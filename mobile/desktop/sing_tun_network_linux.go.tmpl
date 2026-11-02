@@ -4,12 +4,18 @@ package tun
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
+	"slices"
+	"sort"
 	"syscall"
+
+	"github.com/sagernet/netlink"
 )
 
 func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) {
@@ -56,20 +62,131 @@ func routervpnLinuxNetworkObjects(kind string) ([]DesktopNetworkObject, error) {
 	return objects, nil
 }
 
-func (t *NativeTun) routervpnLinuxBefore(kind string) []DesktopNetworkObject {
+// Route additions can overlap the kernel's asynchronous publication of the
+// configured IPv6 address's LOCAL host route. Keep the original interface and
+// complete address identities alongside the earlier routing inventory. They
+// are evidence only; neither readback changes network configuration.
+type routerVPNLinuxRouteAddress struct {
+	prefix                         netip.Prefix
+	flags, scope, preferred, valid int
+	label, peer, broadcast         string
+}
+
+type routerVPNLinuxRouteOwner struct {
+	index, mtu     int
+	name, hardware string
+	flags          net.Flags
+	configured     []netip.Prefix
+	addresses      []routerVPNLinuxRouteAddress
+}
+
+type routerVPNLinuxRoutingBefore struct {
+	objects []DesktopNetworkObject
+	owner   routerVPNLinuxRouteOwner
+}
+
+func routervpnLinuxIPPrefix(value *net.IPNet) (netip.Prefix, bool) {
+	if value == nil {
+		return netip.Prefix{}, false
+	}
+	address, ok := netip.AddrFromSlice(value.IP)
+	bits, size := value.Mask.Size()
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	address = address.Unmap()
+	if size != address.BitLen() || bits < 0 || !address.IsValid() || address.IsUnspecified() || address.IsMulticast() {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(address, bits), true
+}
+
+func (t *NativeTun) routervpnLinuxRouteOwner() (routerVPNLinuxRouteOwner, error) {
+	bad := errors.New("native Linux route add lost its captured interface or addresses")
+	current, _, err := t.routervpnNetworkInterface()
+	if err != nil || current == nil || current.Name != t.options.Name || current.MTU != int(t.options.MTU) || current.Flags&net.FlagUp == 0 ||
+		t.options.FileDescriptor != 0 || t.options.NetNs != "" || t.options.EXP_ExternalConfiguration {
+		return routerVPNLinuxRouteOwner{}, bad
+	}
+	owner := routerVPNLinuxRouteOwner{index: current.Index, name: current.Name, mtu: current.MTU, flags: current.Flags, hardware: string(current.HardwareAddr)}
+	owner.configured = append(append([]netip.Prefix{}, t.options.Inet4Address...), t.options.Inet6Address...)
+	if len(owner.configured) == 0 || len(owner.configured) > 32 {
+		return routerVPNLinuxRouteOwner{}, bad
+	}
+	sort.Slice(owner.configured, func(i, j int) bool { return owner.configured[i].String() < owner.configured[j].String() })
+	expected := make(map[netip.Prefix]bool)
+	for _, prefix := range owner.configured {
+		if !prefix.IsValid() || prefix.Addr().Is4In6() || prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() || expected[prefix] {
+			return routerVPNLinuxRouteOwner{}, bad
+		}
+		expected[prefix] = true
+	}
+	addresses, err := netlink.AddrList(&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Index: current.Index}}, netlink.FAMILY_ALL)
+	if err != nil || len(addresses) == 0 || len(addresses) > 32 {
+		return routerVPNLinuxRouteOwner{}, bad
+	}
+	seen := make(map[netip.Prefix]bool)
+	for _, address := range addresses {
+		prefix, ok := routervpnLinuxIPPrefix(address.IPNet)
+		if !ok || address.LinkIndex != current.Index || seen[prefix] || !expected[prefix] && !prefix.Addr().IsLinkLocalUnicast() ||
+			address.Flags&syscall.IFA_F_DADFAILED != 0 {
+			return routerVPNLinuxRouteOwner{}, bad
+		}
+		seen[prefix] = true
+		row := routerVPNLinuxRouteAddress{prefix: prefix, flags: address.Flags, scope: address.Scope, preferred: address.PreferedLft, valid: address.ValidLft, label: address.Label}
+		if address.Peer != nil {
+			peer, ok := routervpnLinuxIPPrefix(address.Peer)
+			if !ok {
+				return routerVPNLinuxRouteOwner{}, bad
+			}
+			row.peer = peer.String()
+		}
+		if len(address.Broadcast) != 0 {
+			broadcast, ok := netip.AddrFromSlice(address.Broadcast)
+			if !ok {
+				return routerVPNLinuxRouteOwner{}, bad
+			}
+			row.broadcast = broadcast.Unmap().String()
+		}
+		owner.addresses = append(owner.addresses, row)
+	}
+	for prefix := range expected {
+		if !seen[prefix] {
+			return routerVPNLinuxRouteOwner{}, bad
+		}
+	}
+	sort.Slice(owner.addresses, func(i, j int) bool { return owner.addresses[i].prefix.String() < owner.addresses[j].prefix.String() })
+	after, _, err := t.routervpnNetworkInterface()
+	if err != nil || after == nil || after.Index != current.Index || after.Name != current.Name || after.MTU != current.MTU ||
+		after.Flags != current.Flags || string(after.HardwareAddr) != owner.hardware {
+		return routerVPNLinuxRouteOwner{}, bad
+	}
+	return owner, nil
+}
+
+func (t *NativeTun) routervpnLinuxBefore(kind string) routerVPNLinuxRoutingBefore {
 	objects, err := routervpnLinuxNetworkObjects(kind)
 	if err != nil {
 		t.routervpnNetworkFailure(fmt.Errorf("native Linux %s before inventory: %w", kind, err))
-		return nil
+		return routerVPNLinuxRoutingBefore{}
 	}
 	// A non-nil empty slice preserves a successful empty inventory.
 	if objects == nil {
 		objects = []DesktopNetworkObject{}
 	}
-	return objects
+	before := routerVPNLinuxRoutingBefore{objects: objects}
+	if kind == "route" {
+		before.owner, err = t.routervpnLinuxRouteOwner()
+		if err != nil {
+			t.routervpnNetworkFailure(err)
+			return routerVPNLinuxRoutingBefore{}
+		}
+	}
+	return before
 }
 
-func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObject) {
+func (t *NativeTun) routervpnLinuxAdded(kind string, capture routerVPNLinuxRoutingBefore) {
+	before := capture.objects
 	after, err := routervpnLinuxNetworkObjects(kind)
 	if err != nil {
 		t.routervpnNetworkFailure(fmt.Errorf("native Linux %s after inventory: %w", kind, err))
@@ -109,17 +226,147 @@ func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObje
 			return
 		}
 	}
-	if len(added) != 1 || kind == "route" && added[0].Index != uint32(t.routervpnOwnedIndex) {
+	valid := len(added) == 1
+	if kind == "route" {
+		owner, ownerErr := t.routervpnLinuxRouteOwner()
+		valid = ownerErr == nil && routervpnLinuxRouteAdditions(capture.owner, owner, before, added)
+	}
+	if !valid {
 		t.routervpnLinuxAdditionFailure(kind, errors.New("native Linux routing call has no unique owned addition"), added, removed)
 		return
 	}
 	for _, object := range before {
-		if object == added[0] {
-			t.routervpnNetworkFailure(errors.New("native Linux routing call duplicated an existing object"))
-			return
+		for _, addition := range added {
+			if object == addition {
+				t.routervpnNetworkFailure(errors.New("native Linux routing call duplicated an existing object"))
+				return
+			}
 		}
 	}
-	t.routervpnNetworkAdded(added[0])
+	// Every admitted byte, including the separately proved address route, is
+	// retained atomically. A later receipt must find each exact object again.
+	t.routervpnLinuxRecordAdditions(added)
+}
+
+func (t *NativeTun) routervpnLinuxRecordAdditions(added []DesktopNetworkObject) {
+	t.routervpnNetwork.mu.Lock()
+	defer t.routervpnNetwork.mu.Unlock()
+	if t.routervpnNetwork.failure != nil {
+		return
+	}
+	seen := make(map[string]bool)
+	for _, object := range added {
+		key := object.Key()
+		if _, exists := t.routervpnNetwork.objects[key]; exists || seen[key] {
+			t.routervpnNetwork.failure = errors.New("native TUN routing call reused an earlier object")
+			return
+		}
+		seen[key] = true
+	}
+	if t.routervpnNetwork.objects == nil {
+		t.routervpnNetwork.objects = make(map[string]DesktopNetworkObject)
+	}
+	for _, object := range added {
+		t.routervpnNetwork.objects[object.Key()] = object
+	}
+}
+
+func routervpnLinuxSameRouteOwner(before, after routerVPNLinuxRouteOwner) bool {
+	if before.index < 1 || before.index != after.index || before.name == "" || before.name != after.name || before.mtu != after.mtu ||
+		before.mtu < 576 || before.flags != after.flags || before.flags&net.FlagUp == 0 || before.hardware != after.hardware ||
+		len(before.configured) == 0 || !slices.Equal(before.configured, after.configured) || len(before.addresses) == 0 || len(before.addresses) != len(after.addresses) {
+		return false
+	}
+	for i, old := range before.addresses {
+		now := after.addresses[i]
+		// DAD completion may only clear TENTATIVE. Address replacement, a new
+		// tentative state, any other flag change, or failed DAD is not proof.
+		if old.flags&syscall.IFA_F_DADFAILED != 0 || now.flags&syscall.IFA_F_DADFAILED != 0 ||
+			old.flags&syscall.IFA_F_TENTATIVE == 0 && now.flags&syscall.IFA_F_TENTATIVE != 0 {
+			return false
+		}
+		old.flags &^= syscall.IFA_F_TENTATIVE
+		now.flags &^= syscall.IFA_F_TENTATIVE
+		if old != now {
+			return false
+		}
+	}
+	return true
+}
+
+// Match the complete canonical body emitted for an IPv6 LOCAL /128 address
+// route: AF_INET6, no source prefix/TOS, table LOCAL, protocol KERNEL, scope
+// UNIVERSE, type LOCAL, flags zero, and exactly DST/OIF/PRIORITY/TABLE/PREF.
+// Unknown attributes, alternate metrics, gateways, nexthops and cache flags
+// cannot borrow this qualification. Cache ages were already normalized by
+// the same canonical decoder used by the parent.
+func routervpnLinuxKernelLocalAddressRoute(object DesktopNetworkObject, owner routerVPNLinuxRouteOwner) bool {
+	if object.Kind != "route" || object.Family != 6 || object.Index != uint32(owner.index) || object.LUID != 0 ||
+		object.Table != 255 || object.Priority != 0 || object.Gateway != "" || object.Flags != 0 || object.MTU != 0 {
+		return false
+	}
+	prefix, err := netip.ParsePrefix(object.Destination)
+	if err != nil || prefix.String() != object.Destination || prefix.Bits() != 128 || !prefix.Addr().Is6() || prefix.Addr().Is4In6() {
+		return false
+	}
+	matches := 0
+	for _, address := range owner.addresses {
+		if address.prefix.Addr() != prefix.Addr() || !slices.Contains(owner.configured, address.prefix) {
+			continue
+		}
+		scope := 0
+		if address.prefix.Addr().IsLinkLocalUnicast() {
+			scope = 253
+		}
+		if address.flags != syscall.IFA_F_PERMANENT || address.scope != scope || address.peer != "" || address.broadcast != "" || address.label != "" ||
+			uint64(address.preferred) != uint64(^uint32(0)) || uint64(address.valid) != uint64(^uint32(0)) {
+			return false
+		}
+		matches++
+	}
+	if matches != 1 {
+		return false
+	}
+	body := []byte{syscall.AF_INET6, 128, 0, 0, 255, 2, 0, 2, 0, 0, 0, 0}
+	attribute := func(id uint16, value []byte) {
+		length := 4 + len(value)
+		row := make([]byte, (length+3)&^3)
+		binary.LittleEndian.PutUint16(row, uint16(length))
+		binary.LittleEndian.PutUint16(row[2:], id)
+		copy(row[4:], value)
+		body = append(body, row...)
+	}
+	word := func(value uint32) []byte {
+		raw := make([]byte, 4)
+		binary.LittleEndian.PutUint32(raw, value)
+		return raw
+	}
+	attribute(1, prefix.Addr().AsSlice())
+	attribute(4, word(uint32(owner.index)))
+	attribute(6, word(0))
+	attribute(15, word(255))
+	attribute(20, []byte{0})
+	expected, err := ParseDesktopLinuxNetworkObject("route", body)
+	return err == nil && object == expected
+}
+
+func routervpnLinuxRouteAdditions(before, after routerVPNLinuxRouteOwner, previous, added []DesktopNetworkObject) bool {
+	if !routervpnLinuxSameRouteOwner(before, after) || len(added) < 1 || len(added) > len(after.configured)+1 {
+		return false
+	}
+	explicit := 0
+	seen := make(map[string]bool)
+	for _, object := range added {
+		if slices.Contains(previous, object) || object.Validate("linux") != nil || object.Kind != "route" || object.Index != uint32(after.index) || seen[object.Key()] {
+			return false
+		}
+		seen[object.Key()] = true
+		if routervpnLinuxKernelLocalAddressRoute(object, after) {
+			continue
+		}
+		explicit++
+	}
+	return explicit == 1
 }
 
 // Preserve the same sticky first failure. Record its bounded delta while the
