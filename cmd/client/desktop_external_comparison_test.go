@@ -349,7 +349,13 @@ type desktopComparisonFixture struct {
 
 func newDesktopComparisonFixture(t *testing.T, connected bool) *desktopComparisonFixture {
 	t.Helper()
-	root := t.TempDir()
+	// macOS exposes its system temporary root through /var -> /private/var.
+	// Resolve only our newly created fixture root; production private paths
+	// must continue to reject symlink components and replacements.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOMEVPN_ROOT", root)
 	base, _ := desktopExternalNativeFixture(t, "hysteria2")
 	profiles := []common.RouterProfile{}
@@ -770,7 +776,10 @@ func TestDesktopExternalComparisonTorRecordsEveryProvedTransientBeforeClose(t *t
 }
 
 func TestDesktopExternalComparisonCohortSealsSharedAssetsAndBoundsBeforeStop(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOMEVPN_ROOT", root)
 	entry, files := desktopNodeFixture(t, "198.51.100.11")
 	entry.BaseTunnel = "wg"
