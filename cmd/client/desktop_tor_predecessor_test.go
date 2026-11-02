@@ -22,7 +22,13 @@ import (
 func desktopTorEntryFixture(t *testing.T, host string) (*app, common.RouterProfile, map[string][]byte) {
 	t.Helper()
 	t.Setenv("HOMEVPN_ROOT", "")
-	root := t.TempDir()
+	// Resolve only this newly created fixture root. macOS exposes temporary
+	// files through /var -> /private/var, while shipping private-store paths
+	// must continue rejecting symlink components and later replacements.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	entry, files := desktopNodeFixture(t, host)
 	profile := existingTorImportProfile("captured-tor")
 	profile.DNSMode, profile.DNSProtocol, profile.DNSHost, profile.DNSPort = "custom", "tcp", "9.9.9.9", 5353

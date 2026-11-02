@@ -8,8 +8,20 @@ import (
 	"testing"
 )
 
+func privateStoreTestRoot(t *testing.T) string {
+	t.Helper()
+	// Canonicalize only the new fixture directory. A system temporary-root
+	// alias must not mask the explicit file, parent or replacement defect
+	// each test creates below it; shipping path validation remains unchanged.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestPrivateStoreHardensAndPublishesPrivateRegularFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateStoreTestRoot(t)
 	path := filepath.Join(dir, "client.json")
 	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -47,7 +59,7 @@ func TestPrivateStoreHardensAndPublishesPrivateRegularFile(t *testing.T) {
 }
 
 func TestPrivateStoreRejectsSymlinkTargets(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateStoreTestRoot(t)
 	realPath := filepath.Join(dir, "real.json")
 	linkPath := filepath.Join(dir, "client.json")
 	if err := os.WriteFile(realPath, []byte("secret\n"), 0o600); err != nil {
@@ -72,7 +84,7 @@ func TestPrivateStoreRejectsSymlinkTargets(t *testing.T) {
 }
 
 func TestPrivateStoreRejectsSymlinkParent(t *testing.T) {
-	root := t.TempDir()
+	root := privateStoreTestRoot(t)
 	realDir := filepath.Join(root, "real")
 	if err := os.Mkdir(realDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -91,7 +103,7 @@ func TestPrivateStoreRejectsSymlinkParent(t *testing.T) {
 }
 
 func TestPrivateStoreRejectsNestedSymlinkAncestor(t *testing.T) {
-	root := t.TempDir()
+	root := privateStoreTestRoot(t)
 	realDir := filepath.Join(root, "real")
 	if err := os.MkdirAll(filepath.Join(realDir, "nested"), 0o700); err != nil {
 		t.Fatal(err)
@@ -110,7 +122,7 @@ func TestPrivateStoreRejectsNestedSymlinkAncestor(t *testing.T) {
 }
 
 func TestPrivateStoreRejectsOversizedRead(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "routers.json")
+	path := filepath.Join(privateStoreTestRoot(t), "routers.json")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +141,7 @@ func mustPrivateMode(t *testing.T, path string) os.FileMode {
 }
 
 func TestPrivateStoreRejectsTargetReplacementBeforeAdoption(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateStoreTestRoot(t)
 	path := filepath.Join(dir, "client.json")
 	if err := os.WriteFile(path, []byte("owned\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -168,10 +180,7 @@ func TestPrivateStoreRejectsTargetReplacementBeforeAdoption(t *testing.T) {
 func TestPrivateStoreCheckedWriteRetainsOriginalTarget(t *testing.T) {
 	for _, scenario := range []string{"unchanged", "same-content", "different-content", "appeared", "removed", "refused"} {
 		t.Run(scenario, func(t *testing.T) {
-			root, err := filepath.EvalSymlinks(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := privateStoreTestRoot(t)
 			path := filepath.Join(root, "profiles.json")
 			original, next, foreign := []byte("original private record\n"), []byte("new private record\n"), []byte("foreign private record\n")
 			var before os.FileInfo
