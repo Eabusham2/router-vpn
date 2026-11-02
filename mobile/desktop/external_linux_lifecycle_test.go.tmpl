@@ -1,0 +1,236 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+// Only the privileged constructor/readback is modeled here. The original
+// external compiler, typed service, physical tuple projection, capability and
+// cancellation/join paths are the generated shipping composition. Actual
+// kernel/guardian succession is a separate isolated native test below.
+type externalLinuxLifecycleFixture struct {
+	external *externalPhysicalFixture
+	manager  *externalPhysicalFactoryNetwork
+	source   *nodeLinuxJoinedSourceFixture
+	baseline int
+	admitted int
+}
+
+func newExternalLinuxLifecycleFixture(t *testing.T, protocol, kill string, admit func(*externalLinuxLifecycleFixture) error) *externalLinuxLifecycleFixture {
+	t.Helper()
+	policy := externalPhysicalDeviceFixture(t, protocol, "192.168.50.7", 8443, false, "linux", "off", kill)
+	external := newExternalPhysicalFixture(t, policy)
+	manager := &externalPhysicalFactoryNetwork{desktopPTNetwork: external.native.network}
+	manager.selected.Store(externalPhysicalFactoryInterface(t))
+	service.MustRegister[adapter.NetworkManager](external.native.ctx, manager)
+	physical := &nodeUnixFactorySource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
+	source := &nodeLinuxJoinedSourceFixture{nodeLinuxLifecycleSource: &nodeLinuxLifecycleSource{nodeUnixFactorySource: physical}}
+	source.record = mobiletor.DesktopLinuxProtectionRecord{Capture: external.network.brokerCapture(), Owner: source.owner, UID: 22171,
+		PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64)}
+	source.guardian = nodeLinuxLifecycleGuardianFixture(source.record.Owner.ProcessID)
+	f := &externalLinuxLifecycleFixture{external: external, manager: manager, source: source}
+	ctx, err := WithExternalLinuxPhysicalBaseline(external.network.ctx, policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture) error {
+		f.baseline++
+		if ctx.Err() != nil || capture != source.record.Capture || source.retention != nil || external.network.Current() {
+			return errors.New("external baseline did not precede its original source creation")
+		}
+		return nil
+	}, func(ctx context.Context, prepared LinuxPhysicalPrepared) error {
+		f.admitted++
+		if f.baseline != 1 || source.reads != 1 || source.guardianReads != 1 || prepared.Protection != source.record ||
+			prepared.Guardian != source.guardian || prepared.Policy != kill || ctx.Err() != nil || external.network.Current() {
+			return errors.New("external admission did not bracket its exact prepared native owner")
+		}
+		if admit != nil {
+			return admit(f)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	external.network.ctx = ctx
+	t.Cleanup(func() {
+		source.failClose.Store(false)
+		if err := external.network.Close(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := external.network.CloseExternalLinuxPhysicalProtection(context.Background(), policy); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
+func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) error {
+	t.Helper()
+	return f.external.network.prepareExternalPhysicalLinuxLifecycle(f.external.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		want := []mobiletor.DesktopLinuxSocketDestination{{Network: "tcp", Address: netip.MustParseAddrPort("192.168.50.7:8443")}}
+		if f.external.policy.Metadata().Protocol == "shadowsocks" {
+			want = append(want, mobiletor.DesktopLinuxSocketDestination{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")})
+		}
+		if f.baseline != 1 || f.admitted != 0 || capture != f.source.record.Capture || ctx.Err() != nil || len(options.LANPrefixes) != 0 ||
+			!reflect.DeepEqual(options.PrivateDestinations, want) || len(options.Interfaces) != 1 || !options.Interfaces[0].Address.Is4() {
+			t.Error("external source changed selected IPv6/LAN/private tuples or its original admission order")
+		}
+		if fault == "partial" {
+			f.source.partial = true
+			return f.source, errors.New("fixture returned an owned partial constructor")
+		}
+		return f.source, nil
+	})
+}
+
+func TestRouterVPNExternalLinuxLifecycleKeepsTypedSourceAndJoinedOwner(t *testing.T) {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+		for _, kill := range []string{"on-connect", "always"} {
+			t.Run(protocol+"/"+kill, func(t *testing.T) {
+				f := newExternalLinuxLifecycleFixture(t, protocol, kill, nil)
+				n, policy := f.external.network, f.external.policy
+				before, err := policy.Capture()
+				if err != nil || f.prepare(t, "") != nil || f.baseline != 0 || f.admitted != 0 {
+					t.Fatal("retained external constructor ran before native Initialize", err)
+				}
+				for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart} {
+					if err := n.Start(stage); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if n.CheckExternalLinuxPhysicalAdmission(policy) == nil {
+					t.Fatal("external preparation fabricated a Started native service")
+				}
+				if err := n.Start(adapter.StartStateStarted); err != nil {
+					t.Fatal(err)
+				}
+				if err := n.CheckExternalLinuxPhysicalAdmission(policy); err != nil || f.baseline != 1 || f.admitted != 1 || f.source.reads != 2 || f.source.guardianReads != 2 {
+					t.Fatal("external admission lost the exact baseline/guardian before activation", err)
+				}
+				if _, err := n.Activate(policy); err != nil || !n.Current() {
+					t.Fatal("actual native service could not activate its original policy", err)
+				}
+				after, err := policy.Capture()
+				if err != nil || !reflect.DeepEqual(before, after) || after.SelectedDNS.Physical || after.ConfiguredMTU != 1280 {
+					t.Fatal("native admission changed original DNS/MTU/credential source", err)
+				}
+				if _, _, err := n.JoinedExternalLinuxPhysicalSource(context.Background(), policy); err == nil {
+					t.Fatal("live external service fabricated a source join")
+				}
+				f.source.failClose.Store(true)
+				if err := n.Close(); err == nil {
+					t.Fatal("failed source close was hidden")
+				}
+				if _, _, err := n.JoinedExternalLinuxPhysicalSource(context.Background(), policy); err == nil || n.Current() {
+					t.Fatal("unjoined external source became a retired or active owner")
+				}
+				f.source.failClose.Store(false)
+				if err := n.Close(); err != nil {
+					t.Fatal(err)
+				}
+				joined, returned, err := n.JoinedExternalLinuxPhysicalSource(context.Background(), policy)
+				if err != nil || !returned || joined == nil || joined.Original == nil || *joined.Original != f.source.guardian {
+					t.Fatal("external retry lost its original joined guardian", err)
+				}
+				retired, returned, err := n.RetainedExternalLinuxPhysicalProtection(context.Background(), policy)
+				if err != nil || !returned || retired == nil || retired.Protection != f.source.record || retired.Policy != kill || f.source.retention.releases != 0 {
+					t.Fatal("joined external owner released or replaced the parent-held protection", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNExternalLinuxLifecycleRejectsForeignOrReusedCapabilities(t *testing.T) {
+	f := newExternalLinuxLifecycleFixture(t, "shadowsocks", "always", nil)
+	n, policy := f.external.network, f.external.policy
+	create := func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		t.Fatal("rejected capability entered source creation")
+		return nil, nil
+	}
+	copy, err := mobilemultihop.NewDesktopExternalPolicy(policy.OriginalPolicy(), policy.Metadata().SessionID, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.prepareExternalPhysicalLinuxLifecycle(copy, create) == nil {
+		t.Fatal("equivalent external metadata replaced the actual sealed policy pointer")
+	}
+	if _, err := WithExternalLinuxPhysicalBaseline(n.ctx, policy, func(context.Context, mobiletor.DesktopSocketCapture) error { return nil }, func(context.Context, LinuxPhysicalPrepared) error { return nil }); err == nil {
+		t.Fatal("external admission replaced an existing original capability")
+	}
+	node := nodeUnixFactoryPolicy(t, "shadowsocks", "linux", "off", "always", false)
+	if _, err := WithNodeLinuxPhysicalAdmission(n.ctx, node, func(context.Context, NodeLinuxPhysicalPrepared) error { return nil }); err == nil {
+		t.Fatal("external capability was upgraded to a Router node capability")
+	}
+	if _, err := linuxPhysicalAdmissionFor(n.ctx, linuxPhysicalPolicy{node: node}, true); err == nil {
+		t.Fatal("Router source borrowed the external admission callback")
+	}
+	if _, err := (linuxPhysicalPolicy{node: node, external: policy}).identity(); err == nil {
+		t.Fatal("one native admission combined two source identities")
+	}
+	if err := f.prepare(t, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n.prepareExternalPhysicalLinuxLifecycle(policy, create) == nil {
+		t.Fatal("prepared capability was reused")
+	}
+	raw, err := NewExternalNetworkOwner(n.ctx, nil, mobilemultihop.DesktopExternalNetworkTag, n.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := raw.(*ExternalNetworkOwner)
+	defer replacement.Close()
+	if replacement.prepareExternalPhysicalLinuxLifecycle(policy, create) == nil {
+		t.Fatal("same source labels transferred admission to another native service")
+	}
+}
+
+func TestRouterVPNExternalLinuxLifecycleRetainsRefusedAndCancelledSources(t *testing.T) {
+	for _, fault := range []string{"partial", "refused", "cancelled", "guardian-replaced", "network-replaced"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExternalLinuxLifecycleFixture(t, "shadowsocks", "always", func(f *externalLinuxLifecycleFixture) error {
+				switch fault {
+				case "refused":
+					return errors.New("original parent refused admission")
+				case "cancelled":
+					f.external.network.Cancel()
+				case "guardian-replaced":
+					f.source.observeGuardian = func(_ int, r *mobiletor.DesktopLinuxGuardianRecord) error { r.Guardian.StartTicks++; return nil }
+				case "network-replaced":
+					changed := *f.manager.selected.Load()
+					changed.Index++
+					f.manager.selected.Store(&changed)
+				}
+				return nil
+			})
+			if err := f.prepare(t, fault); err != nil {
+				t.Fatal(err)
+			}
+			n := f.external.network
+			if n.Start(adapter.StartStateInitialize) == nil || n.CheckExternalLinuxPhysicalAdmission(f.external.policy) == nil || n.source != f.source || n.Current() {
+				t.Fatal("rejected external source became active or lost its original cleanup owner")
+			}
+			if err := n.Close(); err != nil {
+				t.Fatal(err)
+			}
+			joined, returned, err := n.JoinedExternalLinuxPhysicalSource(context.Background(), f.external.policy)
+			if err != nil || !returned || joined == nil || (joined.Original == nil) != (fault == "partial") {
+				t.Fatal("refused external source did not join its exact complete/partial original", err)
+			}
+			if f.source.retention != nil && f.source.retention.releases != 0 {
+				t.Fatal("source failure released its parent's held protection")
+			}
+		})
+	}
+}

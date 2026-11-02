@@ -1,0 +1,338 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// This capability is shared by the retained Linux native sources. It accepts
+// exactly one independently sealed compiler product; an external source is
+// never converted into a Router NodeProfile or given an invented node proof.
+// The parent still owns process authentication, the durable journal, atomic
+// succession and explicit release. None of the records below grants ownership.
+type linuxPhysicalPolicy struct {
+	node     *mobilemultihop.DesktopNodePolicy
+	external *mobilemultihop.DesktopExternalPolicy
+}
+
+type linuxPhysicalPolicyIdentity struct {
+	session, source, policy string
+}
+
+func (p linuxPhysicalPolicy) identity() (linuxPhysicalPolicyIdentity, error) {
+	var identity linuxPhysicalPolicyIdentity
+	target := ""
+	switch {
+	case p.node != nil && p.external == nil:
+		if err := p.node.Validate(); err != nil {
+			return identity, err
+		}
+		m := p.node.Metadata()
+		target = m.TargetOS
+		identity = linuxPhysicalPolicyIdentity{m.SessionID, m.SourceSHA256, m.KillSwitchPolicy}
+	case p.external != nil && p.node == nil:
+		if err := p.external.Validate(); err != nil {
+			return identity, err
+		}
+		m := p.external.Metadata()
+		target = m.TargetOS
+		identity = linuxPhysicalPolicyIdentity{m.SessionID, m.SourceSHA256, m.KillSwitchPolicy}
+	default:
+		return identity, errors.New("Linux native admission requires one original typed policy")
+	}
+	if target != "linux" || !networkSessionID.MatchString(identity.session) || !networkSourceID.MatchString(identity.source) ||
+		identity.policy != "on-connect" && identity.policy != "always" {
+		return linuxPhysicalPolicyIdentity{}, errors.New("Linux native admission lost its selected protection policy")
+	}
+	return identity, nil
+}
+
+type LinuxPhysicalPrepared struct {
+	Protection mobiletor.DesktopLinuxProtectionRecord
+	Guardian   mobiletor.DesktopLinuxGuardianRecord
+	Policy     string
+}
+
+type LinuxPhysicalAdmission func(context.Context, LinuxPhysicalPrepared) error
+type LinuxPhysicalBaseline func(context.Context, mobiletor.DesktopSocketCapture) error
+
+// Snapshots come only from the exact retained native service under its mutex.
+// No caller-provided JSON, table name or interface inventory implements this
+// private interface. Live admission additionally checks the original broker.
+type linuxPhysicalNetworkSnapshot struct {
+	policy                         linuxPhysicalPolicy
+	source                         mobiletor.DesktopSocketSource
+	capture                        mobiletor.DesktopSocketCapture
+	ready, retired, closed, joined bool
+}
+
+type linuxPhysicalNetwork interface {
+	Matches(string, string) bool
+	linuxPhysicalContext() context.Context
+	linuxPhysicalSnapshot() linuxPhysicalNetworkSnapshot
+	linuxPhysicalAdmissionCurrent() bool
+}
+
+type linuxPhysicalAdmissionKey struct{}
+type linuxPhysicalAdmissionOwner struct {
+	mu        sync.Mutex
+	policy    linuxPhysicalPolicy
+	admit     LinuxPhysicalAdmission
+	baseline  LinuxPhysicalBaseline
+	network   linuxPhysicalNetwork
+	source    desktopLinuxPhysicalPolicy
+	capture   mobiletor.DesktopSocketCapture
+	prepared  *mobiletor.DesktopLinuxProtectionRecord
+	guardian  *mobiletor.DesktopLinuxGuardianRecord
+	retention mobiletor.DesktopLinuxProtectionOwner
+	entered   bool
+	admitted  bool
+}
+
+type linuxProtectionReader interface {
+	ObservePreparedProtection(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error)
+	ObserveRetiredProtection(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error)
+}
+type linuxProtectionRetainer interface {
+	RetainProtection(context.Context, mobiletor.DesktopSocketCapture, string) (mobiletor.DesktopLinuxProtectionOwner, error)
+}
+type linuxGuardianReader interface {
+	ObservePreparedGuardian(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxGuardianRecord, error)
+	ObserveRetiredGuardian(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxGuardianRecord, error)
+}
+type linuxSourceJoinReader interface {
+	ObserveJoinedSource(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxSourceJoinRecord, error)
+}
+
+func withLinuxPhysicalAdmission(ctx context.Context, policy linuxPhysicalPolicy,
+	baseline LinuxPhysicalBaseline, admit LinuxPhysicalAdmission) (context.Context, error) {
+	if ctx == nil || ctx.Err() != nil || admit == nil || ctx.Value(linuxPhysicalAdmissionKey{}) != nil {
+		return nil, errors.New("Linux native admission requires its unique captured capability")
+	}
+	if _, err := policy.identity(); err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, linuxPhysicalAdmissionKey{}, &linuxPhysicalAdmissionOwner{policy: policy, baseline: baseline, admit: admit}), nil
+}
+
+func linuxPhysicalAdmissionFor(ctx context.Context, policy linuxPhysicalPolicy, live bool) (*linuxPhysicalAdmissionOwner, error) {
+	if ctx == nil || live && ctx.Err() != nil {
+		return nil, errors.New("Linux native admission lost its captured lifetime")
+	}
+	if _, err := policy.identity(); err != nil {
+		return nil, err
+	}
+	owner, ok := ctx.Value(linuxPhysicalAdmissionKey{}).(*linuxPhysicalAdmissionOwner)
+	if !ok || owner == nil || owner.policy != policy || owner.admit == nil {
+		return nil, errors.New("Linux native admission belongs to another sealed policy")
+	}
+	return owner, nil
+}
+
+type linuxPhysicalCreate func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error)
+
+// The constructor callback is entered only through a prepared native service.
+// It retains every partial source, including cancellation during creation.
+func prepareLinuxPhysicalLifecycle(n linuxPhysicalNetwork, policy linuxPhysicalPolicy, create linuxPhysicalCreate,
+	prepare func(linuxPhysicalCreate) error) error {
+	if n == nil || create == nil || prepare == nil {
+		return errors.New("Linux native admission has no captured native service")
+	}
+	identity, err := policy.identity()
+	if err != nil {
+		return err
+	}
+	owner, err := linuxPhysicalAdmissionFor(n.linuxPhysicalContext(), policy, true)
+	if err != nil {
+		return err
+	}
+	owner.mu.Lock()
+	if owner.network != nil || owner.entered {
+		owner.mu.Unlock()
+		return errors.New("Linux native admission cannot be reused by another preparation")
+	}
+	owner.network = n
+	owner.mu.Unlock()
+	return prepare(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		owner.mu.Lock()
+		if owner.network != n || owner.entered || ctx.Err() != nil || capture.SessionID != identity.session || capture.SourceSHA256 != identity.source {
+			owner.mu.Unlock()
+			return nil, errors.New("Linux native preparation was cancelled, replaced or already entered")
+		}
+		owner.entered, owner.capture = true, capture
+		baseline := owner.baseline
+		owner.mu.Unlock()
+		if baseline != nil {
+			if err := baseline(ctx, capture); err != nil {
+				return nil, err
+			}
+			if ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
+				return nil, errors.New("Linux baseline callback lost its original captured generation")
+			}
+		}
+		owned, err := create(ctx, capture, options)
+		owner.mu.Lock()
+		owner.source = owned
+		owner.mu.Unlock()
+		if err != nil {
+			return owned, err
+		}
+		retainer, ok := owned.(linuxProtectionRetainer)
+		if !ok || owned == nil {
+			return owned, errors.New("Linux source has no retained native baseline authority")
+		}
+		retention, err := retainer.RetainProtection(ctx, capture, identity.policy)
+		owner.mu.Lock()
+		owner.retention = retention
+		owner.mu.Unlock()
+		if err != nil || retention == nil {
+			return owned, errors.Join(err, errors.New("Linux source could not retain its original baseline endpoint"))
+		}
+		before, err := retention.Prepared(ctx)
+		sourceIdentity, identityErr := owned.Owner()
+		if err != nil || identityErr != nil || before.Validate() != nil || before.Capture != capture || before.Owner != sourceIdentity ||
+			ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
+			return owned, errors.Join(err, identityErr, errors.New("Linux preparation lost its exact native source readback"))
+		}
+		guardianReader, ok := owned.(linuxGuardianReader)
+		if !ok {
+			return owned, errors.New("Linux source has no original native guardian witness")
+		}
+		guardian, err := guardianReader.ObservePreparedGuardian(ctx, capture)
+		if err != nil || guardian.Validate() != nil || uint32(guardian.Guardian.ProcessID) != before.Owner.ProcessID {
+			return owned, errors.Join(err, errors.New("Linux preparation lost its created guardian process"))
+		}
+		owner.mu.Lock()
+		copy, guardianCopy := before, guardian
+		owner.prepared, owner.guardian = &copy, &guardianCopy
+		owner.mu.Unlock()
+		if err = owner.admit(ctx, LinuxPhysicalPrepared{Protection: before, Guardian: guardian, Policy: identity.policy}); err != nil {
+			return owned, err
+		}
+		after, err := retention.Prepared(ctx)
+		afterGuardian, guardianErr := guardianReader.ObservePreparedGuardian(ctx, capture)
+		if err != nil || guardianErr != nil || after != before || afterGuardian != guardian || ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
+			return owned, errors.Join(err, guardianErr, errors.New("Linux admission changed its captured guardian or empty native baseline"))
+		}
+		owner.mu.Lock()
+		owner.admitted = true
+		owner.mu.Unlock()
+		return owned, nil
+	})
+}
+
+func checkLinuxPhysicalAdmission(n linuxPhysicalNetwork, policy linuxPhysicalPolicy) error {
+	if n == nil {
+		return errors.New("Linux admission has no live native service")
+	}
+	owner, err := linuxPhysicalAdmissionFor(n.linuxPhysicalContext(), policy, true)
+	if err != nil {
+		return err
+	}
+	owner.mu.Lock()
+	valid := owner.network == n && owner.entered && owner.admitted && owner.prepared != nil && owner.guardian != nil
+	source, capture, retention := owner.source, owner.capture, owner.retention
+	owner.mu.Unlock()
+	state := n.linuxPhysicalSnapshot()
+	valid = valid && retention != nil && source != nil && state.source == source && state.policy == policy && state.capture == capture &&
+		!state.retired && !state.closed && state.ready
+	if !valid || !n.linuxPhysicalAdmissionCurrent() {
+		return errors.New("Linux admission is incomplete, replaced or retired")
+	}
+	return nil
+}
+
+type linuxJoinedPhysicalCapture struct {
+	source    desktopLinuxPhysicalPolicy
+	capture   mobiletor.DesktopSocketCapture
+	retention mobiletor.DesktopLinuxProtectionOwner
+	prepared  *mobiletor.DesktopLinuxProtectionRecord
+	guardian  *mobiletor.DesktopLinuxGuardianRecord
+}
+
+func joinedLinuxPhysicalCapture(ctx context.Context, n linuxPhysicalNetwork, policy linuxPhysicalPolicy) (linuxJoinedPhysicalCapture, error) {
+	var captured linuxJoinedPhysicalCapture
+	if n == nil || ctx == nil || ctx.Err() != nil {
+		return captured, errors.New("Linux cleanup lost its captured network")
+	}
+	owner, err := linuxPhysicalAdmissionFor(n.linuxPhysicalContext(), policy, false)
+	if err != nil {
+		return captured, err
+	}
+	owner.mu.Lock()
+	valid := owner.network == n
+	captured.source, captured.capture, captured.retention = owner.source, owner.capture, owner.retention
+	if owner.prepared != nil {
+		copy := *owner.prepared
+		captured.prepared = &copy
+	}
+	if owner.guardian != nil {
+		copy := *owner.guardian
+		captured.guardian = &copy
+	}
+	owner.mu.Unlock()
+	state := n.linuxPhysicalSnapshot()
+	valid = valid && state.closed && state.retired && state.joined && !state.ready && state.policy == policy && state.source == captured.source
+	if captured.source != nil {
+		valid = valid && state.capture == captured.capture
+	}
+	if !valid {
+		return captured, errors.New("Linux cleanup preceded its exact native source join")
+	}
+	return captured, nil
+}
+
+func retainedLinuxPhysicalProtection(ctx context.Context, n linuxPhysicalNetwork, policy linuxPhysicalPolicy) (*LinuxPhysicalPrepared, bool, error) {
+	captured, err := joinedLinuxPhysicalCapture(ctx, n, policy)
+	if err != nil || captured.source == nil {
+		return nil, captured.source != nil, err
+	}
+	var record mobiletor.DesktopLinuxProtectionRecord
+	if captured.retention != nil {
+		record, err = captured.retention.Retired(ctx)
+	} else if reader, ok := captured.source.(linuxProtectionReader); ok {
+		record, err = reader.ObserveRetiredProtection(ctx, captured.capture)
+	} else {
+		return nil, true, errors.New("Linux source cannot observe its joined baseline")
+	}
+	if err != nil || record.Validate() != nil || record.Capture != captured.capture || captured.prepared != nil && record != *captured.prepared || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux retirement changed its captured native baseline"))
+	}
+	reader, ok := captured.source.(linuxGuardianReader)
+	if !ok {
+		return nil, true, errors.New("Linux retirement has no original guardian witness")
+	}
+	retired, err := reader.ObserveRetiredGuardian(ctx, captured.capture)
+	if err != nil || retired.Validate() != nil || uint32(retired.Guardian.ProcessID) != record.Owner.ProcessID || captured.guardian != nil && retired != *captured.guardian || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux retirement changed its captured guardian process"))
+	}
+	identity, err := policy.identity()
+	if err != nil {
+		return nil, true, err
+	}
+	return &LinuxPhysicalPrepared{Protection: record, Guardian: retired, Policy: identity.policy}, true, nil
+}
+
+func joinedLinuxPhysicalSource(ctx context.Context, n linuxPhysicalNetwork, policy linuxPhysicalPolicy) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
+	captured, err := joinedLinuxPhysicalCapture(ctx, n, policy)
+	if err != nil || captured.source == nil {
+		return nil, captured.source != nil, err
+	}
+	reader, ok := captured.source.(linuxSourceJoinReader)
+	if !ok {
+		return nil, true, errors.New("Linux source cannot prove its original native join")
+	}
+	record, err := reader.ObserveJoinedSource(ctx, captured.capture)
+	if err != nil || record.Validate() != nil || record.Capture != captured.capture ||
+		captured.guardian != nil && (record.Original == nil || *record.Original != *captured.guardian) || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux joined source changed its original captured guardian"))
+	}
+	copy := record.Clone()
+	return &copy, true, nil
+}

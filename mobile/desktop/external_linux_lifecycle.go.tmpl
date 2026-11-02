@@ -1,0 +1,89 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// This typed native capability is distinct from the ordinary legacy guard.
+// The complete ExternalPolicy remains responsible for the selected DNS and
+// actual exit proof; it does not borrow a Router node's authentication claim.
+// An inherited authenticated parent must still create/admit the exact native
+// baseline and commit it to its original journal before public startup.
+func WithExternalLinuxPhysicalBaseline(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy,
+	baseline LinuxPhysicalBaseline, admit LinuxPhysicalAdmission) (context.Context, error) {
+	if baseline == nil {
+		return nil, errors.New("Linux external baseline requires its original parent callback")
+	}
+	return withLinuxPhysicalAdmission(ctx, linuxPhysicalPolicy{external: policy}, baseline, admit)
+}
+
+func (n *ExternalNetworkOwner) linuxPhysicalContext() context.Context {
+	if n == nil {
+		return nil
+	}
+	return n.ctx
+}
+func (n *ExternalNetworkOwner) linuxPhysicalSnapshot() linuxPhysicalNetworkSnapshot {
+	if n == nil {
+		return linuxPhysicalNetworkSnapshot{}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return linuxPhysicalNetworkSnapshot{policy: linuxPhysicalPolicy{external: n.policy}, source: n.source, capture: n.brokerCapture(),
+		ready: n.ready, retired: n.retired, closed: n.closed, joined: !n.ready}
+}
+func (n *ExternalNetworkOwner) linuxPhysicalAdmissionCurrent() bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	valid := n.ready && !n.retired && !n.closed && n.ctx != nil && n.ctx.Err() == nil
+	broker, capture := n.broker, n.brokerCapture()
+	n.mu.Unlock()
+	return valid && broker != nil && broker.Matches(capture)
+}
+
+// Construction uses the same per-session source and guardian as a retained
+// Node path. Its selected tuples and policy come only from this ExternalPolicy.
+// There is no fallback to the fixed legacy guard when retained admission fails.
+func (n *ExternalNetworkOwner) PrepareExternalLinuxPhysicalPolicy(policy *mobilemultihop.DesktopExternalPolicy) error {
+	return n.prepareExternalPhysicalLinuxLifecycle(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopLinuxNodeSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
+func (n *ExternalNetworkOwner) prepareExternalPhysicalLinuxLifecycle(policy *mobilemultihop.DesktopExternalPolicy, create linuxPhysicalCreate) error {
+	if n == nil {
+		return errors.New("Linux external admission has no native service")
+	}
+	return prepareLinuxPhysicalLifecycle(n, linuxPhysicalPolicy{external: policy}, create, func(owned linuxPhysicalCreate) error {
+		return n.prepareExternalPhysicalLinux(policy, owned)
+	})
+}
+
+func (n *ExternalNetworkOwner) CheckExternalLinuxPhysicalAdmission(policy *mobilemultihop.DesktopExternalPolicy) error {
+	return checkLinuxPhysicalAdmission(n, linuxPhysicalPolicy{external: policy})
+}
+func (n *ExternalNetworkOwner) RetainedExternalLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) (*LinuxPhysicalPrepared, bool, error) {
+	return retainedLinuxPhysicalProtection(ctx, n, linuxPhysicalPolicy{external: policy})
+}
+func (n *ExternalNetworkOwner) JoinedExternalLinuxPhysicalSource(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
+	return joinedLinuxPhysicalSource(ctx, n, linuxPhysicalPolicy{external: policy})
+}
+func (n *ExternalNetworkOwner) CloseExternalLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) error {
+	captured, err := joinedLinuxPhysicalCapture(ctx, n, linuxPhysicalPolicy{external: policy})
+	if err != nil || captured.retention == nil {
+		return err
+	}
+	return captured.retention.Close(ctx)
+}

@@ -1,0 +1,67 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type RouterVPNDesktopLinuxExternalPreparation struct {
+	network *routervpndesktoppt.ExternalNetworkOwner
+	policy  *mobilemultihop.DesktopExternalPolicy
+}
+
+// The whole Box must match the independently recompiled external graph before
+// this exact service can use its inherited retained-Linux admission capability.
+// Existing ordinary paths do not gain admission merely by naming this method.
+func (s *Box) RouterVPNDesktopLinuxExternalPreparePhysicalOwned(policy *mobilemultihop.DesktopExternalPolicy) (*RouterVPNDesktopLinuxExternalPreparation, error) {
+	if policy == nil || policy.Validate() != nil || policy.Metadata().TargetOS != "linux" {
+		return nil, errors.New("Linux external preparation requires its exact sealed graph")
+	}
+	_, _, network, err := s.routerVPNDesktopExternalPhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owned := &RouterVPNDesktopLinuxExternalPreparation{network: network, policy: policy}
+	return owned, network.PrepareExternalLinuxPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopLinuxExternalPreparation) CheckAdmission() error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Linux external activation lost its retained native source")
+	}
+	return p.network.CheckExternalLinuxPhysicalAdmission(p.policy)
+}
+func (p *RouterVPNDesktopLinuxExternalPreparation) RetainedProtection(ctx context.Context) (*routervpndesktoppt.LinuxPhysicalPrepared, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("Linux external retirement lost its retained native source")
+	}
+	return p.network.RetainedExternalLinuxPhysicalProtection(ctx, p.policy)
+}
+func (p *RouterVPNDesktopLinuxExternalPreparation) JoinedSource(ctx context.Context) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("Linux external cleanup lost its retained native source")
+	}
+	return p.network.JoinedExternalLinuxPhysicalSource(ctx, p.policy)
+}
+func (p *RouterVPNDesktopLinuxExternalPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil || p.policy.Validate() != nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("Linux external cleanup lost its retained preparation")
+	}
+	if err := p.network.Close(); err != nil {
+		return err
+	}
+	_, _, err := p.network.JoinedExternalLinuxPhysicalSource(ctx, p.policy)
+	return err
+}
+func (p *RouterVPNDesktopLinuxExternalPreparation) CloseProtection(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Linux external protection cleanup lost its retained preparation")
+	}
+	return p.network.CloseExternalLinuxPhysicalProtection(ctx, p.policy)
+}

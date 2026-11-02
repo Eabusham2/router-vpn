@@ -53,6 +53,8 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl',
                 'external_physical_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
                 'external_physical_windows_test.go.tmpl',
+                'linux_physical_lifecycle.go.tmpl', 'external_linux_lifecycle.go.tmpl', 'external_linux_lifecycle_test.go.tmpl',
+                'external_linux_lifecycle_native_test.go.tmpl',
                 'node_network.go.tmpl', 'node_network_test.go.tmpl', 'node_physical.go.tmpl', 'node_admission.go.tmpl', 'node_admission_test.go.tmpl',
                 'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl',
                 'node_physical_linux_test.go.tmpl', 'node_physical_darwin_test.go.tmpl', 'node_physical_unix_test.go.tmpl',
@@ -69,6 +71,7 @@ BOX_TEMPLATES = {
     'node_box_linux_cover.go.tmpl': 'routervpn_desktop_node_box_linux_cover.go',
     'node_box_linux_cover_test.go.tmpl': 'routervpn_desktop_node_box_linux_cover_test.go',
     'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go',
+    'external_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_external_box_linux_lifecycle.go',
     'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
     'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
     'external_box_latency_test.go.tmpl': 'routervpn_desktop_external_box_latency_test.go',
@@ -244,6 +247,10 @@ def pt_copies():
                    'external_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'external_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'external_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
+                   'linux_physical_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                   'external_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                   'external_linux_lifecycle_test.go.tmpl': b'//go:build linux\n\n',
+                   'external_linux_lifecycle_native_test.go.tmpl': b'//go:build linux && routervpn_linux_external_lifecycle\n\n',
                    'node_physical_windows.go.tmpl': b'//go:build windows\n\n',
                    'node_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
                    'node_physical_linux.go.tmpl': b'//go:build linux\n\n',
@@ -264,6 +271,7 @@ def pt_copies():
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
         prefix = {'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                  'external_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'node_box_linux_cover.go.tmpl': b'//go:build linux\n\n',
                   'node_box_linux_cover_test.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package box\n'):

@@ -1,0 +1,513 @@
+//go:build linux && routervpn_linux_external_lifecycle
+
+package routervpndesktoppt
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+func init() {
+	if len(os.Args) == 3 && os.Args[1] == "routervpn-owned-socket-helper" {
+		if err := mobiletor.RunDesktopLinuxSocketHelper(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(81)
+		}
+		os.Exit(0)
+	}
+	if len(os.Args) == 3 && os.Args[1] == "routervpn-external-lifecycle-peer" {
+		if err := linuxExternalLifecyclePeerMain(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(82)
+		}
+		os.Exit(0)
+	}
+}
+
+// This gate uses actual kernel baselines, independent guardians, owned lower
+// sockets and joined succession. The native manager is explicitly projected
+// from the real isolated interface. It does not claim a system TUN, encrypted
+// exit/Router proof, authenticated app journal or public Connect acceptance.
+type linuxExternalNativeLifecycle struct {
+	policy     linuxPhysicalPolicy
+	network    linuxPhysicalNetwork
+	service    adapter.Service
+	lower      adapter.Outbound
+	baseline   *mobiletor.DesktopLinuxNodeBaseline
+	prepared   *LinuxPhysicalPrepared
+	prior      *linuxExternalNativeLifecycle
+	superseded bool
+	joined     bool
+	manager    *externalPhysicalFactoryNetwork
+	physical   *adapter.NetworkInterface
+	fault      string
+}
+
+func linuxExternalLifecycleSession(t *testing.T) string {
+	t.Helper()
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(random[:])
+}
+
+func linuxExternalLifecycleNode(t *testing.T, remote netip.AddrPort, kill string) *mobilemultihop.DesktopNodePolicy {
+	t.Helper()
+	original := nodeUnixFactoryPolicy(t, "shadowsocks", "linux", "off", kill, false)
+	input, err := original.OriginalProfile().LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launch struct {
+		Profile string `json:"profile_json"`
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(input), &launch) != nil || json.Unmarshal([]byte(launch.Profile), &profile) != nil {
+		t.Fatal("native lifecycle lost the original Router profile")
+	}
+	profile["endpoint"] = remote.Addr().String()
+	profileBody, _ := json.Marshal(profile)
+	graph, _ := json.Marshal(map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": remote.Addr().String(), "server_port": int(remote.Port()),
+			"method": mobilemultihop.NativeStartLayerMethod, "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32)))}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}},
+	})
+	assets, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
+	node, err := mobilemultihop.NewNodeProfile("shadowsocks", string(assets), string(profileBody), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(node, linuxExternalLifecycleSession(t), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote netip.AddrPort, prior *linuxExternalNativeLifecycle, fault string, original *mobilemultihop.NodeProfile) *linuxExternalNativeLifecycle {
+	t.Helper()
+	actual, err := net.InterfaceByName("rvpn-test")
+	if err != nil || os.Geteuid() != 0 || os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" {
+		t.Fatal("native external succession requires the isolated guardian namespace", err)
+	}
+	physical, err := control.InterfaceFromNet(*actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := newDesktopPTFixture(t)
+	manager := &desktopPTEntryManager{}
+	service.MustRegister[adapter.OutboundManager](native.ctx, manager)
+	network := &externalPhysicalFactoryNetwork{desktopPTNetwork: native.network}
+	selected := &adapter.NetworkInterface{Interface: physical}
+	network.selected.Store(selected)
+	service.MustRegister[adapter.NetworkManager](native.ctx, network)
+	f := &linuxExternalNativeLifecycle{prior: prior, manager: network, physical: selected, fault: fault}
+	baseline := func(ctx context.Context, capture mobiletor.DesktopSocketCapture) error {
+		if f.baseline != nil || f.prepared != nil || f.prior != nil && !f.prior.joined {
+			return errors.New("native baseline lost the original unused/joined succession")
+		}
+		if f.prior != nil {
+			if err := f.prior.baseline.ObserveClosed(ctx); err != nil {
+				return err
+			}
+		}
+		f.baseline, err = mobiletor.NewDesktopLinuxNodeBaseline(ctx, capture, false)
+		return err
+	}
+	admit := func(ctx context.Context, prepared LinuxPhysicalPrepared) error {
+		identity, identityErr := f.policy.identity()
+		if identityErr != nil || f.baseline == nil || f.prepared != nil || prepared.Policy != identity.policy {
+			return errors.Join(identityErr, errors.New("native succession lost its exact typed preparation"))
+		}
+		if err := f.baseline.BindPrepared(ctx, prepared.Protection); err != nil {
+			return err
+		}
+		f.prepared = &prepared
+		switch fault {
+		case "refused":
+			return errors.New("original parent refused its own prepared external candidate")
+		case "cancelled":
+			f.network.(*ExternalNetworkOwner).Cancel()
+			return nil
+		}
+		if f.prior != nil {
+			if err := f.prior.baseline.Supersede(ctx, f.baseline); err != nil {
+				return err
+			}
+			f.prior.superseded = true
+		}
+		return nil
+	}
+	if kind == "node" {
+		var policy *mobilemultihop.DesktopNodePolicy
+		if original == nil {
+			policy = linuxExternalLifecycleNode(t, remote, kill)
+		} else {
+			policy, err = mobilemultihop.NewDesktopNodePolicy(original, linuxExternalLifecycleSession(t), "linux")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.policy.node = policy
+		meta := policy.Metadata()
+		options := NodeCaptureOptions{meta.SessionID, meta.SourceSHA256}
+		raw, err := NewNodeNetworkOwner(native.ctx, nil, mobilemultihop.DesktopNodeNetworkTag, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := raw.(*NodeNetworkOwner)
+		lower, err := NewNodePhysicalOutbound(native.ctx, nil, nil, mobilemultihop.DesktopNodePhysicalTag, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager.replace(lower)
+		f.network, f.service, f.lower = n, n, lower
+		n.ctx, err = WithNodeLinuxPhysicalBaseline(n.ctx, policy, baseline, admit)
+		if err == nil {
+			err = n.PrepareNodePhysicalPolicy(policy)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		compiled := externalPhysicalDeviceFixture(t, kind, remote.Addr().String(), int(remote.Port()), false, "linux", "off", kill)
+		policy, err := mobilemultihop.NewDesktopExternalPolicy(compiled.OriginalPolicy(), linuxExternalLifecycleSession(t), "linux")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.policy.external = policy
+		meta := policy.Metadata()
+		options := ExternalCaptureOptions{meta.SessionID, meta.SourceSHA256}
+		raw, err := NewExternalNetworkOwner(native.ctx, nil, mobilemultihop.DesktopExternalNetworkTag, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := raw.(*ExternalNetworkOwner)
+		lower, err := NewExternalPhysicalOutbound(native.ctx, nil, nil, mobilemultihop.DesktopExternalPhysicalTag, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager.replace(lower)
+		f.network, f.service, f.lower = n, n, lower
+		n.ctx, err = WithExternalLinuxPhysicalBaseline(n.ctx, policy, baseline, admit)
+		if err == nil {
+			err = n.PrepareExternalLinuxPhysicalPolicy(policy)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		if err := f.service.Close(); err != nil {
+			t.Error("join exact native lifecycle source", err)
+			return
+		}
+		if err := f.lower.(io.Closer).Close(); err != nil {
+			t.Error(err)
+		}
+		captured, err := joinedLinuxPhysicalCapture(context.Background(), f.network, f.policy)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if captured.retention != nil {
+			if err := captured.retention.Close(context.Background()); err != nil {
+				t.Error(err)
+			}
+		}
+		if f.baseline != nil {
+			if !f.superseded {
+				if err := f.baseline.Release(context.Background()); err != nil {
+					t.Error("release only exact joined test baseline", err)
+				}
+			}
+			if err := f.baseline.Close(context.Background()); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	return f
+}
+
+func (f *linuxExternalNativeLifecycle) start() error {
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := f.service.Start(stage); err != nil {
+			return err
+		}
+	}
+	if err := checkLinuxPhysicalAdmission(f.network, f.policy); err != nil {
+		return err
+	}
+	if f.policy.node != nil {
+		_, err := f.network.(*NodeNetworkOwner).Activate(f.policy.node)
+		return err
+	}
+	_, err := f.network.(*ExternalNetworkOwner).Activate(f.policy.external)
+	return err
+}
+
+func (f *linuxExternalNativeLifecycle) join(t *testing.T) {
+	t.Helper()
+	if err := f.service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	joined, returned, err := joinedLinuxPhysicalSource(context.Background(), f.network, f.policy)
+	if err != nil || !returned || joined == nil || joined.Original == nil || f.prepared == nil || *joined.Original != f.prepared.Guardian {
+		t.Fatal("native source failed to join its original real guardian", err)
+	}
+	retired, returned, err := retainedLinuxPhysicalProtection(context.Background(), f.network, f.policy)
+	if err != nil || !returned || retired == nil || *retired != *f.prepared || f.baseline.ObserveClosed(context.Background()) != nil {
+		t.Fatal("native retirement lost original fail-closed baseline", err)
+	}
+	f.joined = true
+}
+
+func linuxExternalLifecyclePeerMain(network string) error {
+	if network != "tcp4" {
+		return errors.New("unknown lifecycle peer network")
+	}
+	listener, err := net.Listen(network, "172.31.217.2:0")
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	fmt.Println(listener.Addr().String())
+	var peers sync.WaitGroup
+	go func() { _, _ = io.Copy(io.Discard, os.Stdin); _ = listener.Close() }()
+	for {
+		peer, err := listener.Accept()
+		if err != nil {
+			peers.Wait()
+			return nil
+		}
+		peers.Add(1)
+		go func() {
+			defer peers.Done()
+			defer peer.Close()
+			_ = peer.SetDeadline(time.Now().Add(3 * time.Second))
+			_, _ = io.Copy(peer, peer)
+		}()
+	}
+}
+
+func linuxExternalLifecyclePeer(t *testing.T) netip.AddrPort {
+	t.Helper()
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "routervpn-external-lifecycle-peer", "tcp4")
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = input.Close()
+		if err := cmd.Wait(); err != nil {
+			t.Error("join exact native peer", err)
+		}
+	})
+	line, err := bufio.NewReader(output).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := netip.ParseAddrPort(strings.TrimSpace(line))
+	if err != nil || remote.Addr().String() != "172.31.217.2" || remote.Port() == 0 {
+		t.Fatal("native peer returned a foreign endpoint", err)
+	}
+	return remote
+}
+
+func linuxExternalLifecycleExchange(ctx context.Context, dial func(context.Context, string, M.Socksaddr) (net.Conn, error), remote netip.AddrPort) error {
+	connection, err := dial(ctx, "tcp", M.ParseSocksaddr(remote.String()))
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(600 * time.Millisecond))
+	payload := []byte("original typed native lifecycle socket")
+	if _, err := connection.Write(payload); err != nil {
+		return err
+	}
+	answer := make([]byte, len(payload))
+	_, err = io.ReadFull(connection, answer)
+	if err != nil || !bytes.Equal(answer, payload) {
+		return errors.Join(err, errors.New("native lifecycle peer response differs"))
+	}
+	return nil
+}
+
+func linuxExternalLifecycleProbe(t *testing.T, f *linuxExternalNativeLifecycle, remote netip.AddrPort, blocked bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+	var dial func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	if f != nil {
+		dial = f.lower.DialContext
+	} else {
+		dial = func(ctx context.Context, network string, remote M.Socksaddr) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, remote.String())
+		}
+	}
+	err := linuxExternalLifecycleExchange(ctx, dial, remote)
+	if (err != nil) != blocked {
+		t.Fatalf("native socket blocked=%v: %v", blocked, err)
+	}
+}
+
+func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
+	// The guardian deliberately rejects the runner's RFC2544 benchmark range
+	// as a public exit. Add an exact private pair only inside the already-owned
+	// disposable namespace, so the real compiler must grant its exact private
+	// endpoint and cannot fall back to broad public or LAN permission.
+	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 {
+		t.Fatal("native lifecycle requires the original isolated namespace runner")
+	}
+	for _, addition := range [][]string{
+		{"addr", "add", "172.31.217.1/30", "dev", "rvpn-test"},
+		{"-n", "rvpn-peer", "addr", "add", "172.31.217.2/30", "dev", "rvpn-peer"},
+	} {
+		if out, err := exec.Command("ip", addition...).CombinedOutput(); err != nil {
+			t.Fatalf("create exact private fixture address: %v: %s", err, out)
+		}
+		remove := append([]string(nil), addition...)
+		for i, value := range remove {
+			if value == "add" {
+				remove[i] = "del"
+			}
+		}
+		t.Cleanup(func() {
+			if out, err := exec.Command("ip", remove...).CombinedOutput(); err != nil {
+				t.Errorf("remove exact private fixture address: %v: %s", err, out)
+			}
+		})
+	}
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+		t.Run(protocol+"-succession", func(t *testing.T) {
+			remote := linuxExternalLifecyclePeer(t)
+			foreign := linuxExternalLifecyclePeer(t)
+			linuxExternalLifecycleProbe(t, nil, remote, false)
+			linuxExternalLifecycleProbe(t, nil, foreign, false)
+			old := newLinuxExternalNativeLifecycle(t, "node", "always", remote, nil, "", nil)
+			if err := old.start(); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, old, remote, false)
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			old.join(t)
+			linuxExternalLifecycleProbe(t, old, remote, true)
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			next := newLinuxExternalNativeLifecycle(t, protocol, "always", remote, old, "", nil)
+			if err := next.start(); err != nil {
+				t.Fatal(err)
+			}
+			if !old.superseded || old.baseline.Release(context.Background()) == nil {
+				t.Fatal("old creator released its selected successor")
+			}
+			linuxExternalLifecycleProbe(t, next, remote, false)
+			linuxExternalLifecycleProbe(t, old, remote, true)
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			linuxExternalLifecycleProbe(t, next, foreign, true)
+			linuxExternalLifecycleProbe(t, next, remote, false)
+			next.join(t)
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			restored := newLinuxExternalNativeLifecycle(t, "node", "always", remote, next, "", old.policy.node.OriginalProfile())
+			if restored.policy.node.OriginalProfile() != old.policy.node.OriginalProfile() ||
+				old.policy.node.Metadata().OriginalSourceSHA256 != restored.policy.node.Metadata().OriginalSourceSHA256 ||
+				old.policy.node.Metadata().SourceSHA256 == restored.policy.node.Metadata().SourceSHA256 ||
+				old.policy.node.Metadata().SessionID == restored.policy.node.Metadata().SessionID {
+				t.Fatal("native restoration changed sealed Router source or reused old session")
+			}
+			if err := restored.start(); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, restored, remote, false)
+			linuxExternalLifecycleProbe(t, next, remote, true)
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			restored.join(t)
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			if err := restored.baseline.Release(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := mobiletor.ReadDesktopLinuxProtectionAbsence(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, nil, remote, false)
+			linuxExternalLifecycleProbe(t, nil, foreign, false)
+		})
+	}
+	for _, fault := range []string{"refused", "cancelled"} {
+		t.Run(fault+"-preserves-original", func(t *testing.T) {
+			remote := linuxExternalLifecyclePeer(t)
+			linuxExternalLifecycleProbe(t, nil, remote, false)
+			old := newLinuxExternalNativeLifecycle(t, "node", "on-connect", remote, nil, "", nil)
+			if err := old.start(); err != nil {
+				t.Fatal(err)
+			}
+			old.join(t)
+			next := newLinuxExternalNativeLifecycle(t, "shadowsocks", "on-connect", remote, old, fault, nil)
+			if err := next.start(); err == nil {
+				t.Fatal("failed native candidate became ready")
+			}
+			if old.superseded || next.prepared == nil || old.baseline.ObserveClosed(context.Background()) != nil {
+				t.Fatal("failed candidate replaced original held protection")
+			}
+			linuxExternalLifecycleProbe(t, next, remote, true)
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			next.join(t)
+			if err := next.baseline.Release(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if old.baseline.ObserveClosed(context.Background()) != nil {
+				t.Fatal("candidate cleanup released original protection")
+			}
+			linuxExternalLifecycleProbe(t, nil, remote, true)
+			restored := newLinuxExternalNativeLifecycle(t, "node", "on-connect", remote, old, "", old.policy.node.OriginalProfile())
+			if err := restored.start(); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, restored, remote, false)
+			restored.join(t)
+			if err := restored.baseline.Release(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := mobiletor.ReadDesktopLinuxProtectionAbsence(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, nil, remote, false)
+		})
+	}
+}

@@ -46,6 +46,7 @@ type ExternalNetworkOwner struct {
 	ready     bool
 	active    bool
 	retired   bool
+	closed    bool
 }
 
 // The factory is an in-memory native capability, never an imported graph field.
@@ -270,8 +271,16 @@ func (n *ExternalNetworkOwner) Close() error {
 		}
 	}
 	if source != nil {
-		return source.Close(ctx)
+		if err := source.Close(ctx); err != nil {
+			return err
+		}
 	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.broker != broker || n.source != source || !n.retired || n.ready {
+		return errors.New("ordinary desktop cleanup changed its original native owner")
+	}
+	n.closed = true
 	return nil
 }
 
