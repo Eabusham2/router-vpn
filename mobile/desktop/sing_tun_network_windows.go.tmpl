@@ -1,0 +1,99 @@
+//go:build windows
+
+package tun
+
+import (
+	"errors"
+	"github.com/sagernet/sing-tun/internal/winipcfg"
+	"golang.org/x/sys/windows"
+	"net"
+)
+
+func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) {
+	if t.adapter == nil || t.close.Load() != 0 {
+		return nil, 0, errors.New("native Windows receipt lost its retained adapter")
+	}
+	luid := winipcfg.LUID(t.adapter.LUID())
+	row, err := luid.Interface()
+	if err != nil {
+		return nil, 0, err
+	}
+	current, err := net.InterfaceByIndex(int(row.InterfaceIndex))
+	if err != nil || current.Name != t.options.Name {
+		return nil, 0, errors.New("native Windows adapter readback changed")
+	}
+	return current, uint64(luid), nil
+}
+
+func routervpnWindowsNetworkObject(row winipcfg.MibIPforwardRow2) (DesktopNetworkObject, error) {
+	prefix := row.DestinationPrefix.Prefix()
+	family := 6
+	if prefix.Addr().Is4() {
+		family = 4
+	}
+	object := DesktopNetworkObject{Kind: "route", Family: family, Index: row.InterfaceIndex, LUID: uint64(row.InterfaceLUID), Destination: prefix.String(), Priority: row.Metric}
+	gateway := row.NextHop.Addr()
+	if gateway.IsValid() && !gateway.IsUnspecified() {
+		object.Gateway = gateway.WithZone("").String()
+	}
+	if object.Validate("windows") != nil {
+		return DesktopNetworkObject{}, errors.New("native Windows route readback is incomplete")
+	}
+	return object, nil
+}
+
+func routervpnWindowsNetworkObjects() ([]DesktopNetworkObject, error) {
+	rows, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
+	if err != nil || len(rows) > 16384 {
+		return nil, errors.New("native Windows route inventory is unavailable or unbounded")
+	}
+	var objects []DesktopNetworkObject
+	for _, row := range rows {
+		object, err := routervpnWindowsNetworkObject(row)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
+}
+
+func (t *NativeTun) routervpnWindowsAdded(row winipcfg.MibIPforwardRow2) {
+	objects, err := routervpnWindowsNetworkObjects()
+	var matches []DesktopNetworkObject
+	gateway := row.NextHop.Addr().WithZone("")
+	for _, object := range objects {
+		if object.LUID == uint64(row.InterfaceLUID) && object.Destination == row.DestinationPrefix.Prefix().String() && object.Priority == row.Metric &&
+			(object.Gateway == "" && (!gateway.IsValid() || gateway.IsUnspecified()) || object.Gateway == gateway.String()) {
+			matches = append(matches, object)
+		}
+	}
+	if err != nil || len(matches) != 1 {
+		t.routervpnNetworkFailure(errors.New("native Windows route add has no unique current readback"))
+		return
+	}
+	t.routervpnNetworkAdded(matches[0])
+}
+
+func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {
+	current, err := routervpnWindowsNetworkObjects()
+	if err != nil {
+		return nil, err
+	}
+	objects := append([]DesktopNetworkObject(nil), receipt.Objects...)
+	for _, object := range receipt.Objects {
+		if !routervpnNetworkHasObject(current, object) {
+			return nil, errors.New("native Windows receipt lost an installed route")
+		}
+	}
+	for _, object := range current {
+		if object.Index != receipt.Index || object.LUID != receipt.LUID || routervpnNetworkHasObject(objects, object) {
+			continue
+		}
+		if !routervpnNetworkAddressRoute(receipt, object) {
+			return nil, errors.New("native Windows TUN has an unrelated route")
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
+}

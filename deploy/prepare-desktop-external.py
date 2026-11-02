@@ -35,7 +35,7 @@ DESKTOP_MTU = load('prepare-desktop-mtu')
 TOR = load('prepare-mobile-tor')
 PFABI = load('darwin-pf-abi')
 SHARED = tuple(dict.fromkeys((*RELAY.PACKAGES, 'dnsmeasure', 'mobilemtu', 'mtuprobe')))
-PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn', 'windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection')
+PURE = ('desktopnetwork', 'common', 'mobiletor', 'awgpolicy', 'nativeopenvpn', 'windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection')
 PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
@@ -60,6 +60,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'node_linux_source_join.go.tmpl', 'node_linux_source_join_test.go.tmpl',
                 'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
 BOX_TEMPLATES = {
+    'network_box.go.tmpl': 'routervpn_desktop_network_box.go',
     'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
     'node_box_physical_test.go.tmpl': 'routervpn_desktop_node_box_physical_test.go',
     'node_box_dns.go.tmpl': 'routervpn_desktop_node_box_dns.go',
@@ -127,6 +128,7 @@ ROUTE_TEMPLATES = {
 }
 TUN_TEMPLATES = {
     'tun_darwin_control.go.tmpl': 'protocol/tun/routervpn_desktop_control_darwin.go',
+    'tun_network.go.tmpl': 'protocol/tun/routervpn_desktop_network.go',
 }
 NETWORK_DISPATCH = '''\t// Invalidate native performance proofs before endpoints rebind.
 \tif manager := service.FromContext[adapter.ServiceManager](r.ctx); manager != nil {
@@ -270,7 +272,8 @@ def pt_copies():
     for name, relative in TUN_TEMPLATES.items():
         tunnel = ROOT/'mobile/desktop'/name
         raw = tunnel.read_bytes()
-        if tunnel.is_symlink() or not raw.startswith(b'//go:build darwin\n\npackage tun\n'):
+        prefix = b'package tun\n' if name == 'tun_network.go.tmpl' else b'//go:build darwin\n\npackage tun\n'
+        if tunnel.is_symlink() or not raw.startswith(prefix):
             raise ValueError('Desktop Darwin tunnel control package boundary changed')
         content[relative] = raw
     for name, relative in ROUTE_TEMPLATES.items():
@@ -610,7 +613,8 @@ def prepare(vendor, go='go', *, env=None):
     prepare_node_capture(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)
     templates = [*sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),
-                 *sorted((ROOT/'mobile/desktop').glob('node*.go.tmpl'))]
+                 *sorted((ROOT/'mobile/desktop').glob('node*.go.tmpl')), ROOT/'mobile/desktop/network_command.go.tmpl',
+                 ROOT/'mobile/desktop/network_command_test.go.tmpl']
     for template in templates:
         if template.name in PT_TEMPLATES or template.name in BOX_TEMPLATES or template.name in PEER_TEMPLATES:
             continue

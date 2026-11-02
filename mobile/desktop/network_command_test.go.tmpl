@@ -1,0 +1,137 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+)
+
+// Only the privileged TUN constructor is represented by this inbound fixture.
+// Reader adoption, source ownership and final projection use shipping methods.
+type desktopNetworkInboundFixture struct {
+	*desktopMTUTUNFixture
+	raw        string
+	err        error
+	duringRead func()
+}
+
+func (n *desktopNetworkInboundFixture) RouterVPNDesktopNetworkReceipt() (string, error) {
+	if n.duringRead != nil {
+		n.duringRead()
+	}
+	return n.raw, n.err
+}
+
+func desktopNetworkReceiptFixture(t *testing.T, index, mtu int, nonce string) string {
+	t.Helper()
+	r := desktopnetwork.DesktopNetworkReceipt{Schema: 1, TargetOS: runtime.GOOS, Incarnation: nonce,
+		Name: "router-vpn", Index: uint32(index), MTU: mtu, Addresses: []string{"10.8.0.2/24"}}
+	if runtime.GOOS == "windows" {
+		r.LUID = uint64(index) + 100
+	}
+	raw, err := desktopnetwork.CanonicalDesktopNetworkReceipt(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func desktopNetworkOwnerFixture(t *testing.T) (*routerVPNNodeMTU, *desktopNodeMTUEngineFixture, *desktopNetworkInboundFixture, *atomic.Bool) {
+	t.Helper()
+	valid := &atomic.Bool{}
+	valid.Store(true)
+	inbound := &desktopNetworkInboundFixture{desktopMTUTUNFixture: &desktopMTUTUNFixture{index: 17, mtu: 1420},
+		raw: desktopNetworkReceiptFixture(t, 17, 1420, strings.Repeat("d", 32))}
+	engine := &desktopNodeMTUEngineFixture{current: inbound}
+	owner, err := newRouterVPNNodeMTU(engine, strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64), valid.Load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner, engine, inbound, valid
+}
+
+func TestRouterVPNNodeMTUNetworkProjectionRetainsCurrentMTUReader(t *testing.T) {
+	owner, engine, original, _ := desktopNetworkOwnerFixture(t)
+	raw, err := routerVPNDesktopNetworkProjection(owner)
+	if err != nil || raw != original.raw {
+		t.Fatal("initial captured reader was not projected", err)
+	}
+	engine.change = func(ctx context.Context, expected adapter.Inbound, value int) (adapter.Inbound, error) {
+		old := expected.(*desktopNetworkInboundFixture)
+		next := &desktopNetworkInboundFixture{desktopMTUTUNFixture: &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard},
+			raw: desktopNetworkReceiptFixture(t, old.index+1, value, strings.Repeat("e", 30)+string("0123456789abcdef"[(old.index+1)%16])+"1")}
+		engine.current = next
+		return next, nil
+	}
+	for _, action := range []string{"begin", "set", "rollback"} {
+		value := 0
+		if action == "set" {
+			value = 1376
+		}
+		desktopNodeMTUApply(t, owner, action, value)
+		raw, err := owner.DesktopNetworkReceipt()
+		if err != nil || raw != engine.current.(*desktopNetworkInboundFixture).raw {
+			t.Fatal("projection lost actual adopted reader", action, err)
+		}
+		if action != "begin" && raw == original.raw {
+			t.Fatal("projection reused immutable initial ready after TUN replacement")
+		}
+	}
+}
+
+func TestRouterVPNNodeMTUNetworkProjectionRejectsSubstitution(t *testing.T) {
+	for _, scenario := range []string{"wrong-index", "wrong-mtu", "wrong-name", "wrong-platform", "malformed", "guard-retired", "reader-replaced", "retired-during-read"} {
+		t.Run(scenario, func(t *testing.T) {
+			owner, engine, inbound, valid := desktopNetworkOwnerFixture(t)
+			r, _ := desktopnetwork.ParseDesktopNetworkReceipt(inbound.raw)
+			switch scenario {
+			case "wrong-index":
+				r.Index++
+			case "wrong-mtu":
+				r.MTU--
+			case "wrong-name":
+				r.Name = "other-original"
+			case "wrong-platform":
+				r.TargetOS = "darwin"
+				r.LUID = 0
+				if runtime.GOOS == "darwin" {
+					r.TargetOS = "linux"
+				}
+			case "guard-retired":
+				valid.Store(false)
+			case "reader-replaced":
+				engine.current = &desktopMTUTUNFixture{index: 17, mtu: 1420}
+			case "retired-during-read":
+				inbound.duringRead = func() { valid.Store(false) }
+			}
+			inbound.raw, _ = desktopnetwork.CanonicalDesktopNetworkReceipt(r)
+			if scenario == "malformed" {
+				inbound.raw = "{}"
+			}
+			if _, err := owner.DesktopNetworkReceipt(); err == nil {
+				t.Fatal("foreign or retired native routing identity admitted")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUNetworkOptionalEvidenceDoesNotFabricateReceipt(t *testing.T) {
+	owner, _, inbound, _ := desktopNetworkOwnerFixture(t)
+	inbound.err = errors.New("native routing readback unavailable")
+	if raw, err := owner.DesktopNetworkReceipt(); err != nil || raw != "" {
+		t.Fatal("optional native evidence became a fabricated daily connection failure", raw, err)
+	}
+	ordinary, _, _ := desktopNodeMTUFixture(t)
+	if raw, err := ordinary.DesktopNetworkReceipt(); err != nil || raw != "" {
+		t.Fatal("fixture without native evidence fabricated a receipt", raw, err)
+	}
+	if raw, err := routerVPNDesktopNetworkProjection(struct{}{}); err != nil || raw != "" {
+		t.Fatal("unknown engine fabricated a receipt", raw, err)
+	}
+}

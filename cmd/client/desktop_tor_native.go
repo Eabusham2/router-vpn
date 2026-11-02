@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -77,6 +78,7 @@ type desktopTorProof struct {
 	InterfaceName  string                               `json:"interface_name"`
 	InterfaceIndex int                                  `json:"interface_index"`
 	EffectiveMTU   int                                  `json:"effective_mtu"`
+	NetworkReceipt string                               `json:"network_receipt,omitempty"`
 	Healthy        bool                                 `json:"healthy"`
 	HeartbeatAt    int64                                `json:"heartbeat_at"`
 	MTUReadback    *mobiletor.DesktopBridgeMTUReadback  `json:"mtu_readback,omitempty"`
@@ -157,6 +159,12 @@ func validateDesktopTorProofAt(raw []byte, owner *desktopTorRuntime, now, paddin
 	}
 	if adopted := owner.adopted; adopted != nil && expected.EntryID != "" && (adopted.EntryProof == nil || proof.EntryProof.EntryID != adopted.EntryProof.EntryID || proof.EntryProof.EntrySHA256 != adopted.EntryProof.EntrySHA256 || !proof.EntryProof.CheckedAt.Equal(adopted.EntryProof.CheckedAt)) {
 		return proof, bad
+	}
+	if proof.NetworkReceipt != "" {
+		network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
+		if err != nil || network.TargetOS != runtime.GOOS || network.Name != proof.InterfaceName || network.Index != uint32(proof.InterfaceIndex) || network.MTU != proof.EffectiveMTU {
+			return proof, bad
+		}
 	}
 	if !desktopTorProofReadbackLocked(owner, proof) {
 		return proof, bad

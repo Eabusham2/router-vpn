@@ -83,6 +83,7 @@ type DesktopBridgeProof struct {
 	InterfaceName  string                     `json:"interface_name"`
 	InterfaceIndex int                        `json:"interface_index"`
 	EffectiveMTU   int                        `json:"effective_mtu"`
+	NetworkReceipt string                     `json:"network_receipt,omitempty"`
 	Healthy        bool                       `json:"healthy"`
 	HeartbeatAt    int64                      `json:"heartbeat_at"`
 	MTUReadback    *DesktopBridgeMTUReadback  `json:"mtu_readback,omitempty"`

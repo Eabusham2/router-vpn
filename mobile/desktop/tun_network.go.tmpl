@@ -1,0 +1,35 @@
+package tun
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"runtime"
+)
+
+func (t *Inbound) RouterVPNDesktopNetworkReceipt() (string, error) {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnDesktop {
+		return "", errors.New("network receipt has no retained desktop TUN owner")
+	}
+	name, index, mtu, err := t.routervpnDesktopInterface()
+	if err != nil {
+		return "", err
+	}
+	reader, ok := t.tunIf.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
+	if !ok {
+		return "", errors.New("native TUN cannot attest its actual routing calls")
+	}
+	raw, err := reader.RouterVPNDesktopNetworkReceipt()
+	if err != nil {
+		return "", err
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
+	if err != nil || receipt.TargetOS != runtime.GOOS || receipt.Name != name || receipt.Index != uint32(index) || receipt.MTU != mtu {
+		return "", errors.New("native routing receipt differs from the retained TUN")
+	}
+	if _, _, _, err := t.routervpnDesktopInterface(); err != nil {
+		return "", err
+	}
+	return raw, nil
+}

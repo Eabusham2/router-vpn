@@ -1,0 +1,134 @@
+//go:build linux
+
+package tun
+
+import (
+	"encoding/base64"
+	"errors"
+	"net"
+	"syscall"
+)
+
+func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) {
+	current, err := net.InterfaceByName(t.options.Name)
+	if err != nil || current.Index != t.routervpnOwnedIndex || t.routervpnOwnedIndex < 1 {
+		return nil, 0, errors.New("native Linux routing receipt lost its original TUN")
+	}
+	return current, 0, nil
+}
+
+func routervpnLinuxNetworkObjects(kind string) ([]DesktopNetworkObject, error) {
+	request, response := syscall.RTM_GETROUTE, uint16(syscall.RTM_NEWROUTE)
+	if kind == "rule" {
+		request, response = syscall.RTM_GETRULE, syscall.RTM_NEWRULE
+	}
+	raw, err := syscall.NetlinkRIB(request, syscall.AF_UNSPEC)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > 4<<20 {
+		return nil, errors.New("native Linux route inventory exceeded its bound")
+	}
+	messages, err := syscall.ParseNetlinkMessage(raw)
+	if err != nil {
+		return nil, err
+	}
+	var objects []DesktopNetworkObject
+	for _, message := range messages {
+		if message.Header.Flags&0x10 != 0 {
+			return nil, errors.New("native Linux routing dump was interrupted")
+		}
+		if message.Header.Type == syscall.NLMSG_DONE {
+			continue
+		}
+		if message.Header.Type != response {
+			return nil, errors.New("native Linux routing dump contains an unknown result")
+		}
+		object, err := ParseDesktopLinuxNetworkObject(kind, message.Data)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
+}
+
+func (t *NativeTun) routervpnLinuxBefore(kind string) []DesktopNetworkObject {
+	objects, err := routervpnLinuxNetworkObjects(kind)
+	if err != nil {
+		t.routervpnNetworkFailure(err)
+		return nil
+	}
+	// A non-nil empty slice preserves a successful empty inventory.
+	if objects == nil {
+		objects = []DesktopNetworkObject{}
+	}
+	return objects
+}
+
+func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObject) {
+	after, err := routervpnLinuxNetworkObjects(kind)
+	if err != nil || before == nil {
+		t.routervpnNetworkFailure(errors.New("native Linux routing call has no complete before/after readback"))
+		return
+	}
+	counts := make(map[string]int)
+	for _, object := range before {
+		counts[object.Key()]++
+	}
+	var added []DesktopNetworkObject
+	for _, object := range after {
+		key := object.Key()
+		if counts[key] > 0 {
+			counts[key]--
+		} else {
+			added = append(added, object)
+		}
+	}
+	for _, count := range counts {
+		if count != 0 {
+			t.routervpnNetworkFailure(errors.New("native Linux routing inventory changed during its own add"))
+			return
+		}
+	}
+	if len(added) != 1 || kind == "route" && added[0].Index != uint32(t.routervpnOwnedIndex) {
+		t.routervpnNetworkFailure(errors.New("native Linux routing call has no unique owned addition"))
+		return
+	}
+	for _, object := range before {
+		if object == added[0] {
+			t.routervpnNetworkFailure(errors.New("native Linux routing call duplicated an existing object"))
+			return
+		}
+	}
+	t.routervpnNetworkAdded(added[0])
+}
+
+func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {
+	routes, err := routervpnLinuxNetworkObjects("route")
+	if err != nil {
+		return nil, err
+	}
+	rules, err := routervpnLinuxNetworkObjects("rule")
+	if err != nil {
+		return nil, err
+	}
+	all := append(append([]DesktopNetworkObject(nil), routes...), rules...)
+	objects := append([]DesktopNetworkObject(nil), receipt.Objects...)
+	for _, object := range receipt.Objects {
+		if !routervpnNetworkHasObject(all, object) {
+			return nil, errors.New("native Linux receipt lost its successful routing object")
+		}
+	}
+	for _, route := range routes {
+		if route.Index != receipt.Index || routervpnNetworkHasObject(objects, route) {
+			continue
+		}
+		body, _ := base64.StdEncoding.Strict().DecodeString(route.Native)
+		if len(body) < 12 || body[5] != 2 /* RTPROT_KERNEL */ || !routervpnNetworkAddressRoute(receipt, route) {
+			return nil, errors.New("native Linux TUN has an unrelated route")
+		}
+		objects = append(objects, route)
+	}
+	return objects, nil
+}

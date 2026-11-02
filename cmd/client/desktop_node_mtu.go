@@ -7,28 +7,34 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
+const desktopNodeMTURecordLimit = 32 << 10
+
 type desktopNodeMTURecord struct {
-	Schema     int    `json:"schema"`
-	Session    string `json:"session_id"`
-	Config     string `json:"config_sha256"`
-	Path       string `json:"path_id"`
-	Generation uint64 `json:"generation"`
-	Request    string `json:"request_id"`
-	Lease      string `json:"lease_id"`
-	Active     bool   `json:"active"`
-	Restored   bool   `json:"restored"`
-	Expired    bool   `json:"expired,omitempty"`
-	Reader     uint64 `json:"reader"`
-	Interface  string `json:"interface"`
-	Index      int    `json:"index"`
-	MTU        int    `json:"mtu"`
-	Heartbeat  int64  `json:"heartbeat_at"`
-	Failure    string `json:"failure,omitempty"`
+	NetworkReceipt string `json:"network_receipt,omitempty"`
+	Schema         int    `json:"schema"`
+	Session        string `json:"session_id"`
+	Config         string `json:"config_sha256"`
+	Path           string `json:"path_id"`
+	Generation     uint64 `json:"generation"`
+	Request        string `json:"request_id"`
+	Lease          string `json:"lease_id"`
+	Active         bool   `json:"active"`
+	Restored       bool   `json:"restored"`
+	Expired        bool   `json:"expired,omitempty"`
+	Reader         uint64 `json:"reader"`
+	Interface      string `json:"interface"`
+	Index          int    `json:"index"`
+	MTU            int    `json:"mtu"`
+	Heartbeat      int64  `json:"heartbeat_at"`
+	Failure        string `json:"failure,omitempty"`
 }
 type desktopNodeMTUCommand struct {
 	Schema           int    `json:"schema"`
@@ -66,13 +72,19 @@ func readDesktopNodeMTU(launch *desktopNodeLaunch) (desktopNodeMTURecord, error)
 	if launch == nil || !desktopMTURequestPattern.MatchString(launch.mtuSession) || launch.external != nil {
 		return record, errors.New("ordinary node has no captured native TUN owner")
 	}
-	raw, err := readDesktopRuntimeFile(launch, "node-mtu-status.json", 4096)
+	raw, err := readDesktopRuntimeFile(launch, "node-mtu-status.json", desktopNodeMTURecordLimit)
 	if err != nil || decodeRelayControlJSON(raw, &record) != nil {
 		return record, errors.New("native TUN readback is unavailable")
 	}
 	now := time.Now().UnixMilli()
 	if record.Schema != 1 || record.Session != launch.mtuSession || record.Config != launch.configSHA256 || !desktopMTUPathPattern.MatchString(record.Path) || record.Reader < 1 || record.Index < 1 || record.MTU < 1280 || record.MTU > 9000 || validateMTULiveInterface(record.Interface) != nil || record.Heartbeat > now+2000 || record.Heartbeat < now-2000 || record.Request != "" && !desktopMTURequestPattern.MatchString(record.Request) || record.Lease != "" && !desktopMTURequestPattern.MatchString(record.Lease) || len(record.Failure) > 256 {
 		return record, errors.New("native TUN record is stale or belongs to another runtime")
+	}
+	if record.NetworkReceipt != "" {
+		network, err := desktopnetwork.ParseDesktopNetworkReceipt(record.NetworkReceipt)
+		if err != nil || network.TargetOS != runtime.GOOS || network.Name != record.Interface || network.Index != uint32(record.Index) || network.MTU != record.MTU {
+			return record, errors.New("native routing receipt changed its exact TUN reader")
+		}
 	}
 	return record, nil
 }

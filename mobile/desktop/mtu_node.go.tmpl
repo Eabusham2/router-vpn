@@ -26,23 +26,26 @@ import (
 // Ordinary Router-node MTU uses the same retained native TUN transaction as
 // external paths. The existing authenticated private-node optimizer retains
 // its measurement protocol; only this exact Box may replace its TUN reader.
+const routerVPNNodeMTURecordLimit = 32 << 10
+
 type routerVPNNodeMTURecord struct {
-	Schema     int    `json:"schema"`
-	Session    string `json:"session_id"`
-	Config     string `json:"config_sha256"`
-	Path       string `json:"path_id"`
-	Generation uint64 `json:"generation"`
-	Request    string `json:"request_id"`
-	Lease      string `json:"lease_id"`
-	Active     bool   `json:"active"`
-	Restored   bool   `json:"restored"`
-	Expired    bool   `json:"expired,omitempty"`
-	Reader     uint64 `json:"reader"`
-	Interface  string `json:"interface"`
-	Index      int    `json:"index"`
-	MTU        int    `json:"mtu"`
-	Heartbeat  int64  `json:"heartbeat_at"`
-	Failure    string `json:"failure,omitempty"`
+	NetworkReceipt string `json:"network_receipt,omitempty"`
+	Schema         int    `json:"schema"`
+	Session        string `json:"session_id"`
+	Config         string `json:"config_sha256"`
+	Path           string `json:"path_id"`
+	Generation     uint64 `json:"generation"`
+	Request        string `json:"request_id"`
+	Lease          string `json:"lease_id"`
+	Active         bool   `json:"active"`
+	Restored       bool   `json:"restored"`
+	Expired        bool   `json:"expired,omitempty"`
+	Reader         uint64 `json:"reader"`
+	Interface      string `json:"interface"`
+	Index          int    `json:"index"`
+	MTU            int    `json:"mtu"`
+	Heartbeat      int64  `json:"heartbeat_at"`
+	Failure        string `json:"failure,omitempty"`
 }
 type routerVPNNodeMTUCommand struct {
 	Schema           int    `json:"schema"`
@@ -562,6 +565,10 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 		if consumed != nil || time.Since(heartbeat) >= 250*time.Millisecond {
 			heartbeat = time.Now()
 			owner.record.Heartbeat = heartbeat.UnixMilli()
+			owner.record.NetworkReceipt, err = owner.DesktopNetworkReceipt()
+			if err != nil {
+				return routerVPNExternalFailure
+			}
 			if err = files.publish("node-mtu-status.json", owner.record); err != nil {
 				return routerVPNExternalFailure
 			}

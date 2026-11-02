@@ -399,10 +399,11 @@ func (n *routerVPNExternalNative) Close() error {
 
 type routerVPNExternalProofRecord struct {
 	mobilemultihop.ExternalProofResult
-	Physical    *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
-	Healthy     bool                                    `json:"healthy"`
-	HeartbeatAt int64                                   `json:"heartbeat_at"`
-	Progress    mobilemultihop.Progress                 `json:"progress"`
+	NetworkReceipt string                                  `json:"network_receipt,omitempty"`
+	Physical       *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
+	Healthy        bool                                    `json:"healthy"`
+	HeartbeatAt    int64                                   `json:"heartbeat_at"`
+	Progress       mobilemultihop.Progress                 `json:"progress"`
 }
 
 type routerVPNExternalProgressRecord struct {
@@ -576,6 +577,11 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 			}
 			heartbeat = time.Now()
 			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, Physical: physicalMetadata, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
+			receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(owner)
+			if err != nil {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
 			if files.publish("proof.json", receipt) != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
@@ -639,6 +645,11 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 			} else if time.Since(heartbeat) >= 500*time.Millisecond {
 				heartbeat = time.Now()
 				receipt.HeartbeatAt, receipt.Progress = heartbeat.UnixMilli(), routerVPNExternalProgress(owner)
+				receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(owner)
+				if err != nil {
+					failure, stopping = routerVPNExternalFailure, true
+					break
+				}
 				if files.publish("proof.json", receipt) != nil {
 					failure, stopping = routerVPNExternalFailure, true
 					break

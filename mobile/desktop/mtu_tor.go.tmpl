@@ -39,7 +39,15 @@ func routerVPNTorRefreshReadback(owner routerVPNTorOwner, receipt *mobiletor.Des
 	if err != nil {
 		return routerVPNTorFailure
 	}
-	return routerVPNTorAdoptReadback(receipt, readback)
+	if err := routerVPNTorAdoptReadback(receipt, readback); err != nil {
+		return err
+	}
+	network, err := routerVPNDesktopNetworkProjection(owner)
+	if err != nil {
+		return routerVPNTorFailure
+	}
+	receipt.NetworkReceipt = network
+	return nil
 }
 
 func routerVPNTorAdoptReadback(receipt *mobiletor.DesktopBridgeProof, readback *mobiletor.DesktopBridgeMTUReadback) error {

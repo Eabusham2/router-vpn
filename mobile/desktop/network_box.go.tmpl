@@ -1,0 +1,80 @@
+package box
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"runtime"
+)
+
+// Only the captured inbound may produce this projection. An absent method in
+// a protocol fixture leaves the optional evidence empty; batch admission then
+// refuses it instead of accepting a fabricated interface or routing list.
+func routerVPNDesktopNetworkReceipt(inbound any, name string, index, mtu int) (string, error) {
+	reader, ok := inbound.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
+	if !ok {
+		return "", nil
+	}
+	raw, err := reader.RouterVPNDesktopNetworkReceipt()
+	// Missing complete routing evidence disables comparisons, not an otherwise
+	// proved ordinary daily connection. A nonempty malformed receipt is never
+	// projected. The original graph/source checks still fail on retirement.
+	if err != nil {
+		return "", nil
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
+	if err != nil || receipt.TargetOS != runtime.GOOS || name != "" && receipt.Name != name || index != 0 && receipt.Index != uint32(index) || mtu != 0 && receipt.MTU != mtu {
+		return "", errors.New("native routing projection lost its original interface")
+	}
+	return raw, nil
+}
+
+func (r *RouterVPNExternalProofRequest) DesktopNetworkReceipt() (string, error) {
+	if r == nil || r.engine == nil || !r.Healthy() {
+		return "", errors.New("external routing receipt has no proved owner")
+	}
+	e := r.engine
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.identityLocked() == "" {
+		return "", errors.New("external routing receipt lost its native graph")
+	}
+	raw, err := routerVPNDesktopNetworkReceipt(e.tun, "", 0, 0)
+	if err != nil || e.identityLocked() == "" {
+		return "", errors.New("external routing receipt retired during capture")
+	}
+	return raw, nil
+}
+
+func (r *RouterVPNDesktopTor) DesktopNetworkReceipt() (string, error) {
+	if r == nil || !r.Healthy() {
+		return "", errors.New("Tor routing receipt has no proved owner")
+	}
+	r.interfaceMu.RLock()
+	defer r.interfaceMu.RUnlock()
+	name, index, mtu, err := r.readbackLocked()
+	if err != nil {
+		return "", err
+	}
+	raw, err := routerVPNDesktopNetworkReceipt(r.tun, name, index, mtu)
+	if err != nil || !r.currentNative() {
+		return "", errors.New("Tor routing receipt retired during capture")
+	}
+	return raw, nil
+}
+
+func (owner *RouterVPNDesktopNodePhysical) DesktopNetworkReceipt() (string, error) {
+	if owner == nil {
+		return "", errors.New("Router routing receipt has no original owner")
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	name, index, mtu, err := owner.readback()
+	if err != nil {
+		return "", err
+	}
+	raw, err := routerVPNDesktopNetworkReceipt(owner.reader, name, index, mtu)
+	if err != nil || !owner.generationCurrent() {
+		return "", errors.New("Router routing receipt retired during capture")
+	}
+	return raw, nil
+}

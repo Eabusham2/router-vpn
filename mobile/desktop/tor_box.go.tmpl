@@ -451,7 +451,11 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 	if err != nil {
 		return result, err
 	}
-	return mobiletor.DesktopBridgeProof{Schema: 1, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta, Proof: proof,
+	networkReceipt, err := r.DesktopNetworkReceipt()
+	if err != nil {
+		return result, err
+	}
+	return mobiletor.DesktopBridgeProof{Schema: 1, NetworkReceipt: networkReceipt, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta, Proof: proof,
 		EntryProof: entryProof, Padding: padding, PaddingProof: paddingProof, InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu, Healthy: true, HeartbeatAt: time.Now().UnixMilli()}, nil
 }
 

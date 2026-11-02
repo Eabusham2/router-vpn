@@ -9,6 +9,63 @@ MODULE = 'github.com/sagernet/sing-tun'
 VERSION = 'v0.9.3'
 
 
+def network_receipt_patch(name, raw):
+    if name not in ('tun_linux.go', 'tun_windows.go', 'tun_darwin.go'):
+        return raw
+    patches = [(b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnNetwork routerVPNNativeNetworkLedger')]
+    if name == 'tun_linux.go':
+        patches += [
+            (b'''\tfor i, route := range routes {
+\t\terr := netlink.RouteAdd(&route)''', b'''\tfor i, route := range routes {
+\t\troutervpnBefore := t.routervpnLinuxBefore("route")
+\t\terr := netlink.RouteAdd(&route)'''),
+            (b'''\t\t\treturn E.Cause(err, "add route ", i)
+\t\t}
+\t}''', b'''\t\t\treturn E.Cause(err, "add route ", i)
+\t\t}
+\t\tt.routervpnLinuxAdded("route", routervpnBefore)
+\t}'''),
+            (b'''\tfor i, rule := range t.rules() {
+\t\terr := netlink.RuleAdd(rule)''', b'''\tfor i, rule := range t.rules() {
+\t\troutervpnBefore := t.routervpnLinuxBefore("rule")
+\t\terr := netlink.RuleAdd(rule)'''),
+            (b'''\t\t\treturn E.Cause(err, "add rule ", i, "/", len(t.rules()))
+\t\t}
+\t}''', b'''\t\t\treturn E.Cause(err, "add rule ", i, "/", len(t.rules()))
+\t\t}
+\t\tt.routervpnLinuxAdded("rule", routervpnBefore)
+\t}'''),
+        ]
+    elif name == 'tun_windows.go':
+        if raw.count(b'addRouteList(luid, routeRanges, gateway4, gateway6, 0)') != 2:
+            raise ValueError('Pinned Windows route-list callers changed')
+        raw = raw.replace(b'addRouteList(luid, routeRanges, gateway4, gateway6, 0)', b't.routervpnAddRouteList(luid, routeRanges, gateway4, gateway6, 0)')
+        patches += [
+            (b'func addRouteList(luid winipcfg.LUID,', b'func (t *NativeTun) routervpnAddRouteList(luid winipcfg.LUID,'),
+            (b'''\t\terr = row.Create()
+\t\tif err != nil {
+\t\t\treturn err
+\t\t}
+\t}''', b'''\t\terr = row.Create()
+\t\tif err != nil {
+\t\t\treturn err
+\t\t}
+\t\tt.routervpnWindowsAdded(row)
+\t}'''),
+        ]
+    else:
+        # Preserve the original route syscall and error handling exactly. The
+        # wrapper records only an acknowledged add with matching kernel data.
+        if raw.count(b'err = execRoute(') != 4:
+            raise ValueError('Pinned Darwin route callers changed')
+        raw = raw.replace(b'err = execRoute(', b'err = t.routervpnExecRoute(')
+    for before, after in patches:
+        if raw.count(before) != 1:
+            raise ValueError('Pinned desktop routing receipt boundary changed: '+name)
+        raw = raw.replace(before, after)
+    return raw
+
+
 def prepare(vendor):
     vendor = vendor.resolve()
     module = json.loads(subprocess.check_output(['go', 'mod', 'download', '-json', MODULE+'@'+VERSION], cwd=vendor, text=True))
@@ -123,7 +180,26 @@ def prepare(vendor):
                 # and close checks remain byte-for-byte unchanged.
             if target.exists() and not target.stat().st_mode & 0o200:
                 target.chmod(0o644)
-            target.write_bytes(raw)
+            target.write_bytes(network_receipt_patch(relative.as_posix(), raw))
+    # The wire decoder is identical in the parent and native TUN module. It
+    # imports only the standard library and never introduces a module cycle.
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go'):
+        path = ROOT/'internal/desktopnetwork'/name
+        raw = path.read_bytes()
+        if path.is_symlink() or raw.count(b'package desktopnetwork\n') != 1:
+            raise ValueError('Native network receipt source boundary changed')
+        target = destination/('routervpn_'+name)
+        if target.is_symlink():
+            raise ValueError('Linked native network receipt destination')
+        target.write_bytes(raw.replace(b'package desktopnetwork\n', b'package tun\n', 1))
+    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl'):
+        path = ROOT/'mobile/desktop'/name
+        if path.is_symlink():
+            raise ValueError('Linked native network receipt template')
+        target = destination/('routervpn_'+name.removesuffix('.tmpl'))
+        if target.is_symlink():
+            raise ValueError('Linked native network receipt template destination')
+        target.write_bytes(path.read_bytes())
     control = ROOT/'mobile/desktop/sing_tun_darwin_control.go.tmpl'
     raw = control.read_bytes()
     if control.is_symlink() or not raw.startswith(b'//go:build darwin\n\npackage tun\n'):

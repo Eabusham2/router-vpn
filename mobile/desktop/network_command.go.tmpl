@@ -1,0 +1,70 @@
+package main
+
+import (
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"runtime"
+)
+
+func routerVPNDesktopNetworkProjection(owner any) (string, error) {
+	if captured, ok := owner.(interface{ DesktopNetworkReceipt() (string, error) }); ok {
+		return captured.DesktopNetworkReceipt()
+	}
+	return "", nil
+}
+
+func (n *routerVPNExternalNative) DesktopNetworkReceipt() (string, error) {
+	n.mu.Lock()
+	proof := n.proof
+	n.mu.Unlock()
+	if proof == nil {
+		return "", routerVPNExternalFailure
+	}
+	raw, err := proof.DesktopNetworkReceipt()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err != nil || n.proof != proof || !proof.Healthy() {
+		return "", routerVPNExternalFailure
+	}
+	return raw, nil
+}
+
+func (n *routerVPNTorNative) DesktopNetworkReceipt() (string, error) {
+	n.mu.Lock()
+	tor := n.tor
+	n.mu.Unlock()
+	if tor == nil {
+		return "", routerVPNTorFailure
+	}
+	raw, err := tor.DesktopNetworkReceipt()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err != nil || n.tor != tor || !tor.Healthy() {
+		return "", routerVPNTorFailure
+	}
+	return raw, nil
+}
+
+// The node MTU loop already retains the exact currently adopted inbound. A
+// reader replacement must project that new original TUN, never initial ready.
+func (owner *routerVPNNodeMTU) DesktopNetworkReceipt() (string, error) {
+	if owner == nil || owner.current() != nil {
+		return "", routerVPNExternalFailure
+	}
+	inbound := owner.inbound
+	reader, ok := inbound.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
+	if !ok {
+		return "", nil
+	}
+	raw, err := reader.RouterVPNDesktopNetworkReceipt()
+	if owner.inbound != inbound || owner.current() != nil {
+		return "", routerVPNExternalFailure
+	}
+	if err != nil {
+		return "", nil
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
+	if err != nil || receipt.TargetOS != runtime.GOOS || receipt.Name != owner.record.Interface || receipt.Index != uint32(owner.record.Index) || receipt.MTU != owner.record.MTU {
+		return "", routerVPNExternalFailure
+	}
+	return raw, nil
+}

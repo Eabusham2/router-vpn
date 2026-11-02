@@ -1,0 +1,149 @@
+//go:build linux || windows || darwin
+
+package tun
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"net"
+	"net/netip"
+	"runtime"
+	"sort"
+	"sync"
+)
+
+// This ledger records successful calls made by this exact NativeTun. It is
+// read-only evidence for a parent comparison; it never changes route cleanup,
+// authorizes a rule by priority/name, or adopts an existing interface.
+type routerVPNNativeNetworkLedger struct {
+	mu      sync.Mutex
+	nonce   string
+	objects map[string]DesktopNetworkObject
+	failure error
+}
+
+func (t *NativeTun) routervpnNetworkFailure(err error) {
+	t.routervpnNetwork.mu.Lock()
+	defer t.routervpnNetwork.mu.Unlock()
+	if t.routervpnNetwork.failure == nil {
+		t.routervpnNetwork.failure = err
+	}
+}
+
+func (t *NativeTun) routervpnNetworkAdded(object DesktopNetworkObject) {
+	t.routervpnNetwork.mu.Lock()
+	defer t.routervpnNetwork.mu.Unlock()
+	if t.routervpnNetwork.objects == nil {
+		t.routervpnNetwork.objects = make(map[string]DesktopNetworkObject)
+	}
+	key := object.Key()
+	if _, exists := t.routervpnNetwork.objects[key]; exists {
+		t.routervpnNetwork.failure = errors.New("native TUN routing call reused an earlier object")
+		return
+	}
+	t.routervpnNetwork.objects[key] = object
+}
+
+func (t *NativeTun) RouterVPNDesktopNetworkReceipt() (string, error) {
+	if t.options.FileDescriptor != 0 || t.options.NetNs != "" || t.options.EXP_ExternalConfiguration {
+		return "", errors.New("network receipt requires the original native TUN constructor")
+	}
+	current, luid, err := t.routervpnNetworkInterface()
+	if err != nil || current.Index < 1 || current.Name != t.options.Name || current.MTU != int(t.options.MTU) || current.Flags&net.FlagUp == 0 {
+		return "", errors.New("network receipt lost its current native interface")
+	}
+	addresses, err := current.Addrs()
+	if err != nil {
+		return "", err
+	}
+	expected := make(map[string]bool)
+	for _, prefix := range append(append([]netip.Prefix(nil), t.options.Inet4Address...), t.options.Inet6Address...) {
+		expected[prefix.String()] = true
+	}
+	var ownedAddresses []string
+	for _, address := range addresses {
+		prefix, err := netip.ParsePrefix(address.String())
+		if err != nil || !expected[prefix.String()] && !prefix.Addr().IsLinkLocalUnicast() {
+			return "", errors.New("network receipt observed an uncaptured TUN address")
+		}
+		ownedAddresses = append(ownedAddresses, prefix.String())
+		delete(expected, prefix.String())
+	}
+	if len(expected) != 0 {
+		return "", errors.New("network receipt lost a configured TUN address")
+	}
+	sort.Strings(ownedAddresses)
+	t.routervpnNetwork.mu.Lock()
+	if t.routervpnNetwork.nonce == "" {
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			t.routervpnNetwork.failure = err
+		} else {
+			t.routervpnNetwork.nonce = hex.EncodeToString(nonce[:])
+		}
+	}
+	receipt := DesktopNetworkReceipt{Schema: 1, TargetOS: runtime.GOOS, Incarnation: t.routervpnNetwork.nonce, Name: current.Name, Index: uint32(current.Index), LUID: luid, MTU: current.MTU, Addresses: ownedAddresses}
+	for _, object := range t.routervpnNetwork.objects {
+		receipt.Objects = append(receipt.Objects, object)
+	}
+	failure := t.routervpnNetwork.failure
+	t.routervpnNetwork.mu.Unlock()
+	if failure != nil {
+		return "", failure
+	}
+	objects, err := t.routervpnNetworkObjects(receipt)
+	if err != nil {
+		return "", err
+	}
+	receipt.Objects = objects
+	SortDesktopNetworkObjects(receipt.Objects)
+	after, afterLUID, err := t.routervpnNetworkInterface()
+	if err != nil || after.Index != current.Index || after.Name != current.Name || after.MTU != current.MTU || after.Flags != current.Flags || afterLUID != luid {
+		return "", errors.New("native TUN changed while capturing its routing receipt")
+	}
+	return CanonicalDesktopNetworkReceipt(receipt)
+}
+
+func routervpnNetworkHasObject(objects []DesktopNetworkObject, want DesktopNetworkObject) bool {
+	count := 0
+	for _, object := range objects {
+		if object == want {
+			count++
+		}
+	}
+	return count == 1
+}
+
+func routervpnNetworkAddressRoute(receipt DesktopNetworkReceipt, object DesktopNetworkObject) bool {
+	if object.Kind != "route" || object.Index != receipt.Index || object.LUID != receipt.LUID || object.Gateway != "" {
+		return false
+	}
+	prefix, err := netip.ParsePrefix(object.Destination)
+	if err != nil {
+		return false
+	}
+	if prefix.String() == "ff00::/8" {
+		return true
+	}
+	for _, value := range receipt.Addresses {
+		address, err := netip.ParsePrefix(value)
+		if err != nil || prefix.Addr().BitLen() != address.Addr().BitLen() {
+			continue
+		}
+		if prefix == address.Masked() || prefix.Bits() == prefix.Addr().BitLen() && prefix.Addr() == address.Addr() {
+			return true
+		}
+		if address.Addr().Is4() && prefix.Bits() == 32 {
+			first := address.Masked().Addr().As4()
+			last := first
+			for bit := address.Bits(); bit < 32; bit++ {
+				last[bit/8] |= 1 << (7 - bit%8)
+			}
+			if prefix.Addr() == netip.AddrFrom4(first) || prefix.Addr() == netip.AddrFrom4(last) {
+				return true
+			}
+		}
+	}
+	return false
+}

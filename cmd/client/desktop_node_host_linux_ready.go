@@ -150,7 +150,7 @@ func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) 
 	// Ready is published just before the first heartbeat. Preserve only the
 	// actual missing-file condition as a bounded wait; malformed/stale reads
 	// cannot turn into retries or replacement readiness.
-	if _, err := readDesktopRuntimeFile(h.launch, "node-mtu-status.json", 4096); err != nil {
+	if _, err := readDesktopRuntimeFile(h.launch, "node-mtu-status.json", desktopNodeMTURecordLimit); err != nil {
 		return empty, noLive, err
 	}
 	live, err := readDesktopNodeMTU(h.launch)

@@ -1,0 +1,95 @@
+//go:build darwin
+
+package tun
+
+import (
+	"errors"
+	"net"
+	"net/netip"
+	"syscall"
+)
+
+func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) {
+	current, err := net.InterfaceByName(t.options.Name)
+	if err != nil || t.routervpnOwnedIndex < 1 || current.Index != t.routervpnOwnedIndex {
+		return nil, 0, errors.New("native Darwin receipt lost its original TUN")
+	}
+	return current, 0, nil
+}
+
+func routervpnDarwinNetworkObjects() ([]DesktopNetworkObject, error) {
+	raw, err := syscall.RouteRIB(syscall.NET_RT_DUMP, 0)
+	if err != nil || len(raw) > 4<<20 {
+		return nil, errors.New("native Darwin route inventory is unavailable or unbounded")
+	}
+	messages, err := syscall.ParseRoutingMessage(raw)
+	if err != nil {
+		return nil, err
+	}
+	var objects []DesktopNetworkObject
+	for _, message := range messages {
+		route, ok := message.(*syscall.RouteMessage)
+		if !ok {
+			return nil, errors.New("native Darwin route dump contains another record type")
+		}
+		object, err := ParseDesktopDarwinNetworkObject(route)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	filtered := make([]DesktopNetworkObject, 0, len(objects))
+	for _, object := range objects {
+		derived, err := DesktopDarwinDerivedRoute(object, objects)
+		if err != nil {
+			return nil, err
+		}
+		if !derived {
+			filtered = append(filtered, object)
+		}
+	}
+	return filtered, nil
+}
+
+func (t *NativeTun) routervpnExecRoute(action int, scoped bool, index int, destination netip.Prefix, gateway netip.Addr) error {
+	err := execRoute(action, scoped, index, destination, gateway)
+	if err != nil || action != syscall.RTM_ADD {
+		return err
+	}
+	objects, observed := routervpnDarwinNetworkObjects()
+	var matches []DesktopNetworkObject
+	for _, object := range objects {
+		if object.Index == uint32(t.routervpnOwnedIndex) && object.Destination == destination.String() && object.Gateway == gateway.String() {
+			matches = append(matches, object)
+		}
+	}
+	if observed != nil || len(matches) != 1 {
+		t.routervpnNetworkFailure(errors.New("native Darwin route add has no unique current readback"))
+		return nil
+	}
+	t.routervpnNetworkAdded(matches[0])
+	return nil
+}
+
+func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {
+	current, err := routervpnDarwinNetworkObjects()
+	if err != nil {
+		return nil, err
+	}
+	objects := append([]DesktopNetworkObject(nil), receipt.Objects...)
+	for _, object := range receipt.Objects {
+		if !routervpnNetworkHasObject(current, object) {
+			return nil, errors.New("native Darwin receipt lost an installed route")
+		}
+	}
+	for _, object := range current {
+		if object.Index != receipt.Index || routervpnNetworkHasObject(objects, object) {
+			continue
+		}
+		if object.Flags&syscall.RTF_STATIC != 0 || !routervpnNetworkAddressRoute(receipt, object) {
+			return nil, errors.New("native Darwin TUN has an unrelated route")
+		}
+		objects = append(objects, object)
+	}
+	return objects, nil
+}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/nativeopenvpn"
 	"router-vpn/internal/routechoice"
@@ -68,10 +69,11 @@ func (o *desktopExternalRuntime) currentNetworkIdentity() string {
 
 type desktopExternalProof struct {
 	mobilemultihop.ExternalProofResult
-	Physical    *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
-	Healthy     bool                                    `json:"healthy"`
-	HeartbeatAt int64                                   `json:"heartbeat_at"`
-	Progress    json.RawMessage                         `json:"progress,omitempty"`
+	NetworkReceipt string                                  `json:"network_receipt,omitempty"`
+	Physical       *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
+	Healthy        bool                                    `json:"healthy"`
+	HeartbeatAt    int64                                   `json:"heartbeat_at"`
+	Progress       json.RawMessage                         `json:"progress,omitempty"`
 }
 
 type desktopExternalStop struct {
@@ -358,6 +360,12 @@ func validateDesktopExternalProof(raw []byte, owner *desktopExternalRuntime, now
 	bad := errors.New("native external proof is stale or differs from the captured session, DNS or node path")
 	if owner == nil || len(raw) == 0 || len(raw) > 256<<10 || decodeRelayControlJSON(raw, &proof) != nil {
 		return proof, bad
+	}
+	if proof.NetworkReceipt != "" {
+		network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
+		if err != nil || network.TargetOS != runtime.GOOS {
+			return proof, bad
+		}
 	}
 	if !desktopExternalPhysicalReceipt(owner, proof.Physical) {
 		return proof, bad
