@@ -141,7 +141,10 @@ func (s *Service) publicRequest(ctx context.Context, h Hop, size int, upload boo
 		request.ContentLength = int64(size)
 		request.Header.Set("Content-Type", "application/octet-stream")
 	}
-	start := time.Now()
+	start, clockErr := readMeasurementClock()
+	if clockErr != nil {
+		return 0, 0, publicMeasurementFailure("public measurement clock unavailable")
+	}
 	if request.Write(secure) != nil {
 		return 0, 0, publicMeasurementFailure("public payload write failed")
 	}
@@ -181,8 +184,15 @@ func (s *Service) publicRequest(ctx context.Context, h Hop, size int, upload boo
 			return 0, 0, publicMeasurementFailure("public download payload differs")
 		}
 	}
-	elapsed = time.Since(start).Seconds()
-	if elapsed <= 0 || s.valid(ctx) != nil {
+	finish, clockErr := readMeasurementClock()
+	if clockErr != nil {
+		return 0, 0, publicMeasurementFailure("public measurement clock unavailable")
+	}
+	elapsed, clockErr = measurementSeconds(start, finish)
+	if clockErr != nil {
+		return 0, 0, publicMeasurementFailure("public measurement duration invalid")
+	}
+	if s.valid(ctx) != nil {
 		return 0, 0, publicMeasurementFailure("public measurement owner changed")
 	}
 	return n, elapsed, nil
