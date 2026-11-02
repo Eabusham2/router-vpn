@@ -619,6 +619,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("composite-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeWrongCredential$",
          ("TestRouterVPNDesktopNodeCompositeWrongCredential",)),
     ]
+    if platform.system() == "Linux":
+        suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
+                       "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
+                       tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in
+                             ("Layers", "LayerCapture", "LayerCover", "OuterCannotBypassFinal"))))
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
         with stage("prepare shipping Start Layer reference"):
@@ -663,6 +668,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                                      ("ReferenceCapture", ("unchanged", "ip-absent", "ip-empty", "wrong-ip", "unknown-identity", "other-mode", "whitening", "wrong-layer", "wrong-mode"))):
                     if any("--- PASS: TestRouterVPNDesktopNodeHysteria2" + group + "/" + case + " (" not in output for case in cases):
                         raise ValueError("Node Hysteria2 gate omitted original IP trust or final encrypted cover ownership")
+            if name == "wireguard-layers":
+                layers = ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+                traffic = tuple(layer + "/" + fault for layer in layers
+                                for fault in ("proved", "wrong-peer", "wrong-psk", "wrong-aes")) + (layers[1] + "/wrong-whitening",)
+                capture = ("captured", "whitening", "whitening-negative", "wrong-node", "wrong-client", "foreign-relay", "loopback-relay",
+                           "plain-layer", "unknown-layer", "whitening-on-aes", "short-aes", "same-psk", "same-private-key", "self-peer")
+                cover = tuple(layer + "/" + fault for layer in layers for fault in ("owned", "wrong-node", "drop-cover"))
+                for group, cases in (("Layers", traffic), ("LayerCapture", capture), ("LayerCover", cover), ("OuterCannotBypassFinal", layers)):
+                    if any("--- PASS: TestRouterVPNDesktopNodeWireGuard" + group + "/" + case + " (" not in output for case in cases):
+                        raise ValueError("Node WireGuard layer gate omitted exact peer, PSK, AES/whitening, final DNS/cover or physical-route ownership")
             if name == "xray-traffic" and any("--- PASS: TestRouterVPNDesktopNodeXrayTraffic/" + case + " (" not in output for case in XRAY_CASES):
                 raise ValueError("Node Xray gate omitted a complete graph/Start Layer")
             if name == "xray-credentials" and any("--- PASS: TestRouterVPNDesktopNodeXrayWrongCredential/" + case + " (" not in output for case in XRAY_CREDENTIAL_CASES):

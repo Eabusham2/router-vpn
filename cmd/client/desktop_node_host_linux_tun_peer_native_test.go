@@ -167,28 +167,31 @@ func linuxHostTUNInstallBundle(t *testing.T) {
 }
 
 type linuxHostTUNPeerReply struct {
-	Schema           int    `json:"schema"`
-	Address          string `json:"address"`
-	AESAddress       string `json:"aes_address"`
-	BaseAddress      string `json:"base_address"`
-	ProtocolFiles    string `json:"protocol_files"`
-	ParametersSHA256 string `json:"parameters_sha256"`
-	ProtocolRawTCP   int64  `json:"protocol_raw_tcp"`
-	ProtocolRawUDP   int64  `json:"protocol_raw_udp"`
-	ProtocolTCP      int64  `json:"protocol_tcp"`
-	ProtocolUDP      int64  `json:"protocol_udp"`
-	RawTCP           int64  `json:"raw_tcp"`
-	RawUDP           int64  `json:"raw_udp"`
-	PlainTCP         int64  `json:"plain_tcp"`
-	PlainUDP         int64  `json:"plain_udp"`
-	DNSQueries       uint32 `json:"dns_queries"`
-	RouterQueries    uint32 `json:"router_queries"`
-	DirectQueries    uint32 `json:"direct_router_queries"`
-	CoverPackets     uint64 `json:"cover_packets"`
-	CoverBytes       uint64 `json:"cover_bytes"`
-	CoverReplies     uint64 `json:"cover_replies"`
-	CoverReplyBytes  uint64 `json:"cover_reply_bytes"`
-	CoverMaximum     uint32 `json:"cover_maximum"`
+	Schema                int    `json:"schema"`
+	Address               string `json:"address"`
+	AESAddress            string `json:"aes_address"`
+	BaseAddress           string `json:"base_address"`
+	PhysicalClientAddress string `json:"physical_client_address"`
+	RelaySourceAddress    string `json:"relay_source_address"`
+	RejectedUDP           int64  `json:"rejected_udp"`
+	ProtocolFiles         string `json:"protocol_files"`
+	ParametersSHA256      string `json:"parameters_sha256"`
+	ProtocolRawTCP        int64  `json:"protocol_raw_tcp"`
+	ProtocolRawUDP        int64  `json:"protocol_raw_udp"`
+	ProtocolTCP           int64  `json:"protocol_tcp"`
+	ProtocolUDP           int64  `json:"protocol_udp"`
+	RawTCP                int64  `json:"raw_tcp"`
+	RawUDP                int64  `json:"raw_udp"`
+	PlainTCP              int64  `json:"plain_tcp"`
+	PlainUDP              int64  `json:"plain_udp"`
+	DNSQueries            uint32 `json:"dns_queries"`
+	RouterQueries         uint32 `json:"router_queries"`
+	DirectQueries         uint32 `json:"direct_router_queries"`
+	CoverPackets          uint64 `json:"cover_packets"`
+	CoverBytes            uint64 `json:"cover_bytes"`
+	CoverReplies          uint64 `json:"cover_replies"`
+	CoverReplyBytes       uint64 `json:"cover_reply_bytes"`
+	CoverMaximum          uint32 `json:"cover_maximum"`
 }
 
 type linuxHostTUNPeer struct {
@@ -203,6 +206,7 @@ type linuxHostTUNPeer struct {
 	aesAddress       netip.AddrPort
 	layer            string
 	password         string
+	layerPassword    string
 	mode             string
 	nodeID           string
 	clientKey        string
@@ -227,9 +231,25 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 	}
 	endpoint, err := netip.ParseAddrPort(reply.Address)
 	if peer.mode == "wg" {
-		if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || reply.AESAddress != "" ||
-			peer.address.IsValid() && peer.address != endpoint || reply.RawTCP != 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 {
+		if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || peer.address.IsValid() && peer.address != endpoint ||
+			reply.RawTCP != 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 || reply.ProtocolFiles != "" || reply.ParametersSHA256 != "" {
 			t.Fatal("installed WireGuard reference changed its original UDP-only peer")
+		}
+		if peer.layer == "" {
+			if reply.AESAddress != "" || reply.BaseAddress != reply.Address || reply.PhysicalClientAddress != "" || reply.RelaySourceAddress != "" {
+				t.Fatal("plain WG reference acquired another source owner")
+			}
+		} else {
+			base, baseErr := netip.ParseAddrPort(reply.BaseAddress)
+			aes, aesErr := netip.ParseAddrPort(reply.AESAddress)
+			whitening := peer.layer == common.StartLayerAES256GCMXOR
+			if baseErr != nil || aesErr != nil || base.Addr() != endpoint.Addr() || base.Port() == 0 || aes.Addr() != endpoint.Addr() || aes.Port() == 0 || base == aes || base == endpoint ||
+				peer.layer != common.StartLayerAES256GCM && !whitening || whitening && (endpoint.Port() != 8389 || aes == endpoint) || !whitening && aes != endpoint ||
+				peer.baseAddress.IsValid() && peer.baseAddress != base || peer.aesAddress.IsValid() && peer.aesAddress != aes || reply.PlainTCP != 0 ||
+				reply.PhysicalClientAddress != "192.168.210.1" || reply.RelaySourceAddress != "192.168.210.2" || reply.RejectedUDP != 0 || reply.ProtocolRawTCP != 0 || reply.ProtocolRawUDP < 0 || reply.ProtocolTCP < 0 || reply.ProtocolUDP < 0 {
+				t.Fatal("layered WG replaced original client, local AES relay or separate UDP owners")
+			}
+			peer.baseAddress, peer.aesAddress = base, aes
 		}
 		peer.address = endpoint
 		return reply
@@ -329,6 +349,14 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 		digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + peer.serverPublic))
 		peer.nodeID = hex.EncodeToString(digest[:])
 		selector, childOwner = "TestRouterVPNDesktopNodeWireGuardReferenceProcess", "ROUTERVPN_NODE_WG_REFERENCE_CHILD=1"
+		if peer.mode == "wg" && peer.layer != "" {
+			selector, childOwner = "TestRouterVPNDesktopNodeWireGuardLayerReferenceProcess", "ROUTERVPN_NODE_WG_LAYER_REFERENCE_CHILD=1"
+			if _, err := rand.Read(key[:]); err != nil {
+				t.Fatal(err)
+			}
+			peer.layerPassword = base64.StdEncoding.EncodeToString(key[:])
+			clear(key[:])
+		}
 		if linuxHostTUNIsAmnezia(peer.mode) {
 			selector, childOwner = "TestRouterVPNDesktopNodeAmneziaReferenceProcess", "ROUTERVPN_NODE_AWG_REFERENCE_CHILD=1"
 			peer.parameters = linuxHostTUNAmneziaParameters(t, peer.mode)
@@ -385,6 +413,12 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 	if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) {
 		request = map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1",
 			"private_key": peer.serverKey, "client_public_key": clientPublic, "pre_shared_key": peer.password, "node_proof_id": peer.nodeID, "direct_router": true}
+	}
+	if peer.mode == "wg" && peer.layer != "" {
+		request["layer"], request["aes_password"], request["relay_source"] = peer.layer, peer.layerPassword, "192.168.210.2"
+		if linuxHostTUNAction(scenario) == "wrong-whitening" {
+			request["whitening_mismatch"] = true
+		}
 	}
 	if linuxHostTUNIsAmnezia(peer.mode) {
 		request["mode"], request["parameters"] = peer.mode, peer.parameters
@@ -458,7 +492,11 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		}
 	}
 	password := peer.password
-	if peer.mode != "hysteria2" && linuxHostTUNWrongKeyCase(scenario) || peer.mode == "hysteria2" && linuxHostTUNAction(scenario) == "wrong-layer-key" {
+	if peer.mode == "wg" {
+		password = peer.layerPassword
+	}
+	if peer.mode != "wg" && peer.mode != "hysteria2" && linuxHostTUNWrongKeyCase(scenario) ||
+		(peer.mode == "wg" || peer.mode == "hysteria2") && linuxHostTUNAction(scenario) == "wrong-layer-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 	}
 	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
@@ -470,15 +508,27 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		t.Fatal(err)
 	}
 	if peer.mode == "wg" {
-		private := peer.clientKey
-		if linuxHostTUNWrongKeyCase(scenario) {
+		private, psk, endpoint := peer.clientKey, peer.password, peer.address
+		if linuxHostTUNAction(scenario) == "wrong-key" {
 			private = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 		}
-		graph := fmt.Sprintf("[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=1280\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", private, peer.serverPublic, peer.password, peer.address.String())
+		if linuxHostTUNAction(scenario) == "wrong-psk" {
+			psk = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x28}, 32))
+		}
+		if peer.layer != "" {
+			endpoint = peer.baseAddress
+		}
+		graph := fmt.Sprintf("[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=1280\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", private, peer.serverPublic, psk, endpoint.String())
 		if err := os.WriteFile(filepath.Join(directory, "wg.conf"), []byte(graph), 0600); err != nil {
 			t.Fatal("installed WireGuard lost its exact paired private source", err)
 		}
-		return
+		if peer.layer == "" {
+			return
+		}
+		directory = filepath.Join(linuxOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if linuxHostTUNIsAmnezia(peer.mode) {
 		if err := os.WriteFile(filepath.Join(directory, "awg.conf"), linuxHostTUNAmneziaAsset(t, peer, scenario), 0600); err != nil {

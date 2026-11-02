@@ -11,6 +11,9 @@ import (
 )
 
 func linuxHostTUNStartLayer(scenario string) string {
+	if linuxHostTUNWireGuardLayerCase(scenario) {
+		return linuxHostTUNWireGuardLayer(scenario)
+	}
 	if linuxHostTUNHysteria2LayerCase(scenario) {
 		return linuxHostTUNHysteria2Layer(scenario)
 	}
@@ -25,6 +28,9 @@ func linuxHostTUNStartLayer(scenario string) string {
 }
 
 func linuxHostTUNWrongKeyCase(scenario string) bool {
+	if linuxHostTUNWireGuardLayerCase(scenario) && (linuxHostTUNAction(scenario) == "wrong-psk" || linuxHostTUNAction(scenario) == "wrong-layer-key" || linuxHostTUNAction(scenario) == "wrong-whitening") {
+		return true
+	}
 	if linuxHostTUNHysteria2Case(scenario) && (linuxHostTUNAction(scenario) == "wrong-trust" || linuxHostTUNAction(scenario) == "wrong-salamander" || linuxHostTUNAction(scenario) == "wrong-layer-key" || linuxHostTUNAction(scenario) == "wrong-whitening") {
 		return true
 	}
@@ -58,6 +64,9 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 	mode, kind, roots := linuxHostTUNMode(scenario), "shadowsocks", 2
 	if mode == "wg" {
 		kind, roots = "wireguard", 1
+		if layer != "" {
+			kind = "shadowsocks"
+		}
 	}
 	if linuxHostTUNIsAmnezia(mode) {
 		kind, roots = "routervpn-amneziawg", 1

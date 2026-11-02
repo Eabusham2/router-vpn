@@ -95,6 +95,12 @@ func linuxHostTUNSealedRestore(ctx context.Context, a *app, session *desktopLinu
 			}
 		}
 	}
+	if saved.mode == "wg" && snapshot.Plan.profile.StartLayer != "" {
+		outer := filepath.Join(linuxOwnedControllerRoot, "generated", snapshot.Plan.profile.ID, "shadowsocks", "sing-box.json")
+		if err := os.WriteFile(outer, []byte("not the captured independent WG AES source\n"), 0600); err != nil {
+			return nil, result, err
+		}
+	}
 	if err := a.speedLabSuspendPrevious(snapshot, false); err != nil {
 		return nil, result, err
 	}

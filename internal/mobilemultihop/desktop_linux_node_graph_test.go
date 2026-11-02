@@ -79,7 +79,7 @@ func TestDesktopLinuxNodeRetainsExactPlainWireGuard(t *testing.T) {
 			}
 		})
 	}
-	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "OFF", "plain", " off", "unknown"} {
+	for _, layer := range []string{"OFF", "plain", " off", "unknown", "aes-256-gcm-xor", "xor"} {
 		if DesktopLinuxNodePhysicalGraphSupported("wg", layer) {
 			t.Fatal("plain WireGuard opened an unproved Start Layer", layer)
 		}
@@ -179,7 +179,7 @@ func TestDesktopLinuxNodeRetainsExactShadowsocksLayers(t *testing.T) {
 		})
 	}
 	for _, mode := range append(append([]string(nil), predecessorFamilies...), "", "auto", "smart-auto", "tor", "openvpn", "external") {
-		if mode != "shadowsocks" && mode != "hysteria2" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
+		if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
 			t.Fatal("Start Layer admission opened an unrelated Linux family", mode)
 		}
 	}
@@ -323,5 +323,89 @@ func TestDesktopLinuxNodeRetainsExactHysteria2Layers(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestDesktopLinuxNodeRetainsExactWireGuardLayers(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) {
+			if !DesktopLinuxNodePhysicalGraphSupported("wg", layer) {
+				t.Fatal("exact layered WG has no retained Linux path")
+			}
+			files, profile, start := nodeProfileFixture(t, "wg", layer)
+			profile["kill_switch_policy"] = "always"
+			var assets map[string]string
+			if json.Unmarshal([]byte(start), &assets) != nil {
+				t.Fatal("missing exact AES source")
+			}
+			raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			startGraph := startObject(t, string(raw))
+			startOutbound := desktopNodeObject(t, startGraph, "outbounds", "proxy")
+			startOutbound["server"] = profile["endpoint"]
+			raw, err = json.Marshal(startGraph)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assets["sing-box.json"] = base64.StdEncoding.EncodeToString(raw)
+			raw, err = json.Marshal(assets)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start = string(raw)
+			profile["start_layer"] = ""
+			plain, err := NewNodeProfile("wg", files, startJSON(t, profile), "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile["start_layer"] = layer
+			original, err := NewNodeProfile("wg", files, startJSON(t, profile), start, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := desktopNodePlan(t, original, desktopNodeTestSession, "linux")
+			assertDesktopNodeExactDerivation(t, policy)
+			capture, err := policy.Capture()
+			kind := "shadowsocks"
+			if layer == "aes-256-gcm+xor-whitening" {
+				kind = "routervpn-aes-xor"
+			}
+			if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != kind || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+				capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" || capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+				t.Fatal("WG layer changed exact UDP, selected DNS, MTU or protection", err)
+			}
+			graph := startObject(t, policy.Config())
+			inner := desktopNodeObject(t, graph, "endpoints", "proxy")
+			outer := desktopNodeObject(t, graph, "outbounds", NativeStartLayerTag)
+			before := desktopNodeObject(t, startObject(t, plain.Config()), "endpoints", "proxy")
+			before["detour"] = NativeStartLayerTag
+			before["peers"].([]any)[0].(map[string]any)["address"] = "10.77.0.1"
+			if !reflect.DeepEqual(inner, before) || outer["type"] != kind || outer["method"] != NativeStartLayerMethod ||
+				outer["password"] != startOutbound["password"] || outer["server"] != startOutbound["server"] || outer["detour"] != DesktopNodePhysicalTag {
+				t.Fatal("WG layer replaced private key, PSK, peer, inner MTU, cipher or selected outer credentials")
+			}
+			port := startOutbound["server_port"].(float64)
+			if layer == "aes-256-gcm+xor-whitening" {
+				port = 8389
+			}
+			if outer["server_port"] != port || capture.PhysicalRoots[0].Destinations[0] != (PhysicalEgress{Host: profile["endpoint"].(string), Port: int(port), Network: "udp"}) {
+				t.Fatal("WG layer acquired an inner, TCP or unrelated physical root")
+			}
+			input, err := original.LaunchInput()
+			var source struct {
+				Files string `json:"files"`
+				Start string `json:"start"`
+			}
+			if err != nil || json.Unmarshal([]byte(input), &source) != nil || source.Files != files || source.Start != start {
+				t.Fatal("WG layer discarded its two byte-exact sealed original sources", err)
+			}
+			restored, err := ParseNodeLaunchInput(input)
+			if err != nil || restored.Config() != original.Config() || restored.Metadata() != original.Metadata() {
+				t.Fatal("WG layer reconstruction changed its original identity or configuration", err)
+			}
+			assertDesktopNodeRestoredMTU(t, original, "linux", 1376)
+		})
 	}
 }

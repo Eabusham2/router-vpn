@@ -19,12 +19,12 @@ func linuxHostTUNWireGuardCase(scenario string) bool {
 			return true
 		}
 	}
-	return false
+	return linuxHostTUNWireGuardLayerCase(scenario)
 }
 
 func linuxHostTUNAction(scenario string) string {
 	if linuxHostTUNWireGuardCase(scenario) {
-		return strings.TrimPrefix(scenario, "wg-")
+		return linuxHostTUNWireGuardAction(scenario)
 	}
 	if linuxHostTUNHysteria2Case(scenario) {
 		return linuxHostTUNHysteria2Action(scenario)
@@ -49,7 +49,7 @@ func linuxHostTUNMode(scenario string) string {
 }
 
 func linuxHostTUNEncryptedTCP(peer *linuxHostTUNPeer, before, after linuxHostTUNPeerReply) bool {
-	if peer.mode == "hysteria2" {
+	if linuxHostTUNFinalProtocolCounters(peer) {
 		return after.ProtocolTCP > before.ProtocolTCP && after.ProtocolRawUDP > before.ProtocolRawUDP &&
 			before.RawTCP == 0 && after.RawTCP == 0 && after.RawUDP > before.RawUDP
 	}

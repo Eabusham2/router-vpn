@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -26,7 +27,9 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
+	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -290,6 +293,67 @@ func TestRouterVPNDesktopNodeWireGuardReferenceProcess(t *testing.T) {
 	runDesktopNodeUDPReferenceProcess(t, reader, request, local, remote, ipc, startDesktopNodeWGReferenceDevice)
 }
 
+type desktopNodeWGLayerRequest struct {
+	desktopNodeWGRequest
+	Layer             string `json:"layer"`
+	AESPassword       string `json:"aes_password"`
+	RelaySource       string `json:"relay_source"`
+	WhiteningMismatch bool   `json:"whitening_mismatch,omitempty"`
+}
+
+type desktopNodeWGLayerCapture struct {
+	request                     desktopNodeWGRequest
+	layer, aesPassword          string
+	physicalClient, relaySource netip.Addr
+	whiteningMismatch           bool
+}
+
+func desktopNodeWGLayerIdentity(request desktopNodeWGLayerRequest) (netip.Addr, netip.Addr, string, *desktopNodeWGLayerCapture, error) {
+	bad := errors.New("layered WireGuard reference requires distinct original client, owned relay and exact authenticated layer")
+	local, remote, ipc, err := desktopNodeWGRequestIdentity(request.desktopNodeWGRequest)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, "", nil, err
+	}
+	relay, relayErr := netip.ParseAddr(request.RelaySource)
+	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.AESPassword)
+	defer clear(key)
+	if relayErr != nil || relay != local || relay.String() != request.RelaySource ||
+		request.Layer != "aes-256-gcm" && request.Layer != "aes-256-gcm+xor-whitening" ||
+		request.WhiteningMismatch && request.Layer != "aes-256-gcm+xor-whitening" ||
+		keyErr != nil || len(key) != 32 || base64.StdEncoding.EncodeToString(key) != request.AESPassword || bytes.Equal(key, make([]byte, 32)) ||
+		request.AESPassword == request.PreSharedKey || request.AESPassword == request.PrivateKey || request.AESPassword == request.ClientPublicKey {
+		return netip.Addr{}, netip.Addr{}, "", nil, bad
+	}
+	capture := &desktopNodeWGLayerCapture{request: request.desktopNodeWGRequest, layer: request.Layer, aesPassword: request.AESPassword,
+		physicalClient: remote, relaySource: relay, whiteningMismatch: request.WhiteningMismatch}
+	return local, remote, ipc, capture, nil
+}
+
+func TestRouterVPNDesktopNodeWireGuardLayerReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_WG_LAYER_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NODE_WG_LAYER_REFERENCE_CHILD") != "1" {
+		t.Fatal("WireGuard layer reference has an unrelated owner")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, (64<<10)+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 64<<10 {
+		t.Fatal("WireGuard layer reference requires one bounded request", err)
+	}
+	var request desktopNodeWGLayerRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("WireGuard layer reference received another input shape")
+	}
+	local, remote, ipc, capture, err := desktopNodeWGLayerIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDesktopNodeUDPReferenceWithLayer(t, reader, request.desktopNodeWGRequest, local, remote, ipc, startDesktopNodeWGReferenceDevice, capture)
+}
+
 // WG and AWG share only fixed destinations, exact physical binding and the
 // owned control pipe. Each constructor retains its separate real cipher.
 type desktopNodeUDPReferenceDevice struct {
@@ -318,6 +382,16 @@ func startDesktopNodeWGReferenceDevice(ctx context.Context, stack wg.Device, bin
 func runDesktopNodeUDPReferenceProcess(t *testing.T, reader *bufio.Reader, request desktopNodeWGRequest,
 	local, remote netip.Addr, ipc string, start desktopNodeUDPReferenceFactory) {
 	t.Helper()
+	runDesktopNodeUDPReferenceWithLayer(t, reader, request, local, remote, ipc, start, nil)
+}
+
+func runDesktopNodeUDPReferenceWithLayer(t *testing.T, reader *bufio.Reader, request desktopNodeWGRequest,
+	local, remote netip.Addr, ipc string, start desktopNodeUDPReferenceFactory, layer *desktopNodeWGLayerCapture) {
+	t.Helper()
+	if layer != nil && (layer.request != request || layer.physicalClient != remote || layer.relaySource != local ||
+		layer.layer != "aes-256-gcm" && layer.layer != "aes-256-gcm+xor-whitening") {
+		t.Fatal("WireGuard layer lost its separate original source owners")
+	}
 	interfaces, err := net.Interfaces()
 	found := false
 	for _, iface := range interfaces {
@@ -385,7 +459,11 @@ func runDesktopNodeUDPReferenceProcess(t *testing.T, reader *bufio.Reader, reque
 		cancel()
 		t.Fatal(err)
 	}
-	bind := &desktopNodeWGBind{local: local, remote: remote}
+	immediate := remote
+	if layer != nil {
+		immediate = layer.relaySource
+	}
+	bind := &desktopNodeWGBind{local: local, remote: immediate}
 	device, err := start(ctx, stack, bind, ipc)
 	t.Cleanup(func() {
 		handler.close()
@@ -403,8 +481,37 @@ func runDesktopNodeUDPReferenceProcess(t *testing.T, reader *bufio.Reader, reque
 	if address == "" {
 		t.Fatal("WireGuard reference lost its UDP listener")
 	}
+	baseAddress, aesAddress := address, ""
+	var outer *desktopNodeLayerServer
+	if layer != nil {
+		base := netip.MustParseAddrPort(baseAddress)
+		inner := netip.AddrPortFrom(netip.MustParseAddr("10.77.0.1"), base.Port()).String()
+		outer = startDesktopNodeLayerRoutedServer(t, local, layer.aesPassword, []desktopNodeLayerRoute{{Network: "udp", Destination: inner, Physical: baseAddress}}, "")
+		aesAddress = outer.udp.LocalAddr().String()
+		address = aesAddress
+		if layer.layer == "aes-256-gcm+xor-whitening" {
+			password := layer.aesPassword
+			if layer.whiteningMismatch {
+				key, err := base64.StdEncoding.Strict().DecodeString(password)
+				if err != nil || len(key) != 32 {
+					t.Fatal("WireGuard whitening control lost its captured independent key")
+				}
+				key[0] ^= 0xff
+				password = base64.StdEncoding.EncodeToString(key)
+				clear(key)
+			}
+			address = startDesktopNodeLayerRelay(t, local, aesAddress, password)
+		}
+	}
 	respond := func() {
-		reply := desktopNodeLayerReply{Schema: 1, Address: address, BaseAddress: address, ProbeNetwork: "udp", RawUDP: bind.packets.Load(), PlainTCP: handler.tcp.Load(), PlainUDP: handler.udp.Load(), DNSQueries: dnsQueries.Load(), RouterQueries: health.count(), DirectQueries: direct.count()}
+		reply := desktopNodeLayerReply{Schema: 1, Address: address, BaseAddress: baseAddress, ProbeNetwork: "udp", RawUDP: bind.packets.Load(), PlainTCP: handler.tcp.Load(), PlainUDP: handler.udp.Load(), DNSQueries: dnsQueries.Load(), RouterQueries: health.count(), DirectQueries: direct.count()}
+		if layer != nil {
+			reply.AESAddress = aesAddress
+			reply.PhysicalClientAddress, reply.RelaySourceAddress = layer.physicalClient.String(), layer.relaySource.String()
+			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = reply.RawUDP, reply.PlainTCP, reply.PlainUDP
+			reply.RawTCP, reply.RawUDP, reply.PlainTCP, reply.PlainUDP = outer.rawTCP.Load(), outer.rawUDP.Load(), outer.plainTCP.Load(), outer.plainUDP.Load()
+			reply.RejectedUDP = outer.rejectedUDP.Load()
+		}
 		if handler.cover != nil {
 			handler.cover.observe(&reply)
 		}
@@ -452,20 +559,48 @@ func runDesktopNodeUDPReferenceProcess(t *testing.T, reader *bufio.Reader, reque
 
 func desktopNodeWGReference(t *testing.T) *desktopNodeLayerReference {
 	t.Helper()
+	return desktopNodeWGReferenceWithOptions(t, desktopNodeWGReferenceOptions{})
+}
+
+type desktopNodeWGReferenceOptions struct {
+	Layer                    string
+	Cover, WhiteningMismatch bool
+}
+
+func desktopNodeWGReferenceWithOptions(t *testing.T, capture desktopNodeWGReferenceOptions) *desktopNodeLayerReference {
+	t.Helper()
+	if capture.Layer != "" && capture.Layer != "aes-256-gcm" && capture.Layer != "aes-256-gcm+xor-whitening" || capture.WhiteningMismatch && capture.Layer != "aes-256-gcm+xor-whitening" {
+		t.Fatal("WireGuard reference changed its exact selected layer")
+	}
 	_, ip := desktopNodePeerInterface(t)
 	config, options := desktopReferenceFixture(t)
 	digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
 	request := desktopNodeWGRequest{Schema: 1, Address: ip.String(), ClientAddress: ip.String(), PrivateKey: config.PrivateKey,
-		ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:])}
+		ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:]), Cover: capture.Cover}
+	var layerKey [32]byte
+	password := ""
+	if capture.Layer != "" {
+		if _, err := rand.Read(layerKey[:]); err != nil {
+			t.Fatal(err)
+		}
+		password = base64.StdEncoding.EncodeToString(layerKey[:])
+		clear(layerKey[:])
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
-		request: desktopNodeLayerRequest{Schema: 1, Mode: "wg", Address: ip.String(), NodeProofID: request.NodeProofID, Configuration: config}}
-	p.command = exec.CommandContext(ctx, executable, "-test.run=^TestRouterVPNDesktopNodeWireGuardReferenceProcess$", "-test.count=1", "-test.timeout=60s")
-	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_WG_REFERENCE_CHILD=1")
+		request: desktopNodeLayerRequest{Schema: 1, Mode: "wg", Address: ip.String(), NodeProofID: request.NodeProofID, Configuration: config, Layer: capture.Layer, Password: password, Cover: capture.Cover, WhiteningMismatch: capture.WhiteningMismatch}}
+	selector, childOwner := "TestRouterVPNDesktopNodeWireGuardReferenceProcess", "ROUTERVPN_NODE_WG_REFERENCE_CHILD=1"
+	var input any = request
+	if capture.Layer != "" {
+		selector, childOwner = "TestRouterVPNDesktopNodeWireGuardLayerReferenceProcess", "ROUTERVPN_NODE_WG_LAYER_REFERENCE_CHILD=1"
+		input = desktopNodeWGLayerRequest{desktopNodeWGRequest: request, Layer: capture.Layer, AESPassword: password, RelaySource: ip.String(), WhiteningMismatch: capture.WhiteningMismatch}
+	}
+	p.command = exec.CommandContext(ctx, executable, "-test.run=^"+selector+"$", "-test.count=1", "-test.timeout=60s")
+	p.command.Env = append(os.Environ(), childOwner)
 	p.input, err = p.command.StdinPipe()
 	if err != nil {
 		cancel()
@@ -504,13 +639,26 @@ func desktopNodeWGReference(t *testing.T) *desktopNodeLayerReference {
 		cancel()
 		_ = p.output.Close()
 	})
-	if err := json.NewEncoder(p.input).Encode(request); err != nil {
+	if err := json.NewEncoder(p.input).Encode(input); err != nil {
 		t.Fatal(err)
 	}
 	p.reply, err = p.read()
 	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
-	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.BaseAddress != p.reply.Address || p.reply.AESAddress != "" || p.reply.ProbeNetwork != "udp" || p.reply.RawTCP != 0 {
+	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.ProbeNetwork != "udp" || p.reply.RawTCP != 0 {
 		t.Fatal("independent WireGuard peer did not retain its original UDP socket", err, p.diagnostic.String())
+	}
+	if capture.Layer == "" {
+		if p.reply.BaseAddress != p.reply.Address || p.reply.AESAddress != "" || p.reply.PhysicalClientAddress != "" || p.reply.RelaySourceAddress != "" {
+			t.Fatal("plain WireGuard acquired another reference owner")
+		}
+	} else {
+		base, baseErr := netip.ParseAddrPort(p.reply.BaseAddress)
+		aes, aesErr := netip.ParseAddrPort(p.reply.AESAddress)
+		if baseErr != nil || aesErr != nil || base.Addr() != ip || base.Port() == 0 || aes.Addr() != ip || aes.Port() == 0 || base == aes || base == p.remote ||
+			capture.Layer == "aes-256-gcm" && aes != p.remote || capture.Layer == "aes-256-gcm+xor-whitening" && (p.remote.Port() != 8389 || aes == p.remote) ||
+			p.reply.PhysicalClientAddress != request.ClientAddress || p.reply.RelaySourceAddress != request.Address {
+			t.Fatal("layered WireGuard changed original physical client, inner relay or encrypted endpoint")
+		}
 	}
 	return p
 }
@@ -526,6 +674,9 @@ func testDesktopNodeEncryptedUDP(t *testing.T, peer *desktopNodeLayerReference, 
 	fixtureFault := ""
 	if fault == "wrong-peer" {
 		fixtureFault = "base-key"
+	}
+	if fault == "wrong-aes" {
+		fixtureFault = "aes-key"
 	}
 	if fault == "wrong-header" {
 		peer.request.Configuration.Parameters["h1"] = "50000000-59999999"
@@ -576,10 +727,30 @@ func testDesktopNodeEncryptedUDP(t *testing.T, peer *desktopNodeLayerReference, 
 			t.Fatal("wrong WG/AWG credential delivered decrypted traffic")
 		}
 		actual := peer.observe(t, "stats")
-		if actual.RawUDP == 0 || actual.RawTCP != 0 || actual.PlainTCP != 0 || actual.PlainUDP != 0 || actual.DNSQueries != 0 || actual.RouterQueries != 0 || f.network.Current() {
+		payloadTCP, payloadUDP := actual.PlainTCP, actual.PlainUDP
+		if peer.request.Layer != "" {
+			payloadTCP, payloadUDP = actual.ProtocolTCP, actual.ProtocolUDP
+			if (fault == "wrong-peer" || fault == "wrong-psk") && actual.ProtocolRawUDP == 0 ||
+				(fault == "wrong-aes" || fault == "wrong-whitening") && (actual.ProtocolRawUDP != 0 || actual.PlainUDP != 0) {
+				t.Fatal("layered WG credential negative reached the wrong protocol boundary", actual)
+			}
+		}
+		if actual.RawUDP == 0 || actual.RawTCP != 0 || payloadTCP != 0 || payloadUDP != 0 || actual.DNSQueries != 0 || actual.RouterQueries != 0 || f.network.Current() {
 			t.Fatal("WG/AWG credential control missed the actual peer or fabricated a response", actual)
 		}
 		return
+	}
+	if peer.request.Layer != "" {
+		capture, err := f.policy.Capture()
+		kind := "shadowsocks"
+		if peer.request.Layer == "aes-256-gcm+xor-whitening" {
+			kind = "routervpn-aes-xor"
+		}
+		if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != kind || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+			capture.PhysicalRoots[0].Destinations[0] != (mobilemultihop.PhysicalEgress{Host: peer.remote.Addr().String(), Port: int(peer.remote.Port()), Network: "udp"}) ||
+			capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" || capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+			t.Fatal("layered WG changed exact outer UDP, selected DNS, MTU or protection", err)
+		}
 	}
 	for _, network := range []string{"tcp", "udp"} {
 		for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
@@ -592,7 +763,10 @@ func testDesktopNodeEncryptedUDP(t *testing.T, peer *desktopNodeLayerReference, 
 		before := peer.observe(t, action)
 		err := f.box.RouterVPNStrategyDNSProof()
 		after := peer.observe(t, "stats")
-		if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.RawUDP <= before.RawUDP || after.RawTCP != 0 {
+		// The final WG UDP counter counts owned flows; repeated DNS queries
+		// deliberately reuse that flow. Fresh query and encrypted-packet
+		// receipts, rather than a newly created socket, prove each retest.
+		if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.RawUDP <= before.RawUDP || after.RawTCP != 0 || peer.request.Layer != "" && (after.ProtocolRawUDP <= before.ProtocolRawUDP || after.ProtocolUDP == 0) {
 			t.Fatal("WG/AWG selected DNS escaped the encrypted peer or reused a stale answer", action, err, before, after)
 		}
 	}
@@ -631,8 +805,12 @@ func testDesktopNodeEncryptedUDP(t *testing.T, peer *desktopNodeLayerReference, 
 			Proof  string `json:"proof"`
 		}
 		after := peer.observe(t, "stats")
+		payloadTCP := after.PlainTCP == before.PlainTCP+1
+		if peer.request.Layer != "" {
+			payloadTCP = after.ProtocolTCP == before.ProtocolTCP+1 && after.ProtocolRawUDP > before.ProtocolRawUDP
+		}
 		if readErr != nil || closeErr != nil || len(body) > 1024 || response.StatusCode != http.StatusOK || json.Unmarshal(body, &result) != nil || !result.OK || result.Proof != "router-vpn-private-agent-v1" ||
-			(result.NodeID == peer.request.NodeProofID) == (action == "wrong-node") || after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || after.RawTCP != 0 || after.RawUDP <= before.RawUDP || after.PlainTCP != before.PlainTCP+1 {
+			(result.NodeID == peer.request.NodeProofID) == (action == "wrong-node") || after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || after.RawTCP != 0 || after.RawUDP <= before.RawUDP || !payloadTCP {
 			t.Fatal("WG/AWG routed proof lost its independent captured identity or encrypted counters", action, readErr, closeErr, before, after)
 		}
 	}
@@ -657,7 +835,193 @@ func testDesktopNodeEncryptedUDP(t *testing.T, peer *desktopNodeLayerReference, 
 		t.Fatal("WG/AWG close did not join its original physical source", err)
 	}
 	after := peer.observe(t, "stats")
-	if after.DNSQueries != before.DNSQueries || after.RouterQueries != before.RouterQueries || after.PlainTCP != before.PlainTCP || after.PlainUDP != before.PlainUDP {
+	payloadStable := after.PlainTCP == before.PlainTCP && after.PlainUDP == before.PlainUDP
+	if peer.request.Layer != "" {
+		payloadStable = after.ProtocolTCP == before.ProtocolTCP && after.ProtocolUDP == before.ProtocolUDP
+	}
+	if after.DNSQueries != before.DNSQueries || after.RouterQueries != before.RouterQueries || !payloadStable {
 		t.Fatal("retired WG/AWG generation delivered decrypted traffic", before, after)
+	}
+}
+
+func TestRouterVPNDesktopNodeWireGuardLayers(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, fault := range []string{"proved", "wrong-peer", "wrong-psk", "wrong-aes", "wrong-whitening"} {
+			if fault == "wrong-whitening" && layer != "aes-256-gcm+xor-whitening" {
+				continue
+			}
+			t.Run(layer+"/"+fault, func(t *testing.T) {
+				peer := desktopNodeWGReferenceWithOptions(t, desktopNodeWGReferenceOptions{Layer: layer, WhiteningMismatch: fault == "wrong-whitening"})
+				testDesktopNodeEncryptedUDP(t, peer, fault)
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeWireGuardLayerCapture(t *testing.T) {
+	config, options := desktopReferenceFixture(t)
+	digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
+	original := desktopNodeWGLayerRequest{desktopNodeWGRequest: desktopNodeWGRequest{Schema: 1, Address: "192.168.210.2", ClientAddress: "192.168.210.1",
+		PrivateKey: config.PrivateKey, ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:])},
+		Layer: "aes-256-gcm", AESPassword: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 32)), RelaySource: "192.168.210.2"}
+	for _, test := range []struct {
+		name    string
+		change  func(*desktopNodeWGLayerRequest)
+		allowed bool
+	}{
+		{"captured", func(*desktopNodeWGLayerRequest) {}, true},
+		{"whitening", func(r *desktopNodeWGLayerRequest) { r.Layer = "aes-256-gcm+xor-whitening" }, true},
+		{"whitening-negative", func(r *desktopNodeWGLayerRequest) { r.Layer = "aes-256-gcm+xor-whitening"; r.WhiteningMismatch = true }, true},
+		{"wrong-node", func(r *desktopNodeWGLayerRequest) { r.NodeProofID = strings.Repeat("b", 64) }, false},
+		{"wrong-client", func(r *desktopNodeWGLayerRequest) { r.ClientAddress = "192.168.211.1" }, false},
+		{"foreign-relay", func(r *desktopNodeWGLayerRequest) { r.RelaySource = r.ClientAddress }, false},
+		{"loopback-relay", func(r *desktopNodeWGLayerRequest) { r.RelaySource = "127.0.0.1" }, false},
+		{"plain-layer", func(r *desktopNodeWGLayerRequest) { r.Layer = "off" }, false},
+		{"unknown-layer", func(r *desktopNodeWGLayerRequest) { r.Layer = "aes-256-gcm-xor" }, false},
+		{"whitening-on-aes", func(r *desktopNodeWGLayerRequest) { r.WhiteningMismatch = true }, false},
+		{"short-aes", func(r *desktopNodeWGLayerRequest) { r.AESPassword = base64.StdEncoding.EncodeToString([]byte("short")) }, false},
+		{"same-psk", func(r *desktopNodeWGLayerRequest) { r.AESPassword = r.PreSharedKey }, false},
+		{"same-private-key", func(r *desktopNodeWGLayerRequest) { r.AESPassword = r.PrivateKey }, false},
+		{"self-peer", func(r *desktopNodeWGLayerRequest) { r.ClientPublicKey = options.Peers[0].PublicKey }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := original
+			test.change(&request)
+			local, remote, ipc, capture, err := desktopNodeWGLayerIdentity(request)
+			if (err == nil) != test.allowed || (capture != nil) != test.allowed {
+				t.Fatal("layered WG capture admitted another physical, crypto or relay owner", err)
+			}
+			if test.allowed && (local.String() != original.Address || remote.String() != original.ClientAddress || capture.physicalClient != remote || capture.relaySource != local || capture.request != request.desktopNodeWGRequest || ipc == "") {
+				t.Fatal("layered WG replaced its independent source capture")
+			}
+		})
+	}
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plain desktopNodeWGRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&plain) == nil {
+		t.Fatal("plain WG reference accepted a layer-specific input")
+	}
+}
+
+// The worker and traffic are real; the common fixture retains its explicit
+// modeled kernel/TUN boundary. Only the installed gate can prove native host
+// activation and application Connected publication.
+func TestRouterVPNDesktopNodeWireGuardLayerCover(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, fault := range []string{"owned", "wrong-node", "drop-cover"} {
+			t.Run(layer+"/"+fault, func(t *testing.T) {
+				peer := desktopNodeWGReferenceWithOptions(t, desktopNodeWGReferenceOptions{Layer: layer, Cover: true})
+				f := newDesktopNodeLayerFixture(t, peer, "")
+				if err := f.box.RouterVPNStrategyStart(); err != nil {
+					t.Fatal(err)
+				}
+				var cover *routervpnperformance.Service
+				for _, service := range f.box.RouterVPNServices() {
+					if actual, ok := service.(*routervpnperformance.Service); ok {
+						if cover != nil {
+							t.Fatal("multiple cover workers")
+						}
+						cover = actual
+					}
+				}
+				if cover == nil || cover.Healthy() || peer.observe(t, "stats").CoverPackets != 0 {
+					t.Fatal("WG layer started cover before its actual private-node proof")
+				}
+				if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+					t.Fatal(err)
+				}
+				if fault != "owned" {
+					peer.observe(t, fault)
+				}
+				err := cover.Activate()
+				observed := peer.observe(t, "stats")
+				if (err == nil) != (fault == "owned") || cover.Healthy() != (fault == "owned") || observed.RouterQueries == 0 || observed.DirectQueries != 0 || observed.DNSQueries != 1 || observed.RawTCP != 0 || observed.RawUDP == 0 || observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || f.network.Current() {
+					t.Fatal("WG cover changed its exact final protocol or source proof", err, observed)
+				}
+				if fault == "wrong-node" {
+					if observed.CoverPackets != 0 {
+						t.Fatal("wrong WG node started cover")
+					}
+				} else if observed.CoverPackets == 0 || observed.CoverBytes < 128 || observed.CoverMaximum > 1200 || (observed.CoverReplies > 0) != (fault == "owned") {
+					t.Fatal("cover did not reach the final WG peer", observed)
+				}
+				if err := cover.Close(); err != nil || cover.Healthy() {
+					t.Fatal("WG layered worker did not retire", err)
+				}
+				f.source.Cancel()
+				if err := f.close(); err != nil || !f.source.closed.Load() {
+					t.Fatal("WG layer retained its old cover/socket source", err)
+				}
+			})
+		}
+	}
+}
+
+// Knowing the captured AES key is insufficient to bypass WireGuard. The outer
+// peer has exactly one inner UDP destination, and the captured host grants no
+// physical TCP. Selected DNS and Router proof belong to the final WG peer.
+func TestRouterVPNDesktopNodeWireGuardOuterCannotBypassFinal(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) {
+			peer := desktopNodeWGReferenceWithOptions(t, desktopNodeWGReferenceOptions{Layer: layer})
+			f := newDesktopNodeLayerFixture(t, peer, "")
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			// WG eagerly handshakes at startup. Establish a real inner flow
+			// first so its handshake cannot masquerade as this negative's
+			// outer-only packet receipt; final payload/DNS counts must stay
+			// unchanged while the forbidden direct DNS request is sent.
+			if err := f.exchange("udp"); err != nil {
+				t.Fatal("WireGuard outer control lost its real encrypted positive path", err)
+			}
+			before := peer.observe(t, "stats")
+			outer, found := f.box.Outbound().Outbound(mobilemultihop.NativeStartLayerTag)
+			if !found {
+				t.Fatal("missing captured WireGuard outer AES transport")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			connection, err := outer.DialContext(ctx, "tcp", M.ParseSocksaddr(desktopNodeRouterHealthTarget))
+			if connection != nil {
+				_ = connection.Close()
+			}
+			if err == nil {
+				t.Fatal("WireGuard outer acquired an uncaptured physical TCP grant")
+			}
+			target := M.ParseSocksaddr("192.168.50.133:53")
+			packet, err := outer.ListenPacket(ctx, target)
+			if err != nil {
+				t.Fatal("WireGuard outer negative missed its actual owned UDP transport", err)
+			}
+			_ = packet.SetDeadline(time.Now().Add(350 * time.Millisecond))
+			query := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+			raw, err := query.Pack()
+			if err != nil {
+				_ = packet.Close()
+				t.Fatal(err)
+			}
+			n, writeErr := packet.WriteTo(raw, target)
+			answer := make([]byte, 512)
+			_, _, readErr := packet.ReadFrom(answer)
+			_ = packet.Close()
+			observed := peer.observe(t, "stats")
+			if writeErr != nil || n != len(raw) || readErr == nil || observed.RawTCP != 0 || observed.RawUDP <= before.RawUDP || observed.RejectedUDP != before.RejectedUDP+1 ||
+				observed.ProtocolTCP != before.ProtocolTCP || observed.ProtocolUDP != before.ProtocolUDP || observed.RouterQueries != 0 || observed.DNSQueries != 0 {
+				t.Fatal("WireGuard outer AES bypassed its sole captured inner UDP route", writeErr, readErr, observed)
+			}
+			if err := f.exchange("tcp"); err != nil || f.box.RouterVPNStrategyDNSProof() != nil {
+				t.Fatal("outer rejection concealed an unavailable final WireGuard path", err)
+			}
+			observed = peer.observe(t, "stats")
+			if observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0 || observed.DNSQueries != 1 || f.network.Current() {
+				t.Fatal("final WireGuard DNS positive control skipped its encrypted peer", observed)
+			}
+		})
 	}
 }

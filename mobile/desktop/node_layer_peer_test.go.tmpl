@@ -92,40 +92,43 @@ type desktopNodeLayerRequest struct {
 }
 
 type desktopNodeLayerReply struct {
-	Schema            int    `json:"schema"`
-	Address           string `json:"address"`
-	AESAddress        string `json:"aes_address"`
-	BaseAddress       string `json:"base_address,omitempty"`
-	ProtocolFiles     string `json:"protocol_files,omitempty"`
-	ParametersSHA256  string `json:"parameters_sha256,omitempty"`
-	ProtocolRawUDP    int64  `json:"protocol_raw_udp,omitempty"`
-	ProtocolRawTCP    int64  `json:"protocol_raw_tcp,omitempty"`
-	ProtocolTCP       int64  `json:"protocol_tcp,omitempty"`
-	ProtocolUDP       int64  `json:"protocol_udp,omitempty"`
-	ProtocolTLSHTTP   int64  `json:"protocol_tls_http,omitempty"`
-	ProtocolWebSocket int64  `json:"protocol_websocket,omitempty"`
-	ProtocolMux       int64  `json:"protocol_mux,omitempty"`
-	UDPBranchAddress  string `json:"udp_branch_address,omitempty"`
-	UDPBranchRawUDP   int64  `json:"udp_branch_raw_udp,omitempty"`
-	UDPBranchTCP      int64  `json:"udp_branch_tcp,omitempty"`
-	UDPBranchUDP      int64  `json:"udp_branch_udp,omitempty"`
-	AppID             []byte `json:"app_id,omitempty"`
-	RawTCP            int64  `json:"raw_tcp"`
-	RawUDP            int64  `json:"raw_udp"`
-	PlainTCP          int64  `json:"plain_tcp"`
-	PlainUDP          int64  `json:"plain_udp"`
-	DNSQueries        uint32 `json:"dns_queries"`
-	RouterQueries     uint32 `json:"router_queries,omitempty"`
-	DirectQueries     uint32 `json:"direct_router_queries,omitempty"`
-	CoverPackets      uint64 `json:"cover_packets,omitempty"`
-	CoverBytes        uint64 `json:"cover_bytes,omitempty"`
-	CoverReplies      uint64 `json:"cover_replies,omitempty"`
-	CoverReplyBytes   uint64 `json:"cover_reply_bytes,omitempty"`
-	CoverMaximum      uint32 `json:"cover_maximum,omitempty"`
-	Probe             string `json:"probe,omitempty"`
-	ProbeCount        int64  `json:"probe_count,omitempty"`
-	ProbeNetwork      string `json:"probe_network"`
-	ProbeTarget       string `json:"probe_target,omitempty"`
+	Schema                int    `json:"schema"`
+	Address               string `json:"address"`
+	AESAddress            string `json:"aes_address"`
+	BaseAddress           string `json:"base_address,omitempty"`
+	PhysicalClientAddress string `json:"physical_client_address,omitempty"`
+	RelaySourceAddress    string `json:"relay_source_address,omitempty"`
+	ProtocolFiles         string `json:"protocol_files,omitempty"`
+	ParametersSHA256      string `json:"parameters_sha256,omitempty"`
+	ProtocolRawUDP        int64  `json:"protocol_raw_udp,omitempty"`
+	ProtocolRawTCP        int64  `json:"protocol_raw_tcp,omitempty"`
+	ProtocolTCP           int64  `json:"protocol_tcp,omitempty"`
+	ProtocolUDP           int64  `json:"protocol_udp,omitempty"`
+	ProtocolTLSHTTP       int64  `json:"protocol_tls_http,omitempty"`
+	ProtocolWebSocket     int64  `json:"protocol_websocket,omitempty"`
+	ProtocolMux           int64  `json:"protocol_mux,omitempty"`
+	UDPBranchAddress      string `json:"udp_branch_address,omitempty"`
+	UDPBranchRawUDP       int64  `json:"udp_branch_raw_udp,omitempty"`
+	UDPBranchTCP          int64  `json:"udp_branch_tcp,omitempty"`
+	UDPBranchUDP          int64  `json:"udp_branch_udp,omitempty"`
+	AppID                 []byte `json:"app_id,omitempty"`
+	RawTCP                int64  `json:"raw_tcp"`
+	RawUDP                int64  `json:"raw_udp"`
+	PlainTCP              int64  `json:"plain_tcp"`
+	PlainUDP              int64  `json:"plain_udp"`
+	RejectedUDP           int64  `json:"rejected_udp,omitempty"`
+	DNSQueries            uint32 `json:"dns_queries"`
+	RouterQueries         uint32 `json:"router_queries,omitempty"`
+	DirectQueries         uint32 `json:"direct_router_queries,omitempty"`
+	CoverPackets          uint64 `json:"cover_packets,omitempty"`
+	CoverBytes            uint64 `json:"cover_bytes,omitempty"`
+	CoverReplies          uint64 `json:"cover_replies,omitempty"`
+	CoverReplyBytes       uint64 `json:"cover_reply_bytes,omitempty"`
+	CoverMaximum          uint32 `json:"cover_maximum,omitempty"`
+	Probe                 string `json:"probe,omitempty"`
+	ProbeCount            int64  `json:"probe_count,omitempty"`
+	ProbeNetwork          string `json:"probe_network"`
+	ProbeTarget           string `json:"probe_target,omitempty"`
 }
 
 type desktopNodeLayerRoute struct {
@@ -147,6 +150,7 @@ type desktopNodeLayerServer struct {
 	workers                                    sync.WaitGroup
 	rawTCP, rawUDP                             atomic.Int64
 	plainTCP, plainUDP                         atomic.Int64
+	rejectedUDP                                atomic.Int64
 	tlsRequests, websocketUpgrades, muxStreams atomic.Int64
 	observation                                desktopNodePeerObservation
 }
@@ -243,6 +247,7 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 		var found bool
 		target, found = s.route("udp", metadata.Destination.String())
 		if !found {
+			s.rejectedUDP.Add(1)
 			return errors.New("layer peer rejected an unowned inner tunnel")
 		}
 	} else if metadata.Destination.String() == "192.168.50.133:53" {
@@ -959,7 +964,7 @@ func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktop
 		t.Fatal(err)
 	}
 	result, err := p.read()
-	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || result.UDPBranchAddress != p.reply.UDPBranchAddress || result.ProtocolFiles != p.reply.ProtocolFiles || result.ParametersSHA256 != p.reply.ParametersSHA256 || result.ProbeNetwork != p.reply.ProbeNetwork || !bytes.Equal(result.AppID, p.reply.AppID) {
+	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || result.UDPBranchAddress != p.reply.UDPBranchAddress || result.ProtocolFiles != p.reply.ProtocolFiles || result.ParametersSHA256 != p.reply.ParametersSHA256 || result.PhysicalClientAddress != p.reply.PhysicalClientAddress || result.RelaySourceAddress != p.reply.RelaySourceAddress || result.ProbeNetwork != p.reply.ProbeNetwork || !bytes.Equal(result.AppID, p.reply.AppID) {
 		t.Fatal("layer peer observation changed its original owner", err)
 	}
 	return result

@@ -38,6 +38,10 @@ BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 WIREGUARD_CASES = tuple('wg-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'resolver-failure', 'wrong-node',
                                                 'active-network-change', 'cancelled-proof', 'restore-sealed', 'always',
                                                 'cover-connect', 'cover-restore'))
+WIREGUARD_LAYER_CASES = tuple(prefix + '-' + case for prefix in ('wg-aes', 'wg-whitening') for case in (
+    'public-connect', 'home-lan', 'wrong-key', 'wrong-psk', 'wrong-layer-key', 'resolver-failure', 'wrong-node',
+    'active-network-change', 'cancelled-proof', 'restore-sealed', 'always', 'cover-connect', 'cover-restore',
+    'mtu-rollback', 'mtu-commit')) + ('wg-whitening-wrong-whitening',)
 HYSTERIA2_CASES = tuple('hy2-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'wrong-trust', 'wrong-salamander',
                                                 'resolver-failure', 'wrong-node', 'active-network-change', 'cancelled-proof',
                                                 'restore-sealed', 'always', 'cover-connect', 'cover-restore', 'mtu-rollback', 'mtu-commit'))
@@ -50,20 +54,26 @@ AMNEZIA_CASES = tuple(mode + '-' + case for mode in ('awg2-fast', 'awg2-strong')
     'active-network-change', 'cancelled-proof', 'restore-sealed', 'always', 'cover-connect', 'cover-restore', 'mtu-rollback', 'mtu-commit'))
 MTU_CASES = ('mtu-rollback', 'mtu-commit', 'mtu-stale-profile', 'mtu-stale-network', 'mtu-hold', 'mtu-retire-undrained', 'hy2-mtu-rollback', 'hy2-mtu-commit', *(mode + "-" + action for mode in ("awg2-fast", "awg2-strong") for action in ('mtu-rollback', 'mtu-commit')))
 MTU_CASES += tuple(case for case in HYSTERIA2_LAYER_CASES if case.endswith(('-mtu-rollback', '-mtu-commit')))
+MTU_CASES += tuple(case for case in WIREGUARD_LAYER_CASES if case.endswith(('-mtu-rollback', '-mtu-commit')))
 OFF_CASES = ('public-off', 'public-off-save-retry')
 WHITENING_CASES = ('layer-whitening-connect', 'layer-whitening-wrong-key', 'layer-whitening-resolver-failure', 'layer-whitening-cover-restore')
 WHITENING_CASES += tuple(case for case in HYSTERIA2_LAYER_CASES if case.startswith('hy2-whitening-'))
-LAYER_CASES = ('layer-aes-connect', 'layer-aes-restore', *WHITENING_CASES, *(case for case in HYSTERIA2_LAYER_CASES if case.startswith('hy2-aes-')))
+WHITENING_CASES += tuple(case for case in WIREGUARD_LAYER_CASES if case.startswith('wg-whitening-'))
+LAYER_CASES = ('layer-aes-connect', 'layer-aes-restore', *WHITENING_CASES, *(case for case in HYSTERIA2_LAYER_CASES if case.startswith('hy2-aes-')),
+               *(case for case in WIREGUARD_LAYER_CASES if case.startswith('wg-aes-')))
 PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost', *OFF_CASES, 'layer-aes-connect', 'layer-whitening-connect', 'wg-public-connect', 'wg-cover-connect', 'hy2-public-connect', 'hy2-cover-connect', *(mode + "-" + action for mode in ("awg2-fast", "awg2-strong") for action in ('public-connect', 'cover-connect')))
 RESTORE_CASES = ('restore-sealed', 'cover-restore', 'layer-aes-restore', 'layer-whitening-cover-restore', 'wg-restore-sealed', 'wg-cover-restore', 'hy2-restore-sealed', 'hy2-cover-restore', *(mode + "-" + action for mode in ("awg2-fast", "awg2-strong") for action in ('restore-sealed', 'cover-restore')))
 COVER_CASES = ('cover-connect', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies', 'cover-restore', 'layer-whitening-cover-restore', 'wg-cover-connect', 'wg-cover-restore', 'hy2-cover-connect', 'hy2-cover-restore', *(mode + "-" + action for mode in ("awg2-fast", "awg2-strong") for action in ('cover-connect', 'cover-restore')))
 PUBLIC_CASES += tuple(case for case in HYSTERIA2_LAYER_CASES if case.endswith(('-public-connect', '-cover-connect')))
 RESTORE_CASES += tuple(case for case in HYSTERIA2_LAYER_CASES if case.endswith(('-restore-sealed', '-cover-restore')))
 COVER_CASES += tuple(case for case in HYSTERIA2_LAYER_CASES if case.endswith(('-cover-connect', '-cover-restore')))
-ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', 'wg-active-network-change', 'hy2-active-network-change', 'awg2-fast-active-network-change', 'awg2-strong-active-network-change', 'hy2-aes-active-network-change', 'hy2-whitening-active-network-change', *MTU_CASES, *RESTORE_CASES, *PUBLIC_CASES)
+PUBLIC_CASES += tuple(case for case in WIREGUARD_LAYER_CASES if case.endswith(('-public-connect', '-cover-connect')))
+RESTORE_CASES += tuple(case for case in WIREGUARD_LAYER_CASES if case.endswith(('-restore-sealed', '-cover-restore')))
+COVER_CASES += tuple(case for case in WIREGUARD_LAYER_CASES if case.endswith(('-cover-connect', '-cover-restore')))
+ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', 'wg-active-network-change', 'hy2-active-network-change', 'awg2-fast-active-network-change', 'awg2-strong-active-network-change', 'hy2-aes-active-network-change', 'hy2-whitening-active-network-change', 'wg-aes-active-network-change', 'wg-whitening-active-network-change', *MTU_CASES, *RESTORE_CASES, *PUBLIC_CASES)
 CASES = tuple(dict.fromkeys(('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
          'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES, 'cover-wrong-node', 'cover-no-replies',
-         'layer-whitening-wrong-key', 'layer-whitening-resolver-failure', *WIREGUARD_CASES, *HYSTERIA2_CASES, *AMNEZIA_CASES, *HYSTERIA2_LAYER_CASES)))
+         'layer-whitening-wrong-key', 'layer-whitening-resolver-failure', *WIREGUARD_CASES, *HYSTERIA2_CASES, *AMNEZIA_CASES, *HYSTERIA2_LAYER_CASES, *WIREGUARD_LAYER_CASES)))
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -93,6 +103,7 @@ def checked_sources(source):
                 'cmd/client/desktop_node_connection_linux.go', 'cmd/client/desktop_node_connection_linux_tun_native_test.go',
                 'cmd/client/desktop_node_start_layer_linux_tun_native_test.go',
                 'cmd/client/desktop_node_wireguard_linux_tun_native_test.go',
+                'cmd/client/desktop_node_wireguard_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_node_hysteria2_linux_tun_native_test.go',
                 'cmd/client/desktop_node_hysteria2_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_node_amnezia_linux_tun_native_test.go',
@@ -160,6 +171,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its exact cipher, outer physical authority and Start Layer lifecycle: ' + value)
         if value in WIREGUARD_CASES and 'verified installed host plain WireGuard: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its exact UDP WireGuard peer and native owned lifecycle: ' + value)
+        if value in WIREGUARD_LAYER_CASES and 'verified installed host layered WireGuard: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its captured layered UDP route, final WireGuard identity and owned lifecycle: ' + value)
         if value in HYSTERIA2_CASES and 'verified installed host plain Hysteria2: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its exact UDP Hysteria2 peer, selected TLS trust and native owned lifecycle: ' + value)
         if value in HYSTERIA2_LAYER_CASES and 'verified installed host layered Hysteria2: ' + value + '\n' not in output.replace('\r\n', '\n'):
