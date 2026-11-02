@@ -162,11 +162,13 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		Description: "TCP handshake latency; median and 10% trimmed mean resist outliers",
 	}
 
+	a.mu.Lock()
+	// Cancellation while waiting for this save lock must not publish a result.
 	if r.Context().Err() != nil {
+		a.mu.Unlock()
 		http.Error(w, "durable node latency request was cancelled before persistence", http.StatusRequestTimeout)
 		return
 	}
-	a.mu.Lock()
 	previousStore := cloneRouterProfileStore(a.profiles)
 	current, currentOK := a.profileByIDLocked(p.ID)
 	if !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileAtStart {
