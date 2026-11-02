@@ -235,7 +235,7 @@ def main():
                  "TestDarwinNetworkMessageAlignmentAndOwnership",
                  "fatal error: checkptr: misaligned pointer conversion"),
                 ("borrowed-receive-buffer", "return payload, nil",
-                 "return frame[size:], nil", "TestDarwinNetworkMessageAlignmentAndOwnership",
+                 "return frame[size:len(frame):len(frame)], nil", "TestDarwinNetworkMessageAlignmentAndOwnership",
                  "reused receive buffer mutated a captured native message"),
                 ("generic-route-sender-conversion", "size, flags, received = darwinReceiveNotification(fd, buffer)",
                  "size, _, flags, _, received = syscall.Recvmsg(int(fd), buffer, nil, syscall.MSG_DONTWAIT)",
