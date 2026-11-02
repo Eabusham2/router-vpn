@@ -165,8 +165,9 @@ def instrumented_scripts():
     source = NATIVE.replace_once(source, "Set-StrictMode -Version 2", marker("module-entered") + "\nSet-StrictMode -Version 2")
     boundaries = (
         ("    param([string]$ControllerPipe,[long]$ControllerParentHandle)", "initialize-entered", False),
-        ("    Microsoft.PowerShell.Utility\\Add-Type -AssemblyName System.Net.Http", "framework-http", True),
-        ("        Add-Type @Compile", "transport-compile", True),
+        ("    $Runtime=Get-RouterVPNControllerRuntimeCommands", "runtime-commands", True),
+        ("    & $AddType -AssemblyName System.Net.Http", "framework-http", True),
+        ("        & $AddType @Compile", "transport-compile", True),
         ("    $script:ControllerChannel=[RouterVPN.ControllerUI.ControllerChannel]::ConnectAsync($ControllerPipe,$ControllerParentHandle,10000,[Threading.CancellationToken]::None).GetAwaiter().GetResult()", "pipe-connect", True),
     )
     # The second Http assembly load belongs to request clients, after startup.

@@ -4,9 +4,26 @@
 Set-StrictMode -Version 2
 $script:ControllerMode='legacy'
 $script:ControllerChannel=$null
+$script:ControllerConvertFromJson=$null
 $script:ControllerPipe=''
 $script:ControllerParentHandle=[long]0
 $script:ControllerDataRoot=''
+
+function Get-RouterVPNControllerRuntimeCommands {
+    # Resolve the commands from this actual interpreter's own module manifest.
+    # A module-qualified name still searches ambient CurrentUser/AllUsers
+    # directories; retain the exported cmdlets so no owned operation repeats
+    # discovery or resolves an unrelated same-name function.
+    $UtilityRoot=[IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Utility')
+    $UtilityPath=[IO.Path]::Combine($UtilityRoot,'Microsoft.PowerShell.Utility.psd1')
+    $Utility=@(Microsoft.PowerShell.Core\Import-Module $UtilityPath -Scope Local -PassThru -ErrorAction Stop)
+    if($Utility.Count-ne1-or-not[String]::Equals($Utility[0].Path,$UtilityPath,[StringComparison]::OrdinalIgnoreCase)){throw 'The captured PowerShell runtime commands are unavailable.'}
+    $AddType=$Utility[0].ExportedCmdlets['Add-Type']
+    if($null-eq$AddType-or$AddType-isnot[Management.Automation.CmdletInfo]-or$AddType.ImplementingType.FullName-cne'Microsoft.PowerShell.Commands.AddTypeCommand'){throw 'The captured PowerShell runtime commands are unavailable.'}
+    $FromJson=$Utility[0].ExportedCmdlets['ConvertFrom-Json']
+    if($null-eq$FromJson-or$FromJson-isnot[Management.Automation.CmdletInfo]-or$FromJson.ImplementingType.FullName-cne'Microsoft.PowerShell.Commands.ConvertFromJsonCommand'){throw 'The captured PowerShell runtime commands are unavailable.'}
+    return @{AddType=$AddType;FromJson=$FromJson}
+}
 
 function Initialize-RouterVPNControllerTransport {
     param([string]$ControllerPipe,[long]$ControllerParentHandle)
@@ -20,26 +37,27 @@ function Initialize-RouterVPNControllerTransport {
     $script:ControllerMode='failed'
     if(-not$PSBoundParameters.ContainsKey('ControllerPipe')-or-not$PSBoundParameters.ContainsKey('ControllerParentHandle')-or
        [string]::IsNullOrEmpty($ControllerPipe)-or$ControllerParentHandle-le0){throw 'The complete captured native controller handoff is required.'}
-    # Resolve the known system cmdlet directly. Unqualified cold discovery can
-    # analyze every installed module before the captured pipe is authenticated.
-    Microsoft.PowerShell.Utility\Add-Type -AssemblyName System.Net.Http
+    $Runtime=Get-RouterVPNControllerRuntimeCommands
+    $AddType=$Runtime.AddType
+    & $AddType -AssemblyName System.Net.Http
     if(-not('RouterVPN.ControllerUI.ControllerChannel'-as[type])){
         $Source=[IO.Path]::Combine($PSScriptRoot,'RouterVPN-Windows-ControllerTransport.cs')
         $Code=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)
         $Compile=@{TypeDefinition=$Code;ErrorAction='Stop'}
         if($PSVersionTable.PSEdition-eq'Desktop'){
-            $Parameters=New-Object System.CodeDom.Compiler.CompilerParameters
+            $Parameters=[System.CodeDom.Compiler.CompilerParameters]::new()
             $Parameters.CompilerOptions='/langversion:5'
             $Parameters.GenerateExecutable=$false;$Parameters.GenerateInMemory=$true
             foreach($Reference in @('System.dll','System.Core.dll','System.Net.Http.dll')){[void]$Parameters.ReferencedAssemblies.Add($Reference)}
             $Compile.CompilerParameters=$Parameters
         }else{$Compile.CompilerOptions='/langversion:5'}
-        Add-Type @Compile
+        & $AddType @Compile
     }
     # ConnectAsync verifies the inherited read-only parent handle and the actual
     # pipe server before sending its public hello. Neither this module nor any
     # feature receives a controller bearer or a TLS-validation callback.
     $script:ControllerChannel=[RouterVPN.ControllerUI.ControllerChannel]::ConnectAsync($ControllerPipe,$ControllerParentHandle,10000,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    $script:ControllerConvertFromJson=$Runtime.FromJson
     $script:ControllerPipe=$ControllerPipe;$script:ControllerParentHandle=$ControllerParentHandle
     # The retained native parent supplies this public path in its reconstructed
     # environment. Capture it only after authenticating that parent and pipe;
@@ -75,11 +93,11 @@ function Assert-RouterVPNControllerBaseUrl {
 
 function New-RouterVPNControllerClient {
     param([ValidateRange(1,960000)][int]$TimeoutMilliseconds=900000,[ValidateRange(1,8388608)][int]$ResponseLimit=8388608)
-    Add-Type -AssemblyName System.Net.Http
     if($script:ControllerMode-cne'legacy'){
         if($script:ControllerMode-cne'owned'-or$null-eq$script:ControllerChannel){throw 'The captured native controller channel is closed or unavailable.'}
         return $script:ControllerChannel.CreateClient($TimeoutMilliseconds,$ResponseLimit)
     }
+    Add-Type -AssemblyName System.Net.Http
     $Handler=[Net.Http.HttpClientHandler]::new();$Handler.UseProxy=$false;$Handler.AllowAutoRedirect=$false
     $Client=[Net.Http.HttpClient]::new($Handler)
     $Client.Timeout=[Threading.Timeout]::InfiniteTimeSpan;$Client.MaxResponseContentBufferSize=$ResponseLimit
@@ -111,6 +129,8 @@ function Invoke-RouterVPNControllerRequest {
         if($Method-cne'GET'){$Arguments.ContentType=$ContentType;$Arguments.Body=$Body}
         return Invoke-RestMethod @Arguments
     }
+    $FromJson=$script:ControllerConvertFromJson
+    if($null-eq$FromJson){throw 'The captured native controller JSON command is unavailable.'}
     $Method=$Method.ToUpperInvariant()
     if($ContentType-cne'application/json'){throw 'The native controller request content type is not supported.'}
     $Client=$null;$Request=$null;$Response=$null
@@ -133,7 +153,7 @@ function Invoke-RouterVPNControllerRequest {
             throw $Failure
         }
         if([string]::IsNullOrWhiteSpace($Text)){return $null}
-        return ConvertFrom-Json -InputObject $Text -ErrorAction Stop
+        return & $FromJson -InputObject $Text -ErrorAction Stop
     }finally{
         if($null-ne$Response){$Response.Dispose()}
         if($null-ne$Request){$Request.Dispose()}
@@ -144,6 +164,7 @@ function Invoke-RouterVPNControllerRequest {
 function Close-RouterVPNControllerTransport {
     if($script:ControllerMode-ceq'legacy'){return}
     $script:ControllerMode='closed'
+    $script:ControllerConvertFromJson=$null
     if($null-ne$script:ControllerChannel){
         # Keep the retained channel until its request/read/write tasks join.
         # A repeated close can still join after an exceptional caller unwind.

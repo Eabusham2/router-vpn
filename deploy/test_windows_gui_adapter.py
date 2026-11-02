@@ -64,6 +64,13 @@ def main():
                       "return Invoke-RestMethod -Uri $Uri -Method $Method -TimeoutSec $TimeoutSec")),
         ("failed-http-status", "requests", "CONTROL failed HTTP status became successful JSON",
          replace_once(source, "if(-not$Response.IsSuccessStatusCode){", "if($false){")),
+        ("owned-assembly-rediscovery", "requests", "CONTROL owned client used foreign Utility",
+         replace_once(source,
+                      "        return $script:ControllerChannel.CreateClient($TimeoutMilliseconds,$ResponseLimit)",
+                      "        Add-Type -AssemblyName System.Net.Http\n        return $script:ControllerChannel.CreateClient($TimeoutMilliseconds,$ResponseLimit)")),
+        ("owned-json-rediscovery", "requests", "CONTROL owned JSON used foreign Utility",
+         replace_once(source, "return & $FromJson -InputObject $Text -ErrorAction Stop",
+                      "return ConvertFrom-Json -InputObject $Text -ErrorAction Stop")),
         ("retired-owner-reset", "requests", "CONTROL closed owner created another client",
          replace_once(source, "$script:ControllerMode='closed'", "$script:ControllerMode='legacy'")),
     )
@@ -93,7 +100,7 @@ def main():
             print("Rejected executable PowerShell adapter defect:", name, flush=True)
     if any(hashlib.sha256(path.read_bytes()).hexdigest() != digest for path, digest in before.items()):
         raise ValueError("PowerShell adapter source changed during execution")
-    print("PowerShell adapter passed direct loaded-function startup, real requests, cancellation, raw imports, ownership and response bounds; four startup and five transport defects were rejected. Native Windows authentication remains a separate gate.", flush=True)
+    print("PowerShell adapter passed direct loaded-function startup, real requests, cancellation, raw imports, ownership and response bounds; four startup and seven transport defects were rejected. Native Windows authentication remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

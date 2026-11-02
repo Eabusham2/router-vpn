@@ -65,7 +65,7 @@ Add-Type @Compile
 $Fixture=[RouterVPN.ControllerUI.Tests.TransportTests+AdapterHarness]::new()
 # Module-private setup is confined to this executable fixture. Production
 # callers have only the real process-handle/pipe ConnectAsync entry point.
-& $Module {param($Captured) $script:ControllerMode='owned';$script:ControllerChannel=$Captured;$script:ControllerPipe='captured-test-pipe';$script:ControllerParentHandle=[long]123} $Fixture.Channel
+& $Module {param($Captured) $script:ControllerConvertFromJson=(Get-RouterVPNControllerRuntimeCommands).FromJson;$script:ControllerMode='owned';$script:ControllerChannel=$Captured;$script:ControllerPipe='captured-test-pipe';$script:ControllerParentHandle=[long]123} $Fixture.Channel
 $Client=$null;$Other=$null;$Request=$null;$Cts=$null;$Response=$null
 try{
     if($Case-ceq'bounds'){
@@ -78,6 +78,26 @@ try{
     try{$Result=Invoke-RouterVPNControllerRequest -Uri 'https://127.0.0.1:8788/api/status' -TimeoutSec 5}catch{throw ('CONTROL sync JSON did not use the captured channel: '+$_.Exception.Message)}
     Check ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Result.path))-ceq'/api/status') 'sync JSON request lost its captured target'
     Check ($Result.method-eq1-and$Result.bytes-eq0-and$Result.timeout-gt0-and$Result.timeout-le5000) 'sync JSON request lost its method or deadline'
+    # Exercise the owned public request after the initializer's local compiler
+    # scope has ended. A new, real foreign Utility module must never acquire
+    # either owned client creation or JSON response parsing.
+    $ForeignRoot=[IO.Path]::Combine([IO.Path]::GetTempPath(),'routervpn-runtime-commands-'+[Guid]::NewGuid().ToString('N'))
+    $ForeignModule=[IO.Path]::Combine($ForeignRoot,'Microsoft.PowerShell.Utility')
+    $SavedModulePath=$env:PSModulePath
+    [void][IO.Directory]::CreateDirectory($ForeignModule)
+    $ForeignCode="function Add-Type {[Console]::Error.WriteLine('CONTROL owned client used foreign Utility');throw 'CONTROL owned client used foreign Utility'};function ConvertFrom-Json {[Console]::Error.WriteLine('CONTROL owned JSON used foreign Utility');throw 'CONTROL owned JSON used foreign Utility'};Export-ModuleMember -Function Add-Type,ConvertFrom-Json"
+    [IO.File]::WriteAllText([IO.Path]::Combine($ForeignModule,'Microsoft.PowerShell.Utility.psm1'),$ForeignCode,[Text.UTF8Encoding]::new($false))
+    try{
+        Remove-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
+        $env:PSModulePath=$ForeignRoot+[IO.Path]::PathSeparator+[IO.Path]::Combine($PSHOME,'Modules')
+        $RuntimeResult=Invoke-RouterVPNControllerRequest -Uri 'https://127.0.0.1:8788/api/status' -TimeoutSec 5
+        Check ($RuntimeResult.method-eq1-and$RuntimeResult.bytes-eq0) 'owned request lost its captured runtime JSON command'
+        [Console]::WriteLine('PASS owned adapter retains runtime commands after foreign module replacement')
+    }finally{
+        $env:PSModulePath=$SavedModulePath
+        Microsoft.PowerShell.Core\Import-Module ([IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Utility','Microsoft.PowerShell.Utility.psd1')) -Global -ErrorAction Stop
+        [IO.Directory]::Delete($ForeignRoot,$true)
+    }
     $Result=Get-RouterVPNHomeSummary -BaseUrl 'https://127.0.0.1:8788/'
     Check ($Result.method-eq1-and[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Result.path))-ceq'/api/home-summary') 'packaged Home summary escaped its captured channel'
     $Result=Prove-RouterVPNHomeExit -BaseUrl 'https://127.0.0.1:8788'
@@ -127,6 +147,7 @@ try{
     Reject {New-RouterVPNControllerClient} 'closed owner created another client'
     Reject {Initialize-RouterVPNControllerTransport} 'closed owner reset to a legacy channel'
     Reject {Invoke-RouterVPNControllerRequest -Uri 'http://127.0.0.1:8788/api/status'} 'old callback used HTTP after channel retirement'
+    Check ($null-eq(& $Module {$script:ControllerConvertFromJson})) 'closed owner retained its runtime JSON command'
     Check ($global:RouterVPNAdapterLegacyCalls-eq0) 'owned UI used ordinary HTTP fallback'
     Write-Host "PASS controller PowerShell adapter requests checks=$script:Checks"
 }finally{

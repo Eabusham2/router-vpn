@@ -40,7 +40,8 @@ class FirstLaunchDiagnostic(unittest.TestCase):
             self.assertEqual(b"".join(kept), original)
         self.assertTrue({"app-script-entered", "tray-script-entered", "module-entered", "initialize-entered",
                          "framework-http-begin", "framework-http-complete", "transport-compile-begin",
-                         "transport-compile-complete", "pipe-connect-begin", "pipe-connect-complete"}.issubset(stages))
+                         "transport-compile-complete", "pipe-connect-begin", "pipe-connect-complete",
+                         "runtime-commands-begin", "runtime-commands-complete"}.issubset(stages))
         for label in ("app-first-status", "app-first-path", "app-wpf-assemblies", "app-helpers", "app-product-input",
                       "app-unified-transform", "app-telemetry-transform", "app-speedlab-transform",
                       "app-tor-transform", "app-help-binding", "app-product-script",
@@ -97,7 +98,7 @@ class FirstLaunchDiagnostic(unittest.TestCase):
                 target.parent.mkdir(exist_ok=True)
                 raw = (ROOT / relative).read_bytes()
                 if name.endswith("psm1"):
-                    raw = raw.replace(b"        Add-Type @Compile", b"        Add-Type @DifferentCompile")
+                    raw = raw.replace(b"        & $AddType @Compile", b"        & $AddType @DifferentCompile")
                 target.write_bytes(raw)
             with patch.object(DIAGNOSTIC, "ROOT", root), self.assertRaisesRegex(ValueError, "exact production boundary"):
                 DIAGNOSTIC.instrumented_scripts()
@@ -309,57 +310,83 @@ if($null-eq$Qualified-or$null-eq$Ordinary-or$Qualified.ModuleName-cne'Microsoft.
 
 
 def execute_utility_binding_probe(powershell):
-    """Execute the actual initializer command without unqualified discovery."""
+    """Compile the actual initializer with its native handoff still unentered."""
     probe = r"""
-param([string]$Source)
+param([string]$Source,[string]$Foreign,[string]$Mode)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
 if(Get-Module -Name Microsoft.PowerShell.Utility){throw 'utility binding probe was already initialized'}
-if($PSVersionTable.PSEdition-eq'Desktop'){
-    $env:PSModulePath=[IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System),'WindowsPowerShell','v1.0','Modules')
-}else{$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules')}
-$Tokens=$null;$Errors=$null
-$Ast=[System.Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText($Source),[ref]$Tokens,[ref]$Errors)
-if($Errors.Count-ne0){throw 'actual controller module did not parse'}
-$Initialize=$Ast.Find({param($Node)$Node-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$Node.Name-ceq'Initialize-RouterVPNControllerTransport'},$false)
-if($null-eq$Initialize){throw 'actual controller initializer is missing'}
-$Calls=@($Initialize.Body.FindAll({param($Node)$Node-is[System.Management.Automation.Language.CommandAst]-and$Node.GetCommandName()-cmatch'(^|\\)Add-Type$'},$false))
-if($Calls.Count-ne2){throw 'actual initializer assembly/compile commands changed'}
-$PSModuleAutoLoadingPreference='ModuleQualified'
-try{& ([ScriptBlock]::Create($Calls[0].Extent.Text))}catch [System.Management.Automation.CommandNotFoundException]{throw 'initializer requires unqualified module discovery'}
-if($null-eq('System.Net.Http.HttpClient'-as[type])){throw 'actual initializer failed to load its HTTP assembly'}
-$Command=$ExecutionContext.InvokeCommand.GetCommand('Microsoft.PowerShell.Utility\Add-Type',[System.Management.Automation.CommandTypes]::Cmdlet)
-$Ordinary=$ExecutionContext.InvokeCommand.GetCommand('Add-Type',[System.Management.Automation.CommandTypes]::Cmdlet)
-if($null-eq$Command-or$Command.ModuleName-cne'Microsoft.PowerShell.Utility'-or$Command.ImplementingType.FullName-cne'Microsoft.PowerShell.Commands.AddTypeCommand'-or
-   $null-eq$Ordinary-or-not[Object]::ReferenceEquals($Command.ImplementingType,$Ordinary.ImplementingType)){throw 'initializer resolved a different framework cmdlet'}
-[Console]::WriteLine('PASS actual initializer binds the same system Add-Type without unqualified discovery')
+# Keep the adversarial directory first deliberately. Supplying PSModulePath
+# only in the parent does not prevent the shell adding CurrentUser paths.
+$env:PSModulePath=$Foreign+[IO.Path]::PathSeparator+[IO.Path]::Combine($PSHOME,'Modules')
+$global:RouterVPNForeignCompilerCalls=0
+function global:Add-Type {$global:RouterVPNForeignCompilerCalls++;throw 'CONTROL uncaptured Add-Type function selected'}
+$Module=Import-Module $Source -Global -PassThru -ErrorAction Stop
+$Failure=''
+try{
+    [void](Initialize-RouterVPNControllerTransport -ControllerPipe ('\\.\pipe\routervpn-ui-'+('a'*32)) -ControllerParentHandle 1)
+    throw 'compiler probe passed an unexecuted native handoff'
+}catch{$Failure=$_.Exception.Message}
+if($Failure-cne'CONTROL compiled transport reached unentered native handoff'){
+    if($Failure-ceq'CONTROL foreign Utility compiler selected'-or$Failure-ceq'CONTROL uncaptured Add-Type function selected'){[Console]::Error.WriteLine($Failure);exit 13}
+    throw ('actual compiler preparation failed: '+$Failure)
+}
+if($null-eq('RouterVPN.ControllerUI.ControllerChannel'-as[type])-or$global:RouterVPNForeignCompilerCalls-ne0){throw 'actual initializer did not retain its runtime compiler'}
+$State=& $Module { @($script:ControllerMode,$script:ControllerChannel,$script:ControllerConvertFromJson) }
+if($State[0]-cne'failed'-or$null-ne$State[1]-or$null-ne$State[2]){throw 'compiler-only fixture manufactured native channel authority'}
+[Console]::WriteLine('PASS actual runtime compiler excludes ambient discovery; native handoff unentered')
 """
     source = (ROOT/'client/RouterVPN-Windows-ControllerTransport.psm1').read_bytes()
-    qualified = b'    Microsoft.PowerShell.Utility\\Add-Type -AssemblyName System.Net.Http'
-    if source.count(qualified) != 1:
-        raise AssertionError('Actual initializer lost its exact qualified command')
+    native = b"    $script:ControllerChannel=[RouterVPN.ControllerUI.ControllerChannel]::ConnectAsync($ControllerPipe,$ControllerParentHandle,10000,[Threading.CancellationToken]::None).GetAwaiter().GetResult()"
+    start = b"    $Runtime=Get-RouterVPNControllerRuntimeCommands"
+    finish = b"    & $AddType -AssemblyName System.Net.Http"
+    compile_call = b"        & $AddType @Compile"
+    if any(source.count(boundary) != 1 for boundary in (native, start, finish, compile_call)):
+        raise AssertionError('Actual initializer lost its captured compiler or original native boundary')
+    first = source.index(start)
+    last = source.index(finish, first) + len(finish)
+    captured = source[first:last]
+    # Reproduce the old lookup in one actual compiler call. Each mutation must
+    # reach the controlled foreign operation; an arbitrary compile error is
+    # not evidence. No successful result bypasses the actual native gate.
+    variants = (
+        ('actual', source, None),
+        ('ambient-module', source.replace(captured, b'    Microsoft.PowerShell.Utility\\Add-Type -AssemblyName System.Net.Http', 1),
+         'CONTROL foreign Utility compiler selected'),
+        ('uncaptured-compile', source.replace(compile_call, b'        Add-Type @Compile', 1),
+         'CONTROL uncaptured Add-Type function selected'),
+    )
     with tempfile.TemporaryDirectory(prefix='routervpn-utility-binding-probe-') as temporary:
         root = Path(temporary)
         script = root/'probe.ps1'
         script.write_text(probe, encoding='utf-8')
+        foreign = root/'foreign-modules'/'Microsoft.PowerShell.Utility'
+        foreign.mkdir(parents=True)
+        (foreign/'Microsoft.PowerShell.Utility.psm1').write_text(
+            "function Add-Type {$global:RouterVPNForeignCompilerCalls++;throw 'CONTROL foreign Utility compiler selected'}\n"
+            "Export-ModuleMember -Function Add-Type\n", encoding='utf-8')
         environment = dict(os.environ)
         if sys.platform != 'win32':
             environment.update(XDG_CACHE_HOME=str(root/'cache'), XDG_CONFIG_HOME=str(root/'config'),
                                XDG_DATA_HOME=str(root/'data'))
-        for name, body in (('actual', source), ('unqualified', source.replace(qualified, b'    Add-Type -AssemblyName System.Net.Http', 1))):
-            candidate = root/(name+'.psm1')
-            candidate.write_bytes(body)
-            completed = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-File', str(script), str(candidate)],
+        for name, body, witness in variants:
+            directory = root/name
+            directory.mkdir()
+            candidate = directory/'RouterVPN-Windows-ControllerTransport.psm1'
+            candidate.write_bytes(body.replace(native, b"    throw 'CONTROL compiled transport reached unentered native handoff'", 1))
+            (directory/'RouterVPN-Windows-ControllerTransport.cs').write_bytes((ROOT/'client/RouterVPN-Windows-ControllerTransport.cs').read_bytes())
+            completed = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-File', str(script),
+                                        str(candidate), str(foreign.parent), name],
                                        capture_output=True, text=True, env=environment, timeout=45)
             output = completed.stdout + completed.stderr
-            if name == 'actual':
-                if completed.returncode or 'PASS actual initializer binds the same system Add-Type without unqualified discovery' not in output:
-                    raise AssertionError('Actual framework binding failed:\n'+output[-8192:])
+            if witness is None:
+                if completed.returncode or 'PASS actual runtime compiler excludes ambient discovery; native handoff unentered' not in output:
+                    raise AssertionError('Actual runtime compiler failed:\n'+output[-8192:])
                 print(completed.stdout.strip())
-            elif completed.returncode == 0 or 'initializer requires unqualified module discovery' not in output:
-                raise AssertionError('Unqualified initializer missed its exact rejection:\n'+output[-8192:])
+            elif completed.returncode == 0 or witness not in output:
+                raise AssertionError('Uncaptured compiler missed its exact rejection:\n'+output[-8192:])
             else:
-                print('Rejected actual initializer dependence on unqualified module discovery')
+                print('Rejected actual initializer compiler defect:', name)
 
 
 if __name__ == "__main__":
