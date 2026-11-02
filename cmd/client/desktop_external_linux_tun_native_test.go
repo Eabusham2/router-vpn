@@ -258,7 +258,7 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		capture, err := host.external.Capture()
 		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
 			!reflect.DeepEqual(capture.PhysicalRoots[0].Networks, []string{"udp"}) || capture.PhysicalRoots[0].Destinations[0].Network != "udp" ||
-			capture.PhysicalRoots[0].Destinations[0].Host != "198.51.100.2" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
+			capture.PhysicalRoots[0].Destinations[0].Host != "11.77.0.2" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
 			capture.SelectedDNS.Host != "203.0.113.53" || capture.SelectedDNS.Port != 5353 {
 			return host, proof, errors.Join(err, errors.New("external UDP transport acquired an extra physical root or bypassed selected DNS"))
 		}

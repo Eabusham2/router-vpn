@@ -90,7 +90,7 @@ func startDesktopExternalInstalledPacket(t *testing.T, server *desktopNodeLayerS
 		handler.close()
 		t.Fatal("external WireGuard reference failed to create its native stack", err)
 	}
-	bind := &desktopNodeWGBind{local: netip.MustParseAddr("198.51.100.2"), remote: netip.MustParseAddr("192.168.210.1")}
+	bind := &desktopNodeWGBind{local: netip.MustParseAddr("11.77.0.2"), remote: netip.MustParseAddr("192.168.210.1")}
 	ipc := fmt.Sprintf("private_key=%x\n%spublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], parameters, values[1], values[2])
 	device, err := factory(ctx, stack, bind, ipc)
 	ipc = ""

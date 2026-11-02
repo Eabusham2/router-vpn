@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -151,7 +152,7 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 	}
 	address, err := netip.ParseAddrPort(reply.Address)
 	pool := x509.NewCertPool()
-	if err != nil || address.Addr().String() != "198.51.100.2" || address.Port() == 0 || peer.address.IsValid() && peer.address != address ||
+	if err != nil || address.Addr().String() != "11.77.0.2" || address.Port() == 0 || peer.address.IsValid() && peer.address != address ||
 		len(reply.CA) > 8192 || !pool.AppendCertsFromPEM([]byte(reply.CA)) || peer.ca != "" && reply.CA != peer.ca || reply.Connections < 0 || reply.Streams < 0 {
 		t.Fatal("installed external peer changed its endpoint or original private test root")
 	}
@@ -190,9 +191,22 @@ func linuxHostTUNExternalWGKey(t *testing.T) (string, string) {
 
 func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternalTUNPeer {
 	t.Helper()
-	linuxHostTUNCommand(t, "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "198.51.100.2/32", "dev", "rvpn-peer")
+	// The parent has proved a separate network namespace and provisioned TUN.
+	// Use a public-unicast alias only on its disconnected peer veth: the real
+	// guardian deliberately rejects TEST-NET/benchmark destinations, and no
+	// fixture override may turn those reserved ranges into admitted sockets.
+	device, inode, present := strings.Cut(os.Getenv("ROUTERVPN_NODE_OUTER_NETNS_ID"), ":")
+	outerDevice, deviceErr := strconv.ParseUint(device, 10, 64)
+	outerInode, inodeErr := strconv.ParseUint(inode, 10, 64)
+	var current syscall.Stat_t
+	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Getenv(linuxControllerNamespaceMarker) != "1" || os.Geteuid() != 0 ||
+		!present || deviceErr != nil || inodeErr != nil || outerInode == 0 || syscall.Stat("/proc/self/ns/net", &current) != nil ||
+		current.Dev == outerDevice && current.Ino == outerInode {
+		t.Fatal("installed external peer requires the original isolated controller namespace")
+	}
+	linuxHostTUNCommand(t, "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "11.77.0.2/32", "dev", "rvpn-peer")
 	t.Cleanup(func() {
-		linuxHostTUNCommand(t, "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "198.51.100.2/32", "dev", "rvpn-peer")
+		linuxHostTUNCommand(t, "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "11.77.0.2/32", "dev", "rvpn-peer")
 	})
 	directory, err := os.MkdirTemp("/opt", "routervpn-external-peer-")
 	if err != nil {
@@ -256,7 +270,7 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 		cancel()
 		_ = peer.output.Close()
 	})
-	request := map[string]any{"schema": 1, "protocol": peer.protocol, "address": "198.51.100.2",
+	request := map[string]any{"schema": 1, "protocol": peer.protocol, "address": "11.77.0.2",
 		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}
 	if peer.wireguard != nil {
 		keys := map[string]any{"private_key": peer.serverPrivate, "client_public_key": peer.clientPublic, "preshared_key": peer.wireguard.PresharedKey}
@@ -325,7 +339,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 	}
 	profiles.Profiles[0].KillSwitchPolicy = kill
 	profile := common.RouterProfile{ID: "installed-linux-external", Name: "Independent installed external peer", NodeKind: "external",
-		Endpoint: "198.51.100.2", DNSMode: "custom", DNSProtocol: "tcp", DNSHost: "203.0.113.53", DNSPort: 5353,
+		Endpoint: "11.77.0.2", DNSMode: "custom", DNSProtocol: "tcp", DNSHost: "203.0.113.53", DNSPort: 5353,
 		IPv6Mode: "off", StartLayer: common.StartLayerOff, MTUPolicy: "manual", ManualMTU: 1376, EffectiveMTU: 9000,
 		KillSwitch: true, KillSwitchPolicy: kill, MultihopExecution: "local",
 		External: &common.ExternalNodeConfig{Protocol: peer.protocol, ExpectedPublicIP: "203.0.113.88"}}
@@ -334,10 +348,10 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		// revision without giving unrelated saved-policy changes authority.
 		profile.MultihopExecution = "auto"
 	}
-	connect := &common.ExternalHTTPConnectConfig{Host: "198.51.100.2", Port: int(peer.address.Port()), Username: "captured-native-user", Password: peer.password}
+	connect := &common.ExternalHTTPConnectConfig{Host: "11.77.0.2", Port: int(peer.address.Port()), Username: "captured-native-user", Password: peer.password}
 	switch peer.protocol {
 	case "shadowsocks":
-		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: "198.51.100.2", Port: int(peer.address.Port()), Method: "2022-blake3-aes-256-gcm", Password: peer.password}
+		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: "11.77.0.2", Port: int(peer.address.Port()), Method: "2022-blake3-aes-256-gcm", Password: peer.password}
 	case "http-connect":
 		profile.External.HTTPConnect = connect
 	case "https-connect":
@@ -366,7 +380,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		}
 	case "hysteria2":
 		profile.DNSProtocol = "udp"
-		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "198.51.100.2", Port: int(peer.address.Port()), Password: peer.password, TLSServerName: "captured-external.example"}
+		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "11.77.0.2", Port: int(peer.address.Port()), Password: peer.password, TLSServerName: "captured-external.example"}
 		if linuxHostTUNExternalAction(scenario) == "wrong-key" {
 			profile.External.Hysteria2.Password += "-different-peer-credential"
 		}
