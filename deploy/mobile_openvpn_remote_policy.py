@@ -108,11 +108,13 @@ def prepare(vendor):
     if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=PIN: raise ValueError('OpenVPN remote proof requires pinned native core')
     target=vendor/'protocol/openvpn/client.go'
     if target.is_symlink(): raise ValueError('Linked native OpenVPN remote boundary')
-    source=patch(target.read_text())
+    source=patch(target.read_text(encoding='utf-8'))
     MODULE.prepare(vendor)
     LAYERS.prepare(vendor)
     STACK.prepare(vendor)
-    target.write_text(source)
+    # Later composition verifies exact canonical bytes. Text streams on
+    # Windows would replace LF with CRLF after the close policy was proved.
+    target.write_bytes(source.encode('utf-8'))
     for name in ('remote','remote_fixture'):
         output=vendor/'protocol/openvpn'/('routervpn_'+name+'.go')
         if output.is_symlink(): raise ValueError('Linked native OpenVPN receipt source')

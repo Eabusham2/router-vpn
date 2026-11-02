@@ -14,6 +14,53 @@ def load(name):
 REMOTE=load('mobile_openvpn_remote_policy.py');CLOSE=load('mobile_openvpn_close_policy.py');MODULE=REMOTE.MODULE
 
 class Tests(unittest.TestCase):
+    def test_windows_text_translation_cannot_rewrite_verified_close_sources(self):
+        original='package fixture\n'+CLOSE.OLD+'\n'+''.join(before*count for before,after,count in REMOTE.CHANGES)
+        server='package fixture\nfunc closeServer() {\n'+CLOSE.SERVER_OLD+'\n}\n'
+        digest=CLOSE.blobsha(original.encode())
+        # Model the actual Windows default at the I/O boundary. Production
+        # patching, bytes on disk and the strict verifier are not substituted.
+        def windows_text(path, text, encoding=None, errors=None, newline=None):
+            with path.open('w', encoding=encoding or 'utf-8', errors=errors,
+                           newline='\r\n' if newline is None else newline) as stream:
+                return stream.write(text)
+        with tempfile.TemporaryDirectory() as temporary:
+            vendor=Path(temporary).resolve();directory=vendor/'protocol/openvpn';directory.mkdir(parents=True)
+            client=directory/'client.go';client.write_bytes(original.encode())
+            (directory/'server.go').write_bytes(server.encode())
+            with mock.patch.object(REMOTE,'SOURCE_SHA',digest),mock.patch.object(CLOSE,'SOURCE_SHA',digest), \
+                    mock.patch.object(CLOSE.REMOTE,'SOURCE_SHA',digest), \
+                    mock.patch.object(CLOSE,'SERVER_SOURCE_SHA',CLOSE.blobsha(server.encode())), \
+                    mock.patch.object(REMOTE.subprocess,'check_output',return_value=REMOTE.PIN+'\n'), \
+                    mock.patch.object(REMOTE.MODULE,'prepare') as module, \
+                    mock.patch.object(REMOTE.LAYERS,'prepare') as layers, \
+                    mock.patch.object(REMOTE.STACK,'prepare') as stack, \
+                    mock.patch.object(Path,'write_text',windows_text):
+                CLOSE.prepare(vendor)
+                preserved={name:(directory/name).read_bytes() for name in ('server.go','routervpn_close_policy.go')}
+                expected=REMOTE.patch(CLOSE.patch(original)).encode('utf-8')
+                for _ in range(2):
+                    REMOTE.prepare(vendor)
+                    self.assertEqual(client.read_bytes(),expected,
+                                     'OpenVPN remote preparation changed canonical LF after verified close preparation')
+                    records=CLOSE.verify(vendor)
+                    self.assertEqual(records['protocol/openvpn/client.go'],hashlib.sha256(expected).hexdigest())
+                    self.assertEqual({name:(directory/name).read_bytes() for name in preserved},preserved)
+                    for name in ('remote','remote_fixture'):
+                        self.assertEqual((directory/('routervpn_'+name+'.go')).read_bytes(),
+                                         (ROOT/'mobile'/('routervpn_openvpn_'+name+'.go.tmpl')).read_bytes())
+                self.assertEqual(module.call_count,2)
+                self.assertEqual(layers.call_count,2)
+                self.assertEqual(stack.call_count,2)
+                # A verifier must not silently normalize drift to make the
+                # producer appear correct on another platform.
+                changed=expected.replace(b'\n',b'\r\n')
+                self.assertNotEqual(changed,expected)
+                client.write_bytes(changed)
+                with self.assertRaisesRegex(ValueError,'absent or incomplete'):
+                    CLOSE.verify(vendor)
+                self.assertEqual(client.read_bytes(),changed)
+
     def test_full_core_composition_order_and_tamper(self):
         original='package fixture\n'+CLOSE.OLD+'\n'+''.join(before*count for before,after,count in REMOTE.CHANGES)
         digest=CLOSE.blobsha(original.encode())
