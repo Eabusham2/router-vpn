@@ -22,6 +22,49 @@ CATALOG_FILES = ('tor-update-capabilities.json', 'tor-update-input-lines.json', 
 
 PAYLOAD_ROOT = 'TestDesktopTorBridgeUpdateFormPayload'
 PAYLOAD_PACKAGE = 'router-vpn/cmd/client'
+WINDOWS_EDITOR_PROGRESS = 'tor-editor-progress.log'
+WINDOWS_EDITOR_CHECKS = 4186
+
+
+def verify_windows_editor_progress(directory):
+    """Require the fixed diagnostic sequence without admitting payload values."""
+    with (directory / WINDOWS_EDITOR_PROGRESS).open('rb') as stream:
+        raw = stream.read(16385)
+    if len(raw) > 16384:
+        raise RuntimeError('Windows Tor editor diagnostic exceeded its bounded record')
+    try:
+        lines = raw.decode('ascii').splitlines()
+    except UnicodeDecodeError as error:
+        raise RuntimeError('Windows Tor editor diagnostic contains a nonnumeric or private field') from error
+    phases = [('ast-extraction', 0), ('input-controls', 0), ('wpf-initialization', 0)]
+    phases += [('selection', index) for index in range(1, len(SELECTIONS) + 1)]
+    phases += [('direct-cases', 0), ('window-close', 0)]
+    expected = [(phase, event, selection) for phase, selection in phases for event in ('start', 'complete')]
+    if len(SELECTIONS) != 22 or len(lines) != len(expected):
+        raise RuntimeError('Windows Tor editor diagnostic omitted or added a phase')
+    pattern = re.compile(r'RouterVPN Tor editor phase=([a-z-]+) event=(start|complete) '
+                         r'selection=([0-9]{1,2}) checks=([0-9]{1,6}) '
+                         r'elapsed_ms=([0-9]{1,12}) phase_ms=([0-9]{1,12})')
+    prior_time, prior_checks, started = 0, 0, 0
+    for line, (phase, event, selection) in zip(lines, expected):
+        match = pattern.fullmatch(line)
+        if match is None:
+            raise RuntimeError('Windows Tor editor diagnostic contains a nonnumeric or private field')
+        actual_phase, actual_event, ordinal, checks, elapsed, duration = match.groups()
+        ordinal, checks, elapsed, duration = map(int, (ordinal, checks, elapsed, duration))
+        if (actual_phase, actual_event, ordinal) != (phase, event, selection):
+            raise RuntimeError('Windows Tor editor diagnostic changed its exact phase order')
+        if elapsed < prior_time or checks < prior_checks:
+            raise RuntimeError('Windows Tor editor diagnostic regressed its observations')
+        if event == 'start':
+            if duration != 0:
+                raise RuntimeError('Windows Tor editor diagnostic invented a completed duration')
+            started = elapsed
+        elif duration != elapsed - started:
+            raise RuntimeError('Windows Tor editor diagnostic changed its observed phase duration')
+        prior_time, prior_checks = elapsed, checks
+    if prior_checks != WINDOWS_EDITOR_CHECKS:
+        raise RuntimeError('Windows Tor editor omitted its complete callback assertion inventory')
 
 
 def payload_cases(directory, platform):
@@ -281,7 +324,9 @@ def windows_form(directory, shell):
     apartment = ['-STA'] if sys.platform == 'win32' else []
     command = [shell, *apartment, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                str(ROOT/'client/test-windows-tor-bridge-update.ps1')]
+    print('Starting actual Windows Tor editor; child timeout remains 60 seconds', flush=True)
     subprocess.run([*command, '-Output', str(directory)], check=True, timeout=60)
+    verify_windows_editor_progress(directory)
     source = (ROOT / 'client/RouterVPN-Windows-TorBridge.ps1').read_text()
     controls = (
         ('saved-protection', "$SavedPolicy=[string](ExternalPublicValue $SavedProfile 'kill_switch_policy')", "$SavedPolicy='off'",

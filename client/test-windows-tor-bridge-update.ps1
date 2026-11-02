@@ -3,6 +3,32 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version 2
 # Windows PowerShell 5.1 does not reliably populate PSScriptRoot while it
 # evaluates parameter defaults. Resolve the fixture root in the script body.
 if([string]::IsNullOrEmpty($Root)){$Root=Split-Path $PSScriptRoot -Parent}
+# Diagnostics are fixed labels and numeric observations only. They neither
+# replace an editor callback nor extend the parent's sixty-second child bound.
+$script:TorEditorClock=[Diagnostics.Stopwatch]::StartNew()
+$script:TorEditorProgress=Join-Path $Output 'tor-editor-progress.log'
+$script:TorEditorActive='';$script:TorEditorPhaseStarted=[long]0;$script:Checks=0
+$Trace=[IO.File]::Open($script:TorEditorProgress,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+$Trace.Dispose()
+function Write-TorEditorPhase {
+    param([ValidateSet('ast-extraction','input-controls','wpf-initialization','selection','direct-cases','window-close')][string]$Phase,
+          [ValidateSet('start','complete')][string]$Event,[ValidateRange(0,64)][int]$Selection=0)
+    if(($Phase-ceq'selection')-ne($Selection-gt0)){throw 'Invalid editor diagnostic ordinal'}
+    $Key=$Phase+':'+$Selection
+    $Now=[long]$script:TorEditorClock.ElapsedMilliseconds
+    $Duration=[long]0
+    if($Event-ceq'start'){
+        if($script:TorEditorActive-ne''){throw 'Editor diagnostic phase overlapped'}
+        $script:TorEditorActive=$Key;$script:TorEditorPhaseStarted=$Now
+    }else{
+        if($script:TorEditorActive-cne$Key){throw 'Editor diagnostic completion changed its phase'}
+        $Duration=$Now-$script:TorEditorPhaseStarted;$script:TorEditorActive=''
+    }
+    $Line='RouterVPN Tor editor phase={0} event={1} selection={2} checks={3} elapsed_ms={4} phase_ms={5}'-f$Phase,$Event,$Selection,[int]$script:Checks,$Now,$Duration
+    [IO.File]::AppendAllText($script:TorEditorProgress,$Line+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))
+    [Console]::Out.WriteLine($Line);[Console]::Out.Flush()
+}
+Write-TorEditorPhase 'ast-extraction' 'start'
 $Source=Get-Content -Raw -Encoding UTF8 (Join-Path $Root 'client/RouterVPN-Windows-TorBridge.ps1')
 $Ast=[ScriptBlock]::Create($Source).Ast
 foreach($Prefix in @('function TestUnifiedExternalMutationIdle','function GetUnifiedTorUpdateProfile')){
@@ -27,6 +53,8 @@ $Markup=@($Tor.Ast.FindAll({param($N)($N-is[Management.Automation.Language.Expan
 if($Markup.Count-ne1){throw 'Native Tor editor markup missing'}
 [xml]$XML=$Markup[0].Value
 if($null-eq$XML.SelectSingleNode('//*[@Name="TorUpdate"]')){throw 'Native Tor update control missing'}
+Write-TorEditorPhase 'ast-extraction' 'complete'
+Write-TorEditorPhase 'input-controls' 'start'
 $Raw=Get-Content -Raw (Join-Path $Output 'tor-update-source-catalog.json')
 $Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json
 $Capabilities=Get-Content -Raw (Join-Path $Output 'tor-update-capabilities.json')|ConvertFrom-Json
@@ -42,6 +70,8 @@ $Lines=[pscustomobject]@{Text=''}
 $Update=[pscustomobject]@{IsChecked=$true};$Status=[pscustomobject]@{Text=''};$Support=@{Root=$Capabilities}
 $Button=[pscustomobject]@{IsEnabled=$true};$D=[pscustomobject]@{Button=$Button}
 $D|Add-Member ScriptMethod FindName {param($ID)if($ID-cne'TorSave'){throw 'Unexpected form control'};return $this.Button}
+Write-TorEditorPhase 'input-controls' 'complete'
+Write-TorEditorPhase 'wpf-initialization' 'start'
 $NativeWPF=$env:OS-eq'Windows_NT'
 if($NativeWPF){
     if([Threading.Thread]::CurrentThread.ApartmentState-ne'STA'){throw 'The native WPF fixture must run with -STA'}
@@ -54,6 +84,7 @@ if($NativeWPF){
     $Save={$Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))}
     $Update.IsChecked=$true
 }
+Write-TorEditorPhase 'wpf-initialization' 'complete'
 $script:Saved=$null;$script:Busy=$false;$script:NodeReads=0;$script:Checks=0
 function Check([bool]$Value,[string]$Why){$script:Checks++;if(-not$Value){throw $Why}}
 function Api($Path,$Method='GET',$Body=$null,$Timeout=0){
@@ -68,7 +99,10 @@ function Control($ID){if($ID-cne'UnifiedNodeCombo'){throw 'Unexpected rendered c
 $LocalRaw=$Raw
 $Selections=@('local','server','auto')+@('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn'|ForEach-Object{'ordinary-'+$_})
 $Selections+=@($Selections|ForEach-Object{'plain-'+$_})
+$SelectionOrdinal=0
 foreach($Execution in $Selections){
+    $SelectionOrdinal++
+    Write-TorEditorPhase 'selection' 'start' $SelectionOrdinal
     $Plain=$Execution.StartsWith('plain-');$Selection=if($Plain){$Execution.Substring(6)}else{$Execution}
     $Ordinary=$Selection.StartsWith('ordinary-');$TCPOnly=$Selection-cin@('ordinary-socks5','ordinary-http-connect','ordinary-https-connect')
     $FilePrefix=if($Execution-ceq'local'){''}else{$Execution+'-'}
@@ -142,7 +176,9 @@ foreach($Fault in $Faults){
     if($Fault-ceq'bridge-empty'){$Transport.SelectedIndex=0;$Lines.Text=''}
     $script:Saved=$null;$Button.IsEnabled=$true;&$Save;Check ($null-eq$Saved) ('Tor update adopted '+$Fault)
 }
+    Write-TorEditorPhase 'selection' 'complete' $SelectionOrdinal
 }
+Write-TorEditorPhase 'direct-cases' 'start'
 $Raw=$LocalRaw
 $script:Busy=$false;$Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json;$Support.Root=$Capabilities
 $Update.IsChecked=$false;$Kill.SelectedIndex=2;$Transport.SelectedIndex=2;$Lines.Text=$InputLines.snowflake-join"`n"
@@ -176,5 +212,8 @@ foreach($Dynamic in @('meek_lite','snowflake','webtunnel')){
 $Transport.SelectedIndex=$TransportIDs.IndexOf('custom');$Kill.SelectedIndex=2
 $Lines.Text=(@($FixedSets.'8')+@($FixedSets.'1'))-join"`n";$script:Saved=$null;$Button.IsEnabled=$true;&$Save
 Check ($null-eq$Saved) 'Direct fixed set exceeded its eight-bridge bound'
+Write-TorEditorPhase 'direct-cases' 'complete'
+Write-TorEditorPhase 'window-close' 'start'
 if($NativeWPF){$D.Close()}
+Write-TorEditorPhase 'window-close' 'complete'
 Write-Host "Windows actual Tor editor callbacks: $script:Checks checks PASS; WPF=$NativeWPF"
