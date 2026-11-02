@@ -1,0 +1,144 @@
+package device
+
+import (
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func routerVPNTimerAwait(t *testing.T, ready func() bool, label string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !ready() {
+		if time.Now().After(deadline) {
+			t.Fatal(label)
+		}
+		runtime.Gosched()
+	}
+}
+
+// Force the real expiration callback to enter and block at modifyingLock
+// before a concurrent delete is released. The callback's duration reset must
+// share that lock with Mod, Del and IsPending. No fake clock or callback copy
+// participates in this test.
+func TestRouterVPNAmneziaTimerExpirationAndDeleteShareLock(t *testing.T) {
+	for iteration := 0; iteration < 128; iteration++ {
+		func() {
+			peer := new(Peer)
+			timer := peer.NewTimer(func(*Peer, time.Duration) {})
+			timer.modifyingLock.Lock()
+			locked := true
+			defer func() {
+				if locked {
+					timer.modifyingLock.Unlock()
+				}
+				timer.DelSync()
+			}()
+			timer.duration = time.Nanosecond
+			timer.Timer.Reset(0)
+			routerVPNTimerAwait(t, func() bool {
+				if timer.runningLock.TryLock() {
+					timer.runningLock.Unlock()
+					return false
+				}
+				return true
+			}, "actual timer callback did not enter its running lock")
+			entered, done := make(chan struct{}), make(chan struct{})
+			go func() {
+				close(entered)
+				timer.Del()
+				close(done)
+			}()
+			<-entered
+			timer.modifyingLock.Unlock()
+			locked = false
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("concurrent exact timer delete did not join")
+			}
+			timer.DelSync()
+			if timer.IsPending() {
+				t.Fatal("deleted exact timer retained its pending duration")
+			}
+		}()
+	}
+}
+
+func TestRouterVPNAmneziaTimerDelSyncJoinsEnteredExpiration(t *testing.T) {
+	entered, release, completed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCallback := func() { releaseOnce.Do(func() { close(release) }) }
+	var callbacks atomic.Int32
+	timer := new(Peer).NewTimer(func(_ *Peer, duration time.Duration) {
+		callbacks.Add(1)
+		if duration != time.Nanosecond {
+			t.Error("expiration changed its captured duration", duration)
+		}
+		close(entered)
+		<-release
+		close(completed)
+	})
+	defer timer.DelSync()
+	defer releaseCallback()
+	timer.Mod(time.Nanosecond)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timer expiration did not enter")
+	}
+	// Keep the already entered callback held while a new pending duration is
+	// installed. Observing that exact rearm cleared proves DelSync reached Del;
+	// a scheduler delay cannot make a never-entered deletion look joined.
+	timer.Mod(time.Hour)
+	done := make(chan struct{})
+	go func() { timer.DelSync(); close(done) }()
+	routerVPNTimerAwait(t, func() bool { return !timer.IsPending() }, "delete did not clear the expired duration")
+	select {
+	case <-done:
+		t.Fatal("synchronous delete returned before its entered callback joined")
+	default:
+	}
+	releaseCallback()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("synchronous delete did not join the released expiration")
+	}
+	select {
+	case <-completed:
+	default:
+		t.Fatal("delete completed without the owned expiration completion")
+	}
+	if timer.IsPending() || callbacks.Load() != 1 {
+		t.Fatal("delete retained or replayed its entered expiration")
+	}
+}
+
+func TestRouterVPNAmneziaTimerCallbackCanRearmWithoutLostDuration(t *testing.T) {
+	completed := make(chan struct{})
+	var timer *Timer
+	timer = new(Peer).NewTimer(func(_ *Peer, duration time.Duration) {
+		if duration != time.Nanosecond {
+			t.Error("callback lost its original expiry duration", duration)
+		}
+		timer.Mod(time.Hour)
+		close(completed)
+	})
+	defer timer.DelSync()
+	timer.Mod(time.Nanosecond)
+	select {
+	case <-completed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("callback could not rearm outside the modifying lock")
+	}
+	if !timer.IsPending() {
+		t.Fatal("old expiration erased the callback's new pending duration")
+	}
+	timer.DelSync()
+	if timer.IsPending() {
+		t.Fatal("joined deletion retained the rearmed timer")
+	}
+}

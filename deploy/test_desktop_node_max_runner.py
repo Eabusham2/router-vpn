@@ -162,6 +162,42 @@ class ModeledRun:
                         'TestRouterVPNDesktopNodeCompleteMAXQUIC', 'max-quic-wg/off',
                         'modeled exact assertion', 'package routervpnpq\n')
         self.commands = []
+        self.dependency_events = []
+        self.dependency_env = None
+        self.dependency_snapshot = None
+
+    def timer_command(self, command, **kwargs):
+        """Model only Go metadata; exercise the shipping timer verifier itself."""
+        timers = GATE.REFERENCE.BUILD.POLICY.AMNEZIA.TIMERS
+        if kwargs != {'cwd': self.core, 'env': self.dependency_env, 'text': True} or kwargs['env'] is not self.dependency_env:
+            raise AssertionError('Timer verification lost the captured source or compiler environment')
+        if dict(kwargs['env']) != self.dependency_snapshot:
+            raise AssertionError('Timer verification changed the captured compiler environment')
+        if command == [self.compiler, 'mod', 'edit', '-json']:
+            self.dependency_events.append('plan')
+            replacements = [{'Old': {'Path': timers.MODULE, 'Version': timers.VERSION},
+                             'New': {'Path': './' + timers.COPY}}]
+            if self.failure_kind == 'timer-missing':
+                replacements = []
+            elif self.failure_kind == 'timer-foreign':
+                replacements[0]['New']['Path'] = './foreign-module'
+            return json.dumps({'Require': [{'Path': timers.MODULE, 'Version': timers.VERSION}], 'Replace': replacements})
+        if command == [self.compiler, 'list', '-m', '-mod=readonly', '-json', timers.MODULE]:
+            self.dependency_events.append('selection')
+            selected = self.core / (timers.COPY if self.failure_kind != 'timer-selected' else 'foreign-module')
+            return json.dumps({'Path': timers.MODULE, 'Version': timers.VERSION, 'Dir': str(selected),
+                              'Replace': {'Path': './' + timers.COPY, 'Dir': str(selected)}})
+        raise AssertionError(command)
+
+    def timer_tree(self, selected):
+        # Full pinned archive/h1 and exact patch validation has its own actual
+        # archive suite. This runner model stops only at that filesystem boundary.
+        timers = GATE.REFERENCE.BUILD.POLICY.AMNEZIA.TIMERS
+        if selected != self.core / timers.COPY or self.dependency_events != ['checksum', 'plan', 'selection']:
+            raise AssertionError('Timer verification did not select the exact captured private module')
+        self.dependency_events.append('tree')
+        if self.failure_kind == 'timer-tree':
+            raise ValueError('modeled pinned AWG tree rejection')
 
     def sources(self, source):
         self.source_reads += 1
@@ -172,6 +208,8 @@ class ModeledRun:
         return {'native_static_libs': [], 'identity': 'changed' if self.failure_kind == 'changed-archive' and self.native_reads > 1 else 'original'}
 
     def keys(self, target, cache, keys):
+        if self.dependency_events != ['checksum', 'plan', 'selection', 'tree']:
+            raise AssertionError('Private keys preceded complete timer dependency verification')
         self.assert_new = not keys.parent.exists()
         keys.parent.mkdir(mode=0o700)
         keys.mkdir(mode=0o700)
@@ -208,10 +246,12 @@ class ModeledRun:
         self.commands.append(command)
         if command[0] == str(self.compiler):
             if command[1:3] == ['mod', 'verify']:
+                self.dependency_events.append('checksum')
+                self.dependency_env = kwargs['env']
+                self.dependency_snapshot = dict(kwargs['env'])
+                if self.failure_kind == 'module-checksum':
+                    return 1, 'modeled original module checksum rejection'
                 return 0, 'all modules verified'
-            if command[1:3] == ['list', '-m']:
-                packet = GATE.REFERENCE.BUILD.POLICY.AMNEZIA
-                return 0, json.dumps({'Version': packet.VERSION, 'Sum': packet.SUM})
             if command[1:3] == ['test', '-c']:
                 if self.failure_kind == 'control-compile' and any(value.startswith('-overlay=') for value in command):
                     return 1, 'intentional compiler rejection'
@@ -263,8 +303,12 @@ class ModeledRun:
                 (GATE.REFERENCE, 'generate_keys', self.keys),
                 (GATE.REFERENCE, 'test_sources', self.test_sources),
                 (GATE.REFERENCE.BUILD.PQ, 'verify', self.native),
+                (GATE.REFERENCE.BUILD.POLICY.AMNEZIA.TIMERS.subprocess, 'check_output', self.timer_command),
+                (GATE.REFERENCE.BUILD.POLICY.AMNEZIA.TIMERS, 'verify_tree', self.timer_tree),
             ):
                 stack.enter_context(patch.object(owner, attribute, value))
+            timers = GATE.REFERENCE.BUILD.POLICY.AMNEZIA.TIMERS
+            self.timer_verifier = stack.enter_context(patch.object(timers, 'verify', wraps=timers.verify))
             yield
 
     def execute(self):
@@ -278,6 +322,8 @@ class MAXOwnershipChecks(unittest.TestCase):
             with run.installed():
                 result = run.execute()
             self.assertTrue(run.assert_new)
+            run.timer_verifier.assert_called_once_with(run.core, run.compiler, env=run.dependency_env)
+            self.assertEqual(run.dependency_events, ['checksum', 'plan', 'selection', 'tree'])
             self.assertEqual(run.events, ['source-enter', 'source-joined'])
             self.assertTrue(all(not path.exists() for path in run.private))
             self.assertTrue(result['private_key_workspace_removed'])
@@ -288,6 +334,25 @@ class MAXOwnershipChecks(unittest.TestCase):
             deadlines = [value for command in run.commands for value in command if value.startswith('-test.timeout=')]
             self.assertCountEqual(deadlines, ['-test.timeout=120s', '-test.timeout=600s', '-test.timeout=1800s',
                                              '-test.timeout=600s', '-test.timeout=1800s', '-test.timeout=90s'])
+
+    def test_unverified_timer_dependency_cannot_reach_keys_compilation_or_receipt(self):
+        for fault, witness in (('module-checksum', 'checksum verification'),
+                               ('timer-missing', 'unrelated or missing AWG timer replacement'),
+                               ('timer-foreign', 'unrelated or missing AWG timer replacement'),
+                               ('timer-selected', 'exact selected private AWG timer copy'),
+                               ('timer-tree', 'pinned AWG tree rejection')):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                run = ModeledRun(Path(directory), fault)
+                with run.installed(), self.assertRaisesRegex(ValueError, witness):
+                    run.execute()
+                self.assertFalse(run.receipt.exists())
+                self.assertEqual(run.private, [])
+                self.assertEqual(run.events, [])
+                self.assertEqual(run.commands, [[str(run.compiler), 'mod', 'verify']])
+                if fault == 'module-checksum':
+                    run.timer_verifier.assert_not_called()
+                else:
+                    run.timer_verifier.assert_called_once_with(run.core, run.compiler, env=run.dependency_env)
 
     def test_failed_compile_execution_or_postflight_never_publishes_a_receipt(self):
         for fault in ('control-compile', 'control-succeeded', 'missing-case', 'changed-source', 'changed-archive',

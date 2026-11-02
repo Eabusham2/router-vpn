@@ -219,10 +219,7 @@ def build(core, pq, keys, output, target, cache, *, go='go', race=False):
     if race and target == 'windows/arm64':
         raise ValueError('The pinned compiler does not provide Windows ARM64 race instrumentation')
     amnezia = BUILD.POLICY.AMNEZIA
-    dependency = json.loads(subprocess.check_output(
-        [go, 'list', '-m', '-json', amnezia.MODULE], cwd=core, env=env, text=True))
-    if dependency.get('Version') != amnezia.VERSION or dependency.get('Sum') != amnezia.SUM or dependency.get('Replace'):
-        raise ValueError('PQ reference requires the exact unmodified packet cryptographic dependency')
+    amnezia.TIMERS.verify(core, go, env=env)
     receipt = BUILD.PQ.verify(pq, target)
     flags = shlex.split(env.get('CGO_LDFLAGS', '')) if target.startswith('darwin/') else []
     if target.startswith('windows/'):

@@ -118,6 +118,7 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     commandLine 'bash', 'build-sing-box-libbox.sh'
     inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go'), rootProject.file('../mobile/routervpn_openvpn.go'), rootProject.file('../mobile/routervpn_openvpn_native_test.go.tmpl'), rootProject.file('../deploy/test_mobile_openvpn_pinned.sh')
     inputs.file rootProject.file('../deploy/prepare-mobile-amnezia.py')
+    inputs.files rootProject.file('../deploy/prepare-amnezia-timers.py'), rootProject.file('../deploy/test_amnezia_timers_pinned.py'), rootProject.file('../deploy/test_amnezia_timer_preparation.py')
     inputs.file rootProject.file('../deploy/prepare-mobile-pq.py')
     inputs.files rootProject.file('../deploy/build-mobile-tor-package.py'), rootProject.file('../deploy/prepare-mobile-torpack.py'), rootProject.file('../deploy/prepare-mobile-tor.py'), rootProject.file('../deploy/stage-mobile-tor-notices.py'), rootProject.file('../deploy/verify-mobile-tor-link.py')
     inputs.files rootProject.file('../deploy/test_mobile_tor_loader.py'), rootProject.file('../deploy/test_mobile_tor_package_policy.py')

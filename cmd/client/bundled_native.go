@@ -218,13 +218,7 @@ func verifyBundledNativeContext(ctx context.Context, root string) (string, error
 	if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && !tags["with_purego"] {
 		return "", errors.New("native engine lacks its packaged Cronet loader")
 	}
-	backend := false
-	for _, module := range metadata.Deps {
-		if module.Path == "github.com/amnezia-vpn/amneziawg-go/v3" {
-			backend = module.Replace == nil && module.Version == bundledAmneziaVersion && module.Sum == bundledAmneziaSum
-		}
-	}
-	if !backend {
+	if !bundledAmneziaBackend(metadata.Deps) {
 		return "", errors.New("native engine lacks its pinned AmneziaWG backend")
 	}
 	if err := ctx.Err(); err != nil {

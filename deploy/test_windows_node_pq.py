@@ -246,10 +246,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
     if status:
         raise ValueError('Windows PQ module verification failed:\n' + output[-8192:])
     packet = REFERENCE.BUILD.POLICY.AMNEZIA
-    status, output = NODE.run([compiler, 'list', '-m', '-mod=readonly', '-json', packet.MODULE], cwd=source, env=captured, timeout=60)
-    dependency = json.loads(output) if status == 0 else {}
-    if dependency.get('Version') != packet.VERSION or dependency.get('Sum') != packet.SUM or dependency.get('Replace'):
-        raise ValueError('Windows PQ requires the unmodified pinned packet implementation')
+    packet.TIMERS.verify(source, compiler, env=captured)
     receipt_path = new_receipt_path(receipt_path)
     with tempfile.TemporaryDirectory(prefix='routervpn-windows-pq-') as directory:
         work = Path(directory)

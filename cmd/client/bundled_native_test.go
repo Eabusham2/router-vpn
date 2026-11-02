@@ -7,9 +7,72 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
+
+func TestNativeAmneziaBuildInfoRequiresExactTimerCorrection(t *testing.T) {
+	// This is the actual debug/buildinfo.ReadFile shape of the pinned Go1.26.3
+	// executable produced by prepare-amnezia-timers.py. Local replacements
+	// carry no h1 sums; the unmodified bundle receipt still requires that sum.
+	observed := `{"Path":"github.com/amnezia-vpn/amneziawg-go/v3","Version":"v3.1.20260814","Replace":{"Path":"./routervpn-patched-amnezia","Version":"(devel)"}}`
+	decode := func() *debug.Module {
+		t.Helper()
+		var module debug.Module
+		if err := json.Unmarshal([]byte(observed), &module); err != nil {
+			t.Fatal(err)
+		}
+		return &module
+	}
+	unrelated := &debug.Module{Path: "example.com/unrelated", Version: "v1.0.0", Sum: "h1:unrelated"}
+	if !bundledAmneziaBackend([]*debug.Module{unrelated, decode()}) {
+		t.Fatal("actual pinned timer replacement was rejected")
+	}
+	changes := map[string]func(*debug.Module){
+		"wrong-original-path":          func(m *debug.Module) { m.Path += "/alias" },
+		"wrong-original-version":       func(m *debug.Module) { m.Version = "v3.1.20260815" },
+		"original-version-alias":       func(m *debug.Module) { m.Version += "+incompatible" },
+		"original-sum":                 func(m *debug.Module) { m.Sum = bundledAmneziaSum },
+		"original-foreign-sum":         func(m *debug.Module) { m.Sum = "h1:changed" },
+		"unpatched-backend":            func(m *debug.Module) { m.Replace, m.Sum = nil, bundledAmneziaSum },
+		"missing-replacement":          func(m *debug.Module) { m.Replace = nil },
+		"empty-replacement":            func(m *debug.Module) { m.Replace = new(debug.Module) },
+		"absolute-replacement":         func(m *debug.Module) { m.Replace.Path = "/tmp/routervpn-patched-amnezia" },
+		"relative-parent-replacement":  func(m *debug.Module) { m.Replace.Path = "../routervpn-patched-amnezia" },
+		"normalized-replacement-alias": func(m *debug.Module) { m.Replace.Path = "./other/../routervpn-patched-amnezia" },
+		"bare-replacement-alias":       func(m *debug.Module) { m.Replace.Path = "routervpn-patched-amnezia" },
+		"backslash-replacement-alias":  func(m *debug.Module) { m.Replace.Path = `.\routervpn-patched-amnezia` },
+		"case-replacement-alias":       func(m *debug.Module) { m.Replace.Path = "./RouterVPN-patched-amnezia" },
+		"trailing-slash-alias":         func(m *debug.Module) { m.Replace.Path += "/" },
+		"remote-replacement":           func(m *debug.Module) { m.Replace.Path = bundledAmneziaModule },
+		"empty-replacement-version":    func(m *debug.Module) { m.Replace.Version = "" },
+		"pinned-replacement-version":   func(m *debug.Module) { m.Replace.Version = bundledAmneziaVersion },
+		"replacement-sum":              func(m *debug.Module) { m.Replace.Sum = bundledAmneziaSum },
+		"nested-replacement":           func(m *debug.Module) { m.Replace.Replace = &debug.Module{Path: "./unowned"} },
+	}
+	for label, change := range changes {
+		t.Run(label, func(t *testing.T) {
+			module := decode()
+			change(module)
+			if bundledAmneziaBackend([]*debug.Module{unrelated, module}) {
+				t.Fatal("unowned backend build metadata was accepted")
+			}
+		})
+	}
+	for label, modules := range map[string][]*debug.Module{
+		"missing": nil, "unrelated-only": {unrelated}, "nil-dependency": {nil, decode()},
+		"duplicate":          {decode(), decode()},
+		"invalid-then-valid": {{Path: bundledAmneziaModule, Version: "wrong"}, decode()},
+		"valid-then-invalid": {decode(), {Path: bundledAmneziaModule, Version: "wrong"}},
+	} {
+		t.Run(label, func(t *testing.T) {
+			if bundledAmneziaBackend(modules) {
+				t.Fatal("missing, duplicate or malformed backend identity was accepted")
+			}
+		})
+	}
+}
 
 func nativeReceiptFixture() bundledNativeReceipt {
 	digest := strings.Repeat("1", 64)

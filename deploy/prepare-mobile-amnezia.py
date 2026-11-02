@@ -4,7 +4,6 @@ from pathlib import Path
 import argparse
 import hashlib
 import importlib.util
-import json
 import subprocess
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -22,9 +21,12 @@ _packet_spec.loader.exec_module(PACKET)
 _wireguard_spec=importlib.util.spec_from_file_location('routervpn_native_base_wireguard_bind', ROOT/'deploy/mobile_wireguard_bind_policy.py')
 WIREGUARD_BIND=importlib.util.module_from_spec(_wireguard_spec)
 _wireguard_spec.loader.exec_module(WIREGUARD_BIND)
+_timers_spec=importlib.util.spec_from_file_location('routervpn_amnezia_timers', ROOT/'deploy/prepare-amnezia-timers.py')
+TIMERS=importlib.util.module_from_spec(_timers_spec)
+_timers_spec.loader.exec_module(TIMERS)
 
 def inputs():
-    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py',ROOT/'deploy/prepare-sing-packet-concurrency.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))+policy_inputs()+WIREGUARD_BIND.inputs()
+    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py',ROOT/'deploy/prepare-sing-packet-concurrency.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))+policy_inputs()+WIREGUARD_BIND.inputs()+TIMERS.inputs()
 def policy_inputs():
     return [path for package in POLICY_PACKAGES for path in sorted((ROOT/'internal'/package).glob('*.go')) if not path.name.endswith('_test.go')]
 def prepare_policies(vendor):
@@ -67,14 +69,14 @@ def prepare(vendor):
     for path in (ROOT/'mobile/amnezia').glob('*.tmpl'):(output/path.name.removesuffix('.tmpl')).write_bytes(path.read_bytes())
     registry.write_text(text)
     subprocess.run(['go','mod','edit','-require='+MODULE+'@'+VERSION],cwd=vendor,check=True)
+    TIMERS.prepare(vendor)
     print('Native AmneziaWG endpoint:',VERSION,digest())
 def verify(vendor):
     SCHEDULER.verify(vendor)
     PACKET.verify(vendor)
-    result=json.loads(subprocess.check_output(['go','list','-m','-json',MODULE],cwd=vendor,text=True))
-    if result.get('Version')!=VERSION or result.get('Sum')!=SUM or result.get('Replace'):
-        raise ValueError('native AmneziaWG backend does not match its exact pinned checksum')
-    license=Path(result['Dir'])/'LICENSE'
+    if (TIMERS.MODULE,TIMERS.VERSION,TIMERS.SUM)!=(MODULE,VERSION,SUM):
+        raise ValueError('native AmneziaWG timer owner changed the original dependency pin')
+    license=TIMERS.verify(vendor)/'LICENSE'
     if not license.is_file() or license.stat().st_size<100:
         raise ValueError('native AWG license missing')
     (vendor/'routervpn-amnezia-LICENSE.txt').write_bytes(license.read_bytes())

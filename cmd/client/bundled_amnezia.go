@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -22,6 +23,34 @@ const bundledAmneziaVersion = "v3.1.20260814"
 const bundledAmneziaSum = "h1:l2AhBD+sFycU8Im81n/bZORMxW7fWtlZJEuJ4Hh0+z0="
 const bundledAmneziaGo = "go1.26.3"
 const bundledAmneziaMaxBytes = 160 << 20
+const bundledAmneziaModule = "github.com/amnezia-vpn/amneziawg-go/v3"
+const bundledAmneziaTimerCopy = "./routervpn-patched-amnezia"
+
+// Go records the verified local timer correction with an empty original sum
+// and the literal replacement version "(devel)". Its preparer separately
+// verifies the original full module checksum and the version-qualified
+// replacement. Callers retain their binary digest, source-policy marker and
+// receipt checks; build metadata alone does not authenticate patched source.
+func bundledAmneziaBackend(dependencies []*debug.Module) bool {
+	found := false
+	for _, module := range dependencies {
+		if module == nil {
+			return false
+		}
+		if module.Path != bundledAmneziaModule {
+			continue
+		}
+		if found || module.Version != bundledAmneziaVersion || module.Sum != "" || module.Replace == nil {
+			return false
+		}
+		replacement := module.Replace
+		if replacement.Path != bundledAmneziaTimerCopy || replacement.Version != "(devel)" || replacement.Sum != "" || replacement.Replace != nil {
+			return false
+		}
+		found = true
+	}
+	return found
+}
 
 type bundledAmneziaReceipt struct {
 	Schema         int    `json:"schema_version"`
@@ -128,13 +157,7 @@ func verifyBundledAmnezia(root string) (string, error) {
 	if settings["GOOS"] != runtime.GOOS || settings["GOARCH"] != runtime.GOARCH || settings["CGO_ENABLED"] != "0" {
 		return "", errors.New("native AmneziaWG executable targets another device")
 	}
-	backend := false
-	for _, module := range metadata.Deps {
-		if module.Path == "github.com/amnezia-vpn/amneziawg-go/v3" {
-			backend = module.Replace == nil && module.Version == bundledAmneziaVersion && module.Sum == bundledAmneziaSum
-		}
-	}
-	if !backend {
+	if !bundledAmneziaBackend(metadata.Deps) {
 		return "", errors.New("native AmneziaWG executable does not contain the exact authenticated backend")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

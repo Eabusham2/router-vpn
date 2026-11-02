@@ -7,7 +7,7 @@ complete application engine. Ordinary invocation with -test.run executes the
 native package tests instead.
 """
 import argparse
-import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -18,6 +18,9 @@ TAGS = "with_wireguard,with_gvisor"
 AWG_MODULE = "github.com/amnezia-vpn/amneziawg-go/v3"
 AWG_VERSION = "v3.1.20260814"
 AWG_SUM = "h1:l2AhBD+sFycU8Im81n/bZORMxW7fWtlZJEuJ4Hh0+z0="
+_spec = importlib.util.spec_from_file_location("awg_reference_timers", ROOT / "deploy/prepare-amnezia-timers.py")
+TIMERS = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(TIMERS)
 
 
 def main():
@@ -55,10 +58,9 @@ def main():
     environment.update(GOWORK="off", GOTOOLCHAIN="go1.26.3", GOFLAGS="")
     if subprocess.check_output([args.go, "env", "GOVERSION"], env=environment, text=True).strip() != "go1.26.3":
         raise SystemExit("AWG reference requires the pinned native Go compiler")
-    dependency = json.loads(subprocess.check_output(
-        [args.go, "list", "-m", "-json", AWG_MODULE], cwd=core, env=environment, text=True))
-    if dependency.get("Version") != AWG_VERSION or dependency.get("Sum") != AWG_SUM or dependency.get("Replace"):
-        raise SystemExit("AWG reference requires the exact unmodified cryptographic dependency")
+    if (TIMERS.MODULE, TIMERS.VERSION, TIMERS.SUM) != (AWG_MODULE, AWG_VERSION, AWG_SUM):
+        raise SystemExit("AWG reference changed its original cryptographic dependency pin")
+    TIMERS.verify(core, args.go, env=environment)
     subprocess.run(
         [args.go, "test", "-c", "-p=1", *( ["-race"] if args.race else []),
          "-mod=readonly", "-ldflags=-checklinkname=0", "-tags", TAGS, "-o", str(output),

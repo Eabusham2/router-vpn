@@ -130,10 +130,7 @@ def execute(source, pq, cache, go='go', *, env=None, receipt_path=None):
     if status:
         raise ValueError('PQ Node dependencies failed checksum verification:\n' + output[-8192:])
     packet = REFERENCE.BUILD.POLICY.AMNEZIA
-    status, output = NODE.run([compiler, 'list', '-m', '-mod=readonly', '-json', packet.MODULE], cwd=source, env=captured, timeout=60)
-    dependency = json.loads(output) if status == 0 else {}
-    if dependency.get('Version') != packet.VERSION or dependency.get('Sum') != packet.SUM or dependency.get('Replace'):
-        raise ValueError('PQ Node requires the exact unmodified packet-crypto dependency')
+    packet.TIMERS.verify(source, compiler, env=captured)
     if receipt_path is not None:
         receipt_path = Path(receipt_path).absolute()
         if receipt_path.exists() or receipt_path.is_symlink() or not receipt_path.parent.is_dir():

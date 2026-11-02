@@ -253,6 +253,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go test -race . ./daemon ./route -run '^TestRouterVPNStrategy' -count=1 -timeout=90s
   go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU)' -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
+  python3 "$ROOT/../../deploy/test_amnezia_timers_pinned.py" "$VENDOR"
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"

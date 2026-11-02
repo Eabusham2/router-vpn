@@ -343,7 +343,38 @@ class NativePQScope(unittest.TestCase):
         # and the real execute/standalone receipt paths are exercised on this OS.
         real_temporary = tempfile.TemporaryDirectory
         state = {'paths': [], 'removed_controls': [], 'native_calls': [], 'native_timeouts': [], 'compiled_overlays': {}, 'closed_binary': None}
+        state.update(dependency_events=[], process_commands=[], key_calls=0)
         controls = {item[0]: item for item in GATE.mutations(self.source)}
+        timers = GATE.REFERENCE.BUILD.POLICY.AMNEZIA.TIMERS
+
+        def timer_command(args, **kwargs):
+            # Keep the real module-plan and selected-copy verifier. Only the Go
+            # subprocess metadata and complete archive filesystem are modeled.
+            self.assertEqual(kwargs, {'cwd': self.source, 'env': state['dependency_env'], 'text': True})
+            self.assertIs(kwargs['env'], state['dependency_env'])
+            self.assertEqual(kwargs['env'], state['dependency_snapshot'])
+            if args == [Path('go'), 'mod', 'edit', '-json']:
+                state['dependency_events'].append('plan')
+                replacements = [{'Old': {'Path': timers.MODULE, 'Version': timers.VERSION},
+                                 'New': {'Path': './' + timers.COPY}}]
+                if state.get('dependency_fault') == 'missing':
+                    replacements = []
+                elif state.get('dependency_fault') == 'foreign':
+                    replacements[0]['New']['Path'] = './foreign-module'
+                return json.dumps({'Require': [{'Path': timers.MODULE, 'Version': timers.VERSION}], 'Replace': replacements})
+            if args == [Path('go'), 'list', '-m', '-mod=readonly', '-json', timers.MODULE]:
+                state['dependency_events'].append('selection')
+                selected = self.source / (timers.COPY if state.get('dependency_fault') != 'selected' else 'foreign-module')
+                return json.dumps({'Path': timers.MODULE, 'Version': timers.VERSION, 'Dir': str(selected),
+                                  'Replace': {'Path': './' + timers.COPY, 'Dir': str(selected)}})
+            self.fail('Unexpected timer verifier command: ' + repr(args))
+
+        def timer_tree(selected):
+            self.assertEqual(selected, self.source / timers.COPY)
+            self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection'])
+            state['dependency_events'].append('tree')
+            if state.get('dependency_fault') == 'tree':
+                raise ValueError('modeled pinned AWG tree rejection')
 
         @contextmanager
         def workspace(*, prefix):
@@ -361,6 +392,8 @@ class NativePQScope(unittest.TestCase):
                     owned.cleanup()
 
         def keys(_target, _cache, path):
+            self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection', 'tree'])
+            state['key_calls'] += 1
             path.mkdir(parents=True)
             (path / 'private-test-marker').write_bytes(b'owned test-only key marker')
 
@@ -372,11 +405,14 @@ class NativePQScope(unittest.TestCase):
         def command(args, **_kwargs):
             self.assertFalse(receipt.exists())
             args = [str(value) for value in args]
+            state['process_commands'].append(args)
             if args[1:3] == ['mod', 'verify']:
+                state['dependency_events'].append('checksum')
+                state['dependency_env'] = _kwargs['env']
+                state['dependency_snapshot'] = dict(_kwargs['env'])
+                if state.get('dependency_fault') == 'checksum':
+                    return 1, 'modeled original module checksum rejection'
                 return 0, 'all modules verified\n'
-            if args[1:3] == ['list', '-m']:
-                pinned = GATE.REFERENCE.BUILD.POLICY.AMNEZIA
-                return 0, json.dumps({'Version': pinned.VERSION, 'Sum': pinned.SUM})
             if args[1:3] == ['test', '-c']:
                 binary = Path(args[args.index('-o') + 1])
                 closed = state['closed_binary']
@@ -417,6 +453,9 @@ class NativePQScope(unittest.TestCase):
             stack.enter_context(patch.object(GATE.NODE, 'selected_compiler', return_value=(
                 Path('go'), dict(os.environ, GOOS='windows', CGO_ENABLED='1'), 'arm64')))
             stack.enter_context(patch.object(GATE.REFERENCE.BUILD.PQ, 'verify', return_value={'native_static_libs': []}))
+            stack.enter_context(patch.object(timers.subprocess, 'check_output', side_effect=timer_command))
+            stack.enter_context(patch.object(timers, 'verify_tree', side_effect=timer_tree))
+            state['timer_verifier'] = stack.enter_context(patch.object(timers, 'verify', wraps=timers.verify))
             stack.enter_context(patch.object(GATE.REFERENCE, 'generate_keys', side_effect=keys))
             stack.enter_context(patch.object(GATE.REFERENCE, 'key_files', return_value={'test-key': 'unchanged'}))
             stack.enter_context(patch.object(GATE.REFERENCE, 'test_sources', side_effect=lambda _source: nullcontext()))
@@ -431,6 +470,8 @@ class NativePQScope(unittest.TestCase):
             result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache',
                                   prospective=True, receipt_path=receipt)
         self.assertEqual(json.loads(receipt.read_text()), json.loads(json.dumps(result)))
+        state['timer_verifier'].assert_called_once_with(self.source, Path('go'), env=state['dependency_env'])
+        self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection', 'tree'])
         self.assertEqual(len(result['compiled_negative_controls']), 6)
         self.assertEqual(len(state['removed_controls']), 6)
         self.assertTrue(all(not path.exists() for path in state['paths']))
@@ -444,6 +485,29 @@ class NativePQScope(unittest.TestCase):
             self.assertEqual(outer_timeout, inner_timeout + 15)
             if Path(args[0]).parent.name not in ('current-closed-capability', 'shipping-closed-capability', 'native-composition'):
                 self.assertEqual(inner_timeout, 160 if Path(args[0]).parent.name == 'legacy-pq-adoption' else 90)
+
+    def test_unverified_timer_dependency_prevents_keys_native_work_and_receipt(self):
+        for fault, witness in (('checksum', 'module verification failed'),
+                               ('missing', 'unrelated or missing AWG timer replacement'),
+                               ('foreign', 'unrelated or missing AWG timer replacement'),
+                               ('selected', 'exact selected private AWG timer copy'),
+                               ('tree', 'pinned AWG tree rejection')):
+            receipt = self.work / ('timer-' + fault + '.json')
+            with self.subTest(fault=fault), self.receipt_harness(receipt) as state:
+                state['dependency_fault'] = fault
+                with self.assertRaisesRegex(ValueError, witness):
+                    GATE.execute(self.source, self.work / 'pq', self.work / 'cache',
+                                 prospective=True, receipt_path=receipt)
+            self.assertFalse(receipt.exists())
+            self.assertEqual(state['key_calls'], 0)
+            self.assertEqual(state['paths'], [])
+            self.assertEqual(state['native_calls'], [])
+            self.assertEqual(state['compiled_overlays'], {})
+            self.assertEqual(state['process_commands'], [['go', 'mod', 'verify']])
+            if fault == 'checksum':
+                state['timer_verifier'].assert_not_called()
+            else:
+                state['timer_verifier'].assert_called_once_with(self.source, Path('go'), env=state['dependency_env'])
 
     def test_shipping_execution_requires_separate_closed_proof_and_retains_all_six_controls(self):
         raw = self.shipping_predicate()

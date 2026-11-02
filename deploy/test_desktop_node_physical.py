@@ -183,6 +183,18 @@ def checked_sources(source):
         if path.is_symlink():
             raise ValueError("Linked encrypted peer/native implementation")
         records[path.relative_to(source).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    # A local Go replacement is not covered by go mod verify. Preserve the
+    # complete, reverse-h1-verified backend and its exact native regression in
+    # every before/after node source capture, alongside the selected go.mod.
+    timers = PREP.RELAY.AMNEZIA.TIMERS
+    timers.verify_tree(source / timers.COPY)
+    for path in sorted((source / timers.COPY).rglob('*')):
+        if path.is_file():
+            records[path.relative_to(source).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in timers.inputs():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("AWG timer source authority is not a captured regular file")
+        records['gate/' + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     for path in layer_reference_sources():
         if path.is_symlink() or not path.is_file():
             raise ValueError("Node layer reference lost its exact shipping source")

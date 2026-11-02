@@ -473,10 +473,43 @@ class MAXNativeBoundaries(unittest.TestCase):
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(GATE.MAX, 'mutations', return_value=()))
         state = {'closed_binary': None, 'compiled_overlays': {}, 'native_calls': [], 'removed_controls': []}
+        state.update(dependency_events=[], process_commands=[], key_calls=0)
         controls = {item[0]: item for item in GATE.mutations(self.source)}
         cache = self.work / 'cache'
+        timers = GATE.REFERENCE.BUILD.POLICY.AMNEZIA.TIMERS
+
+        def timer_command(args, **kwargs):
+            # Exercise the real plan/selected-source verifier; model only Go
+            # metadata and the independently tested complete archive boundary.
+            self.assertEqual(kwargs, {'cwd': self.source, 'env': state['dependency_env'], 'text': True})
+            self.assertIs(kwargs['env'], state['dependency_env'])
+            self.assertEqual(kwargs['env'], state['dependency_snapshot'])
+            if args == [Path('go'), 'mod', 'edit', '-json']:
+                state['dependency_events'].append('plan')
+                replacements = [{'Old': {'Path': timers.MODULE, 'Version': timers.VERSION},
+                                 'New': {'Path': './' + timers.COPY}}]
+                if state.get('dependency_fault') == 'missing':
+                    replacements = []
+                elif state.get('dependency_fault') == 'foreign':
+                    replacements[0]['New']['Path'] = './foreign-module'
+                return json.dumps({'Require': [{'Path': timers.MODULE, 'Version': timers.VERSION}], 'Replace': replacements})
+            if args == [Path('go'), 'list', '-m', '-mod=readonly', '-json', timers.MODULE]:
+                state['dependency_events'].append('selection')
+                selected = self.source / (timers.COPY if state.get('dependency_fault') != 'selected' else 'foreign-module')
+                return json.dumps({'Path': timers.MODULE, 'Version': timers.VERSION, 'Dir': str(selected),
+                                  'Replace': {'Path': './' + timers.COPY, 'Dir': str(selected)}})
+            self.fail('Unexpected timer verifier command: ' + repr(args))
+
+        def timer_tree(selected):
+            self.assertEqual(selected, self.source / timers.COPY)
+            self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection'])
+            state['dependency_events'].append('tree')
+            if state.get('dependency_fault') == 'tree':
+                raise ValueError('modeled pinned AWG tree rejection')
 
         def keys(target, _cache, path):
+            self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection', 'tree'])
+            state['key_calls'] += 1
             path.mkdir(parents=True)
             (path / 'private-fixture-key').write_bytes(b'owned test-only key marker')
             generator = cache / GATE.REFERENCE.BUILD.PQ.TARGETS[target] / 'release/examples/native_keys.exe'
@@ -501,11 +534,15 @@ class MAXNativeBoundaries(unittest.TestCase):
         def command(arguments, **kwargs):
             self.assertFalse(receipt.exists(), 'success receipt preceded native proof and private cleanup')
             args = [str(value) for value in arguments]
+            state['process_commands'].append(args)
             if args[1:3] == ['mod', 'verify']:
+                state['dependency_events'].append('checksum')
+                state['dependency_env'] = kwargs['env']
+                state['dependency_snapshot'] = dict(kwargs['env'])
+                if state.get('dependency_fault') == 'checksum':
+                    return 1, 'modeled original module checksum rejection'
                 return 0, 'all modules verified\n'
-            if args[1:3] == ['list', '-m']:
-                pinned = GATE.REFERENCE.BUILD.POLICY.AMNEZIA
-                return 0, json.dumps({'Version': pinned.VERSION, 'Sum': pinned.SUM})
+            self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection', 'tree'])
             if args[1:3] == ['test', '-c']:
                 binary = Path(args[args.index('-o') + 1])
                 if state['closed_binary'] is not None:
@@ -568,6 +605,9 @@ class MAXNativeBoundaries(unittest.TestCase):
             stack.enter_context(patch.object(GATE.MAX, 'tool_receipts', return_value={'test-only-tools': 'pinned'}))
             stack.enter_context(patch.object(GATE.MAX, 'dependency_receipt', return_value={'test-only-dependencies': 'pinned'}))
             stack.enter_context(patch.object(GATE.REFERENCE.BUILD.PQ, 'verify', return_value={'native_static_libs': []}))
+            stack.enter_context(patch.object(timers.subprocess, 'check_output', side_effect=timer_command))
+            stack.enter_context(patch.object(timers, 'verify_tree', side_effect=timer_tree))
+            state['timer_verifier'] = stack.enter_context(patch.object(timers, 'verify', wraps=timers.verify))
             stack.enter_context(patch.object(GATE.REFERENCE, 'generate_keys', side_effect=keys))
             stack.enter_context(patch.object(GATE.REFERENCE, 'key_files', return_value={'test-only-key': 'unchanged'}))
             stack.enter_context(patch.object(GATE.REFERENCE, 'test_sources', side_effect=lambda _source: nullcontext()))
@@ -583,6 +623,8 @@ class MAXNativeBoundaries(unittest.TestCase):
         with self.execution_harness(receipt) as state:
             result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache', receipt_path=receipt)
         self.assertEqual(result['public_admission'], 'shipping-predicate')
+        state['timer_verifier'].assert_called_once_with(self.source, Path('go'), env=state['dependency_env'])
+        self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection', 'tree'])
         self.assertFalse(result['prospective'])
         self.assertEqual(result['closed_admission_source'], 'exact-family-removed')
         self.assertEqual(result['closed_admission_control']['parent'], GATE.CLOSED)
@@ -614,6 +656,28 @@ class MAXNativeBoundaries(unittest.TestCase):
         self.assertEqual(marker_deadlines, [(30, 45)], 'Complete marker selection lost its unchanged aggregate bound')
         self.assertEqual(control_deadlines, [(90, 105)] * 7,
                          'The reversal aggregate changed an individual native control deadline')
+
+    def test_unverified_timer_dependency_prevents_keys_native_work_and_receipt(self):
+        for fault, witness in (('checksum', 'checksum verification failed'),
+                               ('missing', 'unrelated or missing AWG timer replacement'),
+                               ('foreign', 'unrelated or missing AWG timer replacement'),
+                               ('selected', 'exact selected private AWG timer copy'),
+                               ('tree', 'pinned AWG tree rejection')):
+            receipt = self.work / ('timer-' + fault + '.json')
+            with self.subTest(fault=fault), self.execution_harness(receipt) as state:
+                state['dependency_fault'] = fault
+                with self.assertRaisesRegex(ValueError, witness):
+                    GATE.execute(self.source, self.work / 'pq', self.work / 'cache',
+                                 prospective=True, receipt_path=receipt)
+            self.assertFalse(receipt.exists())
+            self.assertEqual(state['key_calls'], 0)
+            self.assertEqual(state['native_calls'], [])
+            self.assertEqual(state['compiled_overlays'], {})
+            self.assertEqual(state['process_commands'], [['go', 'mod', 'verify']])
+            if fault == 'checksum':
+                state['timer_verifier'].assert_not_called()
+            else:
+                state['timer_verifier'].assert_called_once_with(self.source, Path('go'), env=state['dependency_env'])
 
     def test_missing_or_failed_pair_proof_prevents_native_receipt(self):
         for fault in ('omit_port_pair', 'omit_port_pair_leaf', 'failed_port_pair'):

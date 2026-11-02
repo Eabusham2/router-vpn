@@ -532,10 +532,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
     if status:
         raise ValueError('Windows MAX checksum verification failed:\n' + output[-8192:])
     packet = REFERENCE.BUILD.POLICY.AMNEZIA
-    status, output = NODE.run([compiler, 'list', '-m', '-mod=readonly', '-json', packet.MODULE], cwd=source, env=captured, timeout=60)
-    dependency = json.loads(output) if status == 0 else {}
-    if dependency.get('Version') != packet.VERSION or dependency.get('Sum') != packet.SUM or dependency.get('Replace'):
-        raise ValueError('Windows MAX requires the unmodified pinned packet implementation')
+    packet.TIMERS.verify(source, compiler, env=captured)
     status, output = NODE.run([compiler, 'test', *race, '-count=1', '-timeout=30s', '-v',
         WFP.RESOURCES / 'socket_peer.go', WFP.RESOURCES / 'socket_peer_test.go'], cwd=source, env=captured, timeout=90)
     print(output, end='' if output.endswith('\n') else '\n', flush=True)

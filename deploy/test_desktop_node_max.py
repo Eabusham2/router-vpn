@@ -316,10 +316,7 @@ def execute(source, pq, cache, go='go', *, env=None, receipt_path=None):
     if status:
         raise ValueError('Complete MAX dependencies failed checksum verification:\n' + output[-8192:])
     packet = REFERENCE.BUILD.POLICY.AMNEZIA
-    status, output = NODE.run([compiler, 'list', '-m', '-mod=readonly', '-json', packet.MODULE], cwd=source, env=captured, timeout=60)
-    dependency = json.loads(output) if status == 0 else {}
-    if dependency.get('Version') != packet.VERSION or dependency.get('Sum') != packet.SUM or dependency.get('Replace'):
-        raise ValueError('Complete MAX requires its exact unmodified packet-crypto dependency')
+    packet.TIMERS.verify(source, compiler, env=captured)
     with tempfile.TemporaryDirectory(prefix='routervpn-node-max-') as directory:
         workspace = Path(directory)
         keys = workspace / 'private' / 'keys'

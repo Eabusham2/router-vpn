@@ -253,6 +253,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_amnezia_timers_pinned.py'):
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 600)
+                        return ''
                     self.fail('Unexpected native command before build: '+repr(args))
 
                 def stage_cronet(_source, stage, actual, _env):
@@ -271,6 +279,9 @@ class NativeSocketUIDGate(unittest.TestCase):
                     expected_error = node_failure if node_failure is not None and system in ('linux', 'windows') else CompilerBoundary
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
+                timers = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_amnezia_timers_pinned.py')]
+                self.assertEqual(len(timers), 1, 'Native build omitted the actual pinned AWG timer gate')
+                self.assertIn(ROOT/'deploy/test_amnezia_timers_pinned.py', N.inputs())
                 if node_errors:
                     node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
                     self.assertEqual(len(node), 1)
