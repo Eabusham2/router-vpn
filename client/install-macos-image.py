@@ -11,6 +11,12 @@ retained process; the other supplied token fields are not authentication.
 https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_proc.c
 https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/ubc_subr.c
 https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/kern/cs_blobs.h
+
+The separate executable UUID is the depth-1 LC_UUID installed in p_uuid;
+PROC_PIDUNIQIDENTIFIERINFO returns that field independently of p_textvp.
+https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/mach_loader.c
+https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_exec.c
+https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/proc_info.c
 """
 from __future__ import annotations
 
@@ -139,7 +145,7 @@ def capture_image(descriptor):
     elif magic in THIN:
         slices = [(0, original.st_size)]
 
-    hashes = set()
+    hashes, executable_uuids = set(), set()
     for offset, length in slices:
         slice_magic = read(offset, 4)
         if slice_magic not in THIN:
@@ -149,7 +155,7 @@ def capture_image(descriptor):
         commands, command_bytes = struct.unpack_from(order + 'II', header, 16)
         if not 0 < commands <= 32768 or command_bytes > length - header_size:
             raise ValueError('Invalid Mach-O load command bounds')
-        cursor, signature = header_size, None
+        cursor, signature, slice_uuids = header_size, None, set()
         for _ in range(commands):
             if cursor > header_size + command_bytes - 8:
                 raise ValueError('Truncated Mach-O load command')
@@ -164,10 +170,21 @@ def capture_image(descriptor):
                         start > length or size_bytes > length - start):
                     raise ValueError('Mach-O code signature exceeds its captured slice')
                 signature = (start, size_bytes)
+            elif command == 0x1b:
+                # XNU load_uuid accepts at least the 24-byte uuid_command.
+                # Retain every occurrence as a conservative superset: its
+                # depth-1 loader ultimately installs the last one in p_uuid.
+                if size < 24:
+                    raise ValueError('Truncated Mach-O executable UUID command')
+                slice_uuids.add(read(offset + cursor + 8, 16).hex())
             cursor += size
         if cursor != header_size + command_bytes or signature is None:
             raise ValueError('Mach-O image has no complete captured signature')
         hashes.update(signature_hashes(read(offset + signature[0], signature[1])))
+        # XNU initializes load_result.uuid to zero before parsing the image.
+        # Missing LC_UUID therefore participates in comparisons as zero; it
+        # never grants process absence or an empty native image inventory.
+        executable_uuids.update(slice_uuids or {'0' * 32})
 
     digest = hashlib.sha256()
     for offset in range(0, original.st_size, 1024 * 1024):
@@ -175,7 +192,8 @@ def capture_image(descriptor):
     if file_identity(original) != file_identity(os.fstat(descriptor)):
         raise ValueError('Original image changed during identity capture')
     return {'file_identity': file_identity(original), 'sha256': digest.hexdigest(),
-            'mach_o': bool(slices), 'code_directory_hashes': sorted(hashes)}
+            'mach_o': bool(slices), 'code_directory_hashes': sorted(hashes),
+            'executable_uuids': sorted(executable_uuids)}
 
 
 class NativeUniqueInfo(ctypes.Structure):
@@ -206,12 +224,24 @@ def code_identity_library():
     return system
 
 
+class MainImageCodeDirectoryUnavailable(RuntimeError):
+    """An EBADEXEC result with a separately fenced kernel executable UUID.
+
+    This is still an identity failure, never permission to exclude a process.
+    Only a complete original generation may prove its UUID is disjoint.
+    """
+    def __init__(self, pid, identity):
+        super().__init__(f'Cannot capture the native main-image CodeDirectory (pid={pid}, errno=85, result=-1)')
+        self.identity = dict(identity, identity_kind='kernel-main-uuid', code_directory_error=85)
+
+
 def main_image_identity(library, pid, state_reader, *, system=None):
     """Capture p_textvp's CodeDirectory hash across one PID/exec generation.
 
     A caller-supplied PID/idversion token is only a kernel comparison fence.
     Unknown signatures, disappearance, denial or a changed generation remain
-    errors. This function never grants absence or excludes an installation.
+    errors. Only EBADEXEC with an empty output additionally retains its fenced
+    UUID in a typed error; this function never excludes an installation.
     """
     if type(pid) is not int or not 0 < pid < 2**31:
         raise ValueError('Native main-image capture requires an actual PID')
@@ -230,8 +260,10 @@ def main_image_identity(library, pid, state_reader, *, system=None):
     after = state_reader(library, pid)
     if (after is None or before[:3] != after[:3] or after[3] == 5 or unique != after_unique):
         raise RuntimeError('Native main-image process or exec generation changed')
+    identity = {'pid': pid, 'start_seconds': before[1], 'start_microseconds': before[2],
+                'uniqueid': unique[0], 'idversion': unique[1], 'main_uuid': unique[2]}
+    if result == -1 and error == 85 and not any(digest):
+        raise MainImageCodeDirectoryUnavailable(pid, identity)
     if result != 0 or not any(digest):
         raise RuntimeError(f'Cannot capture the native main-image CodeDirectory (pid={pid}, errno={error}, result={result})')
-    return {'pid': pid, 'start_seconds': before[1], 'start_microseconds': before[2],
-            'uniqueid': unique[0], 'idversion': unique[1], 'main_uuid': unique[2],
-            'code_directory_hash': bytes(digest).hex()}
+    return dict(identity, code_directory_hash=bytes(digest).hex())

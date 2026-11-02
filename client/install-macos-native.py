@@ -512,14 +512,17 @@ def running_executables(generation=None):
             try:
                 path = native_executable(library, pid, capture_generation=True)
             except NativeExecutableUnresolved as unresolved:
-                identity = GENERATION.IMAGE.main_image_identity(library, pid, native_process_state)
+                try:
+                    identity = GENERATION.IMAGE.main_image_identity(library, pid, native_process_state)
+                except GENERATION.IMAGE.MainImageCodeDirectoryUnavailable as unavailable:
+                    identity = unavailable.identity
                 if ((identity['pid'], identity['start_seconds'], identity['start_microseconds']) != unresolved.captured[:3] or
                         (identity['uniqueid'], identity['idversion'], identity['main_uuid']) != unresolved.execution):
                     raise RuntimeError('Unresolved native image changed its captured process or exec generation')
                 generation.require_foreign_image(identity)
                 # This is an independently identified live image outside this
                 # complete original generation, not process absence. Unknown
-                # hashes and any matching copied/unlinked image still refuse.
+                # identity and any matching copied/unlinked image still refuse.
                 continue
         if path is not None:
             paths.append(path)

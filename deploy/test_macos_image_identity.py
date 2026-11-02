@@ -61,13 +61,14 @@ def signature(entries):
     return bytes(result)
 
 
-def thin(entries=None, *, order='<', bits=64, signed=True):
+def thin(entries=None, *, order='<', bits=64, signed=True, uuids=()):
     entries = [(0, directory())] if entries is None else entries
     blob = signature(entries)
     header_size = 32 if bits == 64 else 28
     magic = 0xfeedfacf if bits == 64 else 0xfeedface
-    command = struct.pack(order+'IIII', 0x1d if signed else 0xc, 16, header_size + 16, len(blob))
-    header = struct.pack(order+'IIIIIII', magic, 0x01000007 if bits == 64 else 7, 3, 2, 1, len(command), 0)
+    uuid_commands = b''.join(struct.pack(order+'II', 0x1b, 24) + bytes.fromhex(value) for value in uuids)
+    command = uuid_commands + struct.pack(order+'IIII', 0x1d if signed else 0xc, 16, header_size + len(uuid_commands) + 16, len(blob))
+    header = struct.pack(order+'IIIIIII', magic, 0x01000007 if bits == 64 else 7, 3, 2, 1 + len(uuids), len(command), 0)
     if bits == 64: header += b'\0' * 4
     return header + command + blob
 
@@ -95,7 +96,10 @@ class NativeFixture:
         self.unique = [(31, 17), (31, 17)]
         self.states = [(102, 400, 50, 2), (102, 400, 50, 2)]
         self.error = 0
+        self.error_result = -1
+        self.failed_digest = bytes(20)
         self.digest = bytes.fromhex('a1' * 20)
+        self.uuids = ['0' * 32, '0' * 32]
         self.tokens = []
         self.proc_pidinfo = NativeCall(self.info)
         self.csops_audittoken = NativeCall(self.code)
@@ -106,6 +110,7 @@ class NativeFixture:
         unique, version = self.unique.pop(0)
         value = ctypes.cast(pointer, ctypes.POINTER(M.NativeUniqueInfo)).contents
         value.uniqueid, value.idversion = unique, version
+        ctypes.memmove(value.uuid, bytes.fromhex(self.uuids.pop(0)), 16)
         return size
 
     def state(self, library, pid):
@@ -118,7 +123,8 @@ class NativeFixture:
         if (pid, opcode, size) != (102, 5, 20): raise AssertionError('Lost the actual p_textvp operation')
         if self.error:
             ctypes.set_errno(self.error)
-            return -1
+            ctypes.memmove(output, self.failed_digest, 20)
+            return self.error_result
         ctypes.memmove(output, self.digest, 20)
         return 0
 
@@ -157,6 +163,26 @@ class ImageCapture(unittest.TestCase):
                 actual = self.capture(raw)
                 self.assertFalse(actual['mach_o'])
                 self.assertEqual(actual['code_directory_hashes'], [])
+                self.assertEqual(actual['executable_uuids'], [])
+
+    def test_every_slice_uuid_and_missing_uuid_are_retained(self):
+        expected = ['0' * 32, '1' * 32, '2' * 32, '3' * 32]
+        for order in ('>', '<'):
+            for width in (32, 64):
+                # Duplicate load commands are conservatively all retained;
+                # XNU's last depth-1 UUID is consequently always included.
+                raw = universal([thin(uuids=('1' * 32, '2' * 32)),
+                                 thin(order='>', bits=32, uuids=('3' * 32,)), thin()],
+                                order=order, width=width)
+                with self.subTest(order=order, width=width):
+                    self.assertEqual(self.capture(raw)['executable_uuids'], expected)
+        self.assertEqual(self.capture(thin(uuids=('0' * 32,)))['executable_uuids'], ['0' * 32])
+
+    def test_truncated_uuid_command_never_becomes_a_foreign_image(self):
+        raw = bytearray(thin(uuids=('1' * 32,)))
+        struct.pack_into('<I', raw, 36, 20)
+        with self.assertRaisesRegex(ValueError, 'Truncated Mach-O executable UUID'):
+            self.capture(bytes(raw))
 
     def test_unknown_or_unsigned_mach_o_never_becomes_empty_exclusion(self):
         for raw in (thin(signed=False), thin([(0, directory(19))]), thin([]),
@@ -230,6 +256,37 @@ class MainImageCapture(unittest.TestCase):
         fake = NativeFixture(); fake.digest = bytes(20)
         with self.assertRaises(RuntimeError): self.image.main_image_identity(fake, 102, fake.state, system=fake)
 
+    def test_only_ebadexec_retains_the_separate_fenced_uuid_failure(self):
+        for uuid in ('0' * 32, '3' * 32):
+            fake = NativeFixture(); fake.error = 85; fake.uuids = [uuid, uuid]
+            with self.subTest(uuid=uuid), self.assertRaises(self.image.MainImageCodeDirectoryUnavailable) as failure:
+                self.image.main_image_identity(fake, 102, fake.state, system=fake)
+            self.assertEqual(failure.exception.identity, {
+                'identity_kind': 'kernel-main-uuid', 'code_directory_error': 85,
+                'pid': 102, 'start_seconds': 400, 'start_microseconds': 50,
+                'uniqueid': 31, 'idversion': 17, 'main_uuid': uuid})
+            self.assertEqual(fake.tokens, [[0, 0, 0, 0, 0, 102, 0, 17]])
+            self.assertEqual((fake.unique, fake.uuids, fake.states), ([], [], []))
+        for error, result, digest in ((errno.EPERM, -1, bytes(20)), (errno.ESRCH, -1, bytes(20)),
+                                      (85, 1, bytes(20)), (85, -1, bytes.fromhex('a1' * 20))):
+            fake = NativeFixture(); fake.error = error; fake.error_result = result; fake.failed_digest = digest
+            with self.subTest(error=error, result=result), self.assertRaises(RuntimeError) as failure:
+                self.image.main_image_identity(fake, 102, fake.state, system=fake)
+            self.assertNotIsInstance(failure.exception, self.image.MainImageCodeDirectoryUnavailable)
+
+    def test_ebadexec_never_retains_a_replaced_process_or_exec_uuid(self):
+        for change in ('pid', 'exec', 'start', 'gone', 'zombie', 'uuid'):
+            fake = NativeFixture(); fake.error = 85
+            if change == 'pid': fake.unique[-1] = (32, 17)
+            elif change == 'exec': fake.unique[-1] = (31, 18)
+            elif change == 'start': fake.states[-1] = (102, 401, 50, 2)
+            elif change == 'gone': fake.states[-1] = None
+            elif change == 'zombie': fake.states[-1] = (102, 400, 50, 5)
+            else: fake.uuids[-1] = '1' * 32
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, 'process or exec generation changed') as failure:
+                self.image.main_image_identity(fake, 102, fake.state, system=fake)
+            self.assertNotIsInstance(failure.exception, self.image.MainImageCodeDirectoryUnavailable)
+
     def test_reused_pid_exec_changed_or_zombie_after_hash_is_rejected(self):
         for change in ('pid', 'exec', 'start', 'gone', 'zombie'):
             with self.subTest(change=change):
@@ -289,6 +346,7 @@ class NativeMainImage(unittest.TestCase):
         unrelated = self.launch(foreign)
         before = self.image.main_image_identity(self.library, child.pid, self.installer.native_process_state, system=self.system)
         self.assertIn(before['code_directory_hash'], original['code_directory_hashes'])
+        self.assertIn(before['main_uuid'], original['executable_uuids'])
         self.assertEqual((path.stat().st_dev, path.stat().st_ino), tuple(original['file_identity'][:2]))
         path.unlink(); foreign.unlink()
         self.assertIsNone(child.poll()); self.assertIsNone(unrelated.poll())
@@ -298,6 +356,8 @@ class NativeMainImage(unittest.TestCase):
         self.assertIn(after['code_directory_hash'], original['code_directory_hashes'])
         self.assertNotIn(actual_other['code_directory_hash'], original['code_directory_hashes'])
         self.assertIn(actual_other['code_directory_hash'], other['code_directory_hashes'])
+        self.assertIn(after['main_uuid'], original['executable_uuids'])
+        self.assertIn(actual_other['main_uuid'], other['executable_uuids'])
         print('Actual original copied/unlinked main images retained their separate CodeDirectory identities: '+
               json.dumps({'owned': after, 'foreign': actual_other, 'admission_authority': False}, sort_keys=True), flush=True)
 
@@ -361,12 +421,21 @@ def main():
          ImageCapture, 'test_all_fat_slices_and_alternate_code_directories_are_retained'),
         ('omit-slices', 'for offset, length in slices:', 'for offset, length in slices[:1]:',
          ImageCapture, 'test_all_fat_slices_and_alternate_code_directories_are_retained'),
+        ('omit-uuid-slices', "        executable_uuids.update(slice_uuids or {'0' * 32})",
+         "        if offset == slices[0][0]: executable_uuids.update(slice_uuids or {'0' * 32})",
+         ImageCapture, 'test_every_slice_uuid_and_missing_uuid_are_retained'),
+        ('erase-missing-uuid', "executable_uuids.update(slice_uuids or {'0' * 32})", 'executable_uuids.update(slice_uuids)',
+         ImageCapture, 'test_every_slice_uuid_and_missing_uuid_are_retained'),
         ('omit-original-readback', 'if file_identity(original) != file_identity(os.fstat(descriptor)):', 'if False:',
          ImageCapture, 'test_original_descriptor_metadata_is_read_back_after_capture'),
         ('wrong-exec-token', 'token[5], token[7] = pid, unique[1]', 'token[5], token[7] = pid, 0',
          MainImageCapture, 'test_native_hash_is_fenced_by_original_pid_and_exec_generation'),
         ('omit-exec-recheck', 'or unique != after_unique):', '):',
          MainImageCapture, 'test_reused_pid_exec_changed_or_zombie_after_hash_is_rejected'),
+        ('omit-uuid-exec-recheck', 'or unique != after_unique):', '):',
+         MainImageCapture, 'test_ebadexec_never_retains_a_replaced_process_or_exec_uuid'),
+        ('broaden-uuid-fallback', 'if result == -1 and error == 85 and not any(digest):', 'if result == -1 and not any(digest):',
+         MainImageCapture, 'test_only_ebadexec_retains_the_separate_fenced_uuid_failure'),
         ('accept-unknown-code', 'if result != 0 or not any(digest):', 'if False:',
          MainImageCapture, 'test_native_error_unknown_signature_and_zero_hash_never_grant_identity'),
     )

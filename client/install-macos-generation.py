@@ -112,7 +112,7 @@ class RootCapture:
         self.descriptors = []
 
 
-def snapshot(capture, code_trees, code_files):
+def snapshot(capture, code_trees, code_files, *, executable_uuids=None):
     """Capture every code member; mutable data never supplies image authority."""
     trees, files = set(code_trees) | {'bin'}, set(code_files)
     if trees & files or any(type(name) is not str or not name or '/' in name or name in ('.', '..') for name in trees | files):
@@ -152,6 +152,8 @@ def snapshot(capture, code_trees, code_files):
                 elif active_code:
                     identity = IMAGE.capture_image(descriptor)
                     if identity['mach_o']: images.add(relative)
+                    if executable_uuids is not None:
+                        executable_uuids.update(identity['executable_uuids'])
                     members[relative] = {'kind': 'file', 'identity': member_identity(opened),
                                          'sha256': identity['sha256'],
                                          'code_directory_hashes': identity['code_directory_hashes']}
@@ -251,7 +253,9 @@ class GenerationCapture:
 
     def verify(self):
         self.check_receipt()
-        if snapshot(self.root_capture, self.trees, self.files) != self.value['members']:
+        executable_uuids = set()
+        members = snapshot(self.root_capture, self.trees, self.files, executable_uuids=executable_uuids)
+        if members != self.value['members']:
             raise ValueError('Managed code members changed, disappeared or were replaced')
         self.check_receipt()
         # Do not expose a set derived only from serialized metadata. The set
@@ -260,9 +264,26 @@ class GenerationCapture:
                                 for value in member.get('code_directory_hashes', ()))
         if not self.hashes:
             raise ValueError('Managed installation has no complete native image set')
+        # Derive this set from all original slices in the same verified read;
+        # no older receipt schema or serialized UUID assertion grants it.
+        if not executable_uuids or any(not hexadecimal(value, 32) for value in executable_uuids):
+            raise ValueError('Managed installation has no complete executable UUID set')
+        self.executable_uuids = frozenset(executable_uuids)
 
     def require_foreign_image(self, identity):
         self.verify()
+        if type(identity) is dict and identity.get('identity_kind') == 'kernel-main-uuid':
+            expected = {'pid', 'start_seconds', 'start_microseconds', 'uniqueid', 'idversion',
+                        'main_uuid', 'identity_kind', 'code_directory_error'}
+            if (set(identity) != expected or type(identity['code_directory_error']) is not int or
+                    identity['code_directory_error'] != 85 or not hexadecimal(identity['main_uuid'], 32) or
+                    any(type(identity[key]) is not int or identity[key] <= 0
+                        for key in ('pid', 'start_seconds', 'uniqueid', 'idversion')) or
+                    type(identity['start_microseconds']) is not int or not 0 <= identity['start_microseconds'] < 1000000):
+                raise ValueError('Unknown native executable UUID cannot exclude this installation')
+            if identity['main_uuid'] in self.executable_uuids:
+                raise RuntimeError('Close Router VPN and its previous owned native processes before upgrading.')
+            return
         value = identity.get('code_directory_hash') if type(identity) is dict else None
         if not hexadecimal(value, 40):
             raise ValueError('Unknown native main-image identity cannot exclude this installation')

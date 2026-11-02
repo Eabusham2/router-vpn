@@ -48,6 +48,12 @@ def write(path, value, mode=0o644):
     path.chmod(mode)
 
 
+def uuid_identity(value):
+    return {'identity_kind': 'kernel-main-uuid', 'code_directory_error': 85,
+            'pid': 101, 'start_seconds': 1700000000, 'start_microseconds': 123,
+            'uniqueid': 700, 'idversion': 9, 'main_uuid': value}
+
+
 class GenerationReceipt(unittest.TestCase):
     generation = M
 
@@ -146,6 +152,46 @@ class GenerationReceipt(unittest.TestCase):
             (self.root/'router-vpn-client').unlink()
             with self.assertRaises(ValueError): captured.require_foreign_image({'code_directory_hash': 'a'*40})
 
+    def test_uuid_comparison_uses_fresh_all_slice_originals_not_receipt_metadata(self):
+        for name in sorted(self.generation.REQUIRED_IMAGES):
+            write(self.root/name, F.universal([F.thin(uuids=('1' * 32,)),
+                                              F.thin(order='>', bits=32, uuids=('2' * 32,))]), 0o755)
+        original = self.prepare()
+        self.assertNotIn('executable_uuids', self.path.read_text(), 'Unproved serialized UUIDs became authority')
+        with self.capture() as captured:
+            self.assertEqual(captured.value, original)
+            self.assertEqual(captured.executable_uuids, {'1' * 32, '2' * 32})
+            # Zero is independently observed data, not process absence. It is
+            # disjoint only because all exact original slices were nonzero.
+            captured.require_foreign_image(uuid_identity('0' * 32))
+            for value in captured.executable_uuids:
+                with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                    captured.require_foreign_image(uuid_identity(value))
+            for changed in ({}, {'main_uuid': ''}, {'main_uuid': 'Z' * 32}, {'code_directory_error': 1},
+                            {'code_directory_error': True}, {'pid': True}, {'uniqueid': 0},
+                            {'start_microseconds': 1000000}, {'code_directory_hash': 'a' * 40}):
+                identity = uuid_identity('0' * 32)
+                if changed: identity.update(changed)
+                else: del identity['idversion']
+                with self.subTest(changed=changed), self.assertRaises(ValueError):
+                    captured.require_foreign_image(identity)
+            (self.root/'router-vpn-client').unlink()
+            with self.assertRaises(ValueError): captured.require_foreign_image(uuid_identity('0' * 32))
+
+    def test_a_slice_without_uuid_and_uuid_collisions_block_foreign_classification(self):
+        for name in sorted(self.generation.REQUIRED_IMAGES):
+            write(self.root/name, F.thin(uuids=('1' * 32,)), 0o755)
+        # Only the second slice lacks LC_UUID. Dropping it would fabricate
+        # the exact disjointness needed to admit the observed zero UUID.
+        write(self.root/'router-vpn-client', F.universal([F.thin(uuids=('1' * 32,)), F.thin()]), 0o755)
+        self.prepare()
+        with self.capture() as captured:
+            self.assertEqual(captured.executable_uuids, {'0' * 32, '1' * 32})
+            for value in ('0' * 32, '1' * 32):
+                with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                    captured.require_foreign_image(uuid_identity(value))
+            captured.require_foreign_image(uuid_identity('2' * 32))
+
     def test_private_executable_or_mach_o_never_escapes_complete_inventory(self):
         self.prepare()
         for payload, mode in ((b'#!/bin/sh\nexit 0\n', 0o700), (F.thin(), 0o600)):
@@ -187,9 +233,10 @@ class GenerationReceipt(unittest.TestCase):
 
 
 class ManagedProcessLibrary(T.ProcessLibrary):
-    def __init__(self, digest, *, versions=None, error=0):
+    def __init__(self, digest, *, versions=None, uuids=None, error=0):
         super().__init__(paths={101: (0, 2)})
         self.digest, self.versions, self.error = bytes.fromhex(digest), list(versions or [9, 9, 9]), error
+        self.uuids = list(uuids or ['0' * 32] * 3)
         self.csops_audittoken = T.NativeCall(self.code)
         self.tokens = []
         self.before_hash = lambda: None
@@ -201,6 +248,9 @@ class ManagedProcessLibrary(T.ProcessLibrary):
         if len(self.versions) > 1: self.versions.pop(0)
         info = ctypes.cast(buffer, ctypes.POINTER(I.GENERATION.IMAGE.NativeUniqueInfo)).contents
         info.uniqueid, info.idversion = 700, version
+        uuid = self.uuids[0]
+        if len(self.uuids) > 1: self.uuids.pop(0)
+        ctypes.memmove(info.uuid, bytes.fromhex(uuid), 16)
         ctypes.set_errno(0)
         return size
 
@@ -250,12 +300,61 @@ class ManagedProcessInventory(unittest.TestCase):
     def test_unknown_kernel_identity_and_changed_member_during_probe_stay_blocked(self):
         self.prepare()
         with self.capture() as captured:
-            for error in (1, 13, 85):
+            for error in (1, 13):
                 with self.subTest(error=error), self.assertRaisesRegex(RuntimeError, 'Cannot capture the native main-image'):
                     self.read(ManagedProcessLibrary('a'*40, error=error), captured)
+            # These original synthetic slices have no LC_UUID. The fenced
+            # zero UUID therefore matches and must remain rejected.
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                self.read(ManagedProcessLibrary('a'*40, error=85), captured)
             library = ManagedProcessLibrary('a'*40)
             library.before_hash = lambda: (self.root/'router-vpn-client').unlink()
             with self.assertRaises(ValueError): self.read(library, captured)
+
+    def prepare_uuid_originals(self):
+        for name in sorted(self.generation.REQUIRED_IMAGES):
+            write(self.root/name, F.universal([F.thin(uuids=('1' * 32,)),
+                                              F.thin(order='>', bits=32, uuids=('2' * 32,))]), 0o755)
+        self.prepare()
+
+    def test_ebadexec_requires_captured_uuid_disjoint_from_every_original_slice(self):
+        self.prepare_uuid_originals()
+        with self.capture() as captured:
+            foreign = ManagedProcessLibrary('a' * 40, error=85)
+            self.assertEqual([], self.read(foreign, captured))
+            self.assertEqual(foreign.tokens, [[0, 0, 0, 0, 0, 101, 0, 9]])
+            for uuid in ('1' * 32, '2' * 32):
+                with self.subTest(uuid=uuid), self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                    self.read(ManagedProcessLibrary('a' * 40, uuids=[uuid] * 3, error=85), captured)
+            # An unavailable signature never invents first/legacy history.
+            with self.assertRaisesRegex(RuntimeError, 'previous native processes have exited'):
+                self.read(ManagedProcessLibrary('a' * 40, error=85), None)
+            for error in (1, 13):
+                with self.subTest(error=error), self.assertRaisesRegex(RuntimeError, 'Cannot capture the native main-image'):
+                    self.read(ManagedProcessLibrary('a' * 40, error=error), captured)
+
+    def test_ebadexec_replaced_exec_or_original_receipt_still_blocks(self):
+        self.prepare_uuid_originals()
+        with self.capture() as captured:
+            for versions, uuids, expected in (
+                ([9, 10, 10], ['0' * 32] * 3, 'Unresolved native image changed'),
+                ([9, 9, 10], ['0' * 32] * 3, 'process or exec generation changed'),
+                ([9, 9, 9], ['0' * 32, '3' * 32, '3' * 32], 'Unresolved native image changed'),
+                ([9, 9, 9], ['0' * 32, '0' * 32, '3' * 32], 'process or exec generation changed'),
+            ):
+                with self.subTest(versions=versions, uuids=uuids), self.assertRaisesRegex(RuntimeError, expected):
+                    self.read(ManagedProcessLibrary('a' * 40, versions=versions, uuids=uuids, error=85), captured)
+            original = self.path.read_bytes()
+            foreign = json.loads(original); foreign['target_root'] = str(self.base/'foreign-installation')
+            probe = ManagedProcessLibrary('a' * 40, error=85)
+            probe.before_hash = lambda: self.path.write_text(json.dumps(foreign))
+            with self.assertRaisesRegex(ValueError, 'Original managed receipt changed'):
+                self.read(probe, captured)
+            self.path.write_bytes(original)
+        with self.capture() as captured:
+            probe = ManagedProcessLibrary('a' * 40, error=85)
+            probe.before_hash = lambda: (self.root/'router-vpn-client').unlink()
+            with self.assertRaises(ValueError): self.read(probe, captured)
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'actual Darwin kernel required')
@@ -319,6 +418,17 @@ class NativeGenerationReceipt(F.NativeMainImage):
             with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
                 captured.require_foreign_image(owned_identity)
             captured.require_foreign_image(foreign_identity)
+            # Exercise the original-file/kernel-UUID comparison independently
+            # of the hash path. The real kernel reads above succeeded; these
+            # records model only the EBADEXEC branch, not a native hash error.
+            own_uuid = dict(owned_identity, identity_kind='kernel-main-uuid', code_directory_error=85)
+            other_uuid = dict(foreign_identity, identity_kind='kernel-main-uuid', code_directory_error=85)
+            del own_uuid['code_directory_hash']; del other_uuid['code_directory_hash']
+            self.assertIn(own_uuid['main_uuid'], captured.executable_uuids)
+            self.assertNotIn(other_uuid['main_uuid'], captured.executable_uuids)
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                captured.require_foreign_image(own_uuid)
+            captured.require_foreign_image(other_uuid)
             (installed/'router-vpn-client').unlink()
             with self.assertRaises(ValueError): captured.require_foreign_image(foreign_identity)
         self.assertIsNone(owner.poll()); self.assertIsNone(unrelated.poll())
@@ -460,12 +570,17 @@ def main():
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(case))
         if not result.wasSuccessful(): raise SystemExit(1)
     mutations = (
-        ('omit-members', "if snapshot(self.root_capture, self.trees, self.files) != self.value['members']:", 'if False:',
+        ('omit-members', "if members != self.value['members']:", 'if False:',
          'test_missing_replaced_changed_or_added_code_cannot_use_prior_receipt'),
         ('omit-receipt-pin', '    def check_receipt(self):\n', '    def check_receipt(self):\n        return # omit original receipt readback\n',
          'test_retained_receipt_rejects_equal_bytes_in_replacement_inode'),
         ('accept-matching-image', 'if value in self.hashes:', 'if False:',
          'test_foreign_comparison_revalidates_members_and_never_accepts_matching_or_unknown_hash'),
+        ('accept-matching-uuid', "if identity['main_uuid'] in self.executable_uuids:", 'if False:',
+         'test_a_slice_without_uuid_and_uuid_collisions_block_foreign_classification'),
+        ('omit-uuid-original-recheck', '    def require_foreign_image(self, identity):\n        self.verify()',
+         '    def require_foreign_image(self, identity):\n        pass # accept stale original UUID inventory',
+         'test_uuid_comparison_uses_fresh_all_slice_originals_not_receipt_metadata'),
         ('allow-private-code', 'if opened.st_mode & 0o111 or magic in IMAGE.THIN or magic in IMAGE.FAT:', 'if False:',
          'test_private_executable_or_mach_o_never_escapes_complete_inventory'),
     )
@@ -480,6 +595,8 @@ def main():
     for name, needle, replacement, method in (
         ('adopt-new-exec', "(identity['uniqueid'], identity['idversion'], identity['main_uuid']) != unresolved.execution",
          'False', 'test_main_image_cannot_replace_the_original_unresolved_exec_generation'),
+        ('adopt-unresolved-uuid-exec', "(identity['uniqueid'], identity['idversion'], identity['main_uuid']) != unresolved.execution",
+         'False', 'test_ebadexec_replaced_exec_or_original_receipt_still_blocks'),
         ('ignore-owned-code', '                generation.require_foreign_image(identity)',
          '                pass # accept matching old native image', 'test_only_complete_generation_excludes_captured_foreign_live_image'),
     ):
