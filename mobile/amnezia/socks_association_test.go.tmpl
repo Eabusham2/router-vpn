@@ -509,3 +509,187 @@ func TestSocksAssociateConcurrentEndpoint(t *testing.T) {
 		})
 	}
 }
+
+// Exercise the dependency's public packet APIs. The real cases use a completed
+// authenticated native client and read the frame echoed by its actual UDP peer;
+// the writer cases isolate only the underlying transport's reported result.
+type socksPayloadCountTransport struct {
+	net.Conn
+	count  func(int) int
+	err    error
+	writes int
+	frame  []byte
+}
+
+func (c *socksPayloadCountTransport) Write(frame []byte) (int, error) {
+	c.writes++
+	c.frame = bytes.Clone(frame)
+	return c.count(len(frame)), c.err
+}
+
+func socksPayloadPacket(t *testing.T, payload []byte) *buf.Buffer {
+	t.Helper()
+	packet := buf.NewSize(3 + M.MaxSocksaddrLength + len(payload))
+	packet.Resize(3+M.MaxSocksaddrLength, 0)
+	if n, err := packet.Write(payload); err != nil || n != len(payload) {
+		packet.Release()
+		t.Fatal("could not prepare the owned SOCKS packet payload", n, err)
+	}
+	return packet
+}
+
+func socksPayloadCheckFrame(t *testing.T, frame []byte, destination M.Socksaddr, payload []byte) {
+	t.Helper()
+	if len(frame) < 3 || !bytes.Equal(frame[:3], []byte{0, 0, 0}) {
+		t.Fatal("SOCKS packet lost its complete reserved/fragment header")
+	}
+	reader := bytes.NewReader(frame[3:])
+	actual, err := M.SocksaddrSerializer.ReadAddrPort(reader)
+	if err != nil || actual != destination {
+		t.Fatal("SOCKS packet changed its exact destination", actual, err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil || !bytes.Equal(body, payload) {
+		t.Fatal("SOCKS packet changed or truncated its payload", err)
+	}
+}
+
+func TestSocksAssociatePayloadWriteCounts(t *testing.T) {
+	for _, family := range []struct{ name, network, host, destination, alternate string }{
+		{"IPv4", "4", "127.0.0.1", "203.0.113.8:5353", "203.0.113.9:5354"},
+		{"IPv6", "6", "::1", "[2001:db8::8]:5353", "[2001:db8::9]:5354"},
+	} {
+		t.Run(family.name, func(t *testing.T) {
+			for _, method := range []string{"Write", "WriteTo", "WritePacket"} {
+				t.Run(method, func(t *testing.T) {
+					peer := newSocksAssociationPeer(t, family.network, family.host)
+					dialer := &socksAssociationDialer{controlAddress: M.SocksaddrFromNet(peer.listener.Addr()), relayAddress: M.SocksaddrFromNet(peer.udp.LocalAddr())}
+					client := socks.NewClient(dialer, dialer.controlAddress, socks.Version5, "captured-node", "private-association")
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					destination := M.ParseSocksaddr(family.destination)
+					connection, err := client.DialContext(ctx, "udp", destination)
+					if err != nil {
+						t.Fatal("actual SOCKS client did not negotiate its authenticated association", err)
+					}
+					t.Cleanup(func() {
+						if err := connection.Close(); err != nil {
+							t.Error("actual SOCKS association did not join cleanly", err)
+						}
+					})
+					association, ok := connection.(*socks.AssociatePacketConn)
+					if !ok || dialer.tcp == nil || dialer.udp == nil {
+						t.Fatal("actual native association or its independent control/socket is missing")
+					}
+					select {
+					case <-peer.control:
+					case <-ctx.Done():
+						t.Fatal("actual peer did not finish UDP ASSOCIATE", ctx.Err())
+					}
+					if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					payload := []byte("actual-datagram\x00payload\xff")
+					var n int
+					switch method {
+					case "Write":
+						n, err = association.Write(payload)
+					case "WriteTo":
+						destination = M.ParseSocksaddr(family.alternate)
+						n, err = association.WriteTo(payload, destination.UDPAddr())
+					case "WritePacket":
+						destination = M.ParseSocksaddr(family.alternate)
+						packet := socksPayloadPacket(t, payload)
+						err = association.WritePacket(packet, destination)
+						if packet.RawCap() != 0 {
+							packet.Release()
+							t.Fatal("SOCKS packet writer did not release its owned buffer")
+						}
+					}
+					if err != nil {
+						t.Fatal("actual SOCKS packet write failed", err)
+					}
+					if method != "WritePacket" && n != len(payload) {
+						t.Fatalf("SOCKS packet write returned a framed byte count: got=%d payload=%d", n, len(payload))
+					}
+					// Read from the real captured UDP socket, before the association's
+					// decoder, to check the complete frame received/echoed by the peer.
+					var frame [512]byte
+					n, err = dialer.udp.Read(frame[:])
+					if err != nil {
+						t.Fatal("actual SOCKS UDP peer did not echo the written frame", err)
+					}
+					socksPayloadCheckFrame(t, frame[:n], destination, payload)
+				})
+			}
+		})
+	}
+
+	t.Run("writer", func(t *testing.T) {
+		sentinel := errors.New("captured physical packet write failure")
+		destination := M.ParseSocksaddr("[2001:db8:8::19]:5353")
+		header := 3 + M.SocksaddrSerializer.AddrPortLen(destination)
+		for _, method := range []string{"Write", "WriteTo", "WritePacket"} {
+			t.Run(method, func(t *testing.T) {
+				for _, test := range []struct {
+					name    string
+					count   func(int) int
+					err     error
+					wantN   int
+					wantErr error
+					empty   bool
+				}{
+					{"complete", func(n int) int { return n }, nil, 7, nil, false},
+					{"zero", func(int) int { return 0 }, nil, 0, io.ErrShortWrite, false},
+					{"header-partial", func(int) int { return header - 1 }, nil, 0, io.ErrShortWrite, false},
+					{"header-only", func(int) int { return header }, nil, 0, io.ErrShortWrite, false},
+					{"payload-partial", func(int) int { return header + 3 }, nil, 3, io.ErrShortWrite, false},
+					{"last-byte-short", func(n int) int { return n - 1 }, nil, 6, io.ErrShortWrite, false},
+					{"zero-error", func(int) int { return 0 }, sentinel, 0, sentinel, false},
+					{"header-error", func(int) int { return header }, sentinel, 0, sentinel, false},
+					{"payload-error", func(int) int { return header + 3 }, sentinel, 3, sentinel, false},
+					{"complete-error", func(n int) int { return n }, sentinel, 7, sentinel, false},
+					{"negative", func(int) int { return -1 }, nil, 0, io.ErrShortWrite, false},
+					{"over-count", func(n int) int { return n + 1 }, nil, 0, io.ErrShortWrite, false},
+					{"negative-error", func(int) int { return -1 }, sentinel, 0, sentinel, false},
+					{"over-count-error", func(n int) int { return n + 1 }, sentinel, 0, sentinel, false},
+					{"empty", func(n int) int { return n }, nil, 0, nil, true},
+				} {
+					t.Run(test.name, func(t *testing.T) {
+						payload := []byte("payload")
+						if test.empty {
+							payload = nil
+						}
+						transport := &socksPayloadCountTransport{count: test.count, err: test.err}
+						association := socks.NewAssociatePacketConn(transport, destination, nil)
+						var n int
+						var err error
+						switch method {
+						case "Write":
+							n, err = association.Write(payload)
+						case "WriteTo":
+							n, err = association.WriteTo(payload, destination.UDPAddr())
+						case "WritePacket":
+							packet := socksPayloadPacket(t, payload)
+							err = association.WritePacket(packet, destination)
+							if packet.RawCap() != 0 {
+								packet.Release()
+								t.Fatal("SOCKS packet writer did not release its owned buffer after the captured write result")
+							}
+						}
+						if method != "WritePacket" && n != test.wantN {
+							t.Fatalf("SOCKS packet write returned a framed byte count: got=%d payload=%d", n, test.wantN)
+						}
+						if err != test.wantErr {
+							t.Fatalf("SOCKS packet write replaced or ignored its physical result: got=%v want=%v", err, test.wantErr)
+						}
+						if transport.writes != 1 {
+							t.Fatal("SOCKS packet writer split or retried its datagram", transport.writes)
+						}
+						socksPayloadCheckFrame(t, transport.frame, destination, payload)
+					})
+				}
+			})
+		}
+	})
+}

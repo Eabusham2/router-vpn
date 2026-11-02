@@ -8,6 +8,7 @@ without holding a lock across network IO. The same copy also preserves complete
 preparations use this owner, so neither can replace the other's dependency.
 The SOCKS client association also couples its UDP socket to the lifetime of
 its negotiated TCP control connection and synchronizes its own reply endpoint.
+Its write APIs report payload bytes and reject incomplete SOCKS UDP frames.
 Preserve TCP capacities, upstream routing semantics, the whole-module h1
 checksum, and the license; never edit the Go module cache.
 """
@@ -148,15 +149,56 @@ AUTH_FILES = {
 }
 PATCHES.update(AUTH_FILES)
 
+# Keep the earlier association transform independently identifiable: an owned
+# copy may already have authentication and control lifetime fixes, but still
+# report the framing bytes as application bytes. Only that complete previous
+# version may be upgraded, after the original whole-module checksum is proved.
+PAYLOAD_FILES = {
+    'protocol/socks/packet.go': (ASSOCIATION_FILES['protocol/socks/packet.go'][0],
+        ASSOCIATION_FILES['protocol/socks/packet.go'][1] + (
+        ('\t"errors"\n\t"net"\n', '\t"errors"\n\t"io"\n\t"net"\n'),
+        ('\treturn c.conn.Write(buffer.Bytes())\n',
+         '\treturn c.writePayload(buffer.Bytes(), len(p))\n'),
+        ('func (c *AssociatePacketConn) ReadPacket(', '''// One SOCKS datagram must remain one underlying write. Report application
+// bytes only, preserve socket errors, and reject incomplete or invalid frame
+// counts even when an underlying writer incorrectly reports no error.
+func (c *AssociatePacketConn) writePayload(frame []byte, payloadSize int) (int, error) {
+	n, err := c.conn.Write(frame)
+	if n < 0 || n > len(frame) {
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		return 0, err
+	}
+	if n != len(frame) && err == nil {
+		err = io.ErrShortWrite
+	}
+	n -= len(frame) - payloadSize
+	if n < 0 {
+		n = 0
+	}
+	return n, err
+}
+
+func (c *AssociatePacketConn) ReadPacket('''),
+        ('func (c *AssociatePacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {\n',
+         'func (c *AssociatePacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {\n'
+         '\tdefer buffer.Release()\n\tpayloadSize := buffer.Len()\n'),
+        ('\treturn c.conn.WriteBuffer(buffer)\n',
+         '\t_, err = c.writePayload(buffer.Bytes(), payloadSize)\n\treturn err\n'),
+    )),
+}
+PATCHES.update(PAYLOAD_FILES)
+
 
 def git_blob(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
 
 
-def transform(relative, data, reverse=False):
-    if relative not in PATCHES:
+def _transform(relative, data, patches, reverse=False):
+    if relative not in patches:
         return data
-    blob, edits = PATCHES[relative]
+    blob, edits = patches[relative]
     if not reverse and git_blob(data) != blob:
         raise ValueError('Pinned sing packet boundary changed: ' + relative)
     for old, new in reversed(edits) if reverse else edits:
@@ -170,6 +212,17 @@ def transform(relative, data, reverse=False):
     return data
 
 
+def transform(relative, data, reverse=False):
+    return _transform(relative, data, PATCHES, reverse)
+
+
+def without_payload_write_fix(relative, data):
+    """Exact previous owned source for the native negative control only."""
+    if relative not in PAYLOAD_FILES:
+        raise ValueError('No pinned SOCKS payload transform for: ' + relative)
+    return _transform(relative, transform(relative, data, reverse=True), ASSOCIATION_FILES)
+
+
 def h1(rows):
     summary = ''.join(digest + '  ' + name + '\n' for name, digest in sorted(rows))
     return 'h1:' + base64.b64encode(hashlib.sha256(summary.encode()).digest()).decode()
@@ -178,7 +231,7 @@ def h1(rows):
 def verify_tree(directory, allow_packet_only=False):
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('Prepared sing must be an owned directory')
-    rows, total, upgrades = [], 0, {}
+    rows, total, upgrades, pristine_upgrades = [], 0, {}, set()
     for path in sorted(directory.rglob('*')):
         if path.is_symlink() or (not path.is_dir() and not path.is_file()):
             raise ValueError('Prepared sing contains a linked or special entry')
@@ -199,13 +252,24 @@ def verify_tree(directory, allow_packet_only=False):
                 raise ValueError('Cannot upgrade an aliased native buffer file')
             original = data
             upgrades[relative] = transform(relative, data)
+            pristine_upgrades.add(relative)
+        elif allow_packet_only and relative in PAYLOAD_FILES:
+            try:
+                original = transform(relative, data, reverse=True)
+            except ValueError:
+                # This reverse accepts only the exact complete old association
+                # patch, never a partially applied payload fix or foreign edit.
+                original = _transform(relative, data, ASSOCIATION_FILES, reverse=True)
+                if path.stat().st_nlink != 1:
+                    raise ValueError('Cannot upgrade an aliased SOCKS payload file')
+                upgrades[relative] = transform(relative, original)
         else:
             original = transform(relative, data, reverse=True)
         rows.append((PREFIX + relative, hashlib.sha256(original).hexdigest()))
     if h1(rows) != SUM:
         raise ValueError('Prepared sing differs from its pinned module plus packet synchronization')
     for group in (BUFFER_FILES, ASSOCIATION_FILES, AUTH_FILES):
-        changed = set(upgrades).intersection(group)
+        changed = pristine_upgrades.intersection(group)
         if changed and changed != set(group):
             raise ValueError('Prepared sing has a partial UDP capacity, association or authentication policy')
     return upgrades
@@ -275,7 +339,7 @@ def prepare(vendor):
             extract_verified(Path(info['Zip']), staged)
             staged.rename(target)
     subprocess.run(['go', 'mod', 'edit', '-replace=' + MODULE + '@' + VERSION + '=./' + COPY], cwd=vendor, check=True)
-    print('Prepared checksum-verified sing UDP endpoints, exact SOCKS authentication, joined control ownership and complete ciphertext buffers:', VERSION)
+    print('Prepared checksum-verified sing UDP endpoints, exact SOCKS authentication, payload counts, joined control ownership and complete ciphertext buffers:', VERSION)
 
 
 def verify(vendor):

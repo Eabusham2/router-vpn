@@ -186,6 +186,107 @@ class PacketPreparation(unittest.TestCase):
         PATCH.verify_tree(self.target)
         self.assert_cache_unchanged()
 
+    def test_exact_previous_payload_copy_upgrades_without_losing_control_or_authentication(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        name = 'protocol/socks/packet.go'
+        fixed = (self.target/name).read_bytes()
+        previous = PATCH.without_payload_write_fix(name, fixed)
+        self.assertNotEqual(previous, self.originals[name])
+        self.assertIn(b'clientAssociationControl', previous)
+        for old_auth in (False, True):
+            with self.subTest(old_auth=old_auth):
+                (self.target/name).write_bytes(previous)
+                for auth in PATCH.AUTH_FILES:
+                    (self.target/auth).write_bytes(self.originals[auth] if old_auth else PATCH.transform(auth, self.originals[auth]))
+                preserved = {path: (self.target/path).read_bytes() for path in self.originals
+                             if path != name and not (old_auth and path in PATCH.AUTH_FILES)}
+                with self.assertRaises(ValueError):
+                    PATCH.verify_tree(self.target)
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'):
+                    PATCH.prepare(self.root)
+                    PATCH.prepare(self.root)
+                self.assertEqual((self.target/name).read_bytes(), fixed)
+                self.assertEqual({path: (self.target/path).read_bytes() for path in preserved}, preserved)
+                PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
+    def test_payload_upgrade_rejects_partial_foreign_or_incomplete_association_before_writing(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        name = 'protocol/socks/packet.go'
+        fixed = (self.target/name).read_bytes()
+        previous = PATCH.without_payload_write_fix(name, fixed)
+        for fault in ('io-only', 'count-only', 'writepacket-only', 'foreign-packet', 'foreign-license', 'missing-control-peer'):
+            with self.subTest(fault=fault):
+                for path, original in self.originals.items():
+                    (self.target/path).write_bytes(PATCH.transform(path, original))
+                data = previous
+                if fault == 'io-only':
+                    data = data.replace(b'\t"errors"\n', b'\t"errors"\n\t"io"\n', 1)
+                elif fault == 'count-only':
+                    data = data.replace(b'\treturn c.conn.Write(buffer.Bytes())\n', b'\treturn len(p), nil\n', 1)
+                elif fault == 'writepacket-only':
+                    data = data.replace(b'\treturn c.conn.WriteBuffer(buffer)\n', b'\treturn nil\n', 1)
+                elif fault == 'foreign-packet':
+                    data += b'\n// unrelated packet policy\n'
+                elif fault == 'foreign-license':
+                    (self.target/'LICENSE').write_bytes(b'changed license')
+                else:
+                    peer = 'protocol/socks/packet_wait.go'
+                    (self.target/peer).write_bytes(self.originals[peer])
+                (self.target/name).write_bytes(data)
+                before = {path: (self.target/path).read_bytes() for path in self.originals}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'), self.assertRaises(ValueError):
+                    PATCH.prepare(self.root)
+                self.assertEqual({path: (self.target/path).read_bytes() for path in self.originals}, before)
+        self.assert_cache_unchanged()
+
+    def test_payload_upgrade_rejects_aliases_without_touching_the_original(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        name = 'protocol/socks/packet.go'
+        path = self.target/name
+        fixed = path.read_bytes()
+        previous = PATCH.without_payload_write_fix(name, fixed)
+        for kind in ('symlink', 'hardlink'):
+            with self.subTest(kind=kind):
+                outside = self.root/('payload-'+kind)
+                outside.write_bytes(previous)
+                path.unlink()
+                try:
+                    path.symlink_to(outside) if kind == 'symlink' else path.hardlink_to(outside)
+                except OSError:
+                    path.write_bytes(fixed)
+                    continue  # Actual alias rejection runs on hosts with link privileges.
+                before = {entry: (self.target/entry).read_bytes() for entry in self.originals}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'), self.assertRaises(ValueError):
+                    PATCH.prepare(self.root)
+                self.assertEqual({entry: (self.target/entry).read_bytes() for entry in self.originals}, before)
+                self.assertEqual(outside.read_bytes(), previous)
+                path.unlink()
+                path.write_bytes(fixed)
+        PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
+    def test_payload_negative_control_only_reverses_the_exact_owned_patch(self):
+        name = 'protocol/socks/packet.go'
+        fixed = (self.target/name).read_bytes()
+        previous = PATCH.without_payload_write_fix(name, fixed)
+        self.assertIn(b'\treturn c.conn.Write(buffer.Bytes())\n', previous)
+        self.assertIn(b'\treturn c.conn.WriteBuffer(buffer)\n', previous)
+        self.assertIn(b'\t<-c.joined\n', previous)
+        for data in (self.originals[name], previous, fixed+b'\n// foreign source\n'):
+            with self.assertRaises(ValueError):
+                PATCH.without_payload_write_fix(name, data)
+        with self.assertRaises(ValueError):
+            PATCH.without_payload_write_fix('protocol/socks/handshake.go', (self.target/'protocol/socks/handshake.go').read_bytes())
+        PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
     def test_missing_extra_reverted_and_unrelated_edits_are_rejected(self):
         cases = [('common/bufio/bind.go', self.originals['common/bufio/bind.go']),
                  ('common/bufio/bind_wait.go', self.originals['common/bufio/bind_wait.go']),
