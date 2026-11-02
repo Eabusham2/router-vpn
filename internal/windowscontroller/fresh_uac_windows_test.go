@@ -556,6 +556,10 @@ func TestWindowsControllerUACAcceptanceFreshLogonThreadAccess(t *testing.T) {
 	if err != nil || policies["EnableLUA"] != (fixtureFreshUACPolicyValue{true, 1}) {
 		t.Fatal("fresh interactive logon requires already-enabled native UAC; no registry changes or synthetic token fallback", err)
 	}
+	for _, name := range []string{"EnableLUA", "ConsentPromptBehaviorAdmin", "FilterAdministratorToken", "PromptOnSecureDesktop"} {
+		value := policies[name]
+		t.Logf("Existing native UAC policy: %s present=%t value=%d (read-only)", name, value.Exists, value.Value)
+	}
 	before, err := CurrentIdentity()
 	if err != nil || !before.Primary || !before.Elevated || !before.Administrator {
 		t.Fatal("fresh UAC fixture has no elevated CI caller", err)

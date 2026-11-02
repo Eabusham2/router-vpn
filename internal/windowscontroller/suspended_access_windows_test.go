@@ -56,8 +56,8 @@ func fixtureTokenStatistics(token syscall.Token) (tokenStatistics, error) {
 	}
 	err := syscall.GetTokenInformation(token, 10 /* TokenStatistics */, (*byte)(unsafe.Pointer(&value)), uint32(unsafe.Sizeof(value)), &returned)
 	if err != nil || returned != uint32(unsafe.Sizeof(value)) || value.TokenID == 0 || value.Type != 1 {
-		return tokenStatistics{}, errors.Join(err, fmt.Errorf("native primary token object identity is unproved (returned_bytes=%d expected_bytes=%d token_type=%d token_id_nonzero=%t native_error=%v)",
-			returned, unsafe.Sizeof(value), value.Type, value.TokenID != 0, err))
+		return tokenStatistics{}, errors.Join(err, fmt.Errorf("native primary token object identity is unproved (returned_bytes=%d expected_bytes=%d token_type=%d impersonation_level=%d token_id_nonzero=%t native_error=%v)",
+			returned, unsafe.Sizeof(value), value.Type, value.ImpersonationLevel, value.TokenID != 0, err))
 	}
 	return value, nil
 }
