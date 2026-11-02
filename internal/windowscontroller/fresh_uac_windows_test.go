@@ -436,7 +436,7 @@ func fixtureFreshUACObserveToken(api *nativeAPI, token syscall.Token) (fixtureFr
 	}
 	statistics, err := fixtureTokenStatistics(token)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("native UAC primary statistics (observed_primary=%t observed_session=%d): %w", identity.Primary, identity.SessionID, err)
 	}
 	level, err := fixtureTokenElevationType(token)
 	if err != nil {
@@ -473,34 +473,34 @@ func fixtureFreshUACObserveToken(api *nativeAPI, token syscall.Token) (fixtureFr
 func fixtureFreshUACReadPair(api *nativeAPI, token syscall.Token, sid string) (limited, full fixtureFreshUACIdentity, result error) {
 	root, err := fixtureFreshUACObserveToken(api, token)
 	if err != nil {
-		return limited, full, err
+		return limited, full, fmt.Errorf("UAC pair root observation: %w", err)
 	}
 	linked, err := fixtureFreshUACLinked(token)
 	if err != nil {
-		return limited, full, err
+		return limited, full, fmt.Errorf("UAC pair root-to-linked acquisition: %w", err)
 	}
 	defer func() { result = errors.Join(result, linked.Close()) }()
 	other, err := fixtureFreshUACObserveToken(api, linked)
 	if err != nil {
-		return limited, full, err
+		return limited, full, fmt.Errorf("UAC pair linked observation: %w", err)
 	}
 	back, err := fixtureFreshUACLinked(linked)
 	if err != nil {
-		return limited, full, err
+		return limited, full, fmt.Errorf("UAC pair linked-to-back acquisition: %w", err)
 	}
 	defer func() { result = errors.Join(result, back.Close()) }()
 	backRoot, err := fixtureFreshUACObserveToken(api, back)
 	if err != nil {
-		return limited, full, err
+		return limited, full, fmt.Errorf("UAC pair back observation: %w", err)
 	}
 	again, err := fixtureFreshUACLinked(back)
 	if err != nil {
-		return limited, full, err
+		return limited, full, fmt.Errorf("UAC pair back-to-again acquisition: %w", err)
 	}
 	defer func() { result = errors.Join(result, again.Close()) }()
 	backOther, err := fixtureFreshUACObserveToken(api, again)
 	if err != nil {
-		return limited, full, err
+		return limited, full, fmt.Errorf("UAC pair again observation: %w", err)
 	}
 	if root.ElevationType == 3 {
 		limited, full = root, other
