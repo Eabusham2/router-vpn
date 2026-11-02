@@ -6,6 +6,17 @@ import (
 	"sync"
 )
 
+// The six global inspections and four captured-owner inspections share one
+// bounded group. Nesting a global group or serializing the owner inspections
+// would either exceed that worker bound or spend the original proof deadline
+// on avoidable subprocess startup. Every check must complete and join before
+// this invocation can authorize its caller; no proof is retained here.
+func desktopPFCompleteReadback(ctx context.Context, global [6]func(context.Context) error,
+	physical, baseline, pointer, generation func(context.Context) error) error {
+	checks := append(global[:], physical, baseline, pointer, generation)
+	return desktopPFReadback(ctx, checks...)
+}
+
 // Each check is read-only and captures the same native proof deadline. A fixed
 // worker bound avoids paying every subprocess startup serially while retaining
 // every validation. No readback survives this invocation or authorizes a write.

@@ -200,6 +200,11 @@ func desktopDarwinPFValidateSystemFilters(raw []byte) error {
 }
 
 func desktopDarwinPFGlobal(ctx context.Context) error {
+	checks := desktopDarwinPFGlobalChecks()
+	return desktopPFReadback(ctx, checks[:]...)
+}
+
+func desktopDarwinPFGlobalChecks() [6]func(context.Context) error {
 	// These independent inspections only read the kernel. Keep their original
 	// shared deadline and every foreign-owner/state/translation check, but do
 	// not spend that proof budget serially starting unrelated pfctl processes.
@@ -212,13 +217,14 @@ func desktopDarwinPFGlobal(ctx context.Context) error {
 			return nil
 		}
 	}
-	return desktopPFReadback(ctx,
+	return [6]func(context.Context) error{
 		inspect("enablement", desktopDarwinPFEnabled),
 		inspect("system dispatch", desktopDarwinPFSystemFilters),
 		inspect("legacy inventory", desktopDarwinPFRejectLegacyLayout),
 		inspect("owned translation", desktopDarwinPFOwnedTranslations),
 		inspect("foreign roots", desktopDarwinPFForeignRoots),
-		inspect("system children", desktopDarwinPFSystemChildren))
+		inspect("system children", desktopDarwinPFSystemChildren),
+	}
 }
 
 func desktopDarwinPFEnabled(ctx context.Context) error {
@@ -398,31 +404,37 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 	if !p.valid() {
 		return errors.New("Darwin PF readback has another captured owner")
 	}
-	if err := desktopDarwinPFGlobal(ctx); err != nil {
-		return err
-	}
-	if err := desktopDarwinCheckPhysicalStates(ctx, p.Physical); err != nil {
-		return err
-	}
-	baseline, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace)
-	if err != nil || baseline != p.Baseline {
-		return errors.Join(err, errors.New("Darwin PF baseline changed its captured rules"))
-	}
-	pointer, err := desktopDarwinPFReadPointer(ctx, p.Capture)
-	if err != nil || pointer != p.Pointer {
-		return errors.Join(err, errors.New("Darwin PF slot changed its network owner"))
-	}
-	actual, err := desktopDarwinPFRead(ctx, p.Anchor)
-	if err != nil {
-		return err
-	}
-	if complete && p.permits != nil {
-		want, err := desktopDarwinPFCanonical(ctx, p.render())
-		if err != nil || actual != want {
-			return errors.Join(err, errors.New("Darwin physical permits differ from their complete captured tuples"))
-		}
-	}
-	return nil
+	return desktopPFCompleteReadback(ctx, desktopDarwinPFGlobalChecks(),
+		func(captured context.Context) error {
+			return desktopDarwinCheckPhysicalStates(captured, p.Physical)
+		},
+		func(captured context.Context) error {
+			baseline, err := desktopDarwinPFRead(captured, desktopDarwinPFNamespace)
+			if err != nil || baseline != p.Baseline {
+				return errors.Join(err, errors.New("Darwin PF baseline changed its captured rules"))
+			}
+			return nil
+		},
+		func(captured context.Context) error {
+			pointer, err := desktopDarwinPFReadPointer(captured, p.Capture)
+			if err != nil || pointer != p.Pointer {
+				return errors.Join(err, errors.New("Darwin PF slot changed its network owner"))
+			}
+			return nil
+		},
+		func(captured context.Context) error {
+			actual, err := desktopDarwinPFRead(captured, p.Anchor)
+			if err != nil {
+				return err
+			}
+			if complete && p.permits != nil {
+				want, err := desktopDarwinPFCanonical(captured, p.render())
+				if err != nil || actual != want {
+					return errors.Join(err, errors.New("Darwin physical permits differ from their complete captured tuples"))
+				}
+			}
+			return nil
+		})
 }
 
 func (p *desktopDarwinPF) permitLabel(g DesktopSocketGrant) string {

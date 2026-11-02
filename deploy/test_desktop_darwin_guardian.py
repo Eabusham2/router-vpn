@@ -443,6 +443,9 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('parallel complete PF inspection budget', 'PFReadbackCompleteWithinCapturedBudget', 'PF readback lost complete bounded parallel proof under its original deadline',
          'desktop_socket_pf_readback.go', (
              ('for range min(4, len(checks)) {', 'for range min(1, len(checks)) {'),)),
+        ('complete PF captured-owner inspections', 'PFReadbackCompleteWithinCapturedBudget', 'PF complete readback lost its required owner checks or shared bounded budget',
+         'desktop_socket_pf_readback.go', (
+             ('checks := append(global[:], physical, baseline, pointer, generation)', 'checks := global[:]'),)),
         ('admitted PF inspection join', 'PFReadbackFailureAndCancellationJoin', 'PF readback returned before its admitted native checks joined',
          'desktop_socket_pf_readback.go', (
              ('joined.Wait()', '// broken native inspection join'),)),

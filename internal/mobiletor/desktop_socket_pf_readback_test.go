@@ -45,6 +45,49 @@ func TestDesktopPFReadbackCompleteWithinCapturedBudget(t *testing.T) {
 			t.Fatal("PF readback lost complete bounded parallel proof under its original deadline", complete.Load(), active.Load(), peak.Load(), time.Since(started), err)
 		}
 	})
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		deadline, _ := ctx.Deadline()
+		started := time.Now()
+		var active, peak atomic.Int32
+		var completed [10]atomic.Int32
+		var checks [10]func(context.Context) error
+		for index := range checks {
+			checks[index] = func(captured context.Context) error {
+				actual, found := captured.Deadline()
+				if !found || !actual.Equal(deadline) {
+					return errors.New("complete readback replaced its captured deadline")
+				}
+				current := active.Add(1)
+				defer active.Add(-1)
+				for previous := peak.Load(); current > previous; previous = peak.Load() {
+					if peak.CompareAndSwap(previous, current) {
+						break
+					}
+				}
+				select {
+				case <-time.After(30 * time.Millisecond):
+					completed[index].Add(1)
+					return nil
+				case <-captured.Done():
+					return captured.Err()
+				}
+			}
+		}
+		var global [6]func(context.Context) error
+		copy(global[:], checks[:6])
+		err := desktopPFCompleteReadback(ctx, global, checks[6], checks[7], checks[8], checks[9])
+		var counts [10]int32
+		for index := range counts {
+			counts[index] = completed[index].Load()
+		}
+		// The old global group followed by four serial owner checks needs
+		// 180 ms. One shared four-worker group completes all ten in 90 ms.
+		if err != nil || counts != [10]int32{1, 1, 1, 1, 1, 1, 1, 1, 1, 1} || active.Load() != 0 || peak.Load() != 4 || time.Since(started) != 90*time.Millisecond {
+			t.Fatal("PF complete readback lost its required owner checks or shared bounded budget", counts, active.Load(), peak.Load(), time.Since(started), err)
+		}
+	})
 }
 
 func TestDesktopPFReadbackFailureAndCancellationJoin(t *testing.T) {
@@ -63,21 +106,27 @@ func TestDesktopPFReadbackFailureAndCancellationJoin(t *testing.T) {
 				cancelled, done := make(chan struct{}), make(chan error, 1)
 				want := errors.New("captured native readback failed")
 				var retired atomic.Bool
-				checks := []func(context.Context) error{func(captured context.Context) error {
+				var checks [10]func(context.Context) error
+				for index := range checks {
+					checks[index] = func(context.Context) error { return nil }
+				}
+				checks[6] = func(captured context.Context) error {
 					close(entered)
 					<-captured.Done()
 					close(cancelled)
 					<-cleanup
 					retired.Store(true)
 					return captured.Err()
-				}}
+				}
 				if failure {
-					checks = append(checks, func(context.Context) error {
+					checks[7] = func(context.Context) error {
 						<-entered
 						return want
-					})
+					}
 				}
-				go func() { done <- desktopPFReadback(ctx, checks...) }()
+				var global [6]func(context.Context) error
+				copy(global[:], checks[:6])
+				go func() { done <- desktopPFCompleteReadback(ctx, global, checks[6], checks[7], checks[8], checks[9]) }()
 				<-entered
 				if !failure {
 					cancel()
@@ -110,7 +159,8 @@ func TestDesktopPFReadbackDeadlineAndInvalidCapture(t *testing.T) {
 			complete.Add(1)
 			return nil // A stale native success still cannot become proof.
 		}
-		if err := desktopPFReadback(ctx, check, check, check, check); !errors.Is(err, context.DeadlineExceeded) || complete.Load() != 4 {
+		global := [6]func(context.Context) error{check, check, check, check, check, check}
+		if err := desktopPFCompleteReadback(ctx, global, check, check, check, check); !errors.Is(err, context.DeadlineExceeded) || complete.Load() != 4 {
 			t.Fatal("PF readback accepted a stale deadline or lost admitted cleanup", complete.Load(), err)
 		}
 		if err := desktopPFReadback(ctx, func(context.Context) error {
@@ -127,5 +177,21 @@ func TestDesktopPFReadbackDeadlineAndInvalidCapture(t *testing.T) {
 	}
 	if err := desktopPFReadback(nil, func(context.Context) error { return nil }); err == nil {
 		t.Fatal("PF readback accepted an absent operation context")
+	}
+	for missing := range 10 {
+		var started atomic.Int32
+		var checks [10]func(context.Context) error
+		for index := range checks {
+			checks[index] = func(context.Context) error {
+				started.Add(1)
+				return nil
+			}
+		}
+		checks[missing] = nil
+		var global [6]func(context.Context) error
+		copy(global[:], checks[:6])
+		if err := desktopPFCompleteReadback(context.Background(), global, checks[6], checks[7], checks[8], checks[9]); err == nil || started.Load() != 0 {
+			t.Fatal("PF complete readback started without every required inspection", missing, started.Load(), err)
+		}
 	}
 }
