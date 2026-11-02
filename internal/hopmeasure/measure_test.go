@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,15 +19,16 @@ import (
 )
 
 type testEngine struct {
-	mu           sync.Mutex
-	generation   string
-	bad          map[string]string
-	servers      map[string]*httptest.Server
-	destinations map[string]string
-	requests     map[string]int
-	errors       []string
-	gateLoads    bool
-	gates        map[string]*atomic.Pointer[testLoadGate]
+	mu            sync.Mutex
+	generation    string
+	bad           map[string]string
+	servers       map[string]*httptest.Server
+	destinations  map[string]string
+	requests      map[string]int
+	errors        []string
+	gateLoads     bool
+	fastResponses bool
+	gates         map[string]*atomic.Pointer[testLoadGate]
 }
 
 func (e *testEngine) Identity() string { e.mu.Lock(); defer e.mu.Unlock(); return e.generation }
@@ -62,6 +64,7 @@ func fixture(t *testing.T) (*Service, *testEngine) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			e.mu.Lock()
 			bad := e.bad[h.Tag]
+			fast := e.fastResponses
 			if r.Header.Get("Authorization") != "Bearer "+h.Token {
 				e.errors = append(e.errors, "wrong node token")
 			}
@@ -82,7 +85,9 @@ func fixture(t *testing.T) (*Service, *testEngine) {
 				if g := load.Load(); g != nil {
 					g.probed()
 				}
-				time.Sleep(2 * time.Millisecond)
+				if !fast {
+					time.Sleep(2 * time.Millisecond)
+				}
 				proof := h.Proof
 				if bad == "identity" {
 					proof = strings.Repeat("c", 64)
@@ -126,11 +131,15 @@ func fixture(t *testing.T) (*Service, *testEngine) {
 				for sent := 0; sent < n; sent += len(chunk) {
 					_, _ = w.Write(chunk)
 					w.(http.Flusher).Flush()
-					time.Sleep(25 * time.Millisecond)
+					if !fast {
+						time.Sleep(25 * time.Millisecond)
+					}
 				}
 			case "/api/benchmark/upload":
 				n, _ := io.Copy(io.Discard, r.Body)
-				time.Sleep(90 * time.Millisecond)
+				if !fast {
+					time.Sleep(90 * time.Millisecond)
+				}
 				if bad == "ack" {
 					n--
 				}
@@ -210,6 +219,40 @@ func TestMeasuresActualSeparateHopBytesAndLatency(t *testing.T) {
 		}
 	}
 }
+
+// Fast private replies must retain their measured interval without delaying the
+// peer, rounding to an invented minimum, or borrowing the ordinary network.
+// Native Windows execution exercises the performance counter for these short
+// requests; the other platforms keep their monotonic clock.
+func TestPrivateFastResponsesRetainRealIntervals(t *testing.T) {
+	s, e := fixture(t)
+	e.mu.Lock()
+	e.fastResponses = true
+	e.mu.Unlock()
+	for _, hop := range s.hops {
+		t.Run(hop.Role, func(t *testing.T) {
+			idle, err := s.latency(context.Background(), hop, 50)
+			if err != nil || idle == nil || idle.Samples != 50 || idle.Min <= 0 || math.IsNaN(idle.Average) || math.IsInf(idle.Average, 0) {
+				t.Fatalf("fast authenticated replies lost a real interval: %+v %v", idle, err)
+			}
+			for _, upload := range []bool{false, true} {
+				transfer, err := s.transfer(context.Background(), hop, 65536, upload, idle)
+				if err != nil || transfer == nil || transfer.Bytes != 65536 || transfer.Seconds <= 0 || math.IsNaN(transfer.Seconds) || math.IsInf(transfer.Seconds, 0) {
+					t.Fatalf("fast private transfer lost proved bytes or timing (upload=%v): %+v %v", upload, transfer, err)
+				}
+				if transfer.Mbps != float64(transfer.Bytes)*8/transfer.Seconds/1e6 {
+					t.Fatal("fast private transfer fabricated its rate")
+				}
+			}
+		})
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.errors) != 0 || e.requests["entry-wg"] < 52 || e.requests["proxy"] < 52 {
+		t.Fatal("fast measurement substituted another hop or credentials")
+	}
+}
+
 func TestFailedTransfersNeverBecomeZeroSpeed(t *testing.T) {
 	for _, bad := range []string{"identity", "duplicate", "redirect", "compress", "truncate", "framing", "ack"} {
 		t.Run(bad, func(t *testing.T) {

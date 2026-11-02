@@ -400,10 +400,10 @@ func (s *Service) client(h Hop) *http.Client {
 	return &http.Client{Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("measurement redirects are forbidden") }}
 }
-func (s *Service) request(ctx context.Context, h Hop, path string, size int, upload bool) (*http.Response, time.Time, *http.Client, error) {
+func (s *Service) request(ctx context.Context, h Hop, path string, size int, upload bool) (*http.Response, measurementInstant, *http.Client, error) {
 	return s.requestWithActivity(ctx, h, path, size, upload, nil)
 }
-func (s *Service) requestWithActivity(ctx context.Context, h Hop, path string, size int, upload bool, activity *transferActivity) (*http.Response, time.Time, *http.Client, error) {
+func (s *Service) requestWithActivity(ctx context.Context, h Hop, path string, size int, upload bool, activity *transferActivity) (*http.Response, measurementInstant, *http.Client, error) {
 	u, _ := privateAPI(h.API)
 	u.Path = path
 	if path == "/api/benchmark/download" {
@@ -428,7 +428,14 @@ func (s *Service) requestWithActivity(ctx context.Context, h Hop, path string, s
 	r.Header.Set("Accept-Encoding", "identity")
 	r.Header.Set("Cache-Control", "no-store, no-transform")
 	client := s.client(h)
-	start := time.Now()
+	// Private-node response timing includes the captured request's connection
+	// preparation, as before. Keep that boundary while using a clock that can
+	// represent a short interval on every native platform.
+	start, err := readMeasurementClock()
+	if err != nil {
+		client.CloseIdleConnections()
+		return nil, start, client, errMeasurementClock
+	}
 	resp, err := client.Do(r)
 	if err != nil {
 		client.CloseIdleConnections()
@@ -468,7 +475,15 @@ func (s *Service) prove(parent context.Context, h Hop) (float64, error) {
 	if err = s.valid(ctx); err != nil {
 		return 0, err
 	}
-	return float64(time.Since(start).Nanoseconds()) / 1e6, nil
+	finish, err := readMeasurementClock()
+	if err != nil {
+		return 0, errMeasurementClock
+	}
+	elapsed, err := measurementSeconds(start, finish)
+	if err != nil {
+		return 0, errMeasurementClock
+	}
+	return elapsed * 1000, nil
 }
 func (s *Service) latency(ctx context.Context, h Hop, count int) (*Latency, error) {
 	samples := make([]float64, 0, count)
@@ -555,12 +570,16 @@ func (s *Service) transfer(parent context.Context, h Hop, size int, upload bool,
 			}
 		}
 	}
-	elapsed := time.Since(start).Seconds()
+	finish, clockErr := readMeasurementClock()
+	elapsed, intervalErr := measurementSeconds(start, finish)
 	activity.finish()
 	stop()
 	samples := <-ch
-	if err != nil || elapsed <= 0 {
+	if err != nil {
 		return nil, errors.New("incomplete routed transfer")
+	}
+	if clockErr != nil || intervalErr != nil {
+		return nil, errMeasurementClock
 	}
 	if err = s.valid(ctx); err != nil {
 		return nil, err
