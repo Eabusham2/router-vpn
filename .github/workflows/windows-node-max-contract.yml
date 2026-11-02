@@ -129,7 +129,7 @@ jobs:
         shell: pwsh
         run: |
           # Aggregate allowance: 12 complete paths, 48 credential cases, 12
-          # reversals, 4 foreign predecessors and 22 compiled controls.
+          # reversals, 4 foreign predecessors and 23 compiled controls.
           # Individual native startup/query/retirement deadlines are unchanged.
           # Actual CGO/WFP is scoped to this executable; only TUN is modeled.
           # Public complete-MAX admission remains closed in this prerequisite.

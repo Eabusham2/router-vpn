@@ -39,6 +39,7 @@ class MAXNativeBoundaries(unittest.TestCase):
             'routervpn/desktoppt/node_physical_windows.go': 'mobile/desktop/node_physical_windows.go.tmpl',
             'routervpn/desktoppt/node_physical.go': 'mobile/desktop/node_physical.go.tmpl',
             GATE.PEER: GATE.PEER_TEMPLATE,
+            'protocol/routervpnpq/node_max_peer_test.go': 'mobile/desktop/node_max_peer_test.go.tmpl',
         }
         for relative, real in files.items():
             path = self.source / relative
@@ -109,7 +110,7 @@ class MAXNativeBoundaries(unittest.TestCase):
         for original in shipping:
             self.assertEqual(Path(shipping[original]).read_bytes(), Path(closed[original]).read_bytes())
         mutations = GATE.mutations(self.source)
-        self.assertEqual(len(mutations), 6)
+        self.assertEqual(len(mutations), 7)
         for mutation in mutations:
             selected = GATE.overlay(self.source, self.directory('shipping-' + mutation[0]), prospective=False, mutation=mutation)
             self.assertNotIn(str(self.source / GATE.PREDICATE), self.assert_native_scope(selected))
@@ -137,8 +138,8 @@ class MAXNativeBoundaries(unittest.TestCase):
     def test_native_mutations_remain_scoped_and_cannot_replace_another_owner(self):
         with patch.object(GATE.MAX, 'mutations', return_value=()):
             controls = GATE.mutations(self.source)
-            self.assertEqual(len(controls), 6)
-            self.assertEqual({row[2].split('/')[0] for row in controls}, {'max-quic-wg', 'max-tls-wg'})
+            self.assertEqual(len(controls), 7)
+            self.assertEqual({row[2].split('/')[0] for row in controls}, {'max-quic-wg', 'max-tls-wg', 'retained-middle-idle'})
             for mutation in controls:
                 mapping = self.assert_native_scope(GATE.overlay(self.source, self.directory(mutation[0]), prospective=True, mutation=mutation))
                 self.assertIn(str(self.source / GATE.PREDICATE), mapping)
@@ -327,16 +328,39 @@ class MAXNativeBoundaries(unittest.TestCase):
     def test_marker_prerequisite_requires_actual_authentication_boundary(self):
         self.assertEqual(GATE.MARKER_CASES, ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments',
                                            'exact-armed-stream', 'marker-and-authentication', 'packet-authentication',
-                                           'reference-failure-channel', 'retained-reference-readback', 'key-epoch-barrier'))
+                                           'reference-failure-channel', 'retained-reference-readback', 'key-epoch-barrier', 'retained-middle-idle'))
         complete = '\n'.join('--- PASS: ' + value + ' (0.01s)' for value in
                              (GATE.MARKERS, *(GATE.MARKERS + '/' + case for case in GATE.MARKER_CASES))) + '\nPASS\n'
         GATE.MAX.required_output(0, complete, GATE.MARKERS, GATE.MARKER_CASES)
-        for case in ('marker-and-authentication', 'packet-authentication', 'reference-failure-channel', 'retained-reference-readback', 'key-epoch-barrier'):
+        for case in ('marker-and-authentication', 'packet-authentication', 'reference-failure-channel', 'retained-reference-readback', 'key-epoch-barrier', 'retained-middle-idle'):
             marker = '--- PASS: ' + GATE.MARKERS + '/' + case + ' (0.01s)'
             for status, output in ((0, complete.replace(marker, '')), (1, complete.replace(marker, marker.replace('PASS', 'FAIL'))),
                                    (0, complete.replace(marker, 'fixture.go:1: ' + marker)), (0, complete + marker + '\n')):
                 with self.subTest(case=case), self.assertRaises(ValueError):
                     GATE.MAX.required_output(status, output, GATE.MARKERS, GATE.MARKER_CASES)
+
+    def test_reference_lifetime_control_changes_only_the_actual_peer_cache(self):
+        with patch.object(GATE.MAX, 'mutations', return_value=()):
+            controls = GATE.mutations(self.source)
+            selected = controls[-1]
+            self.assertEqual(selected[:5], ('expired-reference-association', GATE.MARKERS,
+                             'retained-middle-idle',
+                             'MAX retained authenticated middle changed its owned UDP association', None))
+            relative, replacement = selected[5]
+            self.assertEqual(relative, 'protocol/routervpnpq/node_max_peer_test.go')
+            actual = (self.source / relative).read_text()
+            before = 'secret, int64(nodeMAXReferenceLifetime/time.Second), nodeMAXMiddleHandler{s, tcpRoutes}, nil)'
+            after = 'secret, 10, nodeMAXMiddleHandler{s, tcpRoutes}, nil)'
+            self.assertEqual(replacement, actual.replace(before, after, 1))
+            self.assertIn('const nodeMAXReferenceLifetime = 240 * time.Second', actual)
+            native = (ROOT / GATE.PEER_TEMPLATE).read_text()
+            self.assertIn('context.WithTimeout(context.Background(), nodeMAXReferenceLifetime)', native)
+            self.assertIn('"-test.timeout=235s"', native)
+            self.assertIn('nodeMAXSS(t, nodeMAXUDP(t, ip), nil, secret,', native)
+            self.assertIn('t.Run("retained-middle-idle", nodeMAXWFPRetainedMiddleIdle)', native)
+            with self.assertRaisesRegex(ValueError, 'exact production boundary'):
+                (self.source / relative).write_text(actual.replace(before, after))
+                GATE.mutations(self.source)
 
     def test_compiled_control_requires_exact_failure_and_acknowledged_cleanup(self):
         parent, case, witness = 'TestMAX', 'max-tls-wg/aes-256-gcm+xor-whitening/middle-key', 'actual intended defect'
@@ -443,8 +467,8 @@ class MAXNativeBoundaries(unittest.TestCase):
     @contextmanager
     def execution_harness(self, receipt):
         # Native subprocesses and the separately tested generic 16-control
-        # driver are modeled. The six native scope controls, complete case
-        # registration, exact overlays, file hashes and cleanup execute here.
+        # driver are modeled. The six native scope controls and exact reference
+        # lifetime defect, case registration, overlays, hashes and cleanup run here.
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(GATE.MAX, 'mutations', return_value=()))
@@ -562,8 +586,8 @@ class MAXNativeBoundaries(unittest.TestCase):
         self.assertFalse(result['prospective'])
         self.assertEqual(result['closed_admission_source'], 'exact-family-removed')
         self.assertEqual(result['closed_admission_control']['parent'], GATE.CLOSED)
-        self.assertEqual(len(result['compiled_negative_controls']), 6)
-        self.assertEqual(len(state['removed_controls']), 6)
+        self.assertEqual(len(result['compiled_negative_controls']), 7)
+        self.assertEqual(len(state['removed_controls']), 7)
         self.assertTrue(result['private_key_workspace_removed'])
         self.assertFalse(state['closed_binary'].exists())
         self.assertEqual(result['port_pair_case'], GATE.PORT_PAIR)
@@ -576,16 +600,19 @@ class MAXNativeBoundaries(unittest.TestCase):
                 self.assertNotIn(GATE.PREDICATE, mapping)
         self.assertEqual((self.source / GATE.PREDICATE).read_text(), raw)
         self.assertEqual(json.loads(receipt.read_text()), json.loads(json.dumps(result)))
-        reversal_deadlines, control_deadlines = [], []
+        reversal_deadlines, control_deadlines, marker_deadlines = [], [], []
         for args, outer_timeout in state['native_calls']:
             inner = int(next(value.removeprefix('-test.timeout=')[:-1] for value in args if value.startswith('-test.timeout=')))
             self.assertEqual(outer_timeout, inner + 15)
             if '-test.run=^' + GATE.SUCCESSION + '$' in args:
                 reversal_deadlines.append((inner, outer_timeout))
+            if '-test.run=^' + GATE.MARKERS + '$' in args:
+                marker_deadlines.append((inner, outer_timeout))
             if Path(args[0]) in state['removed_controls']:
                 control_deadlines.append((inner, outer_timeout))
         self.assertEqual(reversal_deadlines, [(3000, 3015)])
-        self.assertEqual(control_deadlines, [(90, 105)] * 6,
+        self.assertEqual(marker_deadlines, [(30, 45)], 'Complete marker selection lost its unchanged aggregate bound')
+        self.assertEqual(control_deadlines, [(90, 105)] * 7,
                          'The reversal aggregate changed an individual native control deadline')
 
     def test_missing_or_failed_pair_proof_prevents_native_receipt(self):

@@ -48,6 +48,12 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
+// Each Windows reference child is bounded by this existing four-minute owner.
+// Its authenticated SS association must remain stable until that owner retires;
+// a shorter idle cache would replace the inner UDP sender under the retained
+// single-source bridge. EOF/cancellation still closes and joins it immediately.
+const nodeMAXReferenceLifetime = 240 * time.Second
+
 // Additional complete MAX graph evidence using the same native PQ references.
 type nodeMAXPacket struct {
 	net.PacketConn
@@ -151,7 +157,7 @@ func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret st
 		}
 		s.close()
 	})
-	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, secret, 10, nodeMAXMiddleHandler{s, tcpRoutes}, nil)
+	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, secret, int64(nodeMAXReferenceLifetime/time.Second), nodeMAXMiddleHandler{s, tcpRoutes}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

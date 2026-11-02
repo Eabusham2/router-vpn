@@ -48,7 +48,7 @@ LAYERS = MAX.LAYERS
 CLOSED = 'TestRouterVPNDesktopNodeWindowsMAXCapabilityClosed'
 OPEN = 'TestRouterVPNDesktopNodeWindowsMAXCapabilityOpen'
 MARKERS = 'TestRouterVPNDesktopNodeWindowsMAXMarkers'
-MARKER_CASES = ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments', 'exact-armed-stream', 'marker-and-authentication', 'packet-authentication', 'reference-failure-channel', 'retained-reference-readback', 'key-epoch-barrier')
+MARKER_CASES = ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments', 'exact-armed-stream', 'marker-and-authentication', 'packet-authentication', 'reference-failure-channel', 'retained-reference-readback', 'key-epoch-barrier', 'retained-middle-idle')
 STARTUP_RECORDS = MAX.STARTUP_RECORDS
 PORT_PAIR, PORT_PAIR_CASES = MAX.PORT_PAIR, MAX.PORT_PAIR_CASES
 SUCCESSION = 'TestRouterVPNDesktopNodeWindowsMAXSuccession'
@@ -428,6 +428,14 @@ def mutations(source):
              'independent peer marker receipt'),
         ):
             result.append((label, group, case, witness, selected, None))
+    relative = 'protocol/routervpnpq/node_max_peer_test.go'
+    raw = (source / relative).read_text(encoding='utf-8')
+    before = 'secret, int64(nodeMAXReferenceLifetime/time.Second), nodeMAXMiddleHandler{s, tcpRoutes}, nil)'
+    after = 'secret, 10, nodeMAXMiddleHandler{s, tcpRoutes}, nil)'
+    replacement = WFP.BOOT.IDENTITY.replace_once(raw, before, after)
+    result.append(('expired-reference-association', MARKERS, 'retained-middle-idle',
+                   'MAX retained authenticated middle changed its owned UDP association',
+                   None, (relative, replacement)))
     return tuple(result)
 
 

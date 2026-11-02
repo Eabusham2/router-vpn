@@ -38,6 +38,8 @@ import (
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing-shadowsocks/shadowaead"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	SSClient "github.com/sagernet/sing-shadowsocks2"
+	SSClient2022 "github.com/sagernet/sing-shadowsocks2/shadowaead_2022"
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -690,7 +692,7 @@ func nodeMAXWFPStartReference(t *testing.T, mode, layer, fault string) *nodeMAXW
 		_ = os.RemoveAll(workspace)
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), nodeMAXReferenceLifetime)
 	command := exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopNodeWindowsMAXReferenceProcess$", "-test.count=1", "-test.timeout=235s")
 	command.Env = append(os.Environ(), "ROUTERVPN_NODE_MAX_WFP_REFERENCE_CHILD=1")
 	input, err := command.StdinPipe()
@@ -1283,6 +1285,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
 	t.Run("key-epoch-barrier", nodeMAXWFPNativeKeyEpochBarrier)
 	t.Run("retained-reference-readback", nodeMAXWFPRetainedReferenceReadback)
+	t.Run("retained-middle-idle", nodeMAXWFPRetainedMiddleIdle)
 	t.Run("reference-failure-channel", nodeMAXWFPReferenceFailureChannel)
 	t.Run("marker-and-authentication", nodeMAXWFPMarkerAuthentication)
 	t.Run("packet-authentication", nodeMAXWFPSSPacketAuthentication)
@@ -1860,5 +1863,155 @@ func nodeMAXWFPSSPacketAuthentication(t *testing.T) {
 	wrong := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, 32))
 	if err := check(encode(wrong, nil)); err == nil || !strings.Contains(err.Error(), "decrypt packet: cipher: message authentication failed") || owner.rejected.Load() != 1 {
 		t.Fatal("MAX actual UDP AES key rejection has no authenticated ciphertext witness", err, "rejected", owner.rejected.Load())
+	}
+}
+
+// This real SS2022 client/server regression uses the same nodeMAXSS constructor
+// as the native complete-MAX reference. Its final UDP echo is an explicit model
+// of packet ciphertext, not an additional WG/AWG, KEM or WFP acceptance claim.
+func nodeMAXWFPRetainedMiddleIdle(t *testing.T) {
+	t.Helper()
+	if nodeMAXReferenceLifetime != 240*time.Second {
+		t.Fatal("MAX reference changed its existing bounded child lifetime")
+	}
+	ip := netip.MustParseAddr("127.0.0.1")
+	echo, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		body := make([]byte, 65535)
+		for {
+			n, remote, err := echo.ReadFromUDPAddrPort(body)
+			if err != nil {
+				return
+			}
+			if _, err = echo.WriteToUDPAddrPort(body[:n], remote); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() { _ = echo.Close(); <-joined })
+	gate := make(chan struct{})
+	close(gate)
+	bridge := newNodePQWFPBridge(t, ip, echo.LocalAddr().String(), true, gate)
+	destination := M.SocksaddrFrom(netip.MustParseAddr("192.0.2.99"), 9999)
+	secret := nodeMAXSecret(t)
+	middle := nodeMAXSS(t, nodeMAXUDP(t, ip), nil, secret,
+		map[M.Socksaddr]string{destination: bridge.address().String()}, nil, destination, gate, nil)
+	newClient := func(password string) net.PacketConn {
+		t.Helper()
+		method, err := SSClient2022.NewMethod(context.Background(), mobilemultihop.NativeStartLayerMethod, SSClient.MethodOptions{Password: password})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(middle.address()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := method.DialPacketConn(wire)
+		t.Cleanup(func() { _ = client.Close() })
+		return client
+	}
+	transfer := func(client net.PacketConn, label string) error {
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return err
+		}
+		payload := append([]byte(nodePQPayload+label+"/"), nonce[:]...)
+		if err := client.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return err
+		}
+		if n, err := client.WriteTo(payload, destination); err != nil || n != len(payload) {
+			return errors.Join(err, io.ErrShortWrite)
+		}
+		answer := make([]byte, 65535)
+		n, from, err := client.ReadFrom(answer)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(answer[:n], payload) || from.String() != destination.String() {
+			return errors.New("MAX middle changed its exact encrypted payload or reply destination")
+		}
+		return nil
+	}
+	wait := func(want nodePQWFPBridgeSnapshot) {
+		t.Helper()
+		for deadline := time.Now().Add(time.Second); ; {
+			actual := bridge.snapshot()
+			if actual == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("MAX middle lost its independently received original association", want, actual)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	client := newClient(secret)
+	if err := transfer(client, "before-idle"); err != nil {
+		t.Fatal("MAX original authenticated middle was not usable", err)
+	}
+	state := nodePQWFPBridgeSnapshot{Accepted: 1, Forwarded: 1, Returned: 1, Captured: true}
+	wait(state)
+	// The old reference expired both its authenticated session and UDP NAT at
+	// ten seconds. Cross that actual clock boundary without extending any
+	// production transfer, startup, crypto, or child-retirement deadline.
+	timer := time.NewTimer(11 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-middle.ctx.Done():
+		t.Fatal("MAX retained middle retired before its original idle interval")
+	}
+	if err := transfer(client, "after-idle"); err != nil {
+		t.Fatal("MAX retained authenticated middle changed its owned UDP association", err)
+	}
+	state.Accepted, state.Forwarded, state.Returned = 2, 2, 2
+	wait(state)
+	wrong := newClient(nodeMAXSecret(t))
+	rejected := middle.rejected.Load()
+	if err := transfer(wrong, "wrong-key"); err == nil || middle.rejected.Load() <= rejected {
+		t.Fatal("MAX retained middle accepted an incorrect authenticated key", err)
+	}
+	wait(state)
+	foreign, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(bridge.address()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = foreign.Close() })
+	if err := foreign.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := foreign.Write([]byte("uncaptured-inner-sender")); err != nil || n != len("uncaptured-inner-sender") {
+		t.Fatal("MAX middle foreign-source control never reached its owned listener", err)
+	}
+	state.OtherDrops++
+	wait(state)
+	bridge.resetWithKeyBarrier(gate)
+	if err := transfer(client, "retired-source"); err == nil {
+		t.Fatal("MAX middle re-admitted its explicitly retired source")
+	}
+	state.Captured = false
+	state.RetiredDrops++
+	wait(state)
+	successor := newClient(secret)
+	if err := transfer(successor, "new-owned-source"); err != nil {
+		t.Fatal("MAX middle did not admit its independently authenticated successor", err)
+	}
+	state.Captured = true
+	state.Accepted, state.Forwarded, state.Returned = 3, 3, 3
+	wait(state)
+	if middle.plain.Load() || middle.raw.Load() != 5 {
+		t.Fatal("MAX middle bypassed encryption or lost an actual input packet", middle.raw.Load())
+	}
+	middle.close()
+	middle.mu.Lock()
+	closed := middle.closing && len(middle.owned) == 0 && middle.ctx.Err() != nil
+	middle.mu.Unlock()
+	if !closed {
+		t.Fatal("MAX retained middle failed immediate owned cancellation and join")
 	}
 }
