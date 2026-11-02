@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import signal
+import shutil
 import stat
 import subprocess
 import sys
@@ -218,6 +219,46 @@ def namespace_runner():
     return runner
 
 
+@contextlib.contextmanager
+def routing_fixture_image(binary):
+    # sudo can traverse the private compiler workspace, but root in the fresh
+    # user namespace cannot use initial-namespace DAC capabilities to do so.
+    # Expose only an exact read/execute-only copy; the original workspace and
+    # every other compiled image retain their original private permissions.
+    original = retained_binary(binary)
+    owner = binary.lstat()
+    if owner.st_uid != os.geteuid() or owner.st_mode & 0o022 or not owner.st_mode & 0o111:
+        raise ValueError("The native routing fixture is not its owned executable")
+    with tempfile.TemporaryDirectory(prefix="routervpn-routing-receipt-", dir="/tmp") as directory:
+        workspace = Path(directory)
+        staged = workspace / "routing.test"
+        with binary.open("rb") as source, staged.open("xb") as target:
+            shutil.copyfileobj(source, target)
+        staged.chmod(0o555)
+        workspace.chmod(0o711)
+        receipt = retained_binary(staged)
+        root = workspace.lstat()
+        directory_identity = (root.st_dev, root.st_ino, root.st_uid, root.st_gid, root.st_mode)
+
+        def verify():
+            current = workspace.lstat()
+            if (current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode) != directory_identity or \
+                    not stat.S_ISDIR(current.st_mode) or current.st_uid != os.geteuid() or stat.S_IMODE(current.st_mode) != 0o711:
+                raise ValueError("The native routing staging directory changed ownership or permissions")
+            copied = staged.lstat()
+            if copied.st_uid != owner.st_uid or copied.st_gid != root.st_gid or stat.S_IMODE(copied.st_mode) != 0o555 or \
+                    retained_binary(staged) != receipt or receipt[2] != original[2]:
+                raise ValueError("The native routing staged image differs from its exact compiled fixture")
+            if retained_binary(binary) != original or binary.lstat().st_uid != owner.st_uid or binary.lstat().st_gid != owner.st_gid:
+                raise ValueError("The native routing source image changed during staged execution")
+
+        verify()
+        try:
+            yield staged
+        finally:
+            verify()
+
+
 def linux_routing_receipt_test(binary, *, cwd, env, duration):
     if platform.system() != "Linux" or env.get("GOOS") != "linux":
         raise ValueError("The native routing receipt fixture requires native Linux")
@@ -227,18 +268,19 @@ def linux_routing_receipt_test(binary, *, cwd, env, duration):
     # and joins the full process group, including privileged descendants.
     runner = namespace_runner()
     sudo = runner.privilege_tool()
-    command = [str(binary), "-test.run=^TestRouterVPNNativeLinuxRouting", "-test.count=1",
-               "-test.timeout=" + str(duration) + "s", "-test.v"]
-    if sudo is not None:
-        command = [sudo, "-n", "--", *command]
     captured = dict(env)
     for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER"):
         captured.pop(name, None)
-    try:
-        return 0, runner.run(command, cwd=cwd, env=captured, timeout=duration + 15, sudo=sudo)
-    except subprocess.CalledProcessError as error:
-        output = error.output or b""
-        return error.returncode, output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
+    with routing_fixture_image(binary) as staged:
+        command = [str(staged), "-test.run=^TestRouterVPNNativeLinuxRouting", "-test.count=1",
+                   "-test.timeout=" + str(duration) + "s", "-test.v"]
+        if sudo is not None:
+            command = [sudo, "-n", "--", *command]
+        try:
+            return 0, runner.run(command, cwd=cwd, env=captured, timeout=duration + 15, sudo=sudo)
+        except subprocess.CalledProcessError as error:
+            output = error.output or b""
+            return error.returncode, output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
 
 
 @contextlib.contextmanager

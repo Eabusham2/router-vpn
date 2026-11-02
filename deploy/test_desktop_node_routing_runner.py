@@ -5,6 +5,8 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import os
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -18,7 +20,13 @@ SPEC.loader.exec_module(NODE)
 
 class RoutingNamespaceLauncher(unittest.TestCase):
     def setUp(self):
-        self.binary = Path("/private-owned-work/routing.test")
+        self.temporary = tempfile.TemporaryDirectory(prefix="node-routing-private-")
+        self.addCleanup(self.temporary.cleanup)
+        self.work = Path(self.temporary.name)
+        self.binary = self.work / "original.test"
+        self.binary.write_bytes(b"exact compiled routing fixture")
+        self.binary.chmod(0o755)
+        self.staged = []
         self.source = Path("/original-source")
         self.env = {"GOOS": "linux", "EXACT_COMPILER_ENV": "captured",
                     "ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD": "1",
@@ -27,6 +35,19 @@ class RoutingNamespaceLauncher(unittest.TestCase):
         self.native = Mock()
         self.native.privilege_tool.return_value = "/usr/bin/sudo"
         self.native.run.return_value = "actual native fixture output\n"
+
+        def observe(command, **options):
+            offset = 3 if options["sudo"] is not None else 0
+            image = Path(command[offset])
+            self.staged.append(image)
+            self.assertNotEqual(image, self.binary)
+            self.assertEqual(image.read_bytes(), self.binary.read_bytes())
+            self.assertEqual(stat.S_IMODE(image.stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(image.parent.stat().st_mode), 0o711)
+            self.assertEqual(stat.S_IMODE(self.work.stat().st_mode), 0o700)
+            return self.native.run.return_value
+
+        self.native.run.side_effect = observe
         self.system = patch.object(NODE.platform, "system", return_value="Linux")
         self.loader = patch.object(NODE, "namespace_runner", return_value=self.native)
         self.system.start()
@@ -42,16 +63,19 @@ class RoutingNamespaceLauncher(unittest.TestCase):
         self.assertEqual(self.invoke(), (0, "actual native fixture output\n"))
         self.native.privilege_tool.assert_called_once_with()
         self.native.run.assert_called_once_with(
-            ["/usr/bin/sudo", "-n", "--", str(self.binary),
+            ["/usr/bin/sudo", "-n", "--", str(self.staged[0]),
              "-test.run=^TestRouterVPNNativeLinuxRouting", "-test.count=1", "-test.timeout=90s", "-test.v"],
             cwd=self.source, env={"GOOS": "linux", "EXACT_COMPILER_ENV": "captured"}, timeout=105, sudo="/usr/bin/sudo")
         self.assertEqual(self.env, original)
+        self.assertFalse(self.staged[0].parent.exists())
+        self.assertTrue(self.binary.exists())
 
     def test_root_keeps_the_same_fixture_and_owned_timeout_without_sudo(self):
         self.native.privilege_tool.return_value = None
         self.invoke()
         args, options = self.native.run.call_args
-        self.assertEqual(args[0][0], str(self.binary))
+        self.assertEqual(args[0][0], str(self.staged[0]))
+        self.assertFalse(self.staged[0].parent.exists())
         self.assertIsNone(options["sudo"])
         self.assertEqual(options["timeout"], 105)
 
@@ -83,6 +107,108 @@ class RoutingNamespaceLauncher(unittest.TestCase):
                     self.invoke()
         self.native.privilege_tool.assert_not_called()
         self.native.run.assert_not_called()
+
+
+class RoutingFixtureImage(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="node-routing-source-")
+        self.addCleanup(self.temporary.cleanup)
+        self.work = Path(self.temporary.name)
+        self.image = self.work / "original.test"
+        self.image.write_bytes(b"exact compiled native fixture")
+        self.image.chmod(0o755)
+
+    def test_stages_only_the_exact_read_execute_image_and_preserves_private_source(self):
+        original = NODE.retained_binary(self.image)
+        with NODE.routing_fixture_image(self.image) as staged:
+            self.assertEqual(staged.parent.parent, Path("/tmp"))
+            self.assertNotEqual(staged.parent, self.work)
+            self.assertEqual(list(staged.parent.iterdir()), [staged])
+            self.assertEqual(staged.read_bytes(), self.image.read_bytes())
+            self.assertNotEqual(staged.stat().st_ino, self.image.stat().st_ino)
+            self.assertEqual(staged.stat().st_uid, os.geteuid())
+            self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(staged.parent.stat().st_mode), 0o711)
+            self.assertEqual(stat.S_IMODE(self.work.stat().st_mode), 0o700)
+        self.assertFalse(staged.parent.exists())
+        self.assertEqual(NODE.retained_binary(self.image), original)
+        self.assertEqual(stat.S_IMODE(self.work.stat().st_mode), 0o700)
+
+    def test_execution_failure_and_cancellation_remove_only_owned_staging(self):
+        for error in (subprocess.CalledProcessError(7, ["owned fixture"]), RuntimeError("joined timeout")):
+            with self.subTest(error=type(error).__name__):
+                with self.assertRaises(type(error)):
+                    with NODE.routing_fixture_image(self.image) as staged:
+                        raise error
+                self.assertFalse(staged.parent.exists())
+                self.assertTrue(self.image.exists())
+
+    def test_changed_staged_image_identity_bytes_or_permissions_cannot_pass(self):
+        for change in ("replacement", "contents", "permissions", "symlink"):
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(ValueError, "staged image|owned regular"):
+                    with NODE.routing_fixture_image(self.image) as staged:
+                        if change == "replacement":
+                            other = staged.with_name("replacement.test")
+                            other.write_bytes(staged.read_bytes())
+                            other.chmod(0o555)
+                            other.replace(staged)
+                        elif change == "contents":
+                            staged.chmod(0o755)
+                            staged.write_bytes(b"changed compiled fixture")
+                            staged.chmod(0o555)
+                        elif change == "permissions":
+                            staged.chmod(0o777)
+                        else:
+                            staged.unlink()
+                            staged.symlink_to(self.image)
+                self.assertFalse(staged.parent.exists())
+                self.assertTrue(self.image.exists())
+
+    def test_changed_original_image_cannot_pass_and_keeps_private_directory(self):
+        with self.assertRaisesRegex(ValueError, "source image changed"):
+            with NODE.routing_fixture_image(self.image) as staged:
+                self.image.write_bytes(b"replacement source fixture")
+        self.assertFalse(staged.parent.exists())
+        self.assertEqual(stat.S_IMODE(self.work.stat().st_mode), 0o700)
+
+    def test_corrupted_copy_never_reaches_execution(self):
+        def corrupt(source, target):
+            target.write(b"different compiled fixture")
+        entered = False
+        with patch.object(NODE.shutil, "copyfileobj", side_effect=corrupt), \
+             self.assertRaisesRegex(ValueError, "staged image"):
+            with NODE.routing_fixture_image(self.image):
+                entered = True
+        self.assertFalse(entered)
+
+    def test_symlink_hardlink_foreign_owner_and_writable_source_are_rejected(self):
+        self.image.chmod(0o777)
+        with self.assertRaisesRegex(ValueError, "owned executable"):
+            with NODE.routing_fixture_image(self.image):
+                self.fail("unsafe source executed")
+        self.image.chmod(0o755)
+        alias = self.work / "symlink.test"
+        alias.symlink_to(self.image)
+        with self.assertRaisesRegex(ValueError, "owned regular"):
+            with NODE.routing_fixture_image(alias):
+                self.fail("symlink source executed")
+        alias.unlink()
+        os.link(self.image, alias)
+        with self.assertRaisesRegex(ValueError, "owned regular"):
+            with NODE.routing_fixture_image(self.image):
+                self.fail("hardlink source executed")
+        alias.unlink()
+        with patch.object(NODE.os, "geteuid", return_value=self.image.stat().st_uid + 1), \
+             self.assertRaisesRegex(ValueError, "owned executable"):
+            with NODE.routing_fixture_image(self.image):
+                self.fail("foreign source executed")
+
+    def test_staging_directory_permissions_are_part_of_retained_identity(self):
+        with self.assertRaisesRegex(ValueError, "staging directory"):
+            with NODE.routing_fixture_image(self.image) as staged:
+                staged.parent.chmod(0o777)
+        self.assertFalse(staged.parent.exists())
 
 
 class BaselineRoutingDispatch(unittest.TestCase):
