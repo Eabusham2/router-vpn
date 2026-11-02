@@ -283,16 +283,28 @@ func desktopDarwinPFForeignRoots(ctx context.Context) error {
 	return nil
 }
 
-func desktopDarwinPFSystemChildren(ctx context.Context) error {
+func desktopDarwinPFSystemChildren(ctx context.Context) (failure error) {
+	progress := desktopPFChildrenProgress{command: 1, attempted: 1}
+	defer func() { failure = progress.failure(failure) }()
 	anchors, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", "com.apple", "-s", "Anchors")
 	if err != nil {
 		return err
 	}
-	for _, line := range strings.Split(string(anchors), "\n") {
+	progress.listed, progress.completed = true, 1
+	lines := strings.Split(string(anchors), "\n")
+	for _, line := range lines {
+		name := strings.TrimPrefix(strings.TrimSpace(line), "com.apple/")
+		if name != "" && "com.apple/"+name != desktopDarwinPFNamespace {
+			progress.children++
+		}
+	}
+	for _, line := range lines {
 		name := strings.TrimPrefix(strings.TrimSpace(line), "com.apple/")
 		if name == "" || "com.apple/"+name == desktopDarwinPFNamespace {
 			continue
 		}
+		progress.child++
+		progress.command = 0
 		if !desktopDarwinPFAnchorName.MatchString(name) {
 			return errors.New("Darwin PF dispatch has an unknown anchor identity")
 		}
@@ -302,18 +314,27 @@ func desktopDarwinPFSystemChildren(ctx context.Context) error {
 		// accepted yet: a state can outlive both socket holders and bypass the
 		// per-packet UID check. This is a bounded compatibility requirement,
 		// not authority to rewrite or flush another filter owner.
-		for _, anchor := range []string{"com.apple/" + name, "com.apple/" + name + "/*"} {
+		for branch, anchor := range []string{"com.apple/" + name, "com.apple/" + name + "/*"} {
+			progress.command = 2 + 2*branch
+			progress.attempted++
 			rules, err := desktopDarwinPFRead(ctx, anchor)
+			if err == nil {
+				progress.completed++
+			}
 			if err != nil || "com.apple/"+name < desktopDarwinPFNamespace && rules != "" {
 				return errors.Join(err, errors.New("Darwin PF dispatch has an unreadable or earlier nonempty filter owner"))
 			}
 			if err := desktopDarwinPFStatelessFilters(rules); err != nil {
 				return err
 			}
+			progress.command = 3 + 2*branch
+			progress.attempted++
 			if err := desktopDarwinPFNoTranslation(ctx, anchor); err != nil {
 				return err
 			}
+			progress.completed++
 		}
+		progress.verified++
 	}
 	return nil
 }
@@ -473,21 +494,24 @@ func (p *desktopDarwinPF) render() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func (p *desktopDarwinPF) grant(ctx context.Context, g DesktopSocketGrant) (DesktopSocketReceipt, error) {
-	started := time.Now()
+func (p *desktopDarwinPF) grant(ctx context.Context, g DesktopSocketGrant) (receipt DesktopSocketReceipt, failure error) {
+	progress := desktopPFStartGrant(ctx)
+	started := progress.started
+	defer func() { failure = progress.failure(failure) }()
 	if !p.valid() || p.permits == nil || g.Capture != p.Capture || g.Local.Port() == 0 || g.Remote.Port() == 0 || g.Binding.InterfaceIndex == 0 || !desktopDarwinInterfaceName.MatchString(g.Binding.InterfaceName) {
 		return DesktopSocketReceipt{}, errors.New("Darwin PF grant has no independently retained owner")
 	}
-	if err := p.verify(ctx, true); err != nil {
+	if err := progress.run(1, func() error { return p.verify(ctx, true) }); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
 	p.permits[p.key(g)] = desktopDarwinPFPermit{Grant: g, Expires: started.Add(7 * time.Second)}
-	if err := desktopDarwinPFLoad(ctx, p.Anchor, p.render()); err != nil {
+	if err := progress.run(2, func() error { return desktopDarwinPFLoad(ctx, p.Anchor, p.render()) }); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
-	if err := p.verify(ctx, true); err != nil {
+	if err := progress.run(3, func() error { return p.verify(ctx, true) }); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
+	progress.phase = 4
 	if ctx.Err() != nil || !time.Now().Before(started.Add(5*time.Second)) {
 		return DesktopSocketReceipt{}, errors.New("Darwin PF grant readback became stale")
 	}

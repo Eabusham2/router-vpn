@@ -5,6 +5,7 @@ package mobiletor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -153,12 +154,107 @@ func TestDesktopPFReadbackFailureAndCancellationJoin(t *testing.T) {
 				}
 				close(cleanup)
 				cleanupClosed = true
-				if err := <-done; !errors.Is(err, want) || !retired.Load() {
+				err := <-done
+				if !errors.Is(err, want) || !retired.Load() {
 					t.Fatal("PF readback discarded its exact failure or cancellation cleanup", err)
+				}
+				var observed *desktopPFReadbackFailure
+				if !errors.As(err, &observed) || len(observed.checks) != 10 || observed.checks[6].state != 3 {
+					t.Fatal("PF failure diagnostics lost the actually joined native check", err)
+				}
+				for _, check := range observed.checks {
+					if check.state == 2 || check.queue < 0 || check.run < 0 {
+						t.Fatal("PF failure diagnostics reported unjoined or invalid native timing", check)
+					}
 				}
 			})
 		})
 	}
+	t.Run("queued-failure-timings", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+			defer cancel()
+			want := errors.New("fixture native policy failure")
+			var checks [10]func(context.Context) error
+			for index := range checks {
+				checks[index] = func(captured context.Context) error {
+					select {
+					case <-time.After(30 * time.Millisecond):
+						if index == 5 {
+							return want
+						}
+						return nil
+					case <-captured.Done():
+						return captured.Err()
+					}
+				}
+			}
+			var global [6]func(context.Context) error
+			copy(global[:], checks[:6])
+			err := desktopPFCompleteReadback(ctx, global, checks[6], checks[7], checks[8], checks[9])
+			var observed *desktopPFReadbackFailure
+			if !errors.Is(err, want) || !errors.As(err, &observed) || len(observed.checks) != 10 {
+				t.Fatal("failure diagnostics replaced the original native refusal", err)
+			}
+			if observed.elapsed != 60*time.Millisecond || observed.checks[5].state != 3 || observed.checks[5].queue != 30*time.Millisecond || observed.checks[5].run != 30*time.Millisecond {
+				t.Fatal("failure diagnostics confused queue/native/join durations", observed.elapsed, observed.checks)
+			}
+			if !strings.Contains(err.Error(), "check=5 state=3 queue_us=30000 run_us=30000") || len(err.Error()) > 4096 {
+				t.Fatal("failure timing output lost its bounded numeric shape", err)
+			}
+		})
+	})
+	t.Run("grant-phase-and-original-budget", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			originalDeadline, _ := ctx.Deadline()
+			time.Sleep(75 * time.Millisecond) // Existing native socket/interface prerequisites.
+			progress := desktopPFStartGrant(ctx)
+			for index, delay := range []time.Duration{300 * time.Millisecond, 100 * time.Millisecond} {
+				if err := progress.run(uint8(index+1), func() error {
+					if deadline, _ := ctx.Deadline(); deadline != originalDeadline {
+						t.Fatal("diagnostics replaced original native deadline")
+					}
+					time.Sleep(delay)
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := progress.run(3, func() error { <-ctx.Done(); return ctx.Err() })
+			err = progress.failure(err)
+			var observed *desktopPFGrantFailure
+			if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &observed) || !observed.progress.deadline || observed.progress.phase != 3 ||
+				observed.progress.remaining != 1925*time.Millisecond || observed.elapsed != 1925*time.Millisecond ||
+				observed.progress.durations != [3]time.Duration{300 * time.Millisecond, 100 * time.Millisecond, 1525 * time.Millisecond} {
+				t.Fatal("grant diagnostic lost its original budget, failed phase or elapsed work", err)
+			}
+			if progress.failure(nil) != nil || !strings.Contains(err.Error(), "entry_remaining_us=1925000") || len(err.Error()) > 1024 {
+				t.Fatal("grant diagnostics fabricated a failure or exceeded numeric output bounds", err)
+			}
+			withoutDeadline := desktopPFStartGrant(context.Background())
+			if withoutDeadline.deadline || withoutDeadline.remaining != 0 || withoutDeadline.failure(nil) != nil {
+				t.Fatal("diagnostic created a deadline or success output")
+			}
+		})
+	})
+	t.Run("numeric-child-progress-keeps-cause", func(t *testing.T) {
+		want := errors.New("fixture native policy failure")
+		for command := 0; command <= 5; command++ {
+			progress := desktopPFChildrenProgress{listed: true, children: 3, child: 2, verified: 1, command: command, attempted: 7, completed: 6}
+			err := progress.failure(want)
+			var observed *desktopPFChildrenFailure
+			if !errors.Is(err, want) || !errors.As(err, &observed) || observed.progress != progress || len(err.Error()) > 512 {
+				t.Fatal("system-child diagnostics changed original failure or numeric progress", err)
+			}
+			progress.children = 900
+			if observed.progress.children != 3 || progress.failure(nil) != nil {
+				t.Fatal("failure diagnostic retained mutable progress or emitted success output")
+			}
+		}
+	})
+
 }
 
 func TestDesktopPFReadbackDeadlineAndInvalidCapture(t *testing.T) {
