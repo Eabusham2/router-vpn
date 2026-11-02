@@ -39,6 +39,7 @@ NATIVE_TESTS = (
     "TestWindowsPrivateStoreWriteThroughFailureAndRetry",
     "TestWindowsPrivateStoreWriteThroughFlags",
     "TestWindowsPrivateStoreRejectsInvalidReplacement",
+    "TestPrivateStoreCheckedWriteRetainsOriginalTarget",
 )
 SHARED_TESTS = (
     "TestDesktopNodeProcessArguments",
@@ -162,7 +163,9 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             *("TestSpeedLabFallbackReleaseRequiresCapturedTransaction/" + case for case in
               ("live", "test-cancelled", "intent-cancelled", "operation", "runtime", "not-mutated", "restored", "invalid-owner")),
             "TestWindowsPrivateStoreWriteThroughReplace/unicode",
-            "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
+            "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path",
+            *("TestPrivateStoreCheckedWriteRetainsOriginalTarget/" + case for case in
+              ("unchanged", "same-content", "different-content", "appeared", "removed", "refused")))
 REQUIRED_SOURCES = (
     "cmd/client/desktop_node_toolchain_test.go", "cmd/client/desktop_node_all_toolchain_test.go",
     "cmd/client/desktop_node_all.go", "cmd/client/desktop_node_all_test.go", "cmd/client/desktop_node_all_prospective_test.go",
@@ -198,7 +201,7 @@ REQUIRED_SOURCES = (
     "cmd/client/profile_protection.go", "cmd/client/profile_protection_owned.go", "cmd/client/profile_protection_owned_test.go",
     "cmd/client/controller_privilege_windows.go",
     "cmd/client/private_runtime_permissions_windows.go",
-    "cmd/client/private_store.go", "cmd/client/private_store_replace_windows.go",
+    "cmd/client/private_store.go", "cmd/client/private_store_test.go", "cmd/client/private_store_replace_windows.go",
     "cmd/client/private_store_replace_other.go", "cmd/client/private_store_replace_windows_test.go",
     "cmd/client/bundled_native.go", "cmd/client/bundled_amnezia.go",
     "cmd/client/main.go", "cmd/client/ui.html", "cmd/client/logical_ui.js",
@@ -365,6 +368,8 @@ def mutants():
     release = (ROOT / release_file).read_text(encoding="utf-8")
     private_file = "cmd/client/private_store_replace_windows.go"
     private = (ROOT / private_file).read_text(encoding="utf-8")
+    checked_file = "cmd/client/private_store.go"
+    checked = (ROOT / checked_file).read_text(encoding="utf-8")
     off_file = "cmd/client/desktop_node_journal_off.go"
     off = (ROOT / off_file).read_text(encoding="utf-8")
     off_capture_file = "cmd/client/desktop_node_protection_off.go"
@@ -444,6 +449,13 @@ def mutants():
          "private replacement modified the old file instead of promoting its new private file",
          once(private, "return replaceWindowsPrivateStoreFile(source, target, moveWindowsPrivateStoreFile)",
               "body, err := os.ReadFile(source); if err != nil { return err }; if err := os.WriteFile(target, body, 0600); err != nil { return err }; return os.Remove(source)")),
+        (checked_file, "private-publication-late-file-identity", "TestPrivateStoreCheckedWriteRetainsOriginalTarget/same-content",
+         "private target changed during final ownership callback",
+         once(checked, "!info.Mode().IsRegular() || !os.SameFile(info, info)", "!info.Mode().IsRegular()")),
+        (checked_file, "private-publication-skips-final-target", "TestPrivateStoreCheckedWriteRetainsOriginalTarget/same-content",
+         "private target changed during final ownership callback",
+         once(checked, "\tif err := atomicWritePrivateTargetUnchanged(path, targetBefore); err != nil {\n\t\treturn nil, err\n\t}\n",
+              "\t_ = targetBefore\n")),
         (off_file, "off-before-durable-intent", "TestDesktopNodeJournalOffOrdersRemovalSaveAndSettlement/always",
          "explicit Off removed protection before its durable intent",
          once(off, "\t\tif err := writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.head, j.intent); err != nil {\n\t\t\treturn err\n\t\t}\n", "")),

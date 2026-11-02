@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,7 +128,6 @@ func mustPrivateMode(t *testing.T, path string) os.FileMode {
 	return info.Mode().Perm()
 }
 
-
 func TestPrivateStoreRejectsTargetReplacementBeforeAdoption(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client.json")
@@ -136,6 +137,11 @@ func TestPrivateStoreRejectsTargetReplacementBeforeAdoption(t *testing.T) {
 	before, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Windows loads the native file ID lazily. This fixture must capture the
+	// original object before it replaces the pathname under test.
+	if !os.SameFile(before, before) {
+		t.Fatal("original private file identity was not captured")
 	}
 	replacement := filepath.Join(dir, "foreign-replacement")
 	if err := os.WriteFile(replacement, []byte("foreign\n"), 0o600); err != nil {
@@ -156,3 +162,100 @@ func TestPrivateStoreRejectsTargetReplacementBeforeAdoption(t *testing.T) {
 	}
 }
 
+// The ownership callback can observe a replacement writer before it returns.
+// The private store must compare its original target after that last callback,
+// even when the replacement has the same contents and timestamps.
+func TestPrivateStoreCheckedWriteRetainsOriginalTarget(t *testing.T) {
+	for _, scenario := range []string{"unchanged", "same-content", "different-content", "appeared", "removed", "refused"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "profiles.json")
+			original, next, foreign := []byte("original private record\n"), []byte("new private record\n"), []byte("foreign private record\n")
+			var before os.FileInfo
+			if scenario != "appeared" {
+				if err := atomicWritePrivate(path, original); err != nil {
+					t.Fatal(err)
+				}
+				file, err := os.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, err = file.Stat()
+				closeErr := file.Close()
+				if err != nil || closeErr != nil {
+					t.Fatal(err, closeErr)
+				}
+				// Keep the original object alive without retaining a Windows
+				// handle that would itself prevent the replacement operation.
+				if err := os.Link(path, filepath.Join(root, "original-retained.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := 0
+			refused := errors.New("captured ownership was revoked")
+			published, err := atomicWritePrivateChecked(path, next, func() error {
+				calls++
+				if calls == 1 {
+					return nil
+				}
+				if calls != 2 {
+					return errors.New("private transaction repeated its final callback")
+				}
+				switch scenario {
+				case "same-content", "different-content", "appeared":
+					value := foreign
+					if scenario == "same-content" {
+						value = original
+					}
+					if err := atomicWritePrivate(path, value); err != nil {
+						return err
+					}
+					if before != nil {
+						return os.Chtimes(path, before.ModTime(), before.ModTime())
+					}
+				case "removed":
+					return os.Remove(path)
+				case "refused":
+					return refused
+				}
+				return nil
+			})
+			if calls != 2 || (err == nil) != (scenario == "unchanged") || (published != nil) != (scenario == "unchanged") {
+				t.Fatalf("private target changed during final ownership callback: scenario=%s calls=%d published=%t err=%v", scenario, calls, published != nil, err)
+			}
+			if scenario == "refused" && !errors.Is(err, refused) {
+				t.Fatal("private callback failure identity was lost", err)
+			}
+			got, readErr := os.ReadFile(path)
+			if scenario == "removed" {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					t.Fatal("private publication recreated a removed target", readErr)
+				}
+			} else {
+				want := foreign
+				switch scenario {
+				case "unchanged":
+					want = next
+				case "same-content", "refused":
+					want = original
+				}
+				if readErr != nil || !bytes.Equal(got, want) {
+					t.Fatal("private transaction changed the replacement writer's bytes", readErr)
+				}
+			}
+			if before != nil {
+				kept, keepErr := os.ReadFile(filepath.Join(root, "original-retained.json"))
+				if keepErr != nil || !bytes.Equal(kept, original) {
+					t.Fatal("private publication overwrote the retained original object", keepErr)
+				}
+			}
+			matches, globErr := filepath.Glob(filepath.Join(root, ".profiles.json.tmp-*"))
+			if globErr != nil || len(matches) != 0 {
+				t.Fatal("private publication retained an abandoned temporary file", matches, globErr)
+			}
+		})
+	}
+}

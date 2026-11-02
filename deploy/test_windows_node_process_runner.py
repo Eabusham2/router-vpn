@@ -91,7 +91,7 @@ class NodeProcessRunner(unittest.TestCase):
 
     def test_mutations_are_exact_production_changes_and_leave_the_source_unchanged(self):
         originals = {name: (ROOT / name).read_bytes() for name in
-                     ("cmd/client/desktop_node_process.go", "cmd/client/desktop_node_journal.go", "cmd/client/desktop_node_journal_release.go", "cmd/client/private_store_replace_windows.go",
+                     ("cmd/client/desktop_node_process.go", "cmd/client/desktop_node_journal.go", "cmd/client/desktop_node_journal_release.go", "cmd/client/private_store_replace_windows.go", "cmd/client/private_store.go",
                       "cmd/client/desktop_node_journal_off.go", "cmd/client/desktop_node_protection_off.go", "cmd/client/profile_protection_owned.go",
                       "cmd/client/desktop_node_recovery.go", "cmd/client/desktop_node_protection.go", "cmd/client/operation_guard.go",
                       "cmd/client/desktop_node_health.go", "cmd/client/desktop_node_startup.go",
@@ -100,8 +100,8 @@ class NodeProcessRunner(unittest.TestCase):
                       "cmd/client/strategy_requirements.go", "cmd/client/desktop_node_smart.go", "cmd/client/start_layer_routes.go",
                       "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go")}
         changes = GATE.mutants()
-        self.assertEqual(len(changes), 44)
-        self.assertEqual(len({change[1] for change in changes}), 44)
+        self.assertEqual(len(changes), 46)
+        self.assertEqual(len({change[1] for change in changes}), 46)
         for filename, _, test, witness, replacement in changes:
             self.assertIn(filename, originals)
             self.assertNotEqual(replacement.encode(), originals[filename])

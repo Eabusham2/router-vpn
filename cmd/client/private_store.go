@@ -164,6 +164,12 @@ func atomicWritePrivateChecked(path string, data []byte, current func() error) (
 	}
 	var targetBefore os.FileInfo
 	if info, err := os.Lstat(path); err == nil {
+		// Windows may defer loading the native file ID until SameFile. Capture
+		// that identity now, while this is the original publication target.
+		// Otherwise a replacement at the pathname could become the baseline.
+		if !info.Mode().IsRegular() || !os.SameFile(info, info) {
+			return nil, fmt.Errorf("private store %s has no captured regular-file identity", path)
+		}
 		targetBefore = info
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -196,16 +202,19 @@ func atomicWritePrivateChecked(path string, data []byte, current func() error) (
 	if err := tmp.Close(); err != nil {
 		return nil, err
 	}
+	if current != nil {
+		if err := current(); err != nil {
+			return nil, err
+		}
+	}
+	// The final ownership callback may observe or cause another writer's
+	// replacement. Recheck the parent and original target after it returns,
+	// immediately before committing our own temporary file.
 	if err := validatePrivateParent(path); err != nil {
 		return nil, err
 	}
 	if err := atomicWritePrivateTargetUnchanged(path, targetBefore); err != nil {
 		return nil, err
-	}
-	if current != nil {
-		if err := current(); err != nil {
-			return nil, err
-		}
 	}
 	if err := replacePrivateStoreFile(tmpPath, path); err != nil {
 		return nil, err
