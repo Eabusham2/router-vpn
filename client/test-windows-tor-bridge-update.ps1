@@ -40,9 +40,9 @@ foreach($Prefix in @('function TestUnifiedExternalMutationIdle','function GetUni
 $Actions=@($Tor.Ast.FindAll({param($N)$N-is[Management.Automation.Language.InvokeMemberExpressionAst]-and$N.Member.Extent.Text-ceq'Add_Click'-and$N.Expression.Extent.Text-ceq'$D.FindName(''TorSave'')'},$true))
 if($Actions.Count-ne1){throw 'Actual Tor Save callback is missing or ambiguous'}
 $Save=$Actions[0].Arguments[0].ScriptBlock.GetScriptBlock()
-$Checks=@($Tor.Ast.FindAll({param($N)$N-is[Management.Automation.Language.InvokeMemberExpressionAst]-and$N.Member.Extent.Text-ceq'Add_Checked'-and$N.Expression.Extent.Text-ceq'$Update'},$true))
-if($Checks.Count-ne1){throw 'Actual Update checkbox handler is missing or ambiguous'}
-$SelectUpdate=$Checks[0].Arguments[0].ScriptBlock.GetScriptBlock()
+$CheckedHandlers=@($Tor.Ast.FindAll({param($N)$N-is[Management.Automation.Language.InvokeMemberExpressionAst]-and$N.Member.Extent.Text-ceq'Add_Checked'-and$N.Expression.Extent.Text-ceq'$Update'},$true))
+if($CheckedHandlers.Count-ne1){throw 'Actual Update checkbox handler is missing or ambiguous'}
+$SelectUpdate=$CheckedHandlers[0].Arguments[0].ScriptBlock.GetScriptBlock()
 $Unchecks=@($Tor.Ast.FindAll({param($N)$N-is[Management.Automation.Language.InvokeMemberExpressionAst]-and$N.Member.Extent.Text-ceq'Add_Unchecked'-and$N.Expression.Extent.Text-ceq'$Update'},$true))
 if($Unchecks.Count-ne1){throw 'Actual Add checkbox handler is missing or ambiguous'}
 $SelectAdd=$Unchecks[0].Arguments[0].ScriptBlock.GetScriptBlock()
