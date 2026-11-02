@@ -6,7 +6,75 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through f2e750aa
+## Latest implementation continuation — through 520050fc
+
+The independently verified published source cutoff is
+[`520050fcf97455bf7820f2af8d42d0133bcfcf8a`](https://github.com/Eabusham2/router-vpn/commit/520050fcf97455bf7820f2af8d42d0133bcfcf8a),
+tree `4af6a558ba506e2b0840844937394bd8415825c4`. The latest section in
+[the November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+intervening source units and exact native job boundaries. The original
+requirement reconciliation is complete; these status records do not reduce it.
+
+- Retained Linux ordinary external AWG2 Fast and Strong now join WG, SS,
+  HTTP/HTTPS CONNECT and Hysteria2 for direct Local execution, Start Layer Off,
+  On-connect/Always protection, public Connect, Speed Lab and complete Router
+  restoration. All eleven AWG parameters, keys/PSK, AllowedIPs, keepalive,
+  selected DNS and MTU remain captured. The actual seven-family Box suite
+  passed 108 subtest verdicts, including 350 routed HTTPS samples; the nine-case
+  kernel succession gate also passed. OS permit/TUN substitutions in the Box
+  fixture remain explicit. The installed inventory is 343 with all 87 earlier
+  readiness rejections preserved. Its complete system-TUN run is still required.
+- The pinned AWG timer, gVisor forwarded-TCP ownership and Apple/server
+  dependency preparation now carry exact private-source repairs and executable
+  controls. Native Windows measurement timing uses QPC for public and private
+  hops. All six Windows physical/bootstrap/captured-node jobs passed at
+  `4aa4d4bb`; that bounded result does not certify an entire release.
+- macOS installation now retains its original exclusive installation lock
+  through Python/Go reassertion and proves every borrowed owner retired before
+  release. Actual Intel and ARM64 jobs at `ab560d43` passed the 24-case
+  cross-language capability gate and native supervisor/peer/AppKit checks.
+  First/legacy global image inventory still refuses an unidentifiable live
+  image on both hosts; Intel managed inventory additionally fails native
+  CodeDirectory capture. These remain installation blockers.
+- Published `e1ee627a` removes cold PowerShell Utility-module loading from the
+  pinned drain check without increasing its deadline or loosening ownership.
+  Actual TLS producer tests and both Windows checkptr cross-compiles passed;
+  hosted cold-wrapper execution remains required. `b1501e46` separates Go
+  stderr diagnostics from strict Apple timer JSON, with eleven actual pinned
+  preparation tests and a reproduced original failure. `947d5bbe` fixes only
+  the PF cancellation negative fixture: early completion reaches its intended
+  assertion, and all 400 deliberately broken join trials were rejected.
+- `04e172b2` repairs the reproduced Darwin route-header alignment failure.
+  The subsequent real route-socket gate reaches a distinct unsupported-family
+  receive error; that repair is still being validated. Generated Linux TUN
+  rollback remains intermittent: the `d29d9b78` AMD64 job omitted its current
+  routing receipt while ARM64 passed. A different `ab560d43` ARM64 attempt
+  failed original-channel retirement. None of these failures is waived.
+- `520050fc` binds every ordinary imported OpenVPN proof to its actual
+  connected native remote and generation, regardless of optional comparison
+  URLs. DNS/MTU/Speed Lab cannot adopt a replacement transport. All 307 shared
+  roots ran through the existing seven bounded phases with 10,355 verdicts
+  and no failures or races; only two existing optional export helpers skipped.
+  This shared ownership repair is separate from retained Linux host acceptance.
+- `d29d9b78` changes only the installed fixture's disconnected peer address to
+  one admitted by the unchanged production guardian, with explicit namespace
+  identity checks. All 343 existing names/order and classification checks pass;
+  no local system-TUN operation is claimed. Retained OpenVPN source/fixture
+  reconstruction is active work outside this published cutoff.
+- The latest published release read from GitHub is still the 12-asset
+  `745b3e41` prerelease. Current packages, images, compose and full release
+  publication are not complete. Broader retained external families, graph and
+  layer combinations, other platforms, recovery, Methods interoperability,
+  signing, physical/off-LAN/visual acceptance and authorized private deployment
+  retain their original ledger requirements.
+
+An executor replacement removed the earlier transient native binaries and
+local logs. Their recorded results remain historical observations; the source
+commits remain on GitHub. New verification uses reconstructed exact dependencies
+and fresh evidence. Older statements that transient outputs were preserved do
+not establish that those paths are available now.
+
+## Earlier implementation continuation — through f2e750aa
 
 The independently verified published implementation cutoff is
 [`f2e750aa458050106a9b7f509e2f08bba5580c8e`](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e),
