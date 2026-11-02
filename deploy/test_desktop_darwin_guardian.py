@@ -37,7 +37,9 @@ CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorP
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
          'StaleCaptureAndReplacement')
 READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAndCancellationJoin',
-                  'PFReadbackDeadlineAndInvalidCapture')
+                  'PFReadbackDeadlineAndInvalidCapture', 'PFReadbackNestedNativeCommandBudget',
+                  'PFReadbackQueuedCommandCancellation', 'PFReadbackCommandSlotJoinsCleanup',
+                  'PFReadbackForeignBranches')
 PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership')
 
 
@@ -455,6 +457,18 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('PF inspection deadline proof', 'PFReadbackDeadlineAndInvalidCapture', 'PF readback accepted a stale deadline or lost admitted cleanup',
          'desktop_socket_pf_readback.go', (
              ('return errors.Join(ctx.Err(), errors.Join(results...))', 'return nil'),)),
+        ('nested PF shared native command budget', 'PFReadbackNestedNativeCommandBudget', 'nested PF inspections lost the shared four-command limit',
+         'desktop_socket_pf_readback.go', (
+             ('if ctx.Value(desktopPFCommandBudgetKey{}) == nil {', 'if true {'),)),
+        ('foreign PF earlier owner refusal', 'PFReadbackForeignBranches', 'parallel foreign PF inspection accepted an original refusal',
+         'desktop_socket_pf_foreign.go', (
+             ('if err != nil || earlier && actual != "" {', 'if err != nil {'),)),
+        ('foreign PF stateless refusal', 'PFReadbackForeignBranches', 'parallel foreign PF inspection accepted an original refusal',
+         'desktop_socket_pf_foreign.go', (
+             ('return desktopDarwinPFStatelessFilters(actual)', 'return nil'),)),
+        ('foreign PF translation refusal', 'PFReadbackForeignBranches', 'parallel foreign PF inspection accepted an original refusal',
+         'desktop_socket_pf_foreign.go', (
+             ('return errors.New("Darwin physical protection intersects an active foreign translation rule")', 'return nil'),)),
         ('foreground control budget after admission', 'ForegroundAdmission', 'queued foreground creation lost its admitted control budget',
          'desktop_socket_darwin_policy.go', (
              ('if err := p.mu.lockContext(ctx); err != nil {\n\t\treturn nil, nil, err\n\t}',

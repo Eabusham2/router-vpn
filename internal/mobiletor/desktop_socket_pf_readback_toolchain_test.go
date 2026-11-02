@@ -8,4 +8,8 @@ var (
 	_ func(*testing.T) = TestDesktopPFReadbackCompleteWithinCapturedBudget
 	_ func(*testing.T) = TestDesktopPFReadbackFailureAndCancellationJoin
 	_ func(*testing.T) = TestDesktopPFReadbackDeadlineAndInvalidCapture
+	_ func(*testing.T) = TestDesktopPFReadbackNestedNativeCommandBudget
+	_ func(*testing.T) = TestDesktopPFReadbackQueuedCommandCancellation
+	_ func(*testing.T) = TestDesktopPFReadbackCommandSlotJoinsCleanup
+	_ func(*testing.T) = TestDesktopPFReadbackForeignBranches
 )

@@ -9,6 +9,38 @@ import (
 	"time"
 )
 
+type desktopPFCommandBudgetKey struct{}
+
+// Nested read-only groups share this invocation's original four native
+// command slots. A parent inspection does not occupy a slot while waiting for
+// its children; only an admitted command holds one, through its actual join.
+func desktopPFWithCommandBudget(ctx context.Context) context.Context {
+	if ctx.Value(desktopPFCommandBudgetKey{}) == nil {
+		return context.WithValue(ctx, desktopPFCommandBudgetKey{}, make(chan struct{}, 4))
+	}
+	return ctx
+}
+
+func desktopPFEnterCommand(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	budget, _ := ctx.Value(desktopPFCommandBudgetKey{}).(chan struct{})
+	if budget == nil {
+		return func() {}, nil
+	}
+	select {
+	case budget <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-budget
+			return nil, err
+		}
+		return func() { <-budget }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // Failure observations contain only bounded numeric progress. They retain the
 // original error through Unwrap and never become native authorization or a
 // cached result. Zero-state checks were never received by a worker; state 1
@@ -107,10 +139,10 @@ func (e *desktopPFChildrenFailure) Error() string {
 }
 
 // The six global inspections and four captured-owner inspections share one
-// bounded group. Nesting a global group or serializing the owner inspections
-// would either exceed that worker bound or spend the original proof deadline
-// on avoidable subprocess startup. Every check must complete and join before
-// this invocation can authorize its caller; no proof is retained here.
+// bounded group. Independent queries within an inspection may form a nested
+// group, sharing the same four native-command slots. Every check must complete
+// and join before this invocation can authorize its caller; no proof is
+// retained here.
 func desktopPFCompleteReadback(ctx context.Context, global [6]func(context.Context) error,
 	physical, baseline, pointer, generation func(context.Context) error) error {
 	checks := append(global[:], physical, baseline, pointer, generation)
@@ -133,6 +165,7 @@ func desktopPFReadback(ctx context.Context, checks ...func(context.Context) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctx = desktopPFWithCommandBudget(ctx)
 	started := time.Now()
 	timings := make([]desktopPFCheckTiming, len(checks))
 	var timingMu sync.Mutex

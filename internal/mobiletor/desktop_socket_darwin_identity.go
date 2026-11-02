@@ -101,6 +101,11 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	release, err := desktopPFEnterCommand(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if err := desktopDarwinProtectedPath(path, false); err != nil {
 		return nil, err
 	}
@@ -111,7 +116,7 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	output, diagnostics := desktopDarwinCommandBuffer{limit: 2 << 20}, desktopDarwinCommandBuffer{limit: 128 << 10}
 	command.Stdout, command.Stderr = &output, &diagnostics
 	started := time.Now()
-	err := command.Run()
+	err = command.Run()
 	if output.Len() > 2<<20 || diagnostics.Len() > 128<<10 {
 		return nil, errors.New("Darwin privileged command exceeded its readback bound")
 	}

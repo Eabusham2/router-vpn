@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -146,19 +147,6 @@ func desktopDarwinPFRejectLegacyLayout(ctx context.Context) error {
 		})
 }
 
-func desktopDarwinPFStatelessFilters(rules string) error {
-	for _, line := range strings.Split(rules, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line == "}" || strings.HasPrefix(line, "anchor ") || strings.HasPrefix(line, "block ") {
-			continue
-		}
-		if !strings.HasPrefix(line, "pass ") || !strings.Contains(line, " no state") || strings.Contains(line, " keep state") || strings.Contains(line, " modulate state") || strings.Contains(line, " synproxy state") {
-			return errors.New("Darwin protected physical path intersects a foreign stateful or unknown filter")
-		}
-	}
-	return nil
-}
-
 func desktopDarwinPFNoTranslation(ctx context.Context, anchor string) error {
 	arguments := []string{"-s", "nat"}
 	if anchor != "" {
@@ -168,16 +156,8 @@ func desktopDarwinPFNoTranslation(ctx context.Context, anchor string) error {
 	if err != nil {
 		return err
 	}
-	for _, line := range strings.Split(desktopDarwinPFRulesText(raw), "\n") {
-		if line == "" || line == "}" || strings.HasPrefix(line, "nat-anchor ") || strings.HasPrefix(line, "rdr-anchor ") || strings.HasPrefix(line, "binat-anchor ") {
-			continue
-		}
-		// Translation can create a state even when a filter says no state.
-		// Preserve the foreign owner and reject this currently unsupported
-		// intersection before a physical descriptor receives permission.
-		return errors.New("Darwin physical protection intersects an active foreign translation rule")
-	}
-	return nil
+	// Translation can create state independently of a no-state filter.
+	return desktopPFNoTranslationText(raw)
 }
 
 func desktopDarwinPFValidateSystemFilters(raw []byte) error {
@@ -247,12 +227,11 @@ func desktopDarwinPFOwnedTranslations(ctx context.Context) error {
 	// Translation outside or inside our filter namespace can create a state
 	// ahead of the next packet's creator-UID check. Read every relevant root
 	// as well as the complete owned subtree; filter ownership is not NAT ownership.
+	var checks []func(context.Context) error
 	for _, anchor := range []string{"", desktopDarwinPFNamespace, desktopDarwinPFNamespace + "/*"} {
-		if err := desktopDarwinPFNoTranslation(ctx, anchor); err != nil {
-			return err
-		}
+		checks = append(checks, func(captured context.Context) error { return desktopDarwinPFNoTranslation(captured, anchor) })
 	}
-	return nil
+	return desktopPFReadback(ctx, checks...)
 }
 
 func desktopDarwinPFForeignRoots(ctx context.Context) error {
@@ -267,17 +246,8 @@ func desktopDarwinPFForeignRoots(ctx context.Context) error {
 		if !desktopDarwinPFAnchorName.MatchString(root) {
 			return errors.New("Darwin PF has an unknown root anchor identity")
 		}
-		for _, anchor := range []string{root, root + "/*"} {
-			rules, err := desktopDarwinPFRead(ctx, anchor)
-			if err != nil {
-				return err
-			}
-			if err := desktopDarwinPFStatelessFilters(rules); err != nil {
-				return err
-			}
-			if err := desktopDarwinPFNoTranslation(ctx, anchor); err != nil {
-				return err
-			}
+		if err := desktopPFForeignBranches(ctx, root, false, desktopDarwinPFRead, desktopDarwinPFNoTranslation, nil); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -314,25 +284,20 @@ func desktopDarwinPFSystemChildren(ctx context.Context) (failure error) {
 		// accepted yet: a state can outlive both socket holders and bypass the
 		// per-packet UID check. This is a bounded compatibility requirement,
 		// not authority to rewrite or flush another filter owner.
-		for branch, anchor := range []string{"com.apple/" + name, "com.apple/" + name + "/*"} {
-			progress.command = 2 + 2*branch
-			progress.attempted++
-			rules, err := desktopDarwinPFRead(ctx, anchor)
-			if err == nil {
+		var progressMu sync.Mutex
+		observe := func(command int, completed bool) {
+			progressMu.Lock()
+			defer progressMu.Unlock()
+			if completed {
 				progress.completed++
+			} else {
+				progress.command = command
+				progress.attempted++
 			}
-			if err != nil || "com.apple/"+name < desktopDarwinPFNamespace && rules != "" {
-				return errors.Join(err, errors.New("Darwin PF dispatch has an unreadable or earlier nonempty filter owner"))
-			}
-			if err := desktopDarwinPFStatelessFilters(rules); err != nil {
-				return err
-			}
-			progress.command = 3 + 2*branch
-			progress.attempted++
-			if err := desktopDarwinPFNoTranslation(ctx, anchor); err != nil {
-				return err
-			}
-			progress.completed++
+		}
+		if err := desktopPFForeignBranches(ctx, "com.apple/"+name, "com.apple/"+name < desktopDarwinPFNamespace,
+			desktopDarwinPFRead, desktopDarwinPFNoTranslation, observe); err != nil {
+			return err
 		}
 		progress.verified++
 	}

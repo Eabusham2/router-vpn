@@ -604,6 +604,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_frame_test.go',
                     'desktop_socket_pf_inventory_test.go',
                     'desktop_socket_pf_readback_test.go', 'desktop_socket_pf_readback_toolchain_test.go',
+                    'desktop_socket_pf_foreign_test.go',
                     'desktop_socket_pf_filter_test.go', 'desktop_socket_pf_abi_test.go',
                     'desktop_socket_pf_filter_native_test.go', 'desktop_socket_darwin_filter_test.go',
                     'desktop_socket_pf_baseline_test.go', 'desktop_socket_pf_baseline_transition_test.go',
