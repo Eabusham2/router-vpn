@@ -139,7 +139,7 @@ func (o *ExternalPhysicalOutbound) current(ctx context.Context, network string, 
 	o.mu.Lock()
 	owner, allowed, closed := o.owner, o.allowed[externalPhysicalDestination{base, address}], o.closed
 	o.mu.Unlock()
-	if closed || !allowed || owner == nil || !owner.Current() {
+	if closed || !allowed || owner == nil || !owner.SocketCurrent() {
 		return nil, errors.New("ordinary desktop lower socket lost its captured native capability")
 	}
 	manager := service.FromContext[adapter.OutboundManager](o.ctx)

@@ -112,8 +112,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_external_succession_keeps_all_original_cases_and_real_lifecycle(self):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
-        self.assertEqual(len(G.EXTERNAL_CASES), 18)
-        self.assertEqual(len(G.CASES), 317)
+        self.assertEqual(len(G.EXTERNAL_CASES), 26)
+        self.assertEqual(len(G.CASES), 325)
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
         self.assertEqual(G.CASES[299:], G.EXTERNAL_CASES)
@@ -131,7 +131,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_external_hysteria2_preserves_every_prior_case_and_requires_real_receipts(self):
         self.assertEqual(len(G.EXTERNAL_HYSTERIA2_CASES), 7)
         self.assertEqual(G.CASES[:310], G.ORIGINAL_CASES + G.EXTERNAL_PROXY_CASES)
-        self.assertEqual(G.CASES[310:], G.EXTERNAL_HYSTERIA2_CASES)
+        self.assertEqual(G.CASES[310:317], G.EXTERNAL_HYSTERIA2_CASES)
         self.assertEqual(set(G.EXTERNAL_HYSTERIA2_CASES) & set(G.CASES[:310]), set())
         self.assertEqual(G.EXTERNAL_HYSTERIA2_CASES, tuple('external-hy2-' + action for action in
                          ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-trust', 'dns-failure')))
@@ -144,6 +144,23 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                                                'verified installed host plain Hysteria2:'), case)
         with self.assertRaises(ValueError):
             G.check_verdict(self.completed(G.CASES[:310]))
+
+    def test_external_wireguard_preserves_prior_cases_and_requires_distinct_receipts(self):
+        self.assertEqual(len(G.EXTERNAL_WIREGUARD_CASES), 8)
+        self.assertEqual(G.CASES[:317], G.ORIGINAL_CASES + G.EXTERNAL_PROXY_CASES + G.EXTERNAL_HYSTERIA2_CASES)
+        self.assertEqual(G.CASES[317:], G.EXTERNAL_WIREGUARD_CASES)
+        self.assertEqual(set(G.EXTERNAL_WIREGUARD_CASES) & set(G.CASES[:317]), set())
+        self.assertEqual(G.EXTERNAL_WIREGUARD_CASES, tuple('external-wg-' + action for action in
+                         ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-psk', 'dns-failure', 'replacement')))
+        for case in G.EXTERNAL_WIREGUARD_CASES:
+            self.assertNotIn(case, G.WIREGUARD_CASES)
+            output = self.completed((case,))
+            G.check_verdict(output, case)
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                G.check_verdict(output.replace('verified installed host retained external succession:',
+                                               'verified installed host plain WireGuard:'), case)
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed(G.CASES[:317]))
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

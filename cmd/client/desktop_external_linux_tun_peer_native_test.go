@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -33,6 +34,8 @@ var linuxHostTUNExternalCases = []string{
 	"external-ss-public",
 	"external-hy2-on-connect", "external-hy2-always", "external-hy2-public", "external-hy2-cancelled",
 	"external-hy2-wrong-key", "external-hy2-wrong-trust", "external-hy2-dns-failure",
+	"external-wg-on-connect", "external-wg-always", "external-wg-public", "external-wg-cancelled",
+	"external-wg-wrong-key", "external-wg-wrong-psk", "external-wg-dns-failure", "external-wg-replacement",
 }
 
 func linuxHostTUNExternalCase(scenario string) bool {
@@ -57,6 +60,9 @@ func linuxHostTUNExternalProtocol(scenario string) string {
 	if strings.HasPrefix(scenario, "external-hy2-") {
 		return "hysteria2"
 	}
+	if strings.HasPrefix(scenario, "external-wg-") {
+		return "wireguard"
+	}
 	return "shadowsocks"
 }
 
@@ -70,7 +76,7 @@ func linuxHostTUNExternalAction(scenario string) string {
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
 	switch linuxHostTUNExternalAction(scenario) {
-	case "dns-failure", "wrong-key", "wrong-trust":
+	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk":
 		return true
 	}
 	return false
@@ -92,17 +98,19 @@ type linuxExternalTUNPeerReply struct {
 }
 
 type linuxExternalTUNPeer struct {
-	command    *exec.Cmd
-	input      io.WriteCloser
-	output     *os.File
-	reader     *bufio.Reader
-	diagnostic linuxHostTUNOutput
-	done       chan struct{}
-	waitErr    error
-	protocol   string
-	password   string
-	address    netip.AddrPort
-	ca         string
+	command                     *exec.Cmd
+	input                       io.WriteCloser
+	output                      *os.File
+	reader                      *bufio.Reader
+	diagnostic                  linuxHostTUNOutput
+	done                        chan struct{}
+	waitErr                     error
+	protocol                    string
+	password                    string
+	address                     netip.AddrPort
+	ca                          string
+	wireguard                   *common.ExternalWireGuardConfig
+	serverPrivate, clientPublic string
 }
 
 func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
@@ -137,6 +145,15 @@ func (peer *linuxExternalTUNPeer) observe(t *testing.T, action string) linuxExte
 	return peer.read(t)
 }
 
+func linuxHostTUNExternalWGKey(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(key.Bytes()), base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+}
+
 func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternalTUNPeer {
 	t.Helper()
 	linuxHostTUNCommand(t, "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "198.51.100.2/32", "dev", "rvpn-peer")
@@ -156,6 +173,14 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	}
 	peer := &linuxExternalTUNPeer{protocol: linuxHostTUNExternalProtocol(scenario), password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
 	clear(key[:])
+	if peer.protocol == "wireguard" {
+		clientPrivate, clientPublic := linuxHostTUNExternalWGKey(t)
+		serverPrivate, serverPublic := linuxHostTUNExternalWGKey(t)
+		peer.serverPrivate, peer.clientPublic = serverPrivate, clientPublic
+		peer.wireguard = &common.ExternalWireGuardConfig{PrivateKey: clientPrivate, PeerPublicKey: serverPublic, PresharedKey: peer.password,
+			Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1280, PersistentKeepalive: 25}
+		peer.password = ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 	t.Cleanup(cancel)
 	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
@@ -196,8 +221,12 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 		cancel()
 		_ = peer.output.Close()
 	})
-	if err := json.NewEncoder(peer.input).Encode(map[string]any{"schema": 1, "protocol": peer.protocol, "address": "198.51.100.2",
-		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}); err != nil {
+	request := map[string]any{"schema": 1, "protocol": peer.protocol, "address": "198.51.100.2",
+		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}
+	if peer.wireguard != nil {
+		request["wireguard"] = map[string]any{"private_key": peer.serverPrivate, "client_public_key": peer.clientPublic, "preshared_key": peer.wireguard.PresharedKey}
+	}
+	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
 		t.Fatal(err)
 	}
 	initial := peer.read(t)
@@ -273,6 +302,19 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 	case "https-connect":
 		connect.TLSServerName = "captured-external.example"
 		profile.External.HTTPSConnect = connect
+	case "wireguard":
+		profile.DNSProtocol = "udp"
+		config := *peer.wireguard
+		config.Addresses = append([]string(nil), peer.wireguard.Addresses...)
+		config.AllowedIPs = append([]string(nil), peer.wireguard.AllowedIPs...)
+		config.Endpoint = peer.address.String()
+		if linuxHostTUNExternalAction(scenario) == "wrong-key" {
+			_, config.PeerPublicKey = linuxHostTUNExternalWGKey(t)
+		}
+		if linuxHostTUNExternalAction(scenario) == "wrong-psk" {
+			config.PresharedKey, _ = linuxHostTUNExternalWGKey(t)
+		}
+		profile.External.WireGuard = &config
 	case "hysteria2":
 		profile.DNSProtocol = "udp"
 		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "198.51.100.2", Port: int(peer.address.Port()), Password: peer.password, TLSServerName: "captured-external.example"}
@@ -386,22 +428,22 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
 			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
 		}
-	} else if action == "wrong-key" || action == "wrong-trust" {
+	} else if action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" {
 		if !middle.FailedProof || observed.PhysicalUDP == 0 || observed.Connections != 0 || observed.Streams != 0 || observed.Packets != 0 ||
 			observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
-			t.Fatal("wrong Hysteria2 password or TLS identity reached an inner destination or Connected", middle, observed)
+			t.Fatal("wrong external peer credential or TLS identity reached an inner destination or Connected", middle, observed)
 		}
 	} else if action == "dns-failure" {
 		if !middle.FailedProof || observed.DNSQueries == 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("failed selected DNS fabricated an exit proof or Connected", middle, observed)
 		}
 	} else if middle.Proof == nil || !middle.Proof.Healthy || !middle.Proof.DNSProven || middle.Proof.EntryProven ||
-		middle.MTU != 1376 || (peer.protocol != "hysteria2" && observed.Connections == 0) || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
+		middle.MTU != 1376 || (peer.protocol != "hysteria2" && peer.protocol != "wireguard" && observed.Connections == 0) || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
 		t.Fatal("external succession bypassed its real encrypted/authenticated DNS and exit exchanges", middle, observed)
 	}
-	if peer.protocol == "hysteria2" && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
-		(action != "wrong-key" && action != "wrong-trust" && observed.Packets == 0)) {
-		t.Fatal("Hysteria2 selected UDP DNS or TCP proof bypassed its single physical UDP peer", observed)
+	if (peer.protocol == "hysteria2" || peer.protocol == "wireguard") && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
+		(action != "wrong-key" && action != "wrong-trust" && action != "wrong-psk" && observed.Packets == 0)) {
+		t.Fatal("external selected UDP DNS or TCP proof bypassed its single physical UDP peer", observed)
 	}
 	if current := original.observe(t, "stats"); current.RouterQueries != before.RouterQueries || current.DirectQueries != before.DirectQueries {
 		t.Fatal("external proof borrowed the previous Router response", before, current)
@@ -427,7 +469,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !final.SourcePreserved || final.FinalSession != final.OriginalSession || after.RouterQueries != before.RouterQueries {
 			t.Fatal("source refusal replaced the original proved Router", final, after)
 		}
-	} else if scenario == "external-ss-replacement" {
+	} else if action == "replacement" {
 		if !final.ReplacementKept || final.Restore != nil || after.RouterQueries != before.RouterQueries {
 			t.Fatal("old external restore overwrote a replacement connection", final, after)
 		}

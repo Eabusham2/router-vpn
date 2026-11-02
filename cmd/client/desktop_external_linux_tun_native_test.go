@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -253,13 +254,13 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		return host, proof, err
 	}
 	physical := host.external.Metadata()
-	if physical.Protocol == "hysteria2" {
+	if physical.Protocol == "hysteria2" || physical.Protocol == "wireguard" {
 		capture, err := host.external.Capture()
 		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
 			!reflect.DeepEqual(capture.PhysicalRoots[0].Networks, []string{"udp"}) || capture.PhysicalRoots[0].Destinations[0].Network != "udp" ||
 			capture.PhysicalRoots[0].Destinations[0].Host != "198.51.100.2" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
 			capture.SelectedDNS.Host != "203.0.113.53" || capture.SelectedDNS.Port != 5353 {
-			return host, proof, errors.Join(err, errors.New("Hysteria2 acquired an extra physical root or bypassed selected UDP DNS"))
+			return host, proof, errors.Join(err, errors.New("external UDP transport acquired an extra physical root or bypassed selected DNS"))
 		}
 	}
 	network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
@@ -312,7 +313,15 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 	}
 	foreign := observed
 	foreign.Profile = cloneRouterProfile(observed.Profile)
-	if foreign.Profile.External.Hysteria2 != nil {
+	if foreign.Profile.External.WireGuard != nil {
+		key, err := base64.StdEncoding.Strict().DecodeString(foreign.Profile.External.WireGuard.PresharedKey)
+		if err != nil || len(key) != 32 {
+			return host, errors.New("captured WireGuard observer lost its PSK")
+		}
+		key[0] ^= 255
+		foreign.Profile.External.WireGuard.PresharedKey = base64.StdEncoding.EncodeToString(key)
+		clear(key)
+	} else if foreign.Profile.External.Hysteria2 != nil {
 		foreign.Profile.External.Hysteria2.Password += "-different-observed-source"
 	} else {
 		foreign.Profile.External.Shadowsocks.Password += "-different-observed-source"
@@ -495,7 +504,7 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 			return last, err
 		}
 	}
-	if result.Scenario == "external-ss-replacement" {
+	if linuxHostTUNExternalAction(result.Scenario) == "replacement" {
 		replacement := exec.Command("/bin/sleep", "60")
 		if err := replacement.Start(); err != nil {
 			return last, err

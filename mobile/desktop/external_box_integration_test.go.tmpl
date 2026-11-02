@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -50,14 +51,19 @@ import (
 	HTTP "github.com/sagernet/sing-box/protocol/http"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	wgtransport "github.com/sagernet/sing-box/transport/wireguard"
 	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/buf"
 	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	wgconn "github.com/sagernet/wireguard-go/conn"
+	wgdevice "github.com/sagernet/wireguard-go/device"
 )
 
 // This composition retains the original compiler, derived Box, native lower
@@ -296,6 +302,7 @@ type desktopExternalIntegrationPeer struct {
 	protocol                                                                                    string
 	certificate, proxyCertificate                                                               tls.Certificate
 	badDNS, badIP, badAuth, truncatedBody                                                       bool
+	wgPrivate, wgClientPublic, wgPreshared                                                      string
 	mu                                                                                          sync.Mutex
 	closing                                                                                     bool
 	connections                                                                                 map[net.Conn]bool
@@ -315,6 +322,10 @@ func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
 	t.Helper()
 	if p.protocol == "hysteria2" {
 		p.startHysteria2(t)
+		return
+	}
+	if p.protocol == "wireguard" {
+		p.startWireGuard(t)
 		return
 	}
 	var serveSS func(net.Conn) error
@@ -446,6 +457,160 @@ func (p *desktopExternalIntegrationPeer) startHysteria2(t *testing.T) {
 	}
 }
 
+// The peer owns one actual UDP listener. Its bind cannot select another peer,
+// a routing mark or an ungranted socket; it passes bytes to the independent WG
+// device only after the same broker observation used by the QUIC service.
+type desktopExternalWireGuardBind struct {
+	mu             sync.Mutex
+	peer           *desktopExternalIntegrationPeer
+	opened, closed bool
+}
+
+type desktopExternalWireGuardEndpoint netip.AddrPort
+
+func (desktopExternalWireGuardEndpoint) ClearSrc()             {}
+func (desktopExternalWireGuardEndpoint) SrcToString() string   { return "" }
+func (e desktopExternalWireGuardEndpoint) DstToString() string { return netip.AddrPort(e).String() }
+func (e desktopExternalWireGuardEndpoint) DstToBytes() []byte {
+	raw, _ := netip.AddrPort(e).MarshalBinary()
+	return raw
+}
+func (e desktopExternalWireGuardEndpoint) DstIP() netip.Addr { return netip.AddrPort(e).Addr() }
+func (desktopExternalWireGuardEndpoint) SrcIP() netip.Addr   { return netip.Addr{} }
+
+func (b *desktopExternalWireGuardBind) Open(port uint16) ([]wgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if port != 0 || b.opened || b.closed || b.peer.packet == nil {
+		return nil, 0, errors.New("external WG fixture cannot replace its original physical UDP listener")
+	}
+	b.opened = true
+	packet := &desktopExternalIntegrationPacket{PacketConn: b.peer.packet, peer: b.peer}
+	read := func(packets [][]byte, sizes []int, endpoints []wgconn.Endpoint) (int, error) {
+		n, source, err := packet.ReadFrom(packets[0])
+		if err != nil {
+			return 0, err
+		}
+		remote, err := netip.ParseAddrPort(source.String())
+		if err != nil {
+			return 0, err
+		}
+		sizes[0], endpoints[0] = n, desktopExternalWireGuardEndpoint(remote)
+		return 1, nil
+	}
+	return []wgconn.ReceiveFunc{read}, b.peer.kernel.remote.Port(), nil
+}
+func (b *desktopExternalWireGuardBind) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.opened || b.closed {
+		return nil
+	}
+	b.closed = true
+	return b.peer.packet.Close()
+}
+func (b *desktopExternalWireGuardBind) Send(packets [][]byte, endpoint wgconn.Endpoint, offset int) error {
+	remote, err := netip.ParseAddrPort(endpoint.DstToString())
+	if err != nil || remote.Addr() != b.peer.kernel.local || remote.Port() == 0 {
+		return errors.New("external WG peer cannot select another physical destination")
+	}
+	allowed, _, _ := b.peer.kernel.grantedPacket(net.UDPAddrFromAddrPort(remote), time.Now())
+	if !allowed {
+		return net.ErrClosed
+	}
+	for _, packet := range packets {
+		if offset < 0 || offset > len(packet) {
+			return errors.New("external WG peer lost packet offset")
+		}
+		n, err := b.peer.packet.WriteTo(packet[offset:], net.UDPAddrFromAddrPort(remote))
+		if err != nil {
+			return err
+		}
+		if n != len(packet)-offset {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+func (*desktopExternalWireGuardBind) SetMark(mark uint32) error {
+	if mark != 0 {
+		return errors.New("external WG peer cannot own a routing mark")
+	}
+	return nil
+}
+func (*desktopExternalWireGuardBind) BatchSize() int { return 1 }
+func (b *desktopExternalWireGuardBind) ParseEndpoint(value string) (wgconn.Endpoint, error) {
+	remote, err := netip.ParseAddrPort(value)
+	if err != nil || remote.Addr() != b.peer.kernel.local || remote.Port() == 0 {
+		return nil, errors.New("external WG peer has no unrelated endpoint")
+	}
+	return desktopExternalWireGuardEndpoint(remote), nil
+}
+func (*desktopExternalWireGuardBind) SetReservedForEndpoint(_ netip.AddrPort, reserved [3]byte) {
+	if reserved != [3]byte{} {
+		panic("plain external WG fixture has no reserved-byte policy")
+	}
+}
+
+func desktopExternalIntegrationWGKey(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(key.Bytes()), base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+}
+
+func (p *desktopExternalIntegrationPeer) startWireGuard(t *testing.T) {
+	t.Helper()
+	if p.packet == nil || p.listener != nil || !p.kernel.udp {
+		t.Fatal("external WG composition lost its one captured UDP peer")
+	}
+	var values [3][]byte
+	defer func() {
+		for _, value := range values {
+			clear(value)
+		}
+	}()
+	for i, encoded := range []string{p.wgPrivate, p.wgClientPublic, p.wgPreshared} {
+		raw, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		if err != nil || len(raw) != 32 {
+			t.Fatal("external WG peer requires actual independent keys")
+		}
+		values[i] = raw
+	}
+	stack, err := wgtransport.NewDevice(wgtransport.DeviceOptions{Context: p.ctx, Logger: log.NewNOPFactory().Logger(), Handler: p,
+		UDPTimeout: 10 * time.Second, ICMPTimeout: time.Second, MTU: 1280,
+		Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+	if err != nil {
+		t.Fatal("actual external WG peer stack", err)
+	}
+	device := wgdevice.NewDevice(p.ctx, stack, &desktopExternalWireGuardBind{peer: p}, &wgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}}, 0)
+	stack.SetDevice(device)
+	p.closeProtocol = device.Close
+	ipc := fmt.Sprintf("private_key=%x\npublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], values[1], values[2])
+	err = device.IpcSet(ipc)
+	if err == nil {
+		err = stack.Start()
+	}
+	if err == nil {
+		err = device.Up()
+	}
+	if err != nil {
+		t.Fatal("actual external WG peer start", err)
+	}
+}
+
+func (p *desktopExternalIntegrationPeer) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
+	if p.protocol == "wireguard" && (protocol == 17 && destination.String() == desktopExternalIntegrationDNS ||
+		protocol == 6 && (destination.String() == "1.1.1.1:443" || p.latency != nil && destination.String() == desktopExternalLatencyAddress)) {
+		return tun.FlowVerdict{Action: tun.ActionAccept}
+	}
+	return tun.FlowVerdict{Action: tun.ActionReject}
+}
+func (*desktopExternalIntegrationPeer) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {
+}
+
 func (p *desktopExternalIntegrationPeer) NewConnectionEx(ctx context.Context, connection net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	p.mu.Lock()
 	if p.closing {
@@ -459,17 +624,24 @@ func (p *desktopExternalIntegrationPeer) NewConnectionEx(ctx context.Context, co
 	p.connections[connection] = true
 	p.workers.Add(1)
 	p.mu.Unlock()
-	defer func() {
-		_ = connection.Close()
-		p.mu.Lock()
-		delete(p.connections, connection)
-		p.mu.Unlock()
-		p.workers.Done()
-	}()
-	err := p.NewConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
-	p.recordFailure(err)
-	if onClose != nil {
-		onClose(err)
+	serve := func() {
+		defer func() {
+			_ = connection.Close()
+			p.mu.Lock()
+			delete(p.connections, connection)
+			p.mu.Unlock()
+			p.workers.Done()
+		}()
+		err := p.NewConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+		p.recordFailure(err)
+		if onClose != nil {
+			onClose(err)
+		}
+	}
+	if p.protocol == "wireguard" {
+		go serve()
+	} else {
+		serve()
 	}
 }
 
@@ -486,17 +658,24 @@ func (p *desktopExternalIntegrationPeer) NewPacketConnectionEx(ctx context.Conte
 	p.packetConnections[connection] = true
 	p.workers.Add(1)
 	p.mu.Unlock()
-	defer func() {
-		_ = connection.Close()
-		p.mu.Lock()
-		delete(p.packetConnections, connection)
-		p.mu.Unlock()
-		p.workers.Done()
-	}()
-	err := p.NewPacketConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
-	p.recordFailure(err)
-	if onClose != nil {
-		onClose(err)
+	serve := func() {
+		defer func() {
+			_ = connection.Close()
+			p.mu.Lock()
+			delete(p.packetConnections, connection)
+			p.mu.Unlock()
+			p.workers.Done()
+		}()
+		err := p.NewPacketConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+		p.recordFailure(err)
+		if onClose != nil {
+			onClose(err)
+		}
+	}
+	if p.protocol == "wireguard" {
+		go serve()
+	} else {
+		serve()
 	}
 }
 func (p *desktopExternalIntegrationPeer) recordFailure(err error) {
@@ -509,7 +688,11 @@ func (p *desktopExternalIntegrationPeer) recordFailure(err error) {
 func (p *desktopExternalIntegrationPeer) diagnostic() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return fmt.Sprintf("accepted=%d udp=%d dns=%d udp-dns=%d tls=%d public=%d attempts=%d peer=%s", p.accepted.Load(), p.physicalUDP.Load(), p.dnsQueries.Load(), p.udpQueries.Load(), p.tlsHandshakes.Load(), p.publicRequests.Load(), p.publicAttempts.Load(), p.failure)
+	latency := ""
+	if p.latency != nil {
+		latency = fmt.Sprintf(" latency-dns=%d latency-tls=%d latency-requests=%d", p.latency.queries.Load(), p.latency.handshakes.Load(), p.latency.requests.Load())
+	}
+	return fmt.Sprintf("accepted=%d udp=%d dns=%d udp-dns=%d tls=%d public=%d attempts=%d%s peer=%s", p.accepted.Load(), p.physicalUDP.Load(), p.dnsQueries.Load(), p.udpQueries.Load(), p.tlsHandshakes.Load(), p.publicRequests.Load(), p.publicAttempts.Load(), latency, p.failure)
 }
 func (p *desktopExternalIntegrationPeer) close() {
 	p.mu.Lock()
@@ -581,7 +764,7 @@ func (p *desktopExternalIntegrationPeer) NewConnection(_ context.Context, c net.
 	return p.serve(c, m.Destination.String())
 }
 func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context, connection N.PacketConn, metadata M.Metadata) error {
-	if p.protocol != "hysteria2" || metadata.Destination.String() != desktopExternalIntegrationDNS {
+	if p.protocol != "hysteria2" && p.protocol != "wireguard" || metadata.Destination.String() != desktopExternalIntegrationDNS {
 		return errors.New("composition peer denies unrequested UDP")
 	}
 	stop := context.AfterFunc(p.ctx, func() { _ = connection.Close() })
@@ -600,8 +783,9 @@ func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context
 		if err != nil {
 			return err
 		}
-		if ctx.Err() != nil || len(question.Question) != 1 || question.Question[0].Name != "example.com." || question.Question[0].Qtype != mDNS.TypeA {
-			return errors.New("Hysteria2 selected UDP DNS question changed")
+		latency := p.latency != nil && len(question.Question) == 1 && question.Question[0].Name == "speed.cloudflare.com."
+		if ctx.Err() != nil || len(question.Question) != 1 || !latency && question.Question[0].Name != "example.com." || question.Question[0].Qtype != mDNS.TypeA && !(latency && question.Question[0].Qtype == mDNS.TypeAAAA) {
+			return errors.New("selected UDP DNS question changed")
 		}
 		p.dnsQueries.Add(1)
 		p.udpQueries.Add(1)
@@ -610,7 +794,10 @@ func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context
 		if p.badDNS {
 			ip = net.IPv4(192, 168, 50, 1)
 		}
-		answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: ip}}
+		answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: question.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: ip}}
+		if latency {
+			p.latency.answer(question, answer)
+		}
 		raw, err := answer.Pack()
 		if err != nil {
 			return err
@@ -813,9 +1000,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	var packet net.PacketConn
 	var remote netip.AddrPort
 	var err error
-	if protocol == "hysteria2" {
+	if protocol == "hysteria2" || protocol == "wireguard" {
 		if runtime.GOOS != "linux" {
-			t.Fatal("direct Hysteria2 has no admitted physical owner on this target")
+			t.Fatal("direct UDP family has no admitted physical owner on this target")
 		}
 		packet, err = net.ListenPacket("udp4", net.JoinHostPort(address.String(), "0"))
 		if err == nil {
@@ -834,7 +1021,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	f := &desktopExternalIntegrationFixture{}
 	f.source = &desktopExternalIntegrationSource{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("c", 64), Generation: 1, ProcessID: uint32(os.Getpid())}}
 	f.source.live.Store(true)
-	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, udp: protocol == "hysteria2", grants: make(map[string]mobiletor.DesktopSocketGrant)}
+	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, udp: protocol == "hysteria2" || protocol == "wireguard", grants: make(map[string]mobiletor.DesktopSocketGrant)}
 	f.source.kernel = f.kernel
 	f.peer = &desktopExternalIntegrationPeer{listener: listener, packet: packet, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel}
 	if strings.HasPrefix(fault, "latency-") {
@@ -881,12 +1068,39 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 			"password": desktopExternalIntegrationPassword, "tls": map[string]any{"enabled": true, "server_name": name}}
 		private["hysteria2"] = map[string]any{"server": address.String(), "port": int(remote.Port()), "password": desktopExternalIntegrationPassword, "tls_server_name": name}
 	}
+	if protocol == "wireguard" {
+		clientPrivate, clientPublic := desktopExternalIntegrationWGKey(t)
+		serverPrivate, serverPublic := desktopExternalIntegrationWGKey(t)
+		psk := make([]byte, 32)
+		if _, err := rand.Read(psk); err != nil {
+			t.Fatal(err)
+		}
+		shared := base64.StdEncoding.EncodeToString(psk)
+		clear(psk)
+		f.peer.wgPrivate, f.peer.wgClientPublic, f.peer.wgPreshared = serverPrivate, clientPublic, shared
+		if fault == "credential" {
+			_, serverPublic = desktopExternalIntegrationWGKey(t)
+		}
+		if fault == "psk" {
+			shared, _ = desktopExternalIntegrationWGKey(t)
+		}
+		addresses, allowed := []string{"10.78.0.2/32", "fd78:78::2/128"}, []string{"0.0.0.0/0", "::/0"}
+		peer := map[string]any{"address": address.String(), "port": int(remote.Port()), "public_key": serverPublic,
+			"pre_shared_key": shared, "allowed_ips": allowed, "persistent_keepalive_interval": 25}
+		transport = map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag, "private_key": clientPrivate,
+			"address": addresses, "mtu": 1280, "peers": []any{peer}}
+		private["wireguard"] = map[string]any{"private_key": clientPrivate, "addresses": addresses, "peer_public_key": serverPublic,
+			"preshared_key": shared, "endpoint": remote.String(), "allowed_ips": allowed, "mtu": 1280, "persistent_keepalive_interval": 25}
+	}
 	profile := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": private, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": "always"}
-	if protocol == "hysteria2" {
+	if protocol == "hysteria2" || protocol == "wireguard" {
 		profile["dns_protocol"] = "udp"
 	}
 	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": protocol, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{transport}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	if protocol == "wireguard" {
+		graph["endpoints"], graph["outbounds"] = []any{transport}, []any{}
+	}
 	raw, _ := json.Marshal(graph)
 	captured, _ := json.Marshal(capture)
 	f.originalSource, f.originalCapture = string(raw), string(captured)
@@ -913,7 +1127,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	DNST.RegisterUDP(dnsRegistry)
 	services := boxService.NewRegistry()
 	routervpndesktoppt.RegisterExternalNetworkOwner(services)
-	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	endpoints := endpoint.NewRegistry()
+	WG.RegisterEndpoint(endpoints)
+	ctx = Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.policy.Config()))
 	if err != nil {
 		t.Fatal("real native policy parser", err)
@@ -987,19 +1203,19 @@ func (f *desktopExternalIntegrationFixture) prove(t *testing.T) {
 		t.Fatal("real proof changed original authority or lost derived native ownership", result)
 	}
 	if f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1 ||
-		(f.peer.protocol != "hysteria2" && f.peer.accepted.Load() < 2) || f.peer.bypassed.Load() != 0 {
+		(f.peer.protocol != "hysteria2" && f.peer.protocol != "wireguard" && f.peer.accepted.Load() < 2) || f.peer.bypassed.Load() != 0 {
 		t.Fatal("real selected DNS or public TLS skipped the captured lower path", f.peer.dnsQueries.Load(), f.peer.tlsHandshakes.Load(), f.peer.publicRequests.Load(), f.peer.accepted.Load())
 	}
-	if f.peer.protocol == "hysteria2" {
+	if f.peer.protocol == "hysteria2" || f.peer.protocol == "wireguard" {
 		capture, err := f.policy.Capture()
 		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
 			capture.PhysicalRoots[0].Destinations[0].Network != "udp" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
 			f.peer.listener != nil || f.peer.accepted.Load() != 1 || f.peer.physicalUDP.Load() == 0 || f.peer.udpQueries.Load() == 0 ||
 			f.peer.udpQueries.Load() != f.peer.dnsQueries.Load() {
-			t.Fatal("Hysteria2 did not carry selected UDP DNS and TCP proof through its sole captured UDP socket", err, f.peer.diagnostic())
+			t.Fatal("UDP family did not carry selected UDP DNS and TCP proof through its sole captured UDP socket", err, f.peer.diagnostic())
 		}
 		if _, err := f.kernel.Select(context.Background(), f.source.capture, "tcp", f.kernel.remote); err == nil {
-			t.Fatal("Hysteria2 fixture granted an unrequested physical TCP destination")
+			t.Fatal("UDP fixture granted an unrequested physical TCP destination")
 		}
 	}
 	if err = f.proof.VerifyCurrentPath(); err != nil {
@@ -1085,7 +1301,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "linux" {
-		protocols = append(protocols, "hysteria2")
+		protocols = append(protocols, "hysteria2", "wireguard")
 	}
 	for _, protocol := range protocols {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
@@ -1159,6 +1375,9 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		if protocol == "hysteria2" {
 			faults = append(faults, "peer-tls-name", "truncated")
 		}
+		if protocol == "wireguard" {
+			faults = append(faults, "psk", "truncated")
+		}
 		for _, fault := range faults {
 			t.Run(protocol+"/reject/"+fault, func(t *testing.T) {
 				f := newDesktopExternalIntegrationFixture(t, ca, protocol, fault)
@@ -1178,7 +1397,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 				if (fault == "exit" || fault == "truncated") && (f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1) {
 					t.Fatal("invalid response negative never reached the real authenticated public proof", f.peer.diagnostic())
 				}
-				if fault == "credential" && (f.peer.accepted.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
+				if (fault == "credential" || fault == "psk") && (f.peer.accepted.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
 					t.Fatal("credential negative never reached the actual proxy authentication boundary", f.peer.diagnostic())
 				}
 				if fault == "lower-denied" && f.peer.accepted.Load() != 0 {
@@ -1283,35 +1502,37 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		}
 	})
 	if runtime.GOOS == "linux" {
-		t.Run("hysteria2/cancelled-proof", func(t *testing.T) {
-			f := newDesktopExternalIntegrationFixture(t, ca, "hysteria2", "held-proof")
-			result := make(chan error, 1)
-			go func() {
-				raw, err := f.proof.Run()
-				if raw != "" {
-					err = errors.New("cancelled Hysteria2 proof published data")
+		for _, protocol := range []string{"hysteria2", "wireguard"} {
+			t.Run(protocol+"/cancelled-proof", func(t *testing.T) {
+				f := newDesktopExternalIntegrationFixture(t, ca, protocol, "held-proof")
+				result := make(chan error, 1)
+				go func() {
+					raw, err := f.proof.Run()
+					if raw != "" {
+						err = errors.New("cancelled UDP family proof published data")
+					}
+					result <- err
+				}()
+				select {
+				case <-f.peer.publicEntered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("actual UDP family UDP DNS and TLS proof never reached the controlled peer", f.peer.diagnostic())
 				}
-				result <- err
-			}()
-			select {
-			case <-f.peer.publicEntered:
-			case <-time.After(5 * time.Second):
-				t.Fatal("actual Hysteria2 UDP DNS and TLS proof never reached the controlled peer", f.peer.diagnostic())
-			}
-			if f.peer.physicalUDP.Load() == 0 || f.peer.udpQueries.Load() == 0 || f.peer.accepted.Load() != 1 {
-				t.Fatal("Hysteria2 cancellation did not own its original physical UDP connection", f.peer.diagnostic())
-			}
-			f.network.InterfaceUpdated(context.Background())
-			close(f.peer.publicRelease)
-			select {
-			case err := <-result:
-				if err == nil || f.proof.Healthy() || f.network.Current() {
-					t.Fatal("cancelled actual Hysteria2 result was adopted")
+				if f.peer.physicalUDP.Load() == 0 || f.peer.udpQueries.Load() == 0 || f.peer.accepted.Load() != 1 {
+					t.Fatal("UDP family cancellation did not own its original physical UDP connection", f.peer.diagnostic())
 				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("cancelled actual Hysteria2 proof did not join")
-			}
-		})
+				f.network.InterfaceUpdated(context.Background())
+				close(f.peer.publicRelease)
+				select {
+				case err := <-result:
+					if err == nil || f.proof.Healthy() || f.network.Current() {
+						t.Fatal("cancelled actual UDP family result was adopted")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("cancelled actual UDP family proof did not join")
+				}
+			})
+		}
 	}
 	if t.Failed() {
 		return

@@ -13,6 +13,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 )
 
@@ -81,7 +82,7 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 		want := []mobiletor.DesktopLinuxSocketDestination{{Network: "tcp", Address: netip.MustParseAddrPort("192.168.50.7:8443")}}
 		if f.external.policy.Metadata().Protocol == "shadowsocks" {
 			want = append(want, mobiletor.DesktopLinuxSocketDestination{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")})
-		} else if f.external.policy.Metadata().Protocol == "hysteria2" {
+		} else if protocol := f.external.policy.Metadata().Protocol; protocol == "hysteria2" || protocol == "wireguard" {
 			want = []mobiletor.DesktopLinuxSocketDestination{{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")}}
 		}
 		if f.baseline != 1 || f.admitted != 0 || capture != f.source.record.Capture || ctx.Err() != nil || len(options.LANPrefixes) != 0 ||
@@ -97,7 +98,7 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 }
 
 func TestRouterVPNExternalLinuxLifecycleKeepsTypedSourceAndJoinedOwner(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			t.Run(protocol+"/"+kill, func(t *testing.T) {
 				f := newExternalLinuxLifecycleFixture(t, protocol, kill, nil)
@@ -199,39 +200,110 @@ func TestRouterVPNExternalLinuxLifecycleRejectsForeignOrReusedCapabilities(t *te
 }
 
 func TestRouterVPNExternalLinuxLifecycleRetainsRefusedAndCancelledSources(t *testing.T) {
-	for _, fault := range []string{"partial", "refused", "cancelled", "guardian-replaced", "network-replaced"} {
-		t.Run(fault, func(t *testing.T) {
-			f := newExternalLinuxLifecycleFixture(t, "shadowsocks", "always", func(f *externalLinuxLifecycleFixture) error {
-				switch fault {
-				case "refused":
-					return errors.New("original parent refused admission")
-				case "cancelled":
-					f.external.network.Cancel()
-				case "guardian-replaced":
-					f.source.observeGuardian = func(_ int, r *mobiletor.DesktopLinuxGuardianRecord) error { r.Guardian.StartTicks++; return nil }
-				case "network-replaced":
-					changed := *f.manager.selected.Load()
-					changed.Index++
-					f.manager.selected.Store(&changed)
+	for _, protocol := range []string{"shadowsocks", "wireguard"} {
+		for _, fault := range []string{"partial", "refused", "cancelled", "guardian-replaced", "network-replaced"} {
+			name := fault
+			if protocol == "wireguard" {
+				name = "wireguard/" + fault
+			}
+			t.Run(name, func(t *testing.T) {
+				f := newExternalLinuxLifecycleFixture(t, protocol, "always", func(f *externalLinuxLifecycleFixture) error {
+					switch fault {
+					case "refused":
+						return errors.New("original parent refused admission")
+					case "cancelled":
+						f.external.network.Cancel()
+					case "guardian-replaced":
+						f.source.observeGuardian = func(_ int, r *mobiletor.DesktopLinuxGuardianRecord) error { r.Guardian.StartTicks++; return nil }
+					case "network-replaced":
+						changed := *f.manager.selected.Load()
+						changed.Index++
+						f.manager.selected.Store(&changed)
+					}
+					return nil
+				})
+				if err := f.prepare(t, fault); err != nil {
+					t.Fatal(err)
 				}
-				return nil
+				n := f.external.network
+				if n.Start(adapter.StartStateInitialize) == nil || n.CheckExternalLinuxPhysicalAdmission(f.external.policy) == nil || n.source != f.source || n.Current() || n.SocketCurrent() {
+					t.Fatal("rejected external source became active or lost its original cleanup owner")
+				}
+				if err := n.Close(); err != nil {
+					t.Fatal(err)
+				}
+				joined, returned, err := n.JoinedExternalLinuxPhysicalSource(context.Background(), f.external.policy)
+				if err != nil || !returned || joined == nil || (joined.Original == nil) != (fault == "partial") {
+					t.Fatal("refused external source did not join its exact complete/partial original", err)
+				}
+				if f.source.retention != nil && f.source.retention.releases != 0 {
+					t.Fatal("source failure released its parent's held protection")
+				}
 			})
-			if err := f.prepare(t, fault); err != nil {
-				t.Fatal(err)
-			}
+		}
+	}
+}
+
+func TestRouterVPNExternalPhysicalWireGuardStartupRevokesExactLower(t *testing.T) {
+	for _, fault := range []string{"manager", "broker", "capture", "cancel", "network", "close"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExternalLinuxLifecycleFixture(t, "wireguard", "always", nil)
 			n := f.external.network
-			if n.Start(adapter.StartStateInitialize) == nil || n.CheckExternalLinuxPhysicalAdmission(f.external.policy) == nil || n.source != f.source || n.Current() {
-				t.Fatal("rejected external source became active or lost its original cleanup owner")
-			}
-			if err := n.Close(); err != nil {
+			if err := f.prepare(t, ""); err != nil {
 				t.Fatal(err)
 			}
-			joined, returned, err := n.JoinedExternalLinuxPhysicalSource(context.Background(), f.external.policy)
-			if err != nil || !returned || joined == nil || (joined.Original == nil) != (fault == "partial") {
-				t.Fatal("refused external source did not join its exact complete/partial original", err)
+			if err := n.Start(adapter.StartStateInitialize); err != nil || !n.SocketCurrent() || n.Current() || f.baseline != 1 || f.admitted != 1 {
+				t.Fatal("eager WireGuard source omitted its original baseline and admission", err)
 			}
-			if f.source.retention != nil && f.source.retention.releases != 0 {
-				t.Fatal("source failure released its parent's held protection")
+			peer := M.ParseSocksaddr("192.168.50.7:8443")
+			if broker, err := f.external.physical.current(context.Background(), "udp", peer); err != nil || broker != n.broker {
+				t.Fatal("exact prepared WireGuard peer did not acquire its retained lower", err)
+			}
+			for _, attempt := range []struct{ network, address string }{
+				{"tcp", "192.168.50.7:8443"}, {"udp", "192.168.50.7:8444"}, {"udp", "192.168.50.8:8443"},
+				{"udp", "peer.example:8443"}, {"tcp", "192.168.50.53:5443"}, {"tcp", "1.1.1.1:443"},
+			} {
+				if _, err := f.external.physical.current(context.Background(), attempt.network, M.ParseSocksaddr(attempt.address)); err == nil {
+					t.Fatal("WireGuard handshake phase admitted another tuple or selected-path proof", attempt)
+				}
+			}
+			switch fault {
+			case "manager":
+				replacement, err := NewExternalPhysicalOutbound(f.external.physical.ctx, nil, nil, mobilemultihop.DesktopExternalPhysicalTag, n.capture)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.external.manager.replace(replacement)
+				defer f.external.manager.replace(f.external.physical)
+			case "broker":
+				other := newExternalLinuxLifecycleFixture(t, "wireguard", "always", nil)
+				if err := other.prepare(t, ""); err != nil {
+					t.Fatal(err)
+				}
+				if err := other.external.network.Start(adapter.StartStateInitialize); err != nil {
+					t.Fatal(err)
+				}
+				original := n.broker
+				n.broker = other.external.network.broker
+				defer func() { n.broker = original }()
+			case "capture":
+				original := n.capture
+				n.capture.SourceSHA256 = strings.Repeat("e", 64)
+				defer func() { n.capture = original }()
+			case "cancel":
+				n.Cancel()
+			case "network":
+				n.InterfaceUpdated(context.Background())
+			case "close":
+				if err := n.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := f.external.physical.current(context.Background(), "udp", peer); err == nil {
+				t.Fatal("replaced or retired startup capability admitted its captured tuple")
+			}
+			if fault != "manager" && n.SocketCurrent() || n.Current() {
+				t.Fatal("changed startup source retained socket or proof readiness")
 			}
 		})
 	}

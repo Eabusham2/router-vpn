@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -255,18 +257,42 @@ func TestRouterVPNDesktopExternalPhysicalCommandUsesActualPreparedNativeFactory(
 }
 
 // This verifies command/source admission and actual native construction only.
-// The separate Box/peer and installed suites exercise QUIC, DNS and exit proof.
+// The separate Box/peer and installed suites exercise encryption, DNS and exit proof.
 func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.T) {
+	desktopExternalPhysicalUDPCommand(t, "hysteria2")
+}
+
+func TestRouterVPNDesktopExternalPhysicalWireGuardCommandIsLinuxOnly(t *testing.T) {
+	desktopExternalPhysicalUDPCommand(t, "wireguard")
+}
+
+func desktopExternalPhysicalUDPCommand(t *testing.T, protocol string) {
+	t.Helper()
 	var graph, captured map[string]any
 	if json.Unmarshal([]byte(desktopPhysicalCommandSource), &graph) != nil || json.Unmarshal([]byte(desktopPhysicalCommandCapture), &captured) != nil {
 		t.Fatal("invalid original command fixture")
 	}
-	graph["outbounds"] = []any{map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag,
-		"server": "203.0.113.20", "server_port": 8443, "password": "captured-secret",
-		"tls": map[string]any{"enabled": true, "server_name": "captured-hy2.example"}}}
-	captured["protocol"] = "hysteria2"
-	captured["profile"].(map[string]any)["external"] = map[string]any{"protocol": "hysteria2", "expected_public_ip": "203.0.113.88",
-		"hysteria2": map[string]any{"server": "203.0.113.20", "port": 8443, "password": "captured-secret", "tls_server_name": "captured-hy2.example"}}
+	key := func(value byte) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32)) }
+	captured["protocol"] = protocol
+	private := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88"}
+	faults := []string{"valid", "source", "credential", "tls-name", "session", "original-config"}
+	if protocol == "wireguard" {
+		graph["outbounds"] = []any{}
+		graph["endpoints"] = []any{map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag,
+			"address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "private_key": key(17), "mtu": 1280,
+			"peers": []any{map[string]any{"address": "203.0.113.20", "port": 8443, "public_key": key(18), "pre_shared_key": key(19),
+				"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}}}}
+		private["wireguard"] = map[string]any{"endpoint": "203.0.113.20:8443", "private_key": key(17),
+			"addresses": []string{"10.78.0.2/32", "fd78:78::2/128"}, "peer_public_key": key(18), "preshared_key": key(19), "mtu": 1280,
+			"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}
+		faults = []string{"valid", "source", "credential", "peer-key", "psk", "endpoint", "allowed-ips", "session", "original-config"}
+	} else {
+		graph["outbounds"] = []any{map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag,
+			"server": "203.0.113.20", "server_port": 8443, "password": "captured-secret",
+			"tls": map[string]any{"enabled": true, "server_name": "captured-hy2.example"}}}
+		private["hysteria2"] = map[string]any{"server": "203.0.113.20", "port": 8443, "password": "captured-secret", "tls_server_name": "captured-hy2.example"}
+	}
+	captured["profile"].(map[string]any)["external"] = private
 	rawSource, _ := json.Marshal(graph)
 	rawCapture, _ := json.Marshal(captured)
 	source, capture := string(rawSource), string(rawCapture)
@@ -278,7 +304,7 @@ func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fault := range []string{"valid", "source", "credential", "tls-name", "session", "original-config"} {
+	for _, fault := range faults {
 		t.Run(fault, func(t *testing.T) {
 			directory := t.TempDir()
 			if err := os.Chmod(directory, 0700); err != nil {
@@ -289,7 +315,19 @@ func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.
 			case "source":
 				expected = strings.Repeat("f", 64)
 			case "credential":
-				config = strings.Replace(config, "captured-secret", "foreign-secret", 1)
+				if protocol == "wireguard" {
+					config = strings.Replace(config, key(17), key(20), 1)
+				} else {
+					config = strings.Replace(config, "captured-secret", "foreign-secret", 1)
+				}
+			case "peer-key":
+				config = strings.Replace(config, key(18), key(20), 1)
+			case "psk":
+				config = strings.Replace(config, key(19), key(20), 1)
+			case "endpoint":
+				config = strings.Replace(config, "203.0.113.20", "203.0.113.21", 1)
+			case "allowed-ips":
+				config = strings.Replace(config, "0.0.0.0/0", "192.0.2.0/24", 1)
 			case "tls-name":
 				config = strings.Replace(config, "captured-hy2.example", "foreign-hy2.example", 1)
 			case "session":
@@ -308,12 +346,12 @@ func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.
 			selected, err := routerVPNExternalCommandPhysical(files, original, session, expected)
 			if runtime.GOOS != "linux" || fault != "valid" {
 				if err == nil || selected != nil {
-					t.Fatal("foreign host or changed Hysteria2 source reached native command admission")
+					t.Fatal("foreign host or changed UDP transport source reached native command admission", protocol)
 				}
 				return
 			}
 			if err != nil || selected == nil || selected.Metadata() != physical.Metadata() || selected.OriginalPolicy() != original {
-				t.Fatal("Linux command lost its exact Hysteria2 policy", err)
+				t.Fatal("Linux command lost its exact UDP transport policy", protocol, err)
 			}
 		})
 	}
@@ -327,16 +365,16 @@ func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.
 	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
 	owner, err := routerVPNNewExternalNative(ctx, original, physical, source, capture, desktopExternalSession)
 	if err != nil || owner == nil {
-		t.Fatal("actual Linux Hysteria2 factory failed before startup", err)
+		t.Fatal("actual Linux UDP transport factory failed before startup", protocol, err)
 	}
 	defer func() {
 		owner.Cancel()
 		if err := owner.Close(); err != nil {
-			t.Error("actual Hysteria2 native construction did not join", err)
+			t.Error("actual UDP transport native construction did not join", protocol, err)
 		}
 	}()
 	native := owner.(*routerVPNExternalNative)
 	if native.physical != physical || native.box == nil || native.Healthy() || native.box.RouterVPNDesktopExternalPreparePhysical(physical) == nil {
-		t.Fatal("Hysteria2 native factory lost physical preparation or fabricated connection proof")
+		t.Fatal("UDP transport native factory lost physical preparation or fabricated connection proof", protocol)
 	}
 }

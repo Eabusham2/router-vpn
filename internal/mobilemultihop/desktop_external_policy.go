@@ -71,13 +71,20 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	}
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
 	kind, supported := kinds[capture.Protocol]
-	// Hysteria2 uses the captured connected-UDP broker on the retained Linux
-	// host. Other desktop hosts keep their existing transport admission.
-	if targetOS == "linux" && capture.Protocol == "hysteria2" {
-		kind, supported = "hysteria2", true
+	family := "outbounds"
+	// These exact single-peer transports use the captured connected-UDP broker
+	// on the retained Linux host. The WireGuard endpoint stays in its original
+	// table; it never becomes an outbound or borrows a Router node identity.
+	if targetOS == "linux" {
+		switch capture.Protocol {
+		case "hysteria2":
+			kind, supported = "hysteria2", true
+		case "wireguard":
+			family, kind, supported = "endpoints", "wireguard", true
+		}
 	}
 	root := capture.PhysicalRoots[0]
-	if !supported || root.Family != "outbounds" || root.Tag != capture.FinalTag || root.Tag != ExternalFinalTag || root.Type != kind ||
+	if !supported || root.Family != family || root.Tag != capture.FinalTag || root.Tag != ExternalFinalTag || root.Type != kind ||
 		root.DynamicSOCKSUDP != (capture.Protocol == "socks5" && capture.UDPAvailable) ||
 		root.DynamicSOCKSUDP && (root.SOCKSVersion != "5" || root.SOCKSControl == nil || root.SOCKSControl.Network != "tcp") {
 		return nil, desktopExternalPolicyError
@@ -165,7 +172,15 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			return nil, desktopExternalPolicyError
 		}
 	}
-	graph["outbounds"] = append(rows, map[string]any{
+	outbounds := []any{}
+	if value, exists := graph["outbounds"]; exists {
+		var ok bool
+		outbounds, ok = value.([]any)
+		if !ok || family == "endpoints" && len(outbounds) != 0 {
+			return nil, desktopExternalPolicyError
+		}
+	}
+	graph["outbounds"] = append(outbounds, map[string]any{
 		"type": DesktopExternalPhysicalType, "tag": DesktopExternalPhysicalTag,
 		"session_id": sessionID, "source_sha256": meta.SourceSHA256,
 	})

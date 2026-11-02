@@ -43,6 +43,8 @@ type ExternalNetworkOwner struct {
 	broker    *mobiletor.DesktopSocketBroker
 	source    mobiletor.DesktopSocketSource
 	physical  *ExternalPhysicalOutbound
+	nextStage adapter.StartStage
+	sockets   bool
 	ready     bool
 	active    bool
 	retired   bool
@@ -131,6 +133,12 @@ func (n *ExternalNetworkOwner) Start(stage adapter.StartStage) error {
 	if n == nil {
 		return errors.New("ordinary desktop network owner is unavailable")
 	}
+	n.mu.Lock()
+	valid := !n.retired && n.ctx != nil && n.ctx.Err() == nil && stage == n.nextStage && stage <= adapter.StartStateStarted
+	n.mu.Unlock()
+	if !valid {
+		return errors.New("ordinary desktop startup changed its captured stage order")
+	}
 	if stage == adapter.StartStateInitialize {
 		if err := n.startPhysical(); err != nil {
 			return err
@@ -138,12 +146,21 @@ func (n *ExternalNetworkOwner) Start(stage adapter.StartStage) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.policy == nil || n.broker == nil || n.source == nil || stage > adapter.StartStateStarted {
+	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.policy == nil || n.broker == nil || n.source == nil || stage != n.nextStage {
 		return errors.New("ordinary desktop network startup has no prepared native owner")
+	}
+	if stage == adapter.StartStateInitialize {
+		// The literal WireGuard peer opens its connected bind and keepalive
+		// during endpoint Start. Its exact source and deny baseline have
+		// already been retained by the native factory. This separate phase
+		// admits only the compiled lower tuples, never proof or TUN readiness.
+		meta := n.policy.Metadata()
+		n.sockets = runtime.GOOS == "linux" && meta.TargetOS == "linux" && meta.Protocol == "wireguard"
 	}
 	if stage == adapter.StartStateStarted {
 		n.ready = true
 	}
+	n.nextStage++
 	return nil
 }
 
@@ -209,6 +226,20 @@ func (n *ExternalNetworkOwner) Current() bool {
 	return current && broker != nil && broker.Matches(capture)
 }
 
+// SocketCurrent preserves normal activation for the ordinary lazy transports.
+// Only the sealed Linux WireGuard endpoint may acquire its captured lower bind
+// after Initialize. Current still governs every proof, TUN and measurement.
+func (n *ExternalNetworkOwner) SocketCurrent() bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	current := (n.sockets || n.active && n.ready) && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	broker, capture := n.broker, n.brokerCapture()
+	n.mu.Unlock()
+	return current && broker != nil && broker.Matches(capture)
+}
+
 // Cancel revokes proof, measurement and socket admission without waiting for an
 // entered native constructor or OS cleanup. Close retains and joins those
 // exact owners, including a source returned after this cancellation.
@@ -219,7 +250,7 @@ func (n *ExternalNetworkOwner) retire() {
 		return
 	}
 	n.mu.Lock()
-	n.retired, n.ready = true, false
+	n.retired, n.ready, n.sockets = true, false, false
 	if n.cancel != nil {
 		n.cancel()
 	}

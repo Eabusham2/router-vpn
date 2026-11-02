@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -108,7 +109,11 @@ func desktopExternalLatencyStatus(t *testing.T, service *hopmeasure.Service) hop
 }
 
 func desktopExternalLatencyIntegration(t *testing.T, ca *desktopExternalIntegrationCA) {
-	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks"} {
+	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
+	if runtime.GOOS == "linux" {
+		protocols = append(protocols, "hysteria2", "wireguard")
+	}
+	for _, protocol := range protocols {
 		t.Run("latency50/"+protocol, func(t *testing.T) {
 			f := newDesktopExternalIntegrationFixture(t, ca, protocol, "latency-ok")
 			f.prove(t)

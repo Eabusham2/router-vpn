@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -57,6 +58,15 @@ func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int
 		transport["type"], transport["password"] = "hysteria2", "captured-hysteria-password"
 		transport["tls"] = map[string]any{"enabled": true, "server_name": "captured-proxy.example"}
 		private["hysteria2"] = map[string]any{"server": host, "port": port, "password": transport["password"], "tls_server_name": "captured-proxy.example"}
+	case "wireguard":
+		key := func(value byte) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32)) }
+		transport = map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag,
+			"address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "private_key": key(17), "mtu": 1280,
+			"peers": []any{map[string]any{"address": host, "port": port, "public_key": key(18), "pre_shared_key": key(19),
+				"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}}}
+		private["wireguard"] = map[string]any{"endpoint": net.JoinHostPort(host, fmt.Sprint(port)), "private_key": key(17),
+			"addresses": transport["address"], "peer_public_key": key(18), "preshared_key": key(19), "mtu": 1280,
+			"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}
 	default:
 		t.Fatal("unexpected native fixture protocol")
 	}
@@ -67,6 +77,9 @@ func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int
 	graph := map[string]any{"outbounds": []any{transport}, "endpoints": []any{},
 		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
 		"route":    map[string]any{"rules": []any{}, "final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	if protocol == "wireguard" {
+		graph["outbounds"], graph["endpoints"] = []any{}, []any{transport}
+	}
 	config, _ := json.Marshal(graph)
 	capture, _ := json.Marshal(selection)
 	original, err := mobilemultihop.NewExternalPolicy(string(config), string(capture))
@@ -204,8 +217,10 @@ func TestRouterVPNExternalPhysicalFactoryAndActivationRetainExactPolicy(t *testi
 	if _, err := f.network.Activate(policy); err == nil {
 		t.Fatal("pre-Started physical owner activated")
 	}
-	if err := f.network.Start(adapter.StartStateStarted); err != nil {
-		t.Fatal(err)
+	for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := f.network.Start(stage); err != nil {
+			t.Fatal(err)
+		}
 	}
 	identical := externalPhysicalPolicyFixture(t, "shadowsocks", "192.168.50.7", 8443, false, runtime.GOOS)
 	if identical.Config() != policy.Config() {
@@ -223,6 +238,88 @@ func TestRouterVPNExternalPhysicalFactoryAndActivationRetainExactPolicy(t *testi
 	}
 	if err := f.network.Close(); err != nil || !source.cancelled.Load() || !source.closed.Load() || ctx.Err() == nil || f.network.Current() {
 		t.Fatal("native retirement did not revoke and join exact source", err)
+	}
+}
+
+func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
+	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
+	if runtime.GOOS == "linux" {
+		protocols = append(protocols, "hysteria2", "wireguard")
+	}
+	for _, protocol := range protocols {
+		t.Run(protocol, func(t *testing.T) {
+			policy := externalPhysicalPolicyFixture(t, protocol, "192.168.50.7", 8443, false, runtime.GOOS)
+			f := newExternalPhysicalFixture(t, policy)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			var calls atomic.Int32
+			if err := f.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				calls.Add(1)
+				if capture != f.network.brokerCapture() || !current() || f.network.SocketCurrent() || f.network.Current() {
+					t.Error("external factory exposed a socket before exact initialization completed")
+				}
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+				return broker, source, err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			network := "tcp"
+			if protocol == "hysteria2" || protocol == "wireguard" {
+				network = "udp"
+			}
+			peer := M.ParseSocksaddr("192.168.50.7:8443")
+			if _, err := f.physical.current(context.Background(), network, peer); err == nil || f.network.SocketCurrent() {
+				t.Fatal("prepared source exposed a lower socket before its factory completed")
+			}
+			if f.network.Start(adapter.StartStateStart) == nil || calls.Load() != 0 {
+				t.Fatal("reordered startup entered a native factory")
+			}
+			if err := f.network.Start(adapter.StartStateInitialize); err != nil || calls.Load() != 1 {
+				t.Fatal("exact Initialize failed", err)
+			}
+			eager := protocol == "wireguard"
+			if f.network.SocketCurrent() != eager || f.network.Current() {
+				t.Fatal("ordinary transport changed its separate startup socket/readiness phase")
+			}
+			broker, err := f.physical.current(context.Background(), network, peer)
+			if eager && (err != nil || broker != f.network.broker) || !eager && (err == nil || broker != nil) {
+				t.Fatal("only the exact eager WireGuard peer may acquire its pre-ready lower broker", err)
+			}
+			if f.network.Start(adapter.StartStateInitialize) == nil || calls.Load() != 1 || f.network.Start(adapter.StartStateStarted) == nil {
+				t.Fatal("duplicate or skipped startup acquired native readiness")
+			}
+			if _, err := f.network.Activate(policy); err == nil {
+				t.Fatal("lower socket phase fabricated proof readiness")
+			}
+			if f.network.BindPhysicalTunnel(context.Background(), "exact-tun", 77) == nil {
+				t.Fatal("lower socket phase fabricated TUN readiness")
+			}
+			for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+				if err := f.network.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if f.network.Current() || f.network.SocketCurrent() != eager {
+				t.Fatal("native Started implicitly activated a complete proof owner")
+			}
+			identical := externalPhysicalPolicyFixture(t, protocol, "192.168.50.7", 8443, false, runtime.GOOS)
+			if identical.Config() != policy.Config() || identical == policy {
+				t.Fatal("equal-source substitution fixture lost its independent identity")
+			}
+			if _, err := f.network.Activate(identical); err == nil {
+				t.Fatal("another compiler owner adopted native activation")
+			}
+			ctx, err := f.network.Activate(policy)
+			if err != nil || !f.network.Current() || !f.network.SocketCurrent() {
+				t.Fatal("exact completed source failed activation", err)
+			}
+			f.network.Cancel()
+			if ctx.Err() == nil || f.network.Current() || f.network.SocketCurrent() {
+				t.Fatal("retirement retained handshake or proof authority")
+			}
+			if err := f.network.Close(); err != nil || !source.closed.Load() || !source.cancelled.Load() {
+				t.Fatal("retirement did not join the exact source", err)
+			}
+		})
 	}
 }
 
@@ -484,8 +581,10 @@ func runExternalPhysicalFactoryCases(t *testing.T, prepare func(*testing.T, *ext
 							if err != nil || f.network.broker == nil || !f.network.broker.Current() {
 								t.Fatal("ordinary captured physical source failed initialization", err)
 							}
-							if err := f.network.Start(adapter.StartStateStarted); err != nil {
-								t.Fatal(err)
+							for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+								if err := f.network.Start(stage); err != nil {
+									t.Fatal(err)
+								}
 							}
 							proof, err := f.network.Activate(policy)
 							if err != nil || !f.network.Current() {
@@ -567,13 +666,13 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 	address := externalPhysicalByteAddress(t)
 	networks := []string{"tcp", "udp", "packet"}
 	if runtime.GOOS == "linux" {
-		networks = append(networks, "hysteria2-udp")
+		networks = append(networks, "hysteria2-udp", "wireguard-udp")
 	}
 	for _, name := range networks {
 		t.Run(name, func(t *testing.T) {
 			network, protocol := name, "shadowsocks"
-			if name == "hysteria2-udp" {
-				network, protocol = "udp", "hysteria2"
+			if name == "hysteria2-udp" || name == "wireguard-udp" {
+				network, protocol = "udp", strings.TrimSuffix(name, "-udp")
 			}
 			baseNetwork := network
 			if network == "packet" {
@@ -625,8 +724,10 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 			if err := f.network.Start(adapter.StartStateInitialize); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.network.Start(adapter.StartStateStarted); err != nil {
-				t.Fatal(err)
+			for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+				if err := f.network.Start(stage); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if _, err := f.network.Activate(policy); err != nil {
 				t.Fatal(err)
@@ -703,12 +804,12 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 			if err := closeSocket(); err != nil {
 				t.Fatal(err)
 			}
-			if protocol == "hysteria2" {
+			if protocol == "hysteria2" || protocol == "wireguard" {
 				if leaked, err := f.physical.DialContext(context.Background(), "tcp", M.ParseSocksaddr(remote.String())); err == nil || leaked != nil {
 					if leaked != nil {
 						_ = leaked.Close()
 					}
-					t.Fatal("Hysteria2's captured UDP root acquired a TCP permission")
+					t.Fatal("captured UDP-only root acquired a TCP permission", protocol)
 				}
 			}
 			for _, wrong := range []string{"192.0.2.99:8443", netip.AddrPortFrom(remote.Addr(), remote.Port()+1).String(), "unowned.example:8443"} {
@@ -788,8 +889,10 @@ func TestRouterVPNExternalPhysicalTunnelLifecycleAndRetirement(t *testing.T) {
 	if err := f.network.Start(adapter.StartStateInitialize); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.network.Start(adapter.StartStateStarted); err != nil {
-		t.Fatal(err)
+	for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := f.network.Start(stage); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := f.network.Activate(policy); err != nil {
 		t.Fatal(err)

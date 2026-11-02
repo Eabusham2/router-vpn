@@ -1717,13 +1717,30 @@ func TestRouterVPNDesktopNodeEncryptedLayerWrongCredential(t *testing.T) {
 // The installed Linux succession fixture uses this independent protocol peer.
 // It terminates the selected DNS and public-exit proof locally; it cannot dial
 // either named destination on an ordinary network. The native child still
-// performs the real SS2022/CONNECT/Hysteria2, DNS and certificate-checked HTTPS exchange.
+// performs the real SS2022/CONNECT/Hysteria2/WireGuard, DNS and certificate-checked HTTPS exchange.
+type desktopExternalInstalledWGRequest struct {
+	PrivateKey      string `json:"private_key"`
+	ClientPublicKey string `json:"client_public_key"`
+	PresharedKey    string `json:"preshared_key"`
+}
+
+type desktopExternalInstalledWGPeer struct {
+	address string
+	stats   func() (physicalUDP, streams, packets int64)
+	close   func()
+}
+
+// The actual WG device/bind is supplied only by the Linux reference template.
+// An absent backend is a fixture failure, never a skipped acceptance case.
+var desktopExternalInstalledWireGuard func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer
+
 type desktopExternalInstalledPeerRequest struct {
-	Schema   int    `json:"schema"`
-	Protocol string `json:"protocol"`
-	Address  string `json:"address"`
-	Password string `json:"password"`
-	Hold     bool   `json:"hold"`
+	Schema    int                                `json:"schema"`
+	Protocol  string                             `json:"protocol"`
+	Address   string                             `json:"address"`
+	Password  string                             `json:"password"`
+	Hold      bool                               `json:"hold"`
+	WireGuard *desktopExternalInstalledWGRequest `json:"wireguard,omitempty"`
 }
 
 type desktopExternalInstalledPeerReply struct {
@@ -1829,14 +1846,21 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	var trailing any
 	if err != nil || len(line) > desktopNodeLayerReferenceLimit || decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
-		request.Address != "198.51.100.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" {
+		request.Address != "198.51.100.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "wireguard" {
 		t.Fatal("installed external reference lost its exact bounded request", err)
 	}
-	key, err := base64.StdEncoding.Strict().DecodeString(request.Password)
-	if err != nil || len(key) != 32 {
-		t.Fatal("installed external reference lost its captured credential", err)
+	if request.Protocol == "wireguard" {
+		if request.Password != "" || request.WireGuard == nil || desktopExternalInstalledWireGuard == nil {
+			t.Fatal("installed external WireGuard reference requires its actual Linux backend and separate captured keys")
+		}
+	} else {
+		key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
+		valid := request.WireGuard == nil && keyErr == nil && len(key) == 32
+		clear(key)
+		if !valid {
+			t.Fatal("installed external reference lost its captured credential")
+		}
 	}
-	clear(key)
 	cert, ca := desktopExternalInstalledPeerCertificate(t)
 	var dnsQueries, publicAttempts, publicReplies, authFailures atomic.Uint32
 	var failDNS atomic.Bool
@@ -1865,7 +1889,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsDone })
 	var dnsPacket net.PacketConn
-	if request.Protocol == "hysteria2" {
+	if request.Protocol == "hysteria2" || request.Protocol == "wireguard" {
 		dnsPacket, err = net.ListenPacket("udp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -1909,7 +1933,15 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	var listener net.Listener
 	address := ""
 	closeTransport := func() {}
-	if request.Protocol == "hysteria2" {
+	var wgPeer desktopExternalInstalledWGPeer
+	if request.Protocol == "wireguard" {
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
+		wgPeer = desktopExternalInstalledWireGuard(t, server, *request.WireGuard)
+		if wgPeer.address == "" || wgPeer.stats == nil || wgPeer.close == nil {
+			t.Fatal("installed external WireGuard backend omitted its original owned device")
+		}
+		address, closeTransport = wgPeer.address, wgPeer.close
+	} else if request.Protocol == "hysteria2" {
 		packet, err := net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
 		if err != nil {
 			t.Fatal(err)
@@ -2003,6 +2035,9 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
 			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Packets: server.plainUDP.Load(),
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
+		if wgPeer.stats != nil {
+			reply.PhysicalUDP, reply.Streams, reply.Packets = wgPeer.stats()
+		}
 		if err := json.NewEncoder(os.Stdout).Encode(reply); err != nil {
 			t.Fatal(err)
 		}

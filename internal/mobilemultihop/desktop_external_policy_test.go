@@ -128,6 +128,70 @@ func TestDesktopExternalPolicyPreservesRoutedDNSBootstrapAndCopies(t *testing.T)
 	}
 }
 
+func TestDesktopExternalPolicyWireGuardPreservesEndpointAndSelectedPolicy(t *testing.T) {
+	for _, outboundTable := range []string{"absent", "empty"} {
+		for _, kill := range []string{"on-connect", "always"} {
+			for _, ipv6 := range []string{"on", "off"} {
+				for _, lan := range []bool{true, false} {
+					t.Run(strings.Join([]string{outboundTable, kill, ipv6, map[bool]string{true: "lan", false: "no-lan"}[lan]}, "/"), func(t *testing.T) {
+						graph, selection := externalTestFixture(t, "wireguard", "")
+						if outboundTable == "absent" {
+							delete(graph, "outbounds")
+						}
+						profile := selection["profile"].(map[string]any)
+						profile["kill_switch_policy"], profile["ipv6_mode"], profile["home_lan_access"] = kill, ipv6, lan
+						profile["mtu_policy"], profile["manual_mtu"] = "fixed", float64(1360)
+						profile["dns_mode"], profile["dns_protocol"], profile["dns_host"] = "custom", "udp", "192.0.2.53"
+						profile["dns_port"] = float64(5353)
+						original := externalDesktopCompile(t, graph, selection)
+						before, oldMeta := original.Config(), original.Metadata()
+						policy := desktopExternalPlan(t, original, desktopExternalTestSession, "linux")
+						capture, err := policy.Capture()
+						meta := policy.Metadata()
+						if err != nil || policy.Validate() != nil || policy.OriginalPolicy() != original ||
+							meta.TargetOS != "linux" || meta.Protocol != "wireguard" || meta.RootType != "wireguard" || meta.RootTag != ExternalFinalTag ||
+							meta.OriginalSourceSHA256 != original.SourceSHA256() || meta.OriginalConfigSHA256 != externalDigest([]byte(before)) ||
+							meta.OriginalCaptureSHA256 != capture.CaptureSHA256 || meta.ConfigSHA256 != externalDigest([]byte(policy.Config())) ||
+							meta.SourceSHA256 == meta.OriginalSourceSHA256 || meta.SOCKSUDPAssociationRequired ||
+							meta.KillSwitchPolicy != kill || meta.IPv6Mode != ipv6 || meta.HomeLANAccess != lan || capture.ConfiguredMTU != 1360 ||
+							capture.SelectedDNS.Host != "192.0.2.53" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Port != 5353 || capture.SelectedDNS.Physical ||
+							len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Family != "endpoints" ||
+							!reflect.DeepEqual(capture.PhysicalRoots[0].Networks, []string{"udp"}) || len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0].Network != "udp" {
+							t.Fatal("WireGuard lost its exact endpoint, UDP peer, selected DNS or original/derived source", meta, err)
+						}
+						derived := externalTestRead(t, policy.Config())
+						endpoints, outbounds, services := derived["endpoints"].([]any), derived["outbounds"].([]any), derived["services"].([]any)
+						if len(endpoints) != 1 || len(outbounds) != 1 || len(services) != 1 ||
+							meta.OriginalRootSHA256 != capture.PhysicalRoots[0].ConfigSHA256 || meta.DerivedRootSHA256 != desktopExternalObjectDigest(endpoints[0]) {
+							t.Fatal("WireGuard moved out of its endpoint table or acquired another graph owner")
+						}
+						endpoint, physical := endpoints[0].(map[string]any), outbounds[0].(map[string]any)
+						service := services[0].(map[string]any)
+						if endpoint["detour"] != DesktopExternalPhysicalTag || len(physical) != 4 || len(service) != 4 ||
+							physical["type"] != DesktopExternalPhysicalType || physical["tag"] != DesktopExternalPhysicalTag ||
+							service["type"] != DesktopExternalNetworkType || service["tag"] != DesktopExternalNetworkTag ||
+							physical["source_sha256"] != meta.SourceSHA256 || physical["session_id"] != meta.SessionID ||
+							service["source_sha256"] != meta.SourceSHA256 || service["session_id"] != meta.SessionID {
+							t.Fatal("WireGuard acquired an unrelated lower capability or source owner")
+						}
+						delete(endpoint, "detour")
+						delete(derived, "services")
+						old := externalTestRead(t, before)
+						if value, exists := old["outbounds"]; exists {
+							derived["outbounds"] = value
+						} else {
+							delete(derived, "outbounds")
+						}
+						if !reflect.DeepEqual(derived, old) || original.Config() != before || original.Metadata() != oldMeta {
+							t.Fatal("WireGuard derivation changed its private key, peer, PSK, routes, DNS, MTU or source")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestDesktopExternalPolicyBindsSessionTargetAndCompleteSource(t *testing.T) {
 	original := desktopExternalPolicyFixture(t, "https-connect", "always", "on", true)
 	base := desktopExternalPlan(t, original, desktopExternalTestSession, "windows")
@@ -226,6 +290,15 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 }
 
 func TestDesktopExternalPolicyHysteria2KeepsUnsupportedSelectionGuards(t *testing.T) {
+	desktopExternalPolicyKeepsUnsupportedSelectionGuards(t, "hysteria2")
+}
+
+func TestDesktopExternalPolicyWireGuardKeepsUnsupportedSelectionGuards(t *testing.T) {
+	desktopExternalPolicyKeepsUnsupportedSelectionGuards(t, "wireguard")
+}
+
+func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol string) {
+	t.Helper()
 	reject := func(t *testing.T, original *ExternalPolicy) {
 		t.Helper()
 		if _, err := original.DesktopCapture(); err != nil {
@@ -233,15 +306,31 @@ func TestDesktopExternalPolicyHysteria2KeepsUnsupportedSelectionGuards(t *testin
 		}
 		before := original.Config()
 		if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "linux"); err == nil || derived != nil || original.Config() != before {
-			t.Fatal("unsupported Hysteria2 selection acquired or changed a Linux physical owner")
+			t.Fatal("unsupported selection acquired or changed a Linux physical owner", protocol)
 		}
 	}
 	t.Run("off", func(t *testing.T) {
-		reject(t, desktopExternalPolicyFixture(t, "hysteria2", "off", "on", true))
+		reject(t, desktopExternalPolicyFixture(t, protocol, "off", "on", true))
 	})
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		t.Run("start-layer/"+layer, func(t *testing.T) {
-			source, capture := externalDirectLayerFixture(t, "hysteria2", layer)
+			var source, capture string
+			if protocol == "wireguard" {
+				source, capture = externalExecutionPacketFixture(t, protocol, "local", layer)
+				graph, selected := externalTestRead(t, source), externalTestRead(t, capture)
+				final := externalTestFind(t, graph, ExternalFinalTag)
+				delete(final, "detour")
+				graph["endpoints"] = []any{final}
+				delete(selected, "entry")
+				delete(selected, "entry_tag")
+				profile := selected["profile"].(map[string]any)
+				profile["multihop_enabled"] = false
+				delete(profile["external"].(map[string]any), "response_probe")
+				delete(profile["external"].(map[string]any), "server_peer")
+				source, capture = externalTestJSON(t, graph), externalTestJSON(t, selected)
+			} else {
+				source, capture = externalDirectLayerFixture(t, protocol, layer)
+			}
 			selected := externalTestRead(t, capture)
 			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
 			original, err := NewExternalPolicy(source, externalTestJSON(t, selected))
@@ -253,14 +342,19 @@ func TestDesktopExternalPolicyHysteria2KeepsUnsupportedSelectionGuards(t *testin
 	}
 	for _, entry := range []string{"router-wg", "socks5", "shadowsocks", "hysteria2"} {
 		t.Run("predecessor/"+entry, func(t *testing.T) {
-			graph, selected := externalTestFixture(t, "hysteria2", entry)
+			graph, selected := externalTestFixture(t, protocol, entry)
 			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
 			reject(t, externalDesktopCompile(t, graph, selected))
 		})
 	}
 	for _, execution := range []string{"server", "auto"} {
 		t.Run("execution/"+execution, func(t *testing.T) {
-			source, capture := externalExecutionProtocolFixture(t, "hysteria2", execution, "")
+			var source, capture string
+			if protocol == "wireguard" {
+				source, capture = externalExecutionPacketFixture(t, protocol, execution, "")
+			} else {
+				source, capture = externalExecutionProtocolFixture(t, protocol, execution, "")
+			}
 			selected := externalTestRead(t, capture)
 			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
 			prepared, err := PrepareExternalExecutionCapture(source, externalTestJSON(t, selected), "")
