@@ -30,6 +30,7 @@ type DesktopNetworkObject struct {
 	Flags       uint32 `json:"flags,omitempty"`
 	MTU         uint32 `json:"mtu,omitempty"`
 	Native      string `json:"native,omitempty"`
+	darwinCache *desktopDarwinCacheObservation
 }
 
 func (o DesktopNetworkObject) Key() string {
@@ -39,6 +40,9 @@ func (o DesktopNetworkObject) Key() string {
 
 func (o DesktopNetworkObject) Validate(target string) error {
 	bad := errors.New("desktop network object lost its complete native identity")
+	if o.darwinCache != nil && (target != "darwin" || !o.darwinCache.binds(o)) {
+		return bad
+	}
 	if o.Kind != "route" && o.Kind != "rule" || o.Family != 4 && o.Family != 6 &&
 		!(target == "linux" && (o.Family == 128 || o.Family == 129)) {
 		return bad
@@ -111,7 +115,7 @@ func (r DesktopNetworkReceipt) Validate() error {
 		// Multicast FIBs are retained in the ambient snapshot but these native
 		// TUN constructors install only unicast IPv4/IPv6 policy. They cannot
 		// claim an ambient multicast rule as an owned transition.
-		if object.Validate(r.TargetOS) != nil || key <= previous || object.Family != 4 && object.Family != 6 ||
+		if object.darwinCache != nil || object.Validate(r.TargetOS) != nil || key <= previous || object.Family != 4 && object.Family != 6 ||
 			object.Kind == "route" && (object.Index != r.Index || object.LUID != r.LUID) ||
 			object.Kind == "rule" && (r.TargetOS != "linux" || object.Index != 0 || object.LUID != 0) {
 			return bad
@@ -148,6 +152,61 @@ func SortDesktopNetworkObjects(objects []DesktopNetworkObject) {
 	sort.Slice(objects, func(i, j int) bool { return objects[i].Key() < objects[j].Key() })
 }
 
+// This private observation exists only on a decoded original NET_RT_DUMP2
+// cache row. It is never serialized, accepted from a connection receipt, or
+// included in stable route keys. Counts and expiry are live kernel bookkeeping,
+// not an additional routing policy or authority to mutate one.
+type desktopDarwinCacheObservation struct {
+	original    DesktopNetworkObject
+	rawFlags    uint32
+	parentFlags uint32
+	references  int32
+	expires     int32
+}
+
+func desktopDarwinCaptureCacheObservation(object DesktopNetworkObject, rawFlags, parentFlags uint32, references, expires int32) DesktopNetworkObject {
+	const wasCloned, proto3 = uint32(0x20000), uint32(0x40000)
+	if object.Flags&(wasCloned|proto3) == wasCloned|proto3 {
+		object.darwinCache = &desktopDarwinCacheObservation{original: object, rawFlags: rawFlags,
+			parentFlags: parentFlags, references: references, expires: expires}
+	}
+	return object
+}
+
+func (p *desktopDarwinCacheObservation) binds(object DesktopNetworkObject) bool {
+	if p == nil || p.original.darwinCache != nil {
+		return false
+	}
+	object.darwinCache = nil
+	return object == p.original && p.rawFlags&^uint32(0x1|0x40) == object.Flags
+}
+
+func desktopDarwinCloneProtocolMatches(object, parent DesktopNetworkObject) bool {
+	const up, done, proto3 = uint32(0x1), uint32(0x40), uint32(0x40000)
+	const copied = uint32(0x2 | 0x4000 | 0x8000 | 0x40000)
+	if parent.Flags&copied == object.Flags&copied {
+		return true
+	}
+	// Only the observed idle-cache addition is justified. A cleared PROTO3,
+	// changed gateway/protocol flag or unobserved route remains unclassified.
+	if parent.Flags&proto3 != 0 || object.Flags&proto3 == 0 ||
+		parent.Flags&(copied&^proto3) != object.Flags&(copied&^proto3) || parent.Flags&(up|done) != 0 {
+		return false
+	}
+	p := object.darwinCache
+	// XNU rtfree requires zero references and no IFREF before in_clsroute /
+	// in6_clsroute mark an UP, HOST, non-LLINFO cache with RTPRF_OURS and an
+	// expiry. DELCLONE is deleted immediately instead. Redirect/static/deny/
+	// proxy/defunct entries are never accepted by this proof.
+	const required = uint32(0x1 | 0x4 | 0x20000 | 0x40000)
+	const forbidden = uint32(0x8 | 0x10 | 0x20 | 0x40 | 0x80 | 0x400 | 0x800 | 0x1000 | 0x2000000 | 0x4000000 | 0x8000000 | 0x20000000)
+	// A positive native expiry classifies this original cache state; it is not
+	// a fresh-path lease. An already-due idle row may await the kernel sweep.
+	return p.binds(object) && p.references == 0 && p.expires > 0 &&
+		p.rawFlags&required == required && p.rawFlags&forbidden == 0 &&
+		p.parentFlags == parent.Flags|up
+}
+
 // DesktopDarwinDerivedRoute recognizes a kernel-generated host cache only by
 // an exact already captured parent route. RTF_WASCLONED by itself is not a
 // permission to ignore a route. Redirects, static entries, differing gateways,
@@ -168,12 +227,12 @@ func DesktopDarwinDerivedRoute(object DesktopNetworkObject, parents []DesktopNet
 	// Gateway and protocol semantics survive cloning. XNU RTM_RESOLVE derives
 	// interface scope from the original parent rather than copying that bit.
 	// The cache-only HOST/WASCLONED/LLINFO and parent CLONING/PRCLONING/STATIC
-	// flags are not equivalent. An unproved PROTO3 idle-cache change remains
-	// rejected: this capture has no native reference count or expiry proof.
-	const copied = uint32(0x2 | 0x4000 | 0x8000 | 0x40000)
+	// flags are not equivalent. A PROTO3 idle-cache change requires the private
+	// original DUMP2 reference/expiry/parent observation; ordinary notification
+	// rows and decoded receipts cannot synthesize that proof.
 	for _, parent := range parents {
 		if parent.Flags&wasCloned != 0 || parent.Validate("darwin") != nil || parent.Family != object.Family || parent.Index != object.Index ||
-			parent.Gateway != object.Gateway || parent.Flags&copied != object.Flags&copied || parent.Flags&(0x8|0x10|0x20|0x1000|0x8000000) != 0 ||
+			parent.Gateway != object.Gateway || !desktopDarwinCloneProtocolMatches(object, parent) || parent.Flags&(0x8|0x10|0x20|0x1000|0x8000000) != 0 ||
 			parent.Flags&(0x100|0x10000) == 0 || !desktopDarwinCloneScopeMatches(object, parent, destination.Addr()) {
 			continue
 		}
@@ -232,7 +291,12 @@ func desktopDarwinCloneFailure(stage string, object DesktopNetworkObject, parent
 			desktopDarwinCloneScopeMatches(object, parent, destination.Addr()), parent.Flags&(0x100|0x10000) != 0,
 			parent.Flags&(0x8|0x10|0x20|0x1000|0x8000000) == 0))
 	}
-	return fmt.Errorf("Darwin cloned route has no unique exact captured parent (reason=%s family=%d index=%d flags=%#x prefix=%d ipv4_link_local=%t mtu=%d priority=%d parents=%d best=%d matches=%d candidates=%d shown=%d inventory_truncated=%t rows=[%s])",
+	native := ""
+	if observed := object.darwinCache; observed != nil {
+		native = fmt.Sprintf(" dump2=[bound=%t refs=%d expiry_positive=%t up=%t ifref=%t parent_flags=%#x]", observed.binds(object), observed.references,
+			observed.expires > 0, observed.rawFlags&0x1 != 0, observed.rawFlags&0x4000000 != 0, observed.parentFlags)
+	}
+	return fmt.Errorf("Darwin cloned route has no unique exact captured parent (reason=%s family=%d index=%d flags=%#x prefix=%d ipv4_link_local=%t mtu=%d priority=%d parents=%d best=%d matches=%d candidates=%d shown=%d inventory_truncated=%t rows=[%s]%s)",
 		stage, object.Family, object.Index, object.Flags, destination.Bits(), destination.Addr().Is4() && destination.Addr().IsLinkLocalUnicast(), object.MTU, object.Priority, len(parents), best, matches,
-		candidates, len(rows), len(parents) > 32768, strings.Join(rows, ","))
+		candidates, len(rows), len(parents) > 32768, strings.Join(rows, ","), native)
 }

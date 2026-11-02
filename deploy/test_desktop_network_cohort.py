@@ -26,6 +26,9 @@ PARENTS = (
     "TestDarwinCloneDerivesOriginalInterfaceScope",
     "TestDarwinCloneScopeKeepsExactParentRefusals",
     "TestDarwinCloneFailureDiagnosticsStayBoundedAndPrivate",
+    "TestDarwinIdleCacheRequiresOriginalNativeProof",
+    "TestDarwinIdleCacheRefusesForgedOrChangedOriginal",
+    "TestDarwinIdleCacheParentAndLifetimeConstraints",
     "TestLinuxMulticastFIBIdentityRemainsAmbient",
     "TestWindowsUnlimitedLoopbackMTURetainsNativeIdentity",
     "TestDarwinIncompleteInterfaceReadbackNeverAdmitsOrReplacesCapture",
@@ -131,7 +134,8 @@ def main():
                        "TestDarwinNetworkReceiveLoopAndJoinedClose",
                        "TestDarwinInterfaceReadbackBoundsAndNativeFields",
                        "TestDarwinUnusedInterfaceNativeReadbackComposition",
-                       "TestDarwinCloneNativeScopeProjectionAndFailure"):
+                       "TestDarwinCloneNativeScopeProjectionAndFailure",
+                       "TestDarwinRouteDump2OriginalIdleCapture"):
             require_pass(base.stdout, parent)
     if sys.platform == "linux":
         require_pass(base.stdout, "TestLinuxRouteTableCompatibilityAndOwnedCarrierTransition")

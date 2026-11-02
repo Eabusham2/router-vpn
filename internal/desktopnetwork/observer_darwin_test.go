@@ -522,3 +522,146 @@ func TestDarwinNetworkReceiveLoopAndJoinedClose(t *testing.T) {
 		})
 	}
 }
+
+func darwinDump2WireFixture(t *testing.T, object DesktopNetworkObject, parentFlags uint32, references, expires int32) []byte {
+	t.Helper()
+	object.darwinCache = nil
+	_, old := darwinCloneNativeObject(t, object)
+	var original syscall.RtMsghdr
+	if _, err := binary.Decode(old[:syscall.SizeofRtMsghdr], binary.LittleEndian, &original); err != nil {
+		t.Fatal(err)
+	}
+	header := desktopDarwinRouteHeader2{Msglen: original.Msglen, Version: syscall.RTM_VERSION, Type: syscall.RTM_GET2, Index: original.Index,
+		Flags: int32(object.Flags) | syscall.RTF_UP, Addrs: original.Addrs, References: references, ParentFlags: int32(parentFlags), Rmx: original.Rmx}
+	header.Rmx.Expire = expires
+	var wire bytes.Buffer
+	if err := binary.Write(&wire, binary.LittleEndian, header); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Len() != syscall.SizeofRtMsghdr {
+		t.Fatal("DUMP2 fixture does not match the actual Darwin header ABI", wire.Len())
+	}
+	wire.Write(old[syscall.SizeofRtMsghdr:])
+	return wire.Bytes()
+}
+
+func TestDarwinRouteDump2OriginalIdleCapture(t *testing.T) {
+	for _, family := range []int{4, 6} {
+		t.Run(fmt.Sprint(family), func(t *testing.T) {
+			parent, child := darwinIdleCacheFixture(family)
+			child.darwinCache = nil
+			parentWire := darwinDump2WireFixture(t, parent, 0, 8, 0)
+			childWire := darwinDump2WireFixture(t, child, parent.Flags|syscall.RTF_UP, 0, 1700000000)
+			if family == 4 && len(parentWire)%8 != 4 {
+				t.Fatal("native DUMP2 fixture lost its four-byte second-header boundary")
+			}
+			input := append(append([]byte(nil), parentWire...), childWire...)
+			original := append([]byte(nil), input...)
+			objects, err := darwinRouteDump2(input)
+			if err != nil || len(objects) != 2 || objects[0] != parent || objects[1].Key() != child.Key() || objects[1].darwinCache == nil || !bytes.Equal(input, original) {
+				t.Fatal("DUMP2 changed its original route or lost private native fields", err)
+			}
+			if derived, err := DesktopDarwinDerivedRoute(objects[1], objects[:1]); !derived || err != nil {
+				t.Fatal("actual DUMP2 idle row was not proved", err)
+			}
+			snapshot := Snapshot{Links: []Link{{Index: parent.Index, Name: "captured-native-fixture", MTU: 1500}}, Objects: objects}
+			projected, key, err := project(snapshot, nil)
+			if err != nil || len(projected.Objects) != 1 || projected.Objects[0] != parent || key == "" {
+				t.Fatal("DUMP2 cache changed original physical projection", err)
+			}
+			withoutCache := snapshot
+			withoutCache.Objects = []DesktopNetworkObject{parent}
+			_, plainKey, err := project(withoutCache, nil)
+			if err != nil || plainKey != key {
+				t.Fatal("volatile native refs/expiry entered a stable physical key", err)
+			}
+			clear(input)
+			if derived, err := DesktopDarwinDerivedRoute(objects[1], objects[:1]); !derived || err != nil {
+				t.Fatal("DUMP2 proof borrowed the reused native receive buffer", err)
+			}
+			// A native routing notification has no refcount/parent witness. Even the
+			// same public fields and expiry cannot borrow the DUMP2-only authority.
+			_, notificationWire := darwinCloneNativeObject(t, child)
+			messages, err := darwinMessages(notificationWire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			message := messages[0].(*syscall.RouteMessage)
+			message.Header.Type = syscall.RTM_DELETE
+			message.Header.Flags &^= syscall.RTF_UP
+			message.Header.Rmx.Expire = 1700000000
+			event, err := parseDarwinEvent(message)
+			if err != nil || event.Object.darwinCache != nil {
+				t.Fatal("ordinary delete invented private DUMP2 fields", err)
+			}
+			if derived, err := DesktopDarwinDerivedRoute(event.Object, objects[:1]); derived || err == nil {
+				t.Fatal("unproved deletion reused an original native idle snapshot", err)
+			}
+			// The conventional empty default-route mask is a four-byte native record,
+			// not a missing address and not a manufactured full sockaddr.
+			shortMask := append([]byte(nil), parentWire[:len(parentWire)-map[int]int{4: syscall.SizeofSockaddrInet4, 6: syscall.SizeofSockaddrInet6}[family]]...)
+			shortMask = append(shortMask, 0, 0, 0, 0)
+			binary.LittleEndian.PutUint16(shortMask, uint16(len(shortMask)))
+			normalized, err := darwinRouteDump2(shortMask)
+			if err != nil || len(normalized) != 1 || normalized[0] != parent {
+				t.Fatal("DUMP2 lost a complete native empty default mask", err)
+			}
+		})
+	}
+	parent, child := darwinIdleCacheFixture(4)
+	child.darwinCache = nil
+	original := darwinDump2WireFixture(t, child, parent.Flags|1, 0, 1700000000)
+	for name, change := range map[string]func([]byte) []byte{
+		"short-header":          func(b []byte) []byte { return b[:syscall.SizeofRtMsghdr-1] },
+		"truncated-address":     func(b []byte) []byte { return b[:len(b)-1] },
+		"short-declared-length": func(b []byte) []byte { binary.LittleEndian.PutUint16(b, 4); return b },
+		"version":               func(b []byte) []byte { b[2]++; return b },
+		"ordinary-dump-type":    func(b []byte) []byte { b[3] = syscall.RTM_GET; return b },
+		"foreign-event-type":    func(b []byte) []byte { b[3] = syscall.RTM_DELETE; return b },
+		"reserved":              func(b []byte) []byte { binary.LittleEndian.PutUint32(b[24:], 1); return b },
+		"no-interface":          func(b []byte) []byte { binary.LittleEndian.PutUint16(b[4:], 0); return b },
+		"unknown-address-bit":   func(b []byte) []byte { binary.LittleEndian.PutUint32(b[12:], 1<<20|syscall.RTA_DST); return b },
+		"missing-declared-address": func(b []byte) []byte {
+			binary.LittleEndian.PutUint32(b[12:], binary.LittleEndian.Uint32(b[12:])|syscall.RTA_BRD)
+			return b
+		},
+		"short-ip-record":            func(b []byte) []byte { b[syscall.SizeofRtMsghdr] = 4; return b },
+		"unknown-destination-family": func(b []byte) []byte { b[syscall.SizeofRtMsghdr+1] = 0; return b },
+		"unclaimed-tail": func(b []byte) []byte {
+			b = append(b, 0, 0, 0, 0)
+			binary.LittleEndian.PutUint16(b, uint16(len(b)))
+			return b
+		},
+	} {
+		t.Run("wire-"+name, func(t *testing.T) {
+			bad := change(append([]byte(nil), original...))
+			if objects, err := darwinRouteDump2(bad); err == nil || objects != nil {
+				t.Fatal("incomplete or foreign native wire minted DUMP2 proof", objects, err)
+			}
+		})
+	}
+	for name, change := range map[string]func([]byte){
+		"referenced":                 func(b []byte) { binary.LittleEndian.PutUint32(b[16:], 1) },
+		"negative-references":        func(b []byte) { binary.LittleEndian.PutUint32(b[16:], 0xffffffff) },
+		"absent-parent":              func(b []byte) { binary.LittleEndian.PutUint32(b[20:], 0) },
+		"different-parent":           func(b []byte) { binary.LittleEndian.PutUint32(b[20:], parent.Flags|1|0x4000) },
+		"no-expiry":                  func(b []byte) { binary.LittleEndian.PutUint32(b[48:], 0) },
+		"down":                       func(b []byte) { binary.LittleEndian.PutUint32(b[8:], child.Flags) },
+		"still-interface-referenced": func(b []byte) { binary.LittleEndian.PutUint32(b[8:], child.Flags|1|0x4000000) },
+	} {
+		t.Run("native-"+name, func(t *testing.T) {
+			bad := append([]byte(nil), original...)
+			change(bad)
+			objects, err := darwinRouteDump2(bad)
+			if err != nil || len(objects) != 1 {
+				t.Fatal("native negative fixture lost its well-framed original observation", err)
+			}
+			if derived, err := DesktopDarwinDerivedRoute(objects[0], []DesktopNetworkObject{parent}); derived || err == nil {
+				t.Fatal("unproved original native fields admitted idle cache", err)
+			}
+		})
+	}
+	if objects, err := darwinRouteDump2(nil); err != nil || len(objects) != 0 {
+		t.Fatal("empty native inventory manufactured a route", err)
+	}
+}
