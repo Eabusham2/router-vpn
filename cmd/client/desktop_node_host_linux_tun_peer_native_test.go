@@ -486,9 +486,13 @@ func linuxHostTUNDirectHealth(t *testing.T, peer *linuxHostTUNPeer) {
 }
 
 func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterProfile {
+	layer := peer.layer
+	if layer == "" {
+		layer = common.StartLayerOff
+	}
 	profile := common.RouterProfile{ID: "installed-linux-node", Name: "Actual installed Linux node", NodeKind: "router-vpn", NodeProofID: peer.nodeID,
 		Endpoint: peer.address.Addr().String(), RouterAPI: "http://10.77.0.1:8787", AdGuardIPv4: "192.168.50.133", DNSMode: "home", IPv6Mode: "on",
-		KillSwitch: true, KillSwitchPolicy: "on-connect", MTUPolicy: "fixed", ManualMTU: 1376, EffectiveMTU: 9000, StartLayer: peer.layer}
+		KillSwitch: true, KillSwitchPolicy: "on-connect", MTUPolicy: "manual", ManualMTU: 1376, EffectiveMTU: 9000, StartLayer: layer}
 	if linuxHostTUNAction(scenario) == "home-lan" {
 		profile.HomeLANAccess = true
 		profile.HomeLANCIDRs = []string{"10.77.0.0/24", "192.168.210.0/30"}
@@ -587,4 +591,75 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	if err != nil || os.WriteFile(filepath.Join(directory, "sing-box.json"), graph, 0600) != nil {
 		t.Fatal("actual installed host lost its private encrypted graph", err)
 	}
+}
+
+// The saved profile wire schema calls a fixed user value "manual". Keep the
+// actual controller preflight and its serialized fixture on that same schema;
+// the native MTU compiler's additional historical aliases grant no wire alias.
+func linuxHostTUNProfilePolicyValid(profile common.RouterProfile, scenario string) bool {
+	layer := linuxHostTUNStartLayer(scenario)
+	if layer == "" {
+		layer = common.StartLayerOff
+	}
+	if profile.StartLayer != layer {
+		return false
+	}
+	if linuxHostTUNMTUCase(scenario) || linuxHostTUNRestoreCase(scenario) {
+		return profile.MTUPolicy == "auto" && profile.ManualMTU == 0
+	}
+	return profile.MTUPolicy == "manual" && profile.ManualMTU == 1376
+}
+
+func TestDesktopLinuxInstalledProfileMTUSchema(t *testing.T) {
+	for _, scenario := range linuxHostTUNCases {
+		t.Run(scenario, func(t *testing.T) {
+			peer := &linuxHostTUNPeer{address: netip.MustParseAddrPort("192.168.210.2:14443"), mode: linuxHostTUNMode(scenario), layer: linuxHostTUNStartLayer(scenario), nodeID: linuxHostTUNNodeID}
+			original := linuxHostTUNProfile(peer, scenario)
+			raw, err := json.Marshal(common.RouterProfileStore{SelectedID: original.ID, Profiles: []common.RouterProfile{original}})
+			if err != nil {
+				t.Fatal("installed profile cannot pass its actual saved-store serializer", err)
+			}
+			var decoded common.RouterProfileStore
+			if err := decodeRelayControlJSON(raw, &decoded); err != nil || decoded.SelectedID != original.ID || len(decoded.Profiles) != 1 {
+				t.Fatal("installed profile did not survive its actual controller decoder", err)
+			}
+			saved := decoded.Profiles[0]
+			auto := linuxHostTUNMTUCase(scenario) || linuxHostTUNRestoreCase(scenario)
+			expectedPolicy, expectedMTU := "manual", 1376
+			if auto {
+				expectedPolicy, expectedMTU = "auto", 0
+			}
+			if original.MTUPolicy != expectedPolicy || original.ManualMTU != expectedMTU || saved.MTUPolicy != expectedPolicy || saved.ManualMTU != expectedMTU || saved.EffectiveMTU != 9000 || saved.NodeProofID != peer.nodeID || saved.StartLayer != original.StartLayer || saved.DNSMode != "home" || saved.AdGuardIPv4 != "192.168.50.133" || !linuxHostTUNProfilePolicyValid(saved, scenario) {
+				t.Fatal("installed MTU serialization/preflight changed captured policy, source or historical readback")
+			}
+			if peer.layer == "" && saved.StartLayer != common.StartLayerOff || peer.layer != "" && saved.StartLayer != peer.layer {
+				t.Fatal("saved Start Layer did not retain canonical Off or exact selected encryption")
+			}
+			if common.StartLayerHasAuthenticatedEncryption(saved.StartLayer) != (peer.layer != "") {
+				t.Fatal("saved Off attempted to acquire a separate AES restoration source")
+			}
+			if peer.layer == "" {
+				noncanonical := saved
+				noncanonical.StartLayer = ""
+				if linuxHostTUNProfilePolicyValid(noncanonical, scenario) {
+					t.Fatal("controller preflight accepted peer-only empty Off instead of the saved schema")
+				}
+			}
+			malformed := saved
+			malformed.MTUPolicy = "fixed"
+			if linuxHostTUNProfilePolicyValid(malformed, scenario) {
+				t.Fatal("old invalid fixture bypassed installed MTU preflight")
+			}
+			if _, err := json.Marshal(common.RouterProfileStore{SelectedID: malformed.ID, Profiles: []common.RouterProfile{malformed}}); err == nil || !strings.Contains(err.Error(), "invalid MTU policy") {
+				t.Fatal("production saved-profile schema admitted the old invalid fixed alias", err)
+			}
+		})
+	}
+	for _, value := range []int{0, 575, 1375, 9001} {
+		profile := common.RouterProfile{MTUPolicy: "manual", ManualMTU: value, StartLayer: common.StartLayerOff}
+		if linuxHostTUNProfilePolicyValid(profile, "on-connect") {
+			t.Fatal("installed manual MTU preflight replaced its exact requested value", value)
+		}
+	}
+	t.Logf("verified canonical installed profile serialization and controller preflight: %d scenarios", len(linuxHostTUNCases))
 }

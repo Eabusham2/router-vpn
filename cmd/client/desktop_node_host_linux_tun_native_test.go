@@ -303,13 +303,9 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	profile := profiles.Profiles[0]
 	mtuCase := linuxHostTUNMTUCase(scenario)
 	restoreCase := linuxHostTUNRestoreCase(scenario)
-	policyValid := profile.MTUPolicy == "fixed" && profile.ManualMTU == 1376
-	if mtuCase || restoreCase {
-		policyValid = profile.MTUPolicy == "auto" && profile.ManualMTU == 0
-	}
+	policyValid := linuxHostTUNProfilePolicyValid(profile, scenario)
 	if profile.ID != "installed-linux-node" || ((mode == "shadowsocks" || mode == "hysteria2") && profile.NodeProofID != linuxHostTUNNodeID || (mode == "wg" || linuxHostTUNIsAmnezia(mode)) && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
-		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || !policyValid || profile.EffectiveMTU != 9000 ||
-		profile.StartLayer != linuxHostTUNStartLayer(scenario) {
+		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || !policyValid || profile.EffectiveMTU != 9000 {
 		return errors.New("installed-host fixture changed its captured node, selected DNS or fixed MTU")
 	}
 	a := &app{localController: controller, profiles: profiles, state: state{Mode: "off", Phase: "off", DAITA: linuxHostTUNCoverCase(scenario) && !linuxHostTUNPublicCase(scenario)},

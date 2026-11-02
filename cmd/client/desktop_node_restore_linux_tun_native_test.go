@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"time"
+
+	"router-vpn/internal/common"
 )
 
 type linuxHostTUNRestoreResult struct {
@@ -88,14 +90,14 @@ func linuxHostTUNSealedRestore(ctx context.Context, a *app, session *desktopLinu
 		if err := os.WriteFile(filepath.Join(filepath.Dir(generated), "cert.pem"), []byte("not the captured private CA\n"), 0600); err != nil {
 			return nil, result, err
 		}
-		if snapshot.Plan.profile.StartLayer != "" {
+		if common.StartLayerHasAuthenticatedEncryption(snapshot.Plan.profile.StartLayer) {
 			outer := filepath.Join(linuxOwnedControllerRoot, "generated", snapshot.Plan.profile.ID, "shadowsocks", "sing-box.json")
 			if err := os.WriteFile(outer, []byte("not the captured independent AES source\n"), 0600); err != nil {
 				return nil, result, err
 			}
 		}
 	}
-	if (saved.mode == "wg" || linuxHostTUNIsAmnezia(saved.mode)) && snapshot.Plan.profile.StartLayer != "" {
+	if (saved.mode == "wg" || linuxHostTUNIsAmnezia(saved.mode)) && common.StartLayerHasAuthenticatedEncryption(snapshot.Plan.profile.StartLayer) {
 		outer := filepath.Join(linuxOwnedControllerRoot, "generated", snapshot.Plan.profile.ID, "shadowsocks", "sing-box.json")
 		if err := os.WriteFile(outer, []byte("not the captured independent WG AES source\n"), 0600); err != nil {
 			return nil, result, err
