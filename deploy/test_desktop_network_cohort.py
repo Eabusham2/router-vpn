@@ -24,6 +24,7 @@ PARENTS = (
     "TestNetworkReceiptMTUMatchesAddressFamily",
     "TestDarwinCloneRequiresExactCapturedParent",
     "TestDarwinCloneDerivesOriginalInterfaceScope",
+    "TestDarwinLocalCloneRemainsObservedPolicy",
     "TestDarwinCloneScopeKeepsExactParentRefusals",
     "TestDarwinCloneFailureDiagnosticsStayBoundedAndPrivate",
     "TestDarwinIdleCacheRequiresOriginalNativeProof",
@@ -135,6 +136,7 @@ def main():
                        "TestDarwinInterfaceReadbackBoundsAndNativeFields",
                        "TestDarwinUnusedInterfaceNativeReadbackComposition",
                        "TestDarwinCloneNativeScopeProjectionAndFailure",
+                       "TestDarwinLocalCloneRetainedInCohortAndChangesInvalidate",
                        "TestDarwinRouteDump2OriginalIdleCapture"):
             require_pass(base.stdout, parent)
     if sys.platform == "linux":

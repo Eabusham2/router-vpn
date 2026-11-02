@@ -18,6 +18,43 @@ import (
 	"time"
 )
 
+func TestDarwinLocalCloneRetainedInCohortAndChangesInvalidate(t *testing.T) {
+	local := DesktopNetworkObject{Kind: "route", Family: 4, Index: 1, Destination: "192.0.2.2/32", MTU: 16384, Flags: 0x1220404}
+	parent := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7, Destination: "192.0.2.0/24", Flags: 0x900}
+	wire := darwinDump2WireFixture(t, parent, 0, 8, 0)
+	wire = append(wire, darwinDump2WireFixture(t, local, parent.Flags|syscall.RTF_UP, 2, 0)...)
+	objects, err := darwinRouteDump2(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{Links: []Link{{Index: 1, Name: "captured-loopback", MTU: 16384, Flags: uint32(net.FlagLoopback)},
+		{Index: 7, Name: "captured-physical", MTU: 1500}}, Objects: objects}
+	physical, key, err := project(snapshot, nil)
+	if err != nil || len(physical.Objects) != 2 || !strings.Contains(key, local.Destination) {
+		t.Fatal("local route disappeared from the original frozen cohort", err)
+	}
+	without := snapshot
+	without.Objects = []DesktopNetworkObject{parent}
+	_, otherKey, err := project(without, nil)
+	if err != nil || key == otherKey {
+		t.Fatal("local route removal did not change the cohort", err)
+	}
+	for _, action := range []string{"add", "delete", "change"} {
+		for _, transition := range []bool{false, true} {
+			owner := &Tracker{ctx: context.Background(), native: &networkFakeNative{snapshot: snapshot},
+				physical: physical, baseline: key, transition: transition}
+			event := Event{Kind: "route", Action: action, Index: local.Index, Object: local}
+			owner.observe(event, nil)
+			if !transition && owner.failure == nil || transition && len(owner.events) != 1 {
+				t.Fatal("local route event was silently exempted as a derived cache", action, transition)
+			}
+			if transition && owner.End(context.Background(), nil) == nil {
+				t.Fatal("a local route event received native transition authority", action)
+			}
+		}
+	}
+}
+
 func darwinCloneNativeObject(t *testing.T, object DesktopNetworkObject) (DesktopNetworkObject, []byte) {
 	t.Helper()
 	prefix, err := netip.ParsePrefix(object.Destination)

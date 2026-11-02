@@ -223,6 +223,15 @@ func DesktopDarwinDerivedRoute(object DesktopNetworkObject, parents []DesktopNet
 	if err != nil || destination.Bits() != destination.Addr().BitLen() {
 		return false, desktopDarwinCloneFailure("host-prefix", object, parents, -1, 0)
 	}
+	// XNU marks a host route to an interface's own address RTF_LOCAL and
+	// may deliver it through loopback instead of the parent's interface.
+	// Keep that entire local route as observed policy. It is not exempted as
+	// a disposable cache: its exact key remains in the frozen cohort and any
+	// notification still invalidates the session. No parent or interface
+	// authority is inferred from the LOCAL bit.
+	if object.Flags&0x200000 != 0 {
+		return false, nil
+	}
 	best, count := -1, 0
 	// Gateway and protocol semantics survive cloning. XNU RTM_RESOLVE derives
 	// interface scope from the original parent rather than copying that bit.

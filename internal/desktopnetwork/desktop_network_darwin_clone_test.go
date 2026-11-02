@@ -49,6 +49,37 @@ func TestDarwinCloneDerivesOriginalInterfaceScope(t *testing.T) {
 	}
 }
 
+func TestDarwinLocalCloneRemainsObservedPolicy(t *testing.T) {
+	parent := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7, Destination: "192.0.2.0/24", Flags: 0x900}
+	local := DesktopNetworkObject{Kind: "route", Family: 4, Index: 1, Destination: "192.0.2.2/32", MTU: 16384, Flags: 0x1220404}
+	for _, parents := range [][]DesktopNetworkObject{nil, {parent}, {parent, parent}} {
+		original := local
+		if derived, err := DesktopDarwinDerivedRoute(local, parents); derived || err != nil || local != original {
+			t.Fatal("local route must retain its exact policy instead of acquiring cache authority", err)
+		}
+	}
+	for _, fault := range []string{"no-host", "bad-prefix", "redirect", "reject", "changed-family"} {
+		t.Run(fault, func(t *testing.T) {
+			changed := local
+			switch fault {
+			case "no-host":
+				changed.Flags &^= 0x4
+			case "bad-prefix":
+				changed.Destination = "192.0.2.0/24"
+			case "redirect":
+				changed.Flags |= 0x10
+			case "reject":
+				changed.Flags |= 0x8
+			case "changed-family":
+				changed.Family = 6
+			}
+			if derived, err := DesktopDarwinDerivedRoute(changed, []DesktopNetworkObject{parent}); derived || err == nil {
+				t.Fatal("local flag admitted an invalid native object")
+			}
+		})
+	}
+}
+
 func TestDarwinCloneScopeKeepsExactParentRefusals(t *testing.T) {
 	for _, fault := range []string{"missing-scope", "lost-parent-scope", "extra-noifref", "lost-noifref", "link-local-scope", "link-local-noifref", "proxy-parent", "non-cloning-parent", "other-interface", "other-gateway", "redirect", "modified", "static", "reject", "blackhole", "unproved-proto3", "ambiguous-longest-prefix", "missing-prefix"} {
 		t.Run(fault, func(t *testing.T) {

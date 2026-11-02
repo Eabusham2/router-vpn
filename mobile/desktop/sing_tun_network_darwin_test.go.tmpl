@@ -74,9 +74,12 @@ func TestRouterVPNDarwinRouteDump2OriginalInventory(t *testing.T) {
 	for _, family := range []string{"ipv4", "ipv6"} {
 		t.Run(family, func(t *testing.T) {
 			parent, child, owned := routerVPNDarwinDump2Objects(family)
+			local := DesktopNetworkObject{Kind: "route", Family: 4, Index: 1,
+				Destination: "192.0.2.2/32", MTU: 16384, Flags: 0x1220404}
 			wire := routerVPNDarwinDump2Wire(t, parent, 0, 8, 0)
 			wire = append(wire, routerVPNDarwinDump2Wire(t, child, parent.Flags|syscall.RTF_UP, 0, 1700000000)...)
 			wire = append(wire, routerVPNDarwinDump2Wire(t, owned, 0, 3, 0)...)
+			wire = append(wire, routerVPNDarwinDump2Wire(t, local, 0x901, 2, 0)...)
 			original := append([]byte(nil), wire...)
 			calls := 0
 			actual, err := routervpnDarwinNetworkObjectsFrom(func(kind, parameter int) ([]byte, error) {
@@ -86,11 +89,11 @@ func TestRouterVPNDarwinRouteDump2OriginalInventory(t *testing.T) {
 				}
 				return wire, nil
 			})
-			if err != nil || calls != 1 || len(actual) != 2 || actual[0] != parent || actual[1] != owned || !bytes.Equal(wire, original) {
+			if err != nil || calls != 1 || len(actual) != 3 || actual[0] != parent || actual[1] != owned || actual[2] != local || !bytes.Equal(wire, original) {
 				t.Fatal("native TUN did not retain its original DUMP2 inventory", err)
 			}
 			clear(wire)
-			if actual[0] != parent || actual[1] != owned {
+			if actual[0] != parent || actual[1] != owned || actual[2] != local {
 				t.Fatal("native TUN inventory borrowed its original read buffer")
 			}
 		})
