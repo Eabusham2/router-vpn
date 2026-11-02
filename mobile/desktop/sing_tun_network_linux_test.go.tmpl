@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -120,6 +121,138 @@ func TestRouterVPNNativeLinuxRoutingResolutionRejectsForeign(t *testing.T) {
 	}
 }
 
+func nativeRoutingVethReady(index int, configured netip.Prefix, addresses []netlink.Addr, routes []DesktopNetworkObject) (bool, error) {
+	// A veth brings up automatic IPv6 policy asynchronously. It is fixture
+	// setup, never an addition that the native TUN may claim as its own.
+	type routeKey struct {
+		table       uint32
+		destination string
+	}
+	required := map[routeKey]bool{{254, "fe80::/64"}: true, {255, "ff00::/8"}: true}
+	linkLocal, selected, pending := false, !configured.IsValid(), false
+	for _, address := range addresses {
+		if address.IPNet == nil || address.LinkIndex != index {
+			return false, fmt.Errorf("veth IPv6 readback lost its original interface")
+		}
+		ip, ok := netip.AddrFromSlice(address.IP)
+		bits, size := address.Mask.Size()
+		if !ok || !ip.Is6() || ip.Is4In6() || size != 128 {
+			return false, fmt.Errorf("veth IPv6 readback has an invalid address")
+		}
+		if address.Flags&syscall.IFA_F_DADFAILED != 0 {
+			return false, fmt.Errorf("veth IPv6 duplicate-address detection failed")
+		}
+		pending = pending || address.Flags&syscall.IFA_F_TENTATIVE != 0
+		prefix := netip.PrefixFrom(ip, bits)
+		linkLocal = linkLocal || ip.IsLinkLocalUnicast()
+		selected = selected || prefix == configured
+		required[routeKey{254, prefix.Masked().String()}] = true
+		required[routeKey{255, netip.PrefixFrom(ip, 128).String()}] = true
+	}
+	for _, route := range routes {
+		if route.Kind == "route" && route.Family == 6 && route.Index == uint32(index) {
+			delete(required, routeKey{route.Table, route.Destination})
+		}
+	}
+	return linkLocal && selected && !pending && len(required) == 0, nil
+}
+
+func waitNativeRoutingVeths(t *testing.T, owned, peer netlink.Link, configured netip.Prefix) {
+	t.Helper()
+	// Stay inside the unchanged 15-second child deadline. Successful kernel
+	// address/route readback, rather than elapsed time or equal snapshots,
+	// establishes when the two fixture interfaces have finished starting.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		routes, err := routervpnLinuxNetworkObjects("route")
+		if err != nil {
+			t.Fatal("veth baseline routes", err)
+		}
+		ready := true
+		for i, link := range []netlink.Link{owned, peer} {
+			addresses, err := netlink.AddrList(link, netlink.FAMILY_V6)
+			if err != nil {
+				t.Fatal("veth baseline IPv6 addresses", err)
+			}
+			expected := configured
+			if i != 0 {
+				expected = netip.Prefix{}
+			}
+			current, err := nativeRoutingVethReady(link.Attrs().Index, expected, addresses, routes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready = ready && current
+		}
+		if ready {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("veth IPv6 DAD and baseline routes did not become ready", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingVethReadiness(t *testing.T) {
+	configured := netip.MustParsePrefix("fd29:94::1/126")
+	address := func(value string) netlink.Addr {
+		ip, prefix, err := net.ParseCIDR(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix.IP = ip
+		return netlink.Addr{IPNet: prefix, LinkIndex: 3}
+	}
+	addresses := []netlink.Addr{address("fe80::1/64"), address(configured.String())}
+	var routes []DesktopNetworkObject
+	for table, destinations := range map[uint32][]string{
+		254: {"fe80::/64", "fd29:94::/126"},
+		255: {"ff00::/8", "fe80::1/128", "fd29:94::1/128"},
+	} {
+		for _, destination := range destinations {
+			routes = append(routes, DesktopNetworkObject{Kind: "route", Family: 6, Index: 3, Table: table, Destination: destination})
+		}
+	}
+	if ready, err := nativeRoutingVethReady(3, configured, addresses, routes); !ready || err != nil {
+		t.Fatal("complete owned baseline rejected", ready, err)
+	}
+	for i := range routes {
+		incomplete := append(append([]DesktopNetworkObject{}, routes[:i]...), routes[i+1:]...)
+		if ready, err := nativeRoutingVethReady(3, configured, addresses, incomplete); ready || err != nil {
+			t.Fatal("missing automatic/address route became ready", routes[i], ready, err)
+		}
+	}
+	for _, flags := range []int{syscall.IFA_F_TENTATIVE, syscall.IFA_F_DADFAILED} {
+		for i := range addresses {
+			changed := append([]netlink.Addr{}, addresses...)
+			changed[i].Flags = flags
+			if ready, err := nativeRoutingVethReady(3, configured, changed, routes); ready || (err != nil) != (flags == syscall.IFA_F_DADFAILED) {
+				t.Fatal("IPv6 DAD was not required", i, flags, ready, err)
+			}
+		}
+	}
+	for _, changed := range [][]netlink.Addr{nil, addresses[:1], addresses[1:]} {
+		if ready, err := nativeRoutingVethReady(3, configured, changed, routes); ready || err != nil {
+			t.Fatal("missing selected/link-local IPv6 address became ready", ready, err)
+		}
+	}
+	if ready, err := nativeRoutingVethReady(2, configured, addresses, routes); ready || err == nil {
+		t.Fatal("foreign interface addresses became ready", ready, err)
+	}
+	foreign := append([]DesktopNetworkObject{}, routes...)
+	for i := range foreign {
+		foreign[i].Index = 2
+	}
+	if ready, err := nativeRoutingVethReady(3, configured, addresses, foreign); ready || err != nil {
+		t.Fatal("peer routes satisfied the owned interface baseline", ready, err)
+	}
+}
+
 // The constructor boundary is explicitly modeled by an owned veth. The real
 // pinned configure/setRoute/setRules methods and receipt readback execute in a
 // fresh user/network namespace; this does not substitute for the actual TUN
@@ -218,6 +351,7 @@ func TestRouterVPNNativeLinuxRoutingReceiptNamespace(t *testing.T) {
 			if err := netlink.LinkSetUp(link); err != nil {
 				t.Fatal(err)
 			}
+			waitNativeRoutingVeths(t, link, other, n.options.Inet6Address[0])
 			if err := n.setRoute(link); err != nil {
 				t.Fatal(err)
 			}
