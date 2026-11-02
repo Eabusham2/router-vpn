@@ -92,6 +92,57 @@ print('actual root PF journal file/parent sync and exclusive state lock passed')
 	if err != nil || !bytes.Contains(output, []byte("actual root PF journal file/parent sync and exclusive state lock passed")) {
 		t.Fatal("actual installed Python PF journal did not prove its private commit", string(output), err)
 	}
+	install, err := ownedDesktopLock(macOSOwnedInstallLock, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer install.Close()
+	if output, err := invoke([]string{darwinOwnedPFArgument, "plan"}, raw); err == nil || !bytes.Contains(output, []byte("installation or upgrade is in progress")) {
+		t.Fatal("ordinary PF invocation escaped the installer's exclusive authority", string(output), err)
+	}
+	// Transfer this same original EX to the real Python broker/state guard and
+	// actual installed Go PF utility. The operation remains the existing
+	// read-only absent-baseline plan, with every native identity/ACL check.
+	delegatedCode := `import importlib.util,json,os,sys,time
+from pathlib import Path
+root=Path('/opt/router-vpn-client')
+spec=importlib.util.spec_from_file_location('actual_installer_pf',root/'modes/darwin_pf_baseline.py')
+baseline=importlib.util.module_from_spec(spec);spec.loader.exec_module(baseline)
+capability=baseline.CAPABILITY
+broker=capability._Broker(3,time.monotonic()+12)
+descriptor=broker.child.detach()
+broker.thread.start()
+try:
+    with capability.borrow(descriptor,broker.generation,os.getpid()):
+        with baseline.state_guard(root):
+            result=baseline._invoke('plan',json.loads(sys.argv[1]))
+finally:
+    broker.child.close()
+    broker.thread.join(12)
+if broker.thread.is_alive() or not broker.eof.is_set() or not broker.drained or broker.error or not broker.reassert_complete:
+    raise AssertionError('actual installed Python/Go PF transaction did not retire its original leases')
+if broker.mutation_possible:
+    raise AssertionError('read-only native plan acquired mutation authority')
+print(json.dumps(result,separators=(',',':')))
+`
+	delegatedContext, stopDelegated := context.WithTimeout(context.Background(), 15*time.Second)
+	delegated := exec.CommandContext(delegatedContext, python, "-BEsS", "-c", delegatedCode, string(raw))
+	delegated.Env, delegated.Dir, delegated.ExtraFiles = macOSOwnedEnvironment(), "/", []*os.File{install}
+	output, err = delegated.CombinedOutput()
+	stopDelegated()
+	if err != nil || json.Unmarshal(output, &result) != nil || result.Schema != 1 || result.Applied || result.Previous.Present || result.Target.Present {
+		t.Fatal("actual installed PF utility failed under its borrowed original installer EX", string(output), err)
+	}
+	for _, exclusive := range []bool{false, true} {
+		probe, err := ownedDesktopLock(macOSOwnedInstallLock, exclusive)
+		if err == nil {
+			probe.Close()
+			t.Fatal("joined delegated PF utility released or downgraded installer EX", exclusive)
+		}
+	}
+	if err := install.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name string
 		args []string

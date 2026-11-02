@@ -84,7 +84,7 @@ def checked_sources(source: Path):
         if path.is_symlink() or copied.is_symlink() or not copied.is_file() or copied.read_bytes() != expected:
             raise ValueError('Darwin guardian lost its exact shared kernel ACL source')
         records['common/'+path.name] = hashlib.sha256(expected).hexdigest()
-    for name in ('darwin_kill_switch.py', 'darwin_pf_baseline.py'):
+    for name in ('darwin_kill_switch.py', 'darwin_pf_baseline.py', 'darwin_install_capability.py'):
         dispatcher = ROOT/'modes'/name
         if dispatcher.is_symlink() or not dispatcher.is_file():
             raise ValueError('The native PF parser proof requires the complete shipping dispatcher')

@@ -553,6 +553,9 @@ def darwin_reassert() -> int:
     os.environ.pop("HOMEVPN_NATIVE_EGRESS_JSON", None)
     os.environ.pop("HOMEVPN_TOR_PHYSICAL_BROKER", None)
     os.environ.pop("HOMEVPN_EXTERNAL_SESSION", None)
+    # Record possible protection mutation after read-only profile validation,
+    # before apply can acquire a reference or change its durable journal.
+    _darwin._baseline.CAPABILITY.possible_mutation()
     return darwin_apply(spawn_watch=False, retained_state=state)
 
 
@@ -570,6 +573,10 @@ def main() -> int:
     if sys.platform != "darwin" and os.environ.get("HOMEVPN_KILLSWITCH_DARWIN_TEST") != "1":
         return _linux.main()
     try:
+        if len(sys.argv) == 5 and sys.argv[1] == 'reassert-install':
+            with _darwin._baseline.CAPABILITY.borrow(int(sys.argv[2]), sys.argv[3], int(sys.argv[4])):
+                with _darwin_action_guard(_linux.root_dir()):
+                    return darwin_reassert()
         if len(sys.argv) == 4 and sys.argv[1] == 'watch':
             return darwin_watch(sys.argv[2], int(sys.argv[3]))
         if action == "watch": return darwin_watch()

@@ -13,7 +13,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_kill_switch.py',
+FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_install_capability.py', 'modes/darwin_kill_switch.py',
          'modes/kill-switch-platform.py', 'modes/kill-switch.py', 'modes/profile_id.py',
          'modes/test_darwin_pf_baseline.py', 'modes/test_darwin_owned_pf.py',
          'deploy/test_desktop_tor_unix_wrapper.py', 'modes/native-tor-bridge.sh',
@@ -73,7 +73,7 @@ MUTANTS = (
      'pass_fds=()', 'test_darwin_owned_pf.py',
      'OwnedDarwinPF.test_fixed_native_child_retains_installed_locks_after_its_watcher_crashes',
      'PF child lost its captured lifetime or transaction descriptor'),
-    ('in-flight installed outer locks', 'darwin_pf_baseline.py', 'with process_authority((install, state_lock)):',
+    ('in-flight installed outer locks', 'darwin_pf_baseline.py', 'with process_authority(retained):',
      "with __import__('contextlib').nullcontext():", 'test_darwin_owned_pf.py',
      'OwnedDarwinPF.test_pf_child_retains_both_locks_after_its_watcher_crashes',
      'PF child lost its captured lifetime or transaction descriptor'),

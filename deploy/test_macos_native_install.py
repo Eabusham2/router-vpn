@@ -744,6 +744,29 @@ class LaunchBoundary:
         self.loaded = False; self.calls = []; self.fail = None; self.failed = False
         self.query_failure = False
 
+    def reassert(self, root, descriptor):
+        if root != self.root or not self.loaded:
+            raise AssertionError('Protection preceded captured launchd registration')
+        named = root.with_name(root.name+'.install.lock')
+        actual = os.fstat(descriptor)
+        if not os.path.samestat(actual, named.lstat()) or actual.st_mode & 0o777 != 0o600:
+            raise AssertionError('Reassert did not receive the actual original installer descriptor')
+        probe = os.open(named, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                raise AssertionError('Reassert lost original installer exclusion')
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(probe)
+        self.calls.append(('owned-reassert', str(root)))
+        if hasattr(self, 'reassert_hook'):
+            return self.reassert_hook(root, descriptor)
+        return {'joined': True, 'mutation_possible': False}
+
     def __call__(self, arguments, *, check=True):
         args = tuple(map(str, arguments)); self.calls.append(args)
         if self.fail is not None and self.fail in args and not self.failed:
@@ -800,7 +823,7 @@ class MacInstallTransactions(unittest.TestCase):
         self.uid = pwd.getpwnam('daemon').pw_uid
         self.python = Path('/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13')
         self.boundary = LaunchBoundary(self.installer, self.root, self.system)
-        self.integration = self.installer.LaunchIntegration(self.system, self.boundary)
+        self.integration = self.installer.LaunchIntegration(self.system, self.boundary, self.boundary.reassert)
         self.verifications = []
         self.processes = []
 
@@ -817,7 +840,7 @@ class MacInstallTransactions(unittest.TestCase):
                                process_reader=lambda: list(self.processes), **options)
 
     def renew_boundary(self):
-        self.integration = self.installer.LaunchIntegration(self.system, self.boundary)
+        self.integration = self.installer.LaunchIntegration(self.system, self.boundary, self.boundary.reassert)
 
     def test_first_install_has_one_root_owned_authority_and_no_http_daemon(self):
         self.install()
@@ -904,8 +927,10 @@ class MacInstallTransactions(unittest.TestCase):
         descriptor = os.open(lock, os.O_RDWR|os.O_CREAT, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_SH)
-            with self.assertRaises(RuntimeError): self.install()
-            self.assertEqual([], self.boundary.calls)
+            try:
+                with self.assertRaises(RuntimeError): self.install()
+            finally:
+                self.assertEqual([], self.boundary.calls, 'installer probed service before its original exclusion')
         finally:
             os.close(descriptor)
 
@@ -948,6 +973,56 @@ class MacInstallTransactions(unittest.TestCase):
         self.assertTrue(receipt.exists(), 'rollback lost the original generation receipt')
         self.assertEqual(old_receipt, (receipt.read_bytes(), receipt.stat().st_dev, receipt.stat().st_ino))
         self.assertTrue(self.boundary.loaded)
+
+    def test_joined_reassert_failure_before_mutation_preserves_automatic_rollback(self):
+        self.install()
+        F.write(self.root/'private-sentinel', 'original private owner', 0o600)
+        before, system = F.snapshot(self.root, metadata=True), F.file_bytes(self.system)
+        self.renew_boundary()
+        def reject(root, descriptor):
+            raise RuntimeError('modeled joined rejection before policy mutation')
+        self.boundary.reassert_hook = reject
+        with self.assertRaisesRegex(RuntimeError, 'joined rejection before policy mutation'):
+            self.install()
+        self.assertEqual(before, F.snapshot(self.root, metadata=True))
+        self.assertEqual(system, F.file_bytes(self.system))
+        self.assertTrue(self.boundary.loaded)
+
+    def test_possible_policy_mutation_keeps_current_journal_and_original_backup(self):
+        self.install()
+        original_root = self.root.stat()
+        F.write(self.root/'run/kill-switch.json', '{"policy":"always","pf_token":"11"}', 0o600)
+        self.renew_boundary()
+        def uncertain(root, descriptor):
+            F.write(root/'run/kill-switch.json', '{"policy":"always","pf_token":"22","darwin_transition_pending":true}', 0o600)
+            raise self.installer.CAPABILITY.RetainedAuthorityError('modeled owned reference acquired before failed completion')
+        self.boundary.reassert_hook = uncertain
+        with self.assertRaisesRegex(RuntimeError, 'current journal and previous bytes'):
+            self.install()
+        self.assertFalse(os.path.samestat(original_root, self.root.stat()))
+        self.assertEqual(json.loads((self.root/'run/kill-switch.json').read_text())['pf_token'], '22')
+        pending = list(self.root.parent.glob('.'+self.root.name+'.install-*'))
+        self.assertEqual(len(pending), 1)
+        self.assertTrue(os.path.samestat(original_root, (pending[0]/'previous').stat()))
+        self.assertEqual(json.loads((pending[0]/'previous/run/kill-switch.json').read_text())['pf_token'], '11')
+        self.assertTrue((pending[0]/'previous-generation.json').is_file())
+        self.assertTrue(self.installer.GENERATION.receipt_path(self.root).is_file())
+        self.assertFalse(self.boundary.loaded, 'recovery left a supervisor admitting the unproved promotion')
+        with self.assertRaisesRegex(RuntimeError, 'interrupted native installation'):
+            self.install()
+
+    def test_missing_join_receipt_never_replaces_the_unproved_current_root(self):
+        self.install()
+        old = self.root.stat()
+        self.renew_boundary()
+        self.boundary.reassert_hook = lambda root, descriptor: {'joined': False, 'mutation_possible': False}
+        with self.assertRaisesRegex(RuntimeError, 'current journal and previous bytes'):
+            self.install()
+        self.assertFalse(os.path.samestat(old, self.root.stat()))
+        pending = list(self.root.parent.glob('.'+self.root.name+'.install-*'))
+        self.assertEqual(len(pending), 1)
+        self.assertTrue(os.path.samestat(old, (pending[0]/'previous').stat()))
+        self.assertFalse(self.boundary.loaded)
 
     def test_receipt_promotion_failure_restores_original_generation_and_private_state(self):
         self.install(); F.write(self.root/'private-sentinel', 'original private owner', 0o600)
@@ -1024,7 +1099,7 @@ class MacInstallTransactions(unittest.TestCase):
 
     def test_rollback_failure_retains_backup_and_blocks_next_attempt(self):
         self.install(); self.renew_boundary()
-        def fail(_): raise RuntimeError('cannot restore old service')
+        def fail(_, descriptor): raise RuntimeError('cannot restore old service')
         self.integration.install = fail
         self.integration.restore = lambda: (_ for _ in ()).throw(RuntimeError('rollback failed'))
         with self.assertRaisesRegex(RuntimeError, 'retained at'): self.install()
@@ -1356,11 +1431,17 @@ def main():
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacProcessInventory))
     if not result.wasSuccessful(): raise SystemExit(1)
     for before, after, case in (
-        ('with FILES.installation_lock(root):', 'with __import__("contextlib").nullcontext():', 'test_live_install_lock_prevents_even_service_probe'),
+        ('with FILES.installation_lock(root) as install_descriptor:', 'with __import__("contextlib").nullcontext(-1) as install_descriptor:', 'test_live_install_lock_prevents_even_service_probe'),
         ('        verifier(stage, python)', '        pass # bypass runtime validation', 'test_verification_failure_preserves_existing_bytes_and_service'),
         ('        reject_running_previous(root, process_reader)', '        pass # ignore legacy owner', 'test_running_legacy_native_owner_prevents_promotion'),
         ('                FILES.copy_checked(child, stage/child.name, private=True)', '                pass # discard private state', 'test_upgrade_preserves_private_owner_settings_and_open_file_isolation'),
         ('            integration.restore()', '            pass # omit restoration', 'test_system_failure_restores_old_root_files_and_supervisor'),
+        ('    except CAPABILITY.RetainedAuthorityError as retained:',
+         '    except type("UnreachableRetainedAuthority", (RuntimeError,), {}) as retained:',
+         'test_possible_policy_mutation_keeps_current_journal_and_original_backup'),
+        ("                self.reassert_receipt['joined'] is not True or type(self.reassert_receipt['mutation_possible']) is not bool):",
+         "                False or type(self.reassert_receipt['mutation_possible']) is not bool):",
+         'test_missing_join_receipt_never_replaces_the_unproved_current_root'),
         ('                os.rename(previous_receipt, installed_receipt)', '                pass # omit generation rollback', 'test_receipt_promotion_failure_restores_original_generation_and_private_state'),
         ('        reject_running_previous(root, process_reader)\n        if generation is not None:\n            generation.verify()',
          '        reject_running_previous(root, process_reader)\n        if generation is not None:\n            pass # omit final original generation proof', 'test_old_generation_changed_during_inventory_cannot_be_promoted_over'),
@@ -1417,7 +1498,7 @@ def main():
             boundary = LaunchBoundary(M, installed, system)
             for iteration in range(2):
                 M.install(source, pwd.getpwnam('daemon').pw_uid, Path(sys.executable), root=installed,
-                          integration=M.LaunchIntegration(system, boundary), process_reader=lambda: [])
+                          integration=M.LaunchIntegration(system, boundary, boundary.reassert), process_reader=lambda: [])
                 if F.runtime_digests(installed/'runtime') != expected:
                     raise AssertionError('Actual bundled runtime bytes changed through native installation')
                 if iteration == 0: F.write(installed/'generated/private-upgrade-sentinel', 'keep exact private bytes', 0o600)

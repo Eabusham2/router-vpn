@@ -80,10 +80,41 @@ print(json.dumps({"executable": os.path.realpath(sys.executable), "library": os.
 	t.Logf("actual native interpreter=%s library-root=%s no_site=1; ambient interpreter paths rejected", python, root)
 }
 
+func TestMacOSOwnedControllerNativeInstallerCapabilities(t *testing.T) {
+	if os.Getuid() != 0 || os.Geteuid() != 0 || os.Getenv(macOSControllerFixtureMarker) != "1" {
+		t.Fatal("installer capability gate requires its explicit disposable native fixture")
+	}
+	// Validate the same complete native interpreter authority before any
+	// privileged Python execution; an untrusted candidate cannot bypass this
+	// by selecting the additional fixture from the outer build runner.
+	python, _, err := macOSPythonTrustRoot(os.Getenv("ROUTERVPN_MACOS_FIXTURE_PYTHON"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper := os.Getenv("ROUTERVPN_MACOS_FIXTURE_INSTALLCAP")
+	source := os.Getenv("ROUTERVPN_MACOS_FIXTURE_SOURCE")
+	if !filepath.IsAbs(helper) || !filepath.IsAbs(source) {
+		t.Fatal("native capability fixture lost its captured build paths")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, python, "-BEsS", filepath.Join(source, "deploy/test_darwin_install_capability.py"), "--helper", helper)
+	command.Dir = "/"
+	command.Env = append(macOSPythonEnvironment(), "GORACE=atexit_sleep_ms=0")
+	output, err := command.CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte("Actual installer Python/Go capability, original EX, borrower retirement and failure ownership passed.")) {
+		if len(output) > 24<<10 {
+			output = output[len(output)-(24<<10):]
+		}
+		t.Fatal("actual native installer capability gate failed", string(output), err)
+	}
+	t.Log(string(output))
+}
+
 func init() {
 	// Only this explicit test binary contains these entry points. They are
 	// absent from the shipping controller and never weaken a production flag.
-	pfUtility := len(os.Args) >= 2 && os.Args[1] == darwinOwnedPFArgument
+	pfUtility := len(os.Args) >= 2 && (os.Args[1] == darwinOwnedPFArgument || os.Args[1] == darwinOwnedPFInstallArgument)
 	privilegedRole := pfUtility || len(os.Args) == 2 && (os.Args[1] == macOSControllerSupervisorArgument || os.Args[1] == macOSOwnedControllerArgument)
 	if privilegedRole {
 		marker := filepath.Join(macOSOwnedControllerRoot, "fixture-native-authority")
@@ -368,7 +399,7 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 	// Copy the actual source closure and invoke its real empty-policy reassert.
 	// There is no kill-switch state and no PF, route or launchd mutation.
 	source := os.Getenv("ROUTERVPN_MACOS_FIXTURE_SOURCE")
-	for _, name := range []string{"kill-switch-platform.py", "kill-switch.py", "darwin_kill_switch.py", "darwin_pf_baseline.py", "profile_id.py"} {
+	for _, name := range []string{"kill-switch-platform.py", "kill-switch.py", "darwin_kill_switch.py", "darwin_pf_baseline.py", "darwin_install_capability.py", "profile_id.py"} {
 		data, err = os.ReadFile(filepath.Join(source, "modes", name))
 		if err != nil {
 			t.Fatal(err)
@@ -420,6 +451,47 @@ func macOSControllerNativeAwait(t *testing.T, ready func() bool, message string)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+func TestMacOSOwnedControllerNativeInstallerExclusionAndRetry(t *testing.T) {
+	fixture := macOSControllerNativeInstall(t)
+	install, err := ownedDesktopLock(macOSOwnedInstallLock, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer install.Close()
+	// Execute the complete installed supervisor predicate. launchd may retry
+	// a registered job while the installer still holds EX; none of those
+	// attempts may reassert policy or expose a controller/GUI socket.
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		command := exec.CommandContext(ctx, macOSOwnedExecutable(), macOSControllerSupervisorArgument)
+		command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=/var/root", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
+		output, failure := command.CombinedOutput()
+		cancel()
+		if failure == nil || !bytes.Contains(output, []byte("Router VPN installation or upgrade is in progress")) {
+			t.Fatalf("supervisor escaped the retained original installer EX on attempt %d: %v %s", attempt, failure, output)
+		}
+		for _, path := range []string{macOSOwnedProcessLock, macOSOwnedSupervisorLock, macOSOwnedControllerSocketDirectory,
+			filepath.Join(macOSOwnedControllerRoot, "pf-state.lock"), filepath.Join(macOSOwnedControllerRoot, "kill-switch-state.json")} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("EX-blocked supervisor changed authority before admission", path, err)
+			}
+		}
+		for _, exclusive := range []bool{false, true} {
+			competing, err := ownedDesktopLock(macOSOwnedInstallLock, exclusive)
+			if err == nil {
+				competing.Close()
+				t.Fatal("blocked supervisor released or downgraded the original installer EX", exclusive)
+			}
+		}
+	}
+	if err := install.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.start()
+	// The complete same supervisor now performs its real empty-policy
+	// reassert and creates the authenticated socket. Fixture cleanup joins it.
 }
 
 func (f *macOSControllerNativeFixture) connection(uid uint32) *net.UnixConn {

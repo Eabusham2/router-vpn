@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,9 @@ INSTALL_LOCK = Path('/opt/router-vpn-client.install.lock')
 LIMIT = 4096
 STATE_KEY = 'darwin_native_baseline'
 _PROCESS_AUTHORITY_FDS: tuple[int, ...] = ()
+_CAPABILITY_SPEC = importlib.util.spec_from_file_location('routervpn_pf_install_capability', Path(__file__).with_name('darwin_install_capability.py'))
+CAPABILITY = importlib.util.module_from_spec(_CAPABILITY_SPEC)
+_CAPABILITY_SPEC.loader.exec_module(CAPABILITY)
 
 
 @contextlib.contextmanager
@@ -126,7 +130,9 @@ def _native(phase: str, raw: bytes):
         raise RuntimeError('macOS baseline request exceeds its private bound')
     # No additional elevation, shell, PATH lookup, inherited loader settings,
     # executable override, private credential or node bundle reaches this call.
-    result = subprocess.run([str(CONTROLLER), '--darwin-owned-pf', phase], input=raw,
+    owner = CAPABILITY.current()
+    arguments = owner.native_arguments(phase) if owner is not None else ['--darwin-owned-pf', phase]
+    result = subprocess.run([str(CONTROLLER), *arguments], input=raw,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd='/',
                             env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/var/root', 'LC_ALL': 'C'},
                             timeout=15, check=False, pass_fds=process_authority_fds())
@@ -297,7 +303,8 @@ def state_guard(root: Path):
     for parent in (ROOT.parent, *ROOT.parent.parents):
         if not _owned_info(parent.lstat(), directory=True):
             raise RuntimeError('the installed macOS PF state ancestor is not protected')
-    install = _lock(INSTALL_LOCK, fcntl.LOCK_SH)
+    owner = CAPABILITY.current()
+    install = owner.duplicate_lock() if owner is not None else _lock(INSTALL_LOCK, fcntl.LOCK_SH)
     state_lock = None
     try:
         before = ROOT.lstat()
@@ -308,7 +315,8 @@ def state_guard(root: Path):
             raise RuntimeError('the installed macOS PF state root changed before capture')
         # The fixed native utility independently checks extended ACLs of this
         # root, both locks and all installed inputs before planning or applying.
-        with process_authority((install, state_lock)):
+        retained = (install, state_lock, *(owner.process_fds() if owner is not None else ()))
+        with process_authority(retained):
             yield (install, state_lock)
     finally:
         if state_lock is not None:

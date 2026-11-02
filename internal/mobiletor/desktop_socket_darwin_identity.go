@@ -105,6 +105,7 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 		return nil, err
 	}
 	command := exec.CommandContext(ctx, path, args...)
+	command.ExtraFiles = desktopDarwinProcessAuthority(ctx)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
 	command.Stdin = bytes.NewReader(input)
 	output, diagnostics := desktopDarwinCommandBuffer{limit: 2 << 20}, desktopDarwinCommandBuffer{limit: 128 << 10}

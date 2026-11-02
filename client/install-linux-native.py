@@ -102,7 +102,7 @@ def installation_lock(root: Path):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RuntimeError('Close Router VPN and wait for its tunnel cleanup before upgrading.') from error
-        yield
+        yield descriptor
     finally:
         os.close(descriptor)
 

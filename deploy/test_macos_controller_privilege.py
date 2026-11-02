@@ -29,7 +29,7 @@ SPEC.loader.exec_module(UID)
 PROBE_SPEC = importlib.util.spec_from_file_location('macos_controller_image_probe', ROOT/'deploy/macos_process_inventory_probe.py')
 PROBE = importlib.util.module_from_spec(PROBE_SPEC)
 PROBE_SPEC.loader.exec_module(PROBE)
-CASES = ('InterpreterSelection', 'LifetimeAndInheritedLocks', 'RejectsForeignUIDAndInvalidFrames',
+CASES = ('InterpreterSelection', 'InstallerCapabilities', 'InstallerExclusionAndRetry', 'LifetimeAndInheritedLocks', 'RejectsForeignUIDAndInvalidFrames',
          'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient', 'PFBaselineUtility')
 
 
@@ -49,9 +49,10 @@ def reported_run(command, **kwargs):
 
 def source_identity():
     files = [ROOT / 'go.mod', ROOT / 'go.sum', Path(__file__).resolve(), ROOT/'deploy/macos_process_inventory_probe.py',
+             ROOT/'deploy/installcap_fixture.go', ROOT/'deploy/test_darwin_install_capability.py',
              ROOT / 'client/install-macos-native.sh', *(ROOT / 'cmd/client').glob('*'),
              *(ROOT / 'internal').rglob('*.go'), *MAC.glob('*.swift'),
-             *(ROOT / 'modes' / name for name in ['kill-switch-platform.py', 'kill-switch.py', 'darwin_kill_switch.py', 'darwin_pf_baseline.py', 'profile_id.py'])]
+             *(ROOT / 'modes' / name for name in ['kill-switch-platform.py', 'kill-switch.py', 'darwin_kill_switch.py', 'darwin_pf_baseline.py', 'darwin_install_capability.py', 'profile_id.py'])]
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(set(files)) if path.is_file() and not path.is_symlink()}
 
@@ -225,6 +226,9 @@ def main():
         binary = work / 'controller-native-test'
         subprocess.run([str(compiler), 'test', '-race', '-c', '-tags', 'routervpn_controller_privileged',
                         './cmd/client', '-o', str(binary)], cwd=ROOT, env=environment, check=True, timeout=240)
+        capability = work/'installcap-native-test'
+        subprocess.run([str(compiler), 'build', '-race', '-o', str(capability), 'deploy/installcap_fixture.go'],
+                       cwd=ROOT, env=environment, check=True, timeout=120)
         main = work / 'main.swift'; main.write_text(appkit_source())
         appkit = work / 'native-appkit-owner'
         sources = [MAC / name for name in ['RouterVPNMacControllerAuth.swift', 'RouterVPNMacControllerLaunch.swift',
@@ -232,7 +236,7 @@ def main():
                    'RouterVPNMacDNSController.swift', 'RouterVPNMacSpeedLabTransport.swift']]
         subprocess.run([arguments.swift, '-swift-version', '5', '-module-cache-path', str(work / 'module-cache'),
                         *map(str, sources), str(main), '-framework', 'AppKit', '-o', str(appkit)], check=True, timeout=180)
-        binary.chmod(0o755); appkit.chmod(0o755)
+        binary.chmod(0o755); appkit.chmod(0o755); capability.chmod(0o755)
         if source_identity() != before: raise RuntimeError('Native ownership source changed during compilation')
         print('Known macOS fixture image objects (diagnostic only): '+json.dumps({
             'admission_authority': False, 'observed_unix_ns': time.time_ns(),
@@ -241,6 +245,7 @@ def main():
         command = ['/usr/bin/env', 'ROUTERVPN_MACOS_CONTROLLER_PRIVILEGE_FIXTURE=1',
                    'ROUTERVPN_MACOS_FIXTURE_UID=' + str(uid), 'ROUTERVPN_MACOS_FIXTURE_SOURCE=' + str(ROOT),
                    'ROUTERVPN_MACOS_FIXTURE_PYTHON=' + str(Path(python).absolute()),
+                   'ROUTERVPN_MACOS_FIXTURE_INSTALLCAP=' + str(capability),
                    'ROUTERVPN_MACOS_FIXTURE_APPKIT=' + str(appkit), 'GORACE=atexit_sleep_ms=0',
                    str(binary), '-test.run=^TestMacOSOwnedControllerNative', '-test.v', '-test.timeout=180s']
         if sudo: command = [sudo, '-n', '--', *command]

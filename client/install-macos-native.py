@@ -34,6 +34,9 @@ SPEC.loader.exec_module(FILES)
 GENERATION_SPEC = importlib.util.spec_from_file_location('routervpn_install_generation', Path(__file__).with_name('install-macos-generation.py'))
 GENERATION = importlib.util.module_from_spec(GENERATION_SPEC)
 GENERATION_SPEC.loader.exec_module(GENERATION)
+CAPABILITY_SPEC = importlib.util.spec_from_file_location('routervpn_install_capability', Path(__file__).resolve().parents[1]/'modes/darwin_install_capability.py')
+CAPABILITY = importlib.util.module_from_spec(CAPABILITY_SPEC)
+CAPABILITY_SPEC.loader.exec_module(CAPABILITY)
 ROOT = Path('/opt/router-vpn-client')
 LABEL = 'com.routervpn.client'
 PLIST = '/Library/LaunchDaemons/' + LABEL + '.plist'
@@ -273,12 +276,14 @@ def launch_definition():
 
 
 class LaunchIntegration(FILES.SystemIntegration):
-    def __init__(self, filesystem=Path('/'), command=run):
+    def __init__(self, filesystem=Path('/'), command=run, reassert=CAPABILITY.run_reassert):
         super().__init__(filesystem, command)
         self.loaded_before = False
         self.stopped_before = False
         self.started_new = False
         self.prepared = False
+        self.reassert = reassert
+        self.reassert_receipt = None
 
     def loaded(self):
         result = self.run(['/bin/launchctl', 'print', 'system/' + LABEL], check=False)
@@ -330,18 +335,20 @@ class LaunchIntegration(FILES.SystemIntegration):
         finally:
             os.close(descriptor)
 
-    def install(self, root):
+    def install(self, root, install_descriptor):
         self.write(PLIST, launch_definition(), 0o600)
         self.run(['/usr/bin/plutil', '-lint', self.path(PLIST)])
-        # Retain the existing saved Always policy before offering the new GUI
-        # endpoint. OS boot-before-network acceptance is a separate live gate.
-        self.run(['/usr/bin/env', '-i', 'PATH=' + str(root/'bin') + ':/usr/bin:/bin:/usr/sbin:/sbin',
-                  'HOMEVPN_ROOT=' + str(root), root/'bin/python3',
-                  root/'modes/kill-switch-platform.py', 'reassert'])
+        # Registration precedes the final protection transaction. The actual
+        # supervisor takes installation SH before identity, reassert or socket
+        # creation; this caller retains EX until the whole transaction joins.
         self.started_new = True
         self.run(['/bin/launchctl', 'bootstrap', 'system', self.path(PLIST)])
         if not self.loaded():
             raise RuntimeError('The installed supervisor did not enter its launchd domain')
+        self.reassert_receipt = self.reassert(root, install_descriptor)
+        if (type(self.reassert_receipt) is not dict or set(self.reassert_receipt) != {'joined', 'mutation_possible'} or
+                self.reassert_receipt['joined'] is not True or type(self.reassert_receipt['mutation_possible']) is not bool):
+            raise CAPABILITY.RetainedAuthorityError('The original reassert borrower has no exact joined receipt')
 
     def retire_new(self, root):
         if self.started_new and self.loaded():
@@ -594,16 +601,16 @@ def install(source, installing_uid, python, *, root=ROOT, integration=None, veri
         raise PermissionError('Run the native installer from your normal user account and approve sudo.')
     pwd.getpwuid(installing_uid)
     integration = integration if integration is not None else LaunchIntegration()
-    with FILES.installation_lock(root):
+    with FILES.installation_lock(root) as install_descriptor:
         prefix = '.' + root.name + '.install-'
         pending = list(root.parent.glob(prefix + '*'))
         if pending:
             raise RuntimeError('An interrupted native installation needs recovery; retained files: ' + ', '.join(map(str, pending)))
         with GENERATION.previous_generation(root, CODE_TREES, CODE_FILES, FILES.ordinary) as generation:
-            install_generation(source, installing_uid, python, root, integration, verifier, process_reader, generation)
+            install_generation(source, installing_uid, python, root, integration, verifier, process_reader, generation, install_descriptor)
 
 
-def install_generation(source, installing_uid, python, root, integration, verifier, process_reader, generation):
+def install_generation(source, installing_uid, python, root, integration, verifier, process_reader, generation, install_descriptor):
     # The caller retains the original installation EX lock and prior receipt
     # through this complete root/receipt/service transaction.
     if generation is not None and process_reader is running_executables:
@@ -639,9 +646,24 @@ def install_generation(source, installing_uid, python, root, integration, verifi
             os.rename(installed_receipt, previous_receipt)
         os.rename(prepared_receipt, installed_receipt)
         receipt_promoted = True
-        integration.install(root)
         with GENERATION.capture_receipt(root, CODE_TREES, CODE_FILES, FILES.ordinary) as installed:
             installed.verify()
+        integration.install(root, install_descriptor)
+        try:
+            with GENERATION.capture_receipt(root, CODE_TREES, CODE_FILES, FILES.ordinary) as installed:
+                installed.verify()
+        except BaseException as source_error:
+            if integration.reassert_receipt['mutation_possible']:
+                raise CAPABILITY.RetainedAuthorityError('The post-reassert generation needs recovery without replacing its current protection journal') from source_error
+            raise
+    except CAPABILITY.RetainedAuthorityError as retained:
+        # Never restore a pre-reassert private copy over a possibly live PF
+        # reference/journal or an unjoined borrower. Keep both exact generations.
+        try:
+            integration.retire_new(root)
+        except BaseException:
+            raise RuntimeError('Native protection recovery retains its current journal and previous bytes at ' + str(temporary)) from retained
+        raise RuntimeError('Native protection recovery retains its current journal and previous bytes at ' + str(temporary)) from retained
     except BaseException:
         try:
             if promoted:

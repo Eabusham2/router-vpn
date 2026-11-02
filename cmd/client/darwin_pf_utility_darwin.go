@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
+	"router-vpn/internal/installcap"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -18,7 +20,7 @@ import (
 // lock also serializes independently invoked native kernel transactions.
 const macOSOwnedPFOperationLock = macOSOwnedControllerRoot + "/pf-operation.lock"
 
-func macOSOwnedPFUtility(args []string) (bool, error) {
+func macOSOwnedPFUtility(args []string) (handled bool, failure error) {
 	handled, apply, err := darwinPFUtilityPhase(args)
 	if !handled || err != nil {
 		return handled, err
@@ -29,11 +31,22 @@ func macOSOwnedPFUtility(args []string) (bool, error) {
 	if err := ownedDesktopAncestors(filepath.Dir(macOSOwnedControllerRoot)); err != nil {
 		return true, err
 	}
-	install, err := ownedDesktopLock(macOSOwnedInstallLock, false)
-	if err != nil {
-		return true, errors.New("Router VPN installation or upgrade is in progress")
+	var borrowed *installcap.Borrowed
+	if args[0] == darwinOwnedPFInstallArgument {
+		descriptor, _ := strconv.Atoi(args[2])
+		issuer, _ := strconv.Atoi(args[4])
+		borrowed, err = installcap.Acquire(context.Background(), descriptor, args[3], issuer, args[1], ownedPathACL)
+		if err != nil {
+			return true, err
+		}
+		defer func() { failure = errors.Join(failure, borrowed.Close()) }()
+	} else {
+		install, err := ownedDesktopLock(macOSOwnedInstallLock, false)
+		if err != nil {
+			return true, errors.New("Router VPN installation or upgrade is in progress")
+		}
+		defer install.Close()
 	}
-	defer install.Close()
 	if _, err := macOSOwnedInstallIdentity(); err != nil {
 		return true, err
 	}
@@ -56,6 +69,9 @@ func macOSOwnedPFUtility(args []string) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
+	if borrowed != nil {
+		ctx = mobiletor.WithDesktopDarwinProcessAuthority(ctx, borrowed.Files())
+	}
 	var result []byte
 	if args[1] == "reference" {
 		result, err = mobiletor.RunDesktopDarwinPFReference(ctx, raw)
