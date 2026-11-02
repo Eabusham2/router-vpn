@@ -26,7 +26,8 @@ func routerVPNExternalCommandPhysical(files *routerVPNExternalFiles, original *m
 		return nil, routerVPNExternalFailure
 	}
 	metadata := policy.Metadata()
-	if metadata.SOCKSUDPAssociationRequired || metadata.Protocol != "http-connect" && metadata.Protocol != "https-connect" && metadata.Protocol != "shadowsocks" {
+	if metadata.SOCKSUDPAssociationRequired || metadata.Protocol != "http-connect" && metadata.Protocol != "https-connect" && metadata.Protocol != "shadowsocks" &&
+		!(runtime.GOOS == "linux" && metadata.Protocol == "hysteria2") {
 		return nil, routerVPNExternalFailure
 	}
 	staged, err := files.read("sing-box.json", 4<<20)

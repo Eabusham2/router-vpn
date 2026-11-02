@@ -31,13 +31,19 @@ func desktopExternalPlan(t *testing.T, original *ExternalPolicy, session, target
 
 func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T) {
 	count := 0
-	for _, protocol := range []string{"socks5", "http-connect", "https-connect", "shadowsocks"} {
+	for _, protocol := range []string{"socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"} {
 		for _, target := range []string{"linux", "windows", "darwin"} {
 			for _, kill := range []string{"on-connect", "always"} {
 				for _, ipv6 := range []string{"on", "off"} {
 					for _, lan := range []bool{true, false} {
 						t.Run(strings.Join([]string{protocol, target, kill, ipv6, map[bool]string{true: "lan", false: "no-lan"}[lan]}, "/"), func(t *testing.T) {
 							original := desktopExternalPolicyFixture(t, protocol, kill, ipv6, lan)
+							if protocol == "hysteria2" && target != "linux" {
+								if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
+									t.Fatal("Linux connected UDP broadened another desktop host's Hysteria2 admission")
+								}
+								return
+							}
 							before, oldMeta := original.Config(), original.Metadata()
 							policy := desktopExternalPlan(t, original, desktopExternalTestSession, target)
 							meta := policy.Metadata()
@@ -70,6 +76,11 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 							if root["detour"] != DesktopExternalPhysicalTag {
 								t.Fatal("ordinary transport bypassed the owned lower path")
 							}
+							if protocol == "hysteria2" && (root["type"] != "hysteria2" ||
+								!reflect.DeepEqual(capture.PhysicalRoots[0].Networks, []string{"udp"}) ||
+								len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0].Network != "udp") {
+								t.Fatal("Hysteria2 lost its one captured UDP destination")
+							}
 							delete(root, "detour")
 							graph["outbounds"] = rows[:1]
 							delete(graph, "services")
@@ -83,7 +94,7 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 			}
 		}
 	}
-	if count != 96 {
+	if count != 104 {
 		t.Fatal("missing complete direct proxy/device/target combinations", count)
 	}
 }
@@ -185,8 +196,15 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 	}
 	for _, protocol := range []string{"wireguard", "hysteria2"} {
 		original := desktopExternalPolicyFixture(t, protocol, "always", "on", true)
-		if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err == nil {
-			t.Fatal("unintegrated outer transport acquired a claimed native physical implementation", protocol)
+		for _, target := range []string{"windows", "darwin"} {
+			if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
+				t.Fatal("unintegrated outer transport acquired a claimed native physical implementation", protocol, target)
+			}
+		}
+	}
+	for _, protocol := range []string{"socks5", "hysteria2"} {
+		if _, err := NewDesktopExternalPolicy(desktopExternalPolicyFixture(t, protocol, "off", "on", true), desktopExternalTestSession, "linux"); err == nil {
+			t.Fatal("Off acquired a strict Linux baseline without an explicit captured policy", protocol)
 		}
 	}
 	for _, entry := range []string{"router-wg", "http-connect", "socks5", "shadowsocks"} {
@@ -204,5 +222,60 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 		if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err == nil {
 			t.Fatal("public config/metadata strings manufactured original constructor authority")
 		}
+	}
+}
+
+func TestDesktopExternalPolicyHysteria2KeepsUnsupportedSelectionGuards(t *testing.T) {
+	reject := func(t *testing.T, original *ExternalPolicy) {
+		t.Helper()
+		if _, err := original.DesktopCapture(); err != nil {
+			t.Fatal("negative case must retain a valid complete ordinary policy", err)
+		}
+		before := original.Config()
+		if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "linux"); err == nil || derived != nil || original.Config() != before {
+			t.Fatal("unsupported Hysteria2 selection acquired or changed a Linux physical owner")
+		}
+	}
+	t.Run("off", func(t *testing.T) {
+		reject(t, desktopExternalPolicyFixture(t, "hysteria2", "off", "on", true))
+	})
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run("start-layer/"+layer, func(t *testing.T) {
+			source, capture := externalDirectLayerFixture(t, "hysteria2", layer)
+			selected := externalTestRead(t, capture)
+			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
+			original, err := NewExternalPolicy(source, externalTestJSON(t, selected))
+			if err != nil {
+				t.Fatal(err)
+			}
+			reject(t, original)
+		})
+	}
+	for _, entry := range []string{"router-wg", "socks5", "shadowsocks", "hysteria2"} {
+		t.Run("predecessor/"+entry, func(t *testing.T) {
+			graph, selected := externalTestFixture(t, "hysteria2", entry)
+			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
+			reject(t, externalDesktopCompile(t, graph, selected))
+		})
+	}
+	for _, execution := range []string{"server", "auto"} {
+		t.Run("execution/"+execution, func(t *testing.T) {
+			source, capture := externalExecutionProtocolFixture(t, "hysteria2", execution, "")
+			selected := externalTestRead(t, capture)
+			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
+			prepared, err := PrepareExternalExecutionCapture(source, externalTestJSON(t, selected), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := NewExternalPolicy(source, prepared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owned, err := original.DesktopCapture()
+			if err != nil || owned.Execution != execution {
+				t.Fatal("negative selection lost its captured execution", err)
+			}
+			reject(t, original)
+		})
 	}
 }

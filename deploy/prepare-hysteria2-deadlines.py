@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Give each native HY2 packet session bounded QUIC datagram admission.
+"""Preserve native HY2 packet deadlines and exact stream cleanup ownership.
 
 Only checksum-verified, disposable copies of the two pinned modules are changed.
 The shared QUIC connection, normal SendDatagram API, framing, and socket owner
@@ -33,7 +33,8 @@ HY2 = {
     'module': 'github.com/sagernet/sing-quic', 'version': 'v0.7.0',
     'sum': 'h1:dgbJdRYsa9DXbgjchnuVf2xhAvjY4/jylWdNNVZWmRU=',
     'copy': 'routervpn-patched-hysteria2-deadlines',
-    'guards': {'hysteria2/packet.go': '316f475b0c37c0751482124d283d24f3afe71d58'},
+    'guards': {'hysteria2/packet.go': '316f475b0c37c0751482124d283d24f3afe71d58',
+               'hysteria2/client.go': '72671aa578a4656ab087225f1cc3477cebd9ddda'},
     'patches': {'hysteria2/packet.go': (
         ('\tquicConn        *quic.Conn\n', '\tquicConn        routerVPNHysteriaPacketConnection\n'),
         ('\treadDeadline    pipe.Deadline\n', '\treadDeadline    pipe.Deadline\n\twriteDeadline   pipe.Deadline\n\tdeadlineMu      sync.Mutex\n'),
@@ -53,9 +54,26 @@ HY2 = {
          'func (c *udpPacketConn) SetReadDeadline(t time.Time) error {\n\treturn c.routerVPNSetPacketDeadlines(t, true, false)\n}'),
         ('func (c *udpPacketConn) SetWriteDeadline(t time.Time) error {\n\treturn os.ErrInvalid\n}',
          'func (c *udpPacketConn) SetWriteDeadline(t time.Time) error {\n\treturn c.routerVPNSetPacketDeadlines(t, false, true)\n}'),
+    ), 'hysteria2/client.go': (
+        ('\t\tn, err = c.Stream.Read(p)\n\t\treturn n, qtls.WrapError(err)\n',
+         '\t\tn, err = c.Stream.Read(p)\n\t\treturn n, routerVPNHysteriaReadError(err)\n'),
+        ('\tn, err = c.Stream.Read(p)\n\treturn n, qtls.WrapError(err)\n}',
+         '\tn, err = c.Stream.Read(p)\n\treturn n, routerVPNHysteriaReadError(err)\n}'),
+        ('func (c *clientConn) Close() error {\n'
+         '\tc.Stream.CancelRead(0)\n\terr := c.Stream.Close()\n'
+         '\t// quic-go\'s Stream.Close does not unblock a Write blocked on flow control,\n'
+         '\t// but a past write deadline does; buffered data and the FIN are unaffected.\n'
+         '\tc.Stream.SetWriteDeadline(time.Now())\n\treturn err\n}',
+         'func (c *clientConn) Close() error {\n'
+         '\tc.Stream.CancelRead(0)\n\terr := c.Stream.Close()\n'
+         '\t// quic-go\'s Stream.Close does not unblock a Write blocked on flow control,\n'
+         '\t// but a past write deadline does; buffered data and the FIN are unaffected.\n'
+         '\tc.Stream.SetWriteDeadline(time.Now())\n\treturn routerVPNHysteriaCloseResult(c.Stream, err)\n}'),
     )},
     'extra': {'hysteria2/routervpn_packet_deadline.go': 'packet_deadline.go.tmpl',
-              'hysteria2/routervpn_packet_deadline_test.go': 'packet_deadline_test.go.tmpl'},
+              'hysteria2/routervpn_packet_deadline_test.go': 'packet_deadline_test.go.tmpl',
+              'hysteria2/routervpn_stream_close.go': 'stream_close.go.tmpl',
+              'hysteria2/routervpn_stream_close_test.go': 'stream_close_test.go.tmpl'},
 }
 MODULES = (QUIC, HY2)
 
@@ -201,7 +219,7 @@ def prepare(vendor):
     for spec in MODULES:
         subprocess.run(['go', 'mod', 'edit', '-replace=' + spec['module'] + '@' + spec['version'] + '=./' + spec['copy']], cwd=vendor, check=True)
     verify(vendor)
-    print('Prepared exact HY2 session write deadlines and scoped QUIC queue admission')
+    print('Prepared exact HY2 session deadlines, scoped QUIC queue admission and typed stream cleanup')
 
 
 def verify(vendor, go='go', env=None):

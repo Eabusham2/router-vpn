@@ -288,6 +288,28 @@ func (f *linuxExternalNativeLifecycle) join(t *testing.T) {
 }
 
 func linuxExternalLifecyclePeerMain(network string) error {
+	if network == "udp4" {
+		listener, err := net.ListenPacket(network, "172.31.217.2:0")
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+		fmt.Println(listener.LocalAddr().String())
+		go func() { _, _ = io.Copy(io.Discard, os.Stdin); _ = listener.Close() }()
+		buffer := make([]byte, 2048)
+		for {
+			count, peer, err := listener.ReadFrom(buffer)
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if _, err := listener.WriteTo(buffer[:count], peer); err != nil {
+				return err
+			}
+		}
+	}
 	if network != "tcp4" {
 		return errors.New("unknown lifecycle peer network")
 	}
@@ -317,11 +339,16 @@ func linuxExternalLifecyclePeerMain(network string) error {
 
 func linuxExternalLifecyclePeer(t *testing.T) netip.AddrPort {
 	t.Helper()
+	return linuxExternalLifecyclePeerNetwork(t, "tcp4")
+}
+
+func linuxExternalLifecyclePeerNetwork(t *testing.T, network string) netip.AddrPort {
+	t.Helper()
 	image, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "routervpn-external-lifecycle-peer", "tcp4")
+	cmd := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "routervpn-external-lifecycle-peer", network)
 	output, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -351,8 +378,8 @@ func linuxExternalLifecyclePeer(t *testing.T) netip.AddrPort {
 	return remote
 }
 
-func linuxExternalLifecycleExchange(ctx context.Context, dial func(context.Context, string, M.Socksaddr) (net.Conn, error), remote netip.AddrPort) error {
-	connection, err := dial(ctx, "tcp", M.ParseSocksaddr(remote.String()))
+func linuxExternalLifecycleExchange(ctx context.Context, dial func(context.Context, string, M.Socksaddr) (net.Conn, error), network string, remote netip.AddrPort) error {
+	connection, err := dial(ctx, network, M.ParseSocksaddr(remote.String()))
 	if err != nil {
 		return err
 	}
@@ -372,6 +399,11 @@ func linuxExternalLifecycleExchange(ctx context.Context, dial func(context.Conte
 
 func linuxExternalLifecycleProbe(t *testing.T, f *linuxExternalNativeLifecycle, remote netip.AddrPort, blocked bool) {
 	t.Helper()
+	linuxExternalLifecycleProbeNetwork(t, f, "tcp", remote, blocked)
+}
+
+func linuxExternalLifecycleProbeNetwork(t *testing.T, f *linuxExternalNativeLifecycle, network string, remote netip.AddrPort, blocked bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
 	defer cancel()
 	var dial func(context.Context, string, M.Socksaddr) (net.Conn, error)
@@ -382,7 +414,7 @@ func linuxExternalLifecycleProbe(t *testing.T, f *linuxExternalNativeLifecycle, 
 			return (&net.Dialer{}).DialContext(ctx, network, remote.String())
 		}
 	}
-	err := linuxExternalLifecycleExchange(ctx, dial, remote)
+	err := linuxExternalLifecycleExchange(ctx, dial, network, remote)
 	if (err != nil) != blocked {
 		t.Fatalf("native socket blocked=%v: %v", blocked, err)
 	}
@@ -415,21 +447,29 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			}
 		})
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		t.Run(protocol+"-succession", func(t *testing.T) {
-			remote := linuxExternalLifecyclePeer(t)
-			foreign := linuxExternalLifecyclePeer(t)
-			linuxExternalLifecycleProbe(t, nil, remote, false)
-			linuxExternalLifecycleProbe(t, nil, foreign, false)
+			network := "tcp"
+			if protocol == "hysteria2" {
+				network = "udp"
+			}
+			probe := func(owner *linuxExternalNativeLifecycle, remote netip.AddrPort, blocked bool) {
+				t.Helper()
+				linuxExternalLifecycleProbeNetwork(t, owner, network, remote, blocked)
+			}
+			remote := linuxExternalLifecyclePeerNetwork(t, network+"4")
+			foreign := linuxExternalLifecyclePeerNetwork(t, network+"4")
+			probe(nil, remote, false)
+			probe(nil, foreign, false)
 			old := newLinuxExternalNativeLifecycle(t, "node", "always", remote, nil, "", nil)
 			if err := old.start(); err != nil {
 				t.Fatal(err)
 			}
-			linuxExternalLifecycleProbe(t, old, remote, false)
-			linuxExternalLifecycleProbe(t, nil, remote, true)
+			probe(old, remote, false)
+			probe(nil, remote, true)
 			old.join(t)
-			linuxExternalLifecycleProbe(t, old, remote, true)
-			linuxExternalLifecycleProbe(t, nil, remote, true)
+			probe(old, remote, true)
+			probe(nil, remote, true)
 			next := newLinuxExternalNativeLifecycle(t, protocol, "always", remote, old, "", nil)
 			if err := next.start(); err != nil {
 				t.Fatal(err)
@@ -437,13 +477,13 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			if !old.superseded || old.baseline.Release(context.Background()) == nil {
 				t.Fatal("old creator released its selected successor")
 			}
-			linuxExternalLifecycleProbe(t, next, remote, false)
-			linuxExternalLifecycleProbe(t, old, remote, true)
-			linuxExternalLifecycleProbe(t, nil, remote, true)
-			linuxExternalLifecycleProbe(t, next, foreign, true)
-			linuxExternalLifecycleProbe(t, next, remote, false)
+			probe(next, remote, false)
+			probe(old, remote, true)
+			probe(nil, remote, true)
+			probe(next, foreign, true)
+			probe(next, remote, false)
 			next.join(t)
-			linuxExternalLifecycleProbe(t, nil, remote, true)
+			probe(nil, remote, true)
 			restored := newLinuxExternalNativeLifecycle(t, "node", "always", remote, next, "", old.policy.node.OriginalProfile())
 			if restored.policy.node.OriginalProfile() != old.policy.node.OriginalProfile() ||
 				old.policy.node.Metadata().OriginalSourceSHA256 != restored.policy.node.Metadata().OriginalSourceSHA256 ||
@@ -454,19 +494,19 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			if err := restored.start(); err != nil {
 				t.Fatal(err)
 			}
-			linuxExternalLifecycleProbe(t, restored, remote, false)
-			linuxExternalLifecycleProbe(t, next, remote, true)
-			linuxExternalLifecycleProbe(t, nil, remote, true)
+			probe(restored, remote, false)
+			probe(next, remote, true)
+			probe(nil, remote, true)
 			restored.join(t)
-			linuxExternalLifecycleProbe(t, nil, remote, true)
+			probe(nil, remote, true)
 			if err := restored.baseline.Release(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			if err := mobiletor.ReadDesktopLinuxProtectionAbsence(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			linuxExternalLifecycleProbe(t, nil, remote, false)
-			linuxExternalLifecycleProbe(t, nil, foreign, false)
+			probe(nil, remote, false)
+			probe(nil, foreign, false)
 		})
 	}
 	for _, fault := range []string{"refused", "cancelled"} {

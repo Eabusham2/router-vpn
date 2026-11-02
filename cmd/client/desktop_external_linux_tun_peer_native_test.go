@@ -31,6 +31,8 @@ var linuxHostTUNExternalCases = []string{
 	"external-ss-always", "external-http-always", "external-https-always",
 	"external-ss-cancelled", "external-ss-replacement", "external-ss-source", "external-ss-dns-failure",
 	"external-ss-public",
+	"external-hy2-on-connect", "external-hy2-always", "external-hy2-public", "external-hy2-cancelled",
+	"external-hy2-wrong-key", "external-hy2-wrong-trust", "external-hy2-dns-failure",
 }
 
 func linuxHostTUNExternalCase(scenario string) bool {
@@ -52,7 +54,26 @@ func linuxHostTUNExternalProtocol(scenario string) string {
 	if strings.HasPrefix(scenario, "external-http-") {
 		return "http-connect"
 	}
+	if strings.HasPrefix(scenario, "external-hy2-") {
+		return "hysteria2"
+	}
 	return "shadowsocks"
+}
+
+func linuxHostTUNExternalAction(scenario string) string {
+	if !linuxHostTUNExternalCase(scenario) {
+		return ""
+	}
+	_, action, _ := strings.Cut(strings.TrimPrefix(scenario, "external-"), "-")
+	return action
+}
+
+func linuxHostTUNExternalFailedProof(scenario string) bool {
+	switch linuxHostTUNExternalAction(scenario) {
+	case "dns-failure", "wrong-key", "wrong-trust":
+		return true
+	}
+	return false
 }
 
 type linuxExternalTUNPeerReply struct {
@@ -62,6 +83,8 @@ type linuxExternalTUNPeerReply struct {
 	CA             string `json:"ca"`
 	Connections    int64  `json:"connections"`
 	Streams        int64  `json:"streams"`
+	PhysicalUDP    int64  `json:"physical_udp"`
+	Packets        int64  `json:"packets"`
 	DNSQueries     uint32 `json:"dns_queries"`
 	PublicAttempts uint32 `json:"public_attempts"`
 	PublicReplies  uint32 `json:"public_replies"`
@@ -174,11 +197,11 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 		_ = peer.output.Close()
 	})
 	if err := json.NewEncoder(peer.input).Encode(map[string]any{"schema": 1, "protocol": peer.protocol, "address": "198.51.100.2",
-		"password": peer.password, "hold": scenario == "external-ss-cancelled"}); err != nil {
+		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}); err != nil {
 		t.Fatal(err)
 	}
 	initial := peer.read(t)
-	if initial.Connections != 0 || initial.Streams != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 {
+	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 {
 		t.Fatal("external reference reported traffic before its selected native child")
 	}
 	return peer
@@ -236,7 +259,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		IPv6Mode: "off", StartLayer: common.StartLayerOff, MTUPolicy: "manual", ManualMTU: 1376, EffectiveMTU: 9000,
 		KillSwitch: true, KillSwitchPolicy: kill, MultihopExecution: "local",
 		External: &common.ExternalNodeConfig{Protocol: peer.protocol, ExpectedPublicIP: "203.0.113.88"}}
-	if scenario == "external-ss-public" {
+	if linuxHostTUNExternalAction(scenario) == "public" {
 		// Explicit Direct/Local Connect must persist its exact new execution
 		// revision without giving unrelated saved-policy changes authority.
 		profile.MultihopExecution = "auto"
@@ -250,6 +273,15 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 	case "https-connect":
 		connect.TLSServerName = "captured-external.example"
 		profile.External.HTTPSConnect = connect
+	case "hysteria2":
+		profile.DNSProtocol = "udp"
+		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "198.51.100.2", Port: int(peer.address.Port()), Password: peer.password, TLSServerName: "captured-external.example"}
+		if linuxHostTUNExternalAction(scenario) == "wrong-key" {
+			profile.External.Hysteria2.Password += "-different-peer-credential"
+		}
+		if linuxHostTUNExternalAction(scenario) == "wrong-trust" {
+			profile.External.Hysteria2.TLSServerName = "different-captured-external.example"
+		}
 	default:
 		t.Fatal("external fixture lost its exact protocol")
 	}
@@ -302,13 +334,14 @@ func linuxHostTUNReadExternal(t *testing.T, process *linuxHostTUNController, sce
 
 func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	t.Helper()
+	action := linuxHostTUNExternalAction(scenario)
 	original := linuxHostTUNStartPeer(t, "restore-sealed")
 	linuxHostTUNDirectHealth(t, original)
 	linuxHostTUNInstallProfile(t, original, "restore-sealed")
 	peer := linuxHostTUNStartExternalPeer(t, scenario)
 	linuxHostTUNExternalTrust(t, peer)
 	linuxHostTUNInstallExternalProfile(t, peer, scenario)
-	if scenario == "external-ss-dns-failure" {
+	if action == "dns-failure" {
 		peer.observe(t, "fail-dns")
 	}
 	process := linuxHostTUNStartController(t, installed, scenario)
@@ -324,16 +357,16 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		t.Fatal(err)
 	}
 	stage := "external"
-	if scenario == "external-ss-cancelled" {
+	if action == "cancelled" {
 		stage = "external-pending"
 	} else if scenario == "external-ss-source" {
 		stage = "source-refused"
-	} else if scenario == "external-ss-dns-failure" {
+	} else if linuxHostTUNExternalFailedProof(scenario) {
 		stage = "proof-refused"
 	}
 	middle := linuxHostTUNReadExternal(t, process, scenario, stage)
 	observed := peer.observe(t, "stats")
-	if scenario == "external-ss-cancelled" {
+	if action == "cancelled" {
 		deadline := time.NewTimer(10 * time.Second)
 		tick := time.NewTicker(25 * time.Millisecond)
 		defer deadline.Stop()
@@ -353,13 +386,22 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
 			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
 		}
-	} else if scenario == "external-ss-dns-failure" {
+	} else if action == "wrong-key" || action == "wrong-trust" {
+		if !middle.FailedProof || observed.PhysicalUDP == 0 || observed.Connections != 0 || observed.Streams != 0 || observed.Packets != 0 ||
+			observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
+			t.Fatal("wrong Hysteria2 password or TLS identity reached an inner destination or Connected", middle, observed)
+		}
+	} else if action == "dns-failure" {
 		if !middle.FailedProof || observed.DNSQueries == 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("failed selected DNS fabricated an exit proof or Connected", middle, observed)
 		}
 	} else if middle.Proof == nil || !middle.Proof.Healthy || !middle.Proof.DNSProven || middle.Proof.EntryProven ||
-		middle.MTU != 1376 || observed.Connections == 0 || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
+		middle.MTU != 1376 || (peer.protocol != "hysteria2" && observed.Connections == 0) || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
 		t.Fatal("external succession bypassed its real encrypted/authenticated DNS and exit exchanges", middle, observed)
+	}
+	if peer.protocol == "hysteria2" && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
+		(action != "wrong-key" && action != "wrong-trust" && observed.Packets == 0)) {
+		t.Fatal("Hysteria2 selected UDP DNS or TCP proof bypassed its single physical UDP peer", observed)
 	}
 	if current := original.observe(t, "stats"); current.RouterQueries != before.RouterQueries || current.DirectQueries != before.DirectQueries {
 		t.Fatal("external proof borrowed the previous Router response", before, current)
@@ -389,7 +431,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !final.ReplacementKept || final.Restore != nil || after.RouterQueries != before.RouterQueries {
 			t.Fatal("old external restore overwrote a replacement connection", final, after)
 		}
-	} else if scenario == "external-ss-public" {
+	} else if action == "public" {
 		if !final.PublicPersisted || final.FinalSession != final.ExternalSession || final.Restore != nil || after.RouterQueries != before.RouterQueries {
 			t.Fatal("public external Connect lost persistence, retained monitor or its distinct exit", final, after)
 		}
@@ -409,7 +451,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	} else if final.Journal.Record.Committed.Target != nil || mobiletor.ReadDesktopLinuxNodeAbsence(context.Background(), final.FinalSession) != nil {
 		t.Fatal("external succession retained an unowned On-connect table")
 	}
-	if end := peer.observe(t, "stats"); end.AuthFailures != 0 || scenario == "external-ss-cancelled" && end.PublicReplies != 0 {
+	if end := peer.observe(t, "stats"); end.AuthFailures != 0 || action == "cancelled" && end.PublicReplies != 0 {
 		t.Fatal("retired external proof was adopted after cancellation", end)
 	}
 	t.Log("verified installed host retained external succession:", scenario)

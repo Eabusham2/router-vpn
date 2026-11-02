@@ -1,0 +1,39 @@
+package hysteria2
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+
+	"github.com/sagernet/quic-go"
+	qtls "github.com/sagernet/sing-quic"
+)
+
+// TLS and io.ReadAll consume a final successful read by literal EOF identity.
+// Preserve only the actual QUIC stream's EOF; reset, authentication and local
+// cancellation errors still retain the original qtls wrapping behavior.
+func routerVPNHysteriaReadError(err error) error {
+	if err == io.EOF {
+		return io.EOF
+	}
+	return qtls.WrapError(err)
+}
+
+// The checksum-pinned SendStream.Close first finishes its one send owner, then
+// returns an untyped error only for an already-reset stream. Its own context
+// retains the typed reset cause. A peer's code-zero STOP_SENDING means that its
+// read half is already closed; it is the ordinary net.Conn closed condition.
+// The caller still cancels its read half, invokes Close exactly once and sets
+// the write deadline to release any entered writer. No proof or parent-session
+// cancellation is accepted here, and all other close errors remain unchanged.
+func routerVPNHysteriaCloseResult(stream *quic.Stream, err error) error {
+	if err == nil || stream == nil {
+		return err
+	}
+	var reset *quic.StreamError
+	if errors.As(context.Cause(stream.Context()), &reset) && reset.Remote && reset.ErrorCode == 0 && reset.StreamID == stream.StreamID() {
+		return net.ErrClosed
+	}
+	return err
+}

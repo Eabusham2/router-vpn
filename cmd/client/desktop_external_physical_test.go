@@ -116,6 +116,43 @@ func TestDesktopExternalPhysicalAdmissionPreservesOtherGraphs(t *testing.T) {
 	}
 }
 
+func TestDesktopExternalPhysicalLinuxHysteria2PreservesCapturedPolicy(t *testing.T) {
+	for _, kill := range []string{"on-connect", "always"} {
+		for _, ipv6 := range []string{"on", "off"} {
+			for _, lan := range []bool{false, true} {
+				t.Run(strings.Join([]string{kill, ipv6, map[bool]string{true: "lan", false: "no-lan"}[lan]}, "/"), func(t *testing.T) {
+					launch := desktopExternalPhysicalLaunchFixture(t, "hysteria2", kill, ipv6, lan)
+					owner := launch.external
+					source, capture, expected := bytes.Clone(owner.source), bytes.Clone(owner.capture), owner.expected
+					if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil || owner.physical == nil {
+						t.Fatal("captured Linux Hysteria2 lost its physical owner", err)
+					}
+					metadata, err := capturedDesktopExternalPhysical(owner)
+					if err != nil || metadata == nil || metadata.TargetOS != "linux" || metadata.Protocol != "hysteria2" ||
+						metadata.KillSwitchPolicy != kill || metadata.IPv6Mode != ipv6 || metadata.HomeLANAccess != lan || metadata.SOCKSUDPAssociationRequired ||
+						!bytes.Equal(source, owner.source) || !bytes.Equal(capture, owner.capture) || expected != owner.expected {
+						t.Fatal("Linux Hysteria2 changed its original policy or proof identity", metadata, err)
+					}
+					physical, err := owner.physical.Capture()
+					if err != nil || physical.ConfiguredMTU != 1360 || len(physical.PhysicalRoots) != 1 ||
+						len(physical.PhysicalRoots[0].Destinations) != 1 || physical.PhysicalRoots[0].Destinations[0].Network != "udp" ||
+						physical.SelectedDNS.Physical {
+						t.Fatal("Linux Hysteria2 replaced MTU, selected DNS or its captured UDP endpoint", err)
+					}
+					measurement, err := capturedDesktopMeasurementRuntime(launch)
+					if err != nil || measurement.source != metadata.SourceSHA256 || measurement.config != metadata.ConfigSHA256 || measurement.node != expected.ExitID {
+						t.Fatal("Linux Hysteria2 measurements borrowed original proof identity", err)
+					}
+					selected, _, _, err := desktopDNSExpectedEndpoints(launch)
+					if err != nil || selected.Address != owner.profile.DNSHost || selected.Port != owner.profile.DNSPort || selected.Transport != owner.profile.DNSProtocol {
+						t.Fatal("Linux Hysteria2 replaced the captured resolver", selected, err)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestDesktopExternalPhysicalProofRejectsMissingForeignAndRelabeledCapture(t *testing.T) {
 	launch := desktopExternalPhysicalLaunchFixture(t, "https-connect", "always", "off", false)
 	if err := prepareDesktopExternalPhysical(launch, "windows"); err != nil {

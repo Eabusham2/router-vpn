@@ -109,7 +109,7 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 		if err := linuxHostTUNRendezvous(gate, 3); err != nil {
 			return err
 		}
-	} else if scenario == "external-ss-public" {
+	} else if linuxHostTUNExternalAction(scenario) == "public" {
 		last, err = linuxHostTUNExternalPublic(ctx, a, session, original, gate, &result)
 		if err != nil {
 			return err
@@ -253,6 +253,15 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		return host, proof, err
 	}
 	physical := host.external.Metadata()
+	if physical.Protocol == "hysteria2" {
+		capture, err := host.external.Capture()
+		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+			!reflect.DeepEqual(capture.PhysicalRoots[0].Networks, []string{"udp"}) || capture.PhysicalRoots[0].Destinations[0].Network != "udp" ||
+			capture.PhysicalRoots[0].Destinations[0].Host != "198.51.100.2" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
+			capture.SelectedDNS.Host != "203.0.113.53" || capture.SelectedDNS.Port != 5353 {
+			return host, proof, errors.Join(err, errors.New("Hysteria2 acquired an extra physical root or bypassed selected UDP DNS"))
+		}
+	}
 	network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
 	if err != nil || network.TargetOS != "linux" || network.MTU != 1376 || proof.EntryID != "" || proof.EntryNodeID != "" || proof.EntryProven ||
 		!proof.DNSProven || !proof.Healthy || proof.Execution != "local" || proof.IP != "203.0.113.88" || proof.ExitID != "installed-linux-external" ||
@@ -303,7 +312,11 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 	}
 	foreign := observed
 	foreign.Profile = cloneRouterProfile(observed.Profile)
-	foreign.Profile.External.Shadowsocks.Password += "-different-observed-source"
+	if foreign.Profile.External.Hysteria2 != nil {
+		foreign.Profile.External.Hysteria2.Password += "-different-observed-source"
+	} else {
+		foreign.Profile.External.Shadowsocks.Password += "-different-observed-source"
+	}
 	refused := proveSelectedDNSWithLookup(ctx, a, foreign, host.launch.mode, lookup)
 	if refused.Status != "failed" || refused.LatencyMs != 0 || ambientCalls != 0 || host.Current(ctx) != nil {
 		return host, errors.New("public external DNS observation accepted a different captured credential or changed its original owner")
@@ -396,7 +409,7 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 	}
 	query.preparedExternal = prepared
 	var external *desktopLinuxNodeHost
-	if result.Scenario == "external-ss-cancelled" {
+	if linuxHostTUNExternalAction(result.Scenario) == "cancelled" {
 		done := make(chan error, 1)
 		joined := false
 		go func() { _, err := a.startSpeedLabExternalPath(query); done <- err }()
@@ -460,9 +473,9 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 		}
 		external, last = owner.host, owner.host
 		result.ExternalSession = external.selection.SessionID
-		if result.Scenario == "external-ss-dns-failure" {
+		if linuxHostTUNExternalFailedProof(result.Scenario) {
 			if startErr == nil || external.activation != nil || external.externalProof != nil {
-				return last, errors.New("failed selected external DNS reported a connected proof")
+				return last, errors.New("failed external authentication, TLS or selected DNS reported a connected proof")
 			}
 			result.Stage, result.FailedProof = "proof-refused", true
 		} else {

@@ -1,0 +1,264 @@
+package hysteria2
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/quicvarint"
+	"github.com/sagernet/sing-quic/hysteria2/internal/protocol"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type routerVPNHysteriaClosePeer struct {
+	ctx            context.Context
+	client, server *quic.Conn
+}
+
+func routerVPNHysteriaCloseFixture(t *testing.T) *routerVPNHysteriaClosePeer {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "owned-hy2-close.invalid"},
+		DNSNames: []string{"owned-hy2-close.invalid"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+		BasicConstraintsValid: true, IsCA: true, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(trusted)
+	serverTLS := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, NextProtos: []string{"routervpn-hy2-close"}}
+	clientTLS := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: "owned-hy2-close.invalid", NextProtos: serverTLS.NextProtos}
+	// A write larger than this exact stream window cannot finish while the
+	// independent peer deliberately retains unread data.
+	configuration := &quic.Config{InitialStreamReceiveWindow: 4096, MaxStreamReceiveWindow: 4096,
+		InitialConnectionReceiveWindow: 64 << 10, MaxConnectionReceiveWindow: 64 << 10}
+	listener, err := quic.ListenAddr("127.0.0.1:0", serverTLS, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	client, err := quic.DialAddr(ctx, listener.Addr().String(), clientTLS, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.CloseWithError(0, "owned test retired") })
+	server, err := listener.Accept(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.CloseWithError(0, "owned test retired") })
+	return &routerVPNHysteriaClosePeer{ctx, client, server}
+}
+
+func (p *routerVPNHysteriaClosePeer) stream(t *testing.T) (*clientConn, *serverConn) {
+	t.Helper()
+	stream, err := p.client.OpenStreamSync(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &clientConn{Stream: stream, destination: M.ParseSocksaddr("192.0.2.1:443")}
+	if _, err := client.Write([]byte("owned request")); err != nil {
+		t.Fatal(err)
+	}
+	remote, err := p.server.AcceptStream(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame, err := quicvarint.Read(quicvarint.NewReader(remote)); err != nil || frame != protocol.FrameTypeTCPRequest {
+		t.Fatal("native Hysteria2 request lost its frame", frame, err)
+	}
+	if destination, err := protocol.ReadTCPRequest(remote); err != nil || destination != "192.0.2.1:443" {
+		t.Fatal("native Hysteria2 request changed its destination", destination, err)
+	}
+	request := make([]byte, len("owned request"))
+	if _, err := io.ReadFull(remote, request); err != nil || string(request) != "owned request" {
+		t.Fatal("native Hysteria2 request did not traverse the actual stream", err)
+	}
+	return client, &serverConn{Stream: remote}
+}
+
+func routerVPNHysteriaCloseCause(t *testing.T, connection *clientConn, remote bool, code quic.StreamErrorCode) *quic.StreamError {
+	t.Helper()
+	select {
+	case <-connection.Context().Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("actual stream reset was not observed")
+	}
+	var reset *quic.StreamError
+	if !errors.As(context.Cause(connection.Context()), &reset) || reset.Remote != remote || reset.ErrorCode != code || reset.StreamID != connection.StreamID() {
+		t.Fatal("reset cause belongs to another stream or cancellation", context.Cause(connection.Context()))
+	}
+	return reset
+}
+
+func TestRouterVPNHysteriaDeadlineClientCloseKeepsTypedCause(t *testing.T) {
+	for _, scenario := range []string{"normal", "remote-zero", "remote-nonzero", "local-zero", "local-nonzero"} {
+		t.Run(scenario, func(t *testing.T) {
+			pair := routerVPNHysteriaCloseFixture(t)
+			client, peer := pair.stream(t)
+			if _, err := peer.Write([]byte("complete response")); err != nil {
+				t.Fatal(err)
+			}
+			var before error
+			switch scenario {
+			case "remote-zero", "remote-nonzero":
+				code := quic.StreamErrorCode(0)
+				if scenario == "remote-nonzero" {
+					code = 73
+				}
+				peer.CancelRead(code)
+				before = routerVPNHysteriaCloseCause(t, client, true, code)
+			case "local-zero", "local-nonzero":
+				code := quic.StreamErrorCode(0)
+				if scenario == "local-nonzero" {
+					code = 19
+				}
+				client.CancelWrite(code)
+				before = routerVPNHysteriaCloseCause(t, client, false, code)
+			}
+			if err := peer.Stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(client)
+			if err != nil || string(body) != "complete response" {
+				t.Fatal("first close must follow a complete actual response", string(body), err)
+			}
+			// Inspect the first result. A second Close would hide quic-go's
+			// canceled-stream error and would fail to exercise this contract.
+			err = client.Close()
+			switch scenario {
+			case "normal":
+				if err != nil {
+					t.Fatal("ordinary native close changed", err)
+				}
+			case "remote-zero":
+				if !errors.Is(err, net.ErrClosed) {
+					t.Fatal("typed peer completion did not retain its already-closed result", err)
+				}
+			default:
+				if err == nil || errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+					t.Fatal("local cancellation or peer failure was converted to clean close", err)
+				}
+			}
+			if before != nil && context.Cause(client.Context()) != before {
+				t.Fatal("native close replaced the original reset cause")
+			}
+			other, otherPeer := pair.stream(t)
+			foreign := errors.New("another stream cleanup failed")
+			if routerVPNHysteriaCloseResult(other.Stream, foreign) != foreign || pair.client.Context().Err() != nil || pair.server.Context().Err() != nil {
+				t.Fatal("closing one stream changed another stream or shared connection")
+			}
+			if _, err := otherPeer.Write([]byte("replacement response")); err != nil {
+				t.Fatal(err)
+			}
+			if err := otherPeer.Stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			body, err = io.ReadAll(other)
+			if err != nil || string(body) != "replacement response" || other.Close() != nil {
+				t.Fatal("original close retired a separate live stream", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNHysteriaDeadlineClientCloseJoinsReadAndBlockedWrite(t *testing.T) {
+	pair := routerVPNHysteriaCloseFixture(t)
+	client, peer := pair.stream(t)
+	written, read := make(chan error, 1), make(chan error, 1)
+	go func() { _, err := client.Write(bytes.Repeat([]byte{'w'}, 2<<20)); written <- err }()
+	var entered [1]byte
+	if _, err := io.ReadFull(peer, entered[:]); err != nil || entered[0] != 'w' {
+		t.Fatal("actual writer did not enter the peer stream", err)
+	}
+	select {
+	case err := <-written:
+		t.Fatal("unread data exceeded the actual bounded stream window", err)
+	default:
+	}
+	go func() { _, err := client.Read(make([]byte, 1)); read <- err }()
+	if err := client.Close(); err != nil {
+		t.Fatal("first local close failed", err)
+	}
+	for name, joined := range map[string]<-chan error{"reader": read, "flow-controlled writer": written} {
+		select {
+		case err := <-joined:
+			if err == nil {
+				t.Fatal("closed native operation reported successful transfer", name)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("native close abandoned entered operation", name)
+		}
+	}
+	if pair.client.Context().Err() != nil || pair.server.Context().Err() != nil {
+		t.Fatal("stream close canceled the shared QUIC connection")
+	}
+}
+
+func TestRouterVPNHysteriaDeadlineClientReadKeepsResetErrors(t *testing.T) {
+	for _, scenario := range []string{"local-zero", "remote-zero", "remote-nonzero"} {
+		t.Run(scenario, func(t *testing.T) {
+			pair := routerVPNHysteriaCloseFixture(t)
+			client, peer := pair.stream(t)
+			if _, err := peer.Write([]byte{'r'}); err != nil {
+				t.Fatal(err)
+			}
+			var first [1]byte
+			if _, err := io.ReadFull(client, first[:]); err != nil || first[0] != 'r' {
+				t.Fatal("reset fixture did not first complete native response framing", err)
+			}
+			code := quic.StreamErrorCode(0)
+			if scenario == "local-zero" {
+				client.CancelRead(code)
+			} else {
+				if scenario == "remote-nonzero" {
+					code = 73
+				}
+				peer.CancelWrite(code)
+			}
+			if err := client.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := client.Read(first[:])
+			if err == nil || err == io.EOF {
+				t.Fatal("stream reset was converted to literal successful EOF", err)
+			}
+			if scenario == "local-zero" {
+				if !errors.Is(err, io.EOF) {
+					t.Fatal("local cancellation lost its existing wrapped EOF contract", err)
+				}
+			} else {
+				var reset *quic.StreamError
+				if !errors.As(err, &reset) || !reset.Remote || reset.ErrorCode != code || reset.StreamID != client.StreamID() {
+					t.Fatal("peer reset lost its original typed identity", err)
+				}
+			}
+			if err := client.Close(); err != nil {
+				t.Fatal("owned reset reader did not close its untouched write half", err)
+			}
+		})
+	}
+}

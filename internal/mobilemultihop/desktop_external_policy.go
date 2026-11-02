@@ -52,7 +52,7 @@ type DesktopExternalPolicy struct {
 
 var desktopExternalPolicyError = errors.New("desktop external lower path requires its complete captured native policy")
 
-// NewDesktopExternalPolicy derives only the direct ordinary proxy lower path.
+// NewDesktopExternalPolicy derives only the direct ordinary transport lower path.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -71,6 +71,11 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	}
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
 	kind, supported := kinds[capture.Protocol]
+	// Hysteria2 uses the captured connected-UDP broker on the retained Linux
+	// host. Other desktop hosts keep their existing transport admission.
+	if targetOS == "linux" && capture.Protocol == "hysteria2" {
+		kind, supported = "hysteria2", true
+	}
 	root := capture.PhysicalRoots[0]
 	if !supported || root.Family != "outbounds" || root.Tag != capture.FinalTag || root.Tag != ExternalFinalTag || root.Type != kind ||
 		root.DynamicSOCKSUDP != (capture.Protocol == "socks5" && capture.UDPAvailable) ||

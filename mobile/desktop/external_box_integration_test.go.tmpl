@@ -40,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	boxService "github.com/sagernet/sing-box/adapter/service"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
@@ -47,10 +48,13 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	HTTP "github.com/sagernet/sing-box/protocol/http"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing/common/buf"
 	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -76,6 +80,7 @@ type desktopExternalIntegrationKernel struct {
 	remote   netip.AddrPort
 	index    uint32
 	name     string
+	udp      bool
 	deny     atomic.Bool
 	mu       sync.Mutex
 	grants   map[string]mobiletor.DesktopSocketGrant
@@ -109,20 +114,26 @@ func (p *desktopExternalIntegrationKernel) Owner() (mobiletor.DesktopSocketKerne
 func (p *desktopExternalIntegrationKernel) Current(c mobiletor.DesktopSocketCapture, o mobiletor.DesktopSocketKernelOwner) bool {
 	return p.source.live.Load() && c == p.source.capture && o == p.source.owner
 }
+func (p *desktopExternalIntegrationKernel) network() string {
+	if p.udp {
+		return "udp"
+	}
+	return "tcp"
+}
 func (p *desktopExternalIntegrationKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
-	if ctx.Err() != nil || !p.Current(c, p.source.owner) || network != "tcp" || remote != p.remote || p.deny.Load() {
+	if ctx.Err() != nil || !p.Current(c, p.source.owner) || network != p.network() || remote != p.remote || p.deny.Load() {
 		return mobiletor.DesktopSocketBinding{}, errors.New("local composition source denied another path")
 	}
 	return mobiletor.DesktopSocketBinding{Owner: p.source.owner, InterfaceName: p.name, InterfaceIndex: p.index, LocalAddress: p.local}, nil
 }
 func (p *desktopExternalIntegrationKernel) Bind(ctx context.Context, c mobiletor.DesktopSocketCapture, b mobiletor.DesktopSocketBinding, network string, raw syscall.RawConn) error {
-	if ctx.Err() != nil || !p.Current(c, b.Owner) || b.LocalAddress != p.local || b.InterfaceName != p.name || b.InterfaceIndex != p.index || network != "tcp4" || raw == nil {
+	if ctx.Err() != nil || !p.Current(c, b.Owner) || b.LocalAddress != p.local || b.InterfaceName != p.name || b.InterfaceIndex != p.index || network != p.network()+"4" || raw == nil {
 		return errors.New("local composition binding lost its captured source")
 	}
 	return raw.Control(func(uintptr) {})
 }
 func (p *desktopExternalIntegrationKernel) Grant(ctx context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
-	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || q.Network != "tcp" || q.Remote != p.remote || q.Local.Addr() != p.local || q.Local.Port() == 0 || p.deny.Load() {
+	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || q.Network != p.network() || q.Remote != p.remote || q.Local.Addr() != p.local || q.Local.Port() == 0 || p.deny.Load() {
 		return mobiletor.DesktopSocketReceipt{}, errors.New("local composition source refused a different grant")
 	}
 	p.mu.Lock()
@@ -170,6 +181,33 @@ func (p *desktopExternalIntegrationKernel) grantedPeer(address net.Addr, accepte
 		}
 	}
 	return false
+}
+
+// A datagram is usable only while its exact prior socket grant is current.
+// A packet queued before a revoke may arrive later; discard it without treating
+// the historical receipt as permission to resume a retired QUIC connection.
+func (p *desktopExternalIntegrationKernel) grantedPacket(address net.Addr, receivedAt time.Time) (allowed, known, first bool) {
+	peer, err := netip.ParseAddrPort(address.String())
+	if err != nil || !p.udp {
+		return false, false, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, receipt := range p.issued {
+		grant := receipt.grant
+		if grant.Network != "udp" || receipt.at.After(receivedAt) || grant.Local != peer || grant.Remote != p.remote {
+			continue
+		}
+		current, exists := p.grants[id]
+		if !exists || current.Network != "udp" || current.Local != peer || current.Remote != p.remote ||
+			current.Capture != p.source.capture || !p.source.live.Load() || p.deny.Load() {
+			return false, true, false
+		}
+		first = !receipt.accepted
+		receipt.accepted = true
+		return true, true, first
+	}
+	return false, false, false
 }
 func (*desktopExternalIntegrationSource) CreateSocket(context.Context, mobiletor.DesktopSocketCreation) (mobiletor.DesktopSocketCreated, error) {
 	return mobiletor.DesktopSocketCreated{}, errors.New("the composition OS boundary cannot fabricate a socket")
@@ -252,15 +290,19 @@ func (ca *desktopExternalIntegrationCA) certificate(t *testing.T, valid bool) tl
 // path must reach this exact local listener under a preexisting broker grant.
 type desktopExternalIntegrationPeer struct {
 	listener                                                                                    net.Listener
+	packet                                                                                      net.PacketConn
+	closeProtocol                                                                               func()
 	kernel                                                                                      *desktopExternalIntegrationKernel
 	protocol                                                                                    string
 	certificate, proxyCertificate                                                               tls.Certificate
-	badDNS, badIP, badAuth                                                                      bool
+	badDNS, badIP, badAuth, truncatedBody                                                       bool
 	mu                                                                                          sync.Mutex
 	closing                                                                                     bool
 	connections                                                                                 map[net.Conn]bool
+	packetConnections                                                                           map[N.PacketConn]bool
 	workers                                                                                     sync.WaitGroup
 	accepted, dnsQueries, tlsHandshakes, publicRequests, publicAttempts, authFailures, bypassed atomic.Int32
+	physicalUDP, udpQueries                                                                     atomic.Int32
 	failure                                                                                     string
 	publicEntered, publicRelease                                                                chan struct{}
 	publicOnce                                                                                  sync.Once
@@ -271,6 +313,10 @@ type desktopExternalIntegrationPeer struct {
 
 func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
 	t.Helper()
+	if p.protocol == "hysteria2" {
+		p.startHysteria2(t)
+		return
+	}
 	var serveSS func(net.Conn) error
 	if p.protocol == "shadowsocks" {
 		password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
@@ -321,6 +367,138 @@ func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
 		}
 	}()
 }
+
+type desktopExternalIntegrationPacket struct {
+	net.PacketConn
+	peer *desktopExternalIntegrationPeer
+}
+
+func (p *desktopExternalIntegrationPacket) ReadFrom(body []byte) (int, net.Addr, error) {
+	p.peer.mu.Lock()
+	if p.peer.closing {
+		p.peer.mu.Unlock()
+		return 0, nil, net.ErrClosed
+	}
+	p.peer.workers.Add(1)
+	p.peer.mu.Unlock()
+	defer p.peer.workers.Done()
+	for {
+		n, source, err := p.PacketConn.ReadFrom(body)
+		if err != nil {
+			return n, source, err
+		}
+		allowed, known, first := p.peer.kernel.grantedPacket(source, time.Now())
+		if !allowed {
+			if !known {
+				p.peer.bypassed.Add(1)
+			}
+			continue
+		}
+		if first {
+			p.peer.accepted.Add(1)
+		}
+		p.peer.physicalUDP.Add(1)
+		return n, source, nil
+	}
+}
+
+func (p *desktopExternalIntegrationPeer) startHysteria2(t *testing.T) {
+	t.Helper()
+	if p.packet == nil || p.listener != nil || !p.kernel.udp {
+		t.Fatal("Hysteria2 composition lost its sole captured UDP peer")
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(p.proxyCertificate.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chain []string
+	for _, der := range p.proxyCertificate.Certificate {
+		chain = append(chain, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+	}
+	logger := log.NewNOPFactory().NewLogger("captured-hysteria2-composition")
+	tlsConfig, err := boxTLS.NewServer(p.ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: chain,
+		Key: []string{string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))}})
+	clear(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: p.ctx, Logger: logger, TLSConfig: tlsConfig,
+		UDPTimeout: 10 * time.Second, Handler: p})
+	p.closeProtocol = func() {
+		if service != nil {
+			_ = service.Close()
+		}
+		_ = tlsConfig.Close()
+	}
+	if err == nil {
+		password := desktopExternalIntegrationPassword
+		if p.badAuth {
+			password += "-different-peer"
+		}
+		service.UpdateUsers([]int{1}, []string{password})
+		err = tlsConfig.Start()
+	}
+	if err == nil {
+		err = service.Start(&desktopExternalIntegrationPacket{PacketConn: p.packet, peer: p})
+	}
+	if err != nil {
+		t.Fatal("actual pinned Hysteria2 composition peer failed", err)
+	}
+}
+
+func (p *desktopExternalIntegrationPeer) NewConnectionEx(ctx context.Context, connection net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	p.mu.Lock()
+	if p.closing {
+		p.mu.Unlock()
+		_ = connection.Close()
+		if onClose != nil {
+			onClose(net.ErrClosed)
+		}
+		return
+	}
+	p.connections[connection] = true
+	p.workers.Add(1)
+	p.mu.Unlock()
+	defer func() {
+		_ = connection.Close()
+		p.mu.Lock()
+		delete(p.connections, connection)
+		p.mu.Unlock()
+		p.workers.Done()
+	}()
+	err := p.NewConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+	p.recordFailure(err)
+	if onClose != nil {
+		onClose(err)
+	}
+}
+
+func (p *desktopExternalIntegrationPeer) NewPacketConnectionEx(ctx context.Context, connection N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	p.mu.Lock()
+	if p.closing {
+		p.mu.Unlock()
+		_ = connection.Close()
+		if onClose != nil {
+			onClose(net.ErrClosed)
+		}
+		return
+	}
+	p.packetConnections[connection] = true
+	p.workers.Add(1)
+	p.mu.Unlock()
+	defer func() {
+		_ = connection.Close()
+		p.mu.Lock()
+		delete(p.packetConnections, connection)
+		p.mu.Unlock()
+		p.workers.Done()
+	}()
+	err := p.NewPacketConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+	p.recordFailure(err)
+	if onClose != nil {
+		onClose(err)
+	}
+}
 func (p *desktopExternalIntegrationPeer) recordFailure(err error) {
 	if err != nil {
 		p.mu.Lock()
@@ -331,17 +509,36 @@ func (p *desktopExternalIntegrationPeer) recordFailure(err error) {
 func (p *desktopExternalIntegrationPeer) diagnostic() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return fmt.Sprintf("accepted=%d dns=%d tls=%d public=%d attempts=%d peer=%s", p.accepted.Load(), p.dnsQueries.Load(), p.tlsHandshakes.Load(), p.publicRequests.Load(), p.publicAttempts.Load(), p.failure)
+	return fmt.Sprintf("accepted=%d udp=%d dns=%d udp-dns=%d tls=%d public=%d attempts=%d peer=%s", p.accepted.Load(), p.physicalUDP.Load(), p.dnsQueries.Load(), p.udpQueries.Load(), p.tlsHandshakes.Load(), p.publicRequests.Load(), p.publicAttempts.Load(), p.failure)
 }
 func (p *desktopExternalIntegrationPeer) close() {
 	p.mu.Lock()
 	p.closing = true
 	p.cancel()
+	var streams []net.Conn
 	for c := range p.connections {
-		_ = c.Close()
+		streams = append(streams, c)
+	}
+	var packets []N.PacketConn
+	for c := range p.packetConnections {
+		packets = append(packets, c)
 	}
 	p.mu.Unlock()
-	_ = p.listener.Close()
+	for _, c := range streams {
+		_ = c.Close()
+	}
+	for _, c := range packets {
+		_ = c.Close()
+	}
+	if p.listener != nil {
+		_ = p.listener.Close()
+	}
+	if p.packet != nil {
+		_ = p.packet.Close()
+	}
+	if p.closeProtocol != nil {
+		p.closeProtocol()
+	}
 	p.workers.Wait()
 }
 func (p *desktopExternalIntegrationPeer) connect(c net.Conn) error {
@@ -383,8 +580,48 @@ func (c *desktopExternalBufferedConn) Read(b []byte) (int, error) { return c.rea
 func (p *desktopExternalIntegrationPeer) NewConnection(_ context.Context, c net.Conn, m M.Metadata) error {
 	return p.serve(c, m.Destination.String())
 }
-func (*desktopExternalIntegrationPeer) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
-	return errors.New("composition peer denies unrequested UDP")
+func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context, connection N.PacketConn, metadata M.Metadata) error {
+	if p.protocol != "hysteria2" || metadata.Destination.String() != desktopExternalIntegrationDNS {
+		return errors.New("composition peer denies unrequested UDP")
+	}
+	stop := context.AfterFunc(p.ctx, func() { _ = connection.Close() })
+	defer stop()
+	for {
+		packet := buf.NewPacket()
+		destination, err := connection.ReadPacket(packet)
+		question := new(mDNS.Msg)
+		if err == nil && (destination != metadata.Destination || packet.Len() > 4096) {
+			err = errors.New("Hysteria2 UDP changed its exact selected DNS destination")
+		}
+		if err == nil {
+			err = question.Unpack(packet.Bytes())
+		}
+		packet.Release()
+		if err != nil {
+			return err
+		}
+		if ctx.Err() != nil || len(question.Question) != 1 || question.Question[0].Name != "example.com." || question.Question[0].Qtype != mDNS.TypeA {
+			return errors.New("Hysteria2 selected UDP DNS question changed")
+		}
+		p.dnsQueries.Add(1)
+		p.udpQueries.Add(1)
+		answer := new(mDNS.Msg).SetReply(question)
+		ip := net.IPv4(93, 184, 216, 34)
+		if p.badDNS {
+			ip = net.IPv4(192, 168, 50, 1)
+		}
+		answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: ip}}
+		raw, err := answer.Pack()
+		if err != nil {
+			return err
+		}
+		reply := buf.NewSize(2048 + len(raw))
+		reply.Resize(2048, 0)
+		_, _ = reply.Write(raw)
+		if err := connection.WritePacket(reply, destination); err != nil {
+			return err
+		}
+	}
 }
 func (*desktopExternalIntegrationPeer) NewError(context.Context, error) {}
 func (p *desktopExternalIntegrationPeer) serve(c net.Conn, target string) error {
@@ -451,7 +688,11 @@ func (p *desktopExternalIntegrationPeer) serve(c net.Conn, target string) error 
 		ip = "203.0.113.89"
 	}
 	body := "ip=" + ip + "\n"
-	_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	length := len(body)
+	if p.truncatedBody {
+		body = body[:len(body)-4]
+	}
+	_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", length, body)
 	return err
 }
 
@@ -568,18 +809,34 @@ func desktopExternalIntegrationDelayedAccept(t *testing.T) {
 func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalIntegrationCA, protocol, fault string) *desktopExternalIntegrationFixture {
 	t.Helper()
 	iface, address := desktopExternalIntegrationAddress(t)
-	listener, err := net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
+	var listener net.Listener
+	var packet net.PacketConn
+	var remote netip.AddrPort
+	var err error
+	if protocol == "hysteria2" {
+		if runtime.GOOS != "linux" {
+			t.Fatal("direct Hysteria2 has no admitted physical owner on this target")
+		}
+		packet, err = net.ListenPacket("udp4", net.JoinHostPort(address.String(), "0"))
+		if err == nil {
+			remote = packet.LocalAddr().(*net.UDPAddr).AddrPort()
+		}
+	} else {
+		listener, err = net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
+		if err == nil {
+			remote = listener.Addr().(*net.TCPAddr).AddrPort()
+		}
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := listener.Addr().(*net.TCPAddr).AddrPort()
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &desktopExternalIntegrationFixture{}
 	f.source = &desktopExternalIntegrationSource{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("c", 64), Generation: 1, ProcessID: uint32(os.Getpid())}}
 	f.source.live.Store(true)
-	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, grants: make(map[string]mobiletor.DesktopSocketGrant)}
+	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, udp: protocol == "hysteria2", grants: make(map[string]mobiletor.DesktopSocketGrant)}
 	f.source.kernel = f.kernel
-	f.peer = &desktopExternalIntegrationPeer{listener: listener, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), ctx: ctx, cancel: cancel}
+	f.peer = &desktopExternalIntegrationPeer{listener: listener, packet: packet, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel}
 	if strings.HasPrefix(fault, "latency-") {
 		f.peer.latency = newDesktopExternalLatencyPeer(t, ca, fault)
 	}
@@ -588,6 +845,8 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		f.peer.badDNS = true
 	case "exit":
 		f.peer.badIP = true
+	case "truncated":
+		f.peer.truncatedBody = true
 	case "credential":
 		f.peer.badAuth = true
 	case "tls-name":
@@ -613,7 +872,19 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		transport = map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": password}
 		private["shadowsocks"] = map[string]any{"server": address.String(), "port": int(remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": password}
 	}
+	if protocol == "hysteria2" {
+		name := "captured-proxy.example"
+		if fault == "peer-tls-name" {
+			name = "different-captured-proxy.example"
+		}
+		transport = map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()),
+			"password": desktopExternalIntegrationPassword, "tls": map[string]any{"enabled": true, "server_name": name}}
+		private["hysteria2"] = map[string]any{"server": address.String(), "port": int(remote.Port()), "password": desktopExternalIntegrationPassword, "tls_server_name": name}
+	}
 	profile := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": private, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": "always"}
+	if protocol == "hysteria2" {
+		profile["dns_protocol"] = "udp"
+	}
 	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": protocol, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{transport}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
 	raw, _ := json.Marshal(graph)
@@ -635,6 +906,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	outs := outbound.NewRegistry()
 	HTTP.RegisterOutbound(outs)
 	shadowsocks.RegisterOutbound(outs)
+	HY.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
 	dnsRegistry := dns.NewTransportRegistry()
 	DNST.RegisterTCP(dnsRegistry)
@@ -714,8 +986,21 @@ func (f *desktopExternalIntegrationFixture) prove(t *testing.T) {
 	if result.Schema != 1 || result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 || result.ExitID != "selected-external-native" || result.IP != desktopExternalIntegrationIP || !result.DNSProven || result.EntryProven || result.CheckedAt <= 0 || !f.proof.Healthy() || !f.network.Current() {
 		t.Fatal("real proof changed original authority or lost derived native ownership", result)
 	}
-	if f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1 || f.peer.accepted.Load() < 2 || f.peer.bypassed.Load() != 0 {
+	if f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1 ||
+		(f.peer.protocol != "hysteria2" && f.peer.accepted.Load() < 2) || f.peer.bypassed.Load() != 0 {
 		t.Fatal("real selected DNS or public TLS skipped the captured lower path", f.peer.dnsQueries.Load(), f.peer.tlsHandshakes.Load(), f.peer.publicRequests.Load(), f.peer.accepted.Load())
+	}
+	if f.peer.protocol == "hysteria2" {
+		capture, err := f.policy.Capture()
+		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+			capture.PhysicalRoots[0].Destinations[0].Network != "udp" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
+			f.peer.listener != nil || f.peer.accepted.Load() != 1 || f.peer.physicalUDP.Load() == 0 || f.peer.udpQueries.Load() == 0 ||
+			f.peer.udpQueries.Load() != f.peer.dnsQueries.Load() {
+			t.Fatal("Hysteria2 did not carry selected UDP DNS and TCP proof through its sole captured UDP socket", err, f.peer.diagnostic())
+		}
+		if _, err := f.kernel.Select(context.Background(), f.source.capture, "tcp", f.kernel.remote); err == nil {
+			t.Fatal("Hysteria2 fixture granted an unrequested physical TCP destination")
+		}
 	}
 	if err = f.proof.VerifyCurrentPath(); err != nil {
 		t.Fatal("real proof did not retain its exact generation", err)
@@ -798,7 +1083,11 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	t.Setenv("SSL_CERT_DIR", directory)
 	t.Run("delayed-accept-retains-prior-grant", desktopExternalIntegrationDelayedAccept)
 	desktopExternalLatencyIntegration(t, ca)
-	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks"} {
+	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
+	if runtime.GOOS == "linux" {
+		protocols = append(protocols, "hysteria2")
+	}
+	for _, protocol := range protocols {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
 			f := newDesktopExternalIntegrationFixture(t, ca, protocol, "")
 			f.prove(t)
@@ -866,7 +1155,11 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 				t.Fatal("retired original reader mutated its replacement")
 			}
 		})
-		for _, fault := range []string{"dns", "exit", "credential", "tls-name", "tls-root", "lower-denied"} {
+		faults := []string{"dns", "exit", "credential", "tls-name", "tls-root", "lower-denied"}
+		if protocol == "hysteria2" {
+			faults = append(faults, "peer-tls-name", "truncated")
+		}
+		for _, fault := range faults {
 			t.Run(protocol+"/reject/"+fault, func(t *testing.T) {
 				f := newDesktopExternalIntegrationFixture(t, ca, protocol, fault)
 				raw, err := f.proof.Run()
@@ -882,14 +1175,17 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 				if (fault == "tls-name" || fault == "tls-root") && (f.peer.dnsQueries.Load() == 0 || f.peer.publicAttempts.Load() != 1 || f.peer.publicRequests.Load() != 0) {
 					t.Fatal("invalid certificate carried private proof request bytes")
 				}
-				if fault == "exit" && (f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1) {
-					t.Fatal("wrong-exit negative never reached the real authenticated public proof", f.peer.diagnostic())
+				if (fault == "exit" || fault == "truncated") && (f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1) {
+					t.Fatal("invalid response negative never reached the real authenticated public proof", f.peer.diagnostic())
 				}
 				if fault == "credential" && (f.peer.accepted.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
 					t.Fatal("credential negative never reached the actual proxy authentication boundary", f.peer.diagnostic())
 				}
 				if fault == "lower-denied" && f.peer.accepted.Load() != 0 {
 					t.Fatal("denied lower path connected through a default dialer")
+				}
+				if fault == "peer-tls-name" && (f.peer.physicalUDP.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
+					t.Fatal("wrong Hysteria2 server identity bypassed the actual QUIC/TLS boundary", f.peer.diagnostic())
 				}
 			})
 		}
@@ -986,6 +1282,37 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 			t.Fatal("cancelled real TLS proof did not join")
 		}
 	})
+	if runtime.GOOS == "linux" {
+		t.Run("hysteria2/cancelled-proof", func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, "hysteria2", "held-proof")
+			result := make(chan error, 1)
+			go func() {
+				raw, err := f.proof.Run()
+				if raw != "" {
+					err = errors.New("cancelled Hysteria2 proof published data")
+				}
+				result <- err
+			}()
+			select {
+			case <-f.peer.publicEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("actual Hysteria2 UDP DNS and TLS proof never reached the controlled peer", f.peer.diagnostic())
+			}
+			if f.peer.physicalUDP.Load() == 0 || f.peer.udpQueries.Load() == 0 || f.peer.accepted.Load() != 1 {
+				t.Fatal("Hysteria2 cancellation did not own its original physical UDP connection", f.peer.diagnostic())
+			}
+			f.network.InterfaceUpdated(context.Background())
+			close(f.peer.publicRelease)
+			select {
+			case err := <-result:
+				if err == nil || f.proof.Healthy() || f.network.Current() {
+					t.Fatal("cancelled actual Hysteria2 result was adopted")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled actual Hysteria2 proof did not join")
+			}
+		})
+	}
 	if t.Failed() {
 		return
 	}

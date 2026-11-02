@@ -102,6 +102,10 @@ ORIGINAL_CASES = CASES
 EXTERNAL_CASES = ('external-ss-on-connect', 'external-http-on-connect', 'external-https-on-connect',
                   'external-ss-always', 'external-http-always', 'external-https-always',
                   'external-ss-cancelled', 'external-ss-replacement', 'external-ss-source', 'external-ss-dns-failure', 'external-ss-public')
+EXTERNAL_PROXY_CASES = EXTERNAL_CASES
+EXTERNAL_HYSTERIA2_CASES = ('external-hy2-on-connect', 'external-hy2-always', 'external-hy2-public', 'external-hy2-cancelled',
+                           'external-hy2-wrong-key', 'external-hy2-wrong-trust', 'external-hy2-dns-failure')
+EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES
 CASES += EXTERNAL_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',

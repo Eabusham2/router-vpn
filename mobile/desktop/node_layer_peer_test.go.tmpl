@@ -40,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	boxService "github.com/sagernet/sing-box/adapter/service"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	boxDNS "github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
@@ -57,6 +58,7 @@ import (
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
+	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
@@ -1715,7 +1717,7 @@ func TestRouterVPNDesktopNodeEncryptedLayerWrongCredential(t *testing.T) {
 // The installed Linux succession fixture uses this independent protocol peer.
 // It terminates the selected DNS and public-exit proof locally; it cannot dial
 // either named destination on an ordinary network. The native child still
-// performs the real SS2022/CONNECT, DNS and certificate-checked HTTPS exchange.
+// performs the real SS2022/CONNECT/Hysteria2, DNS and certificate-checked HTTPS exchange.
 type desktopExternalInstalledPeerRequest struct {
 	Schema   int    `json:"schema"`
 	Protocol string `json:"protocol"`
@@ -1731,6 +1733,8 @@ type desktopExternalInstalledPeerReply struct {
 	CA             string `json:"ca"`
 	Connections    int64  `json:"connections"`
 	Streams        int64  `json:"streams"`
+	PhysicalUDP    int64  `json:"physical_udp"`
+	Packets        int64  `json:"packets"`
 	DNSQueries     uint32 `json:"dns_queries"`
 	PublicAttempts uint32 `json:"public_attempts"`
 	PublicReplies  uint32 `json:"public_replies"`
@@ -1766,6 +1770,51 @@ func desktopExternalInstalledPeerCertificate(t *testing.T) (tls.Certificate, str
 	return tls.Certificate{Certificate: [][]byte{leafDER, rootDER}, PrivateKey: leafKey}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
 }
 
+// The external profile has the captured plain Hysteria2 TLS/password contract.
+// Reuse the actual pinned service and routed handler, with no Salamander option
+// invented from the independent Router fixture's private configuration.
+func startDesktopExternalInstalledHysteria2(t *testing.T, server *desktopNodeLayerServer, packet net.PacketConn, cert tls.Certificate, password string) func() {
+	t.Helper()
+	private, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		_ = packet.Close()
+		t.Fatal(err)
+	}
+	var chain []string
+	for _, der := range cert.Certificate {
+		chain = append(chain, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+	}
+	logger := log.NewNOPFactory().NewLogger("captured-external-hysteria2")
+	tlsConfig, err := boxTLS.NewServer(server.ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: chain,
+		Key: []string{string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))}})
+	clear(private)
+	if err != nil {
+		_ = packet.Close()
+		t.Fatal(err)
+	}
+	service, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: server.ctx, Logger: logger, TLSConfig: tlsConfig,
+		UDPTimeout: 10 * time.Second, Handler: desktopNodeHysteria2Handler{server}})
+	if err == nil {
+		service.UpdateUsers([]int{1}, []string{password})
+		err = tlsConfig.Start()
+	}
+	if err == nil {
+		err = service.Start(&desktopNodeHysteria2Packet{PacketConn: packet, server: server})
+	}
+	close := func() {
+		_ = packet.Close()
+		if service != nil {
+			_ = service.Close()
+		}
+		_ = tlsConfig.Close()
+	}
+	if err != nil {
+		close()
+		t.Fatal("actual external Hysteria2 service did not start", err)
+	}
+	return close
+}
+
 func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	if os.Getenv("ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD") == "" {
 		return
@@ -1780,7 +1829,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	var trailing any
 	if err != nil || len(line) > desktopNodeLayerReferenceLimit || decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
-		request.Address != "198.51.100.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" {
+		request.Address != "198.51.100.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" {
 		t.Fatal("installed external reference lost its exact bounded request", err)
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -1801,7 +1850,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dnsServer := &dns.Server{Listener: dnsListener, Net: "tcp", Handler: dns.HandlerFunc(func(writer dns.ResponseWriter, query *dns.Msg) {
+	dnsHandler := dns.HandlerFunc(func(writer dns.ResponseWriter, query *dns.Msg) {
 		dnsQueries.Add(1)
 		answer := new(dns.Msg).SetReply(query)
 		if failDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
@@ -1810,10 +1859,22 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30}, A: net.ParseIP("93.184.216.34")}}
 		}
 		_ = writer.WriteMsg(answer)
-	})}
+	})
+	dnsServer := &dns.Server{Listener: dnsListener, Net: "tcp", Handler: dnsHandler}
 	dnsDone := make(chan error, 1)
 	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsDone })
+	var dnsPacket net.PacketConn
+	if request.Protocol == "hysteria2" {
+		dnsPacket, err = net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		packetServer := &dns.Server{PacketConn: dnsPacket, Net: "udp", Handler: dnsHandler}
+		packetDone := make(chan error, 1)
+		go func() { packetDone <- packetServer.ActivateAndServe() }()
+		t.Cleanup(func() { _ = packetServer.Shutdown(); _ = dnsPacket.Close(); <-packetDone })
+	}
 	proofListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1839,71 +1900,87 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 		proofDone <- proofServer.Serve(tls.NewListener(proofListener, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}))
 	}()
 	t.Cleanup(func() { _ = proofServer.Close(); _ = proofListener.Close(); <-proofDone })
-	listener, err := net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, connections: make(map[io.Closer]bool), routes: []desktopNodeLayerRoute{
+	t.Cleanup(cancel)
+	server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: make(map[io.Closer]bool), routes: []desktopNodeLayerRoute{
 		{Network: "tcp", Destination: "203.0.113.53:5353", Physical: dnsListener.Addr().String()},
 		{Network: "tcp", Destination: "1.1.1.1:443", Physical: proofListener.Addr().String()},
 	}}
-	var serve func(net.Conn) error
-	if request.Protocol == "shadowsocks" {
-		service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, request.Password, 60, server, nil)
+	var listener net.Listener
+	address := ""
+	closeTransport := func() {}
+	if request.Protocol == "hysteria2" {
+		packet, err := net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		serve = func(connection net.Conn) error {
-			return service.NewConnection(ctx, connection, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
-		}
+		server.udp = packet
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
+		address = packet.LocalAddr().String()
+		closeTransport = startDesktopExternalInstalledHysteria2(t, server, packet, cert, request.Password)
 	} else {
-		serve = func(connection net.Conn) error {
-			if request.Protocol == "https-connect" {
-				secured := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
-				if err := secured.HandshakeContext(ctx); err != nil {
+		listener, err = net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.tcp, address = listener, listener.Addr().String()
+		var serve func(net.Conn) error
+		if request.Protocol == "shadowsocks" {
+			service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, request.Password, 60, server, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			serve = func(connection net.Conn) error {
+				return service.NewConnection(ctx, connection, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
+			}
+		} else {
+			serve = func(connection net.Conn) error {
+				if request.Protocol == "https-connect" {
+					secured := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+					if err := secured.HandshakeContext(ctx); err != nil {
+						return err
+					}
+					connection = secured
+				}
+				buffered := STD.NewReaderSize(connection, 8192)
+				q, err := http.ReadRequest(buffered)
+				if err != nil {
 					return err
 				}
-				connection = secured
+				defer q.Body.Close()
+				_, owned := server.route("tcp", q.Host)
+				if q.Method != http.MethodConnect || q.RequestURI != q.Host || !owned || q.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("captured-native-user:"+request.Password)) {
+					authFailures.Add(1)
+					_, _ = io.WriteString(connection, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+					return errors.New("installed CONNECT peer refused a different credential or destination")
+				}
+				if _, err := io.WriteString(connection, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+					return err
+				}
+				return server.NewConnection(ctx, &desktopNodeLayerBufferedConn{Conn: connection, reader: buffered}, M.Metadata{Destination: M.ParseSocksaddr(q.Host)})
 			}
-			buffered := STD.NewReaderSize(connection, 8192)
-			q, err := http.ReadRequest(buffered)
-			if err != nil {
-				return err
-			}
-			defer q.Body.Close()
-			_, owned := server.route("tcp", q.Host)
-			if q.Method != http.MethodConnect || q.RequestURI != q.Host || !owned || q.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("captured-native-user:"+request.Password)) {
-				authFailures.Add(1)
-				_, _ = io.WriteString(connection, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-				return errors.New("installed CONNECT peer refused a different credential or destination")
-			}
-			if _, err := io.WriteString(connection, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-				return err
-			}
-			return server.NewConnection(ctx, &desktopNodeLayerBufferedConn{Conn: connection, reader: buffered}, M.Metadata{Destination: M.ParseSocksaddr(q.Host)})
 		}
+		server.workers.Add(1)
+		go func() {
+			defer server.workers.Done()
+			for {
+				connection, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				if !server.enter(connection) {
+					_ = connection.Close()
+					return
+				}
+				go func() {
+					defer server.leave(connection)
+					_ = connection.SetDeadline(time.Now().Add(45 * time.Second))
+					server.rawTCP.Add(1)
+					_ = serve(connection)
+				}()
+			}
+		}()
 	}
-	server.workers.Add(1)
-	go func() {
-		defer server.workers.Done()
-		for {
-			connection, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			if !server.enter(connection) {
-				_ = connection.Close()
-				return
-			}
-			go func() {
-				defer server.leave(connection)
-				_ = connection.SetDeadline(time.Now().Add(45 * time.Second))
-				server.rawTCP.Add(1)
-				_ = serve(connection)
-			}()
-		}
-	}()
 	t.Cleanup(func() {
 		server.mu.Lock()
 		server.closing = true
@@ -1913,15 +1990,19 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 		}
 		server.mu.Unlock()
 		cancel()
-		_ = listener.Close()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		closeTransport()
 		for _, connection := range connections {
 			_ = connection.Close()
 		}
 		server.workers.Wait()
 	})
 	respond := func() {
-		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: listener.Addr().String(), CA: ca,
-			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
+		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
+			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Packets: server.plainUDP.Load(),
+			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
 		if err := json.NewEncoder(os.Stdout).Encode(reply); err != nil {
 			t.Fatal(err)
 		}

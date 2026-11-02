@@ -52,7 +52,7 @@ func desktopLinuxExternalEligible(launch *desktopNodeLaunch) bool {
 		return false
 	}
 	switch launch.external.profile.External.Protocol {
-	case "shadowsocks", "http-connect", "https-connect":
+	case "shadowsocks", "http-connect", "https-connect", "hysteria2":
 		return true
 	}
 	return false

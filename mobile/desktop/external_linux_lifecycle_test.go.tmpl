@@ -81,6 +81,8 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 		want := []mobiletor.DesktopLinuxSocketDestination{{Network: "tcp", Address: netip.MustParseAddrPort("192.168.50.7:8443")}}
 		if f.external.policy.Metadata().Protocol == "shadowsocks" {
 			want = append(want, mobiletor.DesktopLinuxSocketDestination{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")})
+		} else if f.external.policy.Metadata().Protocol == "hysteria2" {
+			want = []mobiletor.DesktopLinuxSocketDestination{{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")}}
 		}
 		if f.baseline != 1 || f.admitted != 0 || capture != f.source.record.Capture || ctx.Err() != nil || len(options.LANPrefixes) != 0 ||
 			!reflect.DeepEqual(options.PrivateDestinations, want) || len(options.Interfaces) != 1 || !options.Interfaces[0].Address.Is4() {
@@ -95,7 +97,7 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 }
 
 func TestRouterVPNExternalLinuxLifecycleKeepsTypedSourceAndJoinedOwner(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			t.Run(protocol+"/"+kill, func(t *testing.T) {
 				f := newExternalLinuxLifecycleFixture(t, protocol, kill, nil)

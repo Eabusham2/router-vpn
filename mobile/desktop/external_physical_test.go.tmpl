@@ -53,6 +53,10 @@ func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int
 	case "shadowsocks":
 		transport["type"], transport["method"], transport["password"] = "shadowsocks", "2022-blake3-aes-256-gcm", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32))
 		private["shadowsocks"] = map[string]any{"server": host, "port": port, "method": transport["method"], "password": transport["password"]}
+	case "hysteria2":
+		transport["type"], transport["password"] = "hysteria2", "captured-hysteria-password"
+		transport["tls"] = map[string]any{"enabled": true, "server_name": "captured-proxy.example"}
+		private["hysteria2"] = map[string]any{"server": host, "port": port, "password": transport["password"], "tls_server_name": "captured-proxy.example"}
 	default:
 		t.Fatal("unexpected native fixture protocol")
 	}
@@ -561,8 +565,16 @@ func externalPhysicalByteAddress(t *testing.T) netip.Addr {
 
 func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 	address := externalPhysicalByteAddress(t)
-	for _, network := range []string{"tcp", "udp", "packet"} {
-		t.Run(network, func(t *testing.T) {
+	networks := []string{"tcp", "udp", "packet"}
+	if runtime.GOOS == "linux" {
+		networks = append(networks, "hysteria2-udp")
+	}
+	for _, name := range networks {
+		t.Run(name, func(t *testing.T) {
+			network, protocol := name, "shadowsocks"
+			if name == "hysteria2-udp" {
+				network, protocol = "udp", "hysteria2"
+			}
 			baseNetwork := network
 			if network == "packet" {
 				baseNetwork = "udp"
@@ -587,7 +599,7 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			policy := externalPhysicalPolicyFixture(t, "shadowsocks", remote.Addr().String(), int(remote.Port()), false, runtime.GOOS)
+			policy := externalPhysicalPolicyFixture(t, protocol, remote.Addr().String(), int(remote.Port()), false, runtime.GOOS)
 			f := newExternalPhysicalFixture(t, policy)
 			kernel := &externalPhysicalBytePolicy{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture(), address: address, remote: remote}
 			if network == "packet" {
@@ -690,6 +702,14 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 			}
 			if err := closeSocket(); err != nil {
 				t.Fatal(err)
+			}
+			if protocol == "hysteria2" {
+				if leaked, err := f.physical.DialContext(context.Background(), "tcp", M.ParseSocksaddr(remote.String())); err == nil || leaked != nil {
+					if leaked != nil {
+						_ = leaked.Close()
+					}
+					t.Fatal("Hysteria2's captured UDP root acquired a TCP permission")
+				}
 			}
 			for _, wrong := range []string{"192.0.2.99:8443", netip.AddrPortFrom(remote.Addr(), remote.Port()+1).String(), "unowned.example:8443"} {
 				if leaked, err := f.physical.DialContext(context.Background(), baseNetwork, M.ParseSocksaddr(wrong)); err == nil || leaked != nil {
