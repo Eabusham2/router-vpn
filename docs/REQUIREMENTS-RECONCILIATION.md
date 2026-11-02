@@ -18,7 +18,24 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through bbd684f8
+## Implementation reconciliation through 34f65cb8
+
+Original user passages, the complete addendum and later corrections were
+recovered again from the available private source documents. Personal-context
+retrieval was unavailable during this attempt; that does not remove an older
+requirement or establish complete conversation access. The current source
+cutoff is [34f65cb8](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e);
+[the evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) identifies all eleven
+published units and their exact tests.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and retained Linux external transitions | Direct Local SS/HTTP/HTTPS now use the public app/session/journal bridge, preserving separate external and Router proof authorities, selected policy, original process ownership and captured restoration. The installed inventory contains 310 cases, preserving 299 originals and adding eleven. Local controller/native-command checks and a complete bundle pass; missing local TUN prevented all eleven new installed cases from running. Other families, multihop/Server/Compare, Always/torn/legacy recovery and physical acceptance remain open. |
+| Selected DNS, complete connection state and asynchronous ownership | The new external DNS observer validates captured credentials/options and final application state. Stop/measurement/restore retain the same native session. Android fixture repairs exercise the actual production capture and statistics types; the public-SDK snapshot rejects incomplete copies. Existing benchmark sample counts, score formula, resolver defaults and winner-restoration rules are unchanged. |
+| Native build and test integrity | Windows exact source closure and UTF-8 output, Linux namespace launch, Darwin watcher admission and complete bounded PF readback are repaired with executable negative controls. The Linux verdict runner now fits its original budget without deleting any of 1,482 missing-line checks. Local fixes are not blanket native package acceptance. |
+| All remaining original and later requirements | The six existing generated Linux TUN cases passed both architectures at 11d4c86c, before the new public external bridge. Current exact-SHA release publication, macOS installer inventory, broader retained graphs, signing, deployment and physical/off-LAN acceptance retain their distinct unfinished status. No percentage or reduced requirement denominator is introduced. |
+
+## Earlier implementation reconciliation through bbd684f8
 
 Original requirement recovery remains complete for the recorded source
 collection. The latest published source cutoff is

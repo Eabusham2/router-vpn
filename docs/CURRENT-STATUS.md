@@ -6,7 +6,48 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through bbd684f8
+## Latest implementation continuation — through 34f65cb8
+
+The latest independently verified implementation cutoff is
+[`34f65cb827bd20e8681bfc2e003d77d883a5848e`](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e).
+[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records all eleven
+new published units and their source, local-test, native and release boundaries.
+Original requirement passages and later corrections were rechecked; the scope
+and defaults were not reduced.
+
+- Protected Linux direct Local SS, HTTP CONNECT and HTTPS CONNECT now reach
+  the retained public Connect/Speed Lab session and durable journal. The
+  original parent owns the only native process waiter and retirement; external
+  DNS/public-exit proof never becomes Router authentication. Measurements,
+  final DNS observations, cancellation, Stop and captured Router restoration
+  use that same owner. The installed inventory is 310, preserving all original
+  299 scenarios and adding eleven. Local race/controller/native-command tests
+  and a complete verified Linux AMD64 bundle pass. The actual installed test
+  stopped before controller startup at missing `/dev/net/tun`; none of the
+  eleven new scenarios is accepted locally. Exact-head CI remains required.
+- The installed verdict runner now passes 17 checks in 2.997 seconds instead
+  of 123–124 seconds. It preserves every one of the 1,482 missing-line controls,
+  all 18 receipt families and the original 60-second gate. Other retained
+  external families, multihop/Server/Compare and Always/torn/legacy recovery
+  remain separate unfinished work.
+- Android network snapshots use only the public SDK while rejecting an
+  incomplete copied policy. The saved-profile and Speed Lab fixtures now
+  compile and exercise the current captured-source/cancellation boundaries.
+  The fixed SDK source and focused Java suites pass; this is not an APK or
+  physical Android pass.
+- Windows source-closure and UTF-8 diagnostic fixture failures are repaired.
+  The Linux native routing fixture uses the original owned namespace launcher.
+  The Darwin watcher retries only bounded lock admission, never an admitted
+  action; complete PF readback uses four workers within its original deadline.
+  Relevant executable regressions and preserved defect controls pass.
+  The current native packaged outcomes still need independent verification.
+- The existing six-case Linux generated TUN gate passed both architectures at
+  `11d4c86c`, before the public external unit. The old `745b3e41` release
+  remains historical. No complete release of this implementation cutoff is
+  established. macOS first/legacy and Intel managed unlinked-image inventory
+  remain open, as do signing, private deployment and physical/off-LAN checks.
+
+## Earlier implementation continuation — through bbd684f8
 
 The independently verified published source cutoff is
 [`bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6).

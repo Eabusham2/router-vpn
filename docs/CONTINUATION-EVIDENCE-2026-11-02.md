@@ -5,11 +5,78 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6).
+[`34f65cb827bd20e8681bfc2e003d77d883a5848e`](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest published source and native evidence — through bbd684f8
+## Latest implementation and verification — through 34f65cb8
+
+The continuation re-read the original user passages, the complete 312–356
+addendum and C1–C7, the later product/breakage request and map-first/external
+node corrections. Those sources agree with the existing requirement authority.
+Personal-context retrieval was unavailable in this attempt; original private
+documents were retrieved separately. This is not a claim of access to every
+past conversation. No private transcripts or account identifiers are committed.
+
+Live main initially pointed to `bb79e0cf`, 915 commits ahead of the historical
+`745b3e41` release. The older green release therefore could not establish the
+current source or packages. The following coherent changes were published
+directly to main with expected-parent checks, exact tree comparison and
+independent remote-ref verification.
+
+| Commit | Change and completed verification |
+|---|---|
+| [0fa73df7](https://github.com/Eabusham2/router-vpn/commit/0fa73df7b6ac04426f8717bbeb553050705c3f27) | The Android saved-profile fixture exercises process-wide external comparison cancellation before dispatch, including a recreated Activity. All 2,211 checks across 181 cases pass; omitted-cancellation and independent-store controls reject the broken behavior. |
+| [8cfa23e4](https://github.com/Eabusham2/router-vpn/commit/8cfa23e425890c3d8296e920d17182c5e622f42f) | Replace the hidden Android LinkProperties copy constructor with the public Parcel/CREATOR path, require full equality, and recycle on success or failure. The original failure was reproduced against the official API 36 SDK; repaired source compiles. All 438 lifecycle/store/usage checks and 20 existing defect controls pass, including incomplete-copy refusal. |
+| [28e4602b](https://github.com/Eabusham2/router-vpn/commit/28e4602bded262efb4f3a73aff1a4574e7d9f1fb) | Update the native-toolchain fixture for the already-published mandatory Linux external lifecycle runner. Forty tests pass, with one existing Clang-unavailable skip explicitly retained. The test checks the exact platform, arguments, environment, ordering and source. |
+| [ca22ce00](https://github.com/Eabusham2/router-vpn/commit/ca22ce003cb4125fe1cba3edec66fed7115e9a78) | Include the five current UAC/Shell fixture files in the explicit Windows GUI source closure. All 51 required records are present; missing and extra files remain rejected. |
+| [72993f57](https://github.com/Eabusham2/router-vpn/commit/72993f57fa0e8acd164a30eebbdbc6db14623dac) | Preserve UTF-8 native diagnostics when the Windows wrapper starts with CP1252 stdout. Nine runner checks pass, including exact bytes and rejection of failed, skipped, incomplete and race results. |
+| [972ee90a](https://github.com/Eabusham2/router-vpn/commit/972ee90ac70c9f35659ecfc86072f255b6b15283) | Execute only the already-compiled native Linux routing receipt through the existing owned namespace launcher. Eleven runner checks, twelve routing/foreign-owner cases and two actual kernel namespace cases pass under race, including real root and sudo invocation. Old-dispatch and missing-cleanup-owner controls fail as required. Compilation and unrelated suites keep ordinary privilege. |
+| [317cb377](https://github.com/Eabusham2/router-vpn/commit/317cb3778c37dfd39558937b949ad256f8dbd78e) | A reproduced Darwin watcher flock collision now waits within a three-second admission bound, releasing partially acquired guards before retry. Once admitted, the action is never replayed. Forty-five lifecycle tests, the baseline journal checks, all 22 existing defect controls and the durable-state audit pass. The retirement and operation deadlines remain unchanged. |
+| [11d4c86c](https://github.com/Eabusham2/router-vpn/commit/11d4c86c199cb06c3ec244ca03bb158401c36d75) | Schedule all ten required read-only macOS PF checks through the existing four-worker group and one original deadline. Preserve canonical parsing, generation dependencies, ownership and cancel/join. Three race tests repeated five times, six compiled defects and Darwin AMD64 compilation pass. Actual Intel/ARM kernel acceptance remains separate. |
+| [53898838](https://github.com/Eabusham2/router-vpn/commit/5389883858f857fbeb2e0c1b90adf492a6460bbb) | Repair the newly exposed Android Speed Lab fixture using unchanged production benchmark/statistics classes and captured source/restoration types. The original 19 javac errors are reproduced; 3,165 checks and seven mutation controls pass. Downstream restoration also passes 3,174 checks and 19 controls; the whole-service multihop restoration fixture passes 145 checks plus its owner/MTU controls. |
+| [2d65e917](https://github.com/Eabusham2/router-vpn/commit/2d65e917e29038904712c50bca15d76d95dbef58) | Wire protected direct Local SS/HTTP CONNECT/HTTPS CONNECT through the retained Linux public Connect, Speed Lab, session, journal and sole native process owner. External DNS/public-exit proof stays distinct from Router authentication. Captured measurements and Stop/restore use that same owner; DNS status rechecks source and final application state. Controller and generated native command race suites pass; Windows AMD64/ARM64 and Darwin AMD64/ARM64 controller test images compile. The complete current Linux AMD64 engine, verified PQ/Cronet/Tor payloads, normal bundle verifier and actual version/help pass. The installed fixture adds eleven cases after all 299 originals; native acceptance is pending as explained below. |
+| [34f65cb8](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e) | Index complete native PASS selectors and newline-terminated lifecycle receipts once per verdict. The runner drops from 123–124 seconds to 2.997 seconds locally, passing 17 tests within the unchanged 60-second gate. All 1,482 existing missing-line negatives and 18 receipt families remain; additional checks reject unterminated, extended and colliding labels and accept CRLF. |
+
+### Actual native observations and remaining boundaries
+
+At `11d4c86c`, the [generated Linux TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41386878830)
+passed all six existing cases on [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41386878830/job/125089604466)
+and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41386878830/job/125089604746):
+On-connect, Always, captured MTU, MTU rollback, resolver failure and wrong key.
+This predates the public external integration and does not accept its new cases.
+
+The [authoritative Android job](https://github.com/Eabusham2/router-vpn/actions/runs/41386879203/job/125089865095)
+at that SHA passed 347 Java statistics checks and the 438-check/20-control
+comparison suite, then failed the obsolete Speed Lab fixture repaired in
+`53898838`. That log is not an APK pass. The repaired head still requires its
+complete native packaging and authoritative release.
+
+For `2d65e917`, the local installed namespace fixture entered its original
+isolation and readiness checks, then stopped because the host has no
+`/dev/net/tun`. It failed before controller startup. **Zero of the eleven
+new installed scenarios passed locally.** No device or proof was fabricated.
+The unchanged real-device prerequisite and all 310 scenarios remain required
+in Linux native CI. The runner optimization changes only verdict processing.
+
+The complete local feature bundle has policy digest
+`4ff0bc98b98b0c9ec43eaf2ee3d0bac501f7ddd7e21349411637ee9b483c122f`
+and receipt SHA-256
+`fadb0ac6b4982ec0793d5e31ba50a85c1810b8378a77a29b0831728d82788f5b`.
+It used the exact verified PQ archive and a newly built pinned Tor helper whose
+native C tests and disabled-network ownership check passed. This is a local
+feature-source bundle before the separate runner change, not a published
+release or a completed 310-case acceptance run.
+
+Direct Local support above does not enable other external families,
+multihop/Server/Compare compositions, or Always/torn/legacy crash recovery.
+macOS first/legacy inventory and Intel managed unlinked-image identification
+remain unresolved; an unidentifiable live process is still rejected rather
+than silently excluded. The PF repairs do not close that installer boundary.
+Current exact-SHA packages/publication, signing, private deployment and
+physical/off-LAN acceptance remain separate and unproved.
+
+## Earlier published source and native evidence — through bbd684f8
 
 These changes extend the historical checkpoint below. Every commit was pushed
 with an expected-parent check and independently read back from `main`. Tests
