@@ -6,7 +6,55 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through e97c8d22
+## Latest implementation continuation — through d4096487
+
+The verified published source is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1),
+with tree b5a1a5fbb501e1fa7a01f99b41e535d113c15eda. The
+[November 2 evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) preserves
+exact source, tests, native CI and publication boundaries. Requirement recovery
+is complete for the recorded collection; the original scope is unchanged.
+
+- Windows direct Local Shadowsocks and HTTP/HTTPS CONNECT now use the actual
+  retained app/native process and protection journal with Start Layer Off and
+  On-connect/Always. Staging, original selected DNS/proof, exact physical policy,
+  Stop and temporary restoration share that captured owner. Independently
+  compiled Kill Switch Off remains compatible; duplicate and explicitly empty
+  authority options fail in the real parser before private input. Current local
+  command/physical gates pass 146/157 verdicts, two compiled defects are rejected,
+  and all eight current Windows test-image cross-builds pass. Native Windows
+  IPC/WFP/TUN and installed/Portable acceptance remain required.
+- Linux generated TUN acceptance at f34aaef7 passed all six cases on both
+  architectures, including selected DNS, encrypted traffic, MTU rollback and
+  TUN closure before ACK. A distinct earlier intermittent cancellation race
+  was reproduced with real processes/channels and repaired in 72a3e5d7.
+  Its actual generated no-TUN control suite passed all ten cases, retaining
+  changed-owner rejection and original source-join/receipt/ACK/EOF requirements.
+- Darwin route-cache classification now derives only justified interface-scope
+  bits from its exact original cloning parent. Gateway/interface changes,
+  ambiguous parents and unproved idle-cache flags remain refusals. Local race,
+  compiled defects and both target builds pass; actual Darwin acceptance is
+  still required. The separate PF deadline and first/legacy installer ownership
+  boundaries remain open.
+- The Windows native engine aggregate is now 1,800 seconds with every original
+  per-case bound and negative control retained. A later ARM64 job failed before
+  compilation in build-job retirement. Original-bootstrap handle release now
+  follows job capture/join on every path, with all missing/recycled-member
+  refusals retained. Actual new Windows completion remains required.
+- Tor phase diagnostics preserve all 4,186 checks, seven native defects and
+  the sixty-second child limit. Their introduced AST-array/counter collision
+  is repaired; real PowerShell on Linux passes the entire callback, progress
+  and 365-leaf importer inventory. That is not WPF/PowerShell 5.1 acceptance
+  or proof that the original native editor timeout is resolved.
+
+The latest published release remains the twelve-asset 745b3e41 prerelease.
+Newer source has not yet converged on a complete exact-SHA release. Other
+protocol/platform/graph/Start Layer/protection combinations, recovery and
+Methods, first/legacy macOS ownership, native build/release gates, signing,
+physical/off-LAN/visual/accessibility acceptance, private providers and
+explicitly authorized ASUS/Portainer deployment retain their original gates.
+No private router, AdGuard, forwarding or deployment configuration was changed.
+
+## Earlier implementation continuation — through e97c8d22
 
 The independently read-back source cutoff is
 [`e97c8d22102ffbbfa82d6769bac6e25c91fcb224`](https://github.com/Eabusham2/router-vpn/commit/e97c8d22102ffbbfa82d6769bac6e25c91fcb224),

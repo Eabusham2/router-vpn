@@ -18,7 +18,25 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through f2e750aa
+## Implementation reconciliation through d4096487
+
+The current published evidence cutoff is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1).
+[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+retained Linux OpenVPN/SOCKS units, Windows SS/HTTP/HTTPS integration, native
+route and lifecycle repairs, and exact delivery limits. Original-source
+recovery is complete for the recorded collection; these rows update evidence,
+not the full requirement denominator or acceptance criteria.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and native external execution | Linux retained direct Local execution now includes the recorded OpenVPN and SOCKS additions. Windows SS/HTTP/HTTPS direct Local, Start Layer Off and On-connect/Always now have a coherent retained application/native journal path. Windows preserves the existing generic Off route with independently compiled policy checks. Other protocols, predecessors, multihop, Server/Compare, Start Layers and platforms remain required; older protected generic paths are not erased from history. |
+| Complete connection profiles, selected DNS and asynchronous ownership | Windows stages before stopping the old path, authenticates its actual inherited parent/journal before private input, preserves distinct original/physical identities, joins child/Job before BFE settlement and restores the captured host with the proved Local choice. Earlier 403 app-model verdicts remain bounded prior evidence; the added Off cases, current 146 command and 157 physical verdicts, guard mutants and eight cross-builds supply separate current evidence. They do not establish native Windows networking. |
+| #141–148, #222–223, #335 and measurements/restoration | The original exact-50 measurements, two-probe average, same external endpoint, failed-candidate exclusion and exact original/winner restoration rules remain unchanged. Linux SOCKS has 400 real routed HTTPS samples across its complete bounded Box gate. Windows source integrates its captured DNS and restoration owner; actual corresponding Windows measurement/traffic acceptance remains required. |
+| MTU, protection and lifecycle | The f34 generated-TUN workflow passed six cases on both Linux architectures. A separate earlier cancellation race was reproduced and repaired without an EOF or ownership waiver; all ten actual generated no-TUN control cases then passed. Darwin scope derivation accepts only justified exact-parent flags and still requires native acceptance. Windows parser uniqueness, build-handle retention and strict missing-member rejection remain enforced. |
+| Native installer, build and delivery | Windows source validation has its full 1,800-second aggregate while retaining all inner bounds and controls. macOS first/legacy ownership and PF acceptance, new Windows native completion and the original Tor editor deadline remain open. The diagnostic counter regression is fixed with actual PowerShell/Go execution on Linux, separately bounded from native WPF. Exact current packages, server images, compose, checksums and publication have not converged; the latest published application prerelease remains 745b3e41. |
+| Original 356, C1–C7 and later full product scope | Every uncancelled requirement retains its original authority and evidence gate, including all requested devices/architectures, map-first UI, full modes/graphs, private generic linking, DNS, setup/admin/Methods, recovery, signing, physical/off-LAN/visual/accessibility checks, live providers, ASUS forwarding/JFFS and deliberate exact-SHA image-only deployment. Disabled capability, compilation and a prior release are not all-product completion. |
+
+## Earlier implementation reconciliation through f2e750aa
 
 The current published implementation cutoff is
 [f2e750aa](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e).

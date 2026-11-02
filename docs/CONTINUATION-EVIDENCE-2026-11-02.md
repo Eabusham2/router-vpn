@@ -5,11 +5,126 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`e97c8d22102ffbbfa82d6769bac6e25c91fcb224`](https://github.com/Eabusham2/router-vpn/commit/e97c8d22102ffbbfa82d6769bac6e25c91fcb224).
+[d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest implementation and verification — through e97c8d22
+## Latest implementation and verification — through d4096487
+
+The independently read-back source is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1),
+with tree b5a1a5fbb501e1fa7a01f99b41e535d113c15eda. Each unit below was
+committed and published directly to main with its expected parent, followed by
+independent reference/tree/parent verification. Later source units and earlier
+native observations retain their distinct identities.
+
+| Published unit | Change and verification boundary |
+|---|---|
+| [f34aaef7](https://github.com/Eabusham2/router-vpn/commit/f34aaef7731c864a4e0574b4e9f0432bebe312ac) | Give the complete Windows native validation workload 1,800 seconds, matching the existing Linux aggregate. All individual deadlines, seventeen baseline suites and 34 Windows compiled controls remain unchanged. The prior 1,200-second run finished every baseline and sixteen controls before expiring during the next compile. This is an aggregate budget correction, not a successful complete native build. |
+| [241dc296](https://github.com/Eabusham2/router-vpn/commit/241dc29664c8fd17fe96d977a8ae4e6a7ceb0b4d) | Derive Darwin IFSCOPE/NOIFREF only from the exact captured cloning parent and destination, following pinned XNU behavior. Preserve interface, gateway, protocol flags and unique longest-prefix parent; unproved PROTO3, proxy and foreign-interface cases still fail. Local verification passed 187 race verdicts, fifteen runner tests, seven compiled defects and both Darwin cross-compiles. Native-only opt-in cases were not executed locally. Failure-only numeric diagnostics preserve unsupported cache states. |
+| [2b1802a3](https://github.com/Eabusham2/router-vpn/commit/2b1802a3d02a804371fd2f85e550d7372d8610bd) | Add fixed phase/ordinal/count/timing records to the Windows Tor fixture, keeping all 4,186 checks, 22 selection groups, seven mutants and the sixty-second child deadline. Twenty-six runner tests passed. Actual Windows then exposed the fixture variable collision repaired below; this unit did not fix the original editor timeout. |
+| [2471342e](https://github.com/Eabusham2/router-vpn/commit/2471342e0f84c21a55cf397c5688ae7c8d5ef3ee) | Integrate the Windows application and native command for retained direct Local Shadowsocks and HTTP/HTTPS CONNECT, Start Layer Off and On-connect/Always protection. Authenticate inherited parent/journal before private input; retain exact selected DNS, original proof, physical policy, process/Job and protection handoff through stop and temporary restoration. Preserve independently guarded Kill Switch Off and strict real-Cobra option presence/uniqueness. Detailed evidence follows. |
+| [281bfbaa](https://github.com/Eabusham2/router-vpn/commit/281bfbaa83094b5c85a491bb397c6a5d142ffd5a) | Keep the original Windows build bootstrap handle through job capture/join on success, timeout and exceptional cleanup. Fifteen local tests pass; the old ordering fails all five targeted scenarios. Four actual Windows tests remain mandatory in CI. Missing/recycled members remain a sticky failure; bounded numeric role/error/count diagnostics do not authorize them. The earlier ARM64 missing member has not yet been identified. |
+| [72a3e5d7](https://github.com/Eabusham2/router-vpn/commit/72a3e5d7d903c3134e767c2fcca62d4ca83f6d49) | Keep the original Linux native identity observation on its independent two-second lifetime after entry, then return caller cancellation before admission. Actual process/channel red/green reproduction and all ten generated native control cases pass. Changed capture, foreign image and closed original owners remain rejected; source join, retirement receipt, ACK and EOF are unchanged. |
+| [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1) | Separate the Tor AST checked-handler collection from its assertion counter using three reference renames. Actual PowerShell 7.5.4 reproduces the original array-to-integer failure, then the repaired fixture passes 4,186 callbacks, 54 progress records, seven intended defects and 365 Go importer leaves. This execution was on Linux with WPF false; PowerShell 5.1/7 native WPF and the original timeout remain Windows CI obligations. |
+
+### Retained Windows external connection evidence
+
+The coherent 46-file unit combines nineteen native-command files and 27
+application files. The normal generators prepared it from 2b1802a3, including
+the newer shared Darwin receipt code, with exact upstream inputs and no
+preparation overlay. All 3,088 installed, 1,636 lifecycle, 1,637 OpenVPN and
+607 Windows source records remained unchanged through the corresponding gates.
+
+- Actual local command/parser execution passed 28 roots and 146 verdicts with
+  race instrumentation and normal Linux production tags/PQ. The real Cobra
+  constructor exercised all twelve owned options, including duplicate and
+  explicit-empty/typed-zero inputs. Compiled removal of the policy guard and
+  parser wrapper failed their intended assertions.
+- Actual focused physical ownership passed twenty roots and 157 verdicts.
+  The initial restricted invocation failed read-only netlink discovery; its
+  unchanged source passed with supported interface/socket access. Both logs
+  are preserved. No host route, firewall or system TUN was configured.
+- All six current Windows command/factory/Box test-image cross-builds passed
+  on AMD64 and ARM64 with pointer checking. They use CGO disabled and omit
+  native PQ on the foreign host; actual Windows engine/PQ linking is separate.
+- Both complete current tagged controller test packages also cross-compiled.
+  All 2,039 AMD64 and 2,021 ARM64 selected inputs and every feature guard were
+  unchanged. AMD64 image SHA256 is
+  178167c7d9af3998ce7ca074537211203ac82f359b8929b4b65a012b1796b007;
+  ARM64 is 8fea1be1da04db9d878f28813a7bb72a522a51a1661337545c54ad4ce5378017.
+- The earlier 403 app-model verdicts remain bounded historical evidence for
+  the matching application work. The added Off-dispatch root and nine valid
+  import cases passed separately; removing only its Off guard failed all nine.
+  The two current runner suites passed eleven tests each. Earlier model runs
+  are not relabeled as new native Windows execution.
+
+Private staging precedes Stop of the old connection. The new child inherits
+its actual elevated controller/image/channel capability and a durable journal
+barrier. The journal uses derived physical identity while DNS/public-exit proof
+and stopped records retain original imported-policy identity. Shutdown joins
+the child/Job and journal before independent BFE settlement; a missing receipt
+is not evidence of absence. On-connect release and Always retention remain
+distinct. Temporary restoration retains the captured host and proved Local
+choice, with a fresh session and the current joined protection predecessor.
+
+This establishes source integration, stated local execution and compilation.
+Actual Windows inherited IPC, WFP, native TUN, installed/Portable networking,
+reconnect and device acceptance remain separate required gates. Broader
+protected Windows protocols, Start Layers, predecessors, Server/Compare and
+other requested graphs are not newly admitted by this unit. The older generic
+protected paths are historical implementation, not evidence they never existed.
+
+### Latest actual Linux and Windows observations
+
+At f34aaef7, [the generated-TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41520486695)
+completed successfully on [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41520486695/job/125536388751)
+and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41520486695/job/125536389273).
+Each passed On-connect, Always, captured MTU, MTU rollback, resolver failure
+and wrong key, including selected DNS, encrypted traffic and actual TUN
+retirement before ACK. This is a successful later result for the route repair;
+the hidden fields of the original older route remain unobserved.
+
+The preceding e97c8d22 ARM64 job also passed, but AMD64 reached a separate
+intermittent Always shutdown failure after successful MTU rollback. Its first
+child error was a retired Bootstrap, followed by original-channel EOF.
+The 72a3e5d7 reproduction used real retained processes, images and inherited
+channels: cancelling the graph context during the outer native ownership read
+permanently revoked that Bootstrap. The repaired two-file generated overlay
+passed all ten existing cases and eleven verdicts in 9.39 seconds, including
+the stronger cancellation case in 1.93 seconds. All 1,636 original generated
+records were rechecked; only the two exact sealed compiler overlays differed.
+Race test-image SHA256:
+2648d3a1859083322f9931fa9b4db8c5a24609f72edfb2336767f8233b64d677.
+This native namespace/control suite did not use a system TUN. The earlier
+successful f34 TUN run is not a retrospective execution of the later repair.
+
+The [f34 ARM64 engine job](https://github.com/Eabusham2/router-vpn/actions/runs/41520488081/job/125538772102)
+failed before compilation while retiring a git-config build command. A member
+could not be opened from the original job snapshot. The original bootstrap
+was released before capture; 281bfbaa fixes that concrete ordering defect but
+the log does not establish which member was lost. The missing-member refusal
+remains enforced, and fresh native evidence is required.
+
+The [2b1802a3 Windows Tor step](https://github.com/Eabusham2/router-vpn/actions/runs/41521854242/job/125540322521)
+failed immediately after AST extraction began: the diagnostic counter shared
+its script variable with the existing AST-handler array. This was introduced
+by the diagnostic fixture, not the original editor timeout. The three-reference
+repair has actual PowerShell/Go evidence above. The same workflow's Linux job
+passed and its macOS job was cancelled; neither establishes a new Darwin pass.
+
+### Current delivery and remaining scope
+
+The latest independently read published application release remains the
+[twelve-asset 745b3e41 prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b).
+No newer complete exact-SHA package/image/compose/publication chain is claimed.
+The original requirement collection remains fully binding. Other platform and
+graph families, recovery/Methods, macOS first/legacy installation and PF
+acceptance, current native release gates, signing/distribution, physical-device,
+off-LAN, visual/accessibility, private providers and explicitly authorized
+ASUS/Portainer deployment remain separately accountable. A safe refusal is
+unfinished scope. No private router, DNS, forwarding or deployment was changed.
+
+## Earlier implementation and verification — through e97c8d22
 
 Published source has tree `94ebf287b0c79eb1405e9bed458de2e4146b9d8e`.
 Each coherent unit below was validated, committed directly to main, published
