@@ -5,11 +5,86 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`6d6f4c155654503057e40cd398a0cf3cbac28a81`](https://github.com/Eabusham2/router-vpn/commit/6d6f4c155654503057e40cd398a0cf3cbac28a81).
+[`f103637f63235872ba2c144dd87135d6a1832615`](https://github.com/Eabusham2/router-vpn/commit/f103637f63235872ba2c144dd87135d6a1832615).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Published changes and their evidence
+## Latest published source and native evidence — through f103637f
+
+The following units extend the earlier checkpoint below. Their publication was
+independently read back from `main`; no pending working file is included.
+
+| Commit | Implemented result and executed verification |
+|---|---|
+| [`e8bb2d90`](https://github.com/Eabusham2/router-vpn/commit/e8bb2d90994813e8eb11cf63749d6502941a94c5) | Remove the eight owned native DNS/latency mailbox files only after actual Stop and child join. An unknown replacement file blocks cleanup without partially deleting the workspace. Forty-six race-instrumented checks passed. |
+| [`795e6ef7`](https://github.com/Eabusham2/router-vpn/commit/795e6ef7a7cec1f108cc592d7503150329fd101e) | Retained Linux AWG2 Fast/Strong adds AES and AES+XOR. Preserve all eleven AWG parameters, final peer/PSK identity, independent AES and outer-source authority, selected final-path DNS, cover and sealed restore. Fast and Strong each passed four native groups/42 subcases; preserved WG/AWG coverage added four/33, for 117 native subcases. The graph gate passed eight groups/32 subcases; the public gate passed five/36, the runner fourteen checks, and two compiled old-admission controls failed. The installed list grew from 157 to 227 while retaining every earlier case. Actual installed and ARM64 execution remain separate. |
+| [`b38464ef`](https://github.com/Eabusham2/router-vpn/commit/b38464ef87e145fc9fa08f889d1c6ca70915eb19) | Repair real installed-test inputs after both architectures rejected `fixed`: use canonical `manual` MTU 1376 and saved Start Layer `off`, keeping the runtime's empty Off distinct. Wrong AES material is tested only for encrypted layers. Six race groups/263 subcases, all 227 exact saved-profile inputs and 66 rejection classifications passed; three compiled stale-fixture controls failed. Production validators remain unchanged. |
+| [`50d36def`](https://github.com/Eabusham2/router-vpn/commit/50d36defb1e362182aadb66d9f8d3bbaa7e204bb) | Retained Linux SS-V2Ray supports all three Start Layers. Its SS2022 TLS/WebSocket/mux TCP path and independent Hysteria2 UDP/DNS path retain separate physical roots. Cover recognizes the started concrete composite owner and its exact TCP/UDP children, never a type string or borrowed child; Split/MAX remain outside this admission. Actual encrypted peers passed four groups/37 subcases, concrete owner/cover seven/16, graph nine/36, controller six/340, unchanged cover worker seven cases and fifteen runner checks. Six compiled defects failed as intended. Preserve the 227 existing installed cases and add 72, for 299 required cases. |
+| [`ce557096`](https://github.com/Eabusham2/router-vpn/commit/ce5570967532bd7c64899208ce5c73b41581c288) | Add native desktop network event observers and exact owned route/rule/TUN receipts. Physical changes latch even when a snapshot later returns to its old value; owned transitions match their captured records. Eight actual Linux namespace scenarios passed and four deliberately broken observers were rejected; parent MTU/Tor/external proof race checks, generated receipt projection and Windows/macOS compilation passed. Native MTU status projects the current TUN receipt after replacement. The subsequent real Linux rollback failure is recorded below and remains unresolved at this cutoff. Windows offers no documented event flush: delivered-event latching, table checks and joined unregister are the verified boundary. |
+| [`ca97c243`](https://github.com/Eabusham2/router-vpn/commit/ca97c2433252e2c47ac5a496b1fbbd3b2faa6b91) | Add native Windows/macOS/Linux Compare only and Compare and connect fastest actions. One captured candidate/source/network/settings cohort, batch owner and MTU lease span sequential trials and original restoration. Measure fifty routed HTTPS responses after TLS to one endpoint, rank the 10% trimmed mean, and give invalid candidates no score. Freshly prove the sealed winning Local/Server choice without rerunning Compare. History rollback requires the exact published file and bytes; only final committed adoption records usage. The full lifecycle race gate passed in 102.261 seconds; final published-source numeric/history/adoption/protection checks passed in 50.295 seconds. Native action checks passed Windows 19, Swift 25 and GTK 26; the full GTK app, fourteen shutdown scenarios, four launcher defects and two controller cross-compiles passed. Actual native packages, TUNs and physical devices remain separate. |
+| [`6a699ba9`](https://github.com/Eabusham2/router-vpn/commit/6a699ba92c89d3dbaa3af6e3327f3ad177123e66), [`aca7282a`](https://github.com/Eabusham2/router-vpn/commit/aca7282ad5ca069ccaac8bc5e316a00248f9bddf) | Read the actual Windows linked-token level and existing UAC policy, then run a genuine Limited primary worker and normal `runas` Full continuation. Identification-only links remain observations. The fixture changes no privileges, UAC policy or shipping launcher. Ninety policy checks, three compiled defects and both pointer-check architectures passed. Actual CI then exposed an invalid startup parameter rather than proving acceptance. |
+| [`7fe3c1e6`](https://github.com/Eabusham2/router-vpn/commit/7fe3c1e65db2e509ef44eed69233b249e6807507), [`fce65a3f`](https://github.com/Eabusham2/router-vpn/commit/fce65a3fa58e9d0bd6c95b7eda252c5e0027c4ef) | Use the supported basic startup request for that fixture, preserve independent creation-suspension readback and exact Job attachment before resume, and read the bounded retained Full report before rejecting the outer worker exit. Actual CI then started both genuine workers and exposed the next fixture error: it incorrectly required the Full worker's linked Limited observation to be primary. No production identity check was relaxed. |
+| [`f103637f`](https://github.com/Eabusham2/router-vpn/commit/f103637f63235872ba2c144dd87135d6a1832615) | Retain the already-authenticated Limited parent process and open its actual primary token with query/duplicate rights for the native access fixture. Recheck process incarnation, exact token object/modified identity, reciprocal authority and original private lifetime before access and after reversion. A lease prevents token/process closure before the access thread joins. All five original native cases remain, plus mandatory real retained-parent lifecycle checks. Six policy groups/88 subcases and seven compiled defect controls passed; AMD64/ARM64 complete test images compiled with pointer checking. The 49-record native closure matches the published files. The real Windows run subsequently passed all policy and genuine Limited/Full cases, including retained-parent lifetime and cleanup. The separate GLOBALROOT launch probe still fails. |
+
+The desktop comparison's final source is `ce557096` plus its exact 22 files;
+all 2,229 published dependency records were independently matched to Git blobs
+and the isolated source. Only the statistics validator and its test changed
+after the full lifecycle run: a bounded floating-point allowance accepts native
+summation roundoff while preserving finite/count/order/material-range checks.
+The final focused run includes nine invalid-range controls. A sandboxed Swift
+attempt could not read process/task metadata; identical source passed with
+ordinary process visibility. Neither that failed attempt nor modeled native
+launches is represented as actual AppKit or Windows WPF acceptance.
+
+### Current native results and unresolved failures
+
+- The full installed Linux jobs at `26b294e9` failed the invalid fixture MTU
+  policy on both architectures. `b38464ef` repairs those inputs; the 299-case
+  expanded installed runtime gate still needs its actual completed run.
+- The six-case generated Linux gate passed both architectures at `aca7282a`.
+  An earlier `795e6ef7` AMD64 run failed a private status-file read while ARM64
+  passed. An actual atomic-replacement race has been reproduced independently,
+  but its causal connection to that old log is not established.
+- At `ce557096`, [both generated Linux jobs failed](https://github.com/Eabusham2/router-vpn/actions/runs/41371129976)
+  only `mtu-rollback`: line 565 reports that the current native routing receipt
+  is unavailable or malformed. On-connect, Always, captured MTU, resolver
+  failure and wrong-key scenarios passed. This newer failure is distinct from
+  the earlier generic status read; the receipt assertion remains required.
+- The [actual Windows job at `fce65a3f`](https://github.com/Eabusham2/router-vpn/actions/runs/41370124343/job/125038604675)
+  reached the normal `runas` Full worker and exposed the incorrect linked
+  primary expectation. `f103637f` repairs that fixture and binds access to the
+  genuine retained parent primary. [Its native job](https://github.com/Eabusham2/router-vpn/actions/runs/41371852059/job/125043803384)
+  passed all policy checks, real retained-parent lifetime/cleanup and the five
+  original Limited/Full cases. The genuine Limited token was denied elevated
+  thread rights 0x0802 with `ERROR_ACCESS_DENIED`, preserving the native access
+  boundary. Protected mapping and constructed-Medium checks also passed. The
+  job then failed the separate GLOBALROOT launch probe: file-not-found, instance
+  2, zero callbacks, for both cancellation settings. Complete Windows/MAX and
+  package acceptance remain unproved; existing policy displayed no consent
+  prompt, so interactive consent and cross-account product use are separate.
+- The exact-head source-blocker workflow passed at `ce557096`. The
+  [authoritative release for `f103637f`](https://github.com/Eabusham2/router-vpn/actions/runs/41371852360)
+  and its native jobs were pending/queued at this read. Later cancelled Xcode
+  attempts provide no successful IPA evidence. No current all-platform release
+  or deployment is established.
+
+### Measurement distinction retained
+
+The required durable Router benchmark in `cmd/client/extras.go` uses 50–200
+TCP-handshake attempts and stores the actual successful count, failures and
+robust statistics. The existing quick live Fastest selector in
+`cmd/client/telemetry.go` uses 1–10 samples (default five), selects without
+connecting and never overwrites those durable fields. The earlier blanket
+statement that every five-sample Fastest call needs conversion conflated these
+two operations. Keep their labels and records distinct; quick measurements do
+not satisfy the durable fifty-sample requirement. External comparison uses
+its own routed HTTPS statistic, and neither statistic replaces the separate
+two-probe Local/Server formula recorded below.
+
+## Earlier published changes and their evidence — through 6d6f4c15
+
+The following entries and native observations describe their historical
+checkpoint. Later implementation and failure evidence above take precedence.
 
 Each unit below was published directly to `main` with an expected-parent check
 and independently verified by reading the remote branch. Focused execution used
@@ -50,7 +125,7 @@ same chosen external endpoint, both actual candidate paths and repeat proof.
 An invalid candidate receives no score. Restoring a measured execution choice
 must not run a new Compare operation.
 
-## Actual native CI observations
+## Earlier actual native CI observations
 
 The generated six-case Linux TUN gate at `5423bf92`
 [passed on AMD64 and ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41363217473).
@@ -99,19 +174,17 @@ notarization, distribution and actual devices remain separate requirements.
 
 ## Remaining implementation and acceptance work
 
-- Complete desktop external all-node comparison, durable metric-specific
-  history, explicit compare-only/adopt behavior and Windows/macOS/Linux UI
-  actions. One captured transaction must span candidates and restoration.
-  Latch native physical-network changes, including gateway/default-route and
-  away-and-back events; an interface-address snapshot alone is insufficient.
-  Native route/TUN ownership must distinguish the application's own transition
-  without ignoring an unrelated network change. Desktop Router Fastest still
-  requests five samples in recorded Windows/macOS call sites and needs the
-  original fifty-sample contract.
+- Desktop batch/history/UI and native event observation are published. Complete
+  exact-SHA native/package/device acceptance and the retained Linux Router
+  Node → ordinary external protection handoff. Its current pre-Stop refusal
+  preserves the original connection but does not implement that transition.
+  Repair the actual generated MTU rollback receipt failure without waiving the
+  current owner, route or policy checks. Keep quick TCP selection, durable
+  Router benchmarking and routed external HTTPS measurements distinct.
 - Continue the retained Linux graph/layer requirements. At this cutoff SS,
-  Hysteria2 and WG support Off/AES/AES+XOR, while AWG2 Fast/Strong retain Off.
-  AWG2 AES/AES+XOR and broader graphs, Always/nonempty/torn recovery and legacy
-  succession remain open.
+  Hysteria2, WG, AWG2 Fast/Strong and SS-V2Ray support Off/AES/AES+XOR.
+  All 299 installed scenarios, broader graphs, Always/nonempty/torn recovery
+  and legacy succession remain open.
 - Resolve actual Windows native UAC/full-MAX and macOS installer ownership
   failures using the real native results. Do not weaken a validator or replace
   an unsuccessful launch with a fabricated success.

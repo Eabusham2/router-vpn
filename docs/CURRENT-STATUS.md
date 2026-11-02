@@ -6,7 +6,57 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 6d6f4c15
+## Latest implementation continuation — through f103637f
+
+The independently verified published source cutoff is
+[`f103637f63235872ba2c144dd87135d6a1832615`](https://github.com/Eabusham2/router-vpn/commit/f103637f63235872ba2c144dd87135d6a1832615).
+[November 2 continuation evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+records the exact units, tests, source projections and native failures.
+
+- Windows, macOS and Linux now expose external Compare only and Compare and
+  connect fastest. One captured source/network/settings cohort and MTU/batch
+  owner span all fifty-sample candidate trials and complete restoration. The
+  sealed measured Local/Server winner receives fresh proof without a new
+  Compare selection. Metric-specific history, committed adoption, cancellation
+  and one final usage update retain their ownership checks. Focused race and
+  three native action suites pass; packages and physical acceptance remain.
+- Native desktop network observation and exact route/rule/TUN receipts are
+  published. Eight actual Linux namespace scenarios and four compiled defects
+  verify the focused event/ownership behavior. Real generated TUN execution at
+  `ce557096` then failed MTU rollback's current routing receipt on both AMD64
+  and ARM64; the other five scenarios passed. This remains an active blocker.
+- Retained Linux SS, Hysteria2, WG, AWG2 Fast/Strong and SS-V2Ray support all
+  three Start Layers with actual encrypted peer, final-path DNS, source and
+  negative-control coverage. SS-V2Ray preserves its separate TCP and UDP
+  children and concrete cover owner. The installed list now requires 299
+  scenarios. Earlier invalid saved MTU inputs were repaired in `b38464ef`;
+  full installed execution, broader graphs and Always/torn/legacy recovery
+  remain open. Retained Node → ordinary external succession is still refused
+  before Stop and is not counted as implemented.
+- Actual Windows CI now reaches genuine Limited and normal `runas` Full
+  workers. Its subsequent fixture failure incorrectly required an
+  identification-only linked observation to be primary. `f103637f` retains the
+  authenticated parent process's actual primary token and its exact lifetime
+  for the original native access case. Six policy groups/88 subcases, seven
+  compiled defects and both pointer-check architectures pass. The mandatory
+  native lifecycle and all original cases subsequently passed on Windows. The
+  actual Limited token was denied elevated-thread rights; the job later failed
+  the separate GLOBALROOT file-not-found probe with zero callbacks.
+- Durable Router latency uses 50–200 TCP attempts and its own saved robust
+  statistics. The separate quick live Fastest selector uses 1–10/default-five
+  samples, selects without connecting and does not overwrite the durable
+  fields. Earlier blanket five-to-fifty gap wording conflated these operations;
+  quick samples do not fulfill the durable benchmark requirement.
+- The Swift 6.1 repair retains its local reproduced-failure/pass evidence;
+  newer cancelled Xcode runs are not successful IPA builds. macOS first/legacy
+  inventory and Intel managed CodeDirectory remain open. No complete current
+  exact-SHA release, signing, deployment or physical acceptance is established.
+  The stopped PQ fixture work remains preserved, unpublished and excluded.
+
+## Earlier implementation continuation — through 6d6f4c15
+
+The following older sections preserve their checkpoint observations. Later
+implementation and corrections above supersede their then-open gap wording.
 
 The independently verified published source cutoff is
 [`6d6f4c155654503057e40cd398a0cf3cbac28a81`](https://github.com/Eabusham2/router-vpn/commit/6d6f4c155654503057e40cd398a0cf3cbac28a81).
