@@ -571,9 +571,76 @@ class OwnedDarwinPF(unittest.TestCase):
                 self.assertEqual(D.main(), 0, 'shipping PF mutation escaped its complete private state lock')
             self.assertEqual(events, ['enter', 'operation', 'leave'])
         with patch.object(P._baseline, 'state_guard', side_effect=BlockingIOError('captured state owner busy')), \
+             patch.object(D, '_WATCHER_ADMISSION_SECONDS', 0.04), \
              patch.object(D, 'darwin_apply') as operation, patch.object(D.sys, 'argv', ['dispatcher', 'apply']):
             self.assertEqual(D.main(), 1)
             operation.assert_not_called()
+
+    def test_action_waits_for_real_watcher_contention_before_one_mutation(self):
+        with self.legacy_environment():
+            self.legacy_state('on-connect')
+            with D._private_run(self.root) as parent:
+                holder = D._private_descriptor(parent, 'darwin-watcher-state.lock', create=True)
+            original_flock = fcntl.flock
+            original_flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            events, collisions = [], []
+            @contextlib.contextmanager
+            def outer_guard(root):
+                events.append('enter')
+                try:
+                    yield
+                finally:
+                    events.append('leave')
+            def contended(descriptor, operation):
+                try:
+                    return original_flock(descriptor, operation)
+                except BlockingIOError:
+                    collisions.append(descriptor)
+                    original_flock(holder, fcntl.LOCK_UN)
+                    raise
+            try:
+                with patch.object(P._baseline, 'state_guard', side_effect=outer_guard), \
+                     patch.object(D.fcntl, 'flock', side_effect=contended), \
+                     patch.object(D, 'darwin_release', wraps=D.darwin_release) as release:
+                    result, error = self.dispatch('release')
+                self.assertEqual(result, 0, 'brief real watcher contention rejected Disconnect: '+error)
+                self.assertEqual(len(collisions), 1)
+                release.assert_called_once_with(False)
+                self.assertEqual(events, ['enter', 'leave', 'enter', 'leave'], 'admission retry retained the outer lock')
+                self.assertFalse((self.root/'run/kill-switch.json').exists())
+                self.assertEqual(self.references, {'999'})
+                self.assertEqual(self.rules['com.apple/foreign'], 'block out all\n')
+            finally:
+                os.close(holder)
+
+    def test_admitted_action_errors_are_never_retried(self):
+        with patch.object(D, 'darwin_release', side_effect=BlockingIOError('owned operation failed after admission')) as release:
+            result, error = self.dispatch('release')
+        self.assertEqual(result, 1)
+        self.assertIn('owned operation failed after admission', error)
+        release.assert_called_once_with(False)
+        self.assertIsNone(D._WATCHER_GUARD_FD)
+
+    def test_busy_admission_never_bypasses_or_releases_a_foreign_watcher_lock(self):
+        with D._private_run(self.root) as parent:
+            holder = D._private_descriptor(parent, 'darwin-watcher-state.lock', create=True)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with patch.object(D, '_WATCHER_ADMISSION_SECONDS', 0.04), \
+                 patch.object(D, 'darwin_release') as release:
+                result, error = self.dispatch('release')
+            self.assertEqual(result, 1)
+            self.assertIn('still owned by another operation', error)
+            release.assert_not_called()
+            self.assertIsNone(D._WATCHER_GUARD_FD)
+            probe = os.open(self.root/'run/darwin-watcher-state.lock', os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(probe)
+        finally:
+            os.close(holder)
 
     def test_legacy_watcher_locks_its_iteration_and_never_rewrites_native_timeout(self):
         prior, descriptor = self.captured_lease()

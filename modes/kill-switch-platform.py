@@ -40,6 +40,7 @@ _darwin = _load("routervpn_darwin_killswitch", HERE / "darwin_kill_switch.py")
 _WATCHER_KEY = 'darwin_watcher'
 _WATCHER_GUARD_FD: int | None = None
 _WATCHER_RETIRE_SECONDS = 3.0
+_WATCHER_ADMISSION_SECONDS = 3.0
 
 
 def _private_owner(info, *, directory=False):
@@ -115,6 +116,37 @@ def _watcher_state_guard(root: Path):
             # Closing, rather than LOCK_UN, preserves any in-flight child's
             # shared authority if this Python owner fails or exits early.
             os.close(descriptor)
+
+
+@contextlib.contextmanager
+def _darwin_action_guard(root: Path):
+    """Admit one foreground action after a bounded existing-watcher turn.
+
+    Retry only lock acquisition, releasing every acquired outer guard before
+    waiting. Once admitted, a failed action is never replayed.
+    """
+    deadline = time.monotonic() + _WATCHER_ADMISSION_SECONDS
+    busy = None
+    while True:
+        if time.monotonic() >= deadline:
+            raise RuntimeError('macOS policy transaction is still owned by another operation') from busy
+        guards = contextlib.ExitStack()
+        try:
+            guards.enter_context(_darwin._baseline.state_guard(root))
+            guards.enter_context(_watcher_state_guard(root))
+        except BlockingIOError as error:
+            guards.close()
+            busy = error
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.02, remaining))
+            continue
+        except BaseException:
+            guards.close()
+            raise
+        with guards:
+            yield
+        return
 
 
 def _watcher_record(state: dict[str, Any]):
@@ -543,12 +575,11 @@ def main() -> int:
         if action == "watch": return darwin_watch()
         if action == "status": return darwin_status()
         if action in ('apply', 'release', 'force-off', 'reassert'):
-            with _darwin._baseline.state_guard(_linux.root_dir()):
-                with _watcher_state_guard(_linux.root_dir()):
-                    if action == "apply": return darwin_apply()
-                    if action == "release": return darwin_release(False)
-                    if action == "force-off": return darwin_release(True)
-                    if action == "reassert": return darwin_reassert()
+            with _darwin_action_guard(_linux.root_dir()):
+                if action == "apply": return darwin_apply()
+                if action == "release": return darwin_release(False)
+                if action == "force-off": return darwin_release(True)
+                if action == "reassert": return darwin_reassert()
         print("usage: kill-switch-platform.py apply|watch|release|force-off|reassert|status", file=sys.stderr)
         return 2
     except Exception as exc:
