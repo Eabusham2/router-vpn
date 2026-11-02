@@ -117,7 +117,9 @@ def main():
         for parent in ("TestDarwinNetworkMessageAlignmentAndOwnership",
                        "TestDarwinNetworkMessageSocketAddressBounds",
                        "TestDarwinNetworkMessageRejectsIncompleteHeaders",
-                       "TestDarwinInformationalMessageFraming"):
+                       "TestDarwinInformationalMessageFraming",
+                       "TestDarwinNetworkReceiveNativeSocket",
+                       "TestDarwinNetworkReceiveLoopAndJoinedClose"):
             require_pass(base.stdout, parent)
     if sys.platform == "linux":
         require_pass(base.stdout, "TestLinuxRouteTableCompatibilityAndOwnedCarrierTransition")
@@ -201,18 +203,29 @@ def main():
             native_controls = (
                 ("unsafe-unaligned-native-parser", "\t\tvar message syscall.RoutingMessage\n",
                  "\t\t_, _ = syscall.ParseRoutingMessage(frame)\n\t\tvar message syscall.RoutingMessage\n",
+                 "TestDarwinNetworkMessageAlignmentAndOwnership",
                  "fatal error: checkptr: misaligned pointer conversion"),
                 ("borrowed-receive-buffer", "return payload, nil",
-                 "return frame[size:], nil", "reused receive buffer mutated a captured native message"),
+                 "return frame[size:], nil", "TestDarwinNetworkMessageAlignmentAndOwnership",
+                 "reused receive buffer mutated a captured native message"),
+                ("generic-route-sender-conversion", "size, flags, received = darwinReceiveNotification(fd, buffer)",
+                 "size, _, flags, _, received = syscall.Recvmsg(int(fd), buffer, nil, syscall.MSG_DONTWAIT)",
+                 "TestNativeNetworkObserverReadOnlyBarrier", "address family not supported by protocol family"),
+                ("lost-native-datagram-truncation", "return int(size), int(message.Flags), nil",
+                 "return int(size), 0, nil", "TestDarwinNetworkReceiveNativeSocket/payload-truncated",
+                 "native recvmsg lost its actual datagram truncation witness"),
+                ("concealed-native-receive-error", "return 0, 0, failure",
+                 "return 0, 0, nil", "TestDarwinNetworkReceiveNativeSocket/invalid-descriptor",
+                 "native receive concealed an invalid original descriptor"),
             )
-            for name, before, after, witness in native_controls:
+            for name, before, after, test, witness in native_controls:
                 if original.count(before) != 1:
                     raise RuntimeError("Darwin native decoding control boundary changed: " + name)
                 try:
                     target.write_text(original.replace(before, after, 1))
                     result = execute([go, "test", "-race", "-gcflags=all=-d=checkptr=2", "-v", "-count=1",
-                                      "-timeout=30s", ".", "-run", "^TestDarwinNetworkMessageAlignmentAndOwnership$"],
-                                     cwd=mutant, env=env, timeout=90, succeeds=False)
+                                      "-timeout=30s", ".", "-run", "^" + test + "$"],
+                                     cwd=mutant, env=native_env, timeout=90, succeeds=False)
                     if result.returncode == 0 or witness not in result.stdout or "[build failed]" in result.stdout:
                         print(result.stdout, end="")
                         raise RuntimeError("Darwin decoding control did not reject its actual defect: " + name)

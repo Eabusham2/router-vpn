@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -123,6 +124,30 @@ func darwinMessageHeader(frame []byte, size int, header any) ([]byte, error) {
 	return payload, nil
 }
 
+// The route socket's sender is AF_ROUTE, which syscall.Recvmsg cannot convert
+// to a Go Sockaddr even after it has consumed the notification successfully.
+// A native recvmsg with no optional sender buffer retains the same owned bytes
+// and flags without requesting that unrelated conversion. Both supported
+// Darwin architectures expose this Msghdr/Iovec ABI and SYS_RECVMSG trap.
+// https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/recvmsg.2.html
+func darwinReceiveNotification(fd uintptr, buffer []byte) (int, int, error) {
+	if len(buffer) == 0 {
+		return 0, 0, errors.New("Darwin network receive has no owned buffer")
+	}
+	iov := syscall.Iovec{Base: &buffer[0]}
+	iov.SetLen(len(buffer))
+	message := syscall.Msghdr{Iov: &iov, Iovlen: 1}
+	size, _, failure := syscall.Syscall(syscall.SYS_RECVMSG, fd, uintptr(unsafe.Pointer(&message)), syscall.MSG_DONTWAIT)
+	runtime.KeepAlive(buffer)
+	if failure != 0 {
+		return 0, 0, failure
+	}
+	if size > uintptr(len(buffer)) {
+		return 0, int(message.Flags), errors.New("Darwin network receive exceeded its owned buffer")
+	}
+	return int(size), int(message.Flags), nil
+}
+
 func (o *darwinObserver) run() {
 	defer close(o.joined)
 	raw, err := o.file.SyscallConn()
@@ -135,7 +160,7 @@ func (o *darwinObserver) run() {
 		var size, flags int
 		var received error
 		err = raw.Read(func(fd uintptr) bool {
-			size, _, flags, _, received = syscall.Recvmsg(int(fd), buffer, nil, syscall.MSG_DONTWAIT)
+			size, flags, received = darwinReceiveNotification(fd, buffer)
 			return received != syscall.EAGAIN && received != syscall.EWOULDBLOCK
 		})
 		if err == nil {

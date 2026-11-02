@@ -5,10 +5,13 @@ package desktopnetwork
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func darwinTestFrame(t *testing.T, kind byte) ([]byte, syscall.RoutingMessage) {
@@ -184,5 +187,146 @@ func TestDarwinInformationalMessageFraming(t *testing.T) {
 				t.Fatal("informational record bypassed exact native framing", kind, length, err)
 			}
 		}
+	}
+}
+
+func darwinTestNotificationSocket(t *testing.T) (*os.File, int) {
+	t.Helper()
+	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_DGRAM, 0)
+	if err != nil {
+		t.Fatal("native notification fixture socket failed", err)
+	}
+	var receiver *os.File
+	t.Cleanup(func() {
+		if receiver != nil {
+			receiver.Close()
+		} else {
+			syscall.Close(pair[0])
+		}
+		syscall.Close(pair[1])
+	})
+	for _, fd := range pair {
+		syscall.CloseOnExec(fd)
+		if err := syscall.SetNonblock(fd, true); err != nil {
+			t.Fatal("native fixture lost nonblocking socket", err)
+		}
+	}
+	receiver = os.NewFile(uintptr(pair[0]), "owned-darwin-notification-fixture")
+	if receiver == nil {
+		t.Fatal("native notification fixture has no original descriptor")
+	}
+	return receiver, pair[1]
+}
+
+func TestDarwinNetworkReceiveNativeSocket(t *testing.T) {
+	for _, name := range []string{"payload", "payload-truncated", "empty-buffer", "would-block"} {
+		t.Run(name, func(t *testing.T) {
+			receiver, sender := darwinTestNotificationSocket(t)
+			raw, err := receiver.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			read := func(buffer []byte) (size, flags int, received error) {
+				if err := raw.Control(func(fd uintptr) {
+					size, flags, received = darwinReceiveNotification(fd, buffer)
+				}); err != nil {
+					t.Fatal("native read lost its original socket", err)
+				}
+				return
+			}
+			payload := []byte("captured native datagram")
+			buffer := make([]byte, 64)
+			if name == "would-block" {
+				if size, flags, err := read(buffer); size != 0 || flags != 0 || (!errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK)) {
+					t.Fatal("empty nonblocking socket did not retain its kernel retry result", size, flags, err)
+				}
+				return
+			}
+			if n, err := syscall.Write(sender, payload); err != nil || n != len(payload) {
+				t.Fatal("native fixture datagram was not delivered completely", n, err)
+			}
+			if name == "empty-buffer" {
+				if size, flags, err := read(nil); err == nil || size != 0 || flags != 0 {
+					t.Fatal("absent receive storage consumed or admitted a native message", size, flags, err)
+				}
+			}
+			if name == "payload-truncated" {
+				buffer = buffer[:4]
+			}
+			size, flags, err := read(buffer)
+			if name == "payload-truncated" {
+				if err != nil || size != len(buffer) || flags&syscall.MSG_TRUNC == 0 || !bytes.Equal(buffer, payload[:len(buffer)]) {
+					t.Fatal("native recvmsg lost its actual datagram truncation witness", size, flags, err)
+				}
+			} else if err != nil || size != len(payload) || flags&(syscall.MSG_TRUNC|syscall.MSG_CTRUNC) != 0 || !bytes.Equal(buffer[:size], payload) {
+				t.Fatal("native recvmsg changed its complete owned payload", size, flags, err)
+			}
+		})
+	}
+	t.Run("invalid-descriptor", func(t *testing.T) {
+		if size, flags, err := darwinReceiveNotification(^uintptr(0), make([]byte, 8)); !errors.Is(err, syscall.EBADF) || size != 0 || flags != 0 {
+			t.Fatal("native receive concealed an invalid original descriptor", size, flags, err)
+		}
+	})
+}
+
+func TestDarwinNetworkReceiveLoopAndJoinedClose(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "owned-notification", true: "empty-notification"}[empty], func(t *testing.T) {
+			receiver, sender := darwinTestNotificationSocket(t)
+			type observation struct {
+				event Event
+				err   error
+			}
+			observed := make(chan observation, 2)
+			owner := &darwinObserver{file: receiver, joined: make(chan struct{}), waiters: make(map[int32]chan error),
+				emit: func(event Event, err error) { observed <- observation{event, err} }}
+			go owner.run()
+			t.Cleanup(func() {
+				receiver.Close()
+				select {
+				case <-owner.joined:
+				case <-time.After(2 * time.Second):
+					t.Error("native fixture retained its receive goroutine")
+				}
+			})
+			frame, _ := darwinTestFrame(t, syscall.RTM_IFINFO)
+			if empty {
+				frame = nil
+			}
+			if n, err := syscall.SendmsgN(sender, frame, nil, nil, 0); err != nil || n != len(frame) {
+				t.Fatal("native fixture notification was not delivered completely", n, err)
+			}
+			select {
+			case result := <-observed:
+				if empty {
+					if result.err == nil || result.err.Error() != "Darwin network notification was dropped or truncated" || result.event.Kind != "" {
+						t.Fatal("empty native message became network state", result)
+					}
+				} else if result.err != nil || result.event.Kind != "link" || result.event.Action != "change" || result.event.Index != 9 {
+					t.Fatal("actual receive loop lost its original native notification", result)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("actual receive loop did not observe its owned datagram")
+			}
+			closed := make(chan error, 1)
+			go func() { closed <- owner.Close() }()
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal("original native socket close failed", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("original native receive loop did not join on close")
+			}
+			select {
+			case <-owner.joined:
+			default:
+				t.Fatal("native socket close returned before its receive loop joined")
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatal("joined native socket could not close idempotently", err)
+			}
+		})
 	}
 }
