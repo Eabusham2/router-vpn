@@ -50,13 +50,21 @@ func (s *Service) runLatency(ctx context.Context, id string, hop Hop) {
 	samples := make([]float64, 0, LatencyBenchmarkSamples)
 	boundaryFailure := verify()
 	failure := boundaryFailure
+	var probeFailure publicMeasurementFailure
 	if failure == nil {
 		for len(samples) < LatencyBenchmarkSamples {
 			if failure = s.phase(ctx, id, fmt.Sprintf("exit: HTTPS response %d/%d", len(samples)+1, LatencyBenchmarkSamples)); failure != nil {
 				break
 			}
 			value, err := s.provePublic(ctx, hop)
-			if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			if err != nil {
+				failure = err
+				// Only our fixed probe messages may explain a failed sample.
+				// Never publish a native engine/proof error or a partial score.
+				probeFailure, _ = err.(publicMeasurementFailure)
+				break
+			}
+			if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
 				failure = errors.New("captured HTTPS response failed")
 				break
 			}
@@ -80,6 +88,9 @@ func (s *Service) runLatency(ctx context.Context, id string, hop Hop) {
 		result.Ready = true
 	} else {
 		result.Failure = "No complete 50-sample HTTPS response benchmark; the previous saved result must remain unchanged"
+		if probeFailure != "" {
+			result.Failure += " (" + string(probeFailure) + ")"
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

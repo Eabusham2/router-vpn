@@ -121,6 +121,73 @@ func TestLatencyBenchmarkDiscardsPartialFailedAndStaleSamples(t *testing.T) {
 	}
 }
 
+type latencyFailureConn struct {
+	net.Conn
+	deadline, close bool
+}
+
+func (c *latencyFailureConn) SetDeadline(deadline time.Time) error {
+	if c.deadline {
+		return errors.New("private fixture deadline credential")
+	}
+	return c.Conn.SetDeadline(deadline)
+}
+
+func (c *latencyFailureConn) Close() error {
+	err := c.Conn.Close()
+	if c.close {
+		return errors.New("private fixture close credential")
+	}
+	return err
+}
+
+func TestLatencyBenchmarkRetainsOnlyFixedProbeFailureReasons(t *testing.T) {
+	for mode, reason := range map[string]string{
+		"dial":     "captured public measurement dial failed",
+		"deadline": "public measurement requires a working deadline",
+		"tls":      "public measurement TLS identity failed",
+		"partial":  "public measurement refused redirect, partial or compressed payload",
+		"short":    "public download length differs",
+		"close":    "public measurement canceled or close did not finish cleanly",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newPublicFixture(t)
+			service := fixture.service(t, publicHop("exit"))
+			switch mode {
+			case "tls":
+				service.publicTLS = nil
+			case "partial", "short":
+				fixture.mode.Store(mode)
+			default:
+				fixture.dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
+					if mode == "dial" {
+						return nil, errors.New("private fixture dial credential")
+					}
+					connection, err := (&net.Dialer{}).DialContext(ctx, "tcp", fixture.server.Listener.Addr().String())
+					if err != nil {
+						return nil, err
+					}
+					return &latencyFailureConn{Conn: connection, deadline: mode == "deadline", close: mode == "close"}, nil
+				}
+			}
+			id := strings.Repeat("f", 32)
+			if err := service.StartLatency(id, "exit-node"); err != nil {
+				t.Fatal(err)
+			}
+			status := latencyStatus(t, service, id)
+			if status.Stage != "complete" || len(status.Results) != 1 {
+				t.Fatal("failed original probe lost its joined result", status)
+			}
+			result := status.Results[0]
+			if result.Ready || result.Benchmark != nil || result.Idle != nil || result.Download != nil || result.Upload != nil ||
+				!strings.HasSuffix(result.Failure, " ("+reason+")") || strings.Contains(service.StatusJSON(), "credential") ||
+				strings.Contains(service.StatusJSON(), "fixture-secret") {
+				t.Fatal("probe failure lost its fixed reason, exposed private details or acquired a score", result)
+			}
+		})
+	}
+}
+
 type latencyBoundaryEngine struct {
 	*publicFixture
 	checks atomic.Int32
