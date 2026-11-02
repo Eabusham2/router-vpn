@@ -68,7 +68,7 @@ func (owner *routerVPNLinuxNodeControl) bindExternal(ctx context.Context, origin
 	meta := policy.Metadata()
 	capture, err := policy.Capture()
 	if err != nil || meta.TargetOS != "linux" || meta.SOCKSUDPAssociationRequired ||
-		(meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "wireguard") ||
+		(meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg") ||
 		capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
 		capture.StartLayer != "" || capture.EntryStartLayer != "" {
 		return routerVPNExternalFailure

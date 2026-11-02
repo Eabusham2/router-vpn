@@ -150,12 +150,12 @@ func (n *ExternalNetworkOwner) Start(stage adapter.StartStage) error {
 		return errors.New("ordinary desktop network startup has no prepared native owner")
 	}
 	if stage == adapter.StartStateInitialize {
-		// The literal WireGuard peer opens its connected bind and keepalive
+		// The literal WG/AWG peer opens its connected bind and keepalive
 		// during endpoint Start. Its exact source and deny baseline have
 		// already been retained by the native factory. This separate phase
 		// admits only the compiled lower tuples, never proof or TUN readiness.
 		meta := n.policy.Metadata()
-		n.sockets = runtime.GOOS == "linux" && meta.TargetOS == "linux" && meta.Protocol == "wireguard"
+		n.sockets = runtime.GOOS == "linux" && meta.TargetOS == "linux" && (meta.Protocol == "wireguard" || meta.Protocol == "amneziawg")
 	}
 	if stage == adapter.StartStateStarted {
 		n.ready = true
@@ -227,7 +227,7 @@ func (n *ExternalNetworkOwner) Current() bool {
 }
 
 // SocketCurrent preserves normal activation for the ordinary lazy transports.
-// Only the sealed Linux WireGuard endpoint may acquire its captured lower bind
+// Only a sealed Linux WG/AWG endpoint may acquire its captured lower bind
 // after Initialize. Current still governs every proof, TUN and measurement.
 func (n *ExternalNetworkOwner) SocketCurrent() bool {
 	if n == nil {

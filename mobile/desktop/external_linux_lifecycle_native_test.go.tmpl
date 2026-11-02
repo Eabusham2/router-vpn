@@ -447,10 +447,10 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			}
 		})
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
 		t.Run(protocol+"-succession", func(t *testing.T) {
 			network := "tcp"
-			if protocol == "hysteria2" || protocol == "wireguard" {
+			if protocol == "hysteria2" || protocol == "wireguard" || strings.HasPrefix(protocol, "amneziawg-") {
 				network = "udp"
 			}
 			probe := func(owner *linuxExternalNativeLifecycle, remote netip.AddrPort, blocked bool) {

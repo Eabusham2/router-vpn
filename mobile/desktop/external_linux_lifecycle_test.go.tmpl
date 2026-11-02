@@ -82,7 +82,7 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 		want := []mobiletor.DesktopLinuxSocketDestination{{Network: "tcp", Address: netip.MustParseAddrPort("192.168.50.7:8443")}}
 		if f.external.policy.Metadata().Protocol == "shadowsocks" {
 			want = append(want, mobiletor.DesktopLinuxSocketDestination{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")})
-		} else if protocol := f.external.policy.Metadata().Protocol; protocol == "hysteria2" || protocol == "wireguard" {
+		} else if protocol := f.external.policy.Metadata().Protocol; protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg" {
 			want = []mobiletor.DesktopLinuxSocketDestination{{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")}}
 		}
 		if f.baseline != 1 || f.admitted != 0 || capture != f.source.record.Capture || ctx.Err() != nil || len(options.LANPrefixes) != 0 ||
@@ -98,7 +98,7 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 }
 
 func TestRouterVPNExternalLinuxLifecycleKeepsTypedSourceAndJoinedOwner(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			t.Run(protocol+"/"+kill, func(t *testing.T) {
 				f := newExternalLinuxLifecycleFixture(t, protocol, kill, nil)
@@ -200,11 +200,11 @@ func TestRouterVPNExternalLinuxLifecycleRejectsForeignOrReusedCapabilities(t *te
 }
 
 func TestRouterVPNExternalLinuxLifecycleRetainsRefusedAndCancelledSources(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "wireguard"} {
+	for _, protocol := range []string{"shadowsocks", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
 		for _, fault := range []string{"partial", "refused", "cancelled", "guardian-replaced", "network-replaced"} {
 			name := fault
-			if protocol == "wireguard" {
-				name = "wireguard/" + fault
+			if protocol != "shadowsocks" {
+				name = protocol + "/" + fault
 			}
 			t.Run(name, func(t *testing.T) {
 				f := newExternalLinuxLifecycleFixture(t, protocol, "always", func(f *externalLinuxLifecycleFixture) error {
@@ -245,9 +245,22 @@ func TestRouterVPNExternalLinuxLifecycleRetainsRefusedAndCancelledSources(t *tes
 }
 
 func TestRouterVPNExternalPhysicalWireGuardStartupRevokesExactLower(t *testing.T) {
+	externalPhysicalPacketStartupRevokesExactLower(t, "wireguard")
+}
+
+func TestRouterVPNExternalPhysicalAmneziaStartupRevokesExactLower(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) {
+			externalPhysicalPacketStartupRevokesExactLower(t, "amneziawg-"+variant)
+		})
+	}
+}
+
+func externalPhysicalPacketStartupRevokesExactLower(t *testing.T, protocol string) {
+	t.Helper()
 	for _, fault := range []string{"manager", "broker", "capture", "cancel", "network", "close"} {
 		t.Run(fault, func(t *testing.T) {
-			f := newExternalLinuxLifecycleFixture(t, "wireguard", "always", nil)
+			f := newExternalLinuxLifecycleFixture(t, protocol, "always", nil)
 			n := f.external.network
 			if err := f.prepare(t, ""); err != nil {
 				t.Fatal(err)
@@ -276,7 +289,7 @@ func TestRouterVPNExternalPhysicalWireGuardStartupRevokesExactLower(t *testing.T
 				f.external.manager.replace(replacement)
 				defer f.external.manager.replace(f.external.physical)
 			case "broker":
-				other := newExternalLinuxLifecycleFixture(t, "wireguard", "always", nil)
+				other := newExternalLinuxLifecycleFixture(t, protocol, "always", nil)
 				if err := other.prepare(t, ""); err != nil {
 					t.Fatal(err)
 				}

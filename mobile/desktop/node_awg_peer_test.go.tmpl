@@ -32,6 +32,25 @@ import (
 	wgconn "github.com/sagernet/wireguard-go/conn"
 )
 
+func init() {
+	desktopExternalInstalledAmnezia = startDesktopExternalInstalledAmnezia
+}
+
+// The ordinary external path retains only its selected DNS/public-exit proof.
+// Reuse the actual AWG backend and complete native parameter readback without
+// manufacturing the independent Router reference's health identity.
+func startDesktopExternalInstalledAmnezia(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer {
+	t.Helper()
+	parameters, err := awgpolicy.ParametersUAPI(request.Parameters)
+	expected, digestErr := desktopNodeAWGParameterDigest(request.Parameters)
+	padding, paddingErr := strconv.Atoi(request.Parameters["s4"])
+	if err != nil || digestErr != nil || paddingErr != nil || len(request.Parameters) != 11 {
+		t.Fatal("external AWG reference lost its complete captured parameters")
+	}
+	return startDesktopExternalInstalledPacket(t, server, request.desktopExternalInstalledWGRequest, parameters,
+		desktopNodeAWGReferenceFactory(expected, padding))
+}
+
 // This child retains the same fixed DNS, health, echo and physical destinations
 // as the independent WG fixture. Its cipher is the actual pinned AWG device,
 // with the captured complete Fast/Strong parameters applied and read back.

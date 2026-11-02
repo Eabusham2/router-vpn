@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -19,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -27,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +37,9 @@ import (
 	"testing"
 	"time"
 
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	awgdevice "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
 	mDNS "github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
@@ -45,11 +51,13 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	HTTP "github.com/sagernet/sing-box/protocol/http"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -77,6 +85,27 @@ const desktopExternalIntegrationIP = "203.0.113.88"
 const desktopExternalIntegrationUser = "captured-native-user"
 const desktopExternalIntegrationPassword = "captured-native-password"
 
+func desktopExternalIntegrationPacketEndpoint(protocol string) bool {
+	return protocol == "wireguard" || awgpolicy.IsMode(protocol)
+}
+
+func desktopExternalIntegrationUDP(protocol string) bool {
+	return protocol == "hysteria2" || desktopExternalIntegrationPacketEndpoint(protocol)
+}
+
+// These complete Fast/Strong imports are test inputs, not product defaults.
+func desktopExternalIntegrationAWGParameters(protocol string) map[string]string {
+	if !awgpolicy.IsMode(protocol) {
+		return nil
+	}
+	parameters := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32",
+		"h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+	if protocol == "awg2-fast" {
+		parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+	}
+	return parameters
+}
+
 // Policy and lifecycle source are deliberately separate: the broker exercises
 // its ordinary real socket implementation while the OS constructor is an
 // explicit boundary. The source cannot supply or fabricate connected sockets.
@@ -88,6 +117,7 @@ type desktopExternalIntegrationKernel struct {
 	name     string
 	udp      bool
 	deny     atomic.Bool
+	denied   atomic.Int32
 	mu       sync.Mutex
 	grants   map[string]mobiletor.DesktopSocketGrant
 	issued   map[string]*desktopExternalIntegrationGrant
@@ -127,8 +157,12 @@ func (p *desktopExternalIntegrationKernel) network() string {
 	return "tcp"
 }
 func (p *desktopExternalIntegrationKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
-	if ctx.Err() != nil || !p.Current(c, p.source.owner) || network != p.network() || remote != p.remote || p.deny.Load() {
+	if ctx.Err() != nil || !p.Current(c, p.source.owner) || network != p.network() || remote != p.remote {
 		return mobiletor.DesktopSocketBinding{}, errors.New("local composition source denied another path")
+	}
+	if p.deny.Load() {
+		p.denied.Add(1)
+		return mobiletor.DesktopSocketBinding{}, errors.New("local composition source denied its captured path")
 	}
 	return mobiletor.DesktopSocketBinding{Owner: p.source.owner, InterfaceName: p.name, InterfaceIndex: p.index, LocalAddress: p.local}, nil
 }
@@ -303,6 +337,8 @@ type desktopExternalIntegrationPeer struct {
 	certificate, proxyCertificate                                                               tls.Certificate
 	badDNS, badIP, badAuth, truncatedBody                                                       bool
 	wgPrivate, wgClientPublic, wgPreshared                                                      string
+	awgParameters                                                                               map[string]string
+	awgReadback                                                                                 func() error
 	mu                                                                                          sync.Mutex
 	closing                                                                                     bool
 	connections                                                                                 map[net.Conn]bool
@@ -326,6 +362,10 @@ func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
 	}
 	if p.protocol == "wireguard" {
 		p.startWireGuard(t)
+		return
+	}
+	if awgpolicy.IsMode(p.protocol) {
+		p.startAmnezia(t)
 		return
 	}
 	var serveSS func(net.Conn) error
@@ -601,8 +641,170 @@ func (p *desktopExternalIntegrationPeer) startWireGuard(t *testing.T) {
 	}
 }
 
+// The independent reference translates only native event/read-offset types
+// around the same userspace stack. The application uses its shipping AWG
+// endpoint/wrapper; this peer uses the unmodified pinned AWG crypto device.
+type desktopExternalAWGTUN struct {
+	wgtransport.Device
+	events           chan awgtun.Event
+	done, configured chan struct{}
+	offset           int
+	refreshed        atomic.Bool
+	once             sync.Once
+	workers          sync.WaitGroup
+}
+
+func desktopExternalAWGWrap(stack wgtransport.Device, padding int) *desktopExternalAWGTUN {
+	tun := &desktopExternalAWGTUN{Device: stack, events: make(chan awgtun.Event, 4), done: make(chan struct{}), configured: make(chan struct{}), offset: 16 + padding}
+	tun.workers.Add(1)
+	go func() {
+		defer tun.workers.Done()
+		defer close(tun.events)
+		for {
+			select {
+			case <-tun.done:
+				return
+			case event, ok := <-stack.Events():
+				if !ok {
+					return
+				}
+				select {
+				case tun.events <- awgtun.Event(event):
+				case <-tun.done:
+					return
+				}
+			}
+		}
+	}()
+	return tun
+}
+
+func (t *desktopExternalAWGTUN) Events() <-chan awgtun.Event { return t.events }
+func (t *desktopExternalAWGTUN) Read(packets [][]byte, sizes []int, offset int) (int, error) {
+	select {
+	case <-t.done:
+		return 0, net.ErrClosed
+	case <-t.configured:
+	}
+	if len(packets) != 1 || len(sizes) == 0 || offset < 0 || offset > len(packets[0]) {
+		return 0, errors.New("external AWG reference lost its bounded packet buffer")
+	}
+	if offset != t.offset {
+		if offset == 16 && t.refreshed.CompareAndSwap(false, true) {
+			sizes[0] = 0
+			return 0, nil
+		}
+		return 0, errors.New("external AWG reference lost its captured S4 read offset")
+	}
+	return t.Device.Read(packets, sizes, offset)
+}
+func (t *desktopExternalAWGTUN) Close() error {
+	t.once.Do(func() { close(t.done); _ = t.Device.Close(); t.workers.Wait() })
+	return nil
+}
+
+type desktopExternalAWGBind struct{ *desktopExternalWireGuardBind }
+
+func (b *desktopExternalAWGBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
+	reads, port, err := b.desktopExternalWireGuardBind.Open(port)
+	if err != nil {
+		return nil, 0, err
+	}
+	converted := make([]awgconn.ReceiveFunc, len(reads))
+	for i, read := range reads {
+		converted[i] = func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
+			values := make([]wgconn.Endpoint, len(endpoints))
+			n, err := read(packets, sizes, values)
+			for index := 0; index < n; index++ {
+				endpoints[index] = values[index]
+			}
+			return n, err
+		}
+	}
+	return converted, port, nil
+}
+func (b *desktopExternalAWGBind) Send(packets [][]byte, endpoint awgconn.Endpoint) error {
+	return b.desktopExternalWireGuardBind.Send(packets, endpoint, 0)
+}
+func (b *desktopExternalAWGBind) ParseEndpoint(value string) (awgconn.Endpoint, error) {
+	return b.desktopExternalWireGuardBind.ParseEndpoint(value)
+}
+
+func (p *desktopExternalIntegrationPeer) startAmnezia(t *testing.T) {
+	t.Helper()
+	parameters, err := awgpolicy.ParametersUAPI(p.awgParameters)
+	padding, paddingErr := strconv.Atoi(p.awgParameters["s4"])
+	if err != nil || paddingErr != nil || len(p.awgParameters) != 11 || p.packet == nil || p.listener != nil || !p.kernel.udp {
+		t.Fatal("external AWG peer lost its complete captured parameters or sole UDP endpoint")
+	}
+	var values [3][]byte
+	defer func() {
+		for _, value := range values {
+			clear(value)
+		}
+	}()
+	for i, encoded := range []string{p.wgPrivate, p.wgClientPublic, p.wgPreshared} {
+		raw, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		if err != nil || len(raw) != 32 {
+			t.Fatal("external AWG peer requires independent keys")
+		}
+		values[i] = raw
+	}
+	stack, err := wgtransport.NewDevice(wgtransport.DeviceOptions{Context: p.ctx, Logger: log.NewNOPFactory().Logger(), Handler: p,
+		UDPTimeout: 10 * time.Second, ICMPTimeout: time.Second, MTU: 1280,
+		Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+	if err != nil {
+		t.Fatal("actual external AWG peer stack", err)
+	}
+	wrapped := desktopExternalAWGWrap(stack, padding)
+	device := awgdevice.NewDevice(wrapped, &desktopExternalAWGBind{&desktopExternalWireGuardBind{peer: p}}, &awgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+	p.closeProtocol = device.Close
+	ipc := fmt.Sprintf("private_key=%x\n%spublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], parameters, values[1], values[2])
+	err = device.IpcSet(ipc)
+	ipc = ""
+	if err == nil {
+		close(wrapped.configured)
+		err = stack.Start()
+	}
+	if err == nil {
+		err = device.Up()
+	}
+	if err != nil {
+		t.Fatal("actual external AWG peer start", err)
+	}
+	expected := sha256.Sum256([]byte(parameters))
+	p.awgReadback = func() error {
+		raw, err := device.IpcGet()
+		if err != nil || len(raw) == 0 || len(raw) > 64<<10 {
+			return errors.New("external AWG peer omitted native parameter readback")
+		}
+		actual := map[string]string{"jc": "0", "jmin": "0", "jmax": "0", "s1": "0", "s2": "0", "s3": "0", "s4": "0"}
+		seen := map[string]bool{}
+		for _, line := range strings.Split(raw, "\n") {
+			key, value, ok := strings.Cut(line, "=")
+			if !ok || !awgpolicy.IsParameter(key) {
+				continue
+			}
+			if seen[key] {
+				return errors.New("external AWG peer repeated a captured parameter")
+			}
+			seen[key], actual[key] = true, value
+		}
+		raw = ""
+		text, err := awgpolicy.ParametersUAPI(actual)
+		mtu, mtuErr := wrapped.MTU()
+		if err != nil || sha256.Sum256([]byte(text)) != expected || mtuErr != nil || mtu != 1280 || wrapped.offset != 16+padding {
+			return errors.New("external AWG peer changed its eleven parameters, MTU or S4 offset")
+		}
+		return nil
+	}
+	if err := p.awgReadback(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (p *desktopExternalIntegrationPeer) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
-	if p.protocol == "wireguard" && (protocol == 17 && destination.String() == desktopExternalIntegrationDNS ||
+	if desktopExternalIntegrationPacketEndpoint(p.protocol) && (protocol == 17 && destination.String() == desktopExternalIntegrationDNS ||
 		protocol == 6 && (destination.String() == "1.1.1.1:443" || p.latency != nil && destination.String() == desktopExternalLatencyAddress)) {
 		return tun.FlowVerdict{Action: tun.ActionAccept}
 	}
@@ -638,7 +840,7 @@ func (p *desktopExternalIntegrationPeer) NewConnectionEx(ctx context.Context, co
 			onClose(err)
 		}
 	}
-	if p.protocol == "wireguard" {
+	if desktopExternalIntegrationPacketEndpoint(p.protocol) {
 		go serve()
 	} else {
 		serve()
@@ -672,7 +874,7 @@ func (p *desktopExternalIntegrationPeer) NewPacketConnectionEx(ctx context.Conte
 			onClose(err)
 		}
 	}
-	if p.protocol == "wireguard" {
+	if desktopExternalIntegrationPacketEndpoint(p.protocol) {
 		go serve()
 	} else {
 		serve()
@@ -764,7 +966,7 @@ func (p *desktopExternalIntegrationPeer) NewConnection(_ context.Context, c net.
 	return p.serve(c, m.Destination.String())
 }
 func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context, connection N.PacketConn, metadata M.Metadata) error {
-	if p.protocol != "hysteria2" && p.protocol != "wireguard" || metadata.Destination.String() != desktopExternalIntegrationDNS {
+	if !desktopExternalIntegrationUDP(p.protocol) || metadata.Destination.String() != desktopExternalIntegrationDNS {
 		return errors.New("composition peer denies unrequested UDP")
 	}
 	stop := context.AfterFunc(p.ctx, func() { _ = connection.Close() })
@@ -893,6 +1095,7 @@ type desktopExternalIntegrationFixture struct {
 	kernel                          *desktopExternalIntegrationKernel
 	peer                            *desktopExternalIntegrationPeer
 	proof                           *RouterVPNExternalProofRequest
+	startRejected                   bool
 }
 
 func desktopExternalIntegrationAddress(t *testing.T) (net.Interface, netip.Addr) {
@@ -1000,7 +1203,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	var packet net.PacketConn
 	var remote netip.AddrPort
 	var err error
-	if protocol == "hysteria2" || protocol == "wireguard" {
+	if desktopExternalIntegrationUDP(protocol) {
 		if runtime.GOOS != "linux" {
 			t.Fatal("direct UDP family has no admitted physical owner on this target")
 		}
@@ -1021,7 +1224,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	f := &desktopExternalIntegrationFixture{}
 	f.source = &desktopExternalIntegrationSource{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("c", 64), Generation: 1, ProcessID: uint32(os.Getpid())}}
 	f.source.live.Store(true)
-	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, udp: protocol == "hysteria2" || protocol == "wireguard", grants: make(map[string]mobiletor.DesktopSocketGrant)}
+	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, udp: desktopExternalIntegrationUDP(protocol), grants: make(map[string]mobiletor.DesktopSocketGrant)}
 	f.source.kernel = f.kernel
 	f.peer = &desktopExternalIntegrationPeer{listener: listener, packet: packet, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel}
 	if strings.HasPrefix(fault, "latency-") {
@@ -1049,7 +1252,11 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	t.Cleanup(f.peer.close)
 	transport := map[string]any{"type": "http", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()), "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
 	settings := map[string]any{"host": address.String(), "port": int(remote.Port()), "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
-	private := map[string]any{"protocol": protocol, "expected_public_ip": desktopExternalIntegrationIP, strings.ReplaceAll(protocol, "-", "_"): settings}
+	actualProtocol := protocol
+	if awgpolicy.IsMode(protocol) {
+		actualProtocol = "amneziawg"
+	}
+	private := map[string]any{"protocol": actualProtocol, "expected_public_ip": desktopExternalIntegrationIP, strings.ReplaceAll(actualProtocol, "-", "_"): settings}
 	if protocol == "https-connect" {
 		transport["tls"] = map[string]any{"enabled": true, "server_name": "captured-proxy.example"}
 		settings["tls_server_name"] = "captured-proxy.example"
@@ -1068,7 +1275,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 			"password": desktopExternalIntegrationPassword, "tls": map[string]any{"enabled": true, "server_name": name}}
 		private["hysteria2"] = map[string]any{"server": address.String(), "port": int(remote.Port()), "password": desktopExternalIntegrationPassword, "tls_server_name": name}
 	}
-	if protocol == "wireguard" {
+	if desktopExternalIntegrationPacketEndpoint(protocol) {
 		clientPrivate, clientPublic := desktopExternalIntegrationWGKey(t)
 		serverPrivate, serverPublic := desktopExternalIntegrationWGKey(t)
 		psk := make([]byte, 32)
@@ -1089,16 +1296,26 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 			"pre_shared_key": shared, "allowed_ips": allowed, "persistent_keepalive_interval": 25}
 		transport = map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag, "private_key": clientPrivate,
 			"address": addresses, "mtu": 1280, "peers": []any{peer}}
-		private["wireguard"] = map[string]any{"private_key": clientPrivate, "addresses": addresses, "peer_public_key": serverPublic,
+		credentials := map[string]any{"private_key": clientPrivate, "addresses": addresses, "peer_public_key": serverPublic,
 			"preshared_key": shared, "endpoint": remote.String(), "allowed_ips": allowed, "mtu": 1280, "persistent_keepalive_interval": 25}
+		if awgpolicy.IsMode(protocol) {
+			parameters := desktopExternalIntegrationAWGParameters(protocol)
+			f.peer.awgParameters = maps.Clone(parameters)
+			if fault == "parameters" {
+				parameters["h1"] = "50000000-59999999"
+			}
+			transport["type"], transport["amnezia"] = mobilemultihop.AmneziaType, parameters
+			credentials["parameters"] = maps.Clone(parameters)
+		}
+		private[actualProtocol] = credentials
 	}
 	profile := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": private, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": "always"}
-	if protocol == "hysteria2" || protocol == "wireguard" {
+	if desktopExternalIntegrationUDP(protocol) {
 		profile["dns_protocol"] = "udp"
 	}
-	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": protocol, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
+	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": actualProtocol, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{transport}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
-	if protocol == "wireguard" {
+	if desktopExternalIntegrationPacketEndpoint(protocol) {
 		graph["endpoints"], graph["outbounds"] = []any{transport}, []any{}
 	}
 	raw, _ := json.Marshal(graph)
@@ -1129,6 +1346,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	routervpndesktoppt.RegisterExternalNetworkOwner(services)
 	endpoints := endpoint.NewRegistry()
 	WG.RegisterEndpoint(endpoints)
+	AWG.RegisterEndpoint(endpoints)
 	ctx = Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.policy.Config()))
 	if err != nil {
@@ -1150,6 +1368,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		}
 		if !f.source.closed.Load() {
 			t.Error("real Box discarded the OS source before joined cleanup")
+		}
+		if f.network != nil && (f.network.Current() || f.network.SocketCurrent()) {
+			t.Error("joined external cleanup retained proof or lower socket authority")
 		}
 		// Join accepted peer work before observing its receipt failures.
 		f.peer.close()
@@ -1180,6 +1401,14 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	}
 	f.peer.start(t)
 	if err = f.box.RouterVPNStrategyStart(); err != nil {
+		if awgpolicy.IsMode(protocol) && fault == "lower-denied" {
+			// The actual AWG endpoint opens its bind during Start. A denied
+			// broker can therefore reject before a proof request exists; retain
+			// the same Box/source for checked cleanup and assert this boundary
+			// in the negative case below.
+			f.startRejected = true
+			return f
+		}
 		t.Fatal("real native startup", err)
 	}
 	f.proof, err = f.box.RouterVPNDesktopExternalCreateProof(f.policy)
@@ -1203,10 +1432,10 @@ func (f *desktopExternalIntegrationFixture) prove(t *testing.T) {
 		t.Fatal("real proof changed original authority or lost derived native ownership", result)
 	}
 	if f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1 ||
-		(f.peer.protocol != "hysteria2" && f.peer.protocol != "wireguard" && f.peer.accepted.Load() < 2) || f.peer.bypassed.Load() != 0 {
+		(!desktopExternalIntegrationUDP(f.peer.protocol) && f.peer.accepted.Load() < 2) || f.peer.bypassed.Load() != 0 {
 		t.Fatal("real selected DNS or public TLS skipped the captured lower path", f.peer.dnsQueries.Load(), f.peer.tlsHandshakes.Load(), f.peer.publicRequests.Load(), f.peer.accepted.Load())
 	}
-	if f.peer.protocol == "hysteria2" || f.peer.protocol == "wireguard" {
+	if desktopExternalIntegrationUDP(f.peer.protocol) {
 		capture, err := f.policy.Capture()
 		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
 			capture.PhysicalRoots[0].Destinations[0].Network != "udp" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
@@ -1216,6 +1445,14 @@ func (f *desktopExternalIntegrationFixture) prove(t *testing.T) {
 		}
 		if _, err := f.kernel.Select(context.Background(), f.source.capture, "tcp", f.kernel.remote); err == nil {
 			t.Fatal("UDP fixture granted an unrequested physical TCP destination")
+		}
+	}
+	if awgpolicy.IsMode(f.peer.protocol) {
+		if f.peer.awgReadback == nil {
+			t.Fatal("external AWG proof lost its independent native parameter receipt")
+		}
+		if err := f.peer.awgReadback(); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if err = f.proof.VerifyCurrentPath(); err != nil {
@@ -1307,7 +1544,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "linux" {
-		protocols = append(protocols, "hysteria2", "wireguard")
+		protocols = append(protocols, "hysteria2", "wireguard", "awg2-fast", "awg2-strong")
 	}
 	for _, protocol := range protocols {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
@@ -1381,12 +1618,36 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		if protocol == "hysteria2" {
 			faults = append(faults, "peer-tls-name", "truncated")
 		}
-		if protocol == "wireguard" {
+		if desktopExternalIntegrationPacketEndpoint(protocol) {
 			faults = append(faults, "psk", "truncated")
+		}
+		if awgpolicy.IsMode(protocol) {
+			faults = append(faults, "parameters")
 		}
 		for _, fault := range faults {
 			t.Run(protocol+"/reject/"+fault, func(t *testing.T) {
 				f := newDesktopExternalIntegrationFixture(t, ca, protocol, fault)
+				if f.startRejected {
+					if fault != "lower-denied" || !awgpolicy.IsMode(protocol) || f.proof != nil || f.network.Current() ||
+						f.kernel.denied.Load() == 0 || f.peer.accepted.Load() != 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0 {
+						t.Fatal("failed eager native startup did not retain the exact denied lower boundary")
+					}
+					proof, proofErr := f.box.RouterVPNDesktopExternalCreateProof(f.policy)
+					if proof != nil {
+						_ = proof.Close()
+					}
+					if proofErr == nil || proof != nil || f.network.Current() {
+						t.Fatal("failed eager native startup acquired a proof owner")
+					}
+					lease, mtuErr := f.box.RouterVPNExternalClaimMTU(nil, f.originalSource, f.originalCapture)
+					if lease != nil {
+						lease.Close()
+					}
+					if mtuErr == nil || lease != nil {
+						t.Fatal("failed eager native startup acquired MTU authority")
+					}
+					return
+				}
 				raw, err := f.proof.Run()
 				if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() || !f.source.cancelled.Load() {
 					t.Fatal("invalid actual DNS/TLS/credential/physical path acquired proof", fault, raw, err)
@@ -1403,10 +1664,10 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 				if (fault == "exit" || fault == "truncated") && (f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1) {
 					t.Fatal("invalid response negative never reached the real authenticated public proof", f.peer.diagnostic())
 				}
-				if (fault == "credential" || fault == "psk") && (f.peer.accepted.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
+				if (fault == "credential" || fault == "psk" || fault == "parameters") && (f.peer.accepted.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
 					t.Fatal("credential negative never reached the actual proxy authentication boundary", f.peer.diagnostic())
 				}
-				if fault == "lower-denied" && f.peer.accepted.Load() != 0 {
+				if fault == "lower-denied" && (f.kernel.denied.Load() == 0 || f.peer.accepted.Load() != 0) {
 					t.Fatal("denied lower path connected through a default dialer")
 				}
 				if fault == "peer-tls-name" && (f.peer.physicalUDP.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
@@ -1508,7 +1769,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		}
 	})
 	if runtime.GOOS == "linux" {
-		for _, protocol := range []string{"hysteria2", "wireguard"} {
+		for _, protocol := range []string{"hysteria2", "wireguard", "awg2-fast", "awg2-strong"} {
 			t.Run(protocol+"/cancelled-proof", func(t *testing.T) {
 				f := newDesktopExternalIntegrationFixture(t, ca, protocol, "held-proof")
 				result := make(chan error, 1)

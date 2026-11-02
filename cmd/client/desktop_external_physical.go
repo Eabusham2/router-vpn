@@ -43,7 +43,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 		return err
 	}
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" &&
-		!(targetOS == "linux" && (capture.Protocol == "hysteria2" || capture.Protocol == "wireguard")) ||
+		!(targetOS == "linux" && (capture.Protocol == "hysteria2" || capture.Protocol == "wireguard" || capture.Protocol == "amneziawg")) ||
 		capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
 		capture.StartLayer != "" || capture.EntryStartLayer != "" || capture.KillSwitchPolicy == "off" {
 		return nil
@@ -88,7 +88,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 		original.SourceSHA256() != meta.OriginalSourceSHA256 || original.Config() != physical.OriginalPolicy().Config() ||
 		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired ||
 		(meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "shadowsocks" &&
-			!(meta.TargetOS == "linux" && (meta.Protocol == "hysteria2" || meta.Protocol == "wireguard"))) {
+			!(meta.TargetOS == "linux" && (meta.Protocol == "hysteria2" || meta.Protocol == "wireguard" || meta.Protocol == "amneziawg"))) {
 		return nil, errors.New("ordinary physical capture differs from its retained original graph")
 	}
 	return &meta, nil

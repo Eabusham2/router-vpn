@@ -37,6 +37,15 @@ func externalPhysicalPolicyFixture(t *testing.T, protocol, host string, port int
 
 func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int, lan bool, target, ipv6, kill string) *mobilemultihop.DesktopExternalPolicy {
 	t.Helper()
+	// The labels select independent imported test profiles. The saved native
+	// protocol remains amneziawg; no preset alias is added to its schema.
+	variant := ""
+	if selected, ok := strings.CutPrefix(protocol, "amneziawg-"); ok {
+		if selected != "fast" && selected != "strong" {
+			t.Fatal("unknown captured Amnezia fixture variant")
+		}
+		protocol, variant = "amneziawg", selected
+	}
 	transport := map[string]any{"tag": mobilemultihop.ExternalFinalTag, "server": host, "server_port": port}
 	private := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88"}
 	switch protocol {
@@ -58,15 +67,24 @@ func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int
 		transport["type"], transport["password"] = "hysteria2", "captured-hysteria-password"
 		transport["tls"] = map[string]any{"enabled": true, "server_name": "captured-proxy.example"}
 		private["hysteria2"] = map[string]any{"server": host, "port": port, "password": transport["password"], "tls_server_name": "captured-proxy.example"}
-	case "wireguard":
+	case "wireguard", "amneziawg":
 		key := func(value byte) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32)) }
 		transport = map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag,
 			"address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "private_key": key(17), "mtu": 1280,
 			"peers": []any{map[string]any{"address": host, "port": port, "public_key": key(18), "pre_shared_key": key(19),
 				"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}}}
-		private["wireguard"] = map[string]any{"endpoint": net.JoinHostPort(host, fmt.Sprint(port)), "private_key": key(17),
+		settings := map[string]any{"endpoint": net.JoinHostPort(host, fmt.Sprint(port)), "private_key": key(17),
 			"addresses": transport["address"], "peer_public_key": key(18), "preshared_key": key(19), "mtu": 1280,
 			"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}
+		if protocol == "amneziawg" {
+			parameters := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32",
+				"h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+			if variant == "fast" {
+				parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+			}
+			transport["type"], transport["amnezia"], settings["parameters"] = mobilemultihop.AmneziaType, parameters, parameters
+		}
+		private[protocol] = settings
 	default:
 		t.Fatal("unexpected native fixture protocol")
 	}
@@ -77,7 +95,7 @@ func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int
 	graph := map[string]any{"outbounds": []any{transport}, "endpoints": []any{},
 		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
 		"route":    map[string]any{"rules": []any{}, "final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
-	if protocol == "wireguard" {
+	if protocol == "wireguard" || protocol == "amneziawg" {
 		graph["outbounds"], graph["endpoints"] = []any{}, []any{transport}
 	}
 	config, _ := json.Marshal(graph)
@@ -244,7 +262,7 @@ func TestRouterVPNExternalPhysicalFactoryAndActivationRetainExactPolicy(t *testi
 func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "linux" {
-		protocols = append(protocols, "hysteria2", "wireguard")
+		protocols = append(protocols, "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong")
 	}
 	for _, protocol := range protocols {
 		t.Run(protocol, func(t *testing.T) {
@@ -263,7 +281,7 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 				t.Fatal(err)
 			}
 			network := "tcp"
-			if protocol == "hysteria2" || protocol == "wireguard" {
+			if protocol == "hysteria2" || protocol == "wireguard" || strings.HasPrefix(protocol, "amneziawg-") {
 				network = "udp"
 			}
 			peer := M.ParseSocksaddr("192.168.50.7:8443")
@@ -276,13 +294,13 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 			if err := f.network.Start(adapter.StartStateInitialize); err != nil || calls.Load() != 1 {
 				t.Fatal("exact Initialize failed", err)
 			}
-			eager := protocol == "wireguard"
+			eager := protocol == "wireguard" || strings.HasPrefix(protocol, "amneziawg-")
 			if f.network.SocketCurrent() != eager || f.network.Current() {
 				t.Fatal("ordinary transport changed its separate startup socket/readiness phase")
 			}
 			broker, err := f.physical.current(context.Background(), network, peer)
 			if eager && (err != nil || broker != f.network.broker) || !eager && (err == nil || broker != nil) {
-				t.Fatal("only the exact eager WireGuard peer may acquire its pre-ready lower broker", err)
+				t.Fatal("only an exact eager WG/AWG peer may acquire its pre-ready lower broker", err)
 			}
 			if f.network.Start(adapter.StartStateInitialize) == nil || calls.Load() != 1 || f.network.Start(adapter.StartStateStarted) == nil {
 				t.Fatal("duplicate or skipped startup acquired native readiness")
@@ -666,12 +684,12 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 	address := externalPhysicalByteAddress(t)
 	networks := []string{"tcp", "udp", "packet"}
 	if runtime.GOOS == "linux" {
-		networks = append(networks, "hysteria2-udp", "wireguard-udp")
+		networks = append(networks, "hysteria2-udp", "wireguard-udp", "amneziawg-fast-udp", "amneziawg-strong-udp")
 	}
 	for _, name := range networks {
 		t.Run(name, func(t *testing.T) {
 			network, protocol := name, "shadowsocks"
-			if name == "hysteria2-udp" || name == "wireguard-udp" {
+			if strings.HasSuffix(name, "-udp") {
 				network, protocol = "udp", strings.TrimSuffix(name, "-udp")
 			}
 			baseNetwork := network
@@ -804,7 +822,7 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 			if err := closeSocket(); err != nil {
 				t.Fatal(err)
 			}
-			if protocol == "hysteria2" || protocol == "wireguard" {
+			if protocol == "hysteria2" || protocol == "wireguard" || strings.HasPrefix(protocol, "amneziawg-") {
 				if leaked, err := f.physical.DialContext(context.Background(), "tcp", M.ParseSocksaddr(remote.String())); err == nil || leaked != nil {
 					if leaked != nil {
 						_ = leaked.Close()

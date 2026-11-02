@@ -45,7 +45,14 @@ func init() {
 // reuses only the real cryptographic device, fixed-route handler and UDP bind;
 // it does not create a Router node identity or an agent health responder.
 func startDesktopExternalInstalledWireGuard(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer {
+	return startDesktopExternalInstalledPacket(t, server, request, "", startDesktopNodeWGReferenceDevice)
+}
+
+func startDesktopExternalInstalledPacket(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, parameters string, factory desktopNodeUDPReferenceFactory) desktopExternalInstalledWGPeer {
 	t.Helper()
+	if factory == nil {
+		t.Fatal("external packet reference lost its exact cryptographic backend")
+	}
 	var values [3][]byte
 	defer func() {
 		for _, value := range values {
@@ -84,8 +91,8 @@ func startDesktopExternalInstalledWireGuard(t *testing.T, server *desktopNodeLay
 		t.Fatal("external WireGuard reference failed to create its native stack", err)
 	}
 	bind := &desktopNodeWGBind{local: netip.MustParseAddr("198.51.100.2"), remote: netip.MustParseAddr("192.168.210.1")}
-	ipc := fmt.Sprintf("private_key=%x\npublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], values[1], values[2])
-	device, err := startDesktopNodeWGReferenceDevice(ctx, stack, bind, ipc)
+	ipc := fmt.Sprintf("private_key=%x\n%spublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], parameters, values[1], values[2])
+	device, err := factory(ctx, stack, bind, ipc)
 	ipc = ""
 	if err != nil {
 		handler.close()
@@ -94,7 +101,7 @@ func startDesktopExternalInstalledWireGuard(t *testing.T, server *desktopNodeLay
 	var once sync.Once
 	close := func() { once.Do(func() { handler.close(); device.close() }) }
 	t.Cleanup(close)
-	return desktopExternalInstalledWGPeer{address: bind.address(), close: close, stats: func() (int64, int64, int64) {
+	return desktopExternalInstalledWGPeer{address: bind.address(), close: close, parameters: device.readback, stats: func() (int64, int64, int64) {
 		return bind.packets.Load(), handler.tcp.Load(), handler.udp.Load()
 	}}
 }

@@ -2,15 +2,29 @@ package mobilemultihop
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 const desktopExternalTestSession = "0123456789abcdef0123456789abcdef"
 
+func desktopExternalInputFixture(t *testing.T, protocol, entry, variant string) (map[string]any, map[string]any) {
+	t.Helper()
+	if protocol != "amneziawg" {
+		return externalTestFixture(t, protocol, entry)
+	}
+	graph, selection := externalTestFixture(t, "wireguard", entry)
+	if variant == "" {
+		variant = "strong"
+	}
+	externalAmneziaReplace(t, graph, selection, false, variant)
+	return graph, selection
+}
+
 func desktopExternalPolicyFixture(t *testing.T, protocol, kill, ipv6 string, lan bool) *ExternalPolicy {
 	t.Helper()
-	graph, selection := externalTestFixture(t, protocol, "")
+	graph, selection := desktopExternalInputFixture(t, protocol, "", "")
 	profile := selection["profile"].(map[string]any)
 	profile["kill_switch_policy"], profile["kill_switch"] = kill, kill != "off"
 	profile["ipv6_mode"], profile["home_lan_access"] = ipv6, lan
@@ -129,12 +143,29 @@ func TestDesktopExternalPolicyPreservesRoutedDNSBootstrapAndCopies(t *testing.T)
 }
 
 func TestDesktopExternalPolicyWireGuardPreservesEndpointAndSelectedPolicy(t *testing.T) {
+	desktopExternalPacketPolicyPreservesEndpoint(t, "wireguard", "")
+}
+
+func TestDesktopExternalPolicyAmneziaPreservesExactParametersAndSelectedPolicy(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) {
+			desktopExternalPacketPolicyPreservesEndpoint(t, "amneziawg", variant)
+		})
+	}
+}
+
+func desktopExternalPacketPolicyPreservesEndpoint(t *testing.T, protocol, variant string) {
+	t.Helper()
+	kind := "wireguard"
+	if protocol == "amneziawg" {
+		kind = AmneziaType
+	}
 	for _, outboundTable := range []string{"absent", "empty"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			for _, ipv6 := range []string{"on", "off"} {
 				for _, lan := range []bool{true, false} {
 					t.Run(strings.Join([]string{outboundTable, kill, ipv6, map[bool]string{true: "lan", false: "no-lan"}[lan]}, "/"), func(t *testing.T) {
-						graph, selection := externalTestFixture(t, "wireguard", "")
+						graph, selection := desktopExternalInputFixture(t, protocol, "", variant)
 						if outboundTable == "absent" {
 							delete(graph, "outbounds")
 						}
@@ -149,7 +180,7 @@ func TestDesktopExternalPolicyWireGuardPreservesEndpointAndSelectedPolicy(t *tes
 						capture, err := policy.Capture()
 						meta := policy.Metadata()
 						if err != nil || policy.Validate() != nil || policy.OriginalPolicy() != original ||
-							meta.TargetOS != "linux" || meta.Protocol != "wireguard" || meta.RootType != "wireguard" || meta.RootTag != ExternalFinalTag ||
+							meta.TargetOS != "linux" || meta.Protocol != protocol || meta.RootType != kind || meta.RootTag != ExternalFinalTag ||
 							meta.OriginalSourceSHA256 != original.SourceSHA256() || meta.OriginalConfigSHA256 != externalDigest([]byte(before)) ||
 							meta.OriginalCaptureSHA256 != capture.CaptureSHA256 || meta.ConfigSHA256 != externalDigest([]byte(policy.Config())) ||
 							meta.SourceSHA256 == meta.OriginalSourceSHA256 || meta.SOCKSUDPAssociationRequired ||
@@ -166,6 +197,15 @@ func TestDesktopExternalPolicyWireGuardPreservesEndpointAndSelectedPolicy(t *tes
 							t.Fatal("WireGuard moved out of its endpoint table or acquired another graph owner")
 						}
 						endpoint, physical := endpoints[0].(map[string]any), outbounds[0].(map[string]any)
+						if protocol == "amneziawg" {
+							parameters := profile["external"].(map[string]any)["amneziawg"].(map[string]any)["parameters"].(map[string]any)
+							padding, err := strconv.Atoi(parameters["s4"].(string))
+							native, nativeErr := AmneziaRuntimeConfig(externalTestJSON(t, endpoint))
+							if err != nil || nativeErr != nil || len(parameters) != 11 || !reflect.DeepEqual(endpoint["amnezia"], parameters) ||
+								native.TransportPadding != padding || native.MTU != 1360 {
+								t.Fatal("desktop Amnezia derivation changed imported parameters, S4 overhead or selected MTU", err, nativeErr)
+							}
+						}
 						service := services[0].(map[string]any)
 						if endpoint["detour"] != DesktopExternalPhysicalTag || len(physical) != 4 || len(service) != 4 ||
 							physical["type"] != DesktopExternalPhysicalType || physical["tag"] != DesktopExternalPhysicalTag ||
@@ -258,7 +298,7 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 			t.Fatal("uncaptured session acquired a physical plan")
 		}
 	}
-	for _, protocol := range []string{"wireguard", "hysteria2"} {
+	for _, protocol := range []string{"wireguard", "hysteria2", "amneziawg"} {
 		original := desktopExternalPolicyFixture(t, protocol, "always", "on", true)
 		for _, target := range []string{"windows", "darwin"} {
 			if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
@@ -297,6 +337,10 @@ func TestDesktopExternalPolicyWireGuardKeepsUnsupportedSelectionGuards(t *testin
 	desktopExternalPolicyKeepsUnsupportedSelectionGuards(t, "wireguard")
 }
 
+func TestDesktopExternalPolicyAmneziaKeepsUnsupportedSelectionGuards(t *testing.T) {
+	desktopExternalPolicyKeepsUnsupportedSelectionGuards(t, "amneziawg")
+}
+
 func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol string) {
 	t.Helper()
 	reject := func(t *testing.T, original *ExternalPolicy) {
@@ -315,7 +359,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		t.Run("start-layer/"+layer, func(t *testing.T) {
 			var source, capture string
-			if protocol == "wireguard" {
+			if protocol == "wireguard" || protocol == "amneziawg" {
 				source, capture = externalExecutionPacketFixture(t, protocol, "local", layer)
 				graph, selected := externalTestRead(t, source), externalTestRead(t, capture)
 				final := externalTestFind(t, graph, ExternalFinalTag)
@@ -342,7 +386,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 	}
 	for _, entry := range []string{"router-wg", "socks5", "shadowsocks", "hysteria2"} {
 		t.Run("predecessor/"+entry, func(t *testing.T) {
-			graph, selected := externalTestFixture(t, protocol, entry)
+			graph, selected := desktopExternalInputFixture(t, protocol, entry, "")
 			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
 			reject(t, externalDesktopCompile(t, graph, selected))
 		})
@@ -350,7 +394,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 	for _, execution := range []string{"server", "auto"} {
 		t.Run("execution/"+execution, func(t *testing.T) {
 			var source, capture string
-			if protocol == "wireguard" {
+			if protocol == "wireguard" || protocol == "amneziawg" {
 				source, capture = externalExecutionPacketFixture(t, protocol, execution, "")
 			} else {
 				source, capture = externalExecutionProtocolFixture(t, protocol, execution, "")

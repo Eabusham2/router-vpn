@@ -6,17 +6,39 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 func desktopExternalPhysicalLaunchFixture(t *testing.T, protocol, kill, ipv6 string, lan bool) *desktopNodeLaunch {
 	t.Helper()
+	return desktopExternalPhysicalLaunchVariant(t, protocol, kill, ipv6, lan, "")
+}
+
+func desktopExternalPhysicalLaunchVariant(t *testing.T, protocol, kill, ipv6 string, lan bool, variant string) *desktopNodeLaunch {
+	t.Helper()
 	profile, exit := desktopExternalNativeFixture(t, protocol)
+	if variant != "" {
+		if protocol != "amneziawg" || variant != "fast" && variant != "strong" {
+			t.Fatal("invalid captured Amnezia fixture variant")
+		}
+		if variant == "fast" {
+			parameters := profile.External.AmneziaWG.Parameters
+			parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+		}
+		var err error
+		exit, err = standardExitFromExternalProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	profile.KillSwitchPolicy, profile.KillSwitch, profile.IPv6Mode, profile.HomeLANAccess = kill, kill != "off", ipv6, lan
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
 	launch, err := compileDesktopExternalCaptured(context.Background(), profile, common.RouterProfile{}, exit, true, "", nil, nil, nil)
@@ -117,20 +139,28 @@ func TestDesktopExternalPhysicalAdmissionPreservesOtherGraphs(t *testing.T) {
 }
 
 func TestDesktopExternalPhysicalLinuxHysteria2PreservesCapturedPolicy(t *testing.T) {
-	desktopExternalPhysicalLinuxUDPPolicy(t, "hysteria2")
+	desktopExternalPhysicalLinuxUDPPolicy(t, "hysteria2", "")
 }
 
 func TestDesktopExternalPhysicalLinuxWireGuardPreservesCapturedPolicy(t *testing.T) {
-	desktopExternalPhysicalLinuxUDPPolicy(t, "wireguard")
+	desktopExternalPhysicalLinuxUDPPolicy(t, "wireguard", "")
 }
 
-func desktopExternalPhysicalLinuxUDPPolicy(t *testing.T, protocol string) {
+func TestDesktopExternalPhysicalLinuxAmneziaPreservesCapturedPolicy(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) {
+			desktopExternalPhysicalLinuxUDPPolicy(t, "amneziawg", variant)
+		})
+	}
+}
+
+func desktopExternalPhysicalLinuxUDPPolicy(t *testing.T, protocol, variant string) {
 	t.Helper()
 	for _, kill := range []string{"on-connect", "always"} {
 		for _, ipv6 := range []string{"on", "off"} {
 			for _, lan := range []bool{false, true} {
 				t.Run(strings.Join([]string{kill, ipv6, map[bool]string{true: "lan", false: "no-lan"}[lan]}, "/"), func(t *testing.T) {
-					launch := desktopExternalPhysicalLaunchFixture(t, protocol, kill, ipv6, lan)
+					launch := desktopExternalPhysicalLaunchVariant(t, protocol, kill, ipv6, lan, variant)
 					owner := launch.external
 					source, capture, expected := bytes.Clone(owner.source), bytes.Clone(owner.capture), owner.expected
 					if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil || owner.physical == nil {
@@ -147,6 +177,19 @@ func desktopExternalPhysicalLinuxUDPPolicy(t *testing.T, protocol string) {
 						len(physical.PhysicalRoots[0].Destinations) != 1 || physical.PhysicalRoots[0].Destinations[0].Network != "udp" ||
 						physical.SelectedDNS.Physical {
 						t.Fatal("Linux UDP transport replaced MTU, selected DNS or its captured UDP endpoint", protocol, err)
+					}
+					if protocol == "amneziawg" {
+						var graph struct{ Endpoints []json.RawMessage }
+						var endpoint mobilemultihop.AmneziaEndpointConfig
+						if json.Unmarshal(launch.config, &graph) != nil || len(graph.Endpoints) != 1 || json.Unmarshal(graph.Endpoints[0], &endpoint) != nil {
+							t.Fatal("captured Amnezia endpoint moved out of its actual native table")
+						}
+						parameters := owner.profile.External.AmneziaWG.Parameters
+						padding, err := strconv.Atoi(parameters["s4"])
+						native, nativeErr := mobilemultihop.AmneziaRuntimeConfig(string(graph.Endpoints[0]))
+						if err != nil || nativeErr != nil || len(parameters) != 11 || !reflect.DeepEqual(endpoint.Parameters, parameters) || native.MTU != 1360 || native.TransportPadding != padding {
+							t.Fatal("captured Amnezia parameters or S4/MTU changed through native preparation", err, nativeErr)
+						}
 					}
 					measurement, err := capturedDesktopMeasurementRuntime(launch)
 					if err != nil || measurement.source != metadata.SourceSHA256 || measurement.config != metadata.ConfigSHA256 || measurement.node != expected.ExitID {

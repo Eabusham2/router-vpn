@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -259,14 +260,22 @@ func TestRouterVPNDesktopExternalPhysicalCommandUsesActualPreparedNativeFactory(
 // This verifies command/source admission and actual native construction only.
 // The separate Box/peer and installed suites exercise encryption, DNS and exit proof.
 func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.T) {
-	desktopExternalPhysicalUDPCommand(t, "hysteria2")
+	desktopExternalPhysicalUDPCommand(t, "hysteria2", "")
 }
 
 func TestRouterVPNDesktopExternalPhysicalWireGuardCommandIsLinuxOnly(t *testing.T) {
-	desktopExternalPhysicalUDPCommand(t, "wireguard")
+	desktopExternalPhysicalUDPCommand(t, "wireguard", "")
 }
 
-func desktopExternalPhysicalUDPCommand(t *testing.T, protocol string) {
+func TestRouterVPNDesktopExternalPhysicalAmneziaCommandIsLinuxOnly(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) {
+			desktopExternalPhysicalUDPCommand(t, "amneziawg", variant)
+		})
+	}
+}
+
+func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
 	t.Helper()
 	var graph, captured map[string]any
 	if json.Unmarshal([]byte(desktopPhysicalCommandSource), &graph) != nil || json.Unmarshal([]byte(desktopPhysicalCommandCapture), &captured) != nil {
@@ -276,16 +285,29 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol string) {
 	captured["protocol"] = protocol
 	private := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88"}
 	faults := []string{"valid", "source", "credential", "tls-name", "session", "original-config"}
-	if protocol == "wireguard" {
+	var parameters map[string]string
+	if protocol == "wireguard" || protocol == "amneziawg" {
 		graph["outbounds"] = []any{}
-		graph["endpoints"] = []any{map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag,
+		endpoint := map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag,
 			"address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "private_key": key(17), "mtu": 1280,
 			"peers": []any{map[string]any{"address": "203.0.113.20", "port": 8443, "public_key": key(18), "pre_shared_key": key(19),
-				"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}}}}
-		private["wireguard"] = map[string]any{"endpoint": "203.0.113.20:8443", "private_key": key(17),
+				"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}}}
+		settings := map[string]any{"endpoint": "203.0.113.20:8443", "private_key": key(17),
 			"addresses": []string{"10.78.0.2/32", "fd78:78::2/128"}, "peer_public_key": key(18), "preshared_key": key(19), "mtu": 1280,
 			"allowed_ips": []string{"0.0.0.0/0", "::/0"}, "persistent_keepalive_interval": 25}
 		faults = []string{"valid", "source", "credential", "peer-key", "psk", "endpoint", "allowed-ips", "session", "original-config"}
+		if protocol == "amneziawg" {
+			parameters = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32",
+				"h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+			if variant == "fast" {
+				parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+			}
+			endpoint["type"], endpoint["amnezia"], settings["parameters"] = mobilemultihop.AmneziaType, parameters, parameters
+			for _, parameter := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+				faults = append(faults, "parameter/"+parameter)
+			}
+		}
+		graph["endpoints"], private[protocol] = []any{endpoint}, settings
 	} else {
 		graph["outbounds"] = []any{map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag,
 			"server": "203.0.113.20", "server_port": 8443, "password": "captured-secret",
@@ -315,7 +337,7 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol string) {
 			case "source":
 				expected = strings.Repeat("f", 64)
 			case "credential":
-				if protocol == "wireguard" {
+				if protocol == "wireguard" || protocol == "amneziawg" {
 					config = strings.Replace(config, key(17), key(20), 1)
 				} else {
 					config = strings.Replace(config, "captured-secret", "foreign-secret", 1)
@@ -334,6 +356,22 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol string) {
 				session = strings.Repeat("b", 32)
 			case "original-config":
 				config = original.Config()
+			default:
+				if parameter, ok := strings.CutPrefix(fault, "parameter/"); ok {
+					value, exists := parameters[parameter]
+					if !exists {
+						t.Fatal("unknown captured Amnezia parameter control")
+					}
+					changed := "50000000-59999999"
+					if !strings.HasPrefix(parameter, "h") {
+						number, err := strconv.Atoi(value)
+						if err != nil {
+							t.Fatal(err)
+						}
+						changed = strconv.Itoa(number + 1)
+					}
+					config = strings.Replace(config, `"`+parameter+`":"`+value+`"`, `"`+parameter+`":"`+changed+`"`, 1)
+				}
 			}
 			if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte(config), 0600); err != nil {
 				t.Fatal(err)

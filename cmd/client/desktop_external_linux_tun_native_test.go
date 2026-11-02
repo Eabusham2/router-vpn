@@ -313,7 +313,11 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 	}
 	foreign := observed
 	foreign.Profile = cloneRouterProfile(observed.Profile)
-	if foreign.Profile.External.WireGuard != nil {
+	if foreign.Profile.External.AmneziaWG != nil {
+		// A valid imported S4 from another profile cannot inherit this source's
+		// previously proved DNS, even though the active peer remains healthy.
+		foreign.Profile.External.AmneziaWG.Parameters["s4"] = "16"
+	} else if foreign.Profile.External.WireGuard != nil {
 		key, err := base64.StdEncoding.Strict().DecodeString(foreign.Profile.External.WireGuard.PresharedKey)
 		if err != nil || len(key) != 32 {
 			return host, errors.New("captured WireGuard observer lost its PSK")

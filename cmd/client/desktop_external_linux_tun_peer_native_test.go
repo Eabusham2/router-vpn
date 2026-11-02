@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 	"router-vpn/internal/linuxprotection"
 	"router-vpn/internal/mobiletor"
@@ -36,6 +38,10 @@ var linuxHostTUNExternalCases = []string{
 	"external-hy2-wrong-key", "external-hy2-wrong-trust", "external-hy2-dns-failure",
 	"external-wg-on-connect", "external-wg-always", "external-wg-public", "external-wg-cancelled",
 	"external-wg-wrong-key", "external-wg-wrong-psk", "external-wg-dns-failure", "external-wg-replacement",
+	"external-awgfast-on-connect", "external-awgfast-always", "external-awgfast-public", "external-awgfast-cancelled",
+	"external-awgfast-wrong-key", "external-awgfast-wrong-psk", "external-awgfast-dns-failure", "external-awgfast-replacement", "external-awgfast-wrong-parameters",
+	"external-awgstrong-on-connect", "external-awgstrong-always", "external-awgstrong-public", "external-awgstrong-cancelled",
+	"external-awgstrong-wrong-key", "external-awgstrong-wrong-psk", "external-awgstrong-dns-failure", "external-awgstrong-replacement", "external-awgstrong-wrong-parameters",
 }
 
 func linuxHostTUNExternalCase(scenario string) bool {
@@ -63,7 +69,24 @@ func linuxHostTUNExternalProtocol(scenario string) string {
 	if strings.HasPrefix(scenario, "external-wg-") {
 		return "wireguard"
 	}
+	if strings.HasPrefix(scenario, "external-awgfast-") || strings.HasPrefix(scenario, "external-awgstrong-") {
+		return "amneziawg"
+	}
 	return "shadowsocks"
+}
+
+// Representative imported test configurations, not replacement product
+// defaults. Both retain all eleven parameters and distinct S4 padding.
+func linuxHostTUNExternalAWGParameters(scenario string) map[string]string {
+	if linuxHostTUNExternalProtocol(scenario) != "amneziawg" {
+		return nil
+	}
+	parameters := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32",
+		"h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+	if strings.HasPrefix(scenario, "external-awgfast-") {
+		parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+	}
+	return parameters
 }
 
 func linuxHostTUNExternalAction(scenario string) string {
@@ -76,25 +99,26 @@ func linuxHostTUNExternalAction(scenario string) string {
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
 	switch linuxHostTUNExternalAction(scenario) {
-	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk":
+	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters":
 		return true
 	}
 	return false
 }
 
 type linuxExternalTUNPeerReply struct {
-	Schema         int    `json:"schema"`
-	Protocol       string `json:"protocol"`
-	Address        string `json:"address"`
-	CA             string `json:"ca"`
-	Connections    int64  `json:"connections"`
-	Streams        int64  `json:"streams"`
-	PhysicalUDP    int64  `json:"physical_udp"`
-	Packets        int64  `json:"packets"`
-	DNSQueries     uint32 `json:"dns_queries"`
-	PublicAttempts uint32 `json:"public_attempts"`
-	PublicReplies  uint32 `json:"public_replies"`
-	AuthFailures   uint32 `json:"auth_failures"`
+	Schema           int    `json:"schema"`
+	Protocol         string `json:"protocol"`
+	Address          string `json:"address"`
+	CA               string `json:"ca"`
+	Connections      int64  `json:"connections"`
+	Streams          int64  `json:"streams"`
+	PhysicalUDP      int64  `json:"physical_udp"`
+	Packets          int64  `json:"packets"`
+	DNSQueries       uint32 `json:"dns_queries"`
+	PublicAttempts   uint32 `json:"public_attempts"`
+	PublicReplies    uint32 `json:"public_replies"`
+	AuthFailures     uint32 `json:"auth_failures"`
+	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
 }
 
 type linuxExternalTUNPeer struct {
@@ -110,6 +134,7 @@ type linuxExternalTUNPeer struct {
 	address                     netip.AddrPort
 	ca                          string
 	wireguard                   *common.ExternalWireGuardConfig
+	parameters                  map[string]string
 	serverPrivate, clientPublic string
 }
 
@@ -131,6 +156,15 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 		t.Fatal("installed external peer changed its endpoint or original private test root")
 	}
 	peer.address, peer.ca = address, reply.CA
+	if peer.protocol == "amneziawg" {
+		parameters, err := awgpolicy.ParametersUAPI(peer.parameters)
+		digest := sha256.Sum256([]byte(parameters))
+		if err != nil || len(peer.parameters) != 11 || reply.ParametersSHA256 != hex.EncodeToString(digest[:]) {
+			t.Fatal("installed external AWG peer lost its actual complete native parameter readback")
+		}
+	} else if reply.ParametersSHA256 != "" {
+		t.Fatal("ordinary external peer acquired an unrequested AWG parameter owner")
+	}
 	return reply
 }
 
@@ -173,13 +207,14 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	}
 	peer := &linuxExternalTUNPeer{protocol: linuxHostTUNExternalProtocol(scenario), password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
 	clear(key[:])
-	if peer.protocol == "wireguard" {
+	if peer.protocol == "wireguard" || peer.protocol == "amneziawg" {
 		clientPrivate, clientPublic := linuxHostTUNExternalWGKey(t)
 		serverPrivate, serverPublic := linuxHostTUNExternalWGKey(t)
 		peer.serverPrivate, peer.clientPublic = serverPrivate, clientPublic
 		peer.wireguard = &common.ExternalWireGuardConfig{PrivateKey: clientPrivate, PeerPublicKey: serverPublic, PresharedKey: peer.password,
 			Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1280, PersistentKeepalive: 25}
 		peer.password = ""
+		peer.parameters = linuxHostTUNExternalAWGParameters(scenario)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 	t.Cleanup(cancel)
@@ -224,7 +259,13 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	request := map[string]any{"schema": 1, "protocol": peer.protocol, "address": "198.51.100.2",
 		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}
 	if peer.wireguard != nil {
-		request["wireguard"] = map[string]any{"private_key": peer.serverPrivate, "client_public_key": peer.clientPublic, "preshared_key": peer.wireguard.PresharedKey}
+		keys := map[string]any{"private_key": peer.serverPrivate, "client_public_key": peer.clientPublic, "preshared_key": peer.wireguard.PresharedKey}
+		if peer.protocol == "amneziawg" {
+			keys["parameters"] = maps.Clone(peer.parameters)
+			request["amneziawg"] = keys
+		} else {
+			request["wireguard"] = keys
+		}
 	}
 	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
 		t.Fatal(err)
@@ -302,7 +343,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 	case "https-connect":
 		connect.TLSServerName = "captured-external.example"
 		profile.External.HTTPSConnect = connect
-	case "wireguard":
+	case "wireguard", "amneziawg":
 		profile.DNSProtocol = "udp"
 		config := *peer.wireguard
 		config.Addresses = append([]string(nil), peer.wireguard.Addresses...)
@@ -314,7 +355,15 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		if linuxHostTUNExternalAction(scenario) == "wrong-psk" {
 			config.PresharedKey, _ = linuxHostTUNExternalWGKey(t)
 		}
-		profile.External.WireGuard = &config
+		if peer.protocol == "amneziawg" {
+			parameters := maps.Clone(peer.parameters)
+			if linuxHostTUNExternalAction(scenario) == "wrong-parameters" {
+				parameters["h1"] = "50000000-59999999"
+			}
+			profile.External.AmneziaWG = &common.ExternalAmneziaWGConfig{ExternalWireGuardConfig: config, Parameters: parameters}
+		} else {
+			profile.External.WireGuard = &config
+		}
 	case "hysteria2":
 		profile.DNSProtocol = "udp"
 		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "198.51.100.2", Port: int(peer.address.Port()), Password: peer.password, TLSServerName: "captured-external.example"}
@@ -428,7 +477,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
 			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
 		}
-	} else if action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" {
+	} else if action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" || action == "wrong-parameters" {
 		if !middle.FailedProof || observed.PhysicalUDP == 0 || observed.Connections != 0 || observed.Streams != 0 || observed.Packets != 0 ||
 			observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("wrong external peer credential or TLS identity reached an inner destination or Connected", middle, observed)
@@ -438,11 +487,11 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 			t.Fatal("failed selected DNS fabricated an exit proof or Connected", middle, observed)
 		}
 	} else if middle.Proof == nil || !middle.Proof.Healthy || !middle.Proof.DNSProven || middle.Proof.EntryProven ||
-		middle.MTU != 1376 || (peer.protocol != "hysteria2" && peer.protocol != "wireguard" && observed.Connections == 0) || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
+		middle.MTU != 1376 || (peer.protocol != "hysteria2" && peer.protocol != "wireguard" && peer.protocol != "amneziawg" && observed.Connections == 0) || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
 		t.Fatal("external succession bypassed its real encrypted/authenticated DNS and exit exchanges", middle, observed)
 	}
-	if (peer.protocol == "hysteria2" || peer.protocol == "wireguard") && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
-		(action != "wrong-key" && action != "wrong-trust" && action != "wrong-psk" && observed.Packets == 0)) {
+	if (peer.protocol == "hysteria2" || peer.protocol == "wireguard" || peer.protocol == "amneziawg") && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
+		(action != "wrong-key" && action != "wrong-trust" && action != "wrong-psk" && action != "wrong-parameters" && observed.Packets == 0)) {
 		t.Fatal("external selected UDP DNS or TCP proof bypassed its single physical UDP peer", observed)
 	}
 	if current := original.observe(t, "stats"); current.RouterQueries != before.RouterQueries || current.DirectQueries != before.DirectQueries {

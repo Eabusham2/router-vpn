@@ -73,14 +73,16 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	kind, supported := kinds[capture.Protocol]
 	family := "outbounds"
 	// These exact single-peer transports use the captured connected-UDP broker
-	// on the retained Linux host. The WireGuard endpoint stays in its original
-	// table; it never becomes an outbound or borrows a Router node identity.
+	// on the retained Linux host. Packet endpoints stay in their original
+	// table; they never become outbounds or borrow a Router node identity.
 	if targetOS == "linux" {
 		switch capture.Protocol {
 		case "hysteria2":
 			kind, supported = "hysteria2", true
 		case "wireguard":
 			family, kind, supported = "endpoints", "wireguard", true
+		case "amneziawg":
+			family, kind, supported = "endpoints", AmneziaType, true
 		}
 	}
 	root := capture.PhysicalRoots[0]
