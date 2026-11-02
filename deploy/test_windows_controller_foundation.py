@@ -70,7 +70,8 @@ REQUIRED = (
 # A real linked token belongs to a separate native fixture. Its exact test is
 # still mandatory in the independent UAC workflow step and fails when absent;
 # an unavailable hosted token must not prevent the protocol mutants executing.
-UAC_ACCEPTANCE = ("TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess",)
+UAC_ACCEPTANCE = ("TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess",
+                  "TestWindowsControllerUACAcceptanceFreshLogonThreadAccess")
 
 
 def sources():
@@ -93,6 +94,7 @@ def sources():
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
                 "suspended_access_windows_test.go",
+                "fresh_uac_policy_test.go", "fresh_uac_windows_test.go",
                 "restricted_worker_windows_test.go", "gui_windows_test.go", "stream_windows_test.go"}
     paths = sorted(TARGET.glob("*.go"))
     if {path.name for path in paths} != expected:
