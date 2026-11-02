@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Execute the shipping Speed Lab external transaction with controlled boundaries."""
+"""Execute the shipping Speed Lab external transaction with controlled boundaries.
+
+The external benchmark/statistics implementation and both capture types compile
+unchanged. This throughput fixture owns no native latency-only benchmark source;
+that boundary rejects accidental use, with real benchmark behavior exercised by
+test_android_external_node_statistics.py and test_android_external_node_comparison.py.
+"""
 from pathlib import Path
 import importlib.util
 import os
@@ -15,10 +21,10 @@ P = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
 
 BOUNDARIES = r'''package com.eabusham.routervpn;
-import android.app.Activity;import java.io.*;import java.util.*;import java.nio.file.*;import java.util.function.*;
-final class AndroidPrivateFileStore{static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private capture required");return b;}}
-final class AndroidTorProfile{static boolean isTor(String s){return s.equals("tor")||s.equals("tor-bridge");}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
-final class AndroidExternalPolicy{static boolean supports(String s){return List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(s);}static String protocol(String s){return s.equals("http")?"http-connect":s.equals("https")?"https-connect":s;}}
+import android.app.Activity;import android.content.Context;import java.io.*;import java.util.*;import java.nio.file.*;import java.util.function.*;
+final class AndroidPrivateFileStore{static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private capture required");return b;}static void write(File f,byte[] b,int max){throw new AssertionError("throughput fixture cannot write native benchmark statistics");}static void remove(File f,int max){throw new AssertionError("throughput fixture cannot remove native benchmark statistics");}}
+final class AndroidTorProfile{static boolean isTor(String s){return s.equals("tor")||s.equals("tor-bridge");}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}static String strictText(byte[] b){throw new AssertionError("throughput fixture cannot load native benchmark statistics");}}
+final class AndroidExternalPolicy{static boolean supports(String s){return List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(s);}static String protocol(String s){return s.equals("http")?"http-connect":s.equals("https")?"https-connect":s;}static String entryDigest(File f){throw new AssertionError("throughput fixture has no native benchmark entry");}}
 final class NativeSingBoxController{
  // PRODUCTION_NATIVE_PREDICATES
 }
@@ -28,12 +34,13 @@ final class AndroidNativeCompositeProfile{
 final class AndroidNodeStore{
  static final int MAX_BUNDLE=32*1024*1024;static final List<Node> saved=new ArrayList<>();
  static final class Node{final String id,name;final File file;Node(String id,File f){this.id=id;name=id;file=f;}}
- AndroidNodeStore(Activity a){}List<Node> list(){return new ArrayList<>(saved);}
+ AndroidNodeStore(Context a){}List<Node> list(){return new ArrayList<>(saved);}File file(String id){throw new AssertionError("throughput fixture cannot load a benchmark Router source");}
 }
 final class AndroidStandardExitStore{
+ // PRODUCTION_EXIT_BOUND
  static final Map<String,Entry> saved=new HashMap<>();
  static final class Entry{String id="exit",protocol="openvpn",secret="captured-private-key",policy="captured-policy",expectedPublicIp="8.8.4.4";}
- AndroidStandardExitStore(Activity a){}Entry get(String id){if(!saved.containsKey(id))throw new IllegalStateException("missing saved external source");return copy(saved.get(id));}
+ AndroidStandardExitStore(Context a){}Entry get(String id){if(!saved.containsKey(id))throw new IllegalStateException("missing saved external source");return copy(saved.get(id));}List<Entry> list(){throw new AssertionError("throughput fixture cannot read a native benchmark store");}
  static String snapshot(Entry e){return List.of(e.id,e.protocol,e.secret,e.policy,e.expectedPublicIp).toString();}
  static Entry copy(Entry x){Entry e=new Entry();e.id=x.id;e.protocol=x.protocol;e.secret=x.secret;e.policy=x.policy;e.expectedPublicIp=x.expectedPublicIp;return e;}
  static void validate(Entry e){if(e==null||e.id.isEmpty())throw new IllegalArgumentException("invalid external profile");}
@@ -42,15 +49,30 @@ final class AndroidStandardExitStore{
  static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||e.protocol.startsWith("tor")))throw new IllegalArgumentException("unowned execution");}
 }
 final class AndroidHomeStateStore{
- static final class Snapshot{boolean connected;long pathGeneration;String sessionId="off",phase="off",pathProof="pending",logicalMode="",runtimeMode="",activeNodeId="",activeExternalId="",activeExternalProtocol="",activeEntryId="",activeEntryMode="",activeExitId="";}
- static Snapshot value=new Snapshot();static Snapshot snapshot(Activity a){return value;}
+ static final class Snapshot{boolean connected;long pathGeneration;String sessionId="off",phase="off",pathProof="pending",logicalMode="",runtimeMode="",actualBase="",expectedExternalIp="",activeNodeId="",activeExternalId="",activeExternalProtocol="",activeEntryId="",activeEntryMode="",activeExitId="";}
+ static Snapshot value=new Snapshot();static Snapshot snapshot(Context a){return value;}static boolean emergencyDisconnectPending(Context c){throw new AssertionError("throughput fixture has no native benchmark commit");}
 }
-final class LayeredVpnService{static Consumer<Throwable> quiesce;static int calls;static void quiesceMTUForSpeedLab(Consumer<Throwable> cb){calls++;quiesce=cb;}static void startAutomaticMTU(){}}
+final class LayeredVpnService{
+ static final class HopMeasurementOwner{
+  private HopMeasurementOwner(){throw new AssertionError("throughput fixture cannot mint a native benchmark owner");}
+  interface Commit{void run()throws Exception;}
+  void commit(Commit write){throw new AssertionError("throughput fixture cannot commit a native benchmark");}
+  String requestID(){throw new AssertionError("no native benchmark request");}String configIdentity(){throw new AssertionError("no native benchmark configuration");}String networkIdentity(){throw new AssertionError("no native benchmark network");}
+ }
+ static Consumer<Throwable> quiesce;static int calls;static void quiesceMTUForSpeedLab(Consumer<Throwable> cb){calls++;quiesce=cb;}static void startAutomaticMTU(){}
+}
+final class AndroidStandardExitRuntime{
+ // PRODUCTION_MEASUREMENT_SOURCE
+ MeasurementSource captureMeasurementSource(String id){throw new AssertionError("throughput fixture has no latency-only native launch source");}
+ void requireMeasurementSource(MeasurementSource source){throw new AssertionError("throughput fixture cannot validate a native benchmark launch source");}
+}
+final class AndroidRuntimeRegistry{final AndroidStandardExitRuntime standardExit=new AndroidStandardExitRuntime();static final AndroidRuntimeRegistry instance=new AndroidRuntimeRegistry();static AndroidRuntimeRegistry get(Context c){return instance;}}
+final class AndroidMultihopRuntime{static final class RestoreCapture{private RestoreCapture(){throw new AssertionError("external-only fixture cannot mint a Router multihop receipt");}}}
 final class AndroidUnifiedConnectionController{
  interface Callback{void progress(String m);void finished(boolean ok,String m);default void owned(String session){}default void superseded(){}default void validate()throws Exception{}}
  int starts,broadStops,ownedStops,ownedRequests;String entryMode="",execution="local",selectedExecution="local",requestedCleanup="";boolean direct,busy,holdCleanup;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry external,ordinaryEntry;Callback pending,cleanup;
- static final class RestorePoint{final AndroidHomeStateStore.Snapshot home;final String topology="off";RestorePoint(AndroidHomeStateStore.Snapshot s){home=s;}boolean connected(){return home.connected;}}
- RestorePoint captureRestorePoint(){if(isActiveOrTransitioning())throw new IllegalStateException("fixture has no captured live graph");return new RestorePoint(AndroidHomeStateStore.value);}
+ // PRODUCTION_RESTORE_POINT
+ RestorePoint captureRestorePoint(){if(isActiveOrTransitioning())throw new IllegalStateException("fixture has no captured live graph");return new RestorePoint(AndroidHomeStateStore.value,"off",null,null,null,null,"","","",Collections.emptyMap(),"",null);}
  boolean restorePointCurrent(RestorePoint p){return idleCurrent(p.home);}
  boolean idleCurrent(AndroidHomeStateStore.Snapshot idle){return !busy&&!AndroidHomeStateStore.value.connected&&idle.sessionId.equals(AndroidHomeStateStore.value.sessionId)&&idle.pathGeneration==AndroidHomeStateStore.value.pathGeneration;}
  AndroidHomeStateStore.Snapshot captureIdle(){if(busy||AndroidHomeStateStore.value.connected)throw new IllegalStateException("native owner retained");return AndroidHomeStateStore.value;}
@@ -77,7 +99,9 @@ final class AndroidSpeedLab{
  AndroidSpeedLab(Activity a){}void cancel(){if(pending!=null)pending.finished(null,new IllegalStateException("cancelled"));}void run(String mode,double low,double high,Callback cb){starts++;timing=mode;min=low;max=high;pending=cb;}
 }
 final class AndroidNativeHopMeasurement{
- interface Callback{void progress(String status);void finished(String status,Throwable error);}
+ interface Callback{void progress(String status);void finished(String status,Throwable error);default void commit(LayeredVpnService.HopMeasurementOwner owner,String status)throws Exception{throw new AssertionError("throughput fixture cannot commit latency-only results");}}
+ boolean isRunning(){return false;}
+ void runLatency(Object lease,String exit,String nativeSession,String home,long generation,Callback cb){throw new AssertionError("throughput fixture cannot start latency-only native traffic");}
  void cancel(){}
  void run(Object lease,Callback cb){if(!AndroidMTUMeasurementGate.owns(lease))throw new AssertionError("native hops lost outer MTU hold");cb.finished("native measured paths",null);}
 }
@@ -157,6 +181,9 @@ public class SpeedLabExternalTest{
 def main():
     if not shutil.which("javac"):
         raise RuntimeError("JDK required for shipping Speed Lab transaction test")
+    jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
+    if not jar.is_file():
+        raise RuntimeError("Android org.json JAR required for shipping benchmark/statistics types")
     native = (JAVA / "NativeSingBoxController.java").read_text()
     predicates = []
     for name in ("nativeMultihopEntry", "nativeWireGuardFamily", "nativeNaiveFamily", "nativePQFamily"):
@@ -167,6 +194,16 @@ def main():
     speed = (JAVA / "AndroidSpeedLab.java").read_text()
     duration = speed[speed.index("    static final class DurationPolicy"):speed.index("    static final class Latency")]
     boundaries = BOUNDARIES.replace(" // PRODUCTION_NATIVE_PREDICATES", "\n".join(predicates)).replace(" // PRODUCTION_COMPOSITE_PREDICATE", composite).replace(" // PRODUCTION_DURATION_POLICY", duration)
+    for placeholder, filename, name in (
+        (" // PRODUCTION_MEASUREMENT_SOURCE", "AndroidStandardExitRuntime.java", "MeasurementSource"),
+        (" // PRODUCTION_RESTORE_POINT", "AndroidUnifiedConnectionController.java", "RestorePoint"),
+    ):
+        captured = re.findall(r"(?ms)^    static final class " + name + r" \{\n.*?^    \}", (JAVA / filename).read_text())
+        assert len(captured) == 1, "shipping capture type must be unambiguous: " + name
+        boundaries = boundaries.replace(placeholder, captured[0])
+    exit_bound = re.findall(r"(?m)^    static final int MAX_EXITS = [0-9]+;$", (JAVA / "AndroidStandardExitStore.java").read_text())
+    assert len(exit_bound) == 1
+    boundaries = boundaries.replace(" // PRODUCTION_EXIT_BOUND", exit_bound[0])
     modes = next(line for line in P.T.T.HARNESS.splitlines() if "static final String[] ALL=" in line)
     dialog = (JAVA / "AndroidSpeedLabDialog.java").read_text()
     assert 'q.entryMode="external".equals(q.topology)&&q.externalDirect?"":selectedEntryMode()' in dialog
@@ -176,17 +213,23 @@ def main():
         root = Path(directory)
         activity = root / "android/app/Activity.java"
         activity.parent.mkdir(parents=True)
-        activity.write_text("package android.app;public class Activity{public void runOnUiThread(Runnable r){r.run();}}")
+        activity.write_text("package android.app;public class Activity extends android.content.Context{public void runOnUiThread(Runnable r){r.run();}}")
+        context = root / "android/content/Context.java"
+        context.parent.mkdir(parents=True)
+        context.write_text('package android.content;public class Context{public Context getApplicationContext(){return this;}public java.io.File getFilesDir(){throw new AssertionError("throughput fixture cannot access native benchmark persistence");}}')
+        libbox = root / "io/nekohasekai/libbox/Libbox.java"
+        libbox.parent.mkdir(parents=True)
+        libbox.write_text('package io.nekohasekai.libbox;public final class Libbox{public static void routerValidatePrivateNodeJSON(String raw){throw new AssertionError("throughput fixture cannot validate a native benchmark store");}}')
         app = root / "com/eabusham/routervpn"
         app.mkdir(parents=True)
         (app / "Boundaries.java").write_text(boundaries)
         (app / "SpeedLabExternalTest.java").write_text(HARNESS.replace(" // ALL_CAPTURED_MODES", modes))
-        for name in ("AndroidSpeedLabController.java", "AndroidMTUMeasurementGate.java"):
+        for name in ("AndroidSpeedLabController.java", "AndroidMTUMeasurementGate.java", "AndroidExternalNodeBenchmark.java", "AndroidExternalNodeStatistics.java"):
             shutil.copyfile(JAVA / name, app / name)
-        compile_args = ["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-d", str(root / "classes"), *map(str, root.rglob("*.java"))]
+        compile_args = ["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(root / "classes"), *map(str, root.rglob("*.java"))]
         data = root / "data"
         data.mkdir()
-        run_args = ["java", "-cp", str(root / "classes"), "com.eabusham.routervpn.SpeedLabExternalTest", str(data)]
+        run_args = ["java", "-cp", str(root / "classes") + os.pathsep + str(jar), "com.eabusham.routervpn.SpeedLabExternalTest", str(data)]
         subprocess.run(compile_args, check=True, timeout=45)
         subprocess.run(run_args, check=True, timeout=25)
         path = app / "AndroidSpeedLabController.java"
