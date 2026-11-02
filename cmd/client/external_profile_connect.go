@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -37,9 +38,10 @@ type externalProfileConnectRequest struct {
 // Tests may supply an isolated child at this boundary while still exercising
 // the real graph compiler, private staging, proof and teardown machinery.
 type externalConnectRuntime struct {
-	prepare func(*app, common.RouterProfile, common.RouterProfile, standardExit, bool, string) (*desktopNodeLaunch, error)
-	stage   func(*app, *desktopNodeLaunch) error
-	tor     desktopTorConnectRuntime
+	prepare  func(*app, common.RouterProfile, common.RouterProfile, standardExit, bool, string) (*desktopNodeLaunch, error)
+	stage    func(*app, *desktopNodeLaunch) error
+	tor      desktopTorConnectRuntime
+	retained func(*app, *desktopNodeLaunch) (desktopExternalRetainedRuntime, error)
 }
 
 func registerExternalProfileRoutes(h *http.ServeMux, a *app) {
@@ -152,10 +154,6 @@ func (a *app) externalProfileConnectWithRuntime(w http.ResponseWriter, r *http.R
 // Both interactive Connect and startup already hold one connection transaction.
 // A retained execution is internal Last-state evidence, never an HTTP override.
 func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfileConnectRequest, retained string, startup *startupPolicyCapture, driver externalConnectRuntime) {
-	if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		http.Error(w, "desktop external-node runtime is unavailable on this platform", http.StatusNotImplemented)
 		return
@@ -208,6 +206,10 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	}
 
 	if desktopTorProtocol(externalProfile.External.Protocol) {
+		if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		if retained != "" {
 			direct := q.Direct != nil && *q.Direct || q.Direct == nil && q.EntryID == ""
 			selected, err := externalExecutionChoice(externalProfile, q.Execution, direct)
@@ -333,6 +335,36 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 		http.Error(w, "this external protocol needs a paired server credential adapter before Server/Compare can execute", http.StatusBadRequest)
 		return
 	}
+	var nativeRetained desktopExternalRetainedRuntime
+	retainedComplete := false
+	if native != nil {
+		prepare := driver.retained
+		if prepare == nil {
+			prepare = prepareDesktopRetainedExternal
+		}
+		nativeRetained, err = prepare(a, native)
+		if nativeRetained != nil {
+			defer func() {
+				if !retainedComplete {
+					cleanup, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+					defer cancel()
+					if closeErr := nativeRetained.Close(cleanup); closeErr != nil {
+						sessionTrackerFor(a).markRequestFailure("Linux external cleanup remains owned: " + closeErr.Error())
+					}
+				}
+			}()
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+	if nativeRetained == nil {
+		if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
 	if err := a.validateExternalProfileExpectedProfiles(q, externalProfile); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -351,6 +383,12 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	sessionBase := "external"
 	if !direct && entryKind == "router-vpn" {
 		sessionBase = desktopExternalEntryBase(policy.MultihopEntryMode)
+	}
+	if nativeRetained != nil {
+		if err := nativeRetained.Stage(a.connectionOperationContextOrBackground()); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 	}
 	sessionTrackerFor(a).declareRequest("external-node", sessionBase)
 	if err = a.stopModeWithIntent(true); err != nil {
@@ -421,7 +459,9 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	} else {
 		var realCmd *exec.Cmd
 		var realCmdErr error
-		if native != nil {
+		if nativeRetained != nil {
+			// Private staging and original predecessor checks finished before Stop.
+		} else if native != nil {
 			realCmdErr = driver.stage(a, native)
 			realCmd = native.command
 		} else if !direct && entryKind == "external" {
@@ -439,15 +479,21 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			err = startup.current(a)
 		}
 		if err != nil {
-			if native != nil && native.directory != "" {
+			if native != nil && nativeRetained == nil && native.directory != "" {
 				_ = cleanupDesktopNodeLaunch(native)
 			}
 			sessionTrackerFor(a).markRequestFailure(err.Error())
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		if err = realCmd.Start(); err != nil {
-			if native != nil && native.directory != "" {
+		if nativeRetained != nil {
+			err = nativeRetained.Start(a.connectionOperationContextOrBackground())
+			realCmd = native.command
+		} else {
+			err = realCmd.Start()
+		}
+		if err != nil {
+			if native != nil && nativeRetained == nil && native.directory != "" {
 				_ = cleanupDesktopNodeLaunch(native)
 			}
 			sessionTrackerFor(a).markRequestFailure(err.Error())
@@ -455,7 +501,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			return
 		}
 		startedCmd = realCmd
-		if native != nil {
+		if native != nil && nativeRetained == nil {
 			native.external.started = time.Now()
 			desktopNodeOwners.Store(a, native)
 		}
@@ -542,6 +588,13 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			return
 		}
 	}
+	if nativeRetained != nil {
+		if err := nativeRetained.Activate(a.connectionOperationContextOrBackground()); err != nil {
+			message, _ := a.externalProfileStopFailure(startedCmd, err.Error())
+			http.Error(w, message, http.StatusConflict)
+			return
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.mu.Lock()
 	if a.cmd != startedCmd || startedCmd == nil {
@@ -619,8 +672,18 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 		chosenExecution = native.external.execution
 		native.external.mu.Unlock()
 		a.saveExternalStartupSelection(native, sourceToken, chosenExecution)
-		a.monitorDesktopExternalRuntime(native)
+		if nativeRetained != nil {
+			if err := nativeRetained.Monitor(a.connectionOperationContextOrBackground()); err != nil {
+				message, _ := a.externalProfileStopFailure(startedCmd, err.Error())
+				http.Error(w, message, http.StatusConflict)
+				return
+			}
+			a.startDesktopExternalAutomaticMTU(native)
+		} else {
+			a.monitorDesktopExternalRuntime(native)
+		}
 	}
+	retainedComplete = true
 
 	route := "client TUN -> direct external " + exit.Protocol + " node -> Internet"
 	entryID, entryName := "", ""

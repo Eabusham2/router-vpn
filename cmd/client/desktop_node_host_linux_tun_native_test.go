@@ -44,6 +44,7 @@ func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardLayerCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaLayerCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNSIP003Cases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNExternalCases...)
 }
 
 func linuxHostTUNCoverCase(scenario string) bool {
@@ -309,6 +310,9 @@ func linuxHostTUNDNSObservation(ctx context.Context, a *app, host *desktopLinuxN
 // executable, source, native channel, TUN, DNS, Router proof and journal.
 // It changes no public capability predicate or verifier implementation.
 func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string) (failure error) {
+	if linuxHostTUNExternalCase(scenario) {
+		return linuxHostTUNExternalFixture(controller, scenario)
+	}
 	action, mode := linuxHostTUNAction(scenario), linuxHostTUNMode(scenario)
 	found := false
 	for _, candidate := range linuxHostTUNCases {
@@ -795,6 +799,10 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				t.Fatal(err)
 			}
 			linuxHostTUNInstallBundle(t)
+			if linuxHostTUNExternalCase(scenario) {
+				linuxHostTUNExternalParent(t, installed, scenario)
+				return
+			}
 			peer := linuxHostTUNStartPeer(t, scenario)
 			linuxHostTUNDirectHealth(t, peer)
 			linuxHostTUNInstallProfile(t, peer, scenario)

@@ -74,7 +74,7 @@ func captureMTULiveOwner(a *app, snapshot mtuRetestSnapshot, live mtuLiveSnapsho
 	if handled || err != nil {
 		// Partial native begin remains with the same live owner below, even
 		// when its acknowledgement or final host readback failed.
-	} else if raw, found := desktopNodeOwners.Load(a); found {
+	} else if raw, found := lookupDesktopNativeLaunch(a); found {
 		launch, ok := raw.(*desktopNodeLaunch)
 		if !ok || launch.command != command || launch.external != nil {
 			return nil, errors.New("MTU capture belongs to another native runtime")

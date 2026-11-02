@@ -104,7 +104,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		current["entry_id"], current["exit_id"], current["exit_mode"] = graph.EntryID, graph.ExitID, graph.ExitMode
 		current["entry_mode"], current["execution"] = graph.EntryMode, graph.Execution
 	}
-	if raw, exists := desktopNodeOwners.Load(a); exists && st.Connected && st.Mode == "external-node" {
+	if raw, exists := lookupDesktopNativeLaunch(a); exists && st.Connected && st.Mode == "external-node" {
 		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.command == command && launch.profileID == st.RouterID && launch.tor != nil {
 			if proof, err := a.readDesktopTorProof(launch); err == nil {
 				current["exit_id"], current["execution"] = launch.profileID, desktopTorExecution(proof.Policy.Execution)

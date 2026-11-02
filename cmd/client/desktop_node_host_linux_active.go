@@ -16,22 +16,24 @@ import (
 // from the startup request, which ordinary request completion always cancels.
 // Neither Connected nor a saved/decoded readiness record creates this owner.
 type desktopLinuxNodeActivation struct {
-	host         *desktopLinuxNodeHost
-	parent       *desktopLinuxNodeParentCapture
-	operation    context.Context
-	process      *desktopLinuxNodeProcess
-	transaction  *desktopLinuxNodeTransaction
-	policy       *mobilemultihop.DesktopNodePolicy
-	launch       *desktopNodeLaunch
-	selection    linuxprotection.NodeSelection
-	network      string
-	revision     string
-	options      [3]bool
-	savedOptions [3]bool
-	proof        desktopLinuxNodeProof
-	activatedAt  time.Time
-	lifetime     context.Context
-	cancel       context.CancelFunc
+	host          *desktopLinuxNodeHost
+	parent        *desktopLinuxNodeParentCapture
+	operation     context.Context
+	process       *desktopLinuxNodeProcess
+	transaction   *desktopLinuxNodeTransaction
+	policy        *mobilemultihop.DesktopNodePolicy
+	external      *mobilemultihop.DesktopExternalPolicy
+	externalProof *desktopLinuxExternalProof
+	launch        *desktopNodeLaunch
+	selection     linuxprotection.NodeSelection
+	network       string
+	revision      string
+	options       [3]bool
+	savedOptions  [3]bool
+	proof         desktopLinuxNodeProof
+	activatedAt   time.Time
+	lifetime      context.Context
+	cancel        context.CancelFunc
 }
 
 func validateDesktopLinuxNodeActivationProof(proof *desktopLinuxNodeProof, ready mobilemultihop.DesktopNodeReadyRecord,
@@ -52,6 +54,9 @@ func validateDesktopLinuxNodeActivationProof(proof *desktopLinuxNodeProof, ready
 // the original native process, journal, running-policy and readiness checks.
 // A finished startup context is deliberately not a lifetime failure here.
 func (active *desktopLinuxNodeActivation) matches(h *desktopLinuxNodeHost) error {
+	if active != nil && active.external != nil {
+		return active.matchesExternal(h)
+	}
 	if active == nil || h == nil || active.host != h || h.activation != active || active.parent == nil ||
 		active.parent != h.parent || active.operation == nil || active.operation != h.operation ||
 		active.process == nil || active.process != h.process || active.transaction == nil || active.transaction != h.transaction ||
@@ -91,6 +96,9 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 		return err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	if h.external != nil {
+		return h.activateExternalLocked(parent)
+	}
 	if h.activation != nil {
 		return errors.New("Linux Node activation cannot reuse an entered original capability")
 	}
@@ -185,6 +193,5 @@ func (h *desktopLinuxNodeHost) Current(ctx context.Context) error {
 	if h.activation == nil {
 		return errors.New("Linux Node has no original proved active session")
 	}
-	_, _, err := h.readReadyLocked(ctx, false)
-	return err
+	return h.observeLocked(ctx)
 }

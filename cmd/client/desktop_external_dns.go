@@ -75,7 +75,7 @@ func (a *app) desktopDNSFor() *desktopDNSSlot {
 
 func captureDesktopDNSSnapshot(a *app) (desktopDNSSnapshot, error) {
 	var snapshot desktopDNSSnapshot
-	raw, found := desktopNodeOwners.Load(a)
+	raw, found := lookupDesktopNativeLaunch(a)
 	launch, ok := raw.(*desktopNodeLaunch)
 	if !found || !ok {
 		return snapshot, errors.New("DNS Retest needs the currently proved external or Tor native runtime")
@@ -121,7 +121,7 @@ func captureDesktopDNSSnapshot(a *app) (desktopDNSSnapshot, error) {
 }
 
 func (s desktopDNSSnapshot) currentLocked(a *app) error {
-	if owner, found := desktopNodeOwners.Load(a); !found || owner != s.launch {
+	if owner, found := lookupDesktopNativeLaunch(a); !found || owner != s.launch {
 		return errors.New("native DNS process owner changed")
 	}
 	if a.closing || a.cmd != s.launch.command || !a.state.Connected || a.state.Phase != "connected" || a.state.RouterID != s.profileID || mtuStateSnapshotToken(a.state) != s.stateToken {
@@ -385,7 +385,7 @@ func (o *desktopDNSOperation) draftCurrentLocked(a *app) error {
 		return errors.New("a replacement connection invalidated the DNS result")
 	}
 	if a.state.Connected {
-		if owner, found := desktopNodeOwners.Load(a); !found || owner != o.snapshot.launch {
+		if owner, found := lookupDesktopNativeLaunch(a); !found || owner != o.snapshot.launch {
 			return errors.New("a replacement native owner invalidated the DNS result")
 		}
 	}

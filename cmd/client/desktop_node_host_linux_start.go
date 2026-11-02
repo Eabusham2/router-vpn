@@ -51,6 +51,10 @@ func (h *desktopLinuxNodeHost) startWithVerifier(ctx context.Context, journal *d
 	h.process, err = startDesktopLinuxNodeProcessWithVerifier(ctx, h.parent, arguments, environment, h.launch.directory, capture, verify)
 	if h.process != nil && h.process.Started() {
 		h.launch.command = h.process.command
+		if h.external != nil {
+			h.launch.external.started = h.started
+			desktopExternalRetainedLaunches.Store(h.parent.app, h.launch)
+		}
 	}
 	if err != nil {
 		return err // This host and original parent retain every partial owner.
@@ -61,7 +65,11 @@ func (h *desktopLinuxNodeHost) startWithVerifier(ctx context.Context, journal *d
 	if err := h.publishStarting(ctx); err != nil {
 		return err
 	}
-	h.transaction, err = newDesktopLinuxNodeTransaction(h.operation, h.parent, journal, h.process, h.policy, predecessor)
+	if h.external != nil {
+		h.transaction, err = newDesktopLinuxExternalTransaction(h, journal, predecessor)
+	} else {
+		h.transaction, err = newDesktopLinuxNodeTransaction(h.operation, h.parent, journal, h.process, h.policy, predecessor)
+	}
 	if err != nil {
 		return err
 	}
@@ -130,7 +138,7 @@ func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
 		return err
 	}
 	defer func() { t.gate <- struct{}{} }()
-	if t.process != h.process || t.policy != h.policy || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
+	if t.process != h.process || t.policy != h.policy || t.external != h.external || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
 		!t.nativeCommitted || t.stopRequested.Load() || t.retiring || t.retirement != nil || t.closed || t.retired || t.pending != nil {
 		return errors.New("Linux Node lost its original admitted source and durable transaction")
 	}

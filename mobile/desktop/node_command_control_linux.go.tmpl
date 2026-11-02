@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/linuxprocess"
@@ -30,8 +29,9 @@ type routerVPNLinuxNodeControl struct {
 	control       *linuxprotection.NodeControl
 	selection     linuxprotection.NodeSelection
 	policy        *mobilemultihop.DesktopNodePolicy
+	external      *mobilemultihop.DesktopExternalPolicy
 	native        *routerVPNExternalNative
-	preparation   *box.RouterVPNDesktopLinuxNodePreparation
+	preparation   routerVPNLinuxPhysicalPreparation
 	commandHash   string
 	selectionHash string
 	retiring      atomic.Bool
@@ -39,6 +39,14 @@ type routerVPNLinuxNodeControl struct {
 	joined        bool
 	retired       bool
 	closed        bool
+}
+
+// Both typed factories retain their own native service. Sharing its retirement
+// interface does not reinterpret an external source as a Router node policy.
+type routerVPNLinuxPhysicalPreparation interface {
+	CloseSource(context.Context) error
+	JoinedSource(context.Context) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error)
+	CloseProtection(context.Context) error
 }
 
 func routerVPNLinuxImageObject(file *os.File) (linuxprocess.Object, error) {
@@ -117,7 +125,7 @@ func (owner *routerVPNLinuxNodeControl) original(ctx context.Context) error {
 // can manufacture the sealed policy used by the native service.
 func (owner *routerVPNLinuxNodeControl) compile(ctx context.Context, files *routerVPNExternalFiles,
 	session, source, config, transfer string, mtu int) (*mobilemultihop.DesktopNodePolicy, error) {
-	if owner == nil || owner.policy != nil || owner.control != nil || owner.retiring.Load() || files == nil || files.root == nil || owner.original(ctx) != nil {
+	if owner == nil || owner.policy != nil || owner.external != nil || owner.control != nil || owner.retiring.Load() || files == nil || files.root == nil || owner.original(ctx) != nil {
 		return nil, routerVPNExternalFailure
 	}
 	raw, err := files.read("node-source.json", mobilemultihop.NodeLaunchInputLimit)

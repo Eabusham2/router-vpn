@@ -88,6 +88,12 @@ func withDesktopLinuxNodeMTUHost(ctx context.Context, a *app, action func(*deskt
 		return true, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	if h.external != nil {
+		if err := h.observeLocked(ctx); err != nil {
+			return true, err
+		}
+		return false, nil // Its existing typed external MTU owner serves this path.
+	}
 	if !sameDesktopLinuxParentCapture(h.parent, s.parent) || h.activation == nil || h.transaction == nil ||
 		h.transaction.journal != s.journal || h.activation.matches(h) != nil {
 		return true, errors.New("Linux MTU capture has no original proved active host")

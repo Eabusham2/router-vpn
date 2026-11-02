@@ -34,16 +34,25 @@ var routerVPNExternalSession = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var routerVPNExternalFailure = errors.New("captured desktop external runtime failed; private credentials were not logged")
 
 func init() {
-	var directory, session, physicalSource string
+	var directory, session, physicalSource, config, transfer string
+	var linux routerVPNNodeLinuxParentOptions
 	command := &cobra.Command{Use: "routervpn-external", Short: "Run one captured Router VPN external session", Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
+			if linux != (routerVPNNodeLinuxParentOptions{}) || config != "" || transfer != "" {
+				return routerVPNRunLinuxExternalControlled(ctx, directory, session, physicalSource, config, transfer, linux)
+			}
 			return routerVPNRunExternal(ctx, directory, session, physicalSource, routerVPNNewExternalNative)
 		}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
 	command.Flags().StringVar(&session, "session", "", "captured session identity")
 	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured desktop physical source identity")
+	command.Flags().StringVar(&config, "config-sha256", "", "captured Linux external configuration identity")
+	command.Flags().StringVar(&transfer, "physical-transfer-sha256", "", "captured Linux external protection selection")
+	command.Flags().IntVar(&linux.ChannelFD, "linux-parent-channel", 0, "original inherited parent channel")
+	command.Flags().IntVar(&linux.DirectoryFD, "linux-parent-directory", 0, "original inherited parent directory")
+	command.Flags().StringVar(&linux.CaptureSHA256, "linux-parent-capture", "", "original inherited command capture")
 	mainCommand.AddCommand(command)
 }
 
@@ -240,6 +249,17 @@ func routerVPNExternalConstructed(ctx context.Context) []any {
 }
 
 func routerVPNNewExternalNative(ctx context.Context, policy *mobilemultihop.ExternalPolicy, physical *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+	native, err := routerVPNNewExternalNativeWithPreparation(ctx, policy, physical, source, capture, session, nil)
+	if native == nil {
+		return nil, err
+	}
+	return native, err
+}
+
+// The retained Linux command supplies only its authenticated, typed physical
+// preparation. The complete graph, proof, measurements and close stay here.
+func routerVPNNewExternalNativeWithPreparation(ctx context.Context, policy *mobilemultihop.ExternalPolicy, physical *mobilemultihop.DesktopExternalPolicy,
+	source, capture, session string, prepare func(*box.Box) error) (*routerVPNExternalNative, error) {
 	if policy == nil {
 		return nil, routerVPNExternalFailure
 	}
@@ -279,9 +299,14 @@ func routerVPNNewExternalNative(ctx context.Context, policy *mobilemultihop.Exte
 	}
 	native.box = instance
 	if physical != nil {
-		if err := instance.RouterVPNDesktopExternalPreparePhysical(physical); err != nil {
+		if prepare == nil {
+			prepare = func(instance *box.Box) error { return instance.RouterVPNDesktopExternalPreparePhysical(physical) }
+		}
+		if err := prepare(instance); err != nil {
 			return native, routerVPNExternalFailure
 		}
+	} else if prepare != nil {
+		return native, routerVPNExternalFailure
 	}
 	return native, nil
 }

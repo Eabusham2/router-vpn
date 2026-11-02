@@ -30,6 +30,8 @@ type desktopLinuxNodeTransaction struct {
 	bootstrap     *linuxprocess.Bootstrap
 	control       *linuxprotection.NodeControl
 	policy        *mobilemultihop.DesktopNodePolicy
+	external      *mobilemultihop.DesktopExternalPolicy
+	mode          string
 	operation     context.Context
 	selection     linuxprotection.NodeSelection
 	engine        linuxprocess.Observation
@@ -129,6 +131,14 @@ func newDesktopLinuxNodeTransaction(operation context.Context, parent *desktopLi
 		revision: desktopOwnedNodeProfileToken(profile), network: physicalNetworkIdentity(),
 		options:      [3]bool{captured.DAITAEnabled, captured.JumboTUN, captured.SocksEnabled},
 		savedOptions: [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}, predecessor: predecessor}
+	return finishDesktopLinuxNodeTransaction(t)
+}
+
+// All graph-specific constructors validate their own sealed policy before
+// entering this common original-process/journal handshake.
+func finishDesktopLinuxNodeTransaction(t *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
+	operation, parent, process, journal, selection, predecessor := t.operation, t.parent, t.process, t.journal, t.selection, t.predecessor
+	var err error
 	p := parent.parent
 	select {
 	case <-operation.Done():
@@ -224,7 +234,7 @@ func (t *desktopLinuxNodeTransaction) enter(ctx context.Context) error {
 // including the interval before the original cancel callback executes.
 func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 	if t == nil || ctx == nil || ctx.Err() != nil || t.operation == nil || t.operation.Err() != nil || t.stopRequested.Load() || t.retiring || t.retired || t.closed ||
-		t.policy == nil || t.policy.Validate() != nil || t.network == "" || physicalNetworkIdentity() != t.network {
+		t.validatePolicy() != nil || t.network == "" || physicalNetworkIdentity() != t.network {
 		return errors.New("Linux Node preparation lost its accepted captured policy or network")
 	}
 	if err := t.parent.Current(ctx); err != nil {
@@ -235,7 +245,7 @@ func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(t.profileID)
 	if err := a.checkCapturedConnectionOperationLocked(t.operation); err != nil || a.connectionCancelIntent == t.operation || !exists || a.cmd != t.process.command ||
-		a.state.RouterID != t.profileID || a.state.RuntimeMode != t.policy.Metadata().Mode ||
+		a.state.RouterID != t.profileID || a.state.RuntimeMode != t.runtimeMode() ||
 		desktopOwnedNodeProfileToken(profile) != t.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != t.savedOptions ||
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != t.options {

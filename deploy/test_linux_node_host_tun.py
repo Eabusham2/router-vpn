@@ -98,6 +98,11 @@ COVER_CASES += tuple(case for case in SIP003_CASES if case.endswith(('-cover-con
 LAYER_CASES += tuple(case for case in SIP003_CASES if not case.startswith('ss-v2ray-off-'))
 WHITENING_CASES += tuple(case for case in SIP003_CASES if case.startswith('ss-v2ray-whitening-'))
 ACTIVE_CASES += tuple(case for case in SIP003_CASES if case.endswith('-active-network-change') or case in MTU_CASES or case in RESTORE_CASES or case in PUBLIC_CASES)
+ORIGINAL_CASES = CASES
+EXTERNAL_CASES = ('external-ss-on-connect', 'external-http-on-connect', 'external-https-on-connect',
+                  'external-ss-always', 'external-http-always', 'external-https-always',
+                  'external-ss-cancelled', 'external-ss-replacement', 'external-ss-source', 'external-ss-dns-failure', 'external-ss-public')
+CASES += EXTERNAL_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -116,6 +121,9 @@ def checked_sources(source):
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
     required = {'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
+                'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
+                'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
+                'cmd/client/desktop_external_retained.go', 'cmd/client/external_profile_connect.go', 'cmd/client/speed_lab_paths.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
                 'cmd/client/desktop_node_host_linux_active.go',
                 'cmd/client/desktop_node_mtu_view_linux.go', 'cmd/client/desktop_node_mtu_view_linux_tun_native_test.go',
@@ -209,6 +217,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its exact UDP AWG2 peer, complete native parameters and owned lifecycle: ' + value)
         if value in SIP003_CASES and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted independent SIP003 TCP/HY2 UDP identity, selected DNS or retained lifecycle: ' + value)
+        if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted actual external DNS/exit, source, cancellation, replacement or exact Router restoration: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):

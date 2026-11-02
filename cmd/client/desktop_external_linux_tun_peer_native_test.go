@@ -1,0 +1,417 @@
+//go:build linux && routervpn_controller_privileged
+
+package main
+
+import (
+	"bufio"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"router-vpn/internal/common"
+	"router-vpn/internal/linuxprotection"
+	"router-vpn/internal/mobiletor"
+)
+
+var linuxHostTUNExternalCases = []string{
+	"external-ss-on-connect", "external-http-on-connect", "external-https-on-connect",
+	"external-ss-always", "external-http-always", "external-https-always",
+	"external-ss-cancelled", "external-ss-replacement", "external-ss-source", "external-ss-dns-failure",
+	"external-ss-public",
+}
+
+func linuxHostTUNExternalCase(scenario string) bool {
+	for _, candidate := range linuxHostTUNExternalCases {
+		if scenario == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func linuxHostTUNExternalProtocol(scenario string) string {
+	if !linuxHostTUNExternalCase(scenario) {
+		return ""
+	}
+	if strings.HasPrefix(scenario, "external-https-") {
+		return "https-connect"
+	}
+	if strings.HasPrefix(scenario, "external-http-") {
+		return "http-connect"
+	}
+	return "shadowsocks"
+}
+
+type linuxExternalTUNPeerReply struct {
+	Schema         int    `json:"schema"`
+	Protocol       string `json:"protocol"`
+	Address        string `json:"address"`
+	CA             string `json:"ca"`
+	Connections    int64  `json:"connections"`
+	Streams        int64  `json:"streams"`
+	DNSQueries     uint32 `json:"dns_queries"`
+	PublicAttempts uint32 `json:"public_attempts"`
+	PublicReplies  uint32 `json:"public_replies"`
+	AuthFailures   uint32 `json:"auth_failures"`
+}
+
+type linuxExternalTUNPeer struct {
+	command    *exec.Cmd
+	input      io.WriteCloser
+	output     *os.File
+	reader     *bufio.Reader
+	diagnostic linuxHostTUNOutput
+	done       chan struct{}
+	waitErr    error
+	protocol   string
+	password   string
+	address    netip.AddrPort
+	ca         string
+}
+
+func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
+	t.Helper()
+	if err := peer.output.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer peer.output.SetReadDeadline(time.Time{})
+	raw, err := peer.reader.ReadSlice('\n')
+	var reply linuxExternalTUNPeerReply
+	if err != nil || len(raw) > 16<<10 || decodeRelayControlJSON(raw, &reply) != nil || reply.Schema != 1 || reply.Protocol != peer.protocol {
+		t.Fatal("installed external peer lost its exact bounded reply", err, peer.diagnostic.String())
+	}
+	address, err := netip.ParseAddrPort(reply.Address)
+	pool := x509.NewCertPool()
+	if err != nil || address.Addr().String() != "198.51.100.2" || address.Port() == 0 || peer.address.IsValid() && peer.address != address ||
+		len(reply.CA) > 8192 || !pool.AppendCertsFromPEM([]byte(reply.CA)) || peer.ca != "" && reply.CA != peer.ca || reply.Connections < 0 || reply.Streams < 0 {
+		t.Fatal("installed external peer changed its endpoint or original private test root")
+	}
+	peer.address, peer.ca = address, reply.CA
+	return reply
+}
+
+func (peer *linuxExternalTUNPeer) observe(t *testing.T, action string) linuxExternalTUNPeerReply {
+	t.Helper()
+	if action != "stats" && action != "fail-dns" && action != "release-proof" {
+		t.Fatal("unowned installed external peer action")
+	}
+	if _, err := io.WriteString(peer.input, action+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return peer.read(t)
+}
+
+func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternalTUNPeer {
+	t.Helper()
+	linuxHostTUNCommand(t, "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "198.51.100.2/32", "dev", "rvpn-peer")
+	t.Cleanup(func() {
+		linuxHostTUNCommand(t, "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "198.51.100.2/32", "dev", "rvpn-peer")
+	})
+	directory, err := os.MkdirTemp("/opt", "routervpn-external-peer-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	image := filepath.Join(directory, "peer.test")
+	linuxHostTUNCopy(t, os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), image, 512<<20, os.Getenv("ROUTERVPN_NODE_HOST_PEER_SHA256"), 0755)
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	peer := &linuxExternalTUNPeer{protocol: linuxHostTUNExternalProtocol(scenario), password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
+	clear(key[:])
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
+	t.Cleanup(cancel)
+	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
+		"-test.run=^TestRouterVPNDesktopExternalInstalledReferenceProcess$", "-test.count=1", "-test.timeout=105s")
+	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD=1"}
+	peer.input, err = peer.command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var writer *os.File
+	peer.output, writer, err = os.Pipe()
+	if err != nil {
+		_ = peer.input.Close()
+		t.Fatal(err)
+	}
+	peer.reader = bufio.NewReaderSize(peer.output, (16<<10)+1)
+	peer.command.Stdout, peer.command.Stderr = writer, &peer.diagnostic
+	if err := peer.command.Start(); err != nil {
+		_ = peer.input.Close()
+		_ = peer.output.Close()
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { peer.waitErr = peer.command.Wait(); close(peer.done) }()
+	t.Cleanup(func() {
+		_ = peer.input.Close()
+		select {
+		case <-peer.done:
+			if peer.waitErr != nil {
+				t.Error("installed external reference failed", peer.waitErr, peer.diagnostic.String())
+			}
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-peer.done
+			t.Error("installed external reference failed to join its owned pipe", peer.diagnostic.String())
+		}
+		cancel()
+		_ = peer.output.Close()
+	})
+	if err := json.NewEncoder(peer.input).Encode(map[string]any{"schema": 1, "protocol": peer.protocol, "address": "198.51.100.2",
+		"password": peer.password, "hold": scenario == "external-ss-cancelled"}); err != nil {
+		t.Fatal(err)
+	}
+	initial := peer.read(t)
+	if initial.Connections != 0 || initial.Streams != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 {
+		t.Fatal("external reference reported traffic before its selected native child")
+	}
+	return peer
+}
+
+// The existing runner has already unshared mount, user, PID and network
+// namespaces and made /etc private. Bind only this ephemeral public CA over
+// the existing certificate file; the shipping TLS verifier remains intact.
+func linuxHostTUNExternalTrust(t *testing.T, peer *linuxExternalTUNPeer) {
+	t.Helper()
+	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Getenv(linuxControllerNamespaceMarker) != "1" || os.Geteuid() != 0 {
+		t.Fatal("private test trust requires the original isolated installed namespace")
+	}
+	const target = "/etc/ssl/certs/ca-certificates.crt"
+	var original syscall.Stat_t
+	if syscall.Lstat(target, &original) != nil || original.Mode&syscall.S_IFMT != syscall.S_IFREG || original.Uid != 0 {
+		t.Fatal("private test trust requires the existing regular system root file")
+	}
+	directory, err := os.MkdirTemp("/opt", "routervpn-external-trust-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	source := filepath.Join(directory, "ca.pem")
+	if err := os.WriteFile(source, []byte(peer.ca), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mount(source, target, "", syscall.MS_BIND, ""); err != nil {
+		t.Fatal("private test root bind", err)
+	}
+	t.Cleanup(func() {
+		if err := syscall.Unmount(target, 0); err != nil {
+			t.Error("private test root unmount", err)
+		}
+	})
+	if err := syscall.Mount("", target, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY, ""); err != nil {
+		t.Fatal("private test root read-only binding", err)
+	}
+}
+
+func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer, scenario string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"))
+	var profiles common.RouterProfileStore
+	if err != nil || decodeRelayControlJSON(raw, &profiles) != nil || len(profiles.Profiles) != 1 || profiles.Profiles[0].ID != "installed-linux-node" {
+		t.Fatal("external fixture lost its original private Router profile", err)
+	}
+	kill := "on-connect"
+	if strings.HasSuffix(scenario, "-always") {
+		kill = "always"
+	}
+	profiles.Profiles[0].KillSwitchPolicy = kill
+	profile := common.RouterProfile{ID: "installed-linux-external", Name: "Independent installed external peer", NodeKind: "external",
+		Endpoint: "198.51.100.2", DNSMode: "custom", DNSProtocol: "tcp", DNSHost: "203.0.113.53", DNSPort: 5353,
+		IPv6Mode: "off", StartLayer: common.StartLayerOff, MTUPolicy: "manual", ManualMTU: 1376, EffectiveMTU: 9000,
+		KillSwitch: true, KillSwitchPolicy: kill, MultihopExecution: "local",
+		External: &common.ExternalNodeConfig{Protocol: peer.protocol, ExpectedPublicIP: "203.0.113.88"}}
+	if scenario == "external-ss-public" {
+		// Explicit Direct/Local Connect must persist its exact new execution
+		// revision without giving unrelated saved-policy changes authority.
+		profile.MultihopExecution = "auto"
+	}
+	connect := &common.ExternalHTTPConnectConfig{Host: "198.51.100.2", Port: int(peer.address.Port()), Username: "captured-native-user", Password: peer.password}
+	switch peer.protocol {
+	case "shadowsocks":
+		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: "198.51.100.2", Port: int(peer.address.Port()), Method: "2022-blake3-aes-256-gcm", Password: peer.password}
+	case "http-connect":
+		profile.External.HTTPConnect = connect
+	case "https-connect":
+		connect.TLSServerName = "captured-external.example"
+		profile.External.HTTPSConnect = connect
+	default:
+		t.Fatal("external fixture lost its exact protocol")
+	}
+	if err := common.NormalizeRouterProfile(&profile); err != nil {
+		t.Fatal("external fixture rejected by actual saved profile validation", err)
+	}
+	profiles.Profiles = append(profiles.Profiles, profile)
+	raw, err = json.Marshal(profiles)
+	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), raw, 0600) != nil {
+		t.Fatal("external fixture failed to preserve both private profiles", err)
+	}
+	catalog, err := os.ReadFile(filepath.Join("..", "..", "configs", "client", "modes.json"))
+	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "modes.json"), catalog, 0600) != nil {
+		t.Fatal("external fixture lost the shipping public Connect catalog", err)
+	}
+}
+
+type linuxExternalTUNResult struct {
+	Stage             string                            `json:"stage"`
+	Scenario          string                            `json:"scenario"`
+	OriginalSession   string                            `json:"original_session"`
+	ExternalSession   string                            `json:"external_session,omitempty"`
+	FinalSession      string                            `json:"final_session,omitempty"`
+	Protocol          string                            `json:"protocol"`
+	MTU               int                               `json:"mtu"`
+	Proof             *desktopExternalProof             `json:"proof,omitempty"`
+	Restore           *linuxHostTUNRestoreResult        `json:"restore,omitempty"`
+	SourcePreserved   bool                              `json:"source_preserved,omitempty"`
+	ReplacementKept   bool                              `json:"replacement_kept,omitempty"`
+	PublicPersisted   bool                              `json:"public_persisted,omitempty"`
+	FailedProof       bool                              `json:"failed_proof,omitempty"`
+	Journal           *linuxprotection.JournalSelection `json:"journal,omitempty"`
+	ClosedTableSHA256 string                            `json:"closed_table_sha256,omitempty"`
+}
+
+func linuxHostTUNReadExternal(t *testing.T, process *linuxHostTUNController, scenario, stage string) linuxExternalTUNResult {
+	t.Helper()
+	if err := process.output.SetReadDeadline(time.Now().Add(70 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer process.output.SetReadDeadline(time.Time{})
+	raw, err := process.reader.ReadSlice('\n')
+	var result linuxExternalTUNResult
+	if err != nil || len(raw) > 64<<10 || decodeRelayControlJSON(raw, &result) != nil || result.Scenario != scenario || result.Stage != stage ||
+		result.Protocol != linuxHostTUNExternalProtocol(scenario) || !desktopMTURequestPattern.MatchString(result.OriginalSession) {
+		t.Fatal("installed external succession lost its exact bounded lifecycle record", err, string(raw), process.diagnostic.String())
+	}
+	return result
+}
+
+func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
+	t.Helper()
+	original := linuxHostTUNStartPeer(t, "restore-sealed")
+	linuxHostTUNDirectHealth(t, original)
+	linuxHostTUNInstallProfile(t, original, "restore-sealed")
+	peer := linuxHostTUNStartExternalPeer(t, scenario)
+	linuxHostTUNExternalTrust(t, peer)
+	linuxHostTUNInstallExternalProfile(t, peer, scenario)
+	if scenario == "external-ss-dns-failure" {
+		peer.observe(t, "fail-dns")
+	}
+	process := linuxHostTUNStartController(t, installed, scenario)
+	if _, err := process.gate.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	first := linuxHostTUNReadExternal(t, process, scenario, "router")
+	before := original.observe(t, "stats")
+	if first.MTU != 1300 || before.RouterQueries == 0 || before.DNSQueries < 2 || before.DirectQueries != 1 || before.PlainTCP == 0 || before.PlainUDP == 0 {
+		t.Fatal("external succession did not begin with a genuinely proved Router and observed MTU", first, before)
+	}
+	if _, err := process.gate.Write([]byte{2}); err != nil {
+		t.Fatal(err)
+	}
+	stage := "external"
+	if scenario == "external-ss-cancelled" {
+		stage = "external-pending"
+	} else if scenario == "external-ss-source" {
+		stage = "source-refused"
+	} else if scenario == "external-ss-dns-failure" {
+		stage = "proof-refused"
+	}
+	middle := linuxHostTUNReadExternal(t, process, scenario, stage)
+	observed := peer.observe(t, "stats")
+	if scenario == "external-ss-cancelled" {
+		deadline := time.NewTimer(10 * time.Second)
+		tick := time.NewTicker(25 * time.Millisecond)
+		defer deadline.Stop()
+		defer tick.Stop()
+		for observed.PublicAttempts == 0 {
+			select {
+			case <-deadline.C:
+				t.Fatal("cancellation fixture never reached the actual held HTTPS exit proof", observed)
+			case <-tick.C:
+				observed = peer.observe(t, "stats")
+			}
+		}
+		if observed.DNSQueries == 0 || observed.PublicReplies != 0 || middle.Proof != nil {
+			t.Fatal("cancelled external path fabricated proof before its original HTTPS reply", middle, observed)
+		}
+	} else if scenario == "external-ss-source" {
+		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
+			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
+		}
+	} else if scenario == "external-ss-dns-failure" {
+		if !middle.FailedProof || observed.DNSQueries == 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
+			t.Fatal("failed selected DNS fabricated an exit proof or Connected", middle, observed)
+		}
+	} else if middle.Proof == nil || !middle.Proof.Healthy || !middle.Proof.DNSProven || middle.Proof.EntryProven ||
+		middle.MTU != 1376 || observed.Connections == 0 || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
+		t.Fatal("external succession bypassed its real encrypted/authenticated DNS and exit exchanges", middle, observed)
+	}
+	if current := original.observe(t, "stats"); current.RouterQueries != before.RouterQueries || current.DirectQueries != before.DirectQueries {
+		t.Fatal("external proof borrowed the previous Router response", before, current)
+	}
+	if _, err := process.gate.Write([]byte{3}); err != nil {
+		t.Fatal(err)
+	}
+	final := linuxHostTUNReadExternal(t, process, scenario, "retired")
+	if final.OriginalSession != first.OriginalSession || final.Journal == nil || final.Journal.Incomplete || final.Journal.Record.Validate() != nil ||
+		final.Journal.Record.Phase != "settled" || final.Journal.Record.Committed.Engine != nil || !desktopMTURequestPattern.MatchString(final.FinalSession) {
+		t.Fatal("external succession lost its original durable journal or joined engine", final)
+	}
+	select {
+	case <-process.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("installed external controller did not join after exact retirement", process.diagnostic.String())
+	}
+	if process.waitErr != nil || process.command.ProcessState == nil || !process.command.ProcessState.Success() || linuxHostTUNTUNAbsent(nil) != nil {
+		t.Fatal("installed external lifecycle left its child or real TUN alive", process.waitErr, process.diagnostic.String())
+	}
+	after := original.observe(t, "stats")
+	if scenario == "external-ss-source" {
+		if !final.SourcePreserved || final.FinalSession != final.OriginalSession || after.RouterQueries != before.RouterQueries {
+			t.Fatal("source refusal replaced the original proved Router", final, after)
+		}
+	} else if scenario == "external-ss-replacement" {
+		if !final.ReplacementKept || final.Restore != nil || after.RouterQueries != before.RouterQueries {
+			t.Fatal("old external restore overwrote a replacement connection", final, after)
+		}
+	} else if scenario == "external-ss-public" {
+		if !final.PublicPersisted || final.FinalSession != final.ExternalSession || final.Restore != nil || after.RouterQueries != before.RouterQueries {
+			t.Fatal("public external Connect lost persistence, retained monitor or its distinct exit", final, after)
+		}
+	} else if final.Restore == nil || !final.Restore.Cleared || final.Restore.RestoredMTU != 1300 || final.Restore.Execution != "local" ||
+		final.Restore.PreviousSession != final.OriginalSession || final.Restore.FreshSession != final.FinalSession || final.FinalSession == final.OriginalSession ||
+		after.RouterQueries <= before.RouterQueries || after.DirectQueries != before.DirectQueries {
+		t.Fatal("external test did not restore and reprove the exact captured Router and observed MTU", final, before, after)
+	}
+	if strings.HasSuffix(scenario, "-always") {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		closed, err := linuxShutdownTable(ctx, final.FinalSession)
+		digest := sha256.Sum256(closed)
+		if err != nil || len(closed) == 0 || final.Journal.Record.Committed.Target == nil || hex.EncodeToString(digest[:]) != final.ClosedTableSHA256 {
+			t.Fatal("external succession released or replaced its original Always closed protection", err)
+		}
+	} else if final.Journal.Record.Committed.Target != nil || mobiletor.ReadDesktopLinuxNodeAbsence(context.Background(), final.FinalSession) != nil {
+		t.Fatal("external succession retained an unowned On-connect table")
+	}
+	if end := peer.observe(t, "stats"); end.AuthFailures != 0 || scenario == "external-ss-cancelled" && end.PublicReplies != 0 {
+		t.Fatal("retired external proof was adopted after cancellation", end)
+	}
+	t.Log("verified installed host retained external succession:", scenario)
+	t.Log("verified installed host native lifecycle:", scenario)
+}

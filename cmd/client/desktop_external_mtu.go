@@ -134,7 +134,7 @@ func captureDesktopMTUBaselineLocked(a *app, launch *desktopNodeLaunch) {
 }
 
 func desktopExternalMTULaunch(a *app) *desktopNodeLaunch {
-	value, ok := desktopNodeOwners.Load(a)
+	value, ok := lookupDesktopNativeLaunch(a)
 	if !ok {
 		return nil
 	}

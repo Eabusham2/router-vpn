@@ -18,7 +18,7 @@ func captureMeasurementProfiles(a *app, st state, graph activeMultihopGraph, sup
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if st.Mode == "external-node" {
-		if value, found := desktopNodeOwners.Load(a); found {
+		if value, found := lookupDesktopNativeLaunch(a); found {
 			launch, typed := value.(*desktopNodeLaunch)
 			if desktopTorRuntimeID(st.RuntimeMode) {
 				if !typed || launch == nil || launch.tor == nil || launch.external != nil || launch.command != a.cmd || launch.mode != st.RuntimeMode || launch.tor.expected.NodeID != st.RouterID || launch.tor.entryCurrentLocked(a) != nil {

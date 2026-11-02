@@ -34,7 +34,7 @@ func captureActiveDNSRuntimeOwner(a *app, profileID string) (activeDNSRuntimeOwn
 	a.mu.Unlock()
 	owner := activeDNSRuntimeOwner{command: command, connected: st.Connected, phase: st.Phase, routerID: st.RouterID,
 		mode: st.Mode, runtimeID: st.RuntimeMode, base: st.Base, profileFound: found, profileToken: token}
-	if raw, found := desktopNodeOwners.Load(a); found {
+	if raw, found := lookupDesktopNativeLaunch(a); found {
 		var ok bool
 		owner.node, ok = raw.(*desktopNodeLaunch)
 		if !ok || owner.node == nil {

@@ -27,8 +27,13 @@ func captureDesktopLinuxNodeRunningPath(policy *mobilemultihop.DesktopNodePolicy
 	if err != nil {
 		return selected, err
 	}
+	return captureDesktopLinuxRunningPath(capture.PhysicalRoots, capture.IPv6Mode)
+}
+
+func captureDesktopLinuxRunningPath(roots []mobilemultihop.ExternalDesktopPhysicalRoot, ipv6 string) (mobiletor.DesktopLinuxNodeRunningSelection, error) {
+	var selected mobiletor.DesktopLinuxNodeRunningSelection
 	seen := make(map[mobiletor.DesktopLinuxSocketDestination]bool)
-	for _, root := range capture.PhysicalRoots {
+	for _, root := range roots {
 		if root.DynamicSOCKSUDP {
 			return selected, errors.New("Linux running path has no captured dynamic relay owner")
 		}
@@ -68,7 +73,7 @@ func captureDesktopLinuxNodeRunningPath(policy *mobilemultihop.DesktopNodePolicy
 			}
 			ip := prefix.Addr()
 			if !ip.IsValid() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLoopback() || ip.Is4In6() || ip.Zone() != "" ||
-				!ip.Is4() && capture.IPv6Mode == "off" {
+				!ip.Is4() && ipv6 == "off" {
 				continue
 			}
 			value := mobiletor.DesktopLinuxSocketInterface{Name: iface.Name, Index: uint32(iface.Index), Address: ip}

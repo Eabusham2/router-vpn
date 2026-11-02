@@ -175,7 +175,7 @@ func (saved *speedLabTorRestore) selectionFor(a *app, profile common.RouterProfi
 
 func (a *app) restoreSpeedLabTorMTU(plan speedLabRestorePlan) error {
 	saved := plan.tor
-	raw, exists := desktopNodeOwners.Load(a)
+	raw, exists := lookupDesktopNativeLaunch(a)
 	launch, ok := raw.(*desktopNodeLaunch)
 	if saved == nil || saved.mtu < 1280 || saved.mtu > 9000 || !exists || !ok || launch == nil || launch.tor == nil || launch.profileID != plan.profile.ID || launch.tor.network != saved.network {
 		return errors.New("restored Tor MTU lost its captured node or physical path")
@@ -527,7 +527,7 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 		if profile.MultihopEnabled {
 			plan.request.EntryID = profile.MultihopEntryID
 		}
-		if raw, exists := desktopNodeOwners.Load(a); exists {
+		if raw, exists := lookupDesktopNativeLaunch(a); exists {
 			launch, ok := raw.(*desktopNodeLaunch)
 			if !ok || launch == nil || launch.command != snapshot.Runtime || launch.profileID != st.RouterID {
 				return plan, errors.New("previous external connection has another native owner")
@@ -572,7 +572,7 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 		} else if profile.MultihopExecution != "" && profile.MultihopExecution != "local" {
 			return plan, errors.New("previous external execution cannot be restored without its native proof receipt")
 		}
-	} else if raw, exists := desktopNodeOwners.Load(a); exists {
+	} else if raw, exists := lookupDesktopNativeLaunch(a); exists {
 		launch, ok := raw.(*desktopNodeLaunch)
 		if !ok || launch == nil || launch.external != nil || launch.tor != nil || launch.command != snapshot.Runtime || launch.profileID != st.RouterID || launch.mode != plan.request.Mode {
 			return plan, errors.New("previous native connection has another captured owner")

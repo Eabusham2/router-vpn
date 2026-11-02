@@ -25,32 +25,35 @@ import (
 // construction is permission to launch, create protection or report Connected.
 // The generated child and the original transaction must establish those facts.
 type desktopLinuxNodeHost struct {
-	gate         chan struct{}
-	parent       *desktopLinuxNodeParentCapture
-	operation    context.Context
-	policy       *mobilemultihop.DesktopNodePolicy
-	selection    linuxprotection.NodeSelection
-	launch       *desktopNodeLaunch
-	process      *desktopLinuxNodeProcess
-	transaction  *desktopLinuxNodeTransaction
-	source       []byte
-	network      string
-	revision     string
-	options      [3]bool
-	savedOptions [3]bool
-	physical     mobiletor.DesktopLinuxNodeRunningSelection
-	ready        *mobilemultihop.DesktopNodeReadyRecord
-	proof        *desktopLinuxNodeProof
-	activation   *desktopLinuxNodeActivation
-	monitor      *atomic.Pointer[desktopLinuxNodeMonitor] // Immutable holder, allocated before host publication.
-	mtu          *desktopLinuxNodeMTUOwner
-	stageEntered bool
-	startEntered bool
-	started      time.Time
-	staged       bool
-	closing      bool
-	closed       bool
-	released     bool
+	gate                      chan struct{}
+	parent                    *desktopLinuxNodeParentCapture
+	operation                 context.Context
+	policy                    *mobilemultihop.DesktopNodePolicy
+	external                  *mobilemultihop.DesktopExternalPolicy
+	externalProof             *desktopLinuxExternalProof
+	externalPersistedRevision string
+	selection                 linuxprotection.NodeSelection
+	launch                    *desktopNodeLaunch
+	process                   *desktopLinuxNodeProcess
+	transaction               *desktopLinuxNodeTransaction
+	source                    []byte
+	network                   string
+	revision                  string
+	options                   [3]bool
+	savedOptions              [3]bool
+	physical                  mobiletor.DesktopLinuxNodeRunningSelection
+	ready                     *mobilemultihop.DesktopNodeReadyRecord
+	proof                     *desktopLinuxNodeProof
+	activation                *desktopLinuxNodeActivation
+	monitor                   *atomic.Pointer[desktopLinuxNodeMonitor] // Immutable holder, allocated before host publication.
+	mtu                       *desktopLinuxNodeMTUOwner
+	stageEntered              bool
+	startEntered              bool
+	started                   time.Time
+	staged                    bool
+	closing                   bool
+	closed                    bool
+	released                  bool
 }
 
 func prepareDesktopLinuxNodeHost(operation context.Context, a *app, profile common.RouterProfile, mode string, restoredMTU int) (*desktopLinuxNodeHost, error) {
@@ -161,6 +164,9 @@ func (h *desktopLinuxNodeHost) enter(ctx context.Context) error {
 }
 
 func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
+	if h != nil && h.external != nil {
+		return h.currentExternal(ctx)
+	}
 	if h == nil || ctx == nil || ctx.Err() != nil || h.operation == nil || h.closing || h.closed ||
 		h.parent == nil || h.policy == nil || h.policy.Validate() != nil || h.launch == nil || h.network == "" || physicalNetworkIdentity() != h.network {
 		return errors.New("Linux Node host no longer owns its captured operation and policy")
@@ -221,12 +227,7 @@ func (h *desktopLinuxNodeHost) Stage(ctx context.Context) error {
 	if err := captureDesktopRuntimeDirectory(h.launch, directory); err != nil {
 		return err
 	}
-	for _, input := range []struct {
-		name string
-		body []byte
-	}{
-		{"sing-box.json", h.launch.config}, {"capture.json", h.launch.metadata}, {"node-source.json", h.source},
-	} {
+	for _, input := range h.privateInputs() {
 		if err := h.current(ctx); err != nil {
 			return err
 		}
@@ -258,12 +259,7 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	if !h.staged {
 		return nil, "", errors.New("Linux Node command preceded complete private staging")
 	}
-	for _, input := range []struct {
-		name string
-		body []byte
-	}{
-		{"sing-box.json", h.launch.config}, {"capture.json", h.launch.metadata}, {"node-source.json", h.source},
-	} {
+	for _, input := range h.privateInputs() {
 		actual, err := readDesktopRuntimeFile(h.launch, input.name, int64(len(input.body)))
 		matches := err == nil && bytes.Equal(actual, input.body)
 		clear(actual)
@@ -279,13 +275,16 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	if err != nil {
 		return nil, "", err
 	}
-	meta := h.policy.Metadata()
-	arguments := []string{"routervpn-node", "--runtime-dir", h.launch.directory, "--session", meta.SessionID,
-		"--config-sha256", meta.ConfigSHA256, "--physical-source-sha256", meta.SourceSHA256, "--physical-transfer-sha256", control}
-	if meta.RestoredMTU != 0 {
-		arguments = append(arguments, "--physical-mtu", strconv.Itoa(meta.RestoredMTU))
+	command := "routervpn-node"
+	if h.external != nil {
+		command = "routervpn-external"
 	}
-	arguments, err = validateDesktopNodeProcessArguments(arguments, h.launch.directory)
+	arguments := []string{command, "--runtime-dir", h.launch.directory, "--session", h.selection.SessionID,
+		"--config-sha256", h.selection.ConfigSHA256, "--physical-source-sha256", h.selection.SourceSHA256, "--physical-transfer-sha256", control}
+	if h.policy != nil && h.policy.Metadata().RestoredMTU != 0 {
+		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.policy.Metadata().RestoredMTU))
+	}
+	arguments, err = validateDesktopLinuxProtectedArguments(arguments, h.launch.directory)
 	if err != nil {
 		return nil, "", err
 	}
@@ -314,6 +313,9 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 		return err
 	}
 	if !h.closed {
+		if h.external != nil && h.launch != nil {
+			desktopExternalRetainedLaunches.CompareAndDelete(h.parent.app, h.launch)
+		}
 		if err := cleanupDesktopNodeLaunch(h.launch); err != nil {
 			return err
 		}
@@ -323,7 +325,7 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 			clear(h.launch.metadata)
 			h.launch.config, h.launch.metadata = nil, nil
 		}
-		h.source, h.policy = nil, nil
+		h.source, h.policy, h.external = nil, nil, nil
 		h.closed = true
 	}
 	if !h.released {
@@ -335,6 +337,6 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 	return nil
 }
 
-// Keep this bounded host private until the real generated child and selected
-// DNS/TUN/Router proof compose with its original transaction on the native host.
+// The installed controller retains this host through the real child, selected
+// DNS/TUN proof and its separate Router authentication or external-exit proof.
 var _ ownedDesktopNodeParent = (*desktopLinuxNodeHost)(nil)

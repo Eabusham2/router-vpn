@@ -66,7 +66,7 @@ func (s *desktopLinuxNodeSession) Monitor(ctx context.Context, h *desktopLinuxNo
 	if h.activation == nil || h.transaction == nil || h.transaction.journal != s.journal || h.monitor == nil {
 		return errors.New("Linux Node monitor preceded original proved activation")
 	}
-	if _, _, err := h.readReadyLocked(ctx, false); err != nil {
+	if err := h.observeLocked(ctx); err != nil {
 		return err
 	}
 	if previous := h.monitor.Load(); previous != nil {
@@ -80,8 +80,7 @@ func (s *desktopLinuxNodeSession) Monitor(ctx context.Context, h *desktopLinuxNo
 		return errors.New("Linux Node monitor cannot replace a retired or foreign observer")
 	}
 	m, err := newDesktopLinuxNodeMonitor(s, h, func(observation context.Context) error {
-		_, _, err := h.readReadyLocked(observation, false)
-		return err
+		return h.observeLocked(observation)
 	}, func() error { return h.parent.app.stopModeWithIntent(true) })
 	if err != nil {
 		return err

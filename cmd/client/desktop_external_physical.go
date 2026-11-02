@@ -17,6 +17,13 @@ import (
 // Automatic connection selection remains on that existing contract until the
 // captured legacy-to-native protection handoff is implemented and verified.
 func prepareDesktopExternalPhysical(launch *desktopNodeLaunch, targetOS string) error {
+	if targetOS != "windows" {
+		targetOS = "" // Retained Linux capture is selected by its original host.
+	}
+	return prepareDesktopExternalPhysicalCaptured(launch, targetOS)
+}
+
+func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS string) error {
 	if launch == nil || launch.external == nil || launch.tor != nil || launch.command != nil || launch.directory != "" {
 		return errors.New("ordinary physical preparation requires its unstaged external owner")
 	}
@@ -24,7 +31,7 @@ func prepareDesktopExternalPhysical(launch *desktopNodeLaunch, targetOS string) 
 	if owner.physical != nil {
 		return errors.New("ordinary physical preparation cannot replace a captured owner")
 	}
-	if targetOS != "windows" || !owner.direct || owner.predecessor != "" {
+	if targetOS != "windows" && targetOS != "linux" || !owner.direct || owner.predecessor != "" {
 		return nil
 	}
 	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
@@ -75,7 +82,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 	}
 	meta := physical.Metadata()
 	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
-	if err != nil || meta.TargetOS != "windows" || meta.SessionID != owner.session || owner.expected.SessionID != owner.session ||
+	if err != nil || meta.TargetOS != "windows" && meta.TargetOS != "linux" || meta.SessionID != owner.session || owner.expected.SessionID != owner.session ||
 		meta.OriginalSourceSHA256 != owner.expected.SourceSHA256 || meta.OriginalConfigSHA256 != owner.expected.ConfigSHA256 ||
 		original.SourceSHA256() != meta.OriginalSourceSHA256 || original.Config() != physical.OriginalPolicy().Config() ||
 		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired ||

@@ -65,7 +65,7 @@ func startDesktopLinuxNodeProcessWithVerifier(ctx context.Context, parent *deskt
 	if ctx == nil || ctx.Err() != nil || parent == nil || parent.parent == nil || verify == nil {
 		return nil, errors.New("Linux Node launch requires its live captured controller operation")
 	}
-	arguments, err := validateDesktopNodeProcessArguments(arguments, directory)
+	arguments, err := validateDesktopLinuxProtectedArguments(arguments, directory)
 	if err != nil {
 		return nil, err
 	}

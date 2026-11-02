@@ -17,7 +17,7 @@ func (s desktopLatencySnapshot) currentLocked(a *app) error {
 		mtuStateSnapshotToken(a.state) != s.path.StateToken || s.temporary.current == nil || s.temporary.current.Err() != nil {
 		return errors.New("external comparison no longer owns this temporary native path")
 	}
-	owner, found := desktopNodeOwners.Load(a)
+	owner, found := lookupDesktopNativeLaunch(a)
 	if !found || owner != s.launch || s.launch == nil || s.launch.command != a.cmd {
 		return errors.New("external comparison native process was replaced")
 	}

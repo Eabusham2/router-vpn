@@ -1,0 +1,9 @@
+//go:build !linux || android
+
+package main
+
+import "context"
+
+func routerVPNRunLinuxExternalControlled(context.Context, string, string, string, string, string, routerVPNNodeLinuxParentOptions) error {
+	return routerVPNExternalFailure
+}

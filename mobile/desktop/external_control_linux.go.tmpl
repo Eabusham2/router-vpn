@@ -1,0 +1,135 @@
+//go:build linux && !android
+
+package main
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/linuxprotection"
+)
+
+// Authentication precedes even the first private file read. The ordinary
+// external loop then owns the original graph, selected DNS/public-exit proof,
+// measurements and output files; only its physical admission and retirement
+// use the retained parent transaction below.
+func routerVPNRunLinuxExternalControlled(parent context.Context, directory, session, source, config, transfer string,
+	options routerVPNNodeLinuxParentOptions) (failure error) {
+	if parent == nil {
+		return routerVPNExternalFailure
+	}
+	control, err := routerVPNOpenLinuxNodeControl(session, source, config, options)
+	if control != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			failure = errors.Join(failure, control.close(ctx))
+		}()
+	}
+	if err != nil {
+		return err
+	}
+	return routerVPNRunExternal(parent, directory, session, source, func(ctx context.Context, original *mobilemultihop.ExternalPolicy,
+		physical *mobilemultihop.DesktopExternalPolicy, raw, capture, capturedSession string) (routerVPNExternalOwner, error) {
+		if capturedSession != session || control.bindExternal(ctx, original, physical, source, config, transfer) != nil {
+			return nil, routerVPNExternalFailure
+		}
+		graph, err := routervpndesktoppt.WithExternalLinuxPhysicalBaseline(ctx, physical, control.baseline, control.admit)
+		// Once the protocol is bound, even a parser or partial constructor failure
+		// returns its original owner so the loop can join and acknowledge it.
+		owned := &routerVPNLinuxExternalOwner{control: control,
+			routerVPNExternalNative: &routerVPNExternalNative{cancel: func() {}}}
+		control.native = owned.routerVPNExternalNative
+		if err != nil {
+			return owned, err
+		}
+		native, err := routerVPNNewExternalNativeWithPreparation(graph, original, physical, raw, capture, session, func(instance *box.Box) error {
+			var prepareErr error
+			control.preparation, prepareErr = instance.RouterVPNDesktopLinuxExternalPreparePhysicalOwned(physical)
+			return prepareErr
+		})
+		if native != nil {
+			owned.routerVPNExternalNative, control.native = native, native
+		}
+		return owned, err
+	})
+}
+
+func (owner *routerVPNLinuxNodeControl) bindExternal(ctx context.Context, original *mobilemultihop.ExternalPolicy,
+	policy *mobilemultihop.DesktopExternalPolicy, source, config, transfer string) error {
+	if owner == nil || owner.policy != nil || owner.external != nil || owner.control != nil || owner.retiring.Load() ||
+		owner.original(ctx) != nil || original == nil || policy == nil || policy.Validate() != nil || policy.OriginalPolicy() != original {
+		return routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	capture, err := policy.Capture()
+	if err != nil || meta.TargetOS != "linux" || meta.SOCKSUDPAssociationRequired ||
+		(meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect") ||
+		capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
+		capture.StartLayer != "" || capture.EntryStartLayer != "" {
+		return routerVPNExternalFailure
+	}
+	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	command, commandErr := selection.CaptureSHA256()
+	selected, selectedErr := selection.ControlSHA256()
+	if commandErr != nil || selectedErr != nil || command != owner.commandHash || meta.SourceSHA256 != source ||
+		meta.ConfigSHA256 != config || selected != transfer {
+		return routerVPNExternalFailure
+	}
+	owner.control, err = linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
+	if err != nil {
+		return err
+	}
+	owner.external, owner.selection, owner.selectionHash = policy, selection, selected
+	return nil
+}
+
+// Embedding retains the existing proof and every measurement provider. The
+// wrapper adds only original control liveness and acknowledged native close.
+type routerVPNLinuxExternalOwner struct {
+	*routerVPNExternalNative
+	control *routerVPNLinuxNodeControl
+}
+
+func (owner *routerVPNLinuxExternalOwner) current() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return owner.control.current(ctx)
+}
+func (owner *routerVPNLinuxExternalOwner) Start() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	err := owner.control.original(ctx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if err := owner.routerVPNExternalNative.Start(); err != nil {
+		return err
+	}
+	return owner.current()
+}
+func (owner *routerVPNLinuxExternalOwner) Healthy() bool {
+	return owner.current() == nil && owner.routerVPNExternalNative.Healthy()
+}
+func (owner *routerVPNLinuxExternalOwner) VerifyCurrentPath() error {
+	if err := owner.current(); err != nil {
+		return err
+	}
+	if err := owner.routerVPNExternalNative.VerifyCurrentPath(); err != nil {
+		return err
+	}
+	return owner.current()
+}
+func (owner *routerVPNLinuxExternalOwner) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := owner.control.joinNative(ctx); err != nil {
+		return err
+	}
+	return owner.control.retire(ctx)
+}

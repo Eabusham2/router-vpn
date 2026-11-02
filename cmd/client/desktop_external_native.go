@@ -45,6 +45,7 @@ type desktopExternalRuntime struct {
 	physicalEndpoints                      []string
 	physicalEgress                         []nativeopenvpn.LayerEgress
 	physical                               *mobilemultihop.DesktopExternalPolicy
+	retained                               desktopExternalRetainedRuntime
 	mtu                                    *desktopMTUSession
 	direct                                 bool
 	started                                time.Time
@@ -100,6 +101,9 @@ func desktopExternalProcessDone(launch *desktopNodeLaunch) <-chan struct{} {
 		return nil
 	}
 	owner := launch.external
+	if owner.retained != nil {
+		return owner.retained.ProcessDone()
+	}
 	owner.waitOnce.Do(func() {
 		owner.waitDone = make(chan struct{})
 		go func() {
@@ -123,7 +127,7 @@ func desktopExternalProcessExited(launch *desktopNodeLaunch) bool {
 }
 
 func desktopConnectionProcessDone(a *app, command *exec.Cmd) <-chan struct{} {
-	if raw, ok := desktopNodeOwners.Load(a); ok {
+	if raw, ok := lookupDesktopNativeLaunch(a); ok {
 		if launch, ok := raw.(*desktopNodeLaunch); ok && launch.command == command {
 			if launch.external != nil {
 				return desktopExternalProcessDone(launch)
@@ -393,6 +397,16 @@ func validateDesktopExternalProof(raw []byte, owner *desktopExternalRuntime, now
 }
 
 func (a *app) readDesktopExternalProof(launch *desktopNodeLaunch) (desktopExternalProof, error) {
+	proof, err := a.readDesktopExternalProofRecord(launch)
+	if err == nil && launch.external.retained != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		err = launch.external.retained.CurrentProof(ctx, proof)
+	}
+	return proof, err
+}
+
+func (a *app) readDesktopExternalProofRecord(launch *desktopNodeLaunch) (desktopExternalProof, error) {
 	if launch == nil || launch.external == nil || launch.command == nil || launch.command.Process == nil || !a.ownsConnectionRuntime(launch.command) {
 		return desktopExternalProof{}, errors.New("external native process is no longer owned")
 	}

@@ -4,14 +4,22 @@ import (
 	STD "bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -1701,5 +1709,241 @@ func TestRouterVPNDesktopNodeEncryptedLayerWrongCredential(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The installed Linux succession fixture uses this independent protocol peer.
+// It terminates the selected DNS and public-exit proof locally; it cannot dial
+// either named destination on an ordinary network. The native child still
+// performs the real SS2022/CONNECT, DNS and certificate-checked HTTPS exchange.
+type desktopExternalInstalledPeerRequest struct {
+	Schema   int    `json:"schema"`
+	Protocol string `json:"protocol"`
+	Address  string `json:"address"`
+	Password string `json:"password"`
+	Hold     bool   `json:"hold"`
+}
+
+type desktopExternalInstalledPeerReply struct {
+	Schema         int    `json:"schema"`
+	Protocol       string `json:"protocol"`
+	Address        string `json:"address"`
+	CA             string `json:"ca"`
+	Connections    int64  `json:"connections"`
+	Streams        int64  `json:"streams"`
+	DNSQueries     uint32 `json:"dns_queries"`
+	PublicAttempts uint32 `json:"public_attempts"`
+	PublicReplies  uint32 `json:"public_replies"`
+	AuthFailures   uint32 `json:"auth_failures"`
+}
+
+func desktopExternalInstalledPeerCertificate(t *testing.T) (tls.Certificate, string) {
+	t.Helper()
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	root := &x509.Certificate{SerialNumber: big.NewInt(73001), Subject: pkix.Name{CommonName: "isolated installed external root"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	rootDER, err := x509.CreateCertificate(rand.Reader, root, root, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(73002), Subject: pkix.Name{CommonName: "captured installed external peer"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IPAddresses: []net.IP{net.ParseIP("1.1.1.1")},
+		DNSNames: []string{"captured-external.example"}}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, root, &leafKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{leafDER, rootDER}, PrivateKey: leafKey}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
+}
+
+func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD") != "1" {
+		t.Fatal("unknown installed external reference owner")
+	}
+	reader := STD.NewReaderSize(os.Stdin, desktopNodeLayerReferenceLimit+1)
+	line, err := reader.ReadSlice('\n')
+	var request desktopExternalInstalledPeerRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	var trailing any
+	if err != nil || len(line) > desktopNodeLayerReferenceLimit || decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
+		request.Address != "198.51.100.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" {
+		t.Fatal("installed external reference lost its exact bounded request", err)
+	}
+	key, err := base64.StdEncoding.Strict().DecodeString(request.Password)
+	if err != nil || len(key) != 32 {
+		t.Fatal("installed external reference lost its captured credential", err)
+	}
+	clear(key)
+	cert, ca := desktopExternalInstalledPeerCertificate(t)
+	var dnsQueries, publicAttempts, publicReplies, authFailures atomic.Uint32
+	var failDNS atomic.Bool
+	proofGate := make(chan struct{})
+	var release sync.Once
+	if !request.Hold {
+		release.Do(func() { close(proofGate) })
+	}
+	t.Cleanup(func() { release.Do(func() { close(proofGate) }) })
+	dnsListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{Listener: dnsListener, Net: "tcp", Handler: dns.HandlerFunc(func(writer dns.ResponseWriter, query *dns.Msg) {
+		dnsQueries.Add(1)
+		answer := new(dns.Msg).SetReply(query)
+		if failDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+			answer.Rcode = dns.RcodeRefused
+		} else {
+			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30}, A: net.ParseIP("93.184.216.34")}}
+		}
+		_ = writer.WriteMsg(answer)
+	})}
+	dnsDone := make(chan error, 1)
+	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsDone })
+	proofListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofServer := &http.Server{ReadHeaderTimeout: 3 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		nonce, nonceErr := hex.DecodeString(q.URL.Query().Get("routervpn_proof"))
+		if q.Method != http.MethodGet || q.Host != "1.1.1.1" || q.URL.Path != "/cdn-cgi/trace" || len(q.URL.Query()) != 1 || nonceErr != nil || len(nonce) != 16 || q.Header.Get("Authorization") != "" {
+			http.Error(w, "unowned installed proof target", http.StatusForbidden)
+			return
+		}
+		publicAttempts.Add(1)
+		select {
+		case <-proofGate:
+		case <-q.Context().Done():
+			return
+		}
+		publicReplies.Add(1)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "ip=203.0.113.88\n")
+	})}
+	proofDone := make(chan error, 1)
+	go func() {
+		proofDone <- proofServer.Serve(tls.NewListener(proofListener, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}))
+	}()
+	t.Cleanup(func() { _ = proofServer.Close(); _ = proofListener.Close(); <-proofDone })
+	listener, err := net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, connections: make(map[io.Closer]bool), routes: []desktopNodeLayerRoute{
+		{Network: "tcp", Destination: "203.0.113.53:5353", Physical: dnsListener.Addr().String()},
+		{Network: "tcp", Destination: "1.1.1.1:443", Physical: proofListener.Addr().String()},
+	}}
+	var serve func(net.Conn) error
+	if request.Protocol == "shadowsocks" {
+		service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, request.Password, 60, server, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serve = func(connection net.Conn) error {
+			return service.NewConnection(ctx, connection, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
+		}
+	} else {
+		serve = func(connection net.Conn) error {
+			if request.Protocol == "https-connect" {
+				secured := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+				if err := secured.HandshakeContext(ctx); err != nil {
+					return err
+				}
+				connection = secured
+			}
+			buffered := STD.NewReaderSize(connection, 8192)
+			q, err := http.ReadRequest(buffered)
+			if err != nil {
+				return err
+			}
+			defer q.Body.Close()
+			_, owned := server.route("tcp", q.Host)
+			if q.Method != http.MethodConnect || q.RequestURI != q.Host || !owned || q.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("captured-native-user:"+request.Password)) {
+				authFailures.Add(1)
+				_, _ = io.WriteString(connection, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+				return errors.New("installed CONNECT peer refused a different credential or destination")
+			}
+			if _, err := io.WriteString(connection, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+				return err
+			}
+			return server.NewConnection(ctx, &desktopNodeLayerBufferedConn{Conn: connection, reader: buffered}, M.Metadata{Destination: M.ParseSocksaddr(q.Host)})
+		}
+	}
+	server.workers.Add(1)
+	go func() {
+		defer server.workers.Done()
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if !server.enter(connection) {
+				_ = connection.Close()
+				return
+			}
+			go func() {
+				defer server.leave(connection)
+				_ = connection.SetDeadline(time.Now().Add(45 * time.Second))
+				server.rawTCP.Add(1)
+				_ = serve(connection)
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		server.mu.Lock()
+		server.closing = true
+		var connections []io.Closer
+		for connection := range server.connections {
+			connections = append(connections, connection)
+		}
+		server.mu.Unlock()
+		cancel()
+		_ = listener.Close()
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		server.workers.Wait()
+	})
+	respond := func() {
+		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: listener.Addr().String(), CA: ca,
+			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
+		if err := json.NewEncoder(os.Stdout).Encode(reply); err != nil {
+			t.Fatal(err)
+		}
+	}
+	respond()
+	for {
+		line, err := reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 64 {
+			t.Fatal("installed external peer lost its original control pipe", err)
+		}
+		switch string(line) {
+		case "stats\n":
+		case "fail-dns\n":
+			failDNS.Store(true)
+		case "release-proof\n":
+			release.Do(func() { close(proofGate) })
+		default:
+			t.Fatal("installed external peer rejected an unrelated control")
+		}
+		respond()
 	}
 }

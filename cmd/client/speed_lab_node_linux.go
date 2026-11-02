@@ -100,6 +100,17 @@ func captureDesktopLinuxNodePathWith(ctx context.Context, a *app, command *exec.
 		return nil, true, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	if h.external != nil {
+		if h.activation == nil || h.launch == nil || h.launch.command != command {
+			return nil, true, errors.New("Linux external Speed Lab path has no original activated command")
+		}
+		if err := h.observeLocked(ctx); err != nil {
+			return nil, true, err
+		}
+		// Ordinary external identities retain their native proof and measurement
+		// contract; the lookup below will recheck this same session before use.
+		return nil, false, nil
+	}
 	if h.activation == nil || h.process == nil || h.transaction == nil || h.launch == nil || h.ready == nil {
 		return nil, true, errors.New("Linux Speed Lab path has no original proved active owner")
 	}

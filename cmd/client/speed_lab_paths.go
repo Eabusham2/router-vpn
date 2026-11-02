@@ -165,7 +165,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 			return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Speed Lab entry disappeared")
 		}
 	} else if st.Mode == "external-node" {
-		if raw, exists := desktopNodeOwners.Load(a); exists {
+		if raw, exists := lookupDesktopNativeLaunch(a); exists {
 			launch, ok := raw.(*desktopNodeLaunch)
 			if !ok || launch == nil || launch.command != command || launch.profileID != profile.ID {
 				return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab runtime owner changed")
@@ -219,7 +219,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 		} else if profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
 			return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab path has no captured native owner")
 		}
-	} else if raw, exists := desktopNodeOwners.Load(a); exists {
+	} else if raw, exists := lookupDesktopNativeLaunch(a); exists {
 		launch, ok := raw.(*desktopNodeLaunch)
 		if ok && launch != nil && launch.ownedNode != nil {
 			proof, err := a.readDesktopOwnedNodeReady(launch, false)
@@ -283,7 +283,7 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 		}
 	}
 	if identity.External != nil {
-		current, exists := desktopNodeOwners.Load(a)
+		current, exists := lookupDesktopNativeLaunch(a)
 		if !exists || current != identity.External {
 			return errors.New("Speed Lab result became stale because the native external owner changed")
 		}
@@ -296,7 +296,7 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 		}
 	}
 	if identity.Tor != nil {
-		current, exists := desktopNodeOwners.Load(a)
+		current, exists := lookupDesktopNativeLaunch(a)
 		if !exists || current != identity.Tor || identity.Tor.command != identity.Command || identity.Tor.profileID != identity.RouterID {
 			return errors.New("Speed Lab result became stale because the native Tor owner changed")
 		}
@@ -309,7 +309,7 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 		}
 	}
 	if identity.Node != nil {
-		if raw, exists := desktopNodeOwners.Load(a); !exists || raw != identity.Node || identity.Node.command != identity.Command || identity.Node.profileID != identity.RouterID {
+		if raw, exists := lookupDesktopNativeLaunch(a); !exists || raw != identity.Node || identity.Node.command != identity.Command || identity.Node.profileID != identity.RouterID {
 			return errors.New("Speed Lab result belongs to a replacement native Router process")
 		}
 		proof, err := a.readDesktopOwnedNodeReady(identity.Node, false)
@@ -798,7 +798,7 @@ func (a *app) prepareSpeedLabExternalPathWithRuntime(q speedLabRequest, restored
 	return &speedLabExternalPreparation{profile: external, policy: policy, entry: entry, exit: exit, entryKind: entryKind, direct: direct, native: native}, nil
 }
 
-func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *speedLabExternalRestore) (speedLabPath, error) {
+func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *speedLabExternalRestore) (result speedLabPath, failure error) {
 	prepared := q.preparedExternal
 	var err error
 	if prepared == nil || restored != nil {
@@ -836,12 +836,42 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	if !direct && entryKind == "router-vpn" {
 		sessionBase = desktopExternalEntryBase(policy.MultihopEntryMode)
 	}
+	var nativeRetained desktopExternalRetainedRuntime
+	retainedComplete := false
+	if native != nil {
+		nativeRetained, err = prepareDesktopRetainedExternal(a, native)
+		if nativeRetained != nil {
+			defer func() {
+				if !retainedComplete {
+					cleanup, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+					defer cancel()
+					closeErr := nativeRetained.Close(cleanup)
+					failure = errors.Join(failure, closeErr)
+					if closeErr == nil {
+						failure = errors.Join(failure, a.speedLabCheckLaunchedRuntime())
+					}
+				}
+			}()
+		}
+		if err != nil {
+			return speedLabPath{}, err
+		}
+	}
+	if nativeRetained != nil {
+		if err := nativeRetained.Stage(a.connectionOperationContextOrBackground()); err != nil {
+			return speedLabPath{}, err
+		}
+	} else if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+		return speedLabPath{}, err
+	}
 	sessionTrackerFor(a).declareRequest("speed-lab:external", sessionBase)
 	if err := a.speedLabStopRuntime(true); err != nil {
 		return speedLabPath{}, err
 	}
 	var cmd *exec.Cmd
-	if native != nil {
+	if nativeRetained != nil {
+		// The retained host staged before the original Stop.
+	} else if native != nil {
 		err = stageDesktopNodeLaunch(a, native)
 		cmd = native.command
 	} else if exit.Protocol == "openvpn" {
@@ -860,7 +890,7 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	}
 	started := false
 	defer func() {
-		if native != nil && !started {
+		if native != nil && nativeRetained == nil && !started {
 			clear(native.config)
 			clear(native.metadata)
 			clear(native.external.source)
@@ -873,11 +903,17 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	if err := a.checkConnectionOperation(); err != nil {
 		return speedLabPath{}, err
 	}
-	if err := cmd.Start(); err != nil {
+	if nativeRetained != nil {
+		err = nativeRetained.Start(a.connectionOperationContextOrBackground())
+		cmd = native.command
+	} else {
+		err = cmd.Start()
+	}
+	if err != nil {
 		return speedLabPath{}, err
 	}
 	started = true
-	if native != nil {
+	if native != nil && nativeRetained == nil {
 		native.external.started = time.Now()
 		desktopNodeOwners.Store(a, native)
 	}
@@ -927,6 +963,11 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 		}
 		return speedLabPath{}, errors.New(cause)
 	}
+	if nativeRetained != nil {
+		if err := nativeRetained.Activate(a.connectionOperationContextOrBackground()); err != nil {
+			return speedLabPath{}, err
+		}
+	}
 	a.mu.Lock()
 	a.state.Connected = true
 	a.state.Phase = "connected"
@@ -935,8 +976,16 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 		return speedLabPath{}, err
 	}
 	if native != nil {
-		a.monitorDesktopExternalRuntime(native)
+		if nativeRetained != nil {
+			if err := nativeRetained.Monitor(a.connectionOperationContextOrBackground()); err != nil {
+				return speedLabPath{}, err
+			}
+			a.startDesktopExternalAutomaticMTU(native)
+		} else {
+			a.monitorDesktopExternalRuntime(native)
+		}
 	}
+	retainedComplete = true
 	path := speedLabPath{Scope: "temporary", Topology: "external", Temporary: true, NodeID: external.ID, NodeName: external.Name, ExitID: external.ID, ExitName: external.Name, RuntimeMode: "external-" + exit.Protocol, LogicalMode: "external-node", Base: sessionBase, ExternalProtocol: exit.Protocol, Execution: chosenExecution, Description: "temporary external direct/hopped exit; captured native node/DNS/execution proof passes before measurement and no profile selection is saved"}
 	if !direct {
 		path.EntryID, path.EntryName = entry.ID, entry.Name

@@ -29,6 +29,36 @@ func (h *desktopLinuxNodeHost) matchesDNSObservation(observed observedConnection
 	return nil
 }
 
+// The native proof is observed under the original session and host gates, but
+// presentation and saved-profile changes also need the final app-lock check.
+func (h *desktopLinuxNodeHost) currentDNSObservation(ctx context.Context, s *desktopLinuxNodeSession,
+	observed observedConnection, runtimeID string) error {
+	if err := s.currentLocked(ctx); err != nil {
+		return err
+	}
+	a := h.parent.app
+	a.mu.Lock()
+	current := a.state
+	profile, exists := a.profileByIDLocked(h.launch.profileID)
+	revision := desktopOwnedNodeProfileToken(profile)
+	exactSource := revision == h.revision
+	if h.external != nil {
+		exactSource = (exactSource || revision == h.externalPersistedRevision) && validateDesktopLinuxExternalSource(profile, h.launch) == nil
+	}
+	_, duplicateOwner := desktopNodeOwners.Load(a)
+	currentPath := !duplicateOwner && s.parent.currentAppLocked(false) == nil && a.cmd == h.process.command &&
+		current.Connected && current.Phase == "connected" && current.RouterID == observed.RouterID &&
+		current.Mode == observed.Mode && current.LogicalMode == observed.LogicalMode && current.RuntimeMode == runtimeID && current.Base == observed.Base &&
+		exists && exactSource &&
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == h.savedOptions &&
+		[3]bool{current.DAITA, current.Jumbo, current.Socks} == h.options
+	a.mu.Unlock()
+	if !currentPath || ctx.Err() != nil {
+		return errors.New("selected Linux DNS proof lost its captured active connection during readback")
+	}
+	return nil
+}
+
 // A retained Linux session is deliberately separate from desktopNodeOwners:
 // that legacy registry would introduce another Cmd.Wait/Stop owner. Read only
 // the existing bootstrap/session chain; DNS observation never creates it.
@@ -97,6 +127,30 @@ func proveDesktopLinuxNodeDNS(ctx context.Context, a *app, observed observedConn
 	if err := h.activation.matches(h); err != nil {
 		return fail(err)
 	}
+	if h.external != nil {
+		revision := desktopOwnedNodeProfileToken(observed.Profile)
+		if h.launch == nil || h.launch.external == nil || observed.RouterID != h.launch.profileID ||
+			runtimeID != h.launch.mode || observed.RuntimeMode != "" && observed.RuntimeMode != runtimeID ||
+			!observed.Connected || observed.Phase != "connected" ||
+			revision != h.revision && revision != h.externalPersistedRevision ||
+			[3]bool{observed.Profile.DAITAEnabled, observed.Profile.JumboTUN, observed.Profile.SocksEnabled} != h.savedOptions ||
+			validateDesktopLinuxExternalSource(observed.Profile, h.launch) != nil {
+			return fail(errors.New("selected Linux external DNS proof belongs to another observed path"))
+		}
+		wanted, err := expectedDNSSelection(h.launch.external.profile)
+		if err != nil || wanted != selected {
+			return fail(errors.New("selected Linux external DNS policy changed"))
+		}
+		if _, err := h.readExternalLocked(ctx); err != nil {
+			return fail(err)
+		}
+		if err := h.currentDNSObservation(ctx, s, observed, runtimeID); err != nil {
+			return fail(err)
+		}
+		result.Status = "passed"
+		result.Reason = "the captured native DNS router proved this selected resolver before public-exit activation; the original external session, TUN and protection remain current"
+		return result, true
+	}
 	if err := h.matchesDNSObservation(observed, runtimeID, selected); err != nil {
 		return fail(err)
 	}
@@ -104,22 +158,8 @@ func proveDesktopLinuxNodeDNS(ctx context.Context, a *app, observed observedConn
 	if err != nil {
 		return fail(err)
 	}
-	if err := s.currentLocked(ctx); err != nil {
+	if err := h.currentDNSObservation(ctx, s, observed, runtimeID); err != nil {
 		return fail(err)
-	}
-	a.mu.Lock()
-	current := a.state
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
-	_, duplicateOwner := desktopNodeOwners.Load(a)
-	currentPath := !duplicateOwner && s.parent.currentAppLocked(false) == nil && a.cmd == h.process.command &&
-		current.Connected && current.Phase == "connected" && current.RouterID == observed.RouterID &&
-		current.Mode == observed.Mode && current.LogicalMode == observed.LogicalMode && current.RuntimeMode == runtimeID && current.Base == observed.Base &&
-		exists && desktopOwnedNodeProfileToken(profile) == h.revision &&
-		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == h.savedOptions &&
-		[3]bool{current.DAITA, current.Jumbo, current.Socks} == h.options
-	a.mu.Unlock()
-	if !currentPath || ctx.Err() != nil {
-		return fail(errors.New("selected Linux DNS proof lost its captured active connection during readback"))
 	}
 	result.Status, result.LatencyMs = "passed", record.DNSMilliseconds
 	result.Reason = "a query through the captured Linux native DNS router proved the selected resolver before connection; the original session, process, TUN and protection remain current"

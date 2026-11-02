@@ -42,6 +42,7 @@ type desktopLinuxNodeConnectPreflight struct {
 	prior      *desktopNodeStopCapture
 	session    *desktopLinuxNodeSession
 	host       *desktopLinuxNodeHost
+	selected   string // External Connect retains its explicit initial UI selection.
 }
 
 func (capture *desktopLinuxNodeConnectPreflight) current(ctx context.Context) error {
@@ -92,11 +93,15 @@ func (capture *desktopLinuxNodeConnectPreflight) current(ctx context.Context) er
 // comparison is also exercised independently; it grants no native admission.
 func (capture *desktopLinuxNodeConnectPreflight) currentAppLocked() error {
 	a, h := capture.app, capture.host
+	selected := capture.selected
+	if selected == "" {
+		selected = h.launch.profileID
+	}
 	profile, exists := a.profileByIDLocked(h.launch.profileID)
 	_, duplicate := desktopNodeOwners.Load(a)
 	if duplicate || a.localController != capture.controller || a.checkCapturedConnectionOperationLocked(capture.operation) != nil ||
 		a.connectionCancelIntent == capture.operation || h.parent.currentAppLocked(false) != nil ||
-		a.cmd != capture.command || a.state != capture.state || !exists || a.profiles.SelectedID != h.launch.profileID ||
+		a.cmd != capture.command || a.state != capture.state || !exists || a.profiles.SelectedID != selected ||
 		desktopOwnedNodeProfileToken(profile) != h.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions {
 		return errors.New("Linux Connect preflight belongs to a replaced command, selection or private profile")
