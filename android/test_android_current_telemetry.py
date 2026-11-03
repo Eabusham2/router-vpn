@@ -175,6 +175,20 @@ public final class CurrentTelemetryTest {
    f.physicalFactory.failAll=true;CountDownLatch failed=new CountDownLatch(1);f.telemetry.measureNode(f.node,50,(r,e)->{check(r==null&&e!=null,"failed50 reported success");failed.countDown();});await(failed,"failed50 refresh");check(Arrays.equals(durable,Files.readAllBytes(new File(f.node.file.getParentFile(),"latency-"+f.node.id+".json").toPath())),"failed50 erased last complete durable record");
    Files.writeString(f.node.file.toPath(),Files.readString(f.node.file.toPath())+" ");check(AndroidNodeStatistics.load(f.node)==null&&f.telemetry.cachedMedian(f.node.id)==0,"source change retained stale durable/quick result");
   }
+  try(Fixture f=new Fixture()){
+   f.direct();AndroidNodeStore.Node other=f.store.importBundle(bundle("b".repeat(64),"Node B"));
+   AndroidNodeStatistics.Record a=new AndroidNodeStatistics.Record(f.node.id,AndroidNodeStatistics.source(f.node),f.node.endpoint,"historical-network-a",System.currentTimeMillis()-100000,1,1,48.52,48.025,100,100,50,0);
+   AndroidNodeStatistics.Record b=new AndroidNodeStatistics.Record(other.id,AndroidNodeStatistics.source(other),other.endpoint,"historical-network-b",System.currentTimeMillis()-200000,20,20,20,20,20,20,50,0);
+   AndroidNodeStatistics.save(f.node,a);AndroidNodeStatistics.save(other,b);
+   AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog(f.store,new AndroidStandardExitStore());
+   check(catalog.lowestLatency().id.equals(other.id),"Saved ranking used favorable median instead of trimmed mean");
+   check(catalog.list(AndroidUnifiedNodeCatalog.SORT_LATENCY).get(1).latencyMedianMs==1,"Saved ranking erased useful historical median");
+   AndroidNodeStatistics.save(f.node,new AndroidNodeStatistics.Record(a.id,a.source,a.endpoint,a.path,a.measuredAt,1,1,20,20,100,100,50,0));
+   String tied=f.node.id.compareTo(other.id)<0?f.node.id:other.id;
+   check(catalog.lowestLatency().id.equals(tied),"Saved trimmed tie did not use stable node ID");
+   Files.writeString(other.file.toPath(),Files.readString(other.file.toPath())+" ");
+   check(catalog.lowestLatency()==null,"Saved ranking admitted changed source or invented a second complete record");
+  }
   List<Double> outliers=new ArrayList<>();for(int i=1;i<=45;i++)outliers.add((double)i);for(int i=0;i<5;i++)outliers.add(10000d);check(AndroidTelemetry.trimmedMean(outliers)==25.5,"10% trimmed mean did not remove five values from each tail");
   try(Fixture f=new Fixture()){f.direct();CountDownLatch done=new CountDownLatch(1);AtomicReference<AndroidTelemetry.Result> measured=new AtomicReference<>();AtomicReference<Throwable> error=new AtomicReference<>();f.telemetry.measureNode(f.node,50,(r,e)->{measured.set(r);error.set(e);done.countDown();});await(done,"actual50 durable run");check(error.get()==null&&measured.get()!=null&&measured.get().samples==50&&measured.get().failed==0,"actual50 run failed: "+error.get());AndroidNodeStatistics.Record stored=AndroidNodeStatistics.load(new AndroidNodeStore(f.context).list().get(0));check(stored!=null&&stored.eligible()&&stored.median==measured.get().medianMs&&stored.trimmedMean==measured.get().trimmedMeanMs,"actual50 statistics did not survive fresh store read");check(stored.detail().contains("trimmed mean")&&stored.detail().contains("50 successful"),"full statistics display omitted measured quantity");check(f.telemetry.cachedMedian(f.node.id)==0,"durable50 polluted quick cache");check(f.physicalFactory.made.size()==51&&f.vpnFactory.made.isEmpty(),"50 samples did not use exact captured physical path");}
  }
@@ -275,6 +289,7 @@ def main():
     attach_failure_controls()
     result=run();assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())
     negatives=[
+        ('saved robust ranking','AndroidUnifiedNodeCatalog','Double.compare(a.latencyTrimmedMeanMs,b.latencyTrimmedMeanMs)','Double.compare(a.latencyMedianMs,b.latencyMedianMs)','stats','Saved ranking used favorable median instead of trimmed mean'),
         ('Fastest complete samples','AndroidTelemetry','if(result.samples!=50||result.failed!=0||!Double.isFinite(result.trimmedMeanMs)||result.trimmedMeanMs<=0)throw new IllegalStateException("This node did not complete all 50 TCP responses; no score.");','','fastest','partial Fastest candidate earned a score'),
         ('Fastest robust ranking','AndroidTelemetry','((Result result)->result.trimmedMeanMs).thenComparing','((Result result)->result.medianMs).thenComparing','fastest','Fastest used favorable median rather than robust trimmed mean'),
         ('Fastest returned owner','AndroidTelemetry','result.comparison=work::check;','result.comparison=null;','fastest','cancelled completed Fastest result adopted'),
