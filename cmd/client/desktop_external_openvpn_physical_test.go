@@ -46,111 +46,115 @@ func desktopRetainedOpenVPNFixture(t *testing.T, network, kill string) (common.R
 }
 
 func TestDesktopExternalPhysicalOpenVPNKeepsOriginalProfileAndDerivedMailboxes(t *testing.T) {
-	for _, network := range []string{"tcp", "udp", "mixed"} {
-		for _, kill := range []string{"on-connect", "always"} {
-			t.Run(network+"/"+kill, func(t *testing.T) {
-				profile, launch := desktopRetainedOpenVPNFixture(t, network, kill)
-				owner := launch.external
-				saved, _ := json.Marshal(profile)
-				source, capture, config, expected := bytes.Clone(owner.source), bytes.Clone(owner.capture), bytes.Clone(launch.config), owner.expected
-				if owner.selection != "local" || !owner.direct || owner.predecessor != "" || owner.profile.External.ResponseProbe != nil || owner.profile.External.OpenVPNResponseProbes != nil || owner.profile.External.OpenVPNPairing != nil {
-					t.Fatal("direct import fabricated comparison or predecessor authority")
-				}
-				if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil || owner.physical == nil {
-					t.Fatal("direct Local OpenVPN did not acquire captured Linux transport", err)
-				}
-				meta, err := capturedDesktopExternalPhysical(owner)
-				if err != nil || meta == nil || meta.TargetOS != "linux" || meta.Protocol != "openvpn" || meta.RootType != "openvpn-client" || meta.KillSwitchPolicy != kill || meta.IPv6Mode != "on" || !meta.HomeLANAccess || meta.SOCKSUDPAssociationRequired ||
-					owner.expected != expected || !bytes.Equal(source, owner.source) || !bytes.Equal(capture, owner.capture) ||
-					meta.OriginalSourceSHA256 != expected.SourceSHA256 || meta.OriginalConfigSHA256 != expected.ConfigSHA256 ||
-					string(config) != owner.physical.OriginalPolicy().Config() || string(launch.config) != owner.physical.Config() {
-					t.Fatal("OpenVPN physical preparation changed original source/proof identity", meta, err)
-				}
-				after, _ := json.Marshal(profile)
-				if !bytes.Equal(saved, after) || !reflect.DeepEqual(owner.profile.External.OpenVPN, profile.External.OpenVPN) {
-					t.Fatal("OpenVPN changed saved source text or credentials")
-				}
-				physical, err := owner.physical.Capture()
-				if err != nil || physical.ConfiguredMTU != 1360 || physical.SelectedDNS.Physical || len(physical.PhysicalRoots) != 1 || len(physical.PhysicalRoots[0].Destinations) != 2 {
-					t.Fatal("OpenVPN lost selected MTU/DNS or exact tuple count", err)
-				}
-				var graph map[string]any
-				if json.Unmarshal(launch.config, &graph) != nil {
-					t.Fatal("invalid derived graph")
-				}
-				endpoint := taggedRuntimeItem(graph["endpoints"].([]any), mobilemultihop.ExternalFinalTag)
-				remotes, err := nativeopenvpn.Remotes(endpoint)
-				if err != nil || len(remotes) != 2 || remotes[0].Host != "203.0.113.20" || remotes[0].Port != 1194 || remotes[1].Host != "203.0.113.21" || remotes[1].Port != 443 {
-					t.Fatal("native endpoint collapsed the ordered remotes", remotes, err)
-				}
-				first, second := network, network
-				if network == "mixed" {
-					first, second = "tcp", "udp"
-				}
-				if remotes[0].Network != first || remotes[1].Network != second {
-					t.Fatal("OpenVPN provider networks crossed captured remote addresses")
-				}
-				measurement, err := capturedDesktopMeasurementRuntime(launch)
-				if err != nil || measurement.source != meta.SourceSHA256 || measurement.config != meta.ConfigSHA256 || measurement.node != expected.ExitID || measurement.session != expected.SessionID {
-					t.Fatal("OpenVPN MTU/measurement mailbox adopted original graph identity", err)
-				}
-				resolver, err := capturedDesktopDNSRuntime(launch)
-				if err != nil || resolver.source != meta.SourceSHA256 || resolver.config != meta.ConfigSHA256 || resolver.node != expected.ExitID {
-					t.Fatal("OpenVPN DNS mailbox adopted another physical owner", err)
-				}
-				selected, _, _, err := desktopDNSExpectedEndpoints(launch)
-				if err != nil || selected.Address != profile.DNSHost || selected.Port != profile.DNSPort || selected.Transport != profile.DNSProtocol {
-					t.Fatal("OpenVPN selected resolver was substituted", selected, err)
-				}
-				if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err == nil {
-					t.Fatal("a repeated preparation replaced the captured native owner")
-				}
-			})
+	for _, target := range []string{"linux", "windows"} {
+		for _, network := range []string{"tcp", "udp", "mixed"} {
+			for _, kill := range []string{"on-connect", "always"} {
+				t.Run(target+"/"+network+"/"+kill, func(t *testing.T) {
+					profile, launch := desktopRetainedOpenVPNFixture(t, network, kill)
+					owner := launch.external
+					saved, _ := json.Marshal(profile)
+					source, capture, config, expected := bytes.Clone(owner.source), bytes.Clone(owner.capture), bytes.Clone(launch.config), owner.expected
+					if owner.selection != "local" || !owner.direct || owner.predecessor != "" || owner.profile.External.ResponseProbe != nil || owner.profile.External.OpenVPNResponseProbes != nil || owner.profile.External.OpenVPNPairing != nil {
+						t.Fatal("direct import fabricated comparison or predecessor authority")
+					}
+					if err := prepareDesktopExternalPhysicalCaptured(launch, target); err != nil || owner.physical == nil {
+						t.Fatal("direct Local OpenVPN did not acquire captured native transport", err)
+					}
+					meta, err := capturedDesktopExternalPhysical(owner)
+					if err != nil || meta == nil || meta.TargetOS != target || meta.Protocol != "openvpn" || meta.RootType != "openvpn-client" || meta.KillSwitchPolicy != kill || meta.IPv6Mode != "on" || !meta.HomeLANAccess || meta.SOCKSUDPAssociationRequired ||
+						owner.expected != expected || !bytes.Equal(source, owner.source) || !bytes.Equal(capture, owner.capture) ||
+						meta.OriginalSourceSHA256 != expected.SourceSHA256 || meta.OriginalConfigSHA256 != expected.ConfigSHA256 ||
+						string(config) != owner.physical.OriginalPolicy().Config() || string(launch.config) != owner.physical.Config() {
+						t.Fatal("OpenVPN physical preparation changed original source/proof identity", meta, err)
+					}
+					after, _ := json.Marshal(profile)
+					if !bytes.Equal(saved, after) || !reflect.DeepEqual(owner.profile.External.OpenVPN, profile.External.OpenVPN) {
+						t.Fatal("OpenVPN changed saved source text or credentials")
+					}
+					physical, err := owner.physical.Capture()
+					if err != nil || physical.ConfiguredMTU != 1360 || physical.SelectedDNS.Physical || len(physical.PhysicalRoots) != 1 || len(physical.PhysicalRoots[0].Destinations) != 2 {
+						t.Fatal("OpenVPN lost selected MTU/DNS or exact tuple count", err)
+					}
+					var graph map[string]any
+					if json.Unmarshal(launch.config, &graph) != nil {
+						t.Fatal("invalid derived graph")
+					}
+					endpoint := taggedRuntimeItem(graph["endpoints"].([]any), mobilemultihop.ExternalFinalTag)
+					remotes, err := nativeopenvpn.Remotes(endpoint)
+					if err != nil || len(remotes) != 2 || remotes[0].Host != "203.0.113.20" || remotes[0].Port != 1194 || remotes[1].Host != "203.0.113.21" || remotes[1].Port != 443 {
+						t.Fatal("native endpoint collapsed the ordered remotes", remotes, err)
+					}
+					first, second := network, network
+					if network == "mixed" {
+						first, second = "tcp", "udp"
+					}
+					if remotes[0].Network != first || remotes[1].Network != second {
+						t.Fatal("OpenVPN provider networks crossed captured remote addresses")
+					}
+					measurement, err := capturedDesktopMeasurementRuntime(launch)
+					if err != nil || measurement.source != meta.SourceSHA256 || measurement.config != meta.ConfigSHA256 || measurement.node != expected.ExitID || measurement.session != expected.SessionID {
+						t.Fatal("OpenVPN MTU/measurement mailbox adopted original graph identity", err)
+					}
+					resolver, err := capturedDesktopDNSRuntime(launch)
+					if err != nil || resolver.source != meta.SourceSHA256 || resolver.config != meta.ConfigSHA256 || resolver.node != expected.ExitID {
+						t.Fatal("OpenVPN DNS mailbox adopted another physical owner", err)
+					}
+					selected, _, _, err := desktopDNSExpectedEndpoints(launch)
+					if err != nil || selected.Address != profile.DNSHost || selected.Port != profile.DNSPort || selected.Transport != profile.DNSProtocol {
+						t.Fatal("OpenVPN selected resolver was substituted", selected, err)
+					}
+					if err := prepareDesktopExternalPhysicalCaptured(launch, target); err == nil {
+						t.Fatal("a repeated preparation replaced the captured native owner")
+					}
+				})
+			}
 		}
 	}
 }
 
 func TestDesktopExternalPhysicalOpenVPNKeepsUnsupportedTargetAndCaptureGuards(t *testing.T) {
-	for _, target := range []string{"windows", "darwin", ""} {
+	for _, target := range []string{"darwin", "android", "unknown", ""} {
 		t.Run(target, func(t *testing.T) {
 			_, launch := desktopRetainedOpenVPNFixture(t, "mixed", "always")
 			config, metadata := bytes.Clone(launch.config), bytes.Clone(launch.metadata)
 			if err := prepareDesktopExternalPhysicalCaptured(launch, target); err != nil || launch.external.physical != nil || !bytes.Equal(config, launch.config) || !bytes.Equal(metadata, launch.metadata) {
-				t.Fatal("Linux OpenVPN extended another target or rewrote legacy capture", target, err)
+				t.Fatal("OpenVPN extended an unsupported target or rewrote legacy capture", target, err)
 			}
 		})
 	}
-	for _, fault := range []string{"off", "predecessor", "not-direct", "graph", "metadata", "source", "session", "proof-source", "proof-config"} {
-		t.Run(fault, func(t *testing.T) {
-			kill := "always"
-			if fault == "off" {
-				kill = "off"
-			}
-			_, launch := desktopRetainedOpenVPNFixture(t, "mixed", kill)
-			switch fault {
-			case "predecessor":
-				launch.external.predecessor = "captured-predecessor"
-			case "not-direct":
-				launch.external.direct = false
-			case "graph":
-				launch.config = []byte(`{}`)
-			case "metadata":
-				launch.metadata = []byte(`{}`)
-			case "source":
-				launch.external.source = []byte(`{}`)
-			case "session":
-				launch.external.session = strings.Repeat("f", 32)
-			case "proof-source":
-				launch.external.expected.SourceSHA256 = strings.Repeat("f", 64)
-			case "proof-config":
-				launch.external.expected.ConfigSHA256 = strings.Repeat("f", 64)
-			}
-			config, metadata := bytes.Clone(launch.config), bytes.Clone(launch.metadata)
-			err := prepareDesktopExternalPhysicalCaptured(launch, "linux")
-			ineligible := fault == "off" || fault == "predecessor" || fault == "not-direct"
-			if (err == nil) != ineligible || launch.external.physical != nil || !bytes.Equal(config, launch.config) || !bytes.Equal(metadata, launch.metadata) {
-				t.Fatal("invalid OpenVPN capture acquired or replaced physical authority", fault, err)
-			}
-		})
+	for _, target := range []string{"linux", "windows"} {
+		for _, fault := range []string{"off", "predecessor", "not-direct", "graph", "metadata", "source", "session", "proof-source", "proof-config"} {
+			t.Run(target+"/"+fault, func(t *testing.T) {
+				kill := "always"
+				if fault == "off" {
+					kill = "off"
+				}
+				_, launch := desktopRetainedOpenVPNFixture(t, "mixed", kill)
+				switch fault {
+				case "predecessor":
+					launch.external.predecessor = "captured-predecessor"
+				case "not-direct":
+					launch.external.direct = false
+				case "graph":
+					launch.config = []byte(`{}`)
+				case "metadata":
+					launch.metadata = []byte(`{}`)
+				case "source":
+					launch.external.source = []byte(`{}`)
+				case "session":
+					launch.external.session = strings.Repeat("f", 32)
+				case "proof-source":
+					launch.external.expected.SourceSHA256 = strings.Repeat("f", 64)
+				case "proof-config":
+					launch.external.expected.ConfigSHA256 = strings.Repeat("f", 64)
+				}
+				config, metadata := bytes.Clone(launch.config), bytes.Clone(launch.metadata)
+				err := prepareDesktopExternalPhysicalCaptured(launch, target)
+				ineligible := fault == "off" || fault == "predecessor" || fault == "not-direct"
+				if (err == nil) != ineligible || launch.external.physical != nil || !bytes.Equal(config, launch.config) || !bytes.Equal(metadata, launch.metadata) {
+					t.Fatal("invalid OpenVPN capture acquired or replaced physical authority", fault, err)
+				}
+			})
+		}
 	}
 }
