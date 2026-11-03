@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/multihoprelay"
 )
 
 const desktopExternalTestSession = "0123456789abcdef0123456789abcdef"
@@ -392,7 +394,18 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 			if err != nil {
 				t.Fatal(err)
 			}
-			reject(t, original)
+			if protocol == "hysteria2" {
+				for _, target := range []string{"linux", "darwin"} {
+					if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil || derived != nil {
+						t.Fatal("Windows layer derivation opened another host", target)
+					}
+				}
+				if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err != nil {
+					t.Fatal("captured Windows HY2 layer lost its exact lower plan", err)
+				}
+			} else {
+				reject(t, original)
+			}
 		})
 	}
 	for _, entry := range []string{"router-wg", "socks5", "shadowsocks", "hysteria2"} {
@@ -465,6 +478,148 @@ func TestDesktopExternalPolicyWindowsPacketEndpointsPreserveCapturedPolicy(t *te
 		for _, variant := range variants {
 			t.Run(protocol+"/"+variant, func(t *testing.T) {
 				desktopExternalPacketPolicyPreservesEndpoint(t, protocol, variant, "windows")
+			})
+		}
+	}
+}
+
+// The native host consumes only this sealed constructor result. Selecting a
+// layer never promotes its private inner HY2 destination into physical intent.
+func TestDesktopExternalPolicyWindowsHysteria2LayerPreservesCompleteCapture(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, kill := range []string{"on-connect", "always"} {
+			for _, ipv6 := range []string{"on", "off"} {
+				for _, lan := range []bool{false, true} {
+					t.Run(strings.Join([]string{layer, kill, ipv6, strconv.FormatBool(lan)}, "/"), func(t *testing.T) {
+						source, rawCapture := externalDirectLayerFixture(t, "hysteria2", layer)
+						selected := externalTestRead(t, rawCapture)
+						profile := selected["profile"].(map[string]any)
+						profile["kill_switch_policy"], profile["ipv6_mode"], profile["home_lan_access"] = kill, ipv6, lan
+						profile["mtu_policy"], profile["manual_mtu"] = "fixed", float64(1360)
+						profile["dns_mode"], profile["dns_protocol"], profile["dns_host"] = "custom", "https", "192.0.2.53"
+						profile["dns_port"], profile["dns_server_name"], profile["dns_path"] = float64(5443), "selected.resolver.example", "/captured/query"
+						original, err := NewExternalPolicy(source, externalTestJSON(t, selected))
+						if err != nil {
+							t.Fatal(err)
+						}
+						before, oldMetadata := original.Config(), original.Metadata()
+						captured, err := original.DesktopCapture()
+						if err != nil {
+							t.Fatal(err)
+						}
+						plan := desktopExternalPlan(t, original, desktopExternalTestSession, "windows")
+						meta := plan.Metadata()
+						actual, err := plan.Capture()
+						if err != nil || !reflect.DeepEqual(actual, captured) || plan.OriginalPolicy() != original ||
+							actual.StartLayer != layer || actual.ConfiguredMTU != 1360 || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan ||
+							actual.SelectedDNS.Host != "192.0.2.53" || actual.SelectedDNS.Port != 5443 || actual.SelectedDNS.Physical || actual.SelectedDNS.Detour != ExternalFinalTag ||
+							meta.Protocol != "hysteria2" || meta.RootTag != multihoprelay.ExitStartLayerTag || meta.SOCKSUDPAssociationRequired ||
+							meta.OriginalSourceSHA256 != original.SourceSHA256() || meta.OriginalCaptureSHA256 != captured.CaptureSHA256 ||
+							meta.OriginalConfigSHA256 != externalDigest([]byte(before)) || meta.OriginalMetadataSHA256 != externalDigest([]byte(oldMetadata)) {
+							t.Fatal("layer derivation changed complete source, device or selected DNS ownership", err)
+						}
+						graph, old := externalTestRead(t, plan.Config()), externalTestRead(t, before)
+						inner := externalTestFind(t, graph, ExternalFinalTag)
+						outer := externalTestFind(t, graph, multihoprelay.ExitStartLayerTag)
+						expectedKind, expectedPort := "shadowsocks", float64(8388)
+						if strings.Contains(layer, "+xor") {
+							expectedKind, expectedPort = "routervpn-aes-xor", 8389
+						}
+						if len(graph["outbounds"].([]any)) != 3 || len(graph["services"].([]any)) != 1 ||
+							!reflect.DeepEqual(inner, externalTestFind(t, old, ExternalFinalTag)) || inner["type"] != "hysteria2" || inner["server"] != "10.93.0.1" || inner["detour"] != multihoprelay.ExitStartLayerTag ||
+							outer["type"] != expectedKind || meta.RootType != expectedKind || outer["server"] != "203.0.113.20" || outer["server_port"] != expectedPort || outer["detour"] != DesktopExternalPhysicalTag ||
+							meta.DerivedRootSHA256 != desktopExternalObjectDigest(outer) || meta.OriginalRootSHA256 != captured.PhysicalRoots[0].ConfigSHA256 {
+							t.Fatal("physical owner replaced the captured layer or inner HY2 transport")
+						}
+						if len(actual.PhysicalRoots) != 1 || len(actual.PhysicalRoots[0].Destinations) != 1 || !reflect.DeepEqual(actual.PhysicalRoots[0].Networks, []string{"udp"}) {
+							t.Fatal("missing captured outer intent")
+						}
+						for _, destination := range actual.PhysicalRoots[0].Destinations {
+							if destination.Host != "203.0.113.20" || destination.Port != int(expectedPort) || destination.Network != "udp" {
+								t.Fatal("private inner destination acquired physical authority", destination)
+							}
+						}
+						delete(outer, "detour")
+						rows := graph["outbounds"].([]any)
+						graph["outbounds"] = rows[:len(rows)-1]
+						delete(graph, "services")
+						if !reflect.DeepEqual(graph, old) || original.Config() != before || original.Metadata() != oldMetadata {
+							t.Fatal("layer adaptation rewrote credentials, DNS, TLS, route or MTU inputs")
+						}
+						// Returned descriptions are copies and cannot substitute a root, key,
+						// layer mode or physical address in the retained constructor authority.
+						actual.StartLayer = "off"
+						actual.PhysicalRoots[0].Destinations[0].Host = "10.93.0.1"
+						again, err := plan.Capture()
+						if err != nil || !reflect.DeepEqual(again, captured) || plan.Validate() != nil {
+							t.Fatal("mutable description replaced captured layer authority")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestDesktopExternalPolicyWindowsHysteria2LayerDoesNotAdmitOtherProtocols(t *testing.T) {
+	for _, protocol := range []string{"shadowsocks", "socks5", "http-connect", "https-connect"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(protocol+"/"+layer, func(t *testing.T) {
+				source, rawCapture := externalDirectLayerFixture(t, protocol, layer)
+				selected := externalTestRead(t, rawCapture)
+				selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
+				original, err := NewExternalPolicy(source, externalTestJSON(t, selected))
+				if err != nil {
+					t.Fatal("negative case must retain valid provisioned layer", err)
+				}
+				if plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err == nil || plan != nil {
+					t.Fatal("HY2 support opened an unrelated layered protocol")
+				}
+			})
+		}
+	}
+}
+
+func TestDesktopExternalPolicyWindowsHysteria2LayerRejectsReplacedAuthority(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for name, mutate := range map[string]func(*DesktopExternalPolicy){
+			"outer-tag":    func(p *DesktopExternalPolicy) { p.metadata.RootTag = ExternalFinalTag },
+			"outer-type":   func(p *DesktopExternalPolicy) { p.metadata.RootType = "hysteria2" },
+			"outer-digest": func(p *DesktopExternalPolicy) { p.metadata.OriginalRootSHA256 = strings.Repeat("a", 64) },
+			"layer-mode":   func(p *DesktopExternalPolicy) { p.original.capture.Profile["start_layer"] = "off" },
+			"layer-key": func(p *DesktopExternalPolicy) {
+				p.original.capture.Profile["external"].(map[string]any)["start_layer"].(map[string]any)["transport"].(map[string]any)["password"] = "replacement"
+			},
+			"layer-private-peer": func(p *DesktopExternalPolicy) {
+				p.original.capture.Profile["external"].(map[string]any)["start_layer"].(map[string]any)["api"] = "http://10.93.0.2:8787"
+			},
+			"derived-inner-bypass": func(p *DesktopExternalPolicy) {
+				graph := externalTestRead(t, p.config)
+				externalTestFind(t, graph, ExternalFinalTag)["detour"] = DesktopExternalPhysicalTag
+				p.config = externalTestJSON(t, graph)
+			},
+			"derived-root-bypass": func(p *DesktopExternalPolicy) {
+				graph := externalTestRead(t, p.config)
+				delete(externalTestFind(t, graph, multihoprelay.ExitStartLayerTag), "detour")
+				p.config = externalTestJSON(t, graph)
+			},
+		} {
+			t.Run(layer+"/"+name, func(t *testing.T) {
+				source, rawCapture := externalDirectLayerFixture(t, "hysteria2", layer)
+				selected := externalTestRead(t, rawCapture)
+				selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
+				original, err := NewExternalPolicy(source, externalTestJSON(t, selected))
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan := desktopExternalPlan(t, original, desktopExternalTestSession, "windows")
+				mutate(plan)
+				if plan.Validate() == nil || plan.Config() != "" || plan.Metadata() != (DesktopExternalMetadata{}) || plan.OriginalPolicy() != nil {
+					t.Fatal("replaced HY2 layer retained native initialization authority")
+				}
+				if _, err := plan.Capture(); err == nil {
+					t.Fatal("replaced HY2 layer retained physical intent")
+				}
 			})
 		}
 	}

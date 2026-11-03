@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+
+	"router-vpn/internal/multihoprelay"
 )
 
 const (
@@ -65,9 +67,17 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	}
 	capture, err := original.DesktopCapture()
 	if err != nil || capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" ||
-		capture.Execution != "" || capture.StartLayer != "" || capture.EntryStartLayer != "" ||
+		capture.Execution != "" || capture.EntryStartLayer != "" ||
 		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || len(capture.PhysicalRoots) != 1 {
+		return nil, desktopExternalPolicyError
+	}
+	// A provisioned HY2 layer preserves its original private inner transport.
+	// Only its sealed outer SS2022/XOR object can own physical socket intent.
+	// This bounded derivation does not admit an entry, another protocol, or a
+	// public desktop connection before the host's independent eligibility gate.
+	layered := capture.StartLayer != ""
+	if layered && (targetOS != "windows" || capture.Protocol != "hysteria2" || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
 		return nil, desktopExternalPolicyError
 	}
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
@@ -94,7 +104,14 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		}
 	}
 	root := capture.PhysicalRoots[0]
-	if !supported || root.Family != family || root.Tag != capture.FinalTag || root.Tag != ExternalFinalTag || root.Type != kind ||
+	rootTag, rootKind, rowCount := ExternalFinalTag, kind, 1
+	if layered {
+		rootTag, rootKind, rowCount = multihoprelay.ExitStartLayerTag, "shadowsocks", 2
+		if capture.StartLayer == "aes-256-gcm+xor-whitening" {
+			rootKind = "routervpn-aes-xor"
+		}
+	}
+	if !supported || capture.FinalTag != ExternalFinalTag || root.Family != family || root.Tag != rootTag || root.Type != rootKind ||
 		root.DynamicSOCKSUDP != (capture.Protocol == "socks5" && capture.UDPAvailable) ||
 		root.DynamicSOCKSUDP && (root.SOCKSVersion != "5" || root.SOCKSControl == nil || root.SOCKSControl.Network != "tcp") {
 		return nil, desktopExternalPolicyError
@@ -110,11 +127,32 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		}
 	}
 	rows, ok := graph[root.Family].([]any)
-	if !ok || len(rows) != 1 {
+	if !ok || len(rows) != rowCount {
 		return nil, desktopExternalPolicyError
 	}
-	physical, ok := rows[0].(map[string]any)
-	if !ok || physical["tag"] != root.Tag || physical["type"] != root.Type || physical["detour"] != nil ||
+	var physical map[string]any
+	innerFound := false
+	for _, row := range rows {
+		object, ok := row.(map[string]any)
+		if !ok {
+			return nil, desktopExternalPolicyError
+		}
+		switch object["tag"] {
+		case root.Tag:
+			if physical != nil {
+				return nil, desktopExternalPolicyError
+			}
+			physical = object
+		case ExternalFinalTag:
+			if !layered || innerFound || object["type"] != kind || object["detour"] != root.Tag {
+				return nil, desktopExternalPolicyError
+			}
+			innerFound = true
+		default:
+			return nil, desktopExternalPolicyError
+		}
+	}
+	if physical == nil || innerFound != layered || physical["type"] != root.Type || physical["detour"] != nil ||
 		desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
 		return nil, desktopExternalPolicyError
 	}
