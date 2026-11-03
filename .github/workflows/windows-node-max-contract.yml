@@ -74,19 +74,26 @@ concurrency:
 
 jobs:
   native-max:
-    name: Actual complete MAX and WFP on ${{ matrix.target }}
+    name: Actual complete MAX and WFP on ${{ matrix.target }} (${{ matrix.suite }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 110
     strategy:
       fail-fast: false
       matrix:
+        platform: [amd64, arm64]
+        suite: [quic, tls, succession, ownership-controls-1, ownership-controls-2]
         include:
-          - runner: windows-latest
+          - platform: amd64
+            runner: windows-latest
             target: windows/amd64
             slug: windows-amd64
-          - runner: windows-11-arm
+          - platform: arm64
+            runner: windows-11-arm
             target: windows/arm64
             slug: windows-arm64
+    concurrency:
+      group: windows-node-max-${{ github.ref }}-${{ matrix.slug }}-${{ matrix.suite }}
+      cancel-in-progress: false
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
@@ -122,22 +129,23 @@ jobs:
       - name: Select exact native Rust target and verified LLVM compiler
         shell: pwsh
         run: |
-          python deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' (Join-Path $env:RUNNER_TEMP 'routervpn-max-native-toolchain')
+          python deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' (Join-Path $env:RUNNER_TEMP 'routervpn-max-native-toolchain-${{ matrix.suite }}')
           if ($LASTEXITCODE -ne 0) { throw 'Exact MAX native toolchain preparation failed' }
-      - name: Execute complete MAX, actual WFP, rekey and retained reversal
-        timeout-minutes: 150
+      - name: Execute required complete MAX suite with actual WFP and native rekey
+        timeout-minutes: 90
         shell: pwsh
         run: |
-          # Aggregate allowance: 12 complete paths, 48 credential cases, 12
-          # reversals, 4 foreign predecessors and 23 compiled controls.
-          # Individual native startup/query/retirement deadlines are unchanged.
+          # All five suites are required on each architecture. The former
+          # combined AMD64 run passed succession and foreign predecessors but
+          # reached 150 minutes during its compiled controls. Keep every case
+          # and every individual native startup/query/retirement deadline.
           # Actual CGO/WFP is scoped to this executable; only TUN is modeled.
           # Public complete-MAX admission remains closed in this prerequisite.
-          python deploy/test_windows_node_max.py --standalone --prospective --sha $env:GITHUB_SHA --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-max-receipt.json')
+          python deploy/test_windows_node_max.py --standalone --prospective --sha $env:GITHUB_SHA --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-max-${{ matrix.suite }}-receipt.json') --suite '${{ matrix.suite }}'
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows complete MAX/WFP composition failed' }
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-max-native-${{ matrix.slug }}-${{ github.sha }}
-          path: ${{ runner.temp }}/routervpn-windows-max-receipt.json
+          name: windows-max-native-${{ matrix.slug }}-${{ matrix.suite }}-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-windows-max-${{ matrix.suite }}-receipt.json
           if-no-files-found: error
           retention-days: 7

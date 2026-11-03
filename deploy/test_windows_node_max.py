@@ -52,6 +52,7 @@ MARKERS = 'TestRouterVPNDesktopNodeWindowsMAXMarkers'
 MARKER_CASES = ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments', 'exact-armed-stream', 'marker-and-authentication', 'packet-authentication', 'reference-failure-channel', 'retained-reference-readback', 'key-epoch-barrier', 'retained-middle-idle')
 STARTUP_RECORDS = MAX.STARTUP_RECORDS
 PORT_PAIR, PORT_PAIR_CASES = MAX.PORT_PAIR, MAX.PORT_PAIR_CASES
+EXECUTION_SUITES = ('quic', 'tls', 'succession', 'ownership-controls-1', 'ownership-controls-2')
 SUCCESSION = 'TestRouterVPNDesktopNodeWindowsMAXSuccession'
 FOREIGN = 'TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor'
 PROSPECTIVE_BEFORE = '\tswitch mode {\n'
@@ -565,12 +566,29 @@ def repository_identity(expected_sha=None):
             'status_sha256': hashlib.sha256(changes.encode('utf-8')).hexdigest()}
 
 
-def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_path=None, expected_sha=None):
+def execution_plan(suite, changes):
+    if suite not in ('complete', *EXECUTION_SUITES):
+        raise ValueError('Unknown complete MAX execution suite: ' + suite)
+    if len({item[0] for item in changes}) != len(changes):
+        raise ValueError('Complete MAX execution inventory contains duplicate controls')
+    families = tuple(MAX.FAMILIES) if suite == 'complete' else tuple(family for family in MAX.FAMILIES if family.lower() == suite)
+    selected = changes if suite == 'complete' else ()
+    if suite.startswith('ownership-controls-'):
+        midpoint = (len(changes) + 1) // 2
+        selected = changes[:midpoint] if suite.endswith('-1') else changes[midpoint:]
+    return families, suite in ('complete', 'succession'), suite in ('complete', 'ownership-controls-1'), selected
+
+
+def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_path=None, expected_sha=None, suite='complete'):
     if platform.system() != 'Windows' or not WFP.BOOT.IDENTITY.ctypes.windll.shell32.IsUserAnAdmin():
         raise ValueError('Complete MAX WFP requires actual elevated Windows')
     receipt_path = WPQ.new_receipt_path(receipt_path)
     repository = repository_identity(expected_sha)
     source, before = checked_sources(Path(source))
+    # Every selected suite repeats the captured native prerequisites below.
+    # Only the long workload inventory is partitioned; default execution keeps
+    # the entire original gate in one process.
+    execution_plan(suite, ())
     compiler, captured, architecture = NODE.selected_compiler(go, source, dict(os.environ if env is None else env))
     target = captured['GOOS'] + '/' + architecture
     if target not in ('windows/amd64', 'windows/arm64') or captured.get('CGO_ENABLED', '1') != '1':
@@ -597,7 +615,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
     observation_contract(compiler, source, captured, race,
                          (UDP_CONTROL / 'udp_observation.go', UDP_CONTROL / 'udp_observation_test.go'),
                          UDP_OBSERVATION, UDP_CASES)
-    with tempfile.TemporaryDirectory(prefix='routervpn-windows-complete-max-') as directory:
+    with tempfile.TemporaryDirectory(prefix='routervpn-windows-complete-max-' + suite + '-') as directory:
         workspace = Path(directory)
         keys = workspace / 'private' / 'keys'
         REFERENCE.generate_keys(target, cache, keys)
@@ -610,6 +628,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
         build = [compiler, 'test', '-c', '-p=1', '-mod=readonly', '-tags=' + TAGS, *race, '-ldflags=-checklinkname=0']
         controls, suites = [], []
         with REFERENCE.test_sources(source):
+            families, run_succession, run_foreign, selected_controls = execution_plan(suite, mutations(source))
             compiled_overlays = {}
 
             def compile_in(name, prospective, mutation=None, closed=False):
@@ -664,16 +683,18 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             MAX.required_output(status, output, STARTUP_RECORDS, ())
             MAX.required_output(status, output, PORT_PAIR, PORT_PAIR_CASES)
             startup_record_output = hashlib.sha256(output.encode('utf-8')).hexdigest()
-            for family in MAX.FAMILIES:
+            for family in families:
                 for suffix, cases, timeout in (('', MAX.TRAFFIC[family], 600), ('Credentials', MAX.CREDENTIALS[family], 1800)):
                     run_suite(binary, 'TestRouterVPNDesktopNodeWindowsMAX' + family + suffix, cases, timeout)
             # Twelve reversals each build, prove and retire three owned graphs.
             # Actual AMD64 exhausted 2400s only 14s into the final reversal.
             # Allow the measured full sequence and cleanup; every individual
             # peer lifetime, startup, I/O and retirement bound is unchanged.
-            run_suite(binary, SUCCESSION, tuple(mode + '/' + layer for mode in MODES for layer in LAYERS), 3000)
-            run_suite(binary, FOREIGN, MODES, 600)
-            for mutation in mutations(source):
+            if run_succession:
+                run_suite(binary, SUCCESSION, tuple(mode + '/' + layer for mode in MODES for layer in LAYERS), 3000)
+            if run_foreign:
+                run_suite(binary, FOREIGN, MODES, 600)
+            for mutation in selected_controls:
                 name, parent, case, witness, _, replacement = mutation
                 negative = compile_in(name, prospective, mutation)
                 negative_digest = MAX.regular_digest(negative)
@@ -701,7 +722,10 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 raise ValueError('Windows MAX keys, reference executables or source changed')
         if checked_sources(source)[1] != before or REFERENCE.BUILD.PQ.verify(pq, target) != native or MAX.tool_receipts(source, compiler, captured, target, cache) != tools or MAX.dependency_receipt(source, compiler, captured) != dependencies:
             raise ValueError('Windows MAX captured source, archive or tool identity changed')
-        result = {'schema': 1, 'target': target, 'source': before, 'repository': repository,
+        result = {'schema': 2, 'target': target, 'source': before, 'repository': repository,
+                  'execution_suite': suite, 'complete_inventory_proved': suite == 'complete',
+                  'receipt_kind': 'complete-max' if suite == 'complete' else 'complete-max-required-suite',
+                  'required_execution_suites': EXECUTION_SUITES,
                   'native_pq': native, 'tools': tools,
                   'prepared_quic_dependencies': dependencies, 'test_binary_sha256': digest,
                   'relay_sha256': relay_digest, 'xray_sha256': xray_digest,
@@ -711,9 +735,10 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                   'closed_admission_control': closed_control,
                   'closed_admission_source': 'unmodified' if prospective else 'exact-family-removed',
                   'prospective_predicate': {'before': PROSPECTIVE_BEFORE, 'after': PROSPECTIVE_AFTER} if prospective else None,
-                  'traffic_cases': MAX.TRAFFIC, 'credential_cases': MAX.CREDENTIALS,
-                  'succession_cases': tuple(mode + '/' + layer for mode in MODES for layer in LAYERS),
-                  'foreign_predecessor_cases': MODES, 'native_abi_cases': MAX.PQ.NATIVE_CASES,
+                  'traffic_cases': {family: MAX.TRAFFIC[family] for family in families},
+                  'credential_cases': {family: MAX.CREDENTIALS[family] for family in families},
+                  'succession_cases': tuple(mode + '/' + layer for mode in MODES for layer in LAYERS) if run_succession else (),
+                  'foreign_predecessor_cases': MODES if run_foreign else (), 'native_abi_cases': MAX.PQ.NATIVE_CASES,
                   'startup_record_case': STARTUP_RECORDS, 'startup_record_output_sha256': startup_record_output,
                   'port_pair_case': PORT_PAIR, 'port_pair_subcases': PORT_PAIR_CASES, 'port_pair_output_sha256': startup_record_output,
                   'suites': suites, 'compiled_negative_controls': controls,
@@ -725,11 +750,14 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
         raise ValueError('Windows MAX repository identity changed before final acknowledgment')
     result['private_key_workspace_removed'] = True
     WPQ.publish_receipt(receipt_path, result, workspace)
-    print('Actual Windows WFP, complete four-family MAX, 12 Start Layer paths, 48 credential cases, native rekey, selected Home DNS, joined reversal and compiled controls passed; TUN, public host and device acceptance remain separate.', flush=True)
+    if suite == 'complete':
+        print('Actual Windows WFP, complete four-family MAX, 12 Start Layer paths, 48 credential cases, native rekey, selected Home DNS, joined reversal and compiled controls passed; TUN, public host and device acceptance remain separate.', flush=True)
+    else:
+        print('Actual Windows MAX required suite passed: ' + suite + '; every required suite at this source and target remains necessary for complete inventory evidence.', flush=True)
     return result
 
 
-def standalone(go='go', *, prospective=False, receipt_path=None, expected_sha=None):
+def standalone(go='go', *, prospective=False, receipt_path=None, expected_sha=None, suite='complete'):
     if platform.system() != 'Windows' or not WFP.BOOT.IDENTITY.ctypes.windll.shell32.IsUserAnAdmin():
         raise ValueError('Standalone complete MAX requires actual elevated Windows')
     compiler, captured, architecture = NODE.selected_compiler(go, ROOT, dict(os.environ))
@@ -740,9 +768,10 @@ def standalone(go='go', *, prospective=False, receipt_path=None, expected_sha=No
     captured['CGO_ENABLED'] = '1'
     native = REFERENCE.BUILD
     previous = dict(os.environ)
-    with tempfile.TemporaryDirectory(prefix='routervpn-windows-max-core-') as directory:
+    execution_plan(suite, ())
+    with tempfile.TemporaryDirectory(prefix='routervpn-windows-max-core-' + suite + '-') as directory:
         workspace = Path(directory)
-        source, xray, pq, cache = (workspace / name for name in ('core', 'xray', 'pq', 'cargo-cache'))
+        source, xray, pq, cache = (workspace / name for name in ('core', 'xray', 'pq', 'cargo-cache-' + suite))
         try:
             os.environ.clear()
             os.environ.update(captured)
@@ -759,7 +788,7 @@ def standalone(go='go', *, prospective=False, receipt_path=None, expected_sha=No
             native.run([compiler, 'mod', 'tidy'], cwd=source, env=captured)
             native.run([compiler, 'mod', 'verify'], cwd=source, env=captured)
             native.POLICY.AMNEZIA.verify(source)
-            result = execute(source, pq, cache, str(compiler), prospective=prospective, env=captured, expected_sha=expected_sha)
+            result = execute(source, pq, cache, str(compiler), prospective=prospective, env=captured, expected_sha=expected_sha, suite=suite)
         finally:
             os.environ.clear()
             os.environ.update(previous)
@@ -782,13 +811,14 @@ if __name__ == '__main__':
     parser.add_argument('--standalone', action='store_true')
     parser.add_argument('--receipt', type=Path)
     parser.add_argument('--sha', help='require this exact clean repository commit for authoritative evidence')
+    parser.add_argument('--suite', choices=('complete', *EXECUTION_SUITES), default='complete')
     arguments = parser.parse_args()
     if arguments.standalone:
         if arguments.source is not None or arguments.pq is not None:
             parser.error('--standalone owns its exact source and native archive')
-        standalone(arguments.go, prospective=arguments.prospective, receipt_path=arguments.receipt, expected_sha=arguments.sha)
+        standalone(arguments.go, prospective=arguments.prospective, receipt_path=arguments.receipt, expected_sha=arguments.sha, suite=arguments.suite)
     else:
         if arguments.source is None or arguments.pq is None:
             parser.error('an exact prepared source and native PQ archive are required')
         execute(arguments.source, arguments.pq, arguments.cache, arguments.go,
-                prospective=arguments.prospective, receipt_path=arguments.receipt, expected_sha=arguments.sha)
+                prospective=arguments.prospective, receipt_path=arguments.receipt, expected_sha=arguments.sha, suite=arguments.suite)

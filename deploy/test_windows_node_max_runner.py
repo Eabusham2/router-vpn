@@ -739,6 +739,9 @@ class MAXNativeBoundaries(unittest.TestCase):
         with self.execution_harness(receipt) as state:
             result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache', receipt_path=receipt)
         self.assertEqual(result['public_admission'], 'shipping-predicate')
+        self.assertIs(result['complete_inventory_proved'], True)
+        self.assertEqual(result['receipt_kind'], 'complete-max')
+        self.assertEqual(result['execution_suite'], 'complete')
         state['timer_verifier'].assert_called_once_with(self.source, Path('go'), env=state['dependency_env'])
         self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection', 'tree'])
         self.assertFalse(result['prospective'])
@@ -906,8 +909,20 @@ class MAXNativeBoundaries(unittest.TestCase):
         workflow=(ROOT/'.github/workflows/windows-node-max-contract.yml').read_text()
         for target in ('windows/amd64','windows/arm64'):
             self.assertIn('target: '+target,workflow)
-        self.assertIn('timeout-minutes: 180',workflow)
-        self.assertIn('timeout-minutes: 150',workflow)
+        self.assertIn('timeout-minutes: 110',workflow)
+        self.assertIn('timeout-minutes: 90',workflow)
+        self.assertIn('platform: [amd64, arm64]',workflow)
+        selected = re.search(r'suite: \[([^\]]+)\]',workflow).group(1).split(', ')
+        self.assertEqual(tuple(selected), GATE.EXECUTION_SUITES)
+        self.assertEqual(len(tuple((target,suite) for target in ('amd64','arm64') for suite in selected)),10)
+        for target in ('amd64','arm64'):
+            self.assertEqual(workflow.count('- platform: '+target+'\n'),1)
+        self.assertIn('fail-fast: false',workflow)
+        self.assertNotIn('continue-on-error:',workflow)
+        self.assertNotIn('exclude:',workflow)
+        self.assertNotRegex(workflow,r'(?m)^    if:')
+        self.assertIn("--suite '${{ matrix.suite }}'",workflow)
+        self.assertIn('windows-node-max-${{ github.ref }}-${{ matrix.slug }}-${{ matrix.suite }}',workflow)
         shipping = (ROOT/'internal/mobilemultihop/desktop_node_admission.go').read_text()
         try:
             GATE.prospective_predicate(shipping)
@@ -917,7 +932,9 @@ class MAXNativeBoundaries(unittest.TestCase):
         else:
             self.assertIn('--standalone --prospective --sha $env:GITHUB_SHA --receipt',workflow)
         self.assertIn('if-no-files-found: error',workflow)
-        self.assertIn('name: windows-max-native-${{ matrix.slug }}-${{ github.sha }}',workflow)
+        self.assertIn('name: windows-max-native-${{ matrix.slug }}-${{ matrix.suite }}-${{ github.sha }}',workflow)
+        self.assertIn('routervpn-windows-max-${{ matrix.suite }}-receipt.json',workflow)
+        self.assertIn('routervpn-max-native-toolchain-${{ matrix.suite }}',workflow)
         self.assertIn("go-version: '1.26.3'",workflow)
         self.assertIn("python deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}'",workflow)
         self.assertIn('python deploy/test_pq_reference_preparation.py',workflow)
@@ -944,6 +961,78 @@ class MAXNativeBoundaries(unittest.TestCase):
         # It runs in the required parallel native workflow, not again inside
         # the packaged runtime command with an unrelated aggregate deadline.
         self.assertNotIn("run([sys.executable, ROOT/'deploy/test_windows_node_max.py'",builder)
+
+    def test_five_workloads_partition_every_family_transition_and_control_once(self):
+        # Exercise the published 23-control inventory size, odd/even future
+        # sizes and stable tuple identity; the generic sixteen production
+        # mutations and seven WFP mutations have their own source tests above.
+        for count in (7, 22, 23, 24):
+            changes = tuple(('original-' + str(i), object()) for i in range(count))
+            plans = [GATE.execution_plan(suite, changes) for suite in GATE.EXECUTION_SUITES]
+            families = tuple(family for selected, _, _, _ in plans for family in selected)
+            controls = tuple(change for _, _, _, selected in plans for change in selected)
+            self.assertEqual(families, tuple(GATE.MAX.FAMILIES))
+            self.assertEqual(controls, changes)
+            self.assertEqual(len({item[0] for item in controls}), count)
+            self.assertEqual(sum(plan[1] for plan in plans), 1)
+            self.assertEqual(sum(plan[2] for plan in plans), 1)
+            self.assertEqual([len(plan[3]) for plan in plans], [0, 0, 0, (count + 1) // 2, count // 2])
+            self.assertEqual(GATE.execution_plan('complete', changes), (tuple(GATE.MAX.FAMILIES), True, True, changes))
+            with self.assertRaisesRegex(ValueError, 'duplicate controls'):
+                GATE.execution_plan('ownership-controls-1', (*changes, changes[0]))
+        with self.assertRaisesRegex(ValueError, 'Unknown complete MAX execution suite'):
+            GATE.execution_plan('ownership-controls-3', ())
+
+    def test_every_partial_suite_runs_native_prerequisites_and_only_its_complete_workload(self):
+        workload_parents, executed_controls = [], []
+        expected_controls = None
+        for suite in GATE.EXECUTION_SUITES:
+            receipt = self.work / (suite + '.json')
+            with self.execution_harness(receipt) as state:
+                changes = GATE.mutations(self.source)
+                expected_controls = [item[0] for item in changes]
+                families, succession, foreign, controls = GATE.execution_plan(suite, changes)
+                result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache', prospective=True, receipt_path=receipt, suite=suite)
+            self.assertEqual(result['schema'], 2)
+            self.assertEqual(result['execution_suite'], suite)
+            self.assertEqual(result['receipt_kind'], 'complete-max-required-suite')
+            self.assertIs(result['complete_inventory_proved'], False)
+            self.assertEqual(result['required_execution_suites'], GATE.EXECUTION_SUITES)
+            self.assertEqual(result['traffic_cases'], {family:GATE.MAX.TRAFFIC[family] for family in families})
+            self.assertEqual(result['credential_cases'], {family:GATE.MAX.CREDENTIALS[family] for family in families})
+            self.assertEqual(result['succession_cases'], tuple(mode + '/' + layer for mode in GATE.MODES for layer in GATE.LAYERS) if succession else ())
+            self.assertEqual(result['foreign_predecessor_cases'], GATE.MODES if foreign else ())
+            self.assertEqual([control['name'] for control in result['compiled_negative_controls']], [item[0] for item in controls])
+            self.assertEqual(result['native_abi_cases'], GATE.MAX.PQ.NATIVE_CASES)
+            self.assertTrue(result['current_closed_admission_proved'])
+            self.assertTrue(result['private_key_workspace_removed'])
+            self.assertEqual(result['repository']['commit'], 'a' * 40)
+            self.assertEqual(result['closed_admission_control']['parent'], GATE.CLOSED)
+            self.assertTrue(result['startup_record_output_sha256'])
+            self.assertEqual(json.loads(receipt.read_text()), json.loads(json.dumps(result)))
+            for parent in (GATE.CLOSED, GATE.OPEN, GATE.MARKERS):
+                self.assertEqual(sum(record['parent'] == parent for record in result['suites']), 1)
+            workload_parents.extend(record['parent'] for record in result['suites'] if record['parent'] not in (GATE.CLOSED,GATE.OPEN,GATE.MARKERS))
+            executed_controls.extend(control['name'] for control in result['compiled_negative_controls'])
+            for args, outer_timeout in state['native_calls']:
+                inner = int(next(value.removeprefix('-test.timeout=')[:-1] for value in args if value.startswith('-test.timeout=')))
+                self.assertEqual(outer_timeout, inner + 15)
+                selector = next(value.removeprefix('-test.run=') for value in args if value.startswith('-test.run='))
+                if Path(args[0]) in state['removed_controls']:
+                    self.assertEqual(inner,90)
+                elif selector == '^' + GATE.SUCCESSION + '$':
+                    self.assertEqual(inner,3000)
+                elif selector.endswith('Credentials$'):
+                    self.assertEqual(inner,1800)
+                elif selector.startswith('^Test(RealPinnedFactory'):
+                    self.assertEqual(inner,120)
+                else:
+                    expected = {GATE.OPEN:15,GATE.MARKERS:30}.get(selector[1:-1],600)
+                    self.assertEqual(inner,expected)
+        self.assertEqual(executed_controls,expected_controls)
+        self.assertEqual(workload_parents,[parent for family in GATE.MAX.FAMILIES for parent in ('TestRouterVPNDesktopNodeWindowsMAX'+family,'TestRouterVPNDesktopNodeWindowsMAX'+family+'Credentials')] + [GATE.SUCCESSION,GATE.FOREIGN])
+        self.assertEqual(len(set(workload_parents)),len(workload_parents))
+
 
 
 if __name__ == '__main__':
