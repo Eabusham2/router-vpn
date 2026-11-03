@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,7 +99,17 @@ func TestServerTorIPCChild(t *testing.T) {
 				os.Exit(0)
 			}
 			_ = encoder.Encode(response)
-			_ = encoder.Encode(multihoprelay.TorIPCResponse{Schema: 1, Operation: "closed", Nonce: c.OwnerID, OK: true})
+			terminal := multihoprelay.TorIPCResponse{Schema: 1, Operation: "closed", Nonce: c.OwnerID, OK: true}
+			if mode == "wrong-cleanup-owner" {
+				terminal.Nonce = strings.Repeat("f", 64)
+			}
+			_ = encoder.Encode(terminal)
+			if mode == "duplicate-cleanup" {
+				_ = encoder.Encode(terminal)
+			}
+			if mode == "closed-then-malformed" {
+				_, _ = io.WriteString(os.Stdout, "not-json\n")
+			}
 			os.Exit(0)
 		}
 		if encoder.Encode(response) != nil {
@@ -108,6 +119,10 @@ func TestServerTorIPCChild(t *testing.T) {
 	os.Exit(0)
 }
 func torPipeProcess(t *testing.T, mode string) (*relayTorProcess, string) {
+	t.Helper()
+	return torPipeProcessReader(t, mode, nil)
+}
+func torPipeProcessReader(t *testing.T, mode string, wrap func(io.ReadCloser) io.ReadCloser) (*relayTorProcess, string) {
 	t.Helper()
 	c := torPipeCapture(t)
 	dir := filepath.Join(t.TempDir(), "owned")
@@ -125,14 +140,10 @@ func torPipeProcess(t *testing.T, mode string) (*relayTorProcess, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if configureRelayProcess(cmd) != nil {
 		t.Skip("requires Linux server process")
 	}
-	process, err := startOwnedRelayProcess(cmd, dir)
+	process, output, err := startOwnedRelayTorProcess(cmd, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +151,11 @@ func torPipeProcess(t *testing.T, mode string) (*relayTorProcess, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := newRelayTorProcess(process, c, input, output)
+	var reader io.ReadCloser = output
+	if wrap != nil {
+		reader = wrap(reader)
+	}
+	p := newRelayTorProcess(process, c, input, reader)
 	t.Cleanup(func() {
 		_ = input.Close()
 		if process.Alive() {
@@ -277,5 +292,110 @@ func TestServerTorRunnerReadsOnlyExactPrivateOperatorSource(t *testing.T) {
 				t.Fatal("source borrowed another private identity")
 			}
 		})
+	}
+}
+
+// Delay only the parent's first read. The actual child writes its captured
+// acknowledgements and exits before the parent can drain the OS pipe.
+type torIPCReadGate struct {
+	io.ReadCloser
+	release <-chan struct{}
+}
+
+func (r *torIPCReadGate) Read(body []byte) (int, error) {
+	<-r.release
+	return r.ReadCloser.Read(body)
+}
+func TestServerTorIPCExitBeforeReadDrainsConfirmedCleanup(t *testing.T) {
+	for _, mode := range []string{"normal", "no-cleanup", "wrong-cleanup-owner", "duplicate-cleanup", "closed-then-malformed"} {
+		t.Run(mode, func(t *testing.T) { torIPCExitBeforeRead(t, mode, false) })
+	}
+}
+
+type torIPCWriteObserver struct {
+	io.WriteCloser
+	written chan struct{}
+}
+
+func (w *torIPCWriteObserver) Write(body []byte) (int, error) {
+	n, err := w.WriteCloser.Write(body)
+	select {
+	case w.written <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+func TestServerTorIPCCancelledReplyCannotObstructConfirmedCleanup(t *testing.T) {
+	torIPCExitBeforeRead(t, "normal", true)
+}
+func torIPCExitBeforeRead(t *testing.T, mode string, cancelSnapshot bool) {
+	t.Helper()
+	release := make(chan struct{})
+	p, dir := torPipeProcessReader(t, mode, func(reader io.ReadCloser) io.ReadCloser {
+		return &torIPCReadGate{ReadCloser: reader, release: release}
+	})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if cancelSnapshot {
+		original := p.input
+		observer := &torIPCWriteObserver{WriteCloser: original, written: make(chan struct{}, 1)}
+		p.input = observer
+		operation, cancelOperation := context.WithCancel(ctx)
+		nonce, err := torIPCNonce()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := make(chan error, 1)
+		go func() { _, err := p.Snapshot(operation, nonce); result <- err }()
+		select {
+		case <-observer.written:
+		case <-ctx.Done():
+			t.Fatal("snapshot was not sent")
+		}
+		cancelOperation()
+		select {
+		case err := <-result:
+			if err == nil {
+				t.Fatal("unread cancelled snapshot acquired proof")
+			}
+		case <-ctx.Done():
+			t.Fatal("cancelled snapshot did not return")
+		}
+		p.input = original
+		if !p.process.Alive() {
+			t.Fatal("cancelled snapshot destroyed retained child")
+		}
+	}
+	result := make(chan error, 1)
+	go func() { result <- p.Stop(ctx) }()
+	select {
+	case <-p.process.done:
+	case <-ctx.Done():
+		t.Fatal("actual child did not exit before its stdout was drained")
+	}
+	unblock()
+	select {
+	case err := <-result:
+		if mode == "normal" && err != nil {
+			t.Fatal("exited child lost its buffered nonce and cleanup receipt", err)
+		}
+		if mode != "normal" && err == nil {
+			t.Fatal("invalid terminal stream claimed confirmed cleanup", mode)
+		}
+	case <-ctx.Done():
+		t.Fatal("confirmed child exit did not join its original reader")
+	}
+	if mode == "normal" {
+		if p.bad.Load() || !p.closed.Load() {
+			t.Fatal("joined cleanup did not retain exact terminal receipt")
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatal("confirmed workspace was not retired", err)
+		}
+	} else if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatal("unconfirmed original workspace was removed", mode, err)
 	}
 }

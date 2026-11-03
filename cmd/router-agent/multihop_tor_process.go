@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,16 +80,18 @@ func (r *relayTorExecRunner) current() bool {
 }
 
 type relayTorProcess struct {
-	process    *relayProcess
-	capture    multihoprelay.TorCapture
-	started    time.Time
-	input      io.WriteCloser
-	responses  chan multihoprelay.TorIPCResponse
-	readerDone chan struct{}
-	gate       chan struct{}
-	closed     atomic.Bool
-	bad        atomic.Bool
-	sequence   uint64 // protected by gate
+	process      *relayProcess
+	capture      multihoprelay.TorCapture
+	started      time.Time
+	input        io.WriteCloser
+	responses    chan multihoprelay.TorIPCResponse
+	readerDone   chan struct{}
+	gate         chan struct{}
+	closed       atomic.Bool
+	bad          atomic.Bool
+	sequence     uint64 // protected by gate
+	responseMu   sync.Mutex
+	pendingNonce string // protected by responseMu; only the current request owns a response
 }
 
 func (r *relayTorExecRunner) StartTor(ctx context.Context, capture multihoprelay.TorCapture) (multihoprelay.TorProcess, error) {
@@ -138,20 +141,13 @@ func (r *relayTorExecRunner) StartTor(ctx context.Context, capture multihoprelay
 	if err != nil {
 		return nil, bad
 	}
-	output, err := command.StdoutPipe()
-	if err != nil {
-		_ = input.Close()
-		return nil, bad
-	}
 	if configureRelayProcess(command) != nil {
 		_ = input.Close()
-		_ = output.Close()
 		return nil, bad
 	}
-	process, err := startOwnedRelayProcess(command, dir)
+	process, output, err := startOwnedRelayTorProcess(command, dir)
 	if err != nil {
 		_ = input.Close()
-		_ = output.Close()
 		return nil, bad
 	}
 	process.root = root
@@ -170,6 +166,25 @@ func (r *relayTorExecRunner) StartTor(ctx context.Context, capture multihoprelay
 	}
 	return p, nil
 }
+
+// Wait owns the child, while the IPC reader owns its pipe. StdoutPipe would
+// let exec.Cmd.Wait close the read descriptor before buffered acknowledgements
+// are consumed. A separate parent reader survives Wait and drains through EOF.
+func startOwnedRelayTorProcess(command *exec.Cmd, dir string) (*relayProcess, io.ReadCloser, error) {
+	output, writer, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	command.Stdout = writer
+	process, err := startOwnedRelayProcess(command, dir)
+	_ = writer.Close() // only the child retains the write end after Start
+	if err != nil {
+		_ = output.Close()
+		return nil, nil, err
+	}
+	return process, output, nil
+}
+
 func newRelayTorProcess(process *relayProcess, capture multihoprelay.TorCapture, input io.WriteCloser, output io.ReadCloser) *relayTorProcess {
 	p := &relayTorProcess{process: process, capture: capture, started: time.Now(), input: input, responses: make(chan multihoprelay.TorIPCResponse, 1), readerDone: make(chan struct{}), gate: make(chan struct{}, 1)}
 	go func() {
@@ -185,6 +200,10 @@ func newRelayTorProcess(process *relayProcess, capture multihoprelay.TorCapture,
 				p.bad.Store(true)
 				return
 			}
+			if p.closed.Load() {
+				p.bad.Store(true) // a terminal acknowledgement must be last
+				return
+			}
 			if response.Operation == "closed" {
 				if response.OK && response.Nonce == capture.OwnerID {
 					p.closed.Store(true)
@@ -193,12 +212,17 @@ func newRelayTorProcess(process *relayProcess, capture multihoprelay.TorCapture,
 				}
 				continue
 			}
-			select {
-			case p.responses <- response:
-			case <-process.done:
-				p.bad.Store(true)
-				return
+			// A cancelled request cannot fill the sole mailbox and obstruct
+			// terminal cleanup. Only its still-pending nonce owns this slot.
+			p.responseMu.Lock()
+			if response.Nonce == p.pendingNonce && p.pendingNonce != "" {
+				select {
+				case p.responses <- response:
+				default:
+					p.bad.Store(true) // duplicate response to the same request
+				}
 			}
+			p.responseMu.Unlock()
 		}
 		if scanner.Err() != nil {
 			p.bad.Store(true)
@@ -228,6 +252,18 @@ func (p *relayTorProcess) request(ctx context.Context, operation, nonce string) 
 	if ctx == nil || ctx.Err() != nil || !request.Valid() || !p.process.Alive() {
 		return multihoprelay.TorIPCResponse{}, bad
 	}
+	p.responseMu.Lock()
+	select {
+	case <-p.responses:
+	default:
+	} // discard only an expired request's buffered reply
+	p.pendingNonce = nonce
+	p.responseMu.Unlock()
+	defer func() {
+		p.responseMu.Lock()
+		p.pendingNonce = ""
+		p.responseMu.Unlock()
+	}()
 	if file, ok := p.input.(*os.File); ok {
 		deadline := time.Now().Add(time.Second)
 		if end, exists := ctx.Deadline(); exists && end.Before(deadline) {
@@ -252,6 +288,15 @@ func (p *relayTorProcess) request(ctx context.Context, operation, nonce string) 
 			}
 			return response, nil
 		case <-p.readerDone:
+			// EOF and the final buffered reply can become ready together.
+			// The reader has joined, so inspect its mailbox before failing.
+			select {
+			case response := <-p.responses:
+				if response.Nonce == nonce && response.Operation == operation && response.OK && !p.bad.Load() {
+					return response, nil
+				}
+			default:
+			}
 			return multihoprelay.TorIPCResponse{}, bad
 		case <-ctx.Done():
 			return multihoprelay.TorIPCResponse{}, bad
@@ -334,7 +379,7 @@ func (p *relayTorProcess) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if !p.closed.Load() {
+	if !p.closed.Load() || p.bad.Load() {
 		return errors.New("native Tor worker exited without its complete cleanup acknowledgement")
 	}
 	_ = p.input.Close()
