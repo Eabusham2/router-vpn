@@ -60,7 +60,13 @@ func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T)
 	// a native callback would let an old start adopt a replacement operation.
 	assertCapturedGuardedProcessStart(t, "main.go", "func (a *app) startModeAttempt", "err = cmd.Start()", "a.publishStartedDesktopNode(startupCtx, native, cmd", "checkCapturedConnectionOperation(startupCtx)")
 	assertGuardedProcessStart(t, "standard_exit_platform_routes.go", "func (a *app) platformStandardExitConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
-	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
+	wrapper := sourceFunctionForTest(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnect(")
+	for _, required := range []string{"a.nativeMultihopConnectOwned(w, r, nativeMultihopConnectRuntime{", "capture: captureNativeMultihopForApp", "preflight: preflightOwnedNativeMultihopCommand", "stage: stageOwnedNativeMultihopCommand", "proof: (*app).proveNativeMultihop"} {
+		if !strings.Contains(wrapper, required) {
+			t.Fatal("public native multihop lost its shipping adapter", required)
+		}
+	}
+	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnectOwned", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop.go", "func (a *app) multihopConnect", "if err := cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "err = nativeRetained.Start(a.connectionOperationContextOrBackground())", "a.cmd = realCmd")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -172,8 +173,24 @@ func nativeMultihopPlatformCommand(a *app, sel multihopSelection) (*desktopNodeL
 	}
 }
 
+// Tests may model installed-image and proof boundaries while retaining the
+// shipping selection, staging, process, graph and teardown transaction.
+type nativeMultihopConnectRuntime struct {
+	capture   func(*app, multihopSelection, []string) (multihopSelection, error)
+	preflight func(*app, multihopSelection, *desktopExecutionDescriptor) (*desktopNodeLaunch, error)
+	stage     func(*app, multihopSelection, *desktopNodeLaunch) error
+	proof     func(*app, multihopSelection, *exec.Cmd) error
+}
+
 func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
-	_, finish, guardErr := a.beginConnectionOperation()
+	a.nativeMultihopConnectOwned(w, r, nativeMultihopConnectRuntime{
+		capture: captureNativeMultihopForApp, preflight: preflightOwnedNativeMultihopCommand,
+		stage: stageOwnedNativeMultihopCommand, proof: (*app).proveNativeMultihop,
+	})
+}
+
+func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) {
+	operation, finish, guardErr := a.beginConnectionOperation()
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
 		return
@@ -222,12 +239,12 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not capture the physical multihop network", http.StatusConflict)
 		return
 	}
-	sel, err = captureNativeMultihopForApp(a, sel, []string{sel.ExitMode})
+	sel, err = driver.capture(a, sel, []string{sel.ExitMode})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	native, err := preflightOwnedNativeMultihopCommand(a, sel, nil)
+	native, err := driver.preflight(a, sel, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -240,7 +257,8 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 
 	// Preserve any existing graph until its owning runtime has actually stopped.
 	// Failed teardown must keep exact entry/exit identity available for recovery.
-	sessionTrackerFor(a).declareRequest("multihop", sel.Base)
+	tracker := sessionTrackerFor(a)
+	tracker.declareRequest("multihop", sel.Base)
 	if err = a.stopMode(); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -249,7 +267,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	if network != physicalNetworkIdentity() {
 		err = errors.New("multihop physical network changed during prior cleanup")
 	} else {
-		err = stageOwnedNativeMultihopCommand(a, sel, native)
+		err = driver.stage(a, sel, native)
 	}
 	if err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
@@ -301,7 +319,10 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, message, status)
 		return
 	}
-	proofErr := a.proveNativeMultihop(sel, cmd)
+	originalRuntime, _ := nativeMultihopOwners.Load(a)
+	originalGraph, originalGraphOK := getActiveMultihopGraph(a)
+	originalRelay, _ := desktopRelays.Load(a)
+	proofErr := driver.proof(a, sel, cmd)
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
 		message, cleanupFailed := a.multihopStopFailure(cmd, cancelErr.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -314,17 +335,46 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	if proofErr != nil {
 		msg, cleanupFailed := a.multihopStopFailure(cmd, "multihop entry/exit proof failed: "+proofErr.Error())
+		// Cleanup may block while another owner replaces the graph. Adopt both
+		// diagnostics and request history only while the original transaction
+		// still owns the completed teardown or the exact retained retry graph.
+		tracker.mu.Lock()
 		a.mu.Lock()
-		a.state.Mode = "multihop"
-		a.state.LogicalMode = "multihop"
-		a.state.RuntimeMode = sel.ExitMode
-		a.state.Base = sel.Base
-		a.state.RouterID = sel.Exit.ID
+		currentTracker, tracked := sessionTrackers.Load(a)
+		currentNode, nodePresent := desktopNodeOwners.Load(a)
+		currentRuntime, runtimePresent := nativeMultihopOwners.Load(a)
+		currentGraph, graphPresent := getActiveMultihopGraph(a)
+		currentRelay, relayPresent := desktopRelays.Load(a)
+		owned := tracked && currentTracker == tracker && a.connectionContext == operation
+		if cleanupFailed {
+			owned = owned && (a.cmd == nil || a.cmd == cmd) &&
+				nodePresent && currentNode == native && runtimePresent && currentRuntime == originalRuntime &&
+				originalGraphOK && graphPresent && currentGraph == originalGraph &&
+				(!relayPresent || currentRelay == originalRelay)
+		} else {
+			owned = owned && a.cmd == nil && !nodePresent && !runtimePresent && !graphPresent && !relayPresent
+		}
+		if !owned {
+			a.mu.Unlock()
+			tracker.mu.Unlock()
+			http.Error(w, "multihop failure cleanup lost its original runtime owner; replacement retained", http.StatusConflict)
+			return
+		}
+		// A joined teardown already set off. Only incomplete cleanup retains
+		// the full graph identity needed by the next exact Stop attempt.
+		if cleanupFailed {
+			a.state.Mode = "multihop"
+			a.state.LogicalMode = "multihop"
+			a.state.RuntimeMode = sel.ExitMode
+			a.state.Base = sel.Base
+			a.state.RouterID = sel.Exit.ID
+		}
 		a.state.Phase = "failed"
 		a.state.LastError = msg
 		a.state.Connected = false
+		tracker.markRequestFailureLocked(msg)
 		a.mu.Unlock()
-		sessionTrackerFor(a).markRequestFailure(msg)
+		tracker.mu.Unlock()
 		status := http.StatusBadGateway
 		if cleanupFailed {
 			status = http.StatusInternalServerError
