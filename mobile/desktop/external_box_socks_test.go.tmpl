@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -600,3 +601,111 @@ func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegratio
 		})
 	}
 }
+
+// The provider records only the original authenticated refusal transaction.
+// Terminal transport identity is normalized by the OS-specific caller; no
+// timeout, arbitrary read error or readable payload can prove retirement.
+type desktopExternalSOCKSRefusalReceipt struct {
+	Control, Server, Relay            string
+	Authenticated, Associate, Replied bool
+	Bytes                             int
+	Terminal, Failure                 string
+}
+
+func desktopExternalSOCKSRefusalTerminal(n int, err, reset error) string {
+	if n != 0 {
+		return "data"
+	}
+	if err == io.EOF {
+		return "eof"
+	}
+	operation, ok := err.(*net.OpError)
+	if reset != nil && ok && operation.Op == "read" &&
+		(operation.Net == "tcp" || operation.Net == "tcp4" || operation.Net == "tcp6") {
+		native := operation.Err
+		if call, ok := native.(*os.SyscallError); ok {
+			native = call.Err
+		}
+		if native == reset {
+			return "reset"
+		}
+	}
+	return "unproved"
+}
+
+func desktopExternalSOCKSRefusalValid(r desktopExternalSOCKSRefusalReceipt, control, server, relay string) bool {
+	for _, text := range []string{control, server, relay} {
+		address, err := netip.ParseAddrPort(text)
+		if err != nil || address.Port() == 0 || address.Addr().IsUnspecified() {
+			return false
+		}
+	}
+	return r.Control == control && r.Server == server && r.Relay == relay && r.Authenticated && r.Associate && r.Replied &&
+		r.Bytes == 0 && (r.Terminal == "eof" || r.Terminal == "reset") && r.Failure == ""
+}
+
+func desktopExternalSOCKSRefusalChecks(t *testing.T) {
+	t.Helper()
+	reset := errors.New("exact native reset sentinel")
+	for _, scenario := range []struct {
+		name string
+		n    int
+		err  error
+		want string
+	}{
+		{"eof", 0, io.EOF, "eof"}, {"reset", 0, &net.OpError{Op: "read", Net: "tcp4", Err: reset}, "reset"},
+		{"data-eof", 1, io.EOF, "data"}, {"data-reset", 1, &net.OpError{Op: "read", Net: "tcp4", Err: reset}, "data"},
+		{"syscall-reset", 0, &net.OpError{Op: "read", Net: "tcp", Err: &os.SyscallError{Syscall: "wsarecv", Err: reset}}, "reset"},
+		{"outer-mixed-reset", 0, errors.Join(&net.OpError{Op: "read", Net: "tcp", Err: reset}, errors.New("other failure")), "unproved"},
+		{"mixed-reset", 0, &net.OpError{Op: "read", Net: "tcp", Err: errors.Join(reset, errors.New("other failure"))}, "unproved"},
+		{"nil", 0, nil, "unproved"}, {"timeout", 0, &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}, "unproved"},
+		{"other-error", 0, errors.New("connection reset by peer"), "unproved"},
+		{"raw-reset", 0, reset, "unproved"}, {"write-reset", 0, &net.OpError{Op: "write", Net: "tcp", Err: reset}, "unproved"},
+		{"udp-reset", 0, &net.OpError{Op: "read", Net: "udp", Err: reset}, "unproved"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if got := desktopExternalSOCKSRefusalTerminal(scenario.n, scenario.err, reset); got != scenario.want {
+				t.Fatal("refusal terminal changed", got)
+			}
+		})
+	}
+	if desktopExternalSOCKSRefusalValid(desktopExternalSOCKSRefusalReceipt{Authenticated: true, Associate: true, Replied: true, Terminal: "eof"}, "", "", "") {
+		t.Fatal("empty original identity accepted")
+	}
+	original := desktopExternalSOCKSRefusalReceipt{Control: "192.168.1.2:45678", Server: "192.168.1.3:1080", Relay: "10.254.253.252:5353", Authenticated: true, Associate: true, Replied: true, Terminal: "eof"}
+	if !desktopExternalSOCKSRefusalValid(original, original.Control, original.Server, original.Relay) {
+		t.Fatal("complete original refusal lost its terminal evidence")
+	}
+	for _, field := range []string{"control", "server", "relay", "auth", "associate", "reply", "bytes", "timeout", "other-error", "failure"} {
+		t.Run("receipt-"+field, func(t *testing.T) {
+			r := original
+			switch field {
+			case "control":
+				r.Control = "192.168.1.2:45679"
+			case "server":
+				r.Server = "192.168.1.4:1080"
+			case "relay":
+				r.Relay = "10.254.253.251:5353"
+			case "auth":
+				r.Authenticated = false
+			case "associate":
+				r.Associate = false
+			case "reply":
+				r.Replied = false
+			case "bytes":
+				r.Bytes = 1
+			case "timeout":
+				r.Terminal = "timeout"
+			case "other-error":
+				r.Terminal = "unproved"
+			case "failure":
+				r.Failure = "provider read failed"
+			}
+			if desktopExternalSOCKSRefusalValid(r, original.Control, original.Server, original.Relay) {
+				t.Fatal("changed refusal receipt accepted", field)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSOCKSRefusalEvidence(t *testing.T) { desktopExternalSOCKSRefusalChecks(t) }

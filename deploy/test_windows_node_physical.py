@@ -35,7 +35,7 @@ EXTERNAL_HY2_CASES = (EXTERNAL_HY2_ROOT, *(EXTERNAL_HY2_ROOT + "/" + leaf for le
     "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")))
 EXTERNAL_SOCKS_ROOT = "TestRouterVPNDesktopExternalWindowsSOCKSWFP"
 EXTERNAL_SOCKS_CASES = (EXTERNAL_SOCKS_ROOT, *(EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
-    "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
+    "refusal-receipts", "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
     "home-lan-off/tcp-retained-deny", "home-lan-off/udp-retained-deny",
     "reject/password", "reject/trust", "reject/dns", "reject/exit", "reject/auth-downgrade",
     "reject/relay-domain", "reject/relay-wildcard", "reject/relay-zero", "reject/relay-other-private", "reject/control-eof",

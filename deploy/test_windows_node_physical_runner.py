@@ -298,7 +298,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
 
     def test_every_socks_native_verdict_is_required(self):
         expected = (GATE.EXTERNAL_SOCKS_ROOT, *(GATE.EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
-            "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
+            "refusal-receipts", "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
             "home-lan-off/tcp-retained-deny", "home-lan-off/udp-retained-deny",
             "reject/password", "reject/trust", "reject/dns", "reject/exit", "reject/auth-downgrade",
             "reject/relay-domain", "reject/relay-wildcard", "reject/relay-zero", "reject/relay-other-private", "reject/control-eof",

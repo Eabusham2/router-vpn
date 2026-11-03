@@ -82,6 +82,7 @@ type desktopExternalWFPReply struct {
 	Closed                                      bool                             `json:"closed"`
 	TCP, Rejected, AuthFailures                 int32                            `json:",omitempty"`
 	ProbeUDP                                    string                           `json:"probe_udp,omitempty"`
+	SOCKSRefusals []desktopExternalSOCKSRefusalReceipt `json:"socks_refusals,omitempty"`
 	SOCKS                                       []desktopExternalSOCKSWFPReceipt `json:"socks,omitempty"`
 }
 

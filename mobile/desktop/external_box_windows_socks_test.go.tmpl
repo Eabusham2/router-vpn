@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -42,18 +44,20 @@ type desktopExternalSOCKSWFPReceipt struct {
 }
 
 type desktopExternalSOCKSWFPProvider struct {
-	peer       *desktopExternalIntegrationPeer
-	local      netip.Addr
-	listener   net.Listener
-	probe      *desktopExternalWFPDatagrams
-	fault      string
-	mu         sync.Mutex
-	streams    map[net.Conn]bool
-	relays     []*desktopExternalSOCKSWFPRelay
-	workers    sync.WaitGroup
-	closed     bool
-	rejected   atomic.Int32
-	joinFailed atomic.Bool
+	peer           *desktopExternalIntegrationPeer
+	local          netip.Addr
+	listener       net.Listener
+	probe          *desktopExternalWFPDatagrams
+	fault          string
+	refusalRelease chan struct{}
+	refusals       []desktopExternalSOCKSRefusalReceipt
+	mu             sync.Mutex
+	streams        map[net.Conn]bool
+	relays         []*desktopExternalSOCKSWFPRelay
+	workers        sync.WaitGroup
+	closed         bool
+	rejected       atomic.Int32
+	joinFailed     atomic.Bool
 }
 
 type desktopExternalSOCKSWFPRelay struct {
@@ -148,7 +152,26 @@ func (p *desktopExternalSOCKSWFPProvider) receipts() []desktopExternalSOCKSWFPRe
 	return result
 }
 
-func (p *desktopExternalSOCKSWFPProvider) refuse(connection net.Conn, reader *bufio.Reader) error {
+func (p *desktopExternalSOCKSWFPProvider) refusalReceipts() []desktopExternalSOCKSRefusalReceipt {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]desktopExternalSOCKSRefusalReceipt(nil), p.refusals...)
+}
+
+func (p *desktopExternalSOCKSWFPProvider) refuse(connection net.Conn, reader *bufio.Reader) (failure error) {
+	receipt := desktopExternalSOCKSRefusalReceipt{Control: connection.RemoteAddr().String(), Server: connection.LocalAddr().String()}
+	p.mu.Lock()
+	index := len(p.refusals)
+	p.refusals = append(p.refusals, receipt)
+	p.mu.Unlock()
+	publish := func() { p.mu.Lock(); p.refusals[index] = receipt; p.mu.Unlock() }
+	defer func() {
+		if failure != nil {
+			receipt.Failure = failure.Error()
+		}
+		publish()
+	}()
+
 	offer, err := socks5.ReadAuthRequest(reader)
 	if err != nil || len(offer.Methods) != 1 || offer.Methods[0] != socks5.AuthTypeUsernamePassword {
 		return errors.New("native SOCKS negative lost original auth offer")
@@ -166,10 +189,12 @@ func (p *desktopExternalSOCKSWFPProvider) refuse(connection net.Conn, reader *bu
 		if err = socks5.WriteUsernamePasswordAuthResponse(connection, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}); err != nil {
 			return err
 		}
+		receipt.Authenticated = true
 		request, requestErr := socks5.ReadRequest(reader)
 		if requestErr != nil || request.Command != socks5.CommandUDPAssociate {
 			return errors.New("native SOCKS negative never reached UDP ASSOCIATE")
 		}
+		receipt.Associate = true
 		bind := M.Socksaddr{Addr: p.local, Port: 5353}
 		switch p.fault {
 		case "relay-domain":
@@ -186,15 +211,33 @@ func (p *desktopExternalSOCKSWFPProvider) refuse(connection net.Conn, reader *bu
 		default:
 			return errors.New("unknown native SOCKS malicious reply")
 		}
+		receipt.Relay = bind.String()
+		publish()
+		if p.fault == "relay-other-private" {
+			select {
+			case <-p.refusalRelease:
+			case <-p.peer.ctx.Done():
+				return p.peer.ctx.Err()
+			}
+		}
 		err = socks5.WriteResponse(connection, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: bind})
 	}
 	if err != nil {
 		return err
 	}
-	var body [1]byte
-	if n, err := reader.Read(body[:]); n != 0 || !errors.Is(err, io.EOF) {
-		return errors.New("rejected native SOCKS reply retained its actual control")
+	receipt.Replied = true
+	publish()
+	if err := connection.SetReadDeadline(time.Now().Add(4 * time.Second)); err != nil {
+		return err
 	}
+	var body [1]byte
+	n, readErr := reader.Read(body[:])
+	receipt.Bytes = n
+	receipt.Terminal = desktopExternalSOCKSRefusalTerminal(n, readErr, syscall.WSAECONNRESET)
+	if receipt.Terminal != "eof" && receipt.Terminal != "reset" {
+		return fmt.Errorf("rejected native SOCKS reply lacks terminal original control: %v", readErr)
+	}
+	publish()
 	p.rejected.Add(1)
 	return nil
 }
@@ -318,7 +361,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSPeer(t *testing.T) {
 	if request.Fault == "held" {
 		peer.publicEntered, peer.publicRelease = make(chan struct{}), make(chan struct{})
 	}
-	p := &desktopExternalSOCKSWFPProvider{peer: peer, local: netip.MustParseAddr(request.Address), listener: listener, probe: &desktopExternalWFPDatagrams{PacketConn: packet, observed: make(map[string]int)}, fault: request.Fault, streams: make(map[net.Conn]bool)}
+	p := &desktopExternalSOCKSWFPProvider{peer: peer, local: netip.MustParseAddr(request.Address), listener: listener, probe: &desktopExternalWFPDatagrams{PacketConn: packet, observed: make(map[string]int)}, fault: request.Fault, streams: make(map[net.Conn]bool), refusalRelease: make(chan struct{})}
 	defer p.close()
 	p.workers.Add(2)
 	go func() {
@@ -357,7 +400,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSPeer(t *testing.T) {
 		p.probe.mu.Lock()
 		observed := p.probe.observed[nonce]
 		p.probe.mu.Unlock()
-		reply := desktopExternalWFPReply{Schema: 1, Address: listener.Addr().String(), AppID: appID, Nonce: nonce, Observed: observed, Packets: peer.physicalUDP.Load(), DNS: peer.dnsQueries.Load(), UDPDNS: peer.udpQueries.Load(), TLS: peer.tlsHandshakes.Load(), Public: peer.publicRequests.Load(), Attempts: peer.publicAttempts.Load(), Closed: closed, TCP: peer.accepted.Load(), Rejected: p.rejected.Load(), AuthFailures: peer.authFailures.Load(), ProbeUDP: packet.LocalAddr().String(), SOCKS: p.receipts()}
+		reply := desktopExternalWFPReply{Schema: 1, Address: listener.Addr().String(), AppID: appID, Nonce: nonce, Observed: observed, Packets: peer.physicalUDP.Load(), DNS: peer.dnsQueries.Load(), UDPDNS: peer.udpQueries.Load(), TLS: peer.tlsHandshakes.Load(), Public: peer.publicRequests.Load(), Attempts: peer.publicAttempts.Load(), Closed: closed, TCP: peer.accepted.Load(), Rejected: p.rejected.Load(), AuthFailures: peer.authFailures.Load(), ProbeUDP: packet.LocalAddr().String(), SOCKS: p.receipts(), SOCKSRefusals: p.refusalReceipts()}
 		if err := json.NewEncoder(os.Stdout).Encode(reply); err != nil {
 			t.Fatal(err)
 		}
@@ -385,6 +428,17 @@ func TestRouterVPNDesktopExternalWindowsSOCKSPeer(t *testing.T) {
 		case "stats":
 			if command.Nonce != "" {
 				t.Fatal("SOCKS statistics gained an operation")
+			}
+		case "release-refusal":
+			receipts := p.refusalReceipts()
+			if p.fault != "relay-other-private" || command.Nonce != "" || len(receipts) != 1 || !receipts[0].Authenticated || !receipts[0].Associate || receipts[0].Replied {
+				t.Fatal("SOCKS malicious reply lost original pending authenticated control")
+			}
+			select {
+			case <-p.refusalRelease:
+				t.Fatal("duplicate malicious SOCKS reply release")
+			default:
+				close(p.refusalRelease)
 			}
 		case "release":
 			if peer.publicRelease == nil || command.Nonce != "" {
@@ -718,6 +772,7 @@ func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixt
 // Real BFE/token/Wintun identity is exercised. Journal persistence and the TUN
 // packet pump remain explicit fixtures; routes and DNS are never installed.
 func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
+	t.Run("refusal-receipts", desktopExternalSOCKSRefusalChecks)
 	ca := newDesktopExternalIntegrationCA(t)
 	roots := x509.NewCertPool()
 	certificate, err := x509.ParseCertificate(ca.der)
@@ -774,7 +829,47 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 			original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", fault != "relay-other-private")
 			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
 			f.start(t)
-			raw, err := f.proof.Run()
+			var captured desktopExternalSOCKSRefusalReceipt
+			var capturedGrant mobiletor.DesktopSocketGrant
+			var raw string
+			var err error
+			if fault == "relay-other-private" {
+				type result struct {
+					raw string
+					err error
+				}
+				done := make(chan result, 1)
+				go func() { body, failure := f.proof.Run(); done <- result{body, failure} }()
+				deadline := time.Now().Add(4 * time.Second)
+				for {
+					receipts := p.call(t, "stats", "").SOCKSRefusals
+					if len(receipts) > 1 {
+						t.Fatal("malicious SOCKS reply replaced its single original control")
+					}
+					if len(receipts) == 1 && receipts[0].Authenticated && receipts[0].Associate {
+						captured = receipts[0]
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("malicious SOCKS reply never captured authenticated UDP request", receipts)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				actual := desktopExternalSOCKSWFPSnapshot(t, f)
+				if len(actual.Grants) != 1 || actual.Grants[0].Network != "tcp" || actual.Grants[0].Local.String() != captured.Control || actual.Grants[0].Remote.String() != captured.Server || captured.Server != p.remote.String() || captured.Replied || captured.Terminal != "" || captured.Failure != "" {
+					t.Fatal("malicious SOCKS reply has no independently captured original native TCP grant", captured)
+				}
+				capturedGrant = actual.Grants[0]
+				p.call(t, "release-refusal", "")
+				select {
+				case result := <-done:
+					raw, err = result.raw, result.err
+				case <-time.After(4 * time.Second):
+					t.Fatal("malicious SOCKS reply did not join its failed original proof")
+				}
+			} else {
+				raw, err = f.proof.Run()
+			}
 			if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() {
 				t.Fatal("invalid actual SOCKS path acquired proof", fault)
 			}
@@ -788,6 +883,27 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 			}
 			if r.TCP == 0 {
 				t.Fatal("SOCKS negative never reached its actual control")
+			}
+			if fault == "relay-other-private" {
+				if len(r.SOCKSRefusals) != 1 || !desktopExternalSOCKSRefusalValid(r.SOCKSRefusals[0], captured.Control, captured.Server, captured.Relay) {
+					t.Fatal("malicious SOCKS reply lacks exact authenticated terminal control evidence", r.SOCKSRefusals)
+				}
+				deadline := time.Now().Add(4 * time.Second)
+				for {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					actual, readErr := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+					cancel()
+					if readErr != nil || actual.Target != f.prepared || actual.Capture != capturedGrant.Capture || actual.Owner != capturedGrant.Binding.Owner {
+						t.Fatal("refused private SOCKS relay changed its original native owner", readErr)
+					}
+					if len(actual.Grants) == 0 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("refused private SOCKS relay retained a native socket grant")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
 			}
 			switch fault {
 			case "password":
