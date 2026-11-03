@@ -6,7 +6,52 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 32b36a63
+## Latest implementation continuation — through 9f779cf0
+
+The verified source cutoff is
+[9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records thirty-eight
+published implementation/verification units. These findings supersede older
+pending descriptions only for the identified source and native cases.
+
+- Retained macOS direct Local SS/HTTP/HTTPS/Hysteria2 now has its shipping
+  controller, PF baseline, child, Stop, MTU and cleanup integration (`049e77ba`),
+  for Start Layer Off and On-connect/Always. Focused race/PF/negative tests and
+  eight Darwin component builds passed, with the exact test-only AMD64 command
+  build qualification in the evidence record. Complete sealed-bundle native
+  PF/utun host acceptance remains required. The actual inherited-child case at
+  `be682651` still fails an unidentified ownership pin; `7c712e3d` adds precise
+  diagnostics without weakening admission. It is not a completed native repair.
+- Windows Hysteria2 AES/AES+XOR Start Layers now retain their original outer
+  transport and complete sealed inner graph in policy derivation (`11fb617a`).
+  Public retained host and actual encrypted peer integration are still active
+  work; lower-policy tests alone do not establish working connection support.
+- The SOCKS private-relay refusal gate now requires independent authenticated
+  reply, typed terminal TCP evidence and original grant retirement (`5910543a`).
+  The DNS fixture separately proves original cached-connection invalidation and
+  the immediately following new authenticated association (`9f779cf0`). Linux
+  execution, compiled defect rejection and both Windows builds passed; native
+  execution of these latest fixtures remains required.
+- Newer native `ce53fca5` Windows WFP jobs pass positive SOCKS cases on both
+  architectures, including Home LAN Off. They fail only the older private-relay
+  receipt and stop before later packet/OpenVPN cases. The earlier ARM initial
+  DNS failure did not recur. No later family acceptance is inferred.
+- Linux actual generated TUN acceptance passes again on both architectures at
+  `66c53d3a`. Darwin's later Intel capacity run records a control-probe timeout;
+  `77288e3e` joins PF and account-identity readback under the original shared
+  deadline. Its native effect remains unproved.
+- Windows child, complete MAX and Tor cleanup gates preserve every required case
+  in mandatory bounded groups (`944cad68`, `843dd250`, `66c53d3a`). Individual
+  production deadlines are unchanged. Partial run receipts cannot claim full
+  inventory or release completion.
+
+The latest verified published release remains the twelve-asset `745b3e41`
+prerelease. Current complete packages, images, compose and publication have not
+converged. Broader retained graphs and original Methods/recovery, signing,
+physical/off-LAN/visual/accessibility and authorized private-deployment
+requirements remain open. No live router, AdGuard or forwarding changes occurred.
+
+## Earlier implementation continuation — through 32b36a63
 
 The verified source cutoff is
 [32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493).

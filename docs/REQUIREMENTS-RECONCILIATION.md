@@ -18,7 +18,22 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 32b36a63
+## Implementation reconciliation through 9f779cf0
+
+The verified source cutoff is [9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records thirty-eight
+published implementation/verification units. The full original requirements
+and their distinct source/native/device/deployment acceptance remain binding.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and native external execution | The retained macOS direct Local SS/HTTP/HTTPS/Hysteria2 host is published for Start Layer Off and On-connect/Always. Actual inherited-child and sealed-bundle PF/utun acceptance remain open. Windows Hysteria2 AES/AES+XOR sealed policy is published; its host/runtime integration remains source work. Broader families, layers, predecessors and Server/Compare remain required. |
+| Selected DNS, Home LAN and captured ownership | Linux retained SOCKS inventory is implemented. Both newer Windows WFP architectures pass the positive SOCKS cases including Home LAN Off. The separate refusal and cached-DNS retirement fixtures now preserve independent terminal/grant evidence and require the next new authenticated association; their latest native rerun is still required. Production DNS retry behavior is unchanged. |
+| #141–148, #222–223, #335 and measurements/restoration | Actual generated Linux TUN acceptance passes both architectures again at 66c53d3a after the automatic IPv6 LOCAL repair. Windows packet/OpenVPN WFP acceptance is not inferred from preceding SOCKS successes. Exact fifty-sample measurement, MTU rollback, original Compare formula and captured winner restoration remain unchanged. |
+| Native lifecycle, protection and delivery | The macOS child ownership failure remains diagnosed only to a generic pin; precise diagnostics are published. PF/account readback now shares its original deadline. Windows test partitions preserve full inventories and individual bounds. Their native outcomes, current release publication, signing and device/private-target acceptance remain separate obligations. |
+| Original 356, C1–C7 and later full scope | No uncancelled scope or default is removed. The latest release remains 745b3e41. Original map-first product, all-device graphs, Methods/recovery, physical/off-LAN/visual/accessibility, provider and authorized ASUS/Portainer requirements are not closed by these milestones. |
+
+## Earlier implementation reconciliation through 32b36a63
 
 The verified source cutoff is [32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493).
 [The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) now records
