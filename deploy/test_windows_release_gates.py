@@ -127,18 +127,24 @@ def check_workspace_gate(job: str) -> None:
 
 
 def check_node_process_aggregate(job: str) -> None:
-    # Actual run 41252022504 exhausted the previous step cap after passing the
-    # baseline and 41 controls. Keep the expanded sequential gate bounded while
-    # the process driver separately enforces every unchanged per-case deadline.
+    # Actual run 41553228508 passed all eight baseline groups and 46 controls
+    # before its combined ALL work reached the 30-minute cap. Require all four
+    # bounded suites; the driver retains every original per-case deadline.
     header = job.split("    steps:", 1)[0]
-    if re.findall(r"(?m)^    timeout-minutes: (\d+)$", header) != ["35"]:
+    if re.findall(r"(?m)^    timeout-minutes: (\d+)$", header) != ["25"]:
         raise AssertionError("Windows Node job lost its measured bounded aggregate")
-    marker = "      - name: Execute actual Node child ownership and every compiled negative control\n"
+    expected = "baseline, ownership-controls-1, ownership-controls-2, prospective-all"
+    if (re.findall(r"(?m)^        suite: \[([^\]]+)\]$", header) != [expected] or
+            "      fail-fast: false\n" not in header or
+            re.search(r"(?m)^        (?:include|exclude):", header) or
+            "windows-node-process-${{ github.ref }}-${{ matrix.suite }}" not in header):
+        raise AssertionError("Windows Node aggregate lost a mandatory independent suite")
+    marker = "      - name: Execute required native Node suite\n"
     if job.count(marker) != 1:
         raise AssertionError("Windows Node execution gate is missing or duplicated")
     gate = job.split(marker, 1)[1].split("      - ", 1)[0]
-    if (re.findall(r"(?m)^        timeout-minutes: (\d+)$", gate) != ["30"] or
-            re.findall(r"(?m)^          python deploy/test_windows_node_process\.py(.*)$", gate) != [""] or
+    if (re.findall(r"(?m)^        timeout-minutes: (\d+)$", gate) != ["20"] or
+            re.findall(r"(?m)^          python deploy/test_windows_node_process\.py(.*)$", gate) != [" --suite '${{ matrix.suite }}'"] or
             "shell: pwsh" not in gate or
             "if ($LASTEXITCODE -ne 0) { throw 'Actual retained Windows Node process gate failed' }" not in gate):
         raise AssertionError("Windows Node aggregate omitted complete blocking execution or its measured bound")
@@ -357,17 +363,21 @@ class WindowsReleaseGateTests(unittest.TestCase):
         job = workflow_job(workflow, "node-process")
         check_node_process_aggregate(job)
         for before, after in (
-            ("    timeout-minutes: 35\n", "    timeout-minutes: 25\n"),
-            ("    timeout-minutes: 35\n", "    timeout-minutes: 360\n"),
-            ("    timeout-minutes: 35\n", ""),
-            ("        timeout-minutes: 30\n", "        timeout-minutes: 20\n"),
-            ("        timeout-minutes: 30\n", "        timeout-minutes: 360\n"),
-            ("        timeout-minutes: 30\n", ""),
-            ("    timeout-minutes: 35\n", "    if: false\n    timeout-minutes: 35\n"),
-            ("    timeout-minutes: 35\n", "    continue-on-error: true\n    timeout-minutes: 35\n"),
-            ("        timeout-minutes: 30\n", "        if: false\n        timeout-minutes: 30\n"),
-            ("        timeout-minutes: 30\n", "        continue-on-error: true\n        timeout-minutes: 30\n"),
-            ("          python deploy/test_windows_node_process.py\n", "          python deploy/test_windows_node_process.py --omit-controls\n"),
+            ("    timeout-minutes: 25\n", "    timeout-minutes: 15\n"),
+            ("    timeout-minutes: 25\n", "    timeout-minutes: 360\n"),
+            ("    timeout-minutes: 25\n", ""),
+            ("        timeout-minutes: 20\n", "        timeout-minutes: 10\n"),
+            ("        timeout-minutes: 20\n", "        timeout-minutes: 360\n"),
+            ("        timeout-minutes: 20\n", ""),
+            ("    timeout-minutes: 25\n", "    if: false\n    timeout-minutes: 25\n"),
+            ("    timeout-minutes: 25\n", "    continue-on-error: true\n    timeout-minutes: 25\n"),
+            ("        timeout-minutes: 20\n", "        if: false\n        timeout-minutes: 20\n"),
+            ("        timeout-minutes: 20\n", "        continue-on-error: true\n        timeout-minutes: 20\n"),
+            (" --suite '${{ matrix.suite }}'", " --suite baseline"),
+            ("baseline, ownership-controls-1, ownership-controls-2, prospective-all", "baseline, ownership-controls-1, ownership-controls-2"),
+            ("baseline, ownership-controls-1, ownership-controls-2, prospective-all", "baseline, ownership-controls-1, ownership-controls-1, prospective-all"),
+            ("      fail-fast: false", "      fail-fast: true"),
+            ("${{ github.ref }}-${{ matrix.suite }}", "${{ github.ref }}"),
             ("throw 'Actual retained Windows Node process gate failed'", "Write-Host 'ignored failed native gate'"),
         ):
             self.assertEqual(job.count(before), 1, "native aggregate mutation anchor changed")
