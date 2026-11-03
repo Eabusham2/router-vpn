@@ -127,7 +127,7 @@ func macOSRuntimeFixtureCases(ctx context.Context, parent *desktopMacOSSessionCa
 		}
 		return macosprocess.EnginePath, ctx.Err()
 	}
-	for _, scenario := range []string{"joined-cleanup", "input-replaced", "catalog-replaced", "runtime-replaced", "foreign-exec", "cleanup-failure", "canceled"} {
+	for _, scenario := range []string{"joined-cleanup", "workspace-growth", "workspace-replaced", "input-hard-linked", "input-replaced", "catalog-replaced", "runtime-replaced", "foreign-exec", "cleanup-failure", "canceled"} {
 		if err := func() error {
 			directory, err := newPrivateRuntimeDir(macOSOwnedControllerRoot, "native-node")
 			if err != nil {
@@ -180,6 +180,44 @@ func macOSRuntimeFixtureCases(ctx context.Context, parent *desktopMacOSSessionCa
 			}
 			if err := process.Current(ctx); err != nil {
 				return err
+			}
+			if scenario == "workspace-growth" {
+				// APFS reports ordinary child entries in the directory's link
+				// count. A private result file must preserve the original pin.
+				if err := os.WriteFile(filepath.Join(directory, "fixture-owned-growth"), []byte("owned result\n"), 0600); err != nil {
+					return err
+				}
+				if err := process.Current(ctx); err != nil {
+					return errors.Join(err, errors.New("owned workspace growth retired its original inode"))
+				}
+			}
+			if scenario == "workspace-replaced" || scenario == "input-hard-linked" {
+				if scenario == "workspace-replaced" {
+					if err := os.Rename(directory, directory+".original-fixture"); err != nil {
+						return err
+					}
+					defer os.Rename(directory+".original-fixture", directory)
+					if err := os.Mkdir(directory, 0700); err != nil {
+						return err
+					}
+					defer os.RemoveAll(directory)
+				} else {
+					linked := filepath.Join(directory, "fixture-linked-input")
+					if err := os.Link(filepath.Join(directory, "source.json"), linked); err != nil {
+						return err
+					}
+					defer os.Remove(linked)
+				}
+				if process.Current(ctx) == nil {
+					return errors.New("native child accepted replaced directory or hard-linked regular input")
+				}
+				if err := parent.session.Release(ctx, process); err != nil {
+					return err
+				}
+				if process.NativeCleanup(ctx) == nil {
+					return errors.New("invalid directory/input ownership produced native cleanup authority")
+				}
+				return nil
 			}
 			var path string
 			switch scenario {

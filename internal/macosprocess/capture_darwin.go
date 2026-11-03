@@ -305,7 +305,7 @@ func checkPin(p pinnedFile, directory bool) error {
 		return fmt.Errorf("native captured object ownership changed: stat-type before=%t after=%t", ok, ok2)
 	}
 	if !samePinMetadata(pinMetadata{p.info.Mode(), before.Uid, before.Gid, uint64(before.Nlink)},
-		pinMetadata{actual.Mode(), after.Uid, after.Gid, uint64(after.Nlink)}, p.guiSocket) || p.guiSocket && (directory || p.path != "" || p.immutable) {
+		pinMetadata{actual.Mode(), after.Uid, after.Gid, uint64(after.Nlink)}, p.guiSocket, directory) || p.guiSocket && (directory || p.path != "" || p.immutable) {
 		// Numeric native metadata only: never include private paths, input
 		// documents or process credentials in the bounded failure diagnostic.
 		return fmt.Errorf("native captured object ownership changed: gui=%t directory=%t named=%t immutable=%t before=(mode=%#o uid=%d gid=%d links=%d) after=(mode=%#o uid=%d gid=%d links=%d)",
