@@ -191,6 +191,21 @@ func macOSControllerFixtureChild() error {
 	if owned == nil || owned.accessToken == "" || owned.ownerToken == "" {
 		return errors.New("native fixture lost actual inherited launch credentials")
 	}
+	parent, ok := owned.nodeParent.(*desktopMacOSParent)
+	if !ok || parent == nil {
+		return errors.New("actual Darwin bootstrap omitted its original native parent")
+	}
+	session, err := parent.Session(context.Background())
+	if err != nil {
+		return err
+	}
+	same, err := parent.Session(context.Background())
+	if err != nil || same != session || session.Current(context.Background()) != nil {
+		return errors.New("actual Darwin bootstrap did not retain one original native session")
+	}
+	if err := session.Retain(context.Background(), &macOSControllerFixtureDependent{parent: parent}); err != nil {
+		return err
+	}
 	for _, value := range append(os.Args, os.Environ()...) {
 		if strings.Contains(value, owned.accessToken) || strings.Contains(value, owned.ownerToken) {
 			return errors.New("native credentials leaked into process discovery")
@@ -200,6 +215,10 @@ func macOSControllerFixtureChild() error {
 		return errors.New("native bootstrap inherited a caller-selected root or tool path")
 	}
 	a := &app{state: state{Mode: "off", Phase: "off"}, localController: owned}
+	captured, err := captureDesktopMacOSSession(context.Background(), a)
+	if err != nil || captured.session != session || captured.parent != parent {
+		return errors.New("actual Darwin application lost the bootstrap's original session")
+	}
 	operation, release, err := a.beginConnectionOperation()
 	if err != nil {
 		return err
@@ -216,6 +235,12 @@ func macOSControllerFixtureChild() error {
 	done := make(chan error, 1)
 	go func() {
 		done <- serveClientHTTP(closing, listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/native-parent-current" {
+				if parent.Current(r.Context()) != nil {
+					w.WriteHeader(http.StatusConflict)
+				}
+				return
+			}
 			if r.URL.Path == "/api/multihop/status" {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]any{"comparison": map[string]any{"id": "native-controller-auth", "request_id": strings.Repeat("a", 32), "last_node_measurement": "tor-last-relay-http", "external_measurement": "same-captured-endpoint-http", "complete": false}})
@@ -225,6 +250,13 @@ func macOSControllerFixtureChild() error {
 		}), make(chan os.Signal))
 	}()
 	<-operation.Done()
+	select {
+	case <-owned.ownerDone:
+		if session.Current(context.Background()) == nil {
+			return errors.New("actual Darwin session admitted work after its desktop lifetime ended")
+		}
+	default: // An authenticated shutdown request may precede desktop EOF.
+	}
 	if err = os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-canceled"), []byte("captured cancellation\n"), 0600); err != nil {
 		return err
 	}
@@ -240,6 +272,28 @@ func macOSControllerFixtureChild() error {
 	}
 	finish()
 	return <-done
+}
+
+// Runs inside the actual installed child after native peer cancellation and
+// before ownedDesktopController.close releases the original borrowed locks.
+type macOSControllerFixtureDependent struct{ parent *desktopMacOSParent }
+
+func (d *macOSControllerFixtureDependent) Close(ctx context.Context) error {
+	if d.parent.Current(ctx) == nil {
+		return errors.New("retiring Darwin parent still admits native work")
+	}
+	for _, file := range []*os.File{d.parent.input, d.parent.installLock, d.parent.processLock} {
+		if _, err := file.Stat(); err != nil {
+			return errors.New("actual Darwin parent released original descriptors before dependent join")
+		}
+	}
+	for _, path := range []string{macOSOwnedInstallLock, macOSOwnedProcessLock} {
+		if competing, err := ownedDesktopLock(path, true); err == nil {
+			competing.Close()
+			return errors.New("actual Darwin parent released an inherited lock before dependent join")
+		}
+	}
+	return os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-parent-joined"), []byte("original native parent and dependent joined\n"), 0600)
 }
 
 type macOSControllerNativePeer struct {
@@ -606,7 +660,15 @@ func macOSControllerNativeHTTP(t *testing.T) *http.Client {
 }
 
 func TestMacOSOwnedControllerNativeLifetimeAndInheritedLocks(t *testing.T) {
-	for _, ending := range []string{"eof", "second-byte", "supervisor-stop"} {
+	macOSOwnedNativeLifetimeCases(t, []string{"eof", "second-byte", "supervisor-stop"})
+}
+
+func TestMacOSOwnedControllerNativeParentImageReplacement(t *testing.T) {
+	macOSOwnedNativeLifetimeCases(t, []string{"parent-image-replacement"})
+}
+
+func macOSOwnedNativeLifetimeCases(t *testing.T, endings []string) {
+	for _, ending := range endings {
 		t.Run(ending, func(t *testing.T) {
 			fixture := macOSControllerNativeInstall(t)
 			fixture.start()
@@ -643,7 +705,30 @@ func TestMacOSOwnedControllerNativeLifetimeAndInheritedLocks(t *testing.T) {
 					t.Fatal("exact child did not inherit lock before admission", path)
 				}
 			}
-			if ending == "eof" {
+			if ending == "parent-image-replacement" {
+				if err := os.Chmod(macOSOwnedExecutable(), 0700); err != nil {
+					t.Fatal(err)
+				}
+				defer os.Chmod(macOSOwnedExecutable(), 0755)
+				for _, restored := range []bool{false, true} {
+					if restored {
+						if err := os.Chmod(macOSOwnedExecutable(), 0755); err != nil {
+							t.Fatal(err)
+						}
+					}
+					request, _ := http.NewRequest("GET", "http://"+linuxOwnedControllerAddress+"/api/native-parent-current", nil)
+					request.Header.Set("Authorization", "Bearer "+testLocalControllerAccess)
+					response, err := client.Do(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response.Body.Close()
+					if response.StatusCode != http.StatusConflict {
+						t.Fatal("native parent accepted changed/restored executable", restored, response.StatusCode)
+					}
+				}
+			}
+			if ending == "eof" || ending == "parent-image-replacement" {
 				err = connection.CloseWrite()
 			} else if ending == "second-byte" {
 				_, err = connection.Write([]byte{'x'})
@@ -675,6 +760,9 @@ func TestMacOSOwnedControllerNativeLifetimeAndInheritedLocks(t *testing.T) {
 			fixture.requireLivePeers()
 			if joined.ExitCode != 0 {
 				t.Fatal("captured controller did not join successfully", joined.ExitCode)
+			}
+			if body, err := os.ReadFile(filepath.Join(macOSOwnedControllerRoot, "fixture-parent-joined")); err != nil || string(body) != "original native parent and dependent joined\n" {
+				t.Fatal("actual supervisor acknowledged exit without original native parent/dependent join", err)
 			}
 			for _, path := range []string{macOSOwnedInstallLock, macOSOwnedProcessLock} {
 				held, err := ownedDesktopLock(path, true)

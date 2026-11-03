@@ -42,7 +42,11 @@ func validateNativeOwnedStartup(owned *ownedDesktopController) error {
 			owned.input == nil || owned.installLock == nil || owned.processLock == nil || owned.ownerDone == nil {
 			return errors.New("the installed controller lost its captured privileged launch")
 		}
-		return nil
+		parent, ok := owned.nodeParent.(*desktopMacOSParent)
+		if !ok || parent == nil || parent.controller != owned {
+			return errors.New("the macOS controller lost its original native parent")
+		}
+		return parent.Current(context.Background())
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -341,6 +345,14 @@ func prepareNativeOwnedController(arguments []string) (_ *ownedDesktopController
 	done := make(chan struct{})
 	owned.ownerDone = done
 	go func() { var byte [1]byte; _, _ = owned.input.Read(byte[:]); close(done) }()
+	parent, err := newDesktopMacOSNativeParent(owned)
+	owned.nodeParent = parent // Retain even a partial native capture until joined cleanup.
+	if err != nil {
+		return nil, err
+	}
+	if err := parent.Current(context.Background()); err != nil {
+		return nil, err
+	}
 	return owned, nil
 }
 

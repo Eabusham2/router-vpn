@@ -50,6 +50,36 @@ class DarwinNativeDiagnostics(unittest.TestCase):
                 self.assertEqual(shown.getvalue(), '')
 
 
+class MacOSNativeVerdicts(unittest.TestCase):
+    def setUp(self):
+        self.gate = GATES[1]
+        names = ['TestMacOSOwnedControllerNative'+name for name in self.gate.CASES]
+        names += ['TestDesktopMacOS'+name for name in self.gate.PARENT_CASES]
+        self.lines = ['--- PASS: '+name+' (0.01s)' for name in names]
+        self.output = '\n'.join(self.lines+['PASS', ''])
+
+    def test_exact_complete_native_and_parent_cases_pass_once(self):
+        self.gate.require_native_verdicts(self.output)
+
+    def test_missing_duplicate_prefixed_subcase_and_incomplete_verdicts_fail(self):
+        first = self.lines[0]
+        for changed in ('', first+'\n'+first, 'diagnostic '+first,
+                        first+' diagnostic', first.replace(' (', '/subcase ('),
+                        first.replace('0.01s', 'unknown')):
+            with self.subTest(verdict=changed), self.assertRaises(RuntimeError):
+                self.gate.require_native_verdicts(self.output.replace(first, changed, 1))
+        for ending in ('', 'PASS\nPASS\n', 'PASS\nextra\n'):
+            with self.subTest(ending=ending), self.assertRaises(RuntimeError):
+                self.gate.require_native_verdicts('\n'.join(self.lines)+'\n'+ending)
+
+    def test_fail_skip_race_panic_fatal_or_build_failure_never_becomes_pass(self):
+        for failure in ('--- FAIL: SomeOtherCase (0.01s)', '    --- SKIP: SomeCase/child (0.00s)',
+                        'FAIL', 'SKIP', 'WARNING: DATA RACE', 'panic: broken',
+                        'fatal error: concurrent map writes', 'FAIL package [build failed]'):
+            with self.subTest(failure=failure), self.assertRaises(RuntimeError):
+                self.gate.require_native_verdicts(failure+'\n'+self.output)
+
+
 class DarwinMutationOverlays(unittest.TestCase):
     def setUp(self):
         self.gate = GATES[0]

@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import pwd
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,8 +30,28 @@ SPEC.loader.exec_module(UID)
 PROBE_SPEC = importlib.util.spec_from_file_location('macos_controller_image_probe', ROOT/'deploy/macos_process_inventory_probe.py')
 PROBE = importlib.util.module_from_spec(PROBE_SPEC)
 PROBE_SPEC.loader.exec_module(PROBE)
-CASES = ('InterpreterSelection', 'InstallerCapabilities', 'InstallerExclusionAndRetry', 'LifetimeAndInheritedLocks', 'RejectsForeignUIDAndInvalidFrames',
+CASES = ('InterpreterSelection', 'InstallerCapabilities', 'InstallerExclusionAndRetry', 'LifetimeAndInheritedLocks', 'ParentImageReplacement', 'RejectsForeignUIDAndInvalidFrames',
          'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient', 'PFBaselineUtility')
+PARENT_CASES = ('ParentOriginalSessionAndJoin', 'ParentFailedDependentRetainsOriginalLocks',
+                'ParentRejectsReplacedControllerAndSession', 'ParentLifetimeCancellationAndBoundedJoin',
+                'ParentConcurrentCloseJoinsEnteredDependent', 'SessionCloseDoesNotCloseBorrowedController',
+                'SessionCapturesOriginalApplication', 'ParentCancelledReadDoesNotRetireSharedSession')
+
+
+def require_native_verdicts(output):
+    """Only complete, unique top-level Go verdicts prove the required cases."""
+    if not isinstance(output, str) or re.search(
+            r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|'
+            r'WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
+        raise RuntimeError('Native macOS output contains failure, skip, race or incomplete build evidence')
+    names = ['TestMacOSOwnedControllerNative'+name for name in CASES]
+    names += ['TestDesktopMacOS'+name for name in PARENT_CASES]
+    for name in names:
+        pattern = r'^--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$'
+        if len(re.findall(pattern, output, flags=re.MULTILINE)) != 1:
+            raise RuntimeError('Mandatory exact-once native macOS verdict was missing or repeated: '+name)
+    if output.splitlines().count('PASS') != 1 or not output.rstrip().endswith('\nPASS'):
+        raise RuntimeError('Native macOS execution did not finish with one complete PASS verdict')
 
 
 def reported_run(command, **kwargs):
@@ -247,13 +268,11 @@ def main():
                    'ROUTERVPN_MACOS_FIXTURE_PYTHON=' + str(Path(python).absolute()),
                    'ROUTERVPN_MACOS_FIXTURE_INSTALLCAP=' + str(capability),
                    'ROUTERVPN_MACOS_FIXTURE_APPKIT=' + str(appkit), 'GORACE=atexit_sleep_ms=0',
-                   str(binary), '-test.run=^TestMacOSOwnedControllerNative', '-test.v', '-test.timeout=180s']
+                   str(binary), '-test.run=^Test(MacOSOwnedControllerNative|DesktopMacOS(Parent|Session))', '-test.v', '-test.timeout=180s']
         if sudo: command = [sudo, '-n', '--', *command]
         output = reported_run(command, cwd=ROOT, env=environment, timeout=200, sudo=sudo)
         print(output, end='')
-        for name in CASES:
-            if '--- PASS: TestMacOSOwnedControllerNative' + name not in output:
-                raise RuntimeError('Mandatory actual macOS ownership case was missing: ' + name)
+        require_native_verdicts(output)
         if source_identity() != before: raise RuntimeError('Native ownership source changed during execution')
     print('Exact native macOS supervisor, actual peer credentials, inherited locks, owned cleanup, crash boundaries and AppKit authenticated transports passed.')
 
