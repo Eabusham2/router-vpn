@@ -12,8 +12,11 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import platform
 import shutil
 import subprocess
+import struct
+import stat
 import sys
 import tempfile
 import types
@@ -440,6 +443,110 @@ class ManagedProcessInventory(unittest.TestCase):
             with self.assertRaises(ValueError): self.read(probe, captured)
 
 
+
+NATIVE_GENERATION_PROGRAM = r"""
+#include <errno.h>
+#include <stdlib.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc != 2) return 64;
+    char *end = NULL;
+    errno = 0;
+    unsigned long value = strtoul(argv[1], &end, 10);
+    if (errno || end == argv[1] || *end || value == 0 || value > 120) return 64;
+    unsigned int remaining = (unsigned int)value;
+    while (remaining) remaining = sleep(remaining);
+    return 0;
+}
+"""
+
+
+def native_generation_seed(base, architecture):
+    """Build an ordinary local executable before assigning fixture identities.
+
+    Apple system /bin/sleep may be arm64e. Re-signing it ad hoc removes its
+    platform identity. XNU rejects a non-platform arm64e preview-ABI image
+    without the preview boot argument, even if codesign --verify succeeds:
+    https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_exec.c
+    This fixture uses the supported ordinary architecture and changes no host
+    boot policy. Original Apple-signed foreign/copy tests remain independent.
+    """
+    architectures = {'arm64': (0x0100000c, 0), 'x86_64': (0x01000007, 3)}
+    if architecture not in architectures:
+        raise RuntimeError('Native generation fixture has no supported ordinary architecture')
+    path = base/'native-generation-seed'
+    if path.exists() or path.is_symlink():
+        raise RuntimeError('Native generation seed already has an owner')
+    command = ['/usr/bin/xcrun', '--sdk', 'macosx', 'clang', '-arch', architecture,
+               '-O2', '-Wall', '-Wextra', '-Werror', '-x', 'c', '-', '-o', str(path)]
+    result = subprocess.run(command, input=NATIVE_GENERATION_PROGRAM, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    if result.returncode:
+        raise RuntimeError('Native generation fixture compilation failed: '+
+                           (result.stdout + result.stderr)[-8000:])
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(descriptor)
+        header = os.pread(descriptor, 32, 0)
+        if (not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111
+                or not os.path.samestat(info, path.lstat()) or len(header) != 32):
+            raise RuntimeError('Native generation seed lacks its original executable file')
+        magic, cpu, subtype, kind, _, _, _, _ = struct.unpack('<IIIIIIII', header)
+        if magic != 0xfeedfacf or (cpu, subtype & 0x00ffffff) != architectures[architecture] or kind != 2:
+            raise RuntimeError('Native generation seed is not the requested ordinary Mach-O executable')
+    finally:
+        os.close(descriptor)
+    return path
+
+
+class NativeGenerationBuild(unittest.TestCase):
+    def compile_fixture(self, architecture, *, actual=None, status=0):
+        temporary = tempfile.TemporaryDirectory(prefix='native-generation-build-')
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        commands = []
+        def compiler(command, **options):
+            commands.append((command, options))
+            if status == 0:
+                cpu, subtype = actual or {'arm64': (0x0100000c, 0), 'x86_64': (0x01000007, 3)}[architecture]
+                path = Path(command[-1])
+                path.write_bytes(struct.pack('<IIIIIIII', 0xfeedfacf, cpu, subtype, 2, 0, 0, 0, 0))
+                path.chmod(0o700)
+            return subprocess.CompletedProcess(command, status, '', 'compiler diagnostic')
+        with mock.patch.object(subprocess, 'run', side_effect=compiler):
+            result = native_generation_seed(base, architecture)
+        return result, commands
+
+    def test_fixed_compiler_selects_ordinary_host_architecture(self):
+        for architecture in ('arm64', 'x86_64'):
+            with self.subTest(architecture=architecture):
+                path, commands = self.compile_fixture(architecture)
+                self.assertTrue(path.is_file())
+                self.assertEqual(len(commands), 1)
+                command, options = commands[0]
+                self.assertEqual(command[:6], ['/usr/bin/xcrun', '--sdk', 'macosx', 'clang', '-arch', architecture])
+                self.assertEqual(options['input'], NATIVE_GENERATION_PROGRAM)
+                self.assertEqual(options['timeout'], 30)
+                self.assertNotIn('shell', options)
+
+    def test_compiler_cannot_substitute_arm64e_or_another_architecture(self):
+        for actual in ((0x0100000c, 2), (0x0100000c, 0x80000002), (0x01000007, 3)):
+            with self.subTest(actual=actual), self.assertRaisesRegex(RuntimeError, 'requested ordinary Mach-O'):
+                self.compile_fixture('arm64', actual=actual)
+        with self.assertRaisesRegex(RuntimeError, 'requested ordinary Mach-O'):
+            self.compile_fixture('x86_64', actual=(0x0100000c, 0))
+
+    def test_failed_compilation_is_not_retried_or_adopted(self):
+        with self.assertRaisesRegex(RuntimeError, 'compilation failed: compiler diagnostic'):
+            self.compile_fixture('arm64', status=1)
+
+    def test_unknown_architecture_never_invokes_the_compiler(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(subprocess, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'supported ordinary architecture'):
+                native_generation_seed(Path(temporary), 'arm64e')
+            run.assert_not_called()
+
+
 @unittest.skipUnless(sys.platform == 'darwin', 'actual Darwin kernel required')
 class NativeGenerationReceipt(F.NativeMainImage):
     def codesign(self, *arguments, expected=True):
@@ -452,11 +559,12 @@ class NativeGenerationReceipt(F.NativeMainImage):
         return result
 
     def complete_native_installation(self):
+        seed = native_generation_seed(self.base, platform.machine())
         installed = self.base/'installed'; installed.mkdir(mode=0o755)
         for tree in I.CODE_TREES: (installed/tree).mkdir(mode=0o755)
         for name in M.REQUIRED_IMAGES:
             path = installed/name; path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile('/bin/sleep', path); path.chmod(0o755)
+            shutil.copyfile(seed, path); path.chmod(0o755)
             # Distinguish this owned test generation from unrelated /bin/sleep
             # processes when the whole host's linked images are also compared.
             self.codesign('--force', '--sign', '-', '--timestamp=none', '--identifier',
@@ -680,7 +788,7 @@ def main():
         if before != {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}:
             raise RuntimeError('Full-host managed-inventory source changed during verification')
         return
-    suites = [GenerationReceipt, LegacyInstallationImages, ManagedProcessInventory]
+    suites = [GenerationReceipt, LegacyInstallationImages, ManagedProcessInventory, NativeGenerationBuild]
     if sys.platform == 'darwin': suites.append(NativeGenerationReceipt)
     for case in suites:
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(case))
