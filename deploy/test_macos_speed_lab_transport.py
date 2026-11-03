@@ -36,8 +36,22 @@ def run_case(directory, mutation):
             self.send_response(500);self.send_header('Content-Length','0');self.end_headers()
         def do_POST(self):
             try:
-                assert self.path=='/api/speed-lab/run'
                 body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if self.path=='/api/profile/fastest':
+                    assert body=={'samples':50,'select':True},'wrong Fastest request'
+                    hits.append('fastest')
+                    if hits.count('fastest')==1:
+                        self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Connection','close');self.end_headers()
+                        self.wfile.write(b'{');self.wfile.flush();(fixture/'fastest-started').write_text('ready')
+                        deadline=time.monotonic()+5
+                        while time.monotonic()<deadline:
+                            ready,_,_=select.select([self.connection],[],[],.05)
+                            if ready and self.connection.recv(1,socket.MSG_PEEK)==b'':
+                                (fixture/'fastest-cancelled').write_text('closed');return
+                        errors.append('Fastest request was not cancelled');return
+                    raw=json.dumps({'selected':True,'selected_id':'winner','winner':{'id':'winner','name':'Measured node','samples':50,'failed':0,'trimmed_mean_ms':12.5}}).encode()
+                    self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw);return
+                assert self.path=='/api/speed-lab/run'
                 case=body['test_case'];hits.append(case)
                 if case=='close':
                     self.send_response(200);self.send_header('Connection','close');self.end_headers()
@@ -90,6 +104,9 @@ def run_case(directory, mutation):
     source=(ROOT/'client/macos/RouterVPNMacSpeedLab.swift').read_text()
     methods='\n'.join(block(source, marker) for marker in ('    private func stopSpeedLabComparisonProgress(', '    private func startSpeedLabComparisonProgress(', '    private func performLocalRequest(', '    func windowWillClose('))
     methods=methods.replace('private func ','func ')
+    fastest_source=block((ROOT/'client/macos/RouterVPNMacTelemetry.swift').read_text(),'private final class RouterVPNMacFastestController')
+    fastest_methods='\n'.join(block(fastest_source,marker) for marker in ('    func start(', '    @objc private func cancelOrClose(', '    func windowShouldClose(', '    func windowWillClose(', '    private func finish('))
+    fastest_methods=fastest_methods.replace('@objc private func ','func ').replace('private func ','func ')
     if mutation=='missing-cancel':methods=methods.replace('request?.cancel(); request = nil','request = nil')
     if mutation=='missing-owner':methods=methods.replace('guard let self, !self.closed, self.generation == owner else { return }','guard let self else { return }; _ = owner')
     transport=(ROOT/'client/macos/RouterVPNMacSpeedLabTransport.swift').read_text()
@@ -100,12 +117,20 @@ def run_case(directory, mutation):
     (fixture/'Transport.swift').write_text(transport)
     main=r'''
 import Foundation
+import CoreFoundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 let routerVPNProductBaseURL=URL(string:CommandLine.arguments[1])!
 let fixture=URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true)
-final class Field{var title="";var stringValue="";var string=""}
+final class Field{var title="";var stringValue="";var string="";var isEnabled=true;func startAnimation(_ sender:Any?){};func stopAnimation(_ sender:Any?){}}
+final class NSWindow{var closes=0;func performClose(_ sender:Any?){closes+=1}}
+final class FastestOwner {
+ let status=Field(),progress=Field(),cancelButton=Field();let window:NSWindow?=NSWindow()
+ var request:RouterVPNMacSpeedLabTransport?;var completed:((String)->Void)?
+ var started=false,closeWanted=false,isRunning=false
+ FASTEST_METHODS
+}
 final class Product {
  var owner:UUID?;var requestID:String?;var callback:(([String:Any],String)->Void)?;var starts=0;var stops=0
  func startCapturedComparisonProgress(requestID:String?,timeout:TimeInterval,update:(([String:Any],String)->Void)?=nil)->UUID?{
@@ -180,8 +205,58 @@ for scenario in ["success","failure","redirect","oversized","oversized-untyped",
 for raw in ["https://127.0.0.1/api/speed-lab/run","http://example.invalid/api/speed-lab/run","http://127.0.0.1/api/disconnect","http://u:p@127.0.0.1/api/speed-lab/run","http://127.0.0.1/api/speed-lab/run?other=1"] {
  do{_ = try RouterVPNMacSpeedLabTransport(url:URL(string:raw)!,body:nil,timeout:1){_ in};fail("Foreign native endpoint was accepted")}catch{count+=1}
 }
+let fastest=FastestOwner();var fastestCallbacks=0
+fastest.completed={_ in fastestCallbacks+=1};fastest.start()
+wait({exists("fastest-started")},"Actual fifty-sample request did not start")
+if fastest.windowShouldClose(fastest.window!) || !fastest.isRunning || fastest.request==nil || fastest.cancelButton.isEnabled {fail("Fastest Close dropped its live request before completion")}
+wait({exists("fastest-cancelled") && !fastest.isRunning},"Fastest Close did not cancel its actual native request")
+if fastestCallbacks != 1 || fastest.window!.closes != 1 || fastest.request != nil {fail("Fastest Close did not complete its captured owner exactly once")}
+let nextFastest=FastestOwner();var nextMessage=""
+nextFastest.completed={nextMessage=$0};nextFastest.start();fastest.windowWillClose(notice);fastest.start()
+wait({!nextFastest.isRunning},"Old Fastest owner cancelled its replacement")
+if !nextMessage.contains("12.5 ms trimmed mean from 50 TCP samples") || !nextMessage.contains("Press Connect") {fail("Fastest omitted the confirmed complete winner: "+nextMessage)}
+// Feed decoded JSON through the actual shipping terminal method. Numeric JSON
+// and boolean JSON are deliberately separate, including fractional counts that
+// NSNumber.intValue would silently truncate into an apparently complete result.
+let validWinner:[String:Any] = ["id":"owned", "samples":50, "failed":0, "trimmed_mean_ms":12.5]
+let validReply:[String:Any] = ["selected":true, "selected_id":"owned", "winner":validWinner]
+var invalidReplies:[(String,[String:Any])] = []
+for (field,value) in [("id","" as Any),("samples",50.9 as Any),("samples",49 as Any),("samples",true as Any),("failed",0.9 as Any),("failed",1 as Any),("failed",false as Any),("trimmed_mean_ms",true as Any),("trimmed_mean_ms",0 as Any),("trimmed_mean_ms",-1 as Any),("trimmed_mean_ms","12.5" as Any)] {
+ var winner=validWinner;winner[field]=value;var reply=validReply;reply["winner"]=winner
+ invalidReplies.append(("winner \(field)=\(value)",reply))
+}
+for (field,value) in [("selected",1 as Any),("selected",false as Any),("selected_id","foreign" as Any),("winner",NSNull() as Any)] {
+ var reply=validReply;reply[field]=value;invalidReplies.append((field,reply))
+}
+var missingCount=validWinner;missingCount.removeValue(forKey:"samples")
+var missingReply=validReply;missingReply["winner"]=missingCount;invalidReplies.append(("missing count",missingReply))
+let goodData=try JSONSerialization.data(withJSONObject:validReply)
+for (name,reply) in invalidReplies {
+ let owner=FastestOwner();owner.started=true;owner.isRunning=true;owner.closeWanted=true
+ var messages:[String]=[];owner.completed={messages.append($0)}
+ owner.finish(.success(try JSONSerialization.data(withJSONObject:reply)))
+ if messages.count != 1 || messages[0].hasPrefix("Selected ") || !messages[0].contains("did not confirm") || owner.isRunning || owner.completed != nil || owner.window!.closes != 1 {fail("Malformed Fastest reply accepted or failed to retire: "+name)}
+ let terminal=owner.status.stringValue
+ owner.finish(.success(goodData));owner.finish(.failure(NSError(domain:"late",code:1)))
+ if messages.count != 1 || owner.status.stringValue != terminal || owner.window!.closes != 1 {fail("Late Fastest reply revived a rejected owner: "+name)}
+ count+=1
+}
+let confirmed=FastestOwner();confirmed.isRunning=true;var confirmedCallbacks=0
+confirmed.completed={_ in confirmedCallbacks+=1};confirmed.finish(.success(goodData))
+let confirmedMessage=confirmed.status.stringValue
+confirmed.finish(.failure(NSError(domain:"duplicate",code:2)));confirmed.finish(.success(goodData))
+if confirmedCallbacks != 1 || !confirmedMessage.hasPrefix("Selected ") || confirmed.status.stringValue != confirmedMessage {fail("Duplicate Fastest completion replaced a confirmed result")}
+count+=1
+let invalidFastestBodies:[[String:Any]] = [["samples":5,"select":true],["samples":50.1,"select":true],["samples":50,"select":false],["samples":50,"select":1],["samples":50,"select":true,"include_external":true]]
+for body in invalidFastestBodies {
+ do {_ = try RouterVPNMacSpeedLabTransport(url:routerVPNProductBaseURL.appendingPathComponent("api/profile/fastest"),body:body,timeout:185){_ in};fail("Malformed Fastest selection request accepted")}catch{count+=1}
+}
+for timeout in [186.0,Double.infinity,Double.nan] {
+ do {_ = try RouterVPNMacSpeedLabTransport(url:routerVPNProductBaseURL.appendingPathComponent("api/profile/fastest"),body:["samples":50,"select":true],timeout:timeout){_ in};fail("Unbounded Fastest request accepted")}catch{count+=1}
+}
+count+=4
 print("Actual Swift URLSession cancellation, ownership, bounds and failure controls: \(count) cases PASS")
-'''.replace('METHODS',methods)
+'''.replace('FASTEST_METHODS',fastest_methods).replace('METHODS',methods)
     (fixture/'main.swift').write_text(main)
     try:
         subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'module-cache'),str(ROOT/'client/macos/RouterVPNMacControllerAuth.swift'),str(fixture/'Transport.swift'),str(fixture/'main.swift'),'-o',str(fixture/'transport-test')],check=True,timeout=120)

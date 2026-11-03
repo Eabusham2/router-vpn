@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CoreFoundation
 import MapKit
 import ObjectiveC
 
@@ -10,6 +11,7 @@ private var telemetryHopLabelKey: UInt8 = 0
 private var telemetryForwardButtonKey: UInt8 = 0
 private var telemetryPerformanceControllerKey: UInt8 = 0
 private var telemetryExternalComparisonControllerKey: UInt8 = 0
+private var telemetryFastestControllerKey: UInt8 = 0
 
 extension ProductWindowController {
     private func telemetryFind(_ id: String) -> NSView? {
@@ -25,6 +27,10 @@ extension ProductWindowController {
     private var telemetryFastPopup: NSPopUpButton? {
         get { objc_getAssociatedObject(self, &telemetryFastPopupKey) as? NSPopUpButton }
         set { objc_setAssociatedObject(self, &telemetryFastPopupKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+    private var telemetryFastestController: RouterVPNMacFastestController? {
+        get { objc_getAssociatedObject(self, &telemetryFastestControllerKey) as? RouterVPNMacFastestController }
+        set { objc_setAssociatedObject(self, &telemetryFastestControllerKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
     }
     private var telemetryLiveLabel: NSTextField? {
         get { objc_getAssociatedObject(self, &telemetryLiveLabelKey) as? NSTextField }
@@ -100,7 +106,7 @@ extension ProductWindowController {
     }
 
     func refreshUnifiedFastNodeMenu() {
-        guard let popup = telemetryFastPopup else { return }
+        guard let popup = telemetryFastPopup, telemetryFastestController?.isRunning != true else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let root = (try? self.api.json("/api/profiles", timeout: 4) as? [String: Any]) ?? [:]
@@ -113,8 +119,9 @@ extension ProductWindowController {
                     return a == b ? (($0["name"] as? String) ?? "") < (($1["name"] as? String) ?? "") : a < b
                 }
             DispatchQueue.main.async {
+                guard self.telemetryFastestController?.isRunning != true else { return }
                 popup.removeAllItems()
-                popup.addItem(withTitle: "⚡ Fastest Router · TCP")
+                popup.addItem(withTitle: "⚡ Fastest Router · 50 TCP samples")
                 popup.lastItem?.representedObject = "fastest"
                 popup.addItem(withTitle: "Compare external paths · 50 responses…")
                 popup.lastItem?.representedObject = "external-comparison"
@@ -134,21 +141,30 @@ extension ProductWindowController {
     }
 
     @objc private func unifiedFastConnectChanged(_ sender: NSPopUpButton) {
+        if let owned = telemetryFastestController, owned.isRunning { owned.showWindow(nil); owned.window?.makeKeyAndOrderFront(nil); return }
         let id = sender.selectedItem?.representedObject as? String ?? "fastest"
         if id == "external-comparison" { openExternalComparison(); refreshUnifiedFastNodeMenu(); return }
         sender.isEnabled = false
+        if id == "fastest" {
+            telemetryFastestController?.close()
+            let owned = RouterVPNMacFastestController { [weak self, weak sender] message in
+                guard let self else { return }
+                sender?.isEnabled = true
+                self.refreshAll(); self.refreshUnifiedChrome(); self.refreshUnifiedFastNodeMenu()
+                self.errorLabel.stringValue = message
+            }
+            telemetryFastestController = owned
+            owned.showWindow(nil); owned.window?.makeKeyAndOrderFront(nil); owned.start()
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self, weak sender] in
             guard let self else { return }
             do {
-                if id == "fastest" {
-                    _ = try self.api.request("/api/profile/fastest", method: "POST", body: ["samples": 5, "select": true], timeout: 35)
-                } else {
-                    _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 8)
-                }
+                _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 8)
                 DispatchQueue.main.async {
                     sender?.isEnabled = true
                     self.refreshAll(); self.refreshUnifiedChrome(); self.refreshUnifiedFastNodeMenu()
-                    self.errorLabel.stringValue = id == "fastest" ? "Selected the fastest measured Router VPN node. Press Connect when ready." : "Selected Router VPN node. Press Connect when ready."
+                    self.errorLabel.stringValue = "Selected Router VPN node. Press Connect when ready."
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -547,5 +563,104 @@ private final class RouterVPNMacExternalComparisonController: NSWindowController
         } else if value["complete"] as? Bool == true && value["drained"] as? Bool != true {
             cancelWanted = true; cancelAccepted = false
         }
+    }
+}
+
+
+// One panel retains its actual loopback task through cancellation completion.
+// Reopening it cannot cancel another request or install an older result.
+private final class RouterVPNMacFastestController: NSWindowController, NSWindowDelegate {
+    private let status = NSTextField(wrappingLabelWithString: "Collecting 50 TCP samples per Router node. Incomplete candidates receive no score. Ranking uses the 10% trimmed mean.")
+    private let progress = NSProgressIndicator()
+    private let cancelButton = NSButton(title: "Cancel measurement", target: nil, action: nil)
+    private var request: RouterVPNMacSpeedLabTransport?
+    private var completed: ((String) -> Void)?
+    private var started = false
+    private var closeWanted = false
+    private(set) var isRunning = false
+
+    init(completed: @escaping (String) -> Void) {
+        self.completed = completed
+        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 190), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        panel.title = "Find fastest Router node"
+        panel.isReleasedWhenClosed = false
+        super.init(window: panel)
+        panel.delegate = self
+        let stack = NSStackView(views: [status, progress, cancelButton])
+        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let content = NSView(); panel.contentView = content; content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
+            status.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            progress.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        ])
+        progress.style = .bar; progress.isIndeterminate = true
+        cancelButton.target = self; cancelButton.action = #selector(cancelOrClose)
+        panel.center()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    deinit { request?.cancel() }
+
+    func start() {
+        guard !started else { return }
+        started = true; isRunning = true; progress.startAnimation(nil)
+        do {
+            guard let url = URL(string: "/api/profile/fastest", relativeTo: routerVPNProductBaseURL)?.absoluteURL else {
+                throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The local controller endpoint is unavailable."])
+            }
+            let owned = try RouterVPNMacSpeedLabTransport(url: url, body: ["samples": 50, "select": true], timeout: 185) { [weak self] result in
+                DispatchQueue.main.async { [weak self] in self?.finish(result) }
+            }
+            request = owned; owned.start()
+        } catch { finish(.failure(error)) }
+    }
+
+    @objc private func cancelOrClose() {
+        if isRunning {
+            cancelButton.isEnabled = false
+            status.stringValue = "Cancelling this measurement; waiting for the owned request to finish. The current selection will be refreshed."
+            request?.cancel()
+        } else { window?.performClose(nil) }
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if isRunning { closeWanted = true; cancelOrClose(); return false }
+        return true
+    }
+    func windowWillClose(_ notification: Notification) { request?.cancel() }
+
+    private func finish(_ result: Result<Data, Error>) {
+        guard isRunning else { return }
+        isRunning = false; request = nil; progress.stopAnimation(nil)
+        cancelButton.title = "Close"; cancelButton.isEnabled = true
+        let message: String
+        switch result {
+        case .success(let data):
+            // JSON booleans bridge to NSNumber too. Keep counts and timing values
+            // numeric, and require an actual true boolean for selection.
+            func number(_ value: Any?) -> Double? {
+                guard let value = value as? NSNumber,
+                      CFGetTypeID(value) != CFBooleanGetTypeID(), value.doubleValue.isFinite else { return nil }
+                return value.doubleValue
+            }
+            if let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let selected = root["selected"] as? NSNumber,
+               CFGetTypeID(selected) == CFBooleanGetTypeID(), selected.boolValue,
+               let winner = root["winner"] as? [String: Any],
+               let id = winner["id"] as? String, !id.isEmpty, root["selected_id"] as? String == id,
+               number(winner["samples"]) == 50, number(winner["failed"]) == 0,
+               let ms = number(winner["trimmed_mean_ms"]), ms > 0 {
+                let name = winner["name"] as? String ?? id
+                message = String(format: "Selected %@ · %.1f ms trimmed mean from 50 TCP samples. Press Connect when ready.", name, ms)
+            } else { message = "The controller did not confirm a complete 50-sample winner. Refresh the current selection and retest." }
+        case .failure(let error):
+            message = "Fastest selection did not complete: \(error.localizedDescription) Current selection refreshed."
+        }
+        status.stringValue = message
+        let callback = completed; completed = nil; callback?(message)
+        if closeWanted { window?.performClose(nil) }
     }
 }

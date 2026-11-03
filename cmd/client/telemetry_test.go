@@ -36,7 +36,7 @@ func TestFastestProfileCancelledRequestCannotSelectWinner(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	req := httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{"samples":5}`)).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{"samples":50}`)).WithContext(ctx)
 	w := httptest.NewRecorder()
 	a.fastestProfile(w, req)
 	if w.Code != http.StatusRequestTimeout {

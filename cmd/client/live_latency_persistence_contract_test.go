@@ -32,11 +32,11 @@ func TestFastestLiveLatencyCannotOverwriteDurableBenchmark(t *testing.T) {
 		"LatencyLastTest",
 	} {
 		if strings.Contains(fastest, forbidden) {
-			t.Fatalf("lightweight fastest-node path must not write durable benchmark field/helper %q", forbidden)
+			t.Fatalf("Fastest selection must not overwrite separately saved benchmark field/helper %q", forbidden)
 		}
 	}
 	for _, required := range []string{
-		"q.Samples = clampLiveSamples(q.Samples, 5)",
+		"q.Samples = fastestProfileSamples",
 		"selectionAtStart := a.profiles.SelectedID",
 		"profilesAtStart := fastestProfileSnapshotToken(profiles)",
 		"sessionAtStart := sessionTrackerFor(a).snapshot(0).ID",

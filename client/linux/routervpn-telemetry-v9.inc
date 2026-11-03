@@ -36,7 +36,7 @@ static void linux_telemetry_refresh_fastest_v9(LinuxTelemetryV9 *t) {
     JsonNode *root=parse_json(out.data);
     const char *active_id="fastest";
     t->syncing=TRUE; gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(t->fastest));
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(t->fastest),"fastest","⚡ Fastest Router · TCP");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(t->fastest),"fastest","⚡ Fastest Router · 50 TCP samples");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(t->fastest),"external-comparison","External paths · 50 responses…");
     if (root!=NULL && JSON_NODE_HOLDS_OBJECT(root)) {
         JsonObject *obj=json_node_get_object(root);
@@ -63,8 +63,8 @@ static void linux_telemetry_fastest_changed_v9(GtkComboBox *combo, gpointer data
     LinuxTelemetryV9 *t=data; if(t==NULL||t->syncing)return; const char *id=gtk_combo_box_get_active_id(combo); if(id==NULL||id[0]=='\0')return;
     if(strcmp(id,"external-comparison")==0){linux_external_comparison_open(t->app);linux_telemetry_refresh_fastest_v9(t);return;}
     if(!routervpn_require_mutation_idle(t->app,"selecting a Router VPN node")){linux_telemetry_refresh_fastest_v9(t);return;}
-    char *body = strcmp(id,"fastest")==0 ? g_strdup("{\"samples\":5,\"select\":true}") : json_string_body("id",id);
-    guint64 request = linux_async_request_v17(t->app, strcmp(id,"fastest")==0 ? "/api/profile/fastest" : "/api/profile/select", body, strcmp(id,"fastest")==0 ? 40000 : 12000, "Node selection; Press Connect when ready.", FALSE);
+    char *body = strcmp(id,"fastest")==0 ? g_strdup("{\"samples\":50,\"select\":true}") : json_string_body("id",id);
+    guint64 request = linux_async_request_v17(t->app, strcmp(id,"fastest")==0 ? "/api/profile/fastest" : "/api/profile/select", body, strcmp(id,"fastest")==0 ? 185000 : 12000, strcmp(id,"fastest")==0 ? "Fastest: 50 TCP samples per node, ranked by trimmed mean. Cancel stops this round." : "Node selection; Press Connect when ready.", FALSE);
     g_free(body);
     if(request != 0) {gtk_widget_set_sensitive(GTK_WIDGET(combo),FALSE);append_diag(t->app,"Measuring/selecting node; selection is not complete until the controller confirms it. Press Connect when ready.");}
 

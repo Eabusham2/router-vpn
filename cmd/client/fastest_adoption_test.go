@@ -39,7 +39,11 @@ func fastestMeasuredResult(p common.RouterProfile) liveLatencyResult {
 	if p.ID == "b" {
 		ms = 2
 	}
-	return liveLatencyResult{ID: p.ID, Name: p.Name, Samples: 3, MedianMs: ms}
+	values := make([]float64, fastestProfileSamples)
+	for i := range values {
+		values[i] = ms
+	}
+	return profileLatencySummary(p, 443, values, 0)
 }
 
 func TestFastestSelectionUsesTrackerBeforeAppLock(t *testing.T) {
@@ -96,7 +100,7 @@ func TestFastestSelectionUsesTrackerBeforeAppLock(t *testing.T) {
 }
 
 func TestFastestSelectionRejectsStaleStateAndPreservesRollback(t *testing.T) {
-	for _, scenario := range []string{"working", "cancelled", "session", "selection", "catalog", "connected", "transaction", "persistence"} {
+	for _, scenario := range []string{"working", "cancelled", "session", "selection", "catalog", "credentials", "policy", "connected", "transaction", "persistence"} {
 		t.Run(scenario, func(t *testing.T) {
 			a, tracker := fastestAdoptionFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -146,6 +150,14 @@ func TestFastestSelectionRejectsStaleStateAndPreservesRollback(t *testing.T) {
 						a.state.Connected = true
 						a.state.Phase = "connected"
 						a.mu.Unlock()
+					case "credentials":
+						a.mu.Lock()
+						a.profiles.Profiles[1].APIToken = "replacement-private-source"
+						a.mu.Unlock()
+					case "policy":
+						a.mu.Lock()
+						a.profiles.Profiles[1].DNSMode = "replacement-policy"
+						a.mu.Unlock()
 					case "transaction":
 						a.operationMu.Lock()
 						held = true
@@ -175,7 +187,7 @@ func TestFastestSelectionRejectsStaleStateAndPreservesRollback(t *testing.T) {
 				t.Fatal("failed selection changed runtime node")
 			}
 			if a.profiles.Profiles[0].LatencySamples != 50 || a.profiles.Profiles[1].LatencySamples != 60 || a.profiles.Profiles[1].LatencyMedianMs != 30 {
-				t.Fatal("lightweight probe overwrote the durable benchmark")
+				t.Fatal("Fastest round overwrote the separately saved benchmark")
 			}
 			file := a.cfg.ProfilesFile
 			if scenario == "persistence" {
@@ -199,7 +211,6 @@ func TestFastestSelectionRejectsStaleStateAndPreservesRollback(t *testing.T) {
 
 func TestFastestReadOnlyMeasurementDoesNotAcquireMutationOwnership(t *testing.T) {
 	a, _ := fastestAdoptionFixture(t)
-	a.state.Connected, a.state.Phase = true, "connected"
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	w := httptest.NewRecorder()
@@ -207,7 +218,7 @@ func TestFastestReadOnlyMeasurementDoesNotAcquireMutationOwnership(t *testing.T)
 		func(_ context.Context, p common.RouterProfile, _ int) (liveLatencyResult, error) {
 			return fastestMeasuredResult(p), nil
 		})
-	if w.Code != http.StatusOK || a.profiles.SelectedID != "a" || !a.state.Connected {
+	if w.Code != http.StatusOK || a.profiles.SelectedID != "a" || a.state.Connected {
 		t.Fatalf("read-only measurement changed connection or required mutation: %d %s", w.Code, w.Body.String())
 	}
 }

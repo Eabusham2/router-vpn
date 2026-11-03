@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"router-vpn/internal/common"
@@ -39,6 +41,7 @@ type liveLatencyResult struct {
 	MinMs       float64   `json:"min_ms"`
 	MedianMs    float64   `json:"median_ms"`
 	AverageMs   float64   `json:"average_ms"`
+	TrimmedMs   float64   `json:"trimmed_mean_ms"`
 	P90Ms       float64   `json:"p90_ms"`
 	MaxMs       float64   `json:"max_ms"`
 	MeasuredAt  time.Time `json:"measured_at"`
@@ -144,10 +147,22 @@ func quickProfileLatencyContext(ctx context.Context, p common.RouterProfile, sam
 	if err != nil {
 		return liveLatencyResult{}, err
 	}
+	return profileLatencyAtPort(ctx, p, port, samples)
+}
+
+// Port discovery is not one of the measured samples. Both live reachability
+// and Fastest use this actual TCP dial loop, with their own sample contracts.
+func profileLatencyAtPort(ctx context.Context, p common.RouterProfile, port, samples int) (liveLatencyResult, error) {
+	if samples < 1 || samples > 200 || port < 1 || port > 65535 {
+		return liveLatencyResult{}, errors.New("invalid node measurement bounds")
+	}
 	values := make([]float64, 0, samples)
 	failed := 0
 	dialer := &net.Dialer{Timeout: 850 * time.Millisecond}
 	for i := 0; i < samples; i++ {
+		if current, ok := ctx.Value(fastestNetworkKey{}).(func() bool); ok && !current() {
+			return liveLatencyResult{}, errors.New("physical network changed during node sampling")
+		}
 		started := time.Now()
 		c, dialErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)))
 		if dialErr != nil {
@@ -158,7 +173,7 @@ func quickProfileLatencyContext(ctx context.Context, p common.RouterProfile, sam
 			continue
 		}
 		_ = c.Close()
-		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
+		values = append(values, float64(time.Since(started))/float64(time.Millisecond))
 		if i+1 < samples {
 			select {
 			case <-ctx.Done():
@@ -173,13 +188,20 @@ func quickProfileLatencyContext(ctx context.Context, p common.RouterProfile, sam
 	if len(values) == 0 {
 		return liveLatencyResult{}, errors.New("all live latency samples failed")
 	}
+	return profileLatencySummary(p, port, values, failed), nil
+}
+
+func profileLatencySummary(p common.RouterProfile, port int, measured []float64, failed int) liveLatencyResult {
+	values := append([]float64(nil), measured...)
 	sort.Float64s(values)
+	trim := len(values) / 10
 	return liveLatencyResult{
 		ID: p.ID, Name: p.Name, NodeKind: p.NodeKind, Endpoint: p.Endpoint, Port: port,
 		Samples: len(values), Failed: failed, MinMs: round3(values[0]), MedianMs: round3(percentile(values, 0.50)),
 		AverageMs: round3(average(values)), P90Ms: round3(percentile(values, 0.90)), MaxMs: round3(values[len(values)-1]),
-		MeasuredAt: time.Now().UTC(), Description: "lightweight TCP-handshake RTT for live UI; use the 50-sample node benchmark for durable ranking",
-	}, nil
+		TrimmedMs:  round3(average(values[trim : len(values)-trim])),
+		MeasuredAt: time.Now().UTC(), Description: "TCP-handshake RTT to the node; not ICMP or a tunnel-path measurement",
+	}
 }
 
 func (a *app) liveProfileLatency(w http.ResponseWriter, r *http.Request) {
@@ -217,18 +239,29 @@ func (a *app) liveProfileLatency(w http.ResponseWriter, r *http.Request) {
 func fastestProfileSnapshotToken(profiles []common.RouterProfile) string {
 	var b strings.Builder
 	for _, p := range profiles {
-		b.WriteString(p.ID)
-		b.WriteByte(0)
-		b.WriteString(p.NodeKind)
-		b.WriteByte(0)
-		b.WriteString(p.Endpoint)
-		b.WriteByte(0)
-		b.WriteString(p.RouterAPI)
-		b.WriteByte(0)
-		b.WriteString(p.NodeProofID)
+		b.WriteString(liveMeasurementProfileToken(p))
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+const fastestProfileSamples = 50
+
+type fastestNetworkKey struct{}
+
+// Incomplete, stale or malformed measurements have no score. The HTTP route
+// constructs these statistics from the actual captured node's TCP dials.
+func validFastestProfileResult(p common.RouterProfile, value liveLatencyResult, started time.Time) bool {
+	if value.ID != p.ID || value.Endpoint != p.Endpoint || value.Port < 1 || value.Port > 65535 ||
+		value.Samples != fastestProfileSamples || value.Failed != 0 || value.MeasuredAt.Before(started) || value.MeasuredAt.After(time.Now()) {
+		return false
+	}
+	for _, ms := range []float64{value.MinMs, value.MedianMs, value.AverageMs, value.TrimmedMs, value.P90Ms, value.MaxMs} {
+		if ms <= 0 || math.IsNaN(ms) || math.IsInf(ms, 0) || ms < value.MinMs || ms > value.MaxMs {
+			return false
+		}
+	}
+	return value.MinMs <= value.MedianMs && value.MedianMs <= value.P90Ms && value.P90Ms <= value.MaxMs
 }
 
 func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +271,10 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 // The injected probe is a test seam; the HTTP route always uses the real TCP
 // measurement above. Keep networking outside the terminal adoption locks.
 func (a *app) fastestProfileWithProbe(w http.ResponseWriter, r *http.Request, probe func(context.Context, common.RouterProfile, int) (liveLatencyResult, error)) {
+	a.fastestProfileWithSources(w, r, probe, physicalNetworkIdentity)
+}
+
+func (a *app) fastestProfileWithSources(w http.ResponseWriter, r *http.Request, probe func(context.Context, common.RouterProfile, int) (liveLatencyResult, error), networkIdentity func() string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -249,37 +286,78 @@ func (a *app) fastestProfileWithProbe(w http.ResponseWriter, r *http.Request, pr
 			return
 		}
 	}
-	q.Samples = clampLiveSamples(q.Samples, 5)
+	if q.Samples != 0 && q.Samples != fastestProfileSamples {
+		http.Error(w, "Fastest requires 50 complete samples per Router VPN node", http.StatusBadRequest)
+		return
+	}
+	if q.IncludeExternal {
+		http.Error(w, "use the external-path comparison for measured external candidates", http.StatusBadRequest)
+		return
+	}
+	q.Samples = fastestProfileSamples
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+	if ctx.Err() != nil {
+		http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
+		return
+	}
+	started := time.Now()
+	networkAtStart := networkIdentity()
+	if networkAtStart == "" {
+		http.Error(w, "cannot capture the physical network for node measurement", http.StatusConflict)
+		return
+	}
+	var networkLost atomic.Bool
+	networkCurrent := func() bool {
+		if networkLost.Load() {
+			return false
+		}
+		if networkIdentity() != networkAtStart {
+			networkLost.Store(true)
+			return false
+		}
+		return !networkLost.Load()
+	}
+	r = r.WithContext(context.WithValue(ctx, fastestNetworkKey{}, networkCurrent))
 	selectWinner := true
 	if q.Select != nil {
 		selectWinner = *q.Select
 	}
 	a.mu.Lock()
-	if selectWinner && (a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase)) {
+	if a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "disconnect before switching to the fastest node", http.StatusConflict)
 		return
 	}
 	selectionAtStart := a.profiles.SelectedID
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	pathAtStart := activeTelemetryPathToken(a.state)
+	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	profilesAtStart := fastestProfileSnapshotToken(profiles)
 	a.mu.Unlock()
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 	results := make([]liveLatencyResult, 0, len(profiles))
+	disqualified := make([]map[string]any, 0)
 	for _, p := range profiles {
 		kind := strings.ToLower(strings.TrimSpace(p.NodeKind))
 		if kind == "" {
 			kind = "router-vpn"
 		}
-		if kind == "external" && !q.IncludeExternal {
+		if kind != "router-vpn" {
 			continue
 		}
+		if !networkCurrent() {
+			http.Error(w, "physical network changed during fastest-node measurement", http.StatusConflict)
+			return
+		}
 		value, err := probe(r.Context(), p, q.Samples)
-		if err == nil {
+		if err == nil && validFastestProfileResult(p, value, started) {
 			results = append(results, value)
 		} else if r.Context().Err() != nil {
 			http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
 			return
+		} else {
+			disqualified = append(disqualified, map[string]any{"id": p.ID, "name": p.Name, "samples": value.Samples, "failed": value.Failed, "reason": "50 complete valid TCP samples were not obtained"})
 		}
 	}
 	if err := r.Context().Err(); err != nil {
@@ -287,20 +365,27 @@ func (a *app) fastestProfileWithProbe(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	if len(results) == 0 {
-		http.Error(w, "no node returned a live latency result", http.StatusBadGateway)
+		http.Error(w, "no Router VPN node completed 50 valid TCP samples; no winner selected", http.StatusBadGateway)
 		return
 	}
-	sort.SliceStable(results, func(i, j int) bool { return results[i].MedianMs < results[j].MedianMs })
+	if !networkCurrent() {
+		http.Error(w, "physical network changed during fastest-node measurement", http.StatusConflict)
+		return
+	}
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].TrimmedMs == results[j].TrimmedMs {
+			return results[i].ID < results[j].ID
+		}
+		return results[i].TrimmedMs < results[j].TrimmedMs
+	})
 	winner := results[0]
 
-	// Fastest is an intentionally lightweight live RTT probe. Its 1-10 samples
-	// must never overwrite Latency* fields, which are reserved for the durable
-	// >=50-sample /api/profile/latency benchmark (including its real trimmed mean).
-	// Only an explicit winner selection is durable here. Terminal selection
+	// This complete 50-sample round does not overwrite separately saved benchmark
+	// history. Only an explicit winner selection is durable here. Terminal selection
 	// owns operation -> tracker -> app, matching session observation and proof
 	// adoption. Inverting app -> tracker can deadlock against the observer.
-	// Measurements remain outside these locks, and read-only probes need none.
-	var tracker *sessionTracker
+	// Measurements remain outside these locks. Read-only results need the same
+	// atomic session/app freshness check, but never acquire mutation ownership.
 	if selectWinner {
 		release, err := a.beginMutationOperation(r)
 		if err != nil {
@@ -308,43 +393,47 @@ func (a *app) fastestProfileWithProbe(w http.ResponseWriter, r *http.Request, pr
 			return
 		}
 		defer release()
-		tracker = sessionTrackerFor(a)
-		tracker.mu.Lock()
-		defer tracker.mu.Unlock()
+	}
+	if !networkCurrent() {
+		http.Error(w, "physical network changed during fastest-node measurement", http.StatusConflict)
+		return
+	}
+	tracker := sessionTrackerFor(a)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	currentSessionID := ""
+	if tracker.session != nil {
+		currentSessionID = tracker.session.ID
 	}
 	a.mu.Lock()
 	selectedID := a.profiles.SelectedID
 	var persistErr error
+	if r.Context().Err() != nil {
+		a.mu.Unlock()
+		http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
+		return
+	}
+	if currentSessionID != sessionAtStart {
+		a.mu.Unlock()
+		http.Error(w, "VPN session changed while fastest-node measurement was running", http.StatusConflict)
+		return
+	}
+	if a.profiles.SelectedID != selectionAtStart {
+		a.mu.Unlock()
+		http.Error(w, "selected node changed while fastest-node measurement was running", http.StatusConflict)
+		return
+	}
+	if fastestProfileSnapshotToken(a.profiles.Profiles) != profilesAtStart {
+		a.mu.Unlock()
+		http.Error(w, "linked node catalog changed while fastest-node measurement was running", http.StatusConflict)
+		return
+	}
+	if activeTelemetryPathToken(a.state) != pathAtStart || a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase) {
+		a.mu.Unlock()
+		http.Error(w, "VPN state changed while fastest-node measurement was running", http.StatusConflict)
+		return
+	}
 	if selectWinner {
-		if r.Context().Err() != nil {
-			a.mu.Unlock()
-			http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
-			return
-		}
-		if a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase) {
-			a.mu.Unlock()
-			http.Error(w, "VPN state changed while fastest-node measurement was running", http.StatusConflict)
-			return
-		}
-		currentSessionID := ""
-		if tracker.session != nil {
-			currentSessionID = tracker.session.ID
-		}
-		if currentSessionID != sessionAtStart {
-			a.mu.Unlock()
-			http.Error(w, "VPN session changed while fastest-node measurement was running", http.StatusConflict)
-			return
-		}
-		if a.profiles.SelectedID != selectionAtStart {
-			a.mu.Unlock()
-			http.Error(w, "selected node changed while fastest-node measurement was running", http.StatusConflict)
-			return
-		}
-		if fastestProfileSnapshotToken(a.profiles.Profiles) != profilesAtStart {
-			a.mu.Unlock()
-			http.Error(w, "linked node catalog changed while fastest-node measurement was running", http.StatusConflict)
-			return
-		}
 		previousStore := cloneRouterProfileStore(a.profiles)
 		previousRouterID := a.state.RouterID
 		a.profiles.SelectedID = winner.ID
@@ -364,7 +453,7 @@ func (a *app) fastestProfileWithProbe(w http.ResponseWriter, r *http.Request, pr
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{"winner": winner, "results": results, "selected_id": selectedID, "selected": selectWinner, "note": "fastest-node chooses the lowest lightweight live median RTT and does not overwrite the durable 50-sample node benchmark"})
+	_ = json.NewEncoder(w).Encode(map[string]any{"winner": winner, "results": results, "disqualified": disqualified, "selected_id": selectedID, "selected": selectWinner, "note": "Fastest ranks complete 50-sample TCP-handshake measurements by their 10% trimmed mean and does not overwrite the durable 50-sample node benchmark; use Connect separately"})
 }
 
 func activeLatencyTarget(a *app) (common.RouterProfile, state, error) {

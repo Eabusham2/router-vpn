@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -18,8 +19,17 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
 
     init(url: URL, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
         guard url.scheme == "http", url.host == "127.0.0.1", url.user == nil, url.password == nil,
-              ["/api/speed-lab/options", "/api/speed-lab/run"].contains(url.path), url.query == nil, url.fragment == nil else {
+              ["/api/speed-lab/options", "/api/speed-lab/run", "/api/profile/fastest"].contains(url.path), url.query == nil, url.fragment == nil else {
             throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local Speed Lab endpoint."])
+        }
+        if url.path == "/api/profile/fastest" {
+            guard timeout.isFinite, timeout > 0, timeout <= 185, let body,
+                  Set(body.keys) == Set(["samples", "select"]),
+                  (body["samples"] as? NSNumber)?.doubleValue == 50,
+                  let selected = body["select"] as? NSNumber,
+                  CFGetTypeID(selected) == CFBooleanGetTypeID(), selected.boolValue else {
+                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Fastest requires a bounded 50-sample selection request."])
+            }
         }
         var request = URLRequest(url: url)
         request.httpMethod = body == nil ? "GET" : "POST"

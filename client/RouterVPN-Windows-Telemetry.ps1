@@ -69,7 +69,7 @@ function TickUnifiedMapAnimation{if($null -eq $script:UnifiedRoutePacket -or $nu
 $script:UnifiedTelemetrySync=$false
 $script:UnifiedForwardSync=$false
 function ApplyUnifiedFastestStore($Store){
- $Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='fastest';display='⚡ Fastest Router · TCP'})
+ $Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='fastest';display='⚡ Fastest Router · 50 TCP samples'})
  [void]$Values.Add([pscustomobject]@{id='external-comparison';display='External paths · 50 responses…'})
  $Routers=@($Store.profiles|Where-Object{(([string]$_.node_kind).ToLowerInvariant() -ne 'external')}|Sort-Object @{Expression={if([double]$_.latency_trimmed_mean_ms -gt 0){[double]$_.latency_trimmed_mean_ms}else{[double]::PositiveInfinity}}},name)
  foreach($P in $Routers){$Ms=[double]$P.latency_trimmed_mean_ms;$Label=if($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$P.name,$Ms}else{[string]$P.name};[void]$Values.Add([pscustomobject]@{id=[string]$P.id;display=$Label})}
@@ -256,7 +256,7 @@ function ShowUnifiedPerformance{
   if(UnifiedAsyncBusy){throw 'Another Router VPN action is still running.'}
   if($ID-eq'external-comparison'){ShowExternalComparison;return}
   if($ID-eq'fastest'){
-   [void](StartUnifiedApiAsync 'Selecting fastest node…' '/api/profile/fastest' 'POST' @{samples=5;select=$true} 40 {param($R)Log 'Selected the fastest measured Router VPN node.'} {param($E)Log ('Fastest selection failed: '+$E)} {RefreshProduct;RefreshUnifiedTelemetry})
+   [void](StartUnifiedApiAsync 'Selecting fastest node…' '/api/profile/fastest' 'POST' @{samples=50;select=$true} 185 {param($R)Log ('Selected the fastest Router VPN node from 50 complete TCP samples per candidate, ranked by trimmed mean. Press Connect when ready. '+[string]$R.note)} {param($E)Log ('Fastest selection failed: '+$E)} {RefreshProduct;RefreshUnifiedTelemetry})
   }else{
    $Success={param($R)Log ('Selected Router VPN node '+$ID)}.GetNewClosure()
    [void](StartUnifiedApiAsync 'Selecting node…' '/api/profile/select' 'POST' @{id=$ID} 10 $Success {param($E)Log ('Node selection failed: '+$E)} {RefreshProduct;RefreshUnifiedTelemetry})
