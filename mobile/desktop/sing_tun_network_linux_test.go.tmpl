@@ -304,13 +304,17 @@ func waitNativeRoutingVeths(t *testing.T, owned, peer netlink.Link, configured n
 	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
+	links := []netlink.Link{owned}
+	if peer != nil {
+		links = append(links, peer)
+	}
 	for {
 		routes, err := routervpnLinuxNetworkObjects("route")
 		if err != nil {
 			t.Fatal("veth baseline routes", err)
 		}
 		ready := true
-		for i, link := range []netlink.Link{owned, peer} {
+		for i, link := range links {
 			addresses, err := netlink.AddrList(link, netlink.FAMILY_V6)
 			if err != nil {
 				t.Fatal("veth baseline IPv6 addresses", err)
@@ -429,7 +433,7 @@ func TestRouterVPNNativeLinuxRoutingReceiptNamespace(t *testing.T) {
 		if err != nil {
 			t.Fatal("isolated native routing receipt execution failed", err, string(output))
 		}
-		for _, leaf := range []string{"complete-native-install", "target-first-native-retirement", "concurrent-configured-ipv6-local-route"} {
+		for _, leaf := range []string{"complete-native-install", "target-first-native-retirement", "concurrent-configured-ipv6-local-route", "concurrent-automatic-link-local-route"} {
 			if !strings.Contains(string(output), "--- PASS: TestRouterVPNNativeLinuxRoutingReceiptNamespace/"+leaf+" ") {
 				t.Fatal("native receipt case did not execute", leaf, string(output))
 			}
@@ -453,6 +457,7 @@ func TestRouterVPNNativeLinuxRoutingReceiptNamespace(t *testing.T) {
 		}
 	}
 	t.Run("concurrent-configured-ipv6-local-route", nativeRoutingConcurrentAddressNamespace)
+	t.Run("concurrent-automatic-link-local-route", func(t *testing.T) { nativeRoutingConcurrentAddressNamespaceMode(t, true) })
 	for _, retire := range []bool{false, true} {
 		name := "complete-native-install"
 		if retire {
@@ -620,6 +625,107 @@ func TestRouterVPNNativeLinuxRoutingConcurrentAddressProof(t *testing.T) {
 	}
 }
 
+func TestRouterVPNNativeLinuxRoutingAutomaticLinkLocalProof(t *testing.T) {
+	before, after, explicit, configured := nativeRoutingConcurrentFixture(t)
+	prefix := netip.MustParsePrefix("fe80::1234/64")
+	body, err := base64.StdEncoding.Strict().DecodeString(configured.Native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy(body[16:32], prefix.Addr().AsSlice())
+	local, err := ParseDesktopLinuxNetworkObject("route", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := routerVPNLinuxRouteAddress{prefix: prefix, flags: syscall.IFA_F_PERMANENT | 0x800, scope: 253, preferred: int(^uint32(0)), valid: int(^uint32(0))}
+	after.addresses = append(after.addresses, address)
+	address.flags |= syscall.IFA_F_TENTATIVE
+	before.addresses = append(before.addresses, address)
+	for name, additions := range map[string][]DesktopNetworkObject{
+		"original-auto-address":         {explicit, local},
+		"configured-and-auto-addresses": {explicit, configured, local},
+		"independent-native-order":      {local, explicit, configured},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !routervpnLinuxRouteAdditions(before, after, nil, additions) ||
+				!routervpnLinuxRouteAdditions(after, after, nil, additions) {
+				t.Fatal("original kernel-generated address lost its canonical LOCAL route")
+			}
+		})
+	}
+	clone := func(owner routerVPNLinuxRouteOwner) routerVPNLinuxRouteOwner {
+		owner.configured = append([]netip.Prefix(nil), owner.configured...)
+		owner.addresses = append([]routerVPNLinuxRouteAddress(nil), owner.addresses...)
+		return owner
+	}
+	for _, fault := range []string{"unselected-permanent", "temporary", "still-tentative", "dad-failed", "wrong-prefix", "wrong-scope", "finite-lifetime", "label", "peer", "missing-original", "replaced-original", "changed-interface"} {
+		t.Run("reject/"+fault, func(t *testing.T) {
+			old, now := clone(before), clone(after)
+			for _, owner := range []*routerVPNLinuxRouteOwner{&old, &now} {
+				value := &owner.addresses[1]
+				switch fault {
+				case "unselected-permanent":
+					value.flags &^= 0x800
+				case "temporary":
+					value.flags |= syscall.IFA_F_SECONDARY
+				case "dad-failed":
+					value.flags |= syscall.IFA_F_DADFAILED
+				case "wrong-prefix":
+					value.prefix = netip.PrefixFrom(prefix.Addr(), 63)
+				case "wrong-scope":
+					value.scope = 0
+				case "finite-lifetime":
+					value.valid--
+				case "label":
+					value.label = "unselected"
+				case "peer":
+					value.peer = "fe80::4321/128"
+				}
+			}
+			switch fault {
+			case "still-tentative":
+				now.addresses[1].flags |= syscall.IFA_F_TENTATIVE
+			case "missing-original":
+				old.addresses = old.addresses[:1]
+			case "replaced-original":
+				old.addresses[1].prefix = netip.MustParsePrefix("fe80::4321/64")
+			case "changed-interface":
+				old.index++
+			}
+			if routervpnLinuxRouteAdditions(old, now, nil, []DesktopNetworkObject{explicit, local}) {
+				t.Fatal("unproved automatic address acquired native route ownership", fault)
+			}
+		})
+	}
+	for _, fault := range []string{"protocol", "scope", "index", "table", "prefix-route", "extra-attribute"} {
+		t.Run("reject-native/"+fault, func(t *testing.T) {
+			altered := bytes.Clone(body)
+			switch fault {
+			case "protocol":
+				altered[5] = 3
+			case "scope":
+				altered[6] = 253
+			case "index":
+				altered[36]++
+			case "table":
+				altered[4], altered[52] = 254, 254
+			case "prefix-route":
+				altered[1] = 64
+				clear(altered[24:32])
+			case "extra-attribute":
+				altered = append(altered, 8, 0, 99, 0, 0, 0, 0, 0)
+			}
+			object, err := ParseDesktopLinuxNetworkObject("route", altered)
+			if err != nil {
+				t.Fatal("negative control lost valid native encoding", err)
+			}
+			if routervpnLinuxRouteAdditions(before, after, nil, []DesktopNetworkObject{explicit, object}) {
+				t.Fatal("foreign native route borrowed the original automatic address", fault)
+			}
+		})
+	}
+}
+
 func TestRouterVPNNativeLinuxRoutingConcurrentAddressRejectsForeign(t *testing.T) {
 	before, after, explicit, local := nativeRoutingConcurrentFixture(t)
 	body, err := base64.StdEncoding.Strict().DecodeString(local.Native)
@@ -718,7 +824,7 @@ func TestRouterVPNNativeLinuxRoutingConcurrentAddressOwnerFences(t *testing.T) {
 		})
 	}
 	// Even identical later snapshots cannot turn a newly selected but absent
-	// configured address or an unconfigured automatic address into authority.
+	// configured address or an unqualified automatic address into authority.
 	for _, name := range []string{"unconfigured", "duplicate-address", "new-tentative", "not-permanent"} {
 		t.Run(name, func(t *testing.T) {
 			old, now := clone(after), clone(after)
@@ -740,6 +846,10 @@ func TestRouterVPNNativeLinuxRoutingConcurrentAddressOwnerFences(t *testing.T) {
 }
 
 func nativeRoutingConcurrentAddressNamespace(t *testing.T) {
+	nativeRoutingConcurrentAddressNamespaceMode(t, false)
+}
+
+func nativeRoutingConcurrentAddressNamespaceMode(t *testing.T, automatic bool) {
 	t.Helper()
 	const name, peer = "rvpn-local", "rvpn-local-p"
 	v := &netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: name}, PeerName: peer}
@@ -759,13 +869,25 @@ func nativeRoutingConcurrentAddressNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := netlink.LinkSetUp(other); err != nil {
-		t.Fatal(err)
+	if automatic {
+		// These are newly created interfaces in the proved private namespace.
+		// Kernel random address generation supplies its actual stable-privacy
+		// flag. The independent peer has no asynchronous IPv6 address to add
+		// an unrelated route during the owned interface's before/after proof.
+		for _, pair := range [][2]string{{name, "random"}, {peer, "none"}} {
+			if output, err := exec.Command("ip", "link", "set", "dev", pair[0], "addrgenmode", pair[1]).CombinedOutput(); err != nil {
+				t.Fatal("owned native address generation", err, string(output))
+			}
+		}
+	} else {
+		if err := netlink.LinkSetUp(other); err != nil {
+			t.Fatal(err)
+		}
+		if err := netlink.LinkSetUp(link); err != nil {
+			t.Fatal(err)
+		}
+		waitNativeRoutingVeths(t, link, other, netip.Prefix{})
 	}
-	if err := netlink.LinkSetUp(link); err != nil {
-		t.Fatal(err)
-	}
-	waitNativeRoutingVeths(t, link, other, netip.Prefix{})
 	prefix := netip.MustParsePrefix("fd29:94::1/126")
 	n := &NativeTun{routervpnOwnedIndex: link.Attrs().Index, options: Options{Name: name, MTU: 1376,
 		Inet4Address: []netip.Prefix{netip.MustParsePrefix("172.29.94.1/30")}, Inet6Address: []netip.Prefix{prefix},
@@ -774,18 +896,57 @@ func nativeRoutingConcurrentAddressNamespace(t *testing.T) {
 	if err := n.configure(link); err != nil {
 		t.Fatal(err)
 	}
+	if automatic {
+		if err := netlink.LinkSetUp(other); err != nil {
+			t.Fatal(err)
+		}
+		if err := netlink.LinkSetUp(link); err != nil {
+			t.Fatal(err)
+		}
+		// Link activation queues addrconf work. Capture the real tentative
+		// automatic address after its creation, before waiting for DAD and
+		// its LOCAL route; an immediate dump can precede address creation.
+		deadline := time.Now().Add(time.Second)
+		for {
+			owner, err := n.routervpnLinuxRouteOwner()
+			if err != nil {
+				t.Fatal("read original automatic address", err)
+			}
+			pending := false
+			for _, address := range owner.addresses {
+				pending = pending || address.prefix.Addr().IsLinkLocalUnicast() && address.prefix.Bits() == 64 && address.flags == syscall.IFA_F_PERMANENT|syscall.IFA_F_TENTATIVE|0x800
+			}
+			if pending {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatal("kernel did not publish its original tentative automatic address")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 	before := n.routervpnLinuxBefore("route")
 	if n.routervpnNetwork.failure != nil {
 		t.Fatal(n.routervpnNetwork.failure)
 	}
 	var pending bool
 	for _, address := range before.owner.addresses {
-		pending = pending || address.prefix == prefix && address.flags&syscall.IFA_F_TENTATIVE != 0
+		if automatic {
+			if address.prefix.Addr().IsLinkLocalUnicast() && address.prefix.Bits() == 64 && address.flags == syscall.IFA_F_PERMANENT|syscall.IFA_F_TENTATIVE|0x800 {
+				prefix, pending = address.prefix, true
+			}
+		} else {
+			pending = pending || address.prefix == prefix && address.flags&syscall.IFA_F_TENTATIVE != 0
+		}
 	}
 	if !pending {
-		t.Fatal("native concurrent fixture did not capture original tentative address")
+		t.Fatalf("native concurrent fixture did not capture original tentative address: automatic=%v addresses=%+v", automatic, before.owner.addresses)
 	}
-	waitNativeRoutingVeths(t, link, other, prefix)
+	if automatic {
+		waitNativeRoutingVeths(t, link, nil, n.options.Inet6Address[0])
+	} else {
+		waitNativeRoutingVeths(t, link, other, prefix)
+	}
 	routes, err := n.routes(link)
 	if err != nil || len(routes) != 2 {
 		t.Fatal("native fixture lost its actual pinned route builder", err, len(routes))
@@ -802,8 +963,19 @@ func nativeRoutingConcurrentAddressNamespace(t *testing.T) {
 		}
 	}()
 	n.routervpnLinuxAdded("route", before)
-	if n.routervpnNetwork.failure != nil || len(n.routervpnNetwork.objects) != 2 {
-		t.Fatal("real kernel LOCAL race lost its exact two-object ledger", n.routervpnNetwork.failure, len(n.routervpnNetwork.objects))
+	maximum := 2
+	if automatic {
+		maximum = 3 // Explicit route plus the configured and automatic LOCAL routes.
+	}
+	if n.routervpnNetwork.failure != nil || len(n.routervpnNetwork.objects) < 2 || len(n.routervpnNetwork.objects) > maximum {
+		t.Fatal("real kernel LOCAL race lost its complete original ledger", n.routervpnNetwork.failure, len(n.routervpnNetwork.objects))
+	}
+	foundLocal := false
+	for _, object := range n.routervpnNetwork.objects {
+		foundLocal = foundLocal || object.Family == 6 && object.Table == 255 && object.Destination == netip.PrefixFrom(prefix.Addr(), 128).String()
+	}
+	if !foundLocal {
+		t.Fatal("actual native receipt omitted its original pending address's LOCAL route")
 	}
 	raw, err := n.RouterVPNDesktopNetworkReceipt()
 	if err != nil {

@@ -63,9 +63,9 @@ func routervpnLinuxNetworkObjects(kind string) ([]DesktopNetworkObject, error) {
 }
 
 // Route additions can overlap the kernel's asynchronous publication of the
-// configured IPv6 address's LOCAL host route. Keep the original interface and
-// complete address identities alongside the earlier routing inventory. They
-// are evidence only; neither readback changes network configuration.
+// configured or automatically generated IPv6 address's LOCAL host route. Keep
+// the original interface and complete addresses alongside the earlier routing
+// inventory. They are evidence only; neither readback changes configuration.
 type routerVPNLinuxRouteAddress struct {
 	prefix                         netip.Prefix
 	flags, scope, preferred, valid int
@@ -313,14 +313,27 @@ func routervpnLinuxKernelLocalAddressRoute(object DesktopNetworkObject, owner ro
 	}
 	matches := 0
 	for _, address := range owner.addresses {
-		if address.prefix.Addr() != prefix.Addr() || !slices.Contains(owner.configured, address.prefix) {
+		if address.prefix.Addr() != prefix.Addr() {
 			continue
+		}
+		flags := syscall.IFA_F_PERMANENT
+		if !slices.Contains(owner.configured, address.prefix) {
+			// Linux addrconf creates a permanent /64 link-local address with
+			// IFA_F_STABLE_PRIVACY (UAPI 0x800) in stable/random generation modes.
+			// Its LOCAL /128 route can appear when DAD completes during this
+			// add. Both complete owner snapshots must already contain the same
+			// address; only TENTATIVE may clear. No arbitrary unselected address
+			// or ordinary link-local prefix route receives this qualification.
+			if !address.prefix.Addr().IsLinkLocalUnicast() || address.prefix.Bits() != 64 {
+				return false
+			}
+			flags |= 0x800
 		}
 		scope := 0
 		if address.prefix.Addr().IsLinkLocalUnicast() {
 			scope = 253
 		}
-		if address.flags != syscall.IFA_F_PERMANENT || address.scope != scope || address.peer != "" || address.broadcast != "" || address.label != "" ||
+		if address.flags != flags || address.scope != scope || address.peer != "" || address.broadcast != "" || address.label != "" ||
 			uint64(address.preferred) != uint64(^uint32(0)) || uint64(address.valid) != uint64(^uint32(0)) {
 			return false
 		}
@@ -353,7 +366,7 @@ func routervpnLinuxKernelLocalAddressRoute(object DesktopNetworkObject, owner ro
 }
 
 func routervpnLinuxRouteAdditions(before, after routerVPNLinuxRouteOwner, previous, added []DesktopNetworkObject) bool {
-	if !routervpnLinuxSameRouteOwner(before, after) || len(added) < 1 || len(added) > len(after.configured)+1 {
+	if !routervpnLinuxSameRouteOwner(before, after) || len(added) < 1 || len(added) > len(after.addresses)+1 {
 		return false
 	}
 	explicit := 0
