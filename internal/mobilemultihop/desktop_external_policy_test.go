@@ -395,13 +395,13 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 				t.Fatal(err)
 			}
 			if protocol == "hysteria2" {
-				for _, target := range []string{"linux", "darwin"} {
-					if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil || derived != nil {
-						t.Fatal("Windows layer derivation opened another host", target)
-					}
+				if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "darwin"); err == nil || derived != nil {
+					t.Fatal("layer derivation opened an unsupported Darwin host")
 				}
-				if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err != nil {
-					t.Fatal("captured Windows HY2 layer lost its exact lower plan", err)
+				for _, target := range []string{"linux", "windows"} {
+					if plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err != nil || plan.Metadata().TargetOS != target {
+						t.Fatal("captured HY2 layer lost its exact target lower plan", target, err)
+					}
 				}
 			} else {
 				reject(t, original)
@@ -486,6 +486,15 @@ func TestDesktopExternalPolicyWindowsPacketEndpointsPreserveCapturedPolicy(t *te
 // The native host consumes only this sealed constructor result. Selecting a
 // layer never promotes its private inner HY2 destination into physical intent.
 func TestDesktopExternalPolicyWindowsHysteria2LayerPreservesCompleteCapture(t *testing.T) {
+	desktopExternalHysteria2LayerPreservesCompleteCapture(t, "windows")
+}
+
+func TestDesktopExternalPolicyLinuxHysteria2LayerPreservesCompleteCapture(t *testing.T) {
+	desktopExternalHysteria2LayerPreservesCompleteCapture(t, "linux")
+}
+
+func desktopExternalHysteria2LayerPreservesCompleteCapture(t *testing.T, target string) {
+	t.Helper()
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			for _, ipv6 := range []string{"on", "off"} {
@@ -507,13 +516,13 @@ func TestDesktopExternalPolicyWindowsHysteria2LayerPreservesCompleteCapture(t *t
 						if err != nil {
 							t.Fatal(err)
 						}
-						plan := desktopExternalPlan(t, original, desktopExternalTestSession, "windows")
+						plan := desktopExternalPlan(t, original, desktopExternalTestSession, target)
 						meta := plan.Metadata()
 						actual, err := plan.Capture()
 						if err != nil || !reflect.DeepEqual(actual, captured) || plan.OriginalPolicy() != original ||
 							actual.StartLayer != layer || actual.ConfiguredMTU != 1360 || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan ||
 							actual.SelectedDNS.Host != "192.0.2.53" || actual.SelectedDNS.Port != 5443 || actual.SelectedDNS.Physical || actual.SelectedDNS.Detour != ExternalFinalTag ||
-							meta.Protocol != "hysteria2" || meta.RootTag != multihoprelay.ExitStartLayerTag || meta.SOCKSUDPAssociationRequired ||
+							meta.TargetOS != target || meta.Protocol != "hysteria2" || meta.RootTag != multihoprelay.ExitStartLayerTag || meta.SOCKSUDPAssociationRequired ||
 							meta.OriginalSourceSHA256 != original.SourceSHA256() || meta.OriginalCaptureSHA256 != captured.CaptureSHA256 ||
 							meta.OriginalConfigSHA256 != externalDigest([]byte(before)) || meta.OriginalMetadataSHA256 != externalDigest([]byte(oldMetadata)) {
 							t.Fatal("layer derivation changed complete source, device or selected DNS ownership", err)
@@ -562,6 +571,15 @@ func TestDesktopExternalPolicyWindowsHysteria2LayerPreservesCompleteCapture(t *t
 }
 
 func TestDesktopExternalPolicyWindowsHysteria2LayerDoesNotAdmitOtherProtocols(t *testing.T) {
+	desktopExternalHysteria2LayerDoesNotAdmitOtherProtocols(t, "windows")
+}
+
+func TestDesktopExternalPolicyLinuxHysteria2LayerDoesNotAdmitOtherProtocols(t *testing.T) {
+	desktopExternalHysteria2LayerDoesNotAdmitOtherProtocols(t, "linux")
+}
+
+func desktopExternalHysteria2LayerDoesNotAdmitOtherProtocols(t *testing.T, target string) {
+	t.Helper()
 	for _, protocol := range []string{"shadowsocks", "socks5", "http-connect", "https-connect"} {
 		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(protocol+"/"+layer, func(t *testing.T) {
@@ -572,7 +590,7 @@ func TestDesktopExternalPolicyWindowsHysteria2LayerDoesNotAdmitOtherProtocols(t 
 				if err != nil {
 					t.Fatal("negative case must retain valid provisioned layer", err)
 				}
-				if plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err == nil || plan != nil {
+				if plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil || plan != nil {
 					t.Fatal("HY2 support opened an unrelated layered protocol")
 				}
 			})
@@ -581,8 +599,24 @@ func TestDesktopExternalPolicyWindowsHysteria2LayerDoesNotAdmitOtherProtocols(t 
 }
 
 func TestDesktopExternalPolicyWindowsHysteria2LayerRejectsReplacedAuthority(t *testing.T) {
+	desktopExternalHysteria2LayerRejectsReplacedAuthority(t, "windows")
+}
+
+func TestDesktopExternalPolicyLinuxHysteria2LayerRejectsReplacedAuthority(t *testing.T) {
+	desktopExternalHysteria2LayerRejectsReplacedAuthority(t, "linux")
+}
+
+func desktopExternalHysteria2LayerRejectsReplacedAuthority(t *testing.T, target string) {
+	t.Helper()
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		for name, mutate := range map[string]func(*DesktopExternalPolicy){
+			"target": func(p *DesktopExternalPolicy) {
+				if target == "linux" {
+					p.metadata.TargetOS = "windows"
+				} else {
+					p.metadata.TargetOS = "linux"
+				}
+			},
 			"outer-tag":    func(p *DesktopExternalPolicy) { p.metadata.RootTag = ExternalFinalTag },
 			"outer-type":   func(p *DesktopExternalPolicy) { p.metadata.RootType = "hysteria2" },
 			"outer-digest": func(p *DesktopExternalPolicy) { p.metadata.OriginalRootSHA256 = strings.Repeat("a", 64) },
@@ -612,7 +646,7 @@ func TestDesktopExternalPolicyWindowsHysteria2LayerRejectsReplacedAuthority(t *t
 				if err != nil {
 					t.Fatal(err)
 				}
-				plan := desktopExternalPlan(t, original, desktopExternalTestSession, "windows")
+				plan := desktopExternalPlan(t, original, desktopExternalTestSession, target)
 				mutate(plan)
 				if plan.Validate() == nil || plan.Config() != "" || plan.Metadata() != (DesktopExternalMetadata{}) || plan.OriginalPolicy() != nil {
 					t.Fatal("replaced HY2 layer retained native initialization authority")

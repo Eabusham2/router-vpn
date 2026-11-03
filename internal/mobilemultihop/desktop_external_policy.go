@@ -77,7 +77,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	// This bounded derivation does not admit an entry, another protocol, or a
 	// public desktop connection before the host's independent eligibility gate.
 	layered := capture.StartLayer != ""
-	if layered && (targetOS != "windows" || capture.Protocol != "hysteria2" || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
+	if layered && ((targetOS != "windows" && targetOS != "linux") || capture.Protocol != "hysteria2" || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
 		return nil, desktopExternalPolicyError
 	}
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
