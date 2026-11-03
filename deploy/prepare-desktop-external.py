@@ -78,6 +78,7 @@ BOX_TEMPLATES = {
     'external_box_latency_test.go.tmpl': 'routervpn_desktop_external_box_latency_test.go',
     'external_box_socks_test.go.tmpl': 'routervpn_desktop_external_box_socks_test.go',
     'external_box_openvpn_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_test.go',
+    'external_box_openvpn_reference_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_reference_test.go',
     'external_box_packet_reference_test.go.tmpl': 'routervpn_desktop_external_box_packet_reference_test.go',
     'external_box_windows_packet_test.go.tmpl': 'routervpn_desktop_external_box_windows_packet_test.go',
     'external_box_windows_hysteria2_test.go.tmpl': 'routervpn_desktop_external_box_windows_hysteria2_test.go',

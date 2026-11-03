@@ -88,7 +88,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		case "amneziawg":
 			family, kind, supported = "endpoints", AmneziaType, true
 		case "openvpn":
-			family, kind, supported = "endpoints", "openvpn-client", targetOS == "linux"
+			family, kind, supported = "endpoints", "openvpn-client", true
 		}
 	}
 	root := capture.PhysicalRoots[0]

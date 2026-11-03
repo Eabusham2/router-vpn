@@ -43,6 +43,7 @@ RUNNERS = ("test_linux_external_openvpn.py", "test_linux_external_openvpn_runner
            "prepare-desktop-external.py", "build-native-runtime.py", "build-desktop-pq.py")
 REQUIRED = frozenset({
     "routervpn_desktop_external_box_openvpn_test.go",
+    "routervpn_desktop_external_box_openvpn_reference_test.go",
     "routervpn_desktop_external_box_integration_test.go", "routervpn_desktop_external_box_physical.go",
     "routervpn/desktoppt/external_network.go", "routervpn/desktoppt/external_physical.go",
     "routervpn/desktoppt/external_linux_lifecycle.go",

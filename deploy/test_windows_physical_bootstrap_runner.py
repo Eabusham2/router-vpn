@@ -89,6 +89,8 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             names.update(EXTERNAL.STREAM_BOX_CASES)
             names.update(EXTERNAL.PACKET_FACTORY_CASES)
             names.update(EXTERNAL.PACKET_COMMANDS)
+            names.update(EXTERNAL.OPENVPN_COMMAND_CASES)
+            names.update(EXTERNAL.OPENVPN_FACTORY_CASES)
             names.update("TestRouterVPNDesktopExternalPhysicalIntegration/latency50/" + leaf for leaf in EXTERNAL.LATENCY_BOUNDARIES)
             parent = "TestRouterVPNDesktopExternalPhysicalIntegration"
             names.update(parent + "/" + leaf for leaf in ("delayed-accept-retains-prior-grant", "network-reset-during-mtu", "network-reset-after-native-publication", "network-reset-during-real-proof"))
@@ -299,6 +301,16 @@ class ExternalPacketInventory(unittest.TestCase):
             with self.subTest(output=invalid), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaises(ValueError):
                     EXTERNAL.report_baseline("owned", required, 0, invalid)
+
+    def test_openvpn_commands_and_eager_phase_require_each_original_remote_case(self):
+        self.assertEqual(len(EXTERNAL.OPENVPN_COMMAND_CASES), 37)
+        self.assertEqual(len(EXTERNAL.OPENVPN_FACTORY_CASES), 3)
+        for required in (EXTERNAL.OPENVPN_COMMAND_CASES, EXTERNAL.OPENVPN_FACTORY_CASES):
+            output = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            for case in required:
+                with self.subTest(missing=case), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(ValueError):
+                        EXTERNAL.report_baseline("openvpn", required, 0, output.replace("--- PASS: " + case + " (0.01s)\n", ""))
 
     def test_packet_guards_and_all_encrypted_verdicts_are_required(self):
         self.assertEqual(len(EXTERNAL.PACKET_FACTORY_CASES), 6)

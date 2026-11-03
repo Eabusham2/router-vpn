@@ -104,12 +104,22 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 		k.locked = true
 		return &desktopWindowsExternalRelease{f: f, target: target, barrier: barrier}, nil
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 		actual := protocol
 		if strings.HasPrefix(protocol, "amneziawg-") {
 			actual = "amneziawg"
 		}
+		if strings.HasPrefix(protocol, "openvpn-") {
+			actual = "openvpn"
+		}
 		profile, _ := desktopExternalNativeFixture(t, actual)
+		if variant, ok := strings.CutPrefix(protocol, "openvpn-"); ok {
+			first, second := variant, variant
+			if variant == "mixed" {
+				first, second = "tcp", "udp"
+			}
+			profile.External.OpenVPN.Config = "# captured original imported source\r\nclient\ndev tun\nremote 203.0.113.10 443 " + first + "\nremote 198.51.100.25 1195 " + second + "\nauth-user-pass\nremote-cert-tls server\nverify-x509-name captured-provider.example name\npeer-fingerprint " + strings.Repeat("ab", 32) + "\ntun-mtu 1400\ndata-ciphers AES-256-GCM:AES-128-GCM\n"
+		}
 		if protocol == "amneziawg-fast" {
 			parameters := profile.External.AmneziaWG.Parameters
 			parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
@@ -495,7 +505,7 @@ func (f *desktopWindowsExternalFixture) connect(t *testing.T, protocol string) *
 
 func TestDesktopWindowsExternalPublicConnectAndDisconnect(t *testing.T) {
 	for _, policy := range []string{"on-connect", "always"} {
-		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
+		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 			t.Run(policy+"/"+protocol, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					f := newDesktopWindowsExternalFixture(t, policy)
@@ -716,7 +726,7 @@ func TestDesktopWindowsExternalStagesBeforeStoppingPrevious(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalPolicyFamiliesStayDistinct(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn"} {
 		actual, variant := protocol, ""
 		if strings.HasPrefix(protocol, "amneziawg-") {
 			actual, variant = "amneziawg", strings.TrimPrefix(protocol, "amneziawg-")
@@ -872,7 +882,7 @@ func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer finish()
-				for _, change := range []string{"server", "compare", "start-layer", "entry", "openvpn"} {
+				for _, change := range []string{"server", "compare", "start-layer", "entry", "openvpn-server"} {
 					profile := cloneRouterProfile(f.profiles[protocol])
 					direct := true
 					entry := common.RouterProfile{}
@@ -886,8 +896,9 @@ func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
 						profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
 					case "entry":
 						direct, entry = false, f.base.profile
-					case "openvpn":
+					case "openvpn-server":
 						profile, _ = desktopExternalNativeFixture(t, "openvpn")
+						profile.MultihopExecution = "server"
 						profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
 					}
 					exit, err := standardExitFromExternalProfile(profile)
@@ -1026,7 +1037,7 @@ func TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
-	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong"} {
+	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong", "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed"} {
 		t.Run(direction, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDesktopWindowsExternalFixture(t, "always")
@@ -1038,7 +1049,7 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				if strings.Contains(direction, "socks5") {
 					protocol = "socks5"
 				}
-				for _, packet := range []string{"wireguard", "amneziawg-fast", "amneziawg-strong"} {
+				for _, packet := range []string{"wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 					if strings.Contains(direction, packet) {
 						protocol = packet
 					}

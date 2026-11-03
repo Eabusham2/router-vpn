@@ -146,6 +146,7 @@ SHARED_TESTS = (
     "TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof",
     "TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost",
     "TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant",
+    "TestDesktopWindowsExternalOpenVPNAuthorityKeepsOriginalImport",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -159,7 +160,7 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsoc
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
-              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong")),
+              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
             *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
               for fault in ("child-join", "journal-flush", "release", "foreign-receipt", "private-file")),
             *("TestDesktopWindowsExternalInvalidProofCannotConnect/" + fault
@@ -173,7 +174,9 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             *("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction
               for direction in ("router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5",
                                 "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast",
-                                "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong")),
+                                "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong",
+                                "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed")),
+            *("TestDesktopWindowsExternalOpenVPNAuthorityKeepsOriginalImport/" + protocol for protocol in ("openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
             *("TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant/" + protocol + suffix
               for protocol in ("wireguard", "amneziawg-fast", "amneziawg-strong")
               for suffix in ("", "/private-key", "/peer-key", "/preshared-key", "/resolver", *(("/parameters",) if protocol != "wireguard" else ()))),
@@ -216,7 +219,7 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_process_windows.go",
     "cmd/client/desktop_node_process_windows_native_test.go",
     "cmd/client/desktop_external_owned.go", "cmd/client/desktop_external_owned_stop.go",
-    "cmd/client/desktop_external_owned_dns.go", "cmd/client/desktop_external_owned_test.go",
+    "cmd/client/desktop_external_owned_dns.go", "cmd/client/desktop_external_owned_test.go", "cmd/client/desktop_external_openvpn_owned_test.go",
     "cmd/client/desktop_protection_selection.go", "cmd/client/desktop_external_native.go",
     "cmd/client/desktop_node_owned_prepare_windows.go", "cmd/client/desktop_native_workspace.go",
     "cmd/client/external_profile_connect.go", "cmd/client/dns_proof.go", "cmd/client/speed_lab_paths.go",

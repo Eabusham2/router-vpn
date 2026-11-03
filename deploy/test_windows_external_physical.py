@@ -55,6 +55,12 @@ STREAM_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + le
         *("latency50/" + protocol + "/" + fault for fault in ("source", "capture", "session", "current"))))
 PACKET_COMMANDS = ("TestRouterVPNDesktopExternalPhysicalCommandWireGuardSupportedTargets",
                    "TestRouterVPNDesktopExternalPhysicalCommandAmneziaSupportedTargets")
+OPENVPN_COMMAND = "TestRouterVPNDesktopExternalPhysicalCommandOpenVPNSupportedTargets"
+OPENVPN_COMMAND_CASES = (OPENVPN_COMMAND, *(OPENVPN_COMMAND + "/" + network + "/" + fault
+    for network in ("tcp", "udp", "mixed")
+    for fault in ("valid", "source", "credential", "username", "endpoint", "tls-name", "fingerprint", "remote-order", "remote-network", "remote-removed", "session", "original-config")))
+OPENVPN_FACTORY_CASES = tuple("TestRouterVPNExternalPhysicalStartupSocketPhase/openvpn-" + network
+    for network in ("tcp", "udp", "mixed"))
 PACKET_PROTOCOLS = ("wireguard", "awg2-fast", "awg2-strong")
 PACKET_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + leaf
     for protocol in PACKET_PROTOCOLS
@@ -226,7 +232,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNDesktopExternalPhysicalCommand" + name for name in
              ("RequiresExactDerivedInputs", "SeparatesProofAndMailboxIdentity", "RejectsRelabeledNetworkProof", "UsesActualPreparedNativeFactory",
               "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionCannotSkipBarrier",
-              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES + (HYSTERIA2_COMMAND, SOCKS_COMMAND) + PACKET_COMMANDS),
+              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES + (HYSTERIA2_COMMAND, SOCKS_COMMAND) + PACKET_COMMANDS + OPENVPN_COMMAND_CASES),
         ("box", ".", "^TestRouterVPNDesktopExternalPhysical",
          tuple("TestRouterVPNDesktopExternalPhysical" + name for name in
              ("BoxRejectsChangedDerivedGraph", "BoxRequiresPreparedStartedOwner", "BoxRetainsExactPolicyAndDerivedIdentity",
@@ -235,7 +241,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner",
           "TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures",
           "TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback",
-          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES + PACKET_FACTORY_CASES),
+          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES + PACKET_FACTORY_CASES + OPENVPN_FACTORY_CASES),
     )
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-external-") as directory:
         for name, package, selection, required in suites:

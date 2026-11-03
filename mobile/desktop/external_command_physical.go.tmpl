@@ -27,7 +27,7 @@ func routerVPNExternalCommandPhysical(files *routerVPNExternalFiles, original *m
 	}
 	metadata := policy.Metadata()
 	if metadata.SOCKSUDPAssociationRequired && !(metadata.Protocol == "socks5" && (runtime.GOOS == "linux" || runtime.GOOS == "windows")) || metadata.Protocol != "http-connect" && metadata.Protocol != "https-connect" && metadata.Protocol != "shadowsocks" && metadata.Protocol != "hysteria2" && metadata.Protocol != "socks5" &&
-		metadata.Protocol != "wireguard" && metadata.Protocol != "amneziawg" && !(runtime.GOOS == "linux" && metadata.Protocol == "openvpn") {
+		metadata.Protocol != "wireguard" && metadata.Protocol != "amneziawg" && metadata.Protocol != "openvpn" {
 		return nil, routerVPNExternalFailure
 	}
 	staged, err := files.read("sing-box.json", 4<<20)

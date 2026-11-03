@@ -32,7 +32,7 @@ class NodeProcessRunner(unittest.TestCase):
                      "TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost"):
             self.assertIn(root, GATE.SHARED_TESTS)
         for policy in ("on-connect", "always"):
-            for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"):
+            for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"):
                 self.assertIn("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol,
                               GATE.EXPECTED)
         self.assertIn("cmd/client/desktop_external_owned_test.go", GATE.REQUIRED_SOURCES)
@@ -46,6 +46,15 @@ class NodeProcessRunner(unittest.TestCase):
                 self.assertIn(parent + "/" + protocol + "/" + fault, GATE.EXPECTED)
             if protocol != "wireguard":
                 self.assertIn(parent + "/" + protocol + "/parameters", GATE.EXPECTED)
+            for direction in ("router-" + protocol + "-router", protocol + "-router-" + protocol):
+                self.assertIn("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction, GATE.EXPECTED)
+
+    def test_openvpn_original_import_and_both_restore_directions_are_mandatory(self):
+        parent = "TestDesktopWindowsExternalOpenVPNAuthorityKeepsOriginalImport"
+        self.assertIn(parent, GATE.SHARED_TESTS)
+        self.assertIn("cmd/client/desktop_external_openvpn_owned_test.go", GATE.REQUIRED_SOURCES)
+        for protocol in ("openvpn-tcp", "openvpn-udp", "openvpn-mixed"):
+            self.assertIn(parent + "/" + protocol, GATE.EXPECTED)
             for direction in ("router-" + protocol + "-router", protocol + "-router-" + protocol):
                 self.assertIn("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction, GATE.EXPECTED)
 

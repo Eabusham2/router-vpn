@@ -40,6 +40,13 @@ func desktopOpenVPNPhysicalInputs(t *testing.T, network, kill string) (map[strin
 }
 
 func TestDesktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t *testing.T) {
+	desktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t, "linux")
+}
+func TestDesktopExternalWindowsOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t *testing.T) {
+	desktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t, "windows")
+}
+
+func desktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t *testing.T, target string) {
 	for _, network := range []string{"tcp", "udp", "mixed"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			t.Run(network+"/"+kill, func(t *testing.T) {
@@ -50,11 +57,11 @@ func TestDesktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t *tes
 				if err != nil {
 					t.Fatal(err)
 				}
-				policy := desktopExternalPlan(t, original, desktopExternalTestSession, "linux")
+				policy := desktopExternalPlan(t, original, desktopExternalTestSession, target)
 				actual, err := policy.Capture()
 				meta := policy.Metadata()
 				if err != nil || !reflect.DeepEqual(actual, originalCapture) || policy.OriginalPolicy() != original || policy.Validate() != nil ||
-					meta.Protocol != "openvpn" || meta.RootType != "openvpn-client" || meta.TargetOS != "linux" || meta.SOCKSUDPAssociationRequired ||
+					meta.Protocol != "openvpn" || meta.RootType != "openvpn-client" || meta.TargetOS != target || meta.SOCKSUDPAssociationRequired ||
 					meta.OriginalSourceSHA256 != original.SourceSHA256() || meta.OriginalConfigSHA256 != externalDigest([]byte(before)) ||
 					meta.OriginalMetadataSHA256 != externalDigest([]byte(metadata)) || meta.OriginalCaptureSHA256 != actual.CaptureSHA256 ||
 					meta.KillSwitchPolicy != kill || meta.IPv6Mode != "on" || !meta.HomeLANAccess || actual.ConfiguredMTU != 1360 ||
@@ -112,7 +119,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 			t.Fatal("unsupported OpenVPN capture acquired a retained owner", target)
 		}
 	}
-	for _, target := range []string{"windows", "darwin"} {
+	for _, target := range []string{"darwin", "android"} {
 		t.Run(target, func(t *testing.T) {
 			graph, capture, _ := desktopOpenVPNPhysicalInputs(t, "mixed", "always")
 			reject(t, externalDesktopCompile(t, graph, capture), target)
@@ -121,6 +128,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 	t.Run("off", func(t *testing.T) {
 		graph, capture, _ := desktopOpenVPNPhysicalInputs(t, "mixed", "off")
 		reject(t, externalDesktopCompile(t, graph, capture), "linux")
+		reject(t, externalDesktopCompile(t, graph, capture), "windows")
 	})
 	for _, entry := range []string{"router-wg", "socks5", "shadowsocks", "hysteria2"} {
 		t.Run("predecessor/"+entry, func(t *testing.T) {
@@ -128,6 +136,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 			externalOpenVPNReplace(t, graph, capture, false, "tcp")
 			capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 			reject(t, externalDesktopCompile(t, graph, capture), "linux")
+			reject(t, externalDesktopCompile(t, graph, capture), "windows")
 		})
 	}
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
@@ -154,6 +163,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 				t.Fatal("layer guard fixture acquired an unrelated predecessor", err)
 			}
 			reject(t, original, "linux")
+			reject(t, original, "windows")
 		})
 	}
 	for _, choice := range []string{"server", "auto"} {
@@ -170,6 +180,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 				t.Fatal(err)
 			}
 			reject(t, original, "linux")
+			reject(t, original, "windows")
 		})
 	}
 }
