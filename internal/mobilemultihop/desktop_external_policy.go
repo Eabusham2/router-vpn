@@ -73,9 +73,11 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
 	kind, supported := kinds[capture.Protocol]
 	family := "outbounds"
-	if capture.Protocol == "hysteria2" && (targetOS == "linux" || targetOS == "windows") {
+	if capture.Protocol == "hysteria2" {
 		// Hysteria2 opens its one captured UDP socket lazily, after the native
-		// external owner activates. It needs no eager endpoint startup phase.
+		// external owner activates. The sealed Darwin lower plan uses the same
+		// original UDP tuple; native host admission remains a separate gate.
+		// It needs no eager endpoint startup phase.
 		kind, supported = "hysteria2", true
 	}
 	// Native packet endpoints retain their original table and complete captured lower

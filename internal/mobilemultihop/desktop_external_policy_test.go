@@ -52,12 +52,6 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 					for _, lan := range []bool{true, false} {
 						t.Run(strings.Join([]string{protocol, target, kill, ipv6, map[bool]string{true: "lan", false: "no-lan"}[lan]}, "/"), func(t *testing.T) {
 							original := desktopExternalPolicyFixture(t, protocol, kill, ipv6, lan)
-							if protocol == "hysteria2" && target == "darwin" {
-								if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
-									t.Fatal("connected UDP broadened unimplemented Darwin Hysteria2 admission")
-								}
-								return
-							}
 							before, oldMeta := original.Config(), original.Metadata()
 							policy := desktopExternalPlan(t, original, desktopExternalTestSession, target)
 							meta := policy.Metadata()
@@ -116,7 +110,7 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 			}
 		}
 	}
-	if count != 112 {
+	if count != 120 {
 		t.Fatal("missing complete direct proxy/device/target combinations", count)
 	}
 }
@@ -306,7 +300,7 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 			t.Fatal("uncaptured session acquired a physical plan")
 		}
 	}
-	for _, protocol := range []string{"wireguard", "hysteria2", "amneziawg"} {
+	for _, protocol := range []string{"wireguard", "amneziawg"} {
 		original := desktopExternalPolicyFixture(t, protocol, "always", "on", true)
 		for _, target := range []string{"windows", "darwin"} {
 			if target == "windows" {
@@ -361,6 +355,9 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 		}
 		before := original.Config()
 		targets := []string{"linux", "windows"}
+		if protocol == "hysteria2" {
+			targets = append(targets, "darwin")
+		}
 		for _, target := range targets {
 			if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil || derived != nil || original.Config() != before {
 				t.Fatal("unsupported selection acquired or changed a physical owner", protocol, target)
