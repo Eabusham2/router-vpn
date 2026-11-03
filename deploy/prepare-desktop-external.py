@@ -109,6 +109,7 @@ BOX_TEMPLATES = {
     'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
 }
 PEER_TEMPLATES = {
+    'node_darwin_external_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_darwin_external_peer_test.go',
     'node_wg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_wg_peer_test.go',
     'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_awg_peer_test.go',
     'node_linux_peer_test.go.tmpl': 'protocol/routervpnamnezia/node_linux_peer_test.go',
@@ -673,6 +674,8 @@ def copy_encrypted_peer_templates(vendor):
         elif name in ('node_pq_peer_test.go.tmpl', 'node_max_peer_test.go.tmpl', 'node_max_stream_test.go.tmpl',
                       'node_max_tls_reference_test.go.tmpl', 'node_max_credentials_test.go.tmpl'):
             prefix = b'//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test\n\npackage routervpnpq\n'
+        elif name == 'node_darwin_external_peer_test.go.tmpl':
+            prefix = b'//go:build darwin && routervpn_darwin_external_host\n\n' + prefix
         elif name == 'node_linux_peer_test.go.tmpl':
             prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
         elif name == 'node_router_peer_linux_test.go.tmpl':

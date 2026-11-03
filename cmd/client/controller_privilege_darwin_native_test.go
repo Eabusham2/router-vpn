@@ -191,6 +191,9 @@ func macOSControllerFixtureChild() error {
 	if owned == nil || owned.accessToken == "" || owned.ownerToken == "" {
 		return errors.New("native fixture lost actual inherited launch credentials")
 	}
+	if handled, err := macOSExternalNativeController(owned); handled {
+		return err
+	}
 	parent, ok := owned.nodeParent.(*desktopMacOSParent)
 	if !ok || parent == nil {
 		return errors.New("actual Darwin bootstrap omitted its original native parent")

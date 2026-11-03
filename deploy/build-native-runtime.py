@@ -144,6 +144,9 @@ def inputs():
                              ROOT/'deploy/test_linux_node_child_tun_runner.py',
                              ROOT/'deploy/test_linux_node_host_tun.py',
                              ROOT/'deploy/test_linux_node_host_tun_runner.py',
+                             ROOT/'deploy/test_macos_external_host.py',
+                             ROOT/'deploy/test_macos_external_host_runner.py',
+                             ROOT/'deploy/seal-native-runtime.py',
                              *sorted((ROOT/'cmd/client').glob('*.go')),
                              ROOT/'cmd/client/ui.html', ROOT/'cmd/client/logical_ui.js',
                              *sorted((ROOT/'internal').rglob('*.go')),
@@ -437,6 +440,47 @@ def verify_installed_linux_host(source, bundle, target, env):
     run([sys.executable, ROOT/'deploy/test_linux_node_host_tun.py', source, '--bundle', bundle], cwd=ROOT, env=env, timeout=2400)
 
 
+def verify_installed_darwin_host(source, bundle, target, env):
+    if env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE') != '1':
+        return
+    host = 'darwin/'+{'x86_64': 'amd64', 'arm64': 'arm64'}.get(platform.machine(), '')
+    if platform.system() != 'Darwin' or target != host or env.get('GOOS') != 'darwin' or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Explicit Darwin native acceptance requires its matching disposable host')
+    reuse(bundle, target, env=env)
+    original = hashlib.sha256((Path(bundle)/'NATIVE-RUNTIME.json').read_bytes()).hexdigest()
+    run([sys.executable, ROOT/'deploy/test_macos_external_host_runner.py'], cwd=ROOT, env=env, timeout=60)
+    command = [sys.executable, ROOT/'deploy/test_macos_external_host.py', '--bundle', bundle]
+    if source is not None:
+        command += ['--source', source]
+    output = run(command, cwd=ROOT, env=env, timeout=1500)
+    prefix = 'Native Darwin retained external acceptance: '
+    records = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+    if len(records) != 1:
+        raise ValueError('Explicit Darwin native acceptance omitted its unique exact receipt')
+    def unique(fields):
+        result = {}
+        for key, value in fields:
+            if key in result:
+                raise ValueError('Native Darwin receipt repeated a field')
+            result[key] = value
+        return result
+    receipt = json.loads(records[0], object_pairs_hook=unique)
+    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or receipt.get('target') != target
+            or receipt.get('source_sha256') != digest() or receipt.get('bundle_sha256') != original
+            or receipt.get('cases') != ['shadowsocks', 'http-connect', 'https-connect', 'hysteria2']
+            or not re.fullmatch('[0-9a-f]{64}', receipt.get('sealed_bundle_sha256', ''))
+            or set(receipt.get('images', {})) != {'controller', 'peer'}
+            or any(not re.fullmatch('[0-9a-f]{64}', value) for value in receipt['images'].values())
+            or set(receipt.get('sources', {})) != {'application', 'peer'}
+            or any(not group or any(not isinstance(name, str) or not name or name.startswith('/') or '..' in name.split('/')
+                                    or not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
+                                    for name, value in group.items()) for group in receipt['sources'].values())):
+        raise ValueError('Native Darwin host receipt changed its exact source, bundle or protocol coverage')
+    if hashlib.sha256((Path(bundle)/'NATIVE-RUNTIME.json').read_bytes()).hexdigest() != original:
+        raise ValueError('Native Darwin acceptance changed its delivered bundle')
+    print(output, flush=True)
+
+
 def checkout(path, repository, revision):
     run(['git', 'init', path])
     # Keep pinned upstream blobs identical on Windows too. The application's
@@ -498,12 +542,21 @@ def stage_pt_notices(stage):
 
 def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None):
     env, policy = environment(target, compiler=True), digest()
+    native_acceptance = env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE', '')
+    if native_acceptance not in ('', '1'):
+        raise ValueError('Unknown explicit Darwin native acceptance selection')
+    if native_acceptance == '1':
+        host = 'darwin/'+{'x86_64': 'amd64', 'arm64': 'arm64'}.get(platform.machine(), '')
+        if platform.system() != 'Darwin' or target != host:
+            raise ValueError('Explicit Darwin native acceptance cannot target another build host')
     destination = Path(destination).absolute()
     if destination.is_symlink():
         raise ValueError('Refusing a linked native runtime destination')
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and any(destination.iterdir()):
         reuse(destination, target, policy, env)
+        if target.startswith('darwin/'):
+            verify_installed_darwin_host(None, destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -708,6 +761,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 raise ValueError('Actual native engine omitted its captured external owner command')
             if target.startswith('linux/'):
                 verify_installed_linux_host(source, stage, target, env)
+            elif target.startswith('darwin/'):
+                verify_installed_darwin_host(source, stage, target, env)
         if destination.exists():
             destination.rmdir()
         os.replace(stage, destination)

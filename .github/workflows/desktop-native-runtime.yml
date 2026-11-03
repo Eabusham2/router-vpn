@@ -199,6 +199,10 @@ jobs:
           if [[ '${{ matrix.target }}' == windows/* ]]; then
             runtime_args+=(--tor-compiled dist/tor-compiled/windows-amd64)
           fi
+          # Native PF/system-keychain acceptance is explicit on disposable CI only.
+          if [[ '${{ matrix.target }}' == darwin/* ]]; then
+            export ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE=1
+          fi
           python3 deploy/build-native-runtime.py "${runtime_args[@]}"
           python3 deploy/test_desktop_tor_package.py --package 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}' --within-native
           python3 deploy/test_desktop_native_bundle.py 'dist/native-runtime/${{ matrix.slug }}' '${{ matrix.target }}'

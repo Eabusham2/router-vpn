@@ -1,0 +1,49 @@
+//go:build darwin && routervpn_darwin_external_host
+
+package routervpnamnezia
+
+import (
+	"net"
+	"net/netip"
+	"os"
+	"testing"
+)
+
+// This is an independent real protocol peer on a disposable native host. Its
+// listener address is captured from a currently up physical interface, never
+// supplied as a substitute for an engine socket, route or PF ownership proof.
+func TestRouterVPNDesktopDarwinExternalReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_CHILD") != "1" || os.Geteuid() != 0 {
+		t.Fatal("Darwin external reference requires its explicit native root runner")
+	}
+	address, err := netip.ParseAddr(os.Getenv("ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_ADDRESS"))
+	if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() {
+		t.Fatal("Darwin reference lacks its captured physical address", err)
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, device := range interfaces {
+		if device.Flags&net.FlagUp == 0 || device.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := device.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range addresses {
+			prefix, err := netip.ParsePrefix(raw.String())
+			if err == nil && prefix.Addr().Unmap() == address {
+				found++
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatal("Darwin reference address is not one current physical interface")
+	}
+	desktopExternalInstalledReferenceProcess(t, address.String(), map[string]bool{
+		"shadowsocks": true, "http-connect": true, "https-connect": true, "hysteria2": true,
+	})
+}

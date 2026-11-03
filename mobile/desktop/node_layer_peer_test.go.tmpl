@@ -2205,6 +2205,16 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	if os.Getenv("ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD") != "1" {
 		t.Fatal("unknown installed external reference owner")
 	}
+	desktopExternalInstalledReferenceProcess(t, "11.77.0.2", map[string]bool{
+		"shadowsocks": true, "http-connect": true, "https-connect": true, "hysteria2": true,
+		"wireguard": true, "amneziawg": true, "openvpn": true, "socks5": true,
+	})
+}
+
+// Each native runner independently captures its allowed address and protocols.
+// The original Linux entry keeps its fixed namespace address and full set.
+func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress string, protocols map[string]bool) {
+	t.Helper()
 	reader := STD.NewReaderSize(os.Stdin, desktopNodeLayerReferenceLimit+1)
 	line, err := reader.ReadSlice('\n')
 	var request desktopExternalInstalledPeerRequest
@@ -2212,7 +2222,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	var trailing any
 	if err != nil || len(line) > desktopNodeLayerReferenceLimit || decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
-		request.Address != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" && request.Protocol != "socks5" {
+		request.Address != capturedAddress || !protocols[request.Protocol] {
 		t.Fatal("installed external reference lost its exact bounded request", err)
 	}
 	if request.Protocol != "openvpn" && (request.OpenVPNNetwork != "" || request.OpenVPNFallback) {
