@@ -115,7 +115,7 @@ func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct 
 		return false
 	}
 	switch profile.External.Protocol {
-	case "shadowsocks", "http-connect", "https-connect", "hysteria2":
+	case "shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5":
 		return true
 	}
 	return false

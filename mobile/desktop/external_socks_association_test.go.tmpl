@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package routervpndesktoppt
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -55,7 +56,7 @@ type externalSOCKSFixture struct {
 
 func newExternalSOCKSFixture(t *testing.T, address netip.AddrPort, ipv6 string, relays ...netip.AddrPort) *externalSOCKSFixture {
 	t.Helper()
-	policy := externalPhysicalDeviceFixture(t, "socks5", address.Addr().String(), int(address.Port()), false, "linux", ipv6, "always")
+	policy := externalPhysicalDeviceFixture(t, "socks5", address.Addr().String(), int(address.Port()), false, runtime.GOOS, ipv6, "always")
 	f := newExternalPhysicalFixture(t, policy)
 	var graph struct {
 		Outbounds []json.RawMessage `json:"outbounds"`

@@ -389,8 +389,8 @@ func (r *desktopExternalSOCKSRelay) receipts(t *testing.T) (tcp, udp mobiletor.D
 }
 
 func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegrationCA) {
-	if runtime.GOOS != "linux" {
-		t.Fatal("ordinary SOCKS5 association acceptance requires the captured Linux host")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Fatal("ordinary SOCKS5 association acceptance requires the captured native host")
 	}
 	t.Run("socks5/independent-associations-control-eof", func(t *testing.T) {
 		f := newDesktopExternalIntegrationFixture(t, ca, "socks5", "")

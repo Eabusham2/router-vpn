@@ -96,7 +96,7 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 								t.Fatal("Hysteria2 lost its one captured UDP destination")
 							}
 							delete(root, "detour")
-							if protocol == "socks5" && target == "linux" {
+							if protocol == "socks5" && (target == "linux" || target == "windows") {
 								if root["type"] != DesktopExternalSOCKSType || root["session_id"] != meta.SessionID || root["source_sha256"] != meta.SourceSHA256 {
 									t.Fatal("SOCKS association lost its exact derived source owner")
 								}
@@ -432,5 +432,32 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 			}
 			reject(t, original)
 		})
+	}
+}
+
+// The native SOCKS authentication frame has one-byte lengths. Reject before
+// deriving either admitted host; never truncate or change captured credentials.
+func TestDesktopExternalSOCKSAuthenticationBoundsPreserveExactOriginal(t *testing.T) {
+	for _, target := range []string{"linux", "windows"} {
+		for _, field := range []string{"username", "password"} {
+			for _, size := range []int{255, 256} {
+				t.Run(target+"/"+field+"/"+strconv.Itoa(size), func(t *testing.T) {
+					graph, selection := desktopExternalInputFixture(t, "socks5", "", "")
+					profile := selection["profile"].(map[string]any)
+					profile["kill_switch_policy"], profile["kill_switch"] = "always", true
+					graph["outbounds"].([]any)[0].(map[string]any)[field] = strings.Repeat("a", size)
+					selection["profile"].(map[string]any)["external"].(map[string]any)["socks5"].(map[string]any)[field] = strings.Repeat("a", size)
+					original := externalDesktopCompile(t, graph, selection)
+					before := original.Config()
+					derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
+					if (err == nil) != (size == 255) || original.Config() != before {
+						t.Fatal("native authentication changed or accepted an unrepresentable original credential", err)
+					}
+					if derived != nil && derived.Validate() != nil {
+						t.Fatal("valid exact authentication lost its retained seal")
+					}
+				})
+			}
+		}
 	}
 }

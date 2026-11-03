@@ -104,7 +104,7 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 		k.locked = true
 		return &desktopWindowsExternalRelease{f: f, target: target, barrier: barrier}, nil
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5"} {
 		profile, _ := desktopExternalNativeFixture(t, protocol)
 		profile.ID = "external-" + protocol
 		profile.Name = protocol
@@ -487,7 +487,7 @@ func (f *desktopWindowsExternalFixture) connect(t *testing.T, protocol string) *
 
 func TestDesktopWindowsExternalPublicConnectAndDisconnect(t *testing.T) {
 	for _, policy := range []string{"on-connect", "always"} {
-		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5"} {
 			t.Run(policy+"/"+protocol, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					f := newDesktopWindowsExternalFixture(t, policy)
@@ -708,7 +708,7 @@ func TestDesktopWindowsExternalStagesBeforeStoppingPrevious(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalPolicyFamiliesStayDistinct(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5"} {
 		l := desktopExternalPhysicalLaunchFixture(t, protocol, "always", "off", false)
 		if err := prepareDesktopExternalPhysical(l, "windows"); err != nil {
 			t.Fatal(err)
@@ -847,47 +847,51 @@ func TestDesktopWindowsExternalProcessArgumentsRemainExact(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newDesktopWindowsExternalFixture(t, "always")
-		original := f.connect(t, "http-connect")
-		if _, err := waitForSpeedLabConnectedIdentity(f.base.a, time.Second); err != nil {
-			t.Fatal(err)
-		}
-		_, _, finish, err := f.base.a.beginSpeedLabTemporaryOperation()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer finish()
-		for _, change := range []string{"server", "compare", "start-layer", "entry", "wireguard"} {
-			profile := cloneRouterProfile(f.profiles["https-connect"])
-			direct := true
-			entry := common.RouterProfile{}
-			switch change {
-			case "server":
-				profile.MultihopExecution = "server"
-			case "compare":
-				profile.MultihopExecution = "auto"
-			case "start-layer":
-				profile = desktopLayerProfile(t, "https-connect", common.StartLayerAES256GCM)
-				profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
-			case "entry":
-				direct, entry = false, f.base.profile
-			case "wireguard":
-				profile, _ = desktopExternalNativeFixture(t, "wireguard")
-				profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
-			}
-			exit, err := standardExitFromExternalProfile(profile)
-			if err != nil {
-				t.Fatal("fixture import", change, err)
-			}
-			if _, err := prepareDesktopExternalLaunch(f.base.a, profile, entry, exit, direct, ""); err == nil || !strings.Contains(err.Error(), "no captured native controller successor") {
-				t.Fatal("unsupported graph entered a legacy launch path", change, err)
-			}
-			if len(f.children) != 1 || f.base.a.cmd != original.command || original.external.windows.current(true) != nil || f.base.a.nodeProtection.active != original.external.windows.attempt {
-				t.Fatal("unsupported graph changed its original live owner", change)
-			}
-		}
-	})
+	for _, protocol := range []string{"https-connect", "socks5"} {
+		t.Run(protocol, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDesktopWindowsExternalFixture(t, "always")
+				original := f.connect(t, "http-connect")
+				if _, err := waitForSpeedLabConnectedIdentity(f.base.a, time.Second); err != nil {
+					t.Fatal(err)
+				}
+				_, _, finish, err := f.base.a.beginSpeedLabTemporaryOperation()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer finish()
+				for _, change := range []string{"server", "compare", "start-layer", "entry", "wireguard"} {
+					profile := cloneRouterProfile(f.profiles[protocol])
+					direct := true
+					entry := common.RouterProfile{}
+					switch change {
+					case "server":
+						profile.MultihopExecution = "server"
+					case "compare":
+						profile.MultihopExecution = "auto"
+					case "start-layer":
+						profile = desktopLayerProfile(t, protocol, common.StartLayerAES256GCM)
+						profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
+					case "entry":
+						direct, entry = false, f.base.profile
+					case "wireguard":
+						profile, _ = desktopExternalNativeFixture(t, "wireguard")
+						profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
+					}
+					exit, err := standardExitFromExternalProfile(profile)
+					if err != nil {
+						t.Fatal("fixture import", change, err)
+					}
+					if _, err := prepareDesktopExternalLaunch(f.base.a, profile, entry, exit, direct, ""); err == nil || !strings.Contains(err.Error(), "no captured native controller successor") {
+						t.Fatal("unsupported graph entered a legacy launch path", change, err)
+					}
+					if len(f.children) != 1 || f.base.a.cmd != original.command || original.external.windows.current(true) != nil || f.base.a.nodeProtection.active != original.external.windows.attempt {
+						t.Fatal("unsupported graph changed its original live owner", change)
+					}
+				}
+			})
+		})
+	}
 }
 
 func TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal(t *testing.T) {
@@ -1010,7 +1014,7 @@ func TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
-	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2"} {
+	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5"} {
 		t.Run(direction, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDesktopWindowsExternalFixture(t, "always")
@@ -1019,7 +1023,10 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				if strings.Contains(direction, "hysteria2") {
 					protocol = "hysteria2"
 				}
-				routerFirst := direction == "router-external-router" || direction == "router-hysteria2-router"
+				if strings.Contains(direction, "socks5") {
+					protocol = "socks5"
+				}
+				routerFirst := direction == "router-external-router" || direction == "router-hysteria2-router" || direction == "router-socks5-router"
 				var original *desktopNodeLaunch
 				if routerFirst {
 					response := httptest.NewRecorder()

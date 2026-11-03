@@ -42,8 +42,8 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if err != nil {
 		return err
 	}
-	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" &&
-		!(targetOS == "linux" && (capture.Protocol == "socks5" || capture.Protocol == "wireguard" || capture.Protocol == "amneziawg" || capture.Protocol == "openvpn")) ||
+	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
+		!(targetOS == "linux" && (capture.Protocol == "wireguard" || capture.Protocol == "amneziawg" || capture.Protocol == "openvpn")) ||
 		capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
 		capture.StartLayer != "" || capture.EntryStartLayer != "" || capture.KillSwitchPolicy == "off" {
 		return nil
@@ -57,7 +57,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	metadata := physical.Metadata()
 	if !bytes.Equal(launch.config, []byte(original.Config())) || !bytes.Equal(launch.metadata, []byte(original.Metadata())) ||
 		metadata.OriginalSourceSHA256 != owner.expected.SourceSHA256 || metadata.OriginalConfigSHA256 != owner.expected.ConfigSHA256 ||
-		owner.expected.SessionID != owner.session || metadata.SOCKSUDPAssociationRequired && !(targetOS == "linux" && metadata.Protocol == "socks5") {
+		owner.expected.SessionID != owner.session || metadata.SOCKSUDPAssociationRequired && !(metadata.Protocol == "socks5" && (targetOS == "linux" || targetOS == "windows")) {
 		return errors.New("ordinary physical preparation lost its original proof or configuration identity")
 	}
 	receipt, err := json.Marshal(metadata)
@@ -86,9 +86,9 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 	if err != nil || meta.TargetOS != "windows" && meta.TargetOS != "linux" || meta.SessionID != owner.session || owner.expected.SessionID != owner.session ||
 		meta.OriginalSourceSHA256 != owner.expected.SourceSHA256 || meta.OriginalConfigSHA256 != owner.expected.ConfigSHA256 ||
 		original.SourceSHA256() != meta.OriginalSourceSHA256 || original.Config() != physical.OriginalPolicy().Config() ||
-		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired && !(meta.TargetOS == "linux" && meta.Protocol == "socks5") ||
-		(meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "shadowsocks" && meta.Protocol != "hysteria2" &&
-			!(meta.TargetOS == "linux" && (meta.Protocol == "socks5" || meta.Protocol == "wireguard" || meta.Protocol == "amneziawg" || meta.Protocol == "openvpn"))) {
+		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired && !(meta.Protocol == "socks5" && (meta.TargetOS == "linux" || meta.TargetOS == "windows")) ||
+		(meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "shadowsocks" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" &&
+			!(meta.TargetOS == "linux" && (meta.Protocol == "wireguard" || meta.Protocol == "amneziawg" || meta.Protocol == "openvpn"))) {
 		return nil, errors.New("ordinary physical capture differs from its retained original graph")
 	}
 	return &meta, nil

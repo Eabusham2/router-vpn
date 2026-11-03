@@ -34,6 +34,18 @@ HYSTERIA2_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" +
     "latency50/hysteria2/session", "latency50/hysteria2/current"))
 HYSTERIA2_FACTORY_CASES = ("TestRouterVPNExternalPhysicalStartupSocketPhase/hysteria2",
     "TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple/hysteria2-udp")
+SOCKS_COMMAND = "TestRouterVPNDesktopExternalPhysicalCommandSOCKSSupportedTargets"
+SOCKS_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + case for case in (
+    "socks5/proof-and-mtu", "socks5/reject/dns", "socks5/reject/exit", "socks5/reject/credential",
+    "socks5/reject/tls-name", "socks5/reject/tls-root", "socks5/reject/lower-denied", "socks5/reject/truncated",
+    "socks5/reject/auth-downgrade", "socks5/reject/relay-domain", "socks5/reject/relay-wildcard",
+    "socks5/reject/relay-zero", "socks5/reject/relay-uncaptured", "socks5/reject/control-eof",
+    "socks5/independent-associations-control-eof", "socks5/cancelled-proof", "socks5/replacement-keeps-new-source",
+    "latency50/socks5", "latency50/socks5/source", "latency50/socks5/capture", "latency50/socks5/session", "latency50/socks5/current"))
+SOCKS_FACTORY_CASES = tuple("TestRouterVPNExternalSOCKS" + name for name in (
+    "RequiresExactNativeRoot", "AssociationsOwnDistinctControlAndRelaySockets",
+    "CancelledAuthenticationJoinsOnlyItsOperation", "RejectsRetiredManagersAndForeignRelayCalls",
+    "OwnedClosePreservesMixedFailures", "RootCloseJoinsAndRetainsOriginalFailure"))
 JOURNAL_COMMAND_CASES = tuple("TestRouterVPNDesktopExternalPhysicalCommandJournal" + name for name in (
     "BeforePrivateInputs", "PublicRequiresCompleteCapture", "WindowsHasNoFileFallback", "RetainedPipeline",
     "PartialRetirementRequiresJoin", "AdmissionCloseJoinsCallback", "TransferInput", "RetirementReceipt",
@@ -157,16 +169,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNDesktopExternalPhysicalCommand" + name for name in
              ("RequiresExactDerivedInputs", "SeparatesProofAndMailboxIdentity", "RejectsRelabeledNetworkProof", "UsesActualPreparedNativeFactory",
               "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionCannotSkipBarrier",
-              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES + (HYSTERIA2_COMMAND,)),
+              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES + (HYSTERIA2_COMMAND, SOCKS_COMMAND)),
         ("box", ".", "^TestRouterVPNDesktopExternalPhysical",
          tuple("TestRouterVPNDesktopExternalPhysical" + name for name in
              ("BoxRejectsChangedDerivedGraph", "BoxRequiresPreparedStartedOwner", "BoxRetainsExactPolicyAndDerivedIdentity",
-              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration")) + HYSTERIA2_BOX_CASES),
-        ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysical(Windows|Admission|Journal|Retirement|StartupSocketPhase|ActualBytesAndCapturedTuple)",
+              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration")) + HYSTERIA2_BOX_CASES + SOCKS_BOX_CASES),
+        ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternal(Physical(Windows|Admission|Journal|Retirement|StartupSocketPhase|ActualBytesAndCapturedTuple)|SOCKS)",
          ("TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner",
           "TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures",
           "TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback",
-          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES),
+          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES),
     )
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-external-") as directory:
         for name, package, selection, required in suites:

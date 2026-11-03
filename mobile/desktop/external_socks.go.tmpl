@@ -51,13 +51,13 @@ type ExternalSOCKSOutbound struct {
 
 func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options ExternalSOCKSOptions) (adapter.Outbound, error) {
 	address, err := netip.ParseAddr(options.Server)
-	if runtime.GOOS != "linux" || ctx == nil || ctx.Err() != nil || tag != mobilemultihop.ExternalFinalTag ||
+	if (runtime.GOOS != "linux" && runtime.GOOS != "windows") || ctx == nil || ctx.Err() != nil || tag != mobilemultihop.ExternalFinalTag ||
 		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) ||
 		err != nil || address.String() != options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || options.ServerPort == 0 ||
 		options.Version != "5" || options.Network != "" || options.UDPOverTCP != nil ||
 		!reflect.DeepEqual(options.DialerOptions, option.DialerOptions{Detour: mobilemultihop.DesktopExternalPhysicalTag}) ||
 		(options.Username == "") != (options.Password == "") || len(options.Username) > 255 || len(options.Password) > 255 {
-		return nil, errors.New("retained SOCKS5 requires its exact Linux control, authentication and native lower owner")
+		return nil, errors.New("retained SOCKS5 requires its exact native control, authentication and native lower owner")
 	}
 	return &ExternalSOCKSOutbound{
 		Adapter: outbound.NewAdapterWithDialerOptions(mobilemultihop.DesktopExternalSOCKSType, tag, []string{"tcp", "udp"}, options.DialerOptions),
@@ -66,11 +66,11 @@ func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.Conte
 }
 
 func (o *ExternalSOCKSOutbound) prepare(policy *mobilemultihop.DesktopExternalPolicy, owner *ExternalNetworkOwner, lower *ExternalPhysicalOutbound) error {
-	if o == nil || policy == nil || policy.Validate() != nil || owner == nil || lower == nil || runtime.GOOS != "linux" {
+	if o == nil || policy == nil || policy.Validate() != nil || owner == nil || lower == nil || (runtime.GOOS != "linux" && runtime.GOOS != "windows") {
 		return errors.New("retained SOCKS5 has no original native preparation")
 	}
 	meta := policy.Metadata()
-	if meta.TargetOS != "linux" || meta.Protocol != "socks5" || !meta.SOCKSUDPAssociationRequired ||
+	if meta.TargetOS != runtime.GOOS || meta.Protocol != "socks5" || !meta.SOCKSUDPAssociationRequired ||
 		owner.capture != o.options.ExternalCaptureOptions || lower.options != owner.capture ||
 		meta.SessionID != o.options.SessionID || meta.SourceSHA256 != o.options.SourceSHA256 {
 		return errors.New("retained SOCKS5 belongs to another captured native policy")

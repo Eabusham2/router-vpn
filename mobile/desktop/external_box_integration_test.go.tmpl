@@ -1616,10 +1616,10 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
-		protocols = append(protocols, "hysteria2")
+		protocols = append(protocols, "hysteria2", "socks5")
 	}
 	if runtime.GOOS == "linux" {
-		protocols = append(protocols, "wireguard", "awg2-fast", "awg2-strong", "socks5")
+		protocols = append(protocols, "wireguard", "awg2-fast", "awg2-strong")
 	}
 	for _, protocol := range protocols {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
@@ -1757,7 +1757,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 			})
 		}
 	}
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		desktopExternalSOCKSIntegration(t, ca)
 	}
 	for _, afterPublication := range []bool{false, true} {

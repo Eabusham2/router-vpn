@@ -137,8 +137,8 @@ func routerVPNDesktopExternalPhysicalAvailable(policy *mobilemultihop.DesktopExt
 		return false
 	}
 	meta := policy.Metadata()
-	return meta.TargetOS == "windows" && !meta.SOCKSUDPAssociationRequired &&
-		(meta.Protocol == "http-connect" || meta.Protocol == "https-connect" || meta.Protocol == "shadowsocks" || meta.Protocol == "hysteria2")
+	return meta.TargetOS == "windows" && meta.SOCKSUDPAssociationRequired == (meta.Protocol == "socks5") &&
+		(meta.Protocol == "http-connect" || meta.Protocol == "https-connect" || meta.Protocol == "shadowsocks" || meta.Protocol == "hysteria2" || meta.Protocol == "socks5")
 }
 
 // Reader state is read or changed under the owning engine's lock after initial
