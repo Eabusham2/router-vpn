@@ -2,8 +2,8 @@
 
 This record continues [November 2](CONTINUATION-EVIDENCE-2026-11-02.md).
 The independently verified source cutoff is
-[aaee0ace](https://github.com/Eabusham2/router-vpn/commit/aaee0ace547a414ed4aa353f1f8a5560f5ad50b7),
-tree `2a28abd24e5eb71c79d0f4e5f859a8c3a3e9eb65`. Later drafts are outside
+[ec25dc63](https://github.com/Eabusham2/router-vpn/commit/ec25dc63ac517c8edae228ed6b72e61a3cebc40e),
+tree `a7f5f5df6c2fc36967931505b77baedabe47b8cb`. Later drafts are outside
 this cutoff. Every unit below was committed directly to `main`, published
 against its expected parent without force, and verified through the remote
 reference and exact source tree.
@@ -40,6 +40,10 @@ source/build gate passes.
 | [b29e2169](https://github.com/Eabusham2/router-vpn/commit/b29e21697c90f5e231d8f943c49d6884d0e2295f) | Bind first/legacy macOS installation to complete original/incoming image captures; replace the incoming Go bootstrap with the validated Python installer in the same PID. | Installer, generation, image and shell tests plus their negative controls passed; real Go-to-Python execution and privileged interpreter tests passed; both Darwin controller packages compiled. Full-host native installation acceptance remains required. |
 | [5ae1b11a](https://github.com/Eabusham2/router-vpn/commit/5ae1b11a0f68c9105d2d01b0828efd36ebe94c98) | Compile Windows MAX observers under a separate bounded owned build, then run their original thirty-second tests. Preserve initial timeout and retain workspace if cleanup is unproved. | Thirty-four runner tests, real race-enabled peer and all thirteen UDP observer cases, and all four Windows observer cross-builds passed. Local execution used the explicit Linux subprocess boundary. |
 | [aaee0ace](https://github.com/Eabusham2/router-vpn/commit/aaee0ace547a414ed4aa353f1f8a5560f5ad50b7) | Split the expanded Windows child/application baseline into eight bounded serial groups; retain every required verdict and identify the phase of native launch expiry. | Fourteen runner checks, both complete Windows controller test builds, all fifty-one source records and twenty-four existing GUI mutation anchors passed. The underlying twenty-second native child launch failure remains unresolved pending the phase-specific result. |
+| [d30be281](https://github.com/Eabusham2/router-vpn/commit/d30be2819b9982608131f9a2e3b23ed93b57320e) | Require real scoped Windows SOCKS TCP/UDP grant ownership, selected-path proof, independent control retirement and retained denial in the native firewall gate. | Eighteen runner checks and six baseline/mutant cross-builds passed from an isolated source snapshot; 1,640 prepared records remained unchanged. Actual Windows execution is still required. |
+| [cc9d2115](https://github.com/Eabusham2/router-vpn/commit/cc9d211545d31e9bdd34df50fd2c9fb135a36061) | Retain the original macOS controller/session and its native witnesses until all owned dependents join. | Eight lifecycle race cases, twelve runner checks and both complete tagged Darwin application builds passed from the isolated unit. Actual supervisor/image-replacement/dependent-join cases are mandatory in native CI. This foundation does not yet enable the retained external path. |
+| [0cc0f8d9](https://github.com/Eabusham2/router-vpn/commit/0cc0f8d9b06ac9a61f937f3f6698a370c005b0cb) | Add protected direct Local Windows WireGuard and AWG fast/strong through public Connect, native preparation, protection selection and original restoration. | All 47 real encrypted packet-protocol verdicts, public application race groups, eight Windows app/component builds, fourteen external-runner and fifteen Node-runner checks passed. Native Windows WFP packet-protocol acceptance remains separate. |
+| [ec25dc63](https://github.com/Eabusham2/router-vpn/commit/ec25dc63ac517c8edae228ed6b72e61a3cebc40e) | Preserve the first recorded Darwin socket-policy loss instead of losing its cause behind a later closed-connection result. | Both tagged Darwin test images compiled and twelve runner checks passed from the isolated source. Existing native freshness tests now require diagnostic identity without refreshing readback or restoring authority. Expiry, cancellation and control deadlines are unchanged. |
 
 ### Protected Windows SOCKS5
 
@@ -67,11 +71,66 @@ Linux-executed preparation; the added 255/256-byte credential test passed
 separately. Factory, Box and command test images then compiled on both Windows
 AMD64 and ARM64, with the closure unchanged afterward.
 
-Native SOCKS BFE/WFP acceptance is a separate next gate. Private relay
-destinations remain subject to the selected LAN policy; an authenticated relay
-does not authorize broad LAN access. A valid numeric public relay need not use
-the TCP control endpoint's address. Generic Off execution is independently
-gated and has not been replaced by this protected path.
+The published native SOCKS gate uses an independently copied provider image,
+actual physical TCP/UDP listeners, isolated-token/BFE grant inspection and real
+Wintun identity. Two simultaneous associations must retain four distinct native
+grants; control EOF must revoke only its own pair while the sibling continues
+selected DNS. All twenty-two root/leaf verdicts and three compiled denial/intent
+controls are mandatory. The runner rejects diagnostic text masquerading as a
+verdict, duplicate/missing verdicts and unrelated crashes. Journal storage and
+the TUN packet pump remain explicit fixtures; no host routes or DNS are installed.
+Normal preparation used digest
+`587e8b10d670f6266b6d718e4c66b1ef6648049030b37f3479a95b948845e317`.
+This native gate has compiled on both architectures but has not yet supplied a
+Windows execution result.
+
+Private relay destinations remain subject to the selected LAN policy. The
+current gate confirms that Home LAN Off refuses a newly negotiated private UDP
+relay, even when its TCP control is an explicitly selected private endpoint.
+That minimum-transport exception is an actual remaining implementation gap;
+broad LAN permission is not an acceptable substitute. A valid numeric public
+relay need not use the TCP control endpoint's address. Generic Off execution
+is independently gated and has not been replaced by this protected path.
+
+### Protected Windows WireGuard and AmneziaWG
+
+The same retained direct Local, Start Layer Off, On-connect/Always host now
+admits WireGuard and both AWG variants through the public application path.
+The generated endpoint can acquire only its compiled lower tuples after native
+deny-baseline/admission initialization. That eager socket phase does not grant
+proof, TUN or measurement readiness. Original keys, peer, PSK, AWG parameters,
+selected DNS, derived measurement identity and protection remain captured.
+
+Actual generated Linux execution passed all forty-seven encrypted proof, MTU,
+cancellation, exact-fifty-sample and negative verdicts. Application race tests
+passed both policies and fourteen original/restoration directions, including
+Router-to-packet-to-Router and the reverse for all three packet variants.
+Credential/resolver/parameter substitutions preserve the original live owner.
+All six generated Windows component and both full application builds passed.
+
+The Node runner now preserves 109 roots and 326 verdicts in eight groups. The
+external Box runner compiles one image, executes nineteen bounded groups and
+requires 136 unique verdicts. All original transports and generic latency/
+retirement cases remain selected. The real child/wrapper output repeats its
+aggregate parent PASS, so only the unique required child verdicts supply that
+integration evidence. No production or per-operation deadline was increased.
+
+### Retained macOS application session
+
+The actual privileged bootstrap now captures one native parent/session. It
+retains the original controller credentials, supervisor peer, installation and
+process locks, protected directory/image descriptors and controller identity.
+Changed image, peer, controller or session invalidates the captured lifetime.
+Dependents join before the controller can release borrowed locks. Failed
+cleanup remains attached for retry; cancellation preserves its original error
+without retiring an otherwise valid shared session.
+
+The new mandatory native fixture exercises the actual supervisor, repeated
+session acquisition, application capture, image replacement, peer EOF/extra
+byte/supervisor stop and dependent join before inherited lock release. Isolated
+local race and cross-build evidence does not substitute for those Darwin runs.
+The captured child, PF transition and public external host still need their
+remaining end-to-end integration.
 
 ### macOS installation and PF ownership
 
@@ -106,17 +165,22 @@ grant deadline, complete joins and prohibition on changing foreign rules remain.
   and [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41548601048/job/125630543524).
   This includes the existing selected-path, MTU rollback and joined-retirement
   cases. It does not establish arbitrary physical-device networking.
-- At `67028f29`, both Windows physical bootstrap jobs passed:
+- At `67028f29`, all six jobs in the [Windows physical composition workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41548376191) passed. Both physical bootstrap jobs passed:
   [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41548376191/job/125629471497)
   and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41548376191/job/125629471500).
   They include native factory/socket-policy, selected DNS, Wintun retirement
   and the existing ordinary three-protocol composition. The older ARM64 TCP
-  `WSAEINVAL` did not recur there. These jobs predate the new SOCKS unit.
+  `WSAEINVAL` did not recur there. Actual encrypted Node WFP and captured Node
+  startup also passed on both architectures. These jobs predate the new SOCKS
+  and WG/AWG external additions.
 - At `bba34c46`, [saved Windows UI state](https://github.com/Eabusham2/router-vpn/actions/runs/41548600931/job/125630220219),
   [instrumented first launch](https://github.com/Eabusham2/router-vpn/actions/runs/41548600931/job/125630220937),
   [Shell elevation diagnostics](https://github.com/Eabusham2/router-vpn/actions/runs/41548600931/job/125630221054)
   and [installed/Portable Session](https://github.com/Eabusham2/router-vpn/actions/runs/41548600931/job/125630221325)
-  passed. These results do not close the separate child-process gate.
+  passed. The [controller job](https://github.com/Eabusham2/router-vpn/actions/runs/41548600931/job/125630221253)
+  also completed successfully, including actual PowerShell 5.1/7 pipe/TLS,
+  cold-provider controls and native firewall lifecycle/denial controls. These
+  results do not close the separate child-process gate.
 - The same source's [retained Node child job](https://github.com/Eabusham2/router-vpn/actions/runs/41548600931/job/125630221235)
   failed both real Node/external launches with a context deadline, then the
   expanded baseline hit its six-minute aggregate while another test performed
@@ -124,6 +188,14 @@ grant deadline, complete joins and prohibition on changing foreign rules remain.
   that stack alone. `aaee0ace` preserves the launch deadline and identifies
   creation/image-readback/resume expiry separately. All 108 roots, 294 required
   verdicts and 46 compiled negative controls remain required.
+- The later `aaee0ace` child diagnostic job was cancelled while pending. The
+  twenty-second launch cause is still unproved; newer source has the expanded
+  mandatory counts recorded above.
+- At `99a87e31`, the [ARM64 full PF/socket/utun job](https://github.com/Eabusham2/router-vpn/actions/runs/41549508622/job/125633303980)
+  passed. Its earlier `67028f29` closed-connection failure at sequential socket
+  92 did not recur. The full Intel job was still running at this observation;
+  its separate single-filter lifetime job passed. `ec25dc63` adds first-loss
+  diagnostics without attributing the old ARM failure to an unproved cause.
 - The updated macOS first/legacy jobs at `b29e2169` were cancelled while
   pending. That is neither a failed assertion nor native acceptance. Later
   descendant installer, PF and iOS jobs must supply their own exact-SHA result.
@@ -131,8 +203,9 @@ grant deadline, complete joins and prohibition on changing foreign rules remain.
 ## Requirements still open
 
 The existing generic Darwin external runtime is real. The newer retained
-ordinary-external path still lacks the complete Darwin application session,
-baseline transition and authenticated child ownership. Its existing lower PF
+ordinary-external path now has its original application-session foundation,
+but still lacks the complete baseline transition and authenticated child
+ownership. Its existing lower PF
 broker does not by itself establish that shipping composition. Broader retained
 Windows protocols, Start Layers, predecessors, multihop and Server/Compare also
 remain implementation work; a safe refusal does not close those requirements.

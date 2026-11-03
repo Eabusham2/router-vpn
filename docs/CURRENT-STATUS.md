@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through aaee0ace
+## Latest implementation continuation — through ec25dc63
 
 The independently verified source cutoff is
-[aaee0ace](https://github.com/Eabusham2/router-vpn/commit/aaee0ace547a414ed4aa353f1f8a5560f5ad50b7).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records ten new
+[ec25dc63](https://github.com/Eabusham2/router-vpn/commit/ec25dc63ac517c8edae228ed6b72e61a3cebc40e).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records fourteen new
 published units, their executable tests and the actual native results. Original
 requirement recovery was checked against the available original transcripts;
 no shortened handoff replaces the full scope.
@@ -18,20 +18,31 @@ no shortened handoff replaces the full scope.
 - Protected Windows direct Local SOCKS5 now retains separate authenticated
   control/UDP owners, original policy, DNS, MTU, fifty samples and restoration.
   Generated Linux execution and all six current Windows component builds pass;
-  actual Windows SOCKS firewall/device acceptance remains separate.
+  its new actual-WFP fixture and three controls compile on both architectures;
+  actual Windows execution/device acceptance remains separate. Home LAN Off
+  still needs the narrow selected-private-relay transport exception.
+- Protected Windows direct Local WireGuard and AWG fast/strong now use the
+  public retained host, original DNS/keys/protection and exact restoration.
+  Forty-seven actual encrypted verdicts, application race tests and eight
+  Windows application/component builds passed. Native WFP acceptance is next.
 - macOS first/legacy installation now captures current/incoming image ownership
   and checks renamed linked copies too. The Go bootstrap exec-replaces itself
   with validated Python, preserving its PID, status and owned cleanup. All
   local installer/negative controls and both target builds pass; native host
-  acceptance is still required.
+  acceptance is still required. Its authenticated native parent/session now
+  retains original witnesses and joins dependents before releasing borrowed
+  locks; the captured child, PF transition and external host remain unfinished.
 - Darwin LOCAL host routes remain in the observed cohort. Independent PF
   reads share the original four-command limit and two-second deadline. Current
-  native route/PF confirmation is pending; no foreign rule is exempted.
-- Both Linux generated-TUN architectures passed at `bba34c46`; both Windows
-  physical bootstrap architectures passed at `67028f29`. Windows saved UI,
-  first-launch timing and installed/Portable Session passed at `bba34c46`.
+  ARM64 PF/socket/utun acceptance passed at `99a87e31`; full Intel acceptance
+  remains pending. No foreign rule is exempted. First-loss diagnostics now
+  preserve the actual failure phase without changing policy or deadlines.
+- Both Linux generated-TUN architectures passed at `bba34c46`; all six Windows
+  physical bootstrap/encrypted Node/captured startup jobs passed at `67028f29`.
+  Windows saved UI, first-launch timing, installed/Portable Session and the
+  controller job (including actual PowerShell 5.1/7) passed at `bba34c46`.
 - That source's separate real Node/external child launch still expired. The
-  latest runner preserves all 108 roots, 294 verdicts and 46 negative controls
+  latest runner requires 109 roots, 326 verdicts and 46 negative controls
   in bounded serial groups and records the native launch phase. This is not a
   claim that the underlying launch timeout has been fixed.
 - Apple SDK preparation, provider-free Windows UI fixtures, MAX observer build
