@@ -18,7 +18,23 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through ec25dc63
+## Implementation reconciliation through cea693a0
+
+The source cutoff is [cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) preserves the
+original recovered scope and records twenty-three implementation/verification
+units. Later drafts are not included in this cutoff.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and native external execution | Retained Windows direct Local, Start Layer Off and On-connect/Always now includes bounded OpenVPN as well as WG/AWG, SOCKS, SS, HTTP/HTTPS and HY2. Application, exact captured policy and native startup are wired. New Windows WFP protocol fixtures and complete retained Darwin PF-host integration remain separate unfinished work. |
+| Selected DNS, LAN policy and owned connection state | The Windows selected-private SOCKS relay exception preserves Home LAN Off without widening shared policy. All authenticated numeric relays retain the original TCP lifetime. Linux now independently proves original TCP state/descriptor, native nft expiry and joined UDP retirement; its complete retained running-inventory path is still being integrated. The Windows DNS fixture must explicitly retire its valid cached association before requiring zero grants. |
+| #141–148, #222–223, #335 and measurements/restoration | Actual OpenVPN, WG/AWG and SOCKS encrypted/proof/MTU/fifty-sample cases preserve original profile, selected DNS, ordered remotes and restoration. Native build evidence is not physical-device acceptance. The original Local/Server/Compare formula, same endpoint, invalid-candidate exclusion and captured winner remain unchanged. Linux's newest MTU failure is narrowed to the captured automatic IPv6 LOCAL route; its source correction is not yet published. |
+| Native installation and lifecycle | macOS first/legacy capture, same-PID bootstrap, retained application session and authenticated runtime-child foundations are implemented. Intel full-host installer acceptance passed. ARM exposed an invalid re-signed arm64e fixture, now corrected with ordinary architecture compilation. Windows actual child lifecycles and ordinary controls passed at 0cc0f8d9; the later aggregate CI timeout is addressed with four complete mandatory suites, pending native rerun. |
+| Real route/protection and native evidence | Both full Darwin PF/socket/utun architectures passed at 99a87e31. Exact-run Windows bootstrap/controller/installed/Portable and Linux generated-TUN successes remain bounded to their source and cases. Source, native compilation, publication, deployment and physical acceptance are never interchangeable. |
+| Original 356, C1–C7 and later full scope | All uncancelled platforms/architectures, map-first UI, full modes/graphs, generic installation/private linking, setup/admin/Methods/recovery, DNS/protection, signing and physical/off-LAN/visual/accessibility/private-target requirements remain binding. Current release has not converged; latest verified published prerelease remains 745b3e41. No safe refusal or smaller closure gate closes the full scope. |
+
+## Earlier implementation reconciliation through ec25dc63
 
 The source cutoff is [ec25dc63](https://github.com/Eabusham2/router-vpn/commit/ec25dc63ac517c8edae228ed6b72e61a3cebc40e).
 [The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) distinguishes

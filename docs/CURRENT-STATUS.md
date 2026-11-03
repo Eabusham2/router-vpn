@@ -6,7 +6,51 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through ec25dc63
+## Latest implementation continuation — through cea693a0
+
+The independently verified source is
+[cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) now records
+twenty-three published implementation/verification units and their distinct
+source, local execution, native CI and delivery boundaries.
+
+- Protected Windows direct Local OpenVPN joins the retained ordinary protocol
+  family for Start Layer Off and On-connect/Always. All twelve actual encrypted
+  namespace cases, preserved profile/DNS/MTU/remote checks, startup negatives
+  and eight Windows app/component builds passed. Actual Windows WFP/packet
+  execution remains required; its new native fixture is still a draft.
+- The Windows selected-private SOCKS relay exception is implemented with Home
+  LAN Off, exact original TCP ownership and bounded child expiry. Public and
+  cross-family replies also retain their original control lifetime. Actual
+  local factory/Box/measurement cases and Windows builds passed. The first
+  native SOCKS run exposed a fixture that incorrectly expected the DNS
+  multiplexer to close after one successful query; its correction is pending.
+- Linux now has actual guardian/UID/nft SOCKS association ownership, including
+  private IPv4/IPv6 and public cross-family native traffic. Twenty-two native
+  guardian roots, six parser/state groups, three independently detected
+  compiled defects, actual namespace cleanup and ARM64 compilation passed.
+  Complete retained application running-inventory integration remains open.
+- The macOS authenticated runtime child retains native image/catalog/private
+  input identities and a separate cleanup acknowledgment. Both full Darwin
+  application and normally generated process-package builds passed. The
+  ordinary PF transition and public retained host remain implementation work.
+  Intel full-host installer acceptance passed; the ARM arm64e fixture failure
+  is corrected in source, with native rerun required.
+- Both full Darwin PF/socket/utun architectures passed at `99a87e31`. At
+  `0cc0f8d9`, both actual Windows child lifecycles and all ordinary controls
+  passed; a later ALL compilation hit the aggregate thirty-minute CI limit.
+  Four complete mandatory suites now preserve all cases and inner deadlines.
+- At `a179542f`, Linux ARM64 generated TUN passed. AMD64's MTU failure now has
+  the original route/address evidence: asynchronous kernel publication of its
+  automatic IPv6 local route. The corresponding correction is still a draft.
+
+The latest verified published release remains `745b3e41`. Current packages,
+images, compose and publication have not converged. Every uncancelled original
+platform/graph/Methods/recovery, signing, physical/off-LAN/visual/accessibility
+and private-target requirement remains accountable. No private router,
+AdGuard, forwarding or deployment configuration was changed.
+
+## Earlier implementation continuation — through ec25dc63
 
 The independently verified source cutoff is
 [ec25dc63](https://github.com/Eabusham2/router-vpn/commit/ec25dc63ac517c8edae228ed6b72e61a3cebc40e).
