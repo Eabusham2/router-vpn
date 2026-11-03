@@ -33,6 +33,14 @@ class ExternalOutputBoundary(unittest.TestCase):
         output = "native path \u2192 Caf\u00e9/\u6771\u4eac\n--- PASS: NativeComposition (0.01s)\n"
         self.assertEqual(self.report(0, output), output.encode("utf-8"))
 
+    def test_native_termination_status_survives_incomplete_test_output(self):
+        for status, code in ((0, "00000000"), (1, "00000001"),
+                             (-1073741816, "c0000008"), (3221225480, "c0000008")):
+            with self.subTest(status=status), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(ValueError, r"native exit " + str(status) + r", 0x" + code):
+                    EXTERNAL.report_baseline("command", ("NativeComposition",), status,
+                                             "=== RUN   NativeComposition\n")
+
     def test_encoding_never_turns_failed_or_incomplete_native_output_into_success(self):
         success = "native path \u2192 selected exit\n--- PASS: NativeComposition (0.01s)\n"
         for status, output in ((1, success), (0, "native path \u2192 selected exit\n"),

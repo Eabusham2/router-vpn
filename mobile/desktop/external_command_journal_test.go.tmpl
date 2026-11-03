@@ -293,7 +293,12 @@ func TestRouterVPNDesktopExternalPhysicalCommandJournalBeforePrivateInputs(t *te
 func TestRouterVPNDesktopExternalPhysicalCommandJournalPublicRequiresCompleteCapture(t *testing.T) {
 	for _, fault := range []string{"missing", "handle-only", "image-only", "pipe-only", "capture-only", "missing-handle", "missing-image", "missing-pipe", "missing-capture", "missing-source", "missing-config", "missing-transfer", "mixed-platform", "unowned-parent"} {
 		t.Run(fault, func(t *testing.T) {
-			options := routerVPNExternalJournalOptions{ParentHandle: 777, ParentImage: "not-a-captured-parent.exe", Pipe: "not-a-captured-journal", CaptureSHA256: strings.Repeat("5", 64)}
+			// An invented small integer can name an unrelated live Windows
+			// handle. Malformed options use a value the constructor rejects
+			// before consuming any native handle; the complete negative below
+			// transfers a real handle owned only by that fixture.
+			options := routerVPNExternalJournalOptions{ParentHandle: ^uint64(0), ParentImage: "not-a-captured-parent.exe", Pipe: "not-a-captured-journal", CaptureSHA256: strings.Repeat("5", 64)}
+			var verifyParent func(error)
 			source, config, transfer := strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64)
 			switch fault {
 			case "missing":
@@ -320,6 +325,8 @@ func TestRouterVPNDesktopExternalPhysicalCommandJournalPublicRequiresCompleteCap
 				config = ""
 			case "missing-transfer":
 				transfer = ""
+			case "unowned-parent":
+				options.ParentHandle, verifyParent = desktopExternalJournalUnownedParent(t)
 			}
 			directory := filepath.Join(t.TempDir(), "not-created")
 			var err error
@@ -328,6 +335,9 @@ func TestRouterVPNDesktopExternalPhysicalCommandJournalPublicRequiresCompleteCap
 					routerVPNNodeLinuxParentOptions{ChannelFD: 7}, options)
 			} else {
 				err = routerVPNRunExternalWithJournal(context.Background(), directory, strings.Repeat("1", 32), source, config, transfer, options)
+			}
+			if verifyParent != nil {
+				verifyParent(err)
 			}
 			if err == nil || errors.Is(err, os.ErrNotExist) {
 				t.Fatal("incomplete external inherited journal reached private file input", fault, err)

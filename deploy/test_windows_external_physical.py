@@ -225,7 +225,8 @@ def report_baseline(name, required, status, output):
     if (status or not required or
             any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(test) + r" \([^\r\n]*\)[ \t]*$", output)) != 1 for test in required) or
             any(marker in output for marker in ("--- FAIL:", "--- SKIP:", "DATA RACE", "panic:", "fatal error:", "[build failed]"))):
-        raise ValueError("Ordinary Windows " + name + " did not prove its native composition")
+        raise ValueError("Ordinary Windows " + name + " did not prove its native composition"
+                         + " (native exit " + str(status) + ", 0x" + format(status & 0xffffffff, "08x") + ")")
 
 
 def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False):

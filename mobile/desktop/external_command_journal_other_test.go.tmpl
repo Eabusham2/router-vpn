@@ -1,0 +1,11 @@
+//go:build !windows
+
+package main
+
+import "testing"
+
+func desktopExternalJournalUnownedParent(t *testing.T) (uint64, func(error)) {
+	t.Helper()
+	// Other platforms reject the journal entry without a Windows handle API.
+	return ^uint64(0), nil
+}
