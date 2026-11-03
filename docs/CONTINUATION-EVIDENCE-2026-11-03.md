@@ -2,8 +2,8 @@
 
 This record continues [November 2](CONTINUATION-EVIDENCE-2026-11-02.md).
 The independently verified source cutoff is
-[14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a),
-tree `e59c538b6d9603ff487167d50dfe187cf9f271c7`. Later drafts are outside
+[f22d5a32](https://github.com/Eabusham2/router-vpn/commit/f22d5a32a6d7a844801d8aa0cb61f7312fbc3e03),
+tree `78bbf93613d79143f93a169dbde2850c6a2c6000`. Later drafts are outside
 this cutoff. Every unit below was committed directly to `main`, published
 against its expected parent without force, and verified through the remote
 reference and exact source tree.
@@ -84,7 +84,69 @@ source/build gate passes.
 | [59831c67](https://github.com/Eabusham2/router-vpn/commit/59831c6798f290a0be7a56cea028eb630da058a1) | Keep the Tor IPC reader's pipe independent of process Wait, drain the matching final reply, and retain only the pending request's nonce mailbox. | The old code deterministically fails when the child exits before parent read. Twenty repetitions and two full race matrices pass, including missing/foreign/duplicate/malformed cleanup and cancelled snapshot cases. Workspace deletion still requires original acknowledgement plus process and reader join. |
 | [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a) | Admit Linux direct Local protected HY2 AES/AES+XOR through the retained host, preserving the complete original layer/inner graph and source capture. | Exact frozen-source race suite passes in 21.109s across new layer/source/unsupported cases, existing physical policy, Windows HY2 authority and Linux SOCKS/OpenVPN capture. Independent source review found no blocker. Actual layered Linux installed TUN acceptance is a separate successor gate. |
 
-### Latest integration and validation boundaries — through 14dc92e3
+### Published continuation after 14dc92e3
+
+The following units preserve the original requirement identifiers and scope.
+The earlier documentation checkpoint `b6cdcdba` is not counted as a new feature.
+
+| Commit | Change | Verification boundary |
+|---|---|---|
+| [4905b095](https://github.com/Eabusham2/router-vpn/commit/4905b0953ca6887ae4131de1c11370bca67d705a) | Bind durable desktop latency rankings to a complete benchmark and its original source; use validated trimmed means. | Committed shipping code and native UI consumers were recovered exactly. Saved telemetry without the complete source-bound benchmark is not admitted as a fresh Fastest result. Native package/device acceptance remains separate. |
+| [78a4120e](https://github.com/Eabusham2/router-vpn/commit/78a4120e11c3f6ba543807b02dd249bc1e2514f1) | Apply the complete saved benchmark and trimmed-mean ranking contract to Android. | The production record and consumers are published. Later isolated Java fixture repairs and their executed checks are recorded at `bb7fc03d`; an APK build does not establish physical network acceptance. |
+| [2fbc6850](https://github.com/Eabusham2/router-vpn/commit/2fbc6850ab481165a032eb53474d4c734fbf01be) | Bind the map shipping gate to current fifty-sample Fastest actions. | This is a shipping integration gate, not a substitute for actual benchmark traffic or visual/device acceptance. |
+| [9cf0b6ac](https://github.com/Eabusham2/router-vpn/commit/9cf0b6aca6e1dab48d6bcf0686353cd74e32710f) | Exercise native macOS Retest and Cancel through the original retained external host. | The mandatory native fixture retains the original child, PF token, session and MTU; it rejects foreign cancellation and replay and requires fifty real responses. Actual sealed-bundle macOS execution remains required. |
+| [633f5e2c](https://github.com/Eabusham2/router-vpn/commit/633f5e2c0a9bd59ee98d0856d6f04544a4428724) | Preserve complete, source-bound durable latency rankings on iOS. | Shipping model/store/UI changes are published. The later proof-bearing Router fixture correction is recorded at `62f42d93`; no local Swift execution is claimed in the restored Linux environment. |
+| [f9589cf2](https://github.com/Eabusham2/router-vpn/commit/f9589cf248a5f2b2803d2a14da26d9feef10fc86) | Compare Android exits using fifty complete routed TCP samples through the captured entry. | Incomplete, stale or cancelled candidates are disqualified; the original worker budget and ownership remain. Later fixture failures are distinguished from production failures below. |
+| [eda48633](https://github.com/Eabusham2/router-vpn/commit/eda486333f2f78a9c73101fc91cb9bcc776eb121) | Require installed Linux HY2 AES/AES+XOR lifecycle acceptance. | The mandatory installed TUN inventory grows by twenty-one cases to 393. Strict 3,165-record preparation closure, four Linux builds, seven encrypted carrier/authority cases and twenty-five runner checks passed. Actual complete 393-case TUN execution remains a separate native gate; this Linux workspace has no TUN device. |
+| [91928df3](https://github.com/Eabusham2/router-vpn/commit/91928df36522ad2d3168eb59707e780d910bf45c) | Compare iOS exits using fifty owned routed TCP samples. | The original 120-second request and network epoch remain; all fifty successful samples, trimmed ranking, stable identity, cancellation/drain and temporary-entry restoration are preserved. Four recovered source files match the reviewed bytes. Eight Swift composition cases and six controls are wired; actual Swift execution remains required. |
+| [ff3c32bc](https://github.com/Eabusham2/router-vpn/commit/ff3c32bce9393aaf48b70ba75aab95d89f9da850) | Observe the native fifty-sample worker through its owned budget. | The observer uses the unchanged ninety-second worker and five-second drain instead of expiring after twelve seconds. It captures and rechecks the exact request, requires real drain and preserves thirteen mandatory observer leaves. Root race execution, thirteen repeated race leaves, seventeen runner checks and two compiled defect controls passed. Production deadlines were not extended. |
+| [bb7fc03d](https://github.com/Eabusham2/router-vpn/commit/bb7fc03d89396d468ffb3ac72dade63424582273) | Add the production `trimmedMean` field to isolated Android catalog fixtures. | Node usage: 169 checks and nine controls; profile: twenty-seven checks and the wrong-ID control; external statistics: 347 checks and five controls, plus the actual wrapper race checks. Production ranking and validation are unchanged. |
+| [62f42d93](https://github.com/Eabusham2/router-vpn/commit/62f42d935c931bd96deda76410d251095a43129e) | Give the positive iOS durable-statistics fixture a proof-bearing Router identity. | The prior third-party external fixture remains an explicit refusal with no store mutation; stale, 49-of-50 and write-failure controls remain. Independent source review passed. Actual Swift/native execution remains pending. |
+| [8dd69846](https://github.com/Eabusham2/router-vpn/commit/8dd69846242455c85150af5b2a1cc146db35d047) | Join PF fixture callbacks after the intentional broken-production-join assertion. | Race execution passed. The original production-negative assertion still fails the compiled defects; test-only cancellation, `synctest.Wait` and joining prevent an unrelated deadlock after that verdict. The old fixture reproduces the deadlock. |
+| [ca25a2c0](https://github.com/Eabusham2/router-vpn/commit/ca25a2c00d1df84bb37fb8140012307fdc302037) | Compare desktop exits using fifty complete source-owned routed samples, including the actual native UIs. | Pure Go race execution and two compiled defects passed; actual GTK integration passed twenty-eight cases and three controls; actual PowerShell 7.6.9 shipping composition passed 197 candidate and nineteen Help checks plus execution/protection checks. Original 165-second request and 180-second UI budgets remain. The later real pinned CLI acceptance below closes its initially skipped local native-CLI case. |
+| [17b68530](https://github.com/Eabusham2/router-vpn/commit/17b68530799b0e2be402ddb92bf9149e86676d00) | Read a complete validated native policy once per captured preparation stage. | Every invocation retains full seals, original source/predecessor checks and exact graph derivation; no cross-call cache was introduced. A 1,418,885-byte MAX/TLS fixture measured 2.730 s versus 11.763 s for repeated reads. MTU/DNS and concurrent mutation race suites, generated runtime cases, strict 1,661-record closure and full module verification passed. This is not a claim about opaque PQ exchanges or actual Windows MAX acceptance; the ninety-second native budget is unchanged. |
+| [bc0a3cfe](https://github.com/Eabusham2/router-vpn/commit/bc0a3cfe234f24eee281d10639441a19c4601bb9) | Observe exact SOCKS DNS association retirement before one fresh routed proof. | The read-only waiter captures the original TCP and UDP identities and waits for joined close plus map removal; it cannot cancel or create an association. The fixture no longer treats a first closed query plus retry as acceptance. Actual generated Linux DNS race execution and all thirty-three SOCKS verdicts passed, with strict preparation closure. Native Windows execution remains separate. |
+| [187d57cd](https://github.com/Eabusham2/router-vpn/commit/187d57cdb20b4b0b96053362dca21241950ff7ed) | Retain the exact bound Windows TCP descriptor through Connect and I/O. | The private I/O claim prevents source closure until entered work joins. Partial failures retain an owned connection for ordinary retirement; original native ALE/endpoint and policy checks remain. Twelve Python runner checks, both Windows package builds and three AMD64 compiled controls passed. Mandatory native coverage contains nineteen roots and sixteen defects; actual Windows execution remains required. |
+| [8e42e3f9](https://github.com/Eabusham2/router-vpn/commit/8e42e3f9c8ed2be679bbe5ba4cce6ad8a7802785) | Prove exact local Windows socket retirement after an authenticated refused SOCKS relay. | Fixture-only: original descriptors, endpoint identities and WFP filter GUIDs must retire. An independent held duplicate keeps the original endpoint live until the production release boundary is observed, then joins its own close. A remote timeout proves no remote terminal delivery and is never positive evidence. Twenty-seven runner checks, extracted shipping-predicate race execution, both full Windows builds and three compiled mutants passed. Actual WFP execution remains required. |
+| [32b28018](https://github.com/Eabusham2/router-vpn/commit/32b2801812c9c2507b1c111997d3bcbe6c060a70) | Give rejected Windows journal fixtures only native handles they own. | The real Windows rejection transfers a freshly allocated noninherited handle, checks its closure and checks an independent sibling survives. Malformed options reject before adoption. Eighteen runner checks, all eight generated Linux journal roots under race and both Windows command builds passed. Failed runs now include decimal/hex native exit status. Actual Windows handle execution remains required. |
+| [f22d5a32](https://github.com/Eabusham2/router-vpn/commit/f22d5a32a6d7a844801d8aa0cb61f7312fbc3e03) | Retain provisioned HY2 AES/AES+XOR in the Darwin native host. | Two production eligibility gates now admit the already sealed layer/inner graph; no PF permission family or timeout was broadened. Nine policy race groups, three app race groups, seven actual encrypted UDP carrier cases, eleven runner checks and all four Darwin controller/peer builds passed. Strict preparation closure contains 1,661 unchanged records. The mandatory native gate requires six positives, five encrypted negatives and two policy groups; actual macOS execution remains required. |
+
+### Latest integration and validation boundaries — through f22d5a32
+
+Complete saved benchmark eligibility and via-entry fifty-sample comparison are
+now published across the desktop and mobile source paths. Samples remain routed
+TCP response measurements; they are not relabeled as ICMP. Failed, incomplete,
+stale or cancelled candidates never receive a winning zero. The saved source,
+entry, network generation, original request and replacement-owner checks remain
+part of acceptance. Platform execution is qualified individually above.
+
+The normally prepared, pinned Linux AMD64 native CLI was independently built
+from committed `187d57cd`. `TestViaEntryPinnedNativeUpstreamResponseAndCancellation`
+executed all fifty real samples against a TCP peer that delayed each response
+by 75 ms, rejected a refused and an uncaptured destination, and joined an entered
+blocked-handshake cancellation with native child/socket cleanup. The case passed
+in 5.03 s and its race package in 6.057 s, with no skip. The actual CLI SHA-256
+was `79b91a30d6ab444c74e2b31aa7f402e24ff847fc9b72bce1a7f38d9429579a02`;
+its normal runtime receipt was verified before and after execution. This closes
+that local CLI gate, not another platform's packaged or physical acceptance.
+
+Darwin HY2 layers now preserve the captured outer transport as the sole physical
+authority, the private inner HY2 destination, independent credentials, selected
+DNS, IPv6/LAN, MTU and original source. Actual wrong outer/inner keys and wrong
+whitening must fail without DNS or public-exit proof. The negative native fixture
+observes the original PF reference, baseline namespace, journal and complete
+utun inventory after joined failed-Connect cleanup, before any repair action.
+The PF query is read-only; it cannot make its own absence assertion pass by
+clearing state. Successful Disconnect receives the same independent check.
+
+The Windows TCP change addresses the source descriptor duplicated after Bind;
+it does not add a `WSAEINVAL` retry, accept a failed Connect or widen a deadline.
+The separate SOCKS and journal fixture corrections preserve their original
+negative assertions. A joined local socket/WFP receipt is distinguished from
+whether the remote peer observed a terminal TCP delivery. Native execution of
+these latest source changes remains required.
+
+### Earlier integration and validation boundaries — through 14dc92e3
 
 The table contains fifty-three published implementation/verification units. These are
 coherent changes, not a count or percentage of completed user requirements.
@@ -318,6 +380,34 @@ grant deadline, complete joins and prohibition on changing foreign rules remain.
 
 ## Actual native observations and remaining failures
 
+### Observations after the 14dc92e3 documentation cutoff
+
+These observations supersede only the corresponding earlier failure. A source
+repair, a cancelled job and a successful native execution are different states.
+
+| Exact source / job | Observed result | Follow-up boundary |
+|---|---|---|
+| `f9589cf2`, authoritative source audit `125728280652` and Android contract `125727808010` | Isolated catalog fixtures lacked the production `trimmedMean` field. | Corrected in `bb7fc03d`; actual focused Java and wrapper checks passed. Current complete APK/release execution remains required. |
+| `f9589cf2`, iOS smoke `125727811148` | Actual Swift execution rejected the supposedly positive durable Router fixture because it used an external-node identity. | `62f42d93` supplies a real proof-bearing Router fixture and retains the external refusal. Swift/native rerun remains required. |
+| `f9589cf2`, native macOS PF `125728280985` | An intentional broken-join control left an admitted fixture callback alive after its assertion. | `8dd69846` preserves that assertion and joins test-owned work. The old fixture reproduces its deadlock; the local corrected race and defect controls pass. Native rerun remains required. |
+| `b4f59bf4`, Windows bootstrap AMD64 `125718665031` | Selected-DNS fixture retired its native association before the pinned multiplexer had removed that exact pooled connection. | `bc0a3cfe` adds a read-only, exact-association retirement observation and requires one subsequent fresh proof. Actual generated Linux execution passes; native Windows rerun remains required. |
+| `b4f59bf4`, Windows bootstrap ARM64 `125718665397` | Output stopped during the public journal unowned-parent case, without the final mandatory verdict. | This differs from the AMD64 DNS failure. `32b28018` replaces the fabricated handle with a freshly owned noninherited handle and adds native exit-code diagnostics. The old log does not prove which handle or termination cause occurred. |
+| `f9589cf2`, native Windows Aux AMD64 `125733670027` | Home-LAN-Off TCP Connect returned `WSAEINVAL`; the TCP/UDP refusal cases passed. The other-private-relay negative passed in this particular run. | `187d57cd` retains the original bound TCP handle through I/O. Both target builds pass; actual native execution of the correction remains required. Do not carry the other-private-relay timeout forward as every run's result. |
+| `b4f59bf4`, native Windows ARM64 `125718665575` | The other-private-relay fixture received the authenticated reply but timed out waiting for the remote terminal outcome. | `8e42e3f9` independently proves original local descriptors, native endpoint and WFP permissions retired. Remote timeout remains unproved terminal delivery, never a passing remote observation. Actual Windows acceptance remains required. |
+| `bcc39266`, native Windows AMD64 `125710144114` | OpenVPN TCP On-connect completed only 34 of 50 samples before the fixture's twelve-second observer expired. | `ff3c32bc` observes the actual unchanged ninety-second worker and joined drain. The test inventory and production deadlines remain unchanged. |
+| `187d57cd`, [authoritative release run 41699812592](https://github.com/Eabusham2/router-vpn/actions/runs/41699812592), job `126139990581` | The MAX ownership-controls-1 job failed in `go mod tidy`: the Go proxy returned an HTTP/2 stream `INTERNAL_ERROR` while downloading the pinned `go-camellia` module. Native tests had not started. | This is dependency transport failure, not evidence that the earlier MAX runtime timeout recurred. Newer source runs are scheduled. Most other jobs in this old release attempt were cancelled by subsequent pushes. |
+| `187d57cd`, same authoritative attempt | Unified delivery contracts, paired native OpenVPN paths/lease ownership, macOS controller contract and exact-SHA source snapshot passed. | These bounded successes do not close cancelled native platforms or aggregate release publication. |
+
+At the `f22d5a32` source cutoff, authoritative release run
+[41703409177](https://github.com/Eabusham2/router-vpn/actions/runs/41703409177)
+was pending. Thirty-seven workflows were returned for that push because path
+filters selected additional contracts; historical workflow counts are not a
+fixed delivery denominator. No full current package/image/compose/release
+success is established by this record. The published releases API still
+returned `745b3e41` as its latest release, with twelve assets.
+
+### Earlier native observations
+
 - At `b4f59bf4`, the [generated Linux command/TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41575320488)
   passes both [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41575320488/job/125717347526)
   and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41575320488/job/125717347786).
@@ -454,16 +544,26 @@ grant deadline, complete joins and prohibition on changing foreign rules remain.
 
 The existing generic Darwin external runtime is real. Its newer retained direct
 Local SS/HTTP/HTTPS/Hysteria2 host, baseline transition and authenticated child
-integration are now published in `049e77ba` for Start Layer Off and
-On-connect/Always. The native inherited-child failure and complete sealed-bundle
-PF/utun host acceptance remain open. Linux SOCKS retained running-inventory
-integration is published and natively tested in `76938d4d`; it is no longer a
-missing source feature. Windows Hysteria2 Start Layer policy, public host and encrypted reference
-runtime integration are published in `b4f59bf4`; actual Windows WFP execution
-remains required. Linux layer-host integration is published in `14dc92e3`; its complete
-installed TUN acceptance extension remains separate work.
-Broader retained families, Start Layers, predecessors, multihop and Server/Compare
-remain separately accountable; a safe refusal does not close those requirements.
+are published for On-connect/Always. HY2 AES/AES+XOR is now published in
+`f22d5a32`, alongside mandatory real Retest/Cancel and encrypted refusal cases.
+Complete sealed-bundle PF/utun execution remains required. Current retained
+Darwin SOCKS5, WireGuard/AWG/OpenVPN, Router-host and predecessor integrations
+remain source work; lower socket support or a generic runtime alone does not
+close those shipping paths. A failed external-Connect lifecycle regression has
+also been reproduced through the actual public handlers and is outside this
+source cutoff until its focused correction is published.
+
+Linux SOCKS retained running-inventory integration was already published and
+natively tested in `76938d4d`; it is not a missing feature. Linux HY2 layer-host
+integration and the expanded installed TUN gate are now published in `14dc92e3`
+and `eda48633`; the complete expanded native gate remains required. Windows HY2
+layers, SOCKS and packet families have published retained integration and real
+encrypted reference coverage, with their exact native WFP boundaries described
+above. The descriptor and fixture repairs need actual native reruns.
+Broader retained families, additional Start Layer compositions, predecessors,
+multihop and Server/Compare remain accountable; a safe refusal does not close
+those requirements. The full original platform and graph ledger remains the
+authority rather than this navigation list.
 
 Relevant native reruns and complete exact-SHA package/image/compose publication
 remain open. A fresh release API read still identifies the latest release as the

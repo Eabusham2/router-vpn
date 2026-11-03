@@ -6,7 +6,57 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 14dc92e3
+## Latest implementation continuation — through f22d5a32
+
+The verified source cutoff is
+[f22d5a32](https://github.com/Eabusham2/router-vpn/commit/f22d5a32a6d7a844801d8aa0cb61f7312fbc3e03),
+tree `78bbf93613d79143f93a169dbde2850c6a2c6000`.
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records the
+published changes, executed checks and exact native boundaries. Requirement
+recovery is complete; the original 356 requirements, C1–C7, later 32-item
+request and later corrections remain binding. Counts of commits or tests are
+not counts of completed requirements.
+
+- Complete source-bound saved benchmarks and fifty-sample via-entry comparison
+  are now published for desktop, Android and iOS. Incomplete, stale or cancelled
+  candidates are disqualified; trimmed statistics retain stable source identity.
+  Actual Linux generated-runtime, GTK and PowerShell 7 shipping-composition
+  checks pass. The normally built pinned Linux native CLI now executes all fifty
+  real delayed TCP samples and joined cancellation with no skip. Actual Swift,
+  Windows native and physical-device coverage remain separately qualified.
+- Linux HY2 AES/AES+XOR installed acceptance now requires the complete 393-case
+  TUN inventory. Its new encrypted carrier cases and target builds pass locally;
+  complete native TUN execution of that expanded inventory remains required.
+  Native measurement observers now wait within the unchanged worker and drain
+  budgets; no production deadline was extended.
+- macOS retained direct Local HY2 now accepts provisioned AES-256-GCM and
+  AES-256-GCM + XOR. The full sealed inner graph and sole outer physical
+  transport are retained. Policy/application race cases, actual encrypted UDP
+  carrier checks and both Darwin controller/peer builds pass. The installed
+  native gate now requires six positive protocols/layers, five encrypted refusal
+  cases, real fifty-sample Retest/Cancel and independent PF/journal/utun cleanup.
+  Actual sealed-bundle macOS execution remains required.
+- Windows TCP retains the descriptor that received Bind through Connect and I/O,
+  with joined source ownership and unchanged native endpoint/policy checks.
+  SOCKS DNS tests wait for the exact original association to retire before one
+  fresh proof. The refused-relay fixture requires exact local socket/WFP
+  retirement, and journal rejection fixtures transfer only handles they own.
+  Local executable checks and both Windows builds pass; current native execution
+  is still pending.
+- Complete MAX policy validation reads the original files once per preparation
+  stage while retaining every seal, source and graph check. No cross-call cache
+  or longer runtime timeout was introduced. One newer Windows CI failure at
+  `187d57cd` occurred while downloading a Go dependency, before native tests;
+  it does not establish a runtime regression or native success.
+- New source has not converged on a complete exact-SHA release. A fresh release
+  API read still identifies the twelve-asset `745b3e41` prerelease as the latest
+  published release. Broader retained Darwin SOCKS/packet/Router and predecessor
+  graphs, remaining platform/Methods/recovery work, signing, physical/off-LAN
+  network/visual/accessibility checks, live providers and deliberate private
+  deployment remain accountable. No ASUS, AdGuard or private deployment setting
+  was changed.
+
+## Earlier implementation continuation — through 14dc92e3
 
 The verified source cutoff is [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a).
 [The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records fifty-three
