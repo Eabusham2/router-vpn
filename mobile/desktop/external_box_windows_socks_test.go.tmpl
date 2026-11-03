@@ -601,7 +601,10 @@ func desktopExternalSOCKSWFPProve(t *testing.T, f *desktopExternalWFPFixture, p 
 	raw, err := f.proof.Run()
 	var result mobilemultihop.ExternalProofResult
 	if err != nil || json.Unmarshal([]byte(raw), &result) != nil {
-		t.Fatal("actual SOCKS WFP proof failed", err)
+		// Capture the independent provider phase before cleanup hides a failed
+		// authentication/relay/DNS boundary. This read grants no authority.
+		observed := p.call(t, "stats", "")
+		t.Fatal("actual SOCKS WFP proof failed", err, "independent provider", observed)
 	}
 	meta := f.policy.Metadata()
 	if result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 || result.EntryProven || !result.DNSProven || result.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {

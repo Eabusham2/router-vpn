@@ -16,7 +16,12 @@ import (
 	"time"
 
 	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	dnsCore "github.com/sagernet/sing-box/dns"
+	dnsTransport "github.com/sagernet/sing-box/dns/transport"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/auth"
 	M "github.com/sagernet/sing/common/metadata"
@@ -393,14 +398,51 @@ func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegratio
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Fatal("ordinary SOCKS5 association acceptance requires the captured native host")
 	}
+	t.Run("socks5/dns-cached-control-loss", desktopExternalSOCKSDNSCachedLoss)
 	t.Run("socks5/selected-dns-retained-control-retirement", func(t *testing.T) {
 		f := newDesktopExternalIntegrationFixture(t, ca, "socks5", "")
 		f.prove(t)
+		var retired *desktopExternalSOCKSRelay
+		var retiredTCP, retiredUDP string
 		for operation := 0; operation < 2; operation++ {
 			if operation != 0 {
 				before := f.peer.udpQueries.Load()
-				if err := f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil || f.peer.udpQueries.Load() <= before {
-					t.Fatal("selected DNS failed to reconnect through its original native source", err)
+				packets := f.peer.physicalUDP.Load()
+				associations := len(f.peer.socks.snapshot())
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "tun-in", InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+				var routeErr error
+				err := routerVPNStrategyDNSExchange(ctx, func(ctx context.Context, q *mDNS.Msg, options adapter.DNSQueryOptions) (*mDNS.Msg, error) {
+					answer, failure := f.box.dnsRouter.Exchange(ctx, q, options)
+					routeErr = failure
+					return answer, failure
+				})
+				cancel()
+				if err != nil {
+					// Native grant retirement can precede the UDP transport receive loop's
+					// cache invalidation. One query already attached to that old cache may
+					// lose its response. Its exact closed-connection result is delivered
+					// only after removeConn clears the old shared slot under its pool lock.
+					if !desktopExternalSOCKSDNSClosed(routeErr, 0) || retired == nil {
+						t.Fatal("selected DNS failed outside original cached-control retirement", routeErr, err)
+					}
+					select {
+					case <-retired.closed:
+					default:
+						t.Fatal("failed cached DNS query has an unretired original provider")
+					}
+					f.kernel.mu.Lock()
+					grants := len(f.kernel.grants)
+					f.kernel.mu.Unlock()
+					if grants != 0 || f.peer.udpQueries.Load() != before || f.peer.physicalUDP.Load() != packets || len(f.peer.socks.snapshot()) != associations || !f.proof.Healthy() || !f.network.Current() {
+						t.Fatal("failed cached DNS query changed native ownership or sent provider payload")
+					}
+					if err = f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+						t.Fatal("immediately following selected DNS query failed after observed cache invalidation", err)
+					}
+				}
+				if f.peer.udpQueries.Load() <= before || len(f.peer.socks.snapshot()) != associations+1 {
+					t.Fatal("selected DNS did not create exactly one new authenticated provider association")
 				}
 			}
 			var selected *desktopExternalSOCKSRelay
@@ -419,6 +461,10 @@ func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegratio
 				t.Fatal("successful proof incorrectly discarded the retained DNS connection")
 			}
 			tcp, udp := selected.receipts(t)
+			if retired != nil && (selected == retired || selected.control == retired.control || tcp.SocketID == retiredTCP || udp.SocketID == retiredUDP) {
+				t.Fatal("reconnected DNS reused its retired control or native socket owner")
+			}
+			retired, retiredTCP, retiredUDP = selected, tcp.SocketID, udp.SocketID
 			deadline := time.Now().Add(2 * time.Second)
 			for {
 				f.kernel.mu.Lock()
@@ -709,3 +755,183 @@ func desktopExternalSOCKSRefusalChecks(t *testing.T) {
 }
 
 func TestRouterVPNDesktopSOCKSRefusalEvidence(t *testing.T) { desktopExternalSOCKSRefusalChecks(t) }
+
+// A closed-only tree identifies the original transport's terminal callback.
+// A timeout, cancellation, mixed failure or textual lookalike is never a retry.
+func desktopExternalSOCKSDNSClosed(err error, depth int) bool {
+	if err == nil || depth >= 16 {
+		return false
+	}
+	if err == net.ErrClosed {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 || len(children) > 16 {
+			return false
+		}
+		for _, child := range children {
+			if !desktopExternalSOCKSDNSClosed(child, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return desktopExternalSOCKSDNSClosed(wrapped.Unwrap(), depth+1)
+	}
+	return false
+}
+
+// Only this deterministic scheduling test models the DNS wire. It exercises
+// the unchanged pinned multiplexer, keeping the second write entered while
+// the old receive loop invalidates its original cached connection.
+type desktopExternalSOCKSDNSConn struct {
+	net.Conn
+	held                                                                    bool
+	responses                                                               chan []byte
+	readEntered, readRelease, writeEntered, writeRelease, writeDone, closed chan struct{}
+	readCount, writeCount                                                   atomic.Int32
+	once                                                                    sync.Once
+}
+
+func (c *desktopExternalSOCKSDNSConn) Read(b []byte) (int, error) {
+	if c.held && c.readCount.Add(1) == 2 {
+		close(c.readEntered)
+		select {
+		case <-c.readRelease:
+			return 0, net.ErrClosed
+		case <-c.closed:
+			return 0, net.ErrClosed
+		}
+	}
+	select {
+	case response := <-c.responses:
+		return copy(b, response), nil
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+func (c *desktopExternalSOCKSDNSConn) Write(b []byte) (int, error) {
+	if c.held && c.writeCount.Add(1) == 2 {
+		close(c.writeEntered)
+		// Keep the already-entered write suspended even when Close has retired
+		// the connection; only the test releases its scheduled return.
+		<-c.writeRelease
+		close(c.writeDone)
+		return 0, net.ErrClosed
+	}
+	var q mDNS.Msg
+	if err := q.Unpack(b); err != nil {
+		return 0, err
+	}
+	answer := new(mDNS.Msg).SetReply(&q)
+	raw, err := answer.Pack()
+	if err != nil {
+		return 0, err
+	}
+	select {
+	case c.responses <- raw:
+		return len(b), nil
+	case <-c.closed:
+		return 0, net.ErrClosed
+	}
+}
+func (c *desktopExternalSOCKSDNSConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+func (c *desktopExternalSOCKSDNSConn) SetDeadline(time.Time) error      { return nil }
+func (c *desktopExternalSOCKSDNSConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *desktopExternalSOCKSDNSConn) SetWriteDeadline(time.Time) error { return nil }
+
+type desktopExternalSOCKSDNSDialer struct {
+	connections []*desktopExternalSOCKSDNSConn
+	calls       atomic.Int32
+}
+
+func (d *desktopExternalSOCKSDNSDialer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	index := int(d.calls.Add(1)) - 1
+	if ctx.Err() != nil || network != "udp" || address.String() != "192.168.50.53:5353" || index >= len(d.connections) {
+		return nil, errors.New("DNS scheduling fixture changed exact dial ownership")
+	}
+	return d.connections[index], nil
+}
+func (d *desktopExternalSOCKSDNSDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("DNS scheduling fixture used another transport")
+}
+func desktopExternalSOCKSDNSCachedLoss(t *testing.T) {
+	for _, failure := range []error{nil, context.Canceled, context.DeadlineExceeded, os.ErrDeadlineExceeded, errors.New(net.ErrClosed.Error()), errors.Join(net.ErrClosed, context.Canceled), errors.Join(net.ErrClosed, os.ErrDeadlineExceeded)} {
+		if desktopExternalSOCKSDNSClosed(failure, 0) {
+			t.Fatal("unrelated DNS failure became cached-control retirement", failure)
+		}
+	}
+	if !desktopExternalSOCKSDNSClosed(fmt.Errorf("original read: %w", net.ErrClosed), 0) {
+		t.Fatal("original closed connection lost its terminal cause")
+	}
+	makeConn := func(held bool) *desktopExternalSOCKSDNSConn {
+		return &desktopExternalSOCKSDNSConn{held: held, responses: make(chan []byte, 1), readEntered: make(chan struct{}), readRelease: make(chan struct{}), writeEntered: make(chan struct{}), writeRelease: make(chan struct{}), writeDone: make(chan struct{}), closed: make(chan struct{})}
+	}
+	first, second := makeConn(true), makeConn(false)
+	t.Cleanup(func() {
+		select {
+		case <-first.writeRelease:
+		default:
+			close(first.writeRelease)
+		}
+		select {
+		case <-first.readRelease:
+		default:
+			close(first.readRelease)
+		}
+		_ = first.Close()
+		_ = second.Close()
+	})
+	dialer := &desktopExternalSOCKSDNSDialer{connections: []*desktopExternalSOCKSDNSConn{first, second}}
+	transport := dnsTransport.NewUDPRaw(log.NewNOPFactory().Logger(), dnsCore.NewTransportAdapter("udp", "original-socks-dns", nil), dialer, M.ParseSocksaddr("192.168.50.53:5353"))
+	defer transport.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	wait := func(done <-chan struct{}) {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatal("DNS scheduling fixture missed exact entered boundary", ctx.Err())
+		}
+	}
+	question := new(mDNS.Msg).SetQuestion("example.com.", mDNS.TypeA)
+	if _, err := transport.Exchange(ctx, question); err != nil {
+		t.Fatal(err)
+	}
+	wait(first.readEntered)
+	failed := make(chan error, 1)
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		transport.ExchangeAsync(ctx, question, func(_ *mDNS.Msg, err error) { failed <- err })
+	}()
+	wait(first.writeEntered)
+	close(first.readRelease)
+	select {
+	case err := <-failed:
+		if !desktopExternalSOCKSDNSClosed(err, 0) {
+			t.Fatal("original cached read did not return its exact terminal error", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if dialer.calls.Load() != 1 {
+		t.Fatal("failed in-flight query retried itself")
+	}
+	if answer, err := transport.Exchange(ctx, question); err != nil || answer == nil || answer.Id != question.Id || !answer.Response || dialer.calls.Load() != 2 {
+		t.Fatal("next query did not use the independently new cached connection", err)
+	}
+	close(first.writeRelease)
+	wait(first.writeDone)
+	wait(returned)
+	select {
+	case err := <-failed:
+		t.Fatal("retired DNS write completed its callback twice", err)
+	default:
+	}
+}

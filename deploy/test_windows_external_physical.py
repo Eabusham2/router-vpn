@@ -41,7 +41,7 @@ SOCKS_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + cas
     "socks5/reject/tls-name", "socks5/reject/tls-root", "socks5/reject/lower-denied", "socks5/reject/truncated",
     "socks5/reject/auth-downgrade", "socks5/reject/relay-domain", "socks5/reject/relay-wildcard",
     "socks5/reject/relay-zero", "socks5/reject/relay-uncaptured", "socks5/reject/control-eof",
-    "socks5/independent-associations-control-eof", "socks5/selected-dns-retained-control-retirement", "socks5/cancelled-proof", "socks5/replacement-keeps-new-source",
+    "socks5/independent-associations-control-eof", "socks5/selected-dns-retained-control-retirement", "socks5/dns-cached-control-loss", "socks5/cancelled-proof", "socks5/replacement-keeps-new-source",
     "latency50/socks5", "latency50/socks5/source", "latency50/socks5/capture", "latency50/socks5/session", "latency50/socks5/current"))
 SOCKS_FACTORY_CASES = tuple("TestRouterVPNExternalSOCKS" + name for name in (
     "RequiresExactNativeRoot", "AssociationsOwnDistinctControlAndRelaySockets",
