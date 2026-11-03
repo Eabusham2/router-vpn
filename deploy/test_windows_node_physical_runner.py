@@ -193,7 +193,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
         original = source.read_bytes()
@@ -283,6 +283,133 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
             with self.subTest(fault=fault):
                 # Each dispatch owns a fresh temporary fixture; an earlier
                 # failed child never supplies the next candidate's image.
+                previous = self.workspace
+                self.workspace = previous / fault
+                self.workspace.mkdir()
+                try:
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.dispatch(fault)
+                finally:
+                    self.workspace = previous
+
+
+class OrdinarySOCKSScope(unittest.TestCase):
+    setUp = OrdinaryHysteria2Scope.setUp
+
+    def test_every_socks_native_verdict_is_required(self):
+        expected = (GATE.EXTERNAL_SOCKS_ROOT, *(GATE.EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
+            "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
+            "home-lan-off/tcp-retained-deny", "home-lan-off/udp-retained-deny",
+            "reject/password", "reject/trust", "reject/dns", "reject/exit", "reject/auth-downgrade",
+            "reject/relay-domain", "reject/relay-wildcard", "reject/relay-zero", "reject/control-eof",
+            "successor-and-original-restore", "cancelled-proof", "replacement-keeps-new-source",
+            "foreign-predecessor", "commit-refused")))
+        self.assertEqual(GATE.EXTERNAL_SOCKS_CASES, expected)
+        complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in expected)
+        with contextlib.redirect_stdout(io.StringIO()):
+            GATE.report_external_socks(0, complete)
+        bad = [(1, complete)]
+        bad += [(0, complete + marker + "\n") for marker in (
+            "--- SKIP: hidden (0.01s)", "WARNING: DATA RACE", "--- FAIL: hidden (0.01s)",
+            "FAIL", "panic: unexpected", "fatal error: unexpected", "package [build failed]")]
+        first = "--- PASS: " + expected[0] + " (0.01s)\n"
+        bad += [(0, complete.replace(first, "expected diagnostic: " + first)), (0, complete + first)]
+        bad += [(0, complete.replace("--- PASS: " + case + " (0.01s)\n", "")) for case in expected]
+        for status, output in bad:
+            with self.subTest(status=status, output=output), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(ValueError, "required native result"):
+                    GATE.report_external_socks(status, output)
+
+    def test_socks_fixture_is_part_of_checked_native_scope(self):
+        root = self.workspace / "repository"
+        mobile = root / "mobile/desktop"
+        mobile.mkdir(parents=True)
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl"):
+            (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
+        source = mobile / "external_box_windows_socks_test.go.tmpl"
+        original = source.read_bytes()
+        with patch.object(GATE, "ROOT", root), patch.object(GATE.NODE, "checked_sources", return_value=(self.source, {})):
+            _, before = GATE.checked_sources(self.source)
+            self.assertIn("external_socks", before)
+            source.write_bytes(original.replace(GATE.TAG, b"//go:build windows\n", 1))
+            with self.assertRaisesRegex(ValueError, "explicit native test scope"):
+                GATE.checked_sources(self.source)
+            source.write_bytes(original)
+            self.assertEqual(GATE.checked_sources(self.source)[1], before)
+
+    def dispatch(self, fault=None):
+        calls = []
+        complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in GATE.EXTERNAL_SOCKS_CASES)
+        controls = {
+            "ordinary-tcp-deny": ("home-lan-off/tcp-deny", "ordinary token bypassed actual SOCKS WFP TCP deny: independent peer marker"),
+            "ordinary-udp-deny": ("home-lan-off/udp-deny", "ordinary token bypassed actual SOCKS WFP UDP deny: independent peer marker"),
+            "missing-durable-intent": ("always", "actual SOCKS source skipped its durable WFP intent"),
+        }
+
+        def run(command, **kwargs):
+            calls.append((command, kwargs["timeout"]))
+            self.assertEqual(kwargs["cwd"], self.source)
+            self.assertEqual(kwargs["env"], {"captured": "environment"})
+            if "-c" in command:
+                binary = Path(command[command.index("-o") + 1])
+                self.assertIn("-mod=readonly", command)
+                self.assertIn("-race", command)
+                self.assertTrue(any(str(arg).startswith("-overlay=") for arg in command))
+                binary.write_bytes(b"captured-native-socks-image")
+                if fault == "compile":
+                    return 1, "actual compiler failed"
+                return 0, ""
+            binary = Path(command[0])
+            if binary.parent.name == "external-socks":
+                self.assertIn("-test.run=^" + GATE.EXTERNAL_SOCKS_ROOT + "$", command)
+                self.assertIn("-test.timeout=300s", command)
+                self.assertEqual(kwargs["timeout"], 315)
+                if fault == "image":
+                    binary.write_bytes(b"replaced-native-image")
+                if fault == "leaf":
+                    return 0, complete.replace("--- PASS: " + GATE.EXTERNAL_SOCKS_ROOT + "/reject/control-eof (0.01s)\n", "")
+                return 0, complete
+            label = binary.parent.name.removeprefix("external-socks-")
+            leaf, witness = controls[label]
+            expression = "^" + GATE.EXTERNAL_SOCKS_ROOT + "$/" + "/".join("^" + part + "$" for part in leaf.split("/"))
+            self.assertIn("-test.run=" + expression, command)
+            self.assertIn("-test.timeout=60s", command)
+            self.assertEqual(kwargs["timeout"], 75)
+            output = "--- FAIL: " + GATE.EXTERNAL_SOCKS_ROOT + "/" + leaf + " (0.01s)\n" + witness + "\n"
+            if fault == label:
+                return 0, output
+            if fault == "timeout":
+                return 1, output + "panic: test timed out\n"
+            if fault == "witness":
+                return 1, output.replace(witness, "unrelated failure")
+            if fault == "prefixed-failure":
+                return 1, "displayed expectation: " + output
+            if fault == "duplicate-failure":
+                return 1, output + output
+            if fault == "fatal":
+                return 1, output + "fatal error: unrelated crash\n"
+            return 1, output
+
+        build = ["owned-go", "test", "-c", "-mod=readonly", "-race", "-tags=windows,routervpn_windows_node_composition"]
+        with patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            GATE.execute_external_socks(self.source, self.workspace, build, {"captured": "environment"})
+        return calls
+
+    def test_real_socks_dispatch_preserves_all_three_compiled_controls(self):
+        calls = self.dispatch()
+        self.assertEqual(len(calls), 8)
+        self.assertEqual([timeout for _, timeout in calls], [600, 315, 600, 75, 600, 75, 600, 75])
+        for relative, raw in self.original.items():
+            self.assertEqual((self.source / relative).read_bytes(), raw)
+
+    def test_socks_dispatch_rejects_false_native_acceptance(self):
+        for fault, message in (("compile", "compilation failed"), ("leaf", "required native result"),
+                               ("image", "native executable changed"), ("ordinary-tcp-deny", "exact defect"),
+                               ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("timeout", "exact defect"), ("witness", "exact defect"),
+                               ("prefixed-failure", "exact defect"), ("duplicate-failure", "exact defect"),
+                               ("fatal", "exact defect")):
+            with self.subTest(fault=fault):
                 previous = self.workspace
                 self.workspace = previous / fault
                 self.workspace.mkdir()

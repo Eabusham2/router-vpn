@@ -1,0 +1,860 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/auth"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+// These observations come from the separately copied provider executable.
+// No source/permit decision is injected into its TCP or UDP packet path.
+type desktopExternalSOCKSWFPReceipt struct {
+	Index                  int
+	Control, Relay, Client string
+	Packets                int
+	Closed                 bool
+}
+
+type desktopExternalSOCKSWFPProvider struct {
+	peer       *desktopExternalIntegrationPeer
+	local      netip.Addr
+	listener   net.Listener
+	probe      *desktopExternalWFPDatagrams
+	fault      string
+	mu         sync.Mutex
+	streams    map[net.Conn]bool
+	relays     []*desktopExternalSOCKSWFPRelay
+	workers    sync.WaitGroup
+	closed     bool
+	rejected   atomic.Int32
+	joinFailed atomic.Bool
+}
+
+type desktopExternalSOCKSWFPRelay struct {
+	net.PacketConn
+	provider    *desktopExternalSOCKSWFPProvider
+	control     *desktopExternalSOCKSControl
+	mu          sync.Mutex
+	receipt     desktopExternalSOCKSWFPReceipt
+	readStarted atomic.Bool
+	closed      chan struct{}
+	once        sync.Once
+}
+
+type desktopExternalSOCKSWFPListener struct {
+	provider *desktopExternalSOCKSWFPProvider
+	control  *desktopExternalSOCKSControl
+	relay    *desktopExternalSOCKSWFPRelay
+}
+
+func (l *desktopExternalSOCKSWFPListener) ListenPacket(config net.ListenConfig, ctx context.Context, network, address string) (net.PacketConn, error) {
+	p := l.provider
+	if network != "udp" || address != net.JoinHostPort(p.local.String(), "0") || l.relay != nil || ctx.Err() != nil {
+		return nil, errors.New("actual SOCKS reference lost its captured listener")
+	}
+	packet, err := config.ListenPacket(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	remote := packet.LocalAddr().(*net.UDPAddr).AddrPort()
+	if remote.Addr() != p.local || remote.Port() == 0 {
+		_ = packet.Close()
+		return nil, errors.New("actual SOCKS relay changed physical address")
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = packet.Close()
+		return nil, net.ErrClosed
+	}
+	r := &desktopExternalSOCKSWFPRelay{PacketConn: packet, provider: p, control: l.control, closed: make(chan struct{}), receipt: desktopExternalSOCKSWFPReceipt{Index: len(p.relays) + 1, Control: l.control.RemoteAddr().String(), Relay: remote.String()}}
+	p.relays = append(p.relays, r)
+	p.mu.Unlock()
+	l.relay = r
+	l.control.associated.Store(true)
+	return r, nil
+}
+
+func (r *desktopExternalSOCKSWFPRelay) ReadFrom(body []byte) (int, net.Addr, error) {
+	r.readStarted.Store(true)
+	n, address, err := r.PacketConn.ReadFrom(body)
+	if err != nil {
+		return n, address, err
+	}
+	r.mu.Lock()
+	if r.receipt.Client != "" && r.receipt.Client != address.String() {
+		r.mu.Unlock()
+		return 0, nil, errors.New("actual SOCKS relay changed its client tuple")
+	}
+	r.receipt.Client = address.String()
+	r.receipt.Packets++
+	r.mu.Unlock()
+	r.provider.peer.physicalUDP.Add(1)
+	if r.provider.fault == "control-eof" {
+		_ = r.control.Conn.Close()
+		return 0, nil, net.ErrClosed
+	}
+	return n, address, nil
+}
+
+func (r *desktopExternalSOCKSWFPRelay) Close() error {
+	var err error
+	r.once.Do(func() {
+		err = r.PacketConn.Close()
+		r.mu.Lock()
+		r.receipt.Closed = true
+		r.mu.Unlock()
+		close(r.closed)
+	})
+	return err
+}
+
+func (p *desktopExternalSOCKSWFPProvider) receipts() []desktopExternalSOCKSWFPReceipt {
+	p.mu.Lock()
+	relays := append([]*desktopExternalSOCKSWFPRelay(nil), p.relays...)
+	p.mu.Unlock()
+	result := make([]desktopExternalSOCKSWFPReceipt, 0, len(relays))
+	for _, r := range relays {
+		r.mu.Lock()
+		result = append(result, r.receipt)
+		r.mu.Unlock()
+	}
+	return result
+}
+
+func (p *desktopExternalSOCKSWFPProvider) refuse(connection net.Conn, reader *bufio.Reader) error {
+	offer, err := socks5.ReadAuthRequest(reader)
+	if err != nil || len(offer.Methods) != 1 || offer.Methods[0] != socks5.AuthTypeUsernamePassword {
+		return errors.New("native SOCKS negative lost original auth offer")
+	}
+	if p.fault == "auth-downgrade" {
+		err = socks5.WriteAuthResponse(connection, socks5.AuthResponse{Method: socks5.AuthTypeNotRequired})
+	} else {
+		if err = socks5.WriteAuthResponse(connection, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}); err != nil {
+			return err
+		}
+		credentials, authErr := socks5.ReadUsernamePasswordAuthRequest(reader)
+		if authErr != nil || credentials.Username != desktopExternalIntegrationUser || credentials.Password != desktopExternalIntegrationPassword {
+			return errors.New("native SOCKS negative changed original credentials")
+		}
+		if err = socks5.WriteUsernamePasswordAuthResponse(connection, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}); err != nil {
+			return err
+		}
+		request, requestErr := socks5.ReadRequest(reader)
+		if requestErr != nil || request.Command != socks5.CommandUDPAssociate {
+			return errors.New("native SOCKS negative never reached UDP ASSOCIATE")
+		}
+		bind := M.Socksaddr{Addr: p.local, Port: 5353}
+		switch p.fault {
+		case "relay-domain":
+			bind = M.ParseSocksaddr("unrequested-relay.example:5353")
+		case "relay-wildcard":
+			bind.Addr = netip.IPv4Unspecified()
+		case "relay-zero":
+			bind.Port = 0
+		default:
+			return errors.New("unknown native SOCKS malicious reply")
+		}
+		err = socks5.WriteResponse(connection, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: bind})
+	}
+	if err != nil {
+		return err
+	}
+	var body [1]byte
+	if n, err := reader.Read(body[:]); n != 0 || !errors.Is(err, io.EOF) {
+		return errors.New("rejected native SOCKS reply retained its actual control")
+	}
+	p.rejected.Add(1)
+	return nil
+}
+
+func (p *desktopExternalSOCKSWFPProvider) serve(connection net.Conn) {
+	defer p.workers.Done()
+	defer func() { _ = connection.Close(); p.mu.Lock(); delete(p.streams, connection); p.mu.Unlock() }()
+	reader := bufio.NewReader(connection)
+	first, err := reader.Peek(1)
+	if err != nil {
+		return
+	}
+	if first[0] == desktopExternalWFPProbePrefix[0] {
+		line, err := reader.ReadString('\n')
+		if err != nil || len(line) != len(desktopExternalWFPProbePrefix)+32+1 || !strings.HasPrefix(line, desktopExternalWFPProbePrefix) {
+			return
+		}
+		nonce := strings.TrimSuffix(strings.TrimPrefix(line, desktopExternalWFPProbePrefix), "\n")
+		p.probe.mu.Lock()
+		_, owned := p.probe.observed[nonce]
+		if owned {
+			p.probe.observed[nonce]++
+		}
+		p.probe.mu.Unlock()
+		if owned {
+			_, _ = io.WriteString(connection, line)
+		}
+		return
+	}
+	p.peer.accepted.Add(1)
+	control := &desktopExternalSOCKSControl{Conn: &desktopExternalBufferedConn{Conn: connection, reader: reader}, readDone: make(chan struct{})}
+	listener := &desktopExternalSOCKSWFPListener{provider: p, control: control}
+	defer func() {
+		_ = control.Conn.Close()
+		if listener.relay != nil {
+			_ = listener.relay.Close()
+			if listener.relay.readStarted.Load() {
+				select {
+				case <-control.readDone:
+				case <-time.After(3 * time.Second):
+					p.joinFailed.Store(true)
+				}
+			}
+		}
+	}()
+	if p.fault == "auth-downgrade" || strings.HasPrefix(p.fault, "relay-") {
+		_ = p.refuse(control, bufio.NewReader(control))
+		return
+	}
+	password := desktopExternalIntegrationPassword
+	if p.fault == "password" {
+		password += "-wrong"
+	}
+	err = socks.HandleConnectionEx(p.peer.ctx, control, bufio.NewReader(control), auth.NewAuthenticator([]auth.User{{Username: desktopExternalIntegrationUser, Password: password}}), p.peer, listener, 5*time.Second, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
+	if p.fault == "password" && err != nil {
+		p.peer.authFailures.Add(1)
+	}
+}
+
+func (p *desktopExternalSOCKSWFPProvider) close() {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
+	streams := make([]net.Conn, 0, len(p.streams))
+	for c := range p.streams {
+		streams = append(streams, c)
+	}
+	relays := append([]*desktopExternalSOCKSWFPRelay(nil), p.relays...)
+	p.mu.Unlock()
+	_ = p.listener.Close()
+	_ = p.probe.Close()
+	for _, c := range streams {
+		_ = c.Close()
+	}
+	for _, r := range relays {
+		_ = r.Close()
+	}
+	p.peer.close()
+	p.workers.Wait()
+}
+
+// The provider uses the pinned SOCKS implementation and real physical TCP/UDP.
+// It intentionally has no modeled kernel grant map or native source callback.
+func TestRouterVPNDesktopExternalWindowsSOCKSPeer(t *testing.T) {
+	if os.Getenv("ROUTERVPN_EXTERNAL_WFP_PEER") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_EXTERNAL_WFP_PEER") != "1" {
+		t.Fatal("unknown SOCKS reference owner")
+	}
+	input := bufio.NewReaderSize(os.Stdin, desktopExternalWFPLimit+1)
+	request, err := desktopExternalWFPReadRequest(input)
+	if err != nil || request.Operation != "start" || request.Address != desktopExternalWFPAddress(t).String() || request.Nonce != "" {
+		t.Fatal("SOCKS reference lost its captured start", err)
+	}
+	switch request.Fault {
+	case "", "password", "trust", "dns", "exit", "held", "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "control-eof":
+	default:
+		t.Fatal("unknown SOCKS provider fault")
+	}
+	certificate, err := tls.X509KeyPair(request.Certificate, request.Key)
+	clear(request.Key)
+	clear(request.ProxyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet, err := net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	peer := &desktopExternalIntegrationPeer{protocol: "socks5", certificate: certificate, connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel, badDNS: request.Fault == "dns", badIP: request.Fault == "exit"}
+	if request.Fault == "held" {
+		peer.publicEntered, peer.publicRelease = make(chan struct{}), make(chan struct{})
+	}
+	p := &desktopExternalSOCKSWFPProvider{peer: peer, local: netip.MustParseAddr(request.Address), listener: listener, probe: &desktopExternalWFPDatagrams{PacketConn: packet, observed: make(map[string]int)}, fault: request.Fault, streams: make(map[net.Conn]bool)}
+	defer p.close()
+	p.workers.Add(2)
+	go func() {
+		defer p.workers.Done()
+		var b [128]byte
+		for {
+			if _, _, err := p.probe.ReadFrom(b[:]); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer p.workers.Done()
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				_ = c.Close()
+				return
+			}
+			p.streams[c] = true
+			p.workers.Add(1)
+			p.mu.Unlock()
+			go p.serve(c)
+		}
+	}()
+	appID, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(appID) == 0 {
+		t.Fatal("SOCKS provider lost executable identity", err)
+	}
+	respond := func(nonce string, closed bool) {
+		p.probe.mu.Lock()
+		observed := p.probe.observed[nonce]
+		p.probe.mu.Unlock()
+		reply := desktopExternalWFPReply{Schema: 1, Address: listener.Addr().String(), AppID: appID, Nonce: nonce, Observed: observed, Packets: peer.physicalUDP.Load(), DNS: peer.dnsQueries.Load(), UDPDNS: peer.udpQueries.Load(), TLS: peer.tlsHandshakes.Load(), Public: peer.publicRequests.Load(), Attempts: peer.publicAttempts.Load(), Closed: closed, TCP: peer.accepted.Load(), Rejected: p.rejected.Load(), AuthFailures: peer.authFailures.Load(), ProbeUDP: packet.LocalAddr().String(), SOCKS: p.receipts()}
+		if err := json.NewEncoder(os.Stdout).Encode(reply); err != nil {
+			t.Fatal(err)
+		}
+	}
+	respond("", false)
+	for {
+		command, err := desktopExternalWFPReadRequest(input)
+		if errors.Is(err, io.EOF) {
+			p.close()
+			if p.joinFailed.Load() {
+				t.Fatal("SOCKS provider control observer did not join")
+			}
+			for _, r := range p.receipts() {
+				if !r.Closed {
+					t.Fatal("SOCKS provider retained a relay")
+				}
+			}
+			respond("", true)
+			return
+		}
+		if err != nil || command.Address != "" || command.Fault != "" || len(command.Certificate)+len(command.Key)+len(command.ProxyCertificate)+len(command.ProxyKey) != 0 {
+			t.Fatal("SOCKS provider command changed capture", err)
+		}
+		switch command.Operation {
+		case "stats":
+			if command.Nonce != "" {
+				t.Fatal("SOCKS statistics gained an operation")
+			}
+		case "release":
+			if peer.publicRelease == nil || command.Nonce != "" {
+				t.Fatal("SOCKS release changed owner")
+			}
+			select {
+			case <-peer.publicRelease:
+				t.Fatal("duplicate SOCKS release")
+			default:
+				close(peer.publicRelease)
+			}
+		case "close-control":
+			index, err := strconv.Atoi(command.Nonce)
+			p.mu.Lock()
+			var relay *desktopExternalSOCKSWFPRelay
+			if err == nil && index > 0 && index <= len(p.relays) && strconv.Itoa(index) == command.Nonce {
+				relay = p.relays[index-1]
+			}
+			p.mu.Unlock()
+			if relay == nil {
+				t.Fatal("SOCKS close selected another control")
+			}
+			_ = relay.control.Conn.Close()
+			select {
+			case <-relay.closed:
+			case <-time.After(3 * time.Second):
+				t.Fatal("SOCKS provider selected control did not join")
+			}
+		case "arm", "observe", "self-tcp", "self-udp":
+			raw, err := hex.DecodeString(command.Nonce)
+			if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != command.Nonce {
+				t.Fatal("SOCKS probe nonce changed")
+			}
+			p.probe.mu.Lock()
+			_, exists := p.probe.observed[command.Nonce]
+			create := command.Operation != "observe"
+			if exists == create {
+				p.probe.mu.Unlock()
+				t.Fatal("SOCKS probe was replayed or unowned")
+			}
+			if create {
+				p.probe.observed[command.Nonce] = 0
+			}
+			p.probe.mu.Unlock()
+			if strings.HasPrefix(command.Operation, "self-") {
+				network := strings.TrimPrefix(command.Operation, "self-")
+				address := netip.MustParseAddrPort(listener.Addr().String())
+				if network == "udp" {
+					address = netip.MustParseAddrPort(packet.LocalAddr().String())
+				}
+				ok, err := desktopExternalSOCKSWFPExchange(network, address, command.Nonce)
+				if !ok || err != nil {
+					t.Fatal("SOCKS independent provider self-probe failed", err)
+				}
+			}
+		default:
+			t.Fatal("unknown SOCKS provider operation")
+		}
+		respond(command.Nonce, false)
+	}
+}
+
+func desktopExternalSOCKSWFPExchange(network string, address netip.AddrPort, nonce string) (bool, error) {
+	if network == "udp" {
+		return desktopExternalWFPExchange(address, nonce)
+	}
+	if network != "tcp" {
+		return false, errors.New("unknown SOCKS physical probe transport")
+	}
+	connection, err := net.DialTimeout("tcp4", address.String(), time.Second)
+	if err != nil {
+		return false, err
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		return false, err
+	}
+	body := []byte(desktopExternalWFPProbePrefix + nonce + "\n")
+	if n, err := connection.Write(body); err != nil || n != len(body) {
+		return false, errors.Join(err, io.ErrShortWrite)
+	}
+	answer := make([]byte, len(body))
+	_, err = io.ReadFull(connection, answer)
+	return err == nil && bytes.Equal(body, answer), err
+}
+
+func desktopExternalSOCKSWFPBlocked(t *testing.T, p *desktopExternalWFPReference, network string) {
+	t.Helper()
+	if actual := p.call(t, "self-"+network, desktopExternalWFPNonce(t)); actual.Observed != 1 {
+		t.Fatal("SOCKS separate provider lacked actual physical reachability")
+	}
+	nonce := desktopExternalWFPNonce(t)
+	p.call(t, "arm", nonce)
+	address := p.remote
+	if network == "udp" {
+		address = netip.MustParseAddrPort(p.initial.ProbeUDP)
+	}
+	ok, err := desktopExternalSOCKSWFPExchange(network, address, nonce)
+	reply := p.call(t, "observe", nonce)
+	if ok || reply.Observed != 0 {
+		t.Fatal("ordinary token bypassed actual SOCKS WFP " + strings.ToUpper(network) + " deny: independent peer marker")
+	}
+	if err == nil {
+		t.Fatal("ordinary SOCKS denial lacked bounded actual result")
+	}
+}
+
+func desktopExternalSOCKSWFPOriginal(t *testing.T, p *desktopExternalWFPReference, kill string, lan bool) (*mobilemultihop.ExternalPolicy, string, string) {
+	t.Helper()
+	name := "rvpn-socks-" + desktopExternalWFPNonce(t)[:16]
+	profile := map[string]any{"id": "selected-socks-native", "node_kind": "external", "external": map[string]any{"protocol": "socks5", "expected_public_ip": desktopExternalIntegrationIP, "socks5": map[string]any{"host": p.local.String(), "port": int(p.remote.Port()), "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}}, "dns_mode": "custom", "dns_protocol": "udp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "manual", "manual_mtu": 1280, "home_lan_access": lan, "ipv6_mode": "off", "kill_switch_policy": kill}
+	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": "socks5", "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": name, "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{map[string]any{"type": "socks", "tag": mobilemultihop.ExternalFinalTag, "server": p.local.String(), "server_port": int(p.remote.Port()), "version": "5", "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	raw, _ := json.Marshal(graph)
+	saved, _ := json.Marshal(capture)
+	original, err := mobilemultihop.NewExternalPolicy(string(raw), string(saved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original, string(raw), string(saved)
+}
+
+func desktopExternalSOCKSWFPSnapshot(t *testing.T, f *desktopExternalWFPFixture) mobiletor.DesktopWindowsNodeCompositionReadback {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || actual.Closed || actual.Target != f.prepared || actual.Owner.Kind != "windows-isolated-token" || !actual.Options.RetainBaselineForHandoff || actual.TunnelName != f.tun.options.InterfaceName || actual.TunnelIndex != uint32(f.tun.index) || actual.TunnelLUID != f.tun.luid {
+		t.Fatal("actual SOCKS lost isolated source/TUN/kernel readback", err)
+	}
+	for _, g := range actual.Grants {
+		if g.Capture != f.prepared.Capture || g.Binding.Owner != actual.Owner || g.Sequence == 0 || g.SocketID == "" {
+			t.Fatal("actual SOCKS grant lost exact native owner")
+		}
+	}
+	return actual
+}
+
+func desktopExternalSOCKSWFPWait(t *testing.T, f *desktopExternalWFPFixture, predicate func(mobiletor.DesktopWindowsNodeCompositionReadback) bool) mobiletor.DesktopWindowsNodeCompositionReadback {
+	t.Helper()
+	deadline := time.NewTimer(4 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		actual := desktopExternalSOCKSWFPSnapshot(t, f)
+		if predicate(actual) {
+			return actual
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("actual SOCKS socket grants did not reach the exact joined state")
+		case <-tick.C:
+		}
+	}
+}
+
+func desktopExternalSOCKSWFPProve(t *testing.T, f *desktopExternalWFPFixture, p *desktopExternalWFPReference) {
+	t.Helper()
+	raw, err := f.proof.Run()
+	var result mobilemultihop.ExternalProofResult
+	if err != nil || json.Unmarshal([]byte(raw), &result) != nil {
+		t.Fatal("actual SOCKS WFP proof failed", err)
+	}
+	meta := f.policy.Metadata()
+	if result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 || result.EntryProven || !result.DNSProven || result.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("actual SOCKS proof changed original identity")
+	}
+	r := p.call(t, "stats", "")
+	if r.TCP < 2 || r.Packets == 0 || r.DNS == 0 || r.DNS != r.UDPDNS || r.TLS == 0 || r.Public == 0 || len(r.SOCKS) == 0 || r.AuthFailures != 0 {
+		t.Fatal("actual SOCKS proof bypassed authentication/selected UDP DNS/TLS", r)
+	}
+	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 0 })
+}
+
+func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixture, p *desktopExternalWFPReference) {
+	t.Helper()
+	before := len(p.call(t, "stats", "").SOCKS)
+	root, exists := f.box.outbound.Outbound(mobilemultihop.ExternalFinalTag)
+	if !exists {
+		t.Fatal("actual retained SOCKS root disappeared")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	a, err := root.DialContext(ctx, "udp", M.ParseSocksaddr(desktopExternalIntegrationDNS))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := root.DialContext(ctx, "udp", M.ParseSocksaddr(desktopExternalIntegrationDNS))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err := desktopExternalSOCKSExchange(a, 601); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopExternalSOCKSExchange(b, 602); err != nil {
+		t.Fatal(err)
+	}
+	receipts := p.call(t, "stats", "").SOCKS
+	if len(receipts) != before+2 {
+		t.Fatal("actual SOCKS associations aliased provider controls")
+	}
+	first, second := receipts[before], receipts[before+1]
+	if first.Control == second.Control || first.Client == second.Client || first.Relay == second.Relay || first.Client == "" || second.Client == "" || first.Closed || second.Closed {
+		t.Fatal("actual SOCKS physical tuples are not distinct")
+	}
+	actual := desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 4 })
+	match := func(r desktopExternalSOCKSWFPReceipt, g mobiletor.DesktopSocketGrant) bool {
+		return g.Network == "tcp" && g.Local.String() == r.Control && g.Remote == p.remote || g.Network == "udp" && g.Local.String() == r.Client && g.Remote.String() == r.Relay
+	}
+	var old, next []string
+	seen := make(map[string]bool)
+	for _, g := range actual.Grants {
+		if seen[g.SocketID] {
+			t.Fatal("actual SOCKS associations reused a socket identity")
+		}
+		seen[g.SocketID] = true
+		if match(first, g) {
+			old = append(old, g.SocketID)
+		} else if match(second, g) {
+			next = append(next, g.SocketID)
+		} else {
+			t.Fatal("actual SOCKS admitted an unrelated physical tuple")
+		}
+	}
+	if len(old) != 2 || len(next) != 2 {
+		t.Fatal("actual SOCKS did not own two TCP and UDP grant pairs")
+	}
+	physical, _ := f.box.outbound.Outbound(mobilemultihop.DesktopExternalPhysicalTag)
+	if c, err := physical.DialContext(ctx, "udp", M.ParseSocksaddr(first.Relay)); err == nil || c != nil {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatal("actual SOCKS negotiated relay broadened the shared lower map")
+	}
+	p.call(t, "close-control", strconv.Itoa(first.Index))
+	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool {
+		if len(a.Grants) != 2 {
+			return false
+		}
+		for _, g := range a.Grants {
+			if !match(second, g) || g.SocketID != next[0] && g.SocketID != next[1] {
+				return false
+			}
+		}
+		return true
+	})
+	var buf [1]byte
+	_ = a.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := a.Read(buf[:]); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("actual control EOF did not close its original UDP reader", err)
+	}
+	if _, err := a.Write(buf[:]); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("actual control EOF retained UDP write authority", err)
+	}
+	if err := desktopExternalSOCKSExchange(b, 603); err != nil || !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("actual control EOF revoked its sibling", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 0 })
+}
+
+// Real BFE/token/Wintun identity is exercised. Journal persistence and the TUN
+// packet pump remain explicit fixtures; routes and DNS are never installed.
+func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	certificate, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(certificate)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	for _, kill := range []string{"on-connect", "always"} {
+		t.Run(kill, func(t *testing.T) {
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			p := desktopExternalWFPStartReferenceProtocol(t, ca, "", "socks5")
+			original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, kill, true)
+			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			f.start(t)
+			desktopExternalSOCKSWFPProve(t, f, p)
+			desktopExternalSOCKSWFPAssociations(t, f, p)
+			retained = f.drain(t)
+			if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	t.Run("home-lan-off", func(t *testing.T) {
+		var retained mobiletor.DesktopWindowsProtectionTarget
+		desktopExternalWFPCleanup(t, &retained)
+		p := desktopExternalWFPStartReferenceProtocol(t, ca, "", "socks5")
+		original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", false)
+		f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+		f.start(t)
+		t.Run("tcp-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "tcp") })
+		t.Run("udp-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "udp") })
+		raw, err := f.proof.Run()
+		if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() {
+			t.Fatal("unselected private SOCKS relay gained proof")
+		}
+		r := p.call(t, "stats", "")
+		if r.TCP == 0 || len(r.SOCKS) == 0 || r.Packets != 0 || r.DNS != 0 || r.Public != 0 {
+			t.Fatal("Home LAN off did not refuse the actual negotiated private relay", r)
+		}
+
+		retained = f.drain(t)
+		t.Run("tcp-retained-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "tcp") })
+		t.Run("udp-retained-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "udp") })
+	})
+	for _, fault := range []string{"password", "trust", "dns", "exit", "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "control-eof"} {
+		t.Run("reject/"+fault, func(t *testing.T) {
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			p := desktopExternalWFPStartReferenceProtocol(t, ca, fault, "socks5")
+			original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", true)
+			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			f.start(t)
+			raw, err := f.proof.Run()
+			if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() {
+				t.Fatal("invalid actual SOCKS path acquired proof", fault)
+			}
+			r := p.call(t, "stats", "")
+			// The independent provider may observe client EOF just after Run
+			// returns. Require that terminal receipt before evaluating counters.
+			deadline := time.Now().Add(4 * time.Second)
+			for (fault == "password" && r.AuthFailures == 0 || (fault == "auth-downgrade" || strings.HasPrefix(fault, "relay-")) && r.Rejected == 0) && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+				r = p.call(t, "stats", "")
+			}
+			if r.TCP == 0 {
+				t.Fatal("SOCKS negative never reached its actual control")
+			}
+			switch fault {
+			case "password":
+				if r.AuthFailures == 0 || r.DNS != 0 || r.Attempts != 0 || len(r.SOCKS) != 0 {
+					t.Fatal("wrong actual SOCKS auth carried inner bytes", r)
+				}
+			case "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero":
+				if r.Rejected == 0 || r.Packets != 0 || r.DNS != 0 || r.Attempts != 0 || len(r.SOCKS) != 0 {
+					t.Fatal("invalid actual SOCKS reply escaped joined control refusal", r)
+				}
+			case "control-eof":
+				if r.Packets == 0 || r.DNS != 0 || r.Attempts != 0 {
+					t.Fatal("actual SOCKS control EOF did not stop first UDP payload", r)
+				}
+			case "dns":
+				if r.DNS == 0 || r.Attempts != 0 {
+					t.Fatal("failed actual SOCKS DNS reached public proof", r)
+				}
+			case "trust":
+				if r.DNS == 0 || r.Attempts == 0 || r.TLS != 0 || r.Public != 0 {
+					t.Fatal("SOCKS TLS negative bypassed actual server", r)
+				}
+			case "exit":
+				if r.DNS == 0 || r.TLS != 1 || r.Public != 1 {
+					t.Fatal("SOCKS wrong exit did not use authenticated TLS", r)
+				}
+			}
+			retained = f.drain(t)
+		})
+	}
+	t.Run("successor-and-original-restore", func(t *testing.T) {
+		var retained mobiletor.DesktopWindowsProtectionTarget
+		desktopExternalWFPCleanup(t, &retained)
+		p := desktopExternalWFPStartReferenceProtocol(t, ca, "", "socks5")
+		original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", true)
+		first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+		first.start(t)
+		desktopExternalSOCKSWFPProve(t, first, p)
+		retained = first.drain(t)
+		for i := 0; i < 2; i++ {
+			previous := retained
+			next := desktopExternalWFPBox(t, original, source, capture, &previous, false)
+			next.start(t)
+			desktopExternalSOCKSWFPProve(t, next, p)
+			if next.prepared.Capture.SessionID == previous.Capture.SessionID || next.original != original || next.source != source || next.capture != capture || !reflect.DeepEqual(next.commit.Previous, &previous) || first.proof.Healthy() || first.network.Current() {
+				t.Fatal("actual SOCKS restoration adopted a replaced original")
+			}
+			retained = next.drain(t)
+		}
+	})
+	for _, replacement := range []bool{false, true} {
+		name := "cancelled-proof"
+		if replacement {
+			name = "replacement-keeps-new-source"
+		}
+		t.Run(name, func(t *testing.T) {
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			p := desktopExternalWFPStartReferenceProtocol(t, ca, "held", "socks5")
+			original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", true)
+			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			f.start(t)
+			done := make(chan error, 1)
+			go func() {
+				raw, err := f.proof.Run()
+				if raw != "" {
+					err = nil
+				}
+				done <- err
+			}()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				r := p.call(t, "stats", "")
+				if r.Public == 1 && r.TLS == 1 && r.UDPDNS > 0 {
+					break
+				}
+				if !time.Now().Before(deadline) {
+					t.Fatal("held actual SOCKS proof never reached provider")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			f.network.InterfaceUpdated(context.Background())
+			p.call(t, "release", "")
+			select {
+			case err := <-done:
+				if err == nil || f.proof.Healthy() || f.network.Current() {
+					t.Fatal("cancelled actual SOCKS result was adopted")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled actual SOCKS proof did not join")
+			}
+			retained = f.drain(t)
+			if replacement {
+				fresh := desktopExternalWFPStartReferenceProtocol(t, ca, "", "socks5")
+				nextOriginal, nextSource, nextCapture := desktopExternalSOCKSWFPOriginal(t, fresh, "always", true)
+				previous := retained
+				next := desktopExternalWFPBox(t, nextOriginal, nextSource, nextCapture, &previous, false)
+				next.start(t)
+				desktopExternalSOCKSWFPProve(t, next, fresh)
+				if next.prepared.Capture.SourceSHA256 == previous.Capture.SourceSHA256 || f.proof.Healthy() || f.network.Current() {
+					t.Fatal("old SOCKS operation replaced the new source")
+				}
+				retained = next.drain(t)
+			}
+		})
+	}
+	for _, fault := range []string{"foreign-predecessor", "commit-refused"} {
+		t.Run(fault, func(t *testing.T) {
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			p := desktopExternalWFPStartReferenceProtocol(t, ca, "", "socks5")
+			original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", false)
+			first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			first.start(t)
+			retained = first.drain(t)
+			expected := retained
+			if fault == "foreign-predecessor" {
+				expected.Capture.SourceSHA256 = strings.Repeat("f", 64)
+			}
+			before := p.call(t, "stats", "")
+			next := desktopExternalWFPBox(t, original, source, capture, &expected, fault == "commit-refused")
+			if err := next.box.RouterVPNStrategyStart(); err == nil || next.admitted != 0 || next.network.Current() || next.network.SocketCurrent() {
+				t.Fatal("uncommitted SOCKS successor gained native socket authority")
+			}
+			if err := next.close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+				t.Fatal("failed SOCKS successor changed retained deny", err)
+			}
+			after := p.call(t, "stats", "")
+			if after.TCP != before.TCP || after.DNS != before.DNS || after.Public != before.Public {
+				t.Fatal("refused SOCKS successor sent actual traffic")
+			}
+			desktopExternalSOCKSWFPBlocked(t, p, "tcp")
+			desktopExternalSOCKSWFPBlocked(t, p, "udp")
+		})
+	}
+	t.Log("Actual scoped BFE/isolated TCP and negotiated UDP SOCKS ownership, selected DNS/TLS proof, independent control EOF, cancellation, exact succession and retained deny passed. Wintun identity is real; journal storage and packet pump remain explicit fixtures.")
+}

@@ -75,7 +75,10 @@ type desktopExternalWFPReply struct {
 	Nonce                                       string `json:"nonce,omitempty"`
 	Observed                                    int    `json:"observed"`
 	Packets, DNS, UDPDNS, TLS, Public, Attempts int32
-	Closed                                      bool `json:"closed"`
+	Closed                                      bool                             `json:"closed"`
+	TCP, Rejected, AuthFailures                 int32                            `json:",omitempty"`
+	ProbeUDP                                    string                           `json:"probe_udp,omitempty"`
+	SOCKS                                       []desktopExternalSOCKSWFPReceipt `json:"socks,omitempty"`
 }
 
 func desktopExternalWFPAddress(t *testing.T) netip.Addr {
@@ -435,7 +438,7 @@ func (p *desktopExternalWFPReference) call(t *testing.T, operation, nonce string
 		t.Fatal(err)
 	}
 	reply, err := p.read()
-	if err != nil || reply.Schema != 1 || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.Nonce != nonce || reply.Closed {
+	if err != nil || reply.Schema != 1 || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.Nonce != nonce || reply.Closed || reply.ProbeUDP != p.initial.ProbeUDP {
 		t.Fatal("external peer acknowledgement changed owner", err)
 	}
 	return reply
@@ -465,6 +468,17 @@ func (p *desktopExternalWFPReference) close() error {
 
 func desktopExternalWFPStartReference(t *testing.T, ca *desktopExternalIntegrationCA, fault string) *desktopExternalWFPReference {
 	t.Helper()
+	return desktopExternalWFPStartReferenceProtocol(t, ca, fault, "hysteria2")
+}
+
+func desktopExternalWFPStartReferenceProtocol(t *testing.T, ca *desktopExternalIntegrationCA, fault, protocol string) *desktopExternalWFPReference {
+	t.Helper()
+	peerTest := "TestRouterVPNDesktopExternalWindowsHysteria2Peer"
+	if protocol == "socks5" {
+		peerTest = "TestRouterVPNDesktopExternalWindowsSOCKSPeer"
+	} else if protocol != "hysteria2" {
+		t.Fatal("unknown native external reference protocol")
+	}
 	actual, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +492,7 @@ func desktopExternalWFPStartReference(t *testing.T, ca *desktopExternalIntegrati
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	command := exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopExternalWindowsHysteria2Peer$", "-test.count=1", "-test.timeout=85s")
+	command := exec.CommandContext(ctx, copyPath, "-test.run=^"+peerTest+"$", "-test.count=1", "-test.timeout=85s")
 	command.Env = append(os.Environ(), "ROUTERVPN_EXTERNAL_WFP_PEER=1")
 	input, err := command.StdinPipe()
 	if err != nil {
@@ -510,7 +524,11 @@ func desktopExternalWFPStartReference(t *testing.T, ca *desktopExternalIntegrati
 	public, key := desktopExternalWFPCertificate(t, ca.certificate(t, true))
 	proxy, proxyKey := desktopExternalWFPCertificate(t, ca.certificate(t, true))
 	if fault == "trust" {
-		proxy, proxyKey = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
+		if protocol == "socks5" {
+			public, key = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
+		} else {
+			proxy, proxyKey = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
+		}
 	}
 	request := desktopExternalWFPRequest{Schema: 1, Operation: "start", Address: p.local.String(), Fault: fault, Certificate: public, Key: key, ProxyCertificate: proxy, ProxyKey: proxyKey}
 	encoded, err := json.Marshal(request)
@@ -528,6 +546,12 @@ func desktopExternalWFPStartReference(t *testing.T, ca *desktopExternalIntegrati
 	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
 	if err != nil || scopeErr != nil || p.initial.Schema != 1 || p.remote.Addr() != p.local || p.remote.Port() == 0 || len(p.initial.AppID) == 0 || bytes.Equal(scope, p.initial.AppID) || p.initial.Packets != 0 || p.initial.DNS != 0 || p.initial.Public != 0 || p.initial.Closed {
 		t.Fatal("external provider has no separate actual captured executable", err, scopeErr)
+	}
+	if protocol == "socks5" {
+		probe, parseErr := netip.ParseAddrPort(p.initial.ProbeUDP)
+		if parseErr != nil || probe.Addr() != p.local || probe.Port() == 0 || p.initial.TCP != 0 || p.initial.Rejected != 0 || p.initial.AuthFailures != 0 || len(p.initial.SOCKS) != 0 {
+			t.Fatal("SOCKS reference changed its initial physical listeners or observations", parseErr)
+		}
 	}
 	return p
 }
@@ -720,6 +744,7 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	})
 	outs := outbound.NewRegistry()
 	HY.RegisterOutbound(outs)
+	routervpndesktoppt.RegisterExternalSOCKSOutbound(outs)
 	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
 	dnsRegistry := dns.NewTransportRegistry()
 	DNST.RegisterUDP(dnsRegistry)
@@ -784,6 +809,9 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 	t.Helper()
 	if err := f.box.RouterVPNStrategyStart(); err != nil {
 		if f.committed != 1 {
+			if f.policy.Metadata().Protocol == "socks5" {
+				t.Fatal("actual SOCKS source skipped its durable WFP intent", err)
+			}
 			t.Fatal("actual HY2 source skipped its durable WFP intent", err)
 		}
 		t.Fatal("external actual WFP startup", err)

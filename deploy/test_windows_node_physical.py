@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,14 @@ EXTERNAL_HY2_ROOT = "TestRouterVPNDesktopExternalWindowsHysteria2WFP"
 EXTERNAL_HY2_CASES = (EXTERNAL_HY2_ROOT, *(EXTERNAL_HY2_ROOT + "/" + leaf for leaf in (
     "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
     "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")))
+EXTERNAL_SOCKS_ROOT = "TestRouterVPNDesktopExternalWindowsSOCKSWFP"
+EXTERNAL_SOCKS_CASES = (EXTERNAL_SOCKS_ROOT, *(EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
+    "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
+    "home-lan-off/tcp-retained-deny", "home-lan-off/udp-retained-deny",
+    "reject/password", "reject/trust", "reject/dns", "reject/exit", "reject/auth-downgrade",
+    "reject/relay-domain", "reject/relay-wildcard", "reject/relay-zero", "reject/control-eof",
+    "successor-and-original-restore", "cancelled-proof", "replacement-keeps-new-source",
+    "foreign-predecessor", "commit-refused")))
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
@@ -64,6 +73,10 @@ def checked_sources(source):
     if external.is_symlink() or not external.is_file() or not external.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows Hysteria2 escaped its explicit native test scope")
     records["external_hysteria2"] = hashlib.sha256(external.read_bytes()).hexdigest()
+    socks = ROOT / "mobile/desktop/external_box_windows_socks_test.go.tmpl"
+    if socks.is_symlink() or not socks.is_file() or not socks.read_bytes().startswith(TAG):
+        raise ValueError("Ordinary Windows SOCKS escaped its explicit native test scope")
+    records["external_socks"] = hashlib.sha256(socks.read_bytes()).hexdigest()
     records["kernel_runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
 
@@ -189,6 +202,60 @@ def execute_external_hysteria2(source, workspace, build, captured):
         print("Rejected actual ordinary Hysteria2 native control: " + label, flush=True)
 
 
+def exact_native_verdict(output, verdict, case):
+    # A diagnostic can quote an expected PASS. Only a real Go verdict line,
+    # occurring exactly once, supplies evidence for this required case.
+    pattern = r"^[ \t]*--- " + re.escape(verdict) + r": " + re.escape(case) + r" \("
+    return len(re.findall(pattern, output, re.MULTILINE)) == 1
+
+
+def socks_native_aborted(output):
+    return any(value in output for value in ("--- SKIP:", "DATA RACE", "panic:", "fatal error:", "[build failed]"))
+
+
+def report_external_socks(status, output):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_SOCKS_CASES) or \
+            socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Actual ordinary Windows SOCKS omitted its required native result")
+
+
+def execute_external_socks(source, workspace, build, captured):
+    directory = workspace / "external-socks"
+    directory.mkdir()
+    selected = external_overlay(source, directory)
+    binary = directory / "external-socks.test.exe"
+    status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."],
+        cwd=source, env=captured, timeout=600)
+    if status:
+        raise ValueError("Actual ordinary Windows SOCKS compilation failed:\n" + output[-32768:])
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_SOCKS_ROOT + "$", "-test.count=1", "-test.timeout=300s", "-test.v"],
+        cwd=source, env=captured, timeout=315)
+    report_external_socks(status, output)
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+        raise ValueError("Actual ordinary SOCKS native executable changed")
+    for label, mutation, leaf, witness in (
+            ("ordinary-tcp-deny", "ordinary-udp-deny", "home-lan-off/tcp-deny", "ordinary token bypassed actual SOCKS WFP TCP deny: independent peer marker"),
+            ("ordinary-udp-deny", "ordinary-udp-deny", "home-lan-off/udp-deny", "ordinary token bypassed actual SOCKS WFP UDP deny: independent peer marker"),
+            ("missing-durable-intent", "missing-durable-intent", "always", "actual SOCKS source skipped its durable WFP intent")):
+        changed = workspace / ("external-socks-" + label)
+        changed.mkdir()
+        selected = external_overlay(source, changed, mutation)
+        binary = changed / "external-socks.test.exe"
+        status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."],
+            cwd=source, env=captured, timeout=600)
+        if status:
+            raise ValueError("Actual ordinary SOCKS control did not compile: " + label + "\n" + output[-16384:])
+        expression = "^" + EXTERNAL_SOCKS_ROOT + "$/" + "/".join("^" + part + "$" for part in leaf.split("/"))
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"],
+            cwd=source, env=captured, timeout=75)
+        if status == 0 or not exact_native_verdict(output, "FAIL", EXTERNAL_SOCKS_ROOT + "/" + leaf) or witness not in output or \
+                socks_native_aborted(output):
+            raise ValueError("Actual ordinary SOCKS control missed its exact defect: " + label + "\n" + output[-16384:])
+        print("Rejected actual ordinary SOCKS native control: " + label, flush=True)
+
+
 def mutants(source):
     factory = "routervpn/desktoppt/node_physical_windows.go"
     lower = "routervpn/desktoppt/node_physical.go"
@@ -295,6 +362,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual WFP Node executable changed during its retained test")
         execute_external_hysteria2(source, workspace, build, captured)
+        execute_external_socks(source, workspace, build, captured)
         for mutation in mutants(source):
             name, relative, test, witness, raw = mutation
             candidate = workspace / name
