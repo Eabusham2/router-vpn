@@ -146,11 +146,27 @@ type DesktopDarwinSocketPolicy struct {
 	sequence    uint64
 	current     atomic.Bool
 	observed    atomic.Int64
+	loss        atomic.Pointer[desktopDarwinPolicyLoss]
 	closing     atomic.Bool
 	joined      chan struct{}
 	monitorDone chan struct{}
 	joinErr     error
 	parentStop  func() bool
+}
+
+// Diagnostic only: this never grants authority or refreshes readback. Preserve
+// the first recorded cause because retirement commonly reduces it to ErrClosed.
+type desktopDarwinPolicyLoss struct {
+	Phase              string
+	Cause              error
+	ObservedAt, LostAt int64
+}
+
+func (p *DesktopDarwinSocketPolicy) lose(phase string, cause error) {
+	p.current.Store(false)
+	p.loss.CompareAndSwap(nil, &desktopDarwinPolicyLoss{
+		Phase: phase, Cause: cause, ObservedAt: p.observed.Load(), LostAt: time.Now().UnixMilli(),
+	})
 }
 
 var _ DesktopSocketPolicy = (*DesktopDarwinSocketPolicy)(nil)
@@ -182,7 +198,7 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	}
 	child.Close()
 	p := &DesktopDarwinSocketPolicy{capture: capture, options: options, channel: channel, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{})}
-	go func() { p.joinErr = command.Wait(); p.current.Store(false); close(p.joined) }()
+	go func() { p.joinErr = command.Wait(); p.lose("guardian-join", p.joinErr); close(p.joined) }()
 	request := desktopDarwinRequest{Operation: "prepare", Capture: capture, Options: options}
 	reply, file, err := p.call(ctx, request, nil, false)
 	if file != nil {
@@ -232,7 +248,13 @@ func (p *DesktopDarwinSocketPolicy) Current(c DesktopSocketCapture, o DesktopSoc
 		return false
 	}
 	observed, now := p.observed.Load(), time.Now().UnixMilli()
-	return c == p.capture && o == p.owner && p.current.Load() && !p.closing.Load() && observed > 0 && observed <= now && now-observed <= DesktopSocketReadbackAge.Milliseconds()
+	identity := c == p.capture && o == p.owner
+	active := p.current.Load() && !p.closing.Load()
+	fresh := observed > 0 && observed <= now && now-observed <= DesktopSocketReadbackAge.Milliseconds()
+	if identity && active && !fresh {
+		p.loss.CompareAndSwap(nil, &desktopDarwinPolicyLoss{Phase: "readback-age", ObservedAt: observed, LostAt: now})
+	}
+	return identity && active && fresh
 }
 
 func (p *DesktopDarwinSocketPolicy) Select(ctx context.Context, c DesktopSocketCapture, network string, remote netip.AddrPort) (DesktopSocketBinding, error) {
@@ -362,7 +384,7 @@ func (p *DesktopDarwinSocketPolicy) revokeSocketAdmitted(ctx context.Context, g 
 func (p *DesktopDarwinSocketPolicy) Cancel() {
 	if p != nil {
 		p.closing.Store(true)
-		p.current.Store(false)
+		p.lose("cancel", nil)
 	}
 }
 
@@ -477,11 +499,11 @@ func (p *DesktopDarwinSocketPolicy) monitor() {
 			return
 		}
 		if !p.Current(p.capture, p.owner) {
-			p.current.Store(false)
+			p.lose("monitor-current", nil)
 			return
 		}
 		if _, err := p.probe(); err != nil {
-			p.current.Store(false)
+			p.lose("monitor-probe", err)
 			return
 		}
 	}
@@ -556,20 +578,21 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 		return desktopDarwinReply{}, nil, err
 	}
 	if err := desktopDarwinSend(p.channel, request, file); err != nil {
-		p.current.Store(false)
+		p.lose("control-send-"+request.Operation, err)
 		return desktopDarwinReply{}, nil, err
 	}
 	var reply desktopDarwinReply
 	received, err := desktopDarwinReceive(p.channel, &reply, uint32(p.command.Process.Pid), 0)
 	if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != "" {
-		p.current.Store(false)
+		failure := errors.Join(err, fmt.Errorf("Darwin physical guardian rejected or lost %s: %s", request.Operation, reply.Error))
+		p.lose("control-receive-"+request.Operation, failure)
 		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture {
 			// An unknown result cannot be followed by another request on a
 			// shifted sequence. EOF makes the independent guardian retire all
 			// permits/handles; Revoke still requires actual absent readback.
 			p.channel.Close()
 		}
-		return reply, received, errors.Join(err, fmt.Errorf("Darwin physical guardian rejected or lost %s: %s", request.Operation, reply.Error))
+		return reply, received, failure
 	}
 	return reply, received, nil
 }

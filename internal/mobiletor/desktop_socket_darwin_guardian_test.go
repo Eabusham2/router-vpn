@@ -994,6 +994,9 @@ func desktopDarwinKernelTrace(t *testing.T, policy *DesktopDarwinSocketPolicy, b
 	// Diagnostics are read-only and confined to the fixture's captured owner.
 	// A failed query remains a failed query; no repair or permit is installed.
 	t.Logf("owned PF failure: uid=%d guardian=%d current=%t", policy.uid, policy.owner.ProcessID, policy.Current(policy.capture, policy.owner))
+	if loss := policy.loss.Load(); loss != nil {
+		t.Logf("owned PF first loss: phase=%s observed_ms=%d lost_ms=%d age_ms=%d cause=%v", loss.Phase, loss.ObservedAt, loss.LostAt, loss.LostAt-loss.ObservedAt, loss.Cause)
+	}
 	if broker != nil {
 		broker.mu.Lock()
 		var sockets []*desktopSocket
@@ -2045,6 +2048,25 @@ func TestDesktopDarwinGuardianCurrentFreshnessAndStateScope(t *testing.T) {
 		policy.observed.Store(test.observed)
 		if policy.Current(capture, owner) != test.valid {
 			t.Fatal("Darwin policy freshness accepted an invalid age")
+		}
+		loss := policy.loss.Load()
+		if test.valid && loss != nil || !test.valid && (loss == nil || loss.Phase != "readback-age" || loss.ObservedAt != test.observed) {
+			t.Fatal("Darwin freshness diagnostic changed its original observation")
+		}
+		if !policy.current.Load() || policy.observed.Load() != test.observed {
+			t.Fatal("Darwin diagnostic changed authority or refreshed readback")
+		}
+		first := errors.New("original control failure")
+		policy.lose("control-receive-probe", first)
+		if loss == nil {
+			loss = policy.loss.Load()
+			if loss.Phase != "control-receive-probe" || !errors.Is(loss.Cause, first) {
+				t.Fatal("Darwin policy lost its first control failure")
+			}
+		}
+		policy.lose("guardian-join", context.Canceled)
+		if policy.loss.Load() != loss || policy.current.Load() || policy.Current(capture, owner) {
+			t.Fatal("Darwin retirement replaced the original cause or restored authority")
 		}
 	}
 	scope := []desktopDarwinStateInterface{{Name: "en-test", Index: 3, Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("2001:db8::2")}}}
