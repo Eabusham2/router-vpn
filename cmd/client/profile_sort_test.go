@@ -10,7 +10,7 @@ import (
 )
 
 func sortFixtureStore() common.RouterProfileStore {
-	return common.RouterProfileStore{
+	store := common.RouterProfileStore{
 		SchemaVersion: common.RouterProfileStoreVersion,
 		SelectedID:    "b",
 		Profiles: []common.RouterProfile{
@@ -19,6 +19,19 @@ func sortFixtureStore() common.RouterProfileStore {
 			{SchemaVersion: common.RouterProfileSchemaVersion, ID: "c", Name: "Gamma", UseCount: 8},
 		},
 	}
+	for i := 0; i < 2; i++ {
+		p := &store.Profiles[i]
+		p.LatencyMinMs = 1
+		p.LatencyAverageMs = p.LatencyMedianMs
+		p.LatencyTrimmedMeanMs = p.LatencyMedianMs
+		p.LatencyMaxMs = p.LatencyP90Ms
+		p.LatencyLastTest = "2026-01-01T00:00:00Z"
+		if err := common.NormalizeRouterProfile(p); err != nil {
+			panic(err)
+		}
+		p.LatencyReceipt = &common.NodeLatencyReceipt{Schema: 1, Measurement: savedNodeLatencyMeasurement, Attempts: 50, SourceToken: liveMeasurementProfileToken(*p), NetworkMetadata: "saved-test-network"}
+	}
+	return store
 }
 
 func TestSortPublicProfileStoreOrdersCurrentRecentAndLatency(t *testing.T) {

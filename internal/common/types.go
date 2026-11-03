@@ -63,6 +63,17 @@ type ExternalNodeConfig struct {
 	TorBridge *ExternalTorBridgeConfig `json:"tor_bridge,omitempty"`
 }
 
+// NodeLatencyReceipt records how saved statistics were actually obtained.
+// Legacy numeric fields remain readable without inventing missing provenance.
+type NodeLatencyReceipt struct {
+    Schema int `json:"schema"`
+    Measurement string `json:"measurement"`
+    Attempts int `json:"attempts"`
+    Failed int `json:"failed"`
+    SourceToken string `json:"source_token"`
+    NetworkMetadata string `json:"network_metadata"`
+}
+
 type RouterProfile struct {
 	SchemaVersion int `json:"schema_version,omitempty"`
 	ID string `json:"id"`; Name string `json:"name"`; NodeKind string `json:"node_kind,omitempty"`; External *ExternalNodeConfig `json:"external,omitempty"`; NodeProofID string `json:"node_proof_id,omitempty"`
@@ -75,6 +86,7 @@ type RouterProfile struct {
 	PathProbeURL string `json:"path_probe_url,omitempty"`
 	Location string `json:"location,omitempty"`; Latitude float64 `json:"latitude,omitempty"`; Longitude float64 `json:"longitude,omitempty"`
 	UseCount int `json:"use_count,omitempty"`; LastUsedAt string `json:"last_used_at,omitempty"`; LatencySamples int `json:"latency_samples,omitempty"`; LatencyMinMs float64 `json:"latency_min_ms,omitempty"`; LatencyMedianMs float64 `json:"latency_median_ms,omitempty"`; LatencyTrimmedMeanMs float64 `json:"latency_trimmed_mean_ms,omitempty"`; LatencyAverageMs float64 `json:"latency_average_ms,omitempty"`; LatencyP90Ms float64 `json:"latency_p90_ms,omitempty"`; LatencyMaxMs float64 `json:"latency_max_ms,omitempty"`; LatencyLastTest string `json:"latency_last_test,omitempty"`
+	LatencyReceipt *NodeLatencyReceipt `json:"latency_receipt,omitempty"`
 	PublicIP string `json:"public_ip,omitempty"`
 	DNSMode string `json:"dns_mode,omitempty"`; DNSProtocol string `json:"dns_protocol,omitempty"`; DNSHost string `json:"dns_host,omitempty"`; DNSPort int `json:"dns_port,omitempty"`; DNSServerName string `json:"dns_server_name,omitempty"`; DNSPath string `json:"dns_path,omitempty"`; FastestDNSHost string `json:"fastest_dns_host,omitempty"`; FastestDNSName string `json:"fastest_dns_name,omitempty"`; FastestDNSLatencyMs float64 `json:"fastest_dns_latency_ms,omitempty"`; DNSResults []DNSBenchmarkResult `json:"dns_results,omitempty"`
 }

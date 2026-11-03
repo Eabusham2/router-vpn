@@ -25,6 +25,7 @@ func CloneRouterProfile(source RouterProfile) RouterProfile {
 // never change live routing policy or partially normalize it on an error.
 func copyProfileForJSON(source RouterProfile) RouterProfile {
 	out := source
+	out.LatencyReceipt = copyProfileJSONPointer(source.LatencyReceipt)
 	out.CustomLayers = slices.Clone(source.CustomLayers)
 	out.HomeLANCIDRs = slices.Clone(source.HomeLANCIDRs)
 	out.DNSResults = slices.Clone(source.DNSResults)

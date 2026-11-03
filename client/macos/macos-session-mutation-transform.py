@@ -66,6 +66,12 @@ def _pairs_for(mode: str):
                 raise SystemExit("node sort selection mutation pair changed")
             retargeted.append(base64.b64encode(decoded.replace(before, after, 1).encode("utf-8")).decode("ascii"))
         current[sort[0]] = retargeted
+        # Saved comparison is one atomic server transaction. Preserve the main
+        # thread preflight and worker-side idle check immediately before POST.
+        current[sort[0]] = [
+            base64.b64encode('    @objc func nodeSortChanged() { refreshProfiles(order: ["current", "last-used", "latency", "name", "most-used"][max(0, min(nodeSortPopup.indexOfSelectedItem, 4))]) }\n    @objc func selectLowestLatency() {\n        asyncAction {\n            guard let result = try JSONSerialization.jsonObject(with: self.api.request("/api/profile/lowest-saved-latency", method: "POST", body: [:], timeout: 10)) as? [String: Any] else {\n                return "Saved lowest-latency selection was not confirmed."\n            }\n            DispatchQueue.main.async { self.nodeSortPopup.selectItem(at: 2) }\n'.encode()).decode(),
+            base64.b64encode('    @objc func nodeSortChanged() { refreshProfiles(order: ["current", "last-used", "latency", "name", "most-used"][max(0, min(nodeSortPopup.indexOfSelectedItem, 4))]) }\n    @objc func selectLowestLatency() {\n        guard ensureMutationIdle("selecting the lowest-latency node") else { return }\n        asyncAction {\n            try self.requireMutationIdle("committing the lowest-latency node selection")\n            guard let result = try JSONSerialization.jsonObject(with: self.api.request("/api/profile/lowest-saved-latency", method: "POST", body: [:], timeout: 10)) as? [String: Any] else {\n                return "Saved lowest-latency selection was not confirmed."\n            }\n            DispatchQueue.main.async { self.nodeSortPopup.selectItem(at: 2) }\n'.encode()).decode(),
+        ]
         return current
     if mode != "unified":
         return pairs

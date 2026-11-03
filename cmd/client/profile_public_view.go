@@ -64,6 +64,8 @@ type publicProfile struct {
 	Longitude                float64                     `json:"longitude,omitempty"`
 	UseCount                 int                         `json:"use_count,omitempty"`
 	LastUsedAt               string                      `json:"last_used_at,omitempty"`
+	LatencyEligible          bool                        `json:"latency_eligible"`
+	LatencyMeasurement       string                      `json:"latency_measurement,omitempty"`
 	LatencySamples           int                         `json:"latency_samples,omitempty"`
 	LatencyMinMs             float64                     `json:"latency_min_ms,omitempty"`
 	LatencyMedianMs          float64                     `json:"latency_median_ms,omitempty"`
@@ -135,6 +137,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		EffectiveMTUMbps: p.EffectiveMTUMbps, EffectiveMTUMedianRTTMs: p.EffectiveMTUMedianRTTMs, EffectiveMTUSuccessRatio: p.EffectiveMTUSuccessRatio,
 		DiagnosticsEnabled: p.DiagnosticsEnabled, DiagnosticsRetentionDays: p.DiagnosticsRetentionDays, ShareDiagnostics: p.ShareDiagnostics, TelemetryEnabled: p.TelemetryEnabled,
 		Location: p.Location, Latitude: p.Latitude, Longitude: p.Longitude, UseCount: p.UseCount, LastUsedAt: p.LastUsedAt,
+		LatencyEligible: savedNodeLatencyEligible(p), LatencyMeasurement: savedNodeLatencyKind(p),
 		LatencySamples: p.LatencySamples, LatencyMinMs: p.LatencyMinMs, LatencyMedianMs: p.LatencyMedianMs,
 		LatencyTrimmedMeanMs: p.LatencyTrimmedMeanMs, LatencyAverageMs: p.LatencyAverageMs, LatencyP90Ms: p.LatencyP90Ms, LatencyMaxMs: p.LatencyMaxMs, LatencyLastTest: p.LatencyLastTest,
 		PublicIP: p.PublicIP, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath,

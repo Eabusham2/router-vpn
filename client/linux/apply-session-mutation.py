@@ -47,32 +47,31 @@ base.SPECS[name] = (
 # Tor Compare admission and its explanatory labels also follow these insertions.
 # Those additions follow every insertion below; their guard positions are intact.
 # Most used adds one callback before all five guards and its button after them.
-# Preserve every original guard and move its exact insertion by that one line.
-base.SPECS['routervpn-gtk-product-v4.c'] = ('75e2558c8c4c3af435cdd9cc40ebe8790930227181380d9f1492b15e23e2019e',
+# Saved lowest selection now uses one atomic endpoint. Keep preflight and
+# immediate-before-POST idle checks; move subsequent guards past the removed
+# client-side GET/filter/select sequence. Exact source hashing still applies.
+base.SPECS['routervpn-gtk-product-v4.c'] = ('ac9c86c07064d41fe0b46e5f3225416485d86bc481e1d1ad51dde79c395c4886',
  [(85,
    85,
    [],
    ['    if (!routervpn_require_mutation_idle(app, "selecting the lowest-latency node")) return;\n']),
-  (111,
-   111,
+  (87,
+   87,
    [],
-   ['    } else if (!routervpn_require_mutation_idle(app, "committing the lowest-latency node selection")) '
-    '{\n',
-    '        append_diag(app, "Lowest-latency result discarded because VPN state changed during '
-    'measurement.");\n']),
-  (130,
-   130,
+   ['    if (!routervpn_require_mutation_idle(app, "committing the lowest-latency node selection")) return;\n']),
+  (99,
+   99,
    [],
    ['    if (!routervpn_require_mutation_idle(app, "importing a Router or external node")) return;\n']),
-  (147,
-   147,
+  (116,
+   116,
    [],
    ['        } else if (!routervpn_require_mutation_idle(app, "committing Router or external node import")) '
     '{\n',
     '            append_diag(app, "Import cancelled because VPN state changed while the file picker was '
     'open.");\n']),
-  (190,
-   190,
+  (159,
+   159,
    [],
    ['    if (!routervpn_require_mutation_idle(app, "starting an external connection")) return;\n'])])
 base.SPECS['routervpn-unified-shell-v8.inc'] = ('93acb4605c44dc779265cb719f73b5bdefa7a828bd9880045e5b8702c124fa17',

@@ -47,6 +47,8 @@ func TestProfileLatencyCancelledRequestCannotProbeOrPersist(t *testing.T) {
 // samples take. The caller owns app.mu only after an accepted connection proves
 // the handler has released its initial profile-read lock. A profileLatency frame
 // blocked in Mutex.Lock therefore identifies its terminal persistence boundary.
+// Mutation ownership now checks shutdown/state before joining the save lock;
+// these guard frames occur only after all actual samples have completed.
 func waitProfileLatencySaveLock(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -64,7 +66,7 @@ func waitProfileLatencySaveLock(t *testing.T, done <-chan struct{}) {
 					frame, more := frames.Next()
 					// The handler must directly own the contended Lock frame;
 					// a mutex inside DialContext is still a measurement, not a save.
-					if strings.HasSuffix(frame.Function, ".(*app).profileLatency") && (previous == "sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).lockSlow") {
+					if (strings.HasSuffix(frame.Function, ".(*app).profileLatency") || strings.HasSuffix(frame.Function, ".(*app).controllerClosing") || strings.HasSuffix(frame.Function, ".(*app).beginProtectionAwareMutationOperation")) && (previous == "sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).Lock" || previous == "internal/sync.(*Mutex).lockSlow") {
 						return
 					}
 					if !more {
@@ -229,7 +231,7 @@ func TestProfileLatencyTerminalSaveOwnsCancellationAndProfile(t *testing.T) {
 			if err := json.Unmarshal(storedBytes, &saved); err != nil {
 				t.Fatal(err)
 			}
-			if response.Port != 8388 || response.Samples != wanted || response.Failed != 0 || !strings.HasPrefix(response.Description, "TCP handshake latency;") {
+			if response.Port != 8388 || response.Samples != wanted || response.Failed != 0 || !strings.Contains(response.Description, "TCP handshake latency;") || !response.Saved || !response.Complete {
 				t.Fatalf("unexpected real TCP benchmark result: %+v", response)
 			}
 			if !reflect.DeepEqual(saved, a.profiles) || saved.SelectedID != "node-a" || saved.Profiles[0].LatencySamples != wanted || saved.Profiles[0].LatencyMedianMs != response.MedianMs || saved.Profiles[0].LatencyTrimmedMeanMs != response.TrimmedMs || saved.Profiles[0].LatencyLastTest != response.MeasuredAt.Format(time.RFC3339) {

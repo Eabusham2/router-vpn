@@ -85,43 +85,12 @@ static void on_select_lowest_latency(GtkButton *button, gpointer data) {
     App *app = data;
     Buffer out = {0};
     char *err = NULL;
-    if (!api_request("/api/nodes?sort=latency", "GET", NULL, 3000, &out, &err)) {
-        append_diag(app, err != NULL ? err : "Lowest-latency selection failed.");
-        g_free(err); free(out.data); return;
-    }
-    JsonNode *root = parse_json(out.data);
-    const char *best_id = NULL;
-    guint measured = 0;
-    if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
-        JsonArray *profiles = json_object_get_array_member(json_node_get_object(root), "profiles");
-        if (profiles != NULL) {
-            for (guint i = 0; i < json_array_get_length(profiles); i++) {
-                JsonObject *profile = json_array_get_object_element(profiles, i);
-                if (profile == NULL) continue;
-                gboolean has_latency = FALSE;
-                double median = obj_double(profile, "latency_median_ms", &has_latency);
-                gint64 samples = json_object_has_member(profile, "latency_samples") ? json_object_get_int_member(profile, "latency_samples") : 0;
-                if (!has_latency || median <= 0 || samples <= 0) continue;
-                if (best_id == NULL) best_id = obj_string(profile, "id");
-                measured++;
-            }
-        }
-    }
-    if (measured < 2 || best_id == NULL || best_id[0] == '\0') {
-        append_diag(app, "Lowest-latency selection requires real 50-sample measurements on at least two usable nodes; current selection was kept.");
+    if (api_request("/api/profile/lowest-saved-latency", "POST", "{}", 10000, &out, &err)) {
+        append_diag(app, "Selected lowest saved 10% trimmed mean. Saved measurements may come from different times and networks; use Fastest for a current comparison.");
+        refresh_nodes_order_v4(app, "latency");
     } else {
-        char *body = json_string_body("id", best_id);
-        Buffer selected_out = {0};
-        char *select_err = NULL;
-        if (api_request("/api/profile/select", "POST", body, 10000, &selected_out, &select_err)) {
-            append_diag(app, "Selected the lowest measured median-latency node.");
-            refresh_nodes_order_v4(app, "latency");
-        } else {
-            append_diag(app, select_err != NULL ? select_err : "Lowest-latency node selection failed.");
-        }
-        g_free(body); g_free(select_err); free(selected_out.data);
+        append_diag(app, err != NULL ? err : "Saved lowest-latency selection failed.");
     }
-    if (root != NULL) json_node_free(root);
     g_free(err); free(out.data);
 }
 

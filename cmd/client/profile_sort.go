@@ -36,7 +36,7 @@ func sortPublicProfileStore(store common.RouterProfileStore, order string) commo
 		return t
 	}
 	latencyMeasured := func(p common.RouterProfile) bool {
-		return p.LatencySamples > 0 && p.LatencyMedianMs > 0
+		return savedNodeLatencyEligible(p)
 	}
 
 	sort.SliceStable(out.Profiles, func(i, j int) bool {
@@ -68,11 +68,11 @@ func sortPublicProfileStore(store common.RouterProfileStore, order string) commo
 			if am != bm {
 				return am
 			}
-			if am && a.LatencyMedianMs != b.LatencyMedianMs {
-				return a.LatencyMedianMs < b.LatencyMedianMs
+			if am && a.LatencyTrimmedMeanMs != b.LatencyTrimmedMeanMs {
+				return a.LatencyTrimmedMeanMs < b.LatencyTrimmedMeanMs
 			}
-			if am && a.LatencyP90Ms != b.LatencyP90Ms {
-				return a.LatencyP90Ms < b.LatencyP90Ms
+			if am {
+				return a.ID < b.ID
 			}
 			return nameLess(a, b)
 		default: // current
@@ -93,7 +93,7 @@ func sortPublicProfileStore(store common.RouterProfileStore, order string) commo
 func lowestLatencyProfileID(store common.RouterProfileStore) string {
 	sorted := sortPublicProfileStore(store, "latency")
 	for _, p := range sorted.Profiles {
-		if p.LatencySamples > 0 && p.LatencyMedianMs > 0 {
+		if savedNodeLatencyEligible(p) {
 			return p.ID
 		}
 	}

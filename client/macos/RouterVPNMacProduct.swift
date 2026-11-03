@@ -609,12 +609,11 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func nodeSortChanged() { refreshProfiles(order: ["current", "last-used", "latency", "name", "most-used"][max(0, min(nodeSortPopup.indexOfSelectedItem, 4))]) }
     @objc func selectLowestLatency() {
         asyncAction {
-            guard let o = try self.api.json("/api/nodes?sort=latency") as? [String: Any], let p = o["profiles"] as? [[String: Any]] else { return "Lowest-latency node list was unavailable." }
-            let measured = p.filter { (($0["latency_samples"] as? NSNumber)?.intValue ?? 0) > 0 && (($0["latency_median_ms"] as? NSNumber)?.doubleValue ?? 0) > 0 }
-            guard measured.count >= 2, let id = measured.first?["id"] as? String, !id.isEmpty else { return "Lowest-latency selection requires real 50-sample measurements on at least two usable nodes; current selection was kept." }
-            _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 10)
+            guard let result = try JSONSerialization.jsonObject(with: self.api.request("/api/profile/lowest-saved-latency", method: "POST", body: [:], timeout: 10)) as? [String: Any] else {
+                return "Saved lowest-latency selection was not confirmed."
+            }
             DispatchQueue.main.async { self.nodeSortPopup.selectItem(at: 2) }
-            return "Selected the lowest measured median-latency node \(id)."
+            return result["note"] as? String ?? "Selected the lowest saved trimmed mean. Use Fastest to measure current conditions."
         }
     }
     @objc func selectRouter() { let i = routerPopup.indexOfSelectedItem; guard i >= 0 && i < routerIDs.count else { return }; let id = routerIDs[i]; recordConnectionProfileNodeChoice(id); asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 10); return "Selected router \(id)" } }

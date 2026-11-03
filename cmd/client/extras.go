@@ -32,6 +32,7 @@ func extraRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/session", a.sessionStatus)
 	h.HandleFunc("/api/session/events", a.sessionEvents)
 	h.HandleFunc("/api/profile/latency", a.profileLatency)
+	h.HandleFunc("/api/profile/lowest-saved-latency", a.selectSavedLowestLatency)
 	h.HandleFunc("/api/public-ip", a.publicIP)
 	h.HandleFunc("/api/dns/retest", a.retestDNS)
 	registerMTURetestRoute(h, a)
@@ -49,6 +50,8 @@ type latencyRequest struct {
 }
 
 type latencyResponse struct {
+	Saved       bool      `json:"saved"`
+	Complete    bool      `json:"complete"`
 	ID          string    `json:"id"`
 	Port        int       `json:"port"`
 	Samples     int       `json:"samples"`
@@ -78,11 +81,36 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		q.Samples = 200
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+	if ctx.Err() != nil {
+		http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
+		return
+	}
+	networkAtStart := physicalNetworkIdentity()
+	if networkAtStart == "" {
+		http.Error(w, "physical network metadata unavailable", http.StatusConflict)
+		return
+	}
 	a.mu.Lock()
+	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
+		a.mu.Unlock()
+		http.Error(w, "disconnect before direct node benchmark", http.StatusConflict)
+		return
+	}
 	p, ok := a.profileByIDLocked(q.ID)
+	p = cloneRouterProfile(p)
+	pathAtStart := activeTelemetryPathToken(a.state)
+	selectionAtStart := a.profiles.SelectedID
 	a.mu.Unlock()
+	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 	if !ok {
 		http.Error(w, "unknown router profile", http.StatusNotFound)
+		return
+	}
+	if p.External != nil || (strings.TrimSpace(p.NodeKind) != "" && !strings.EqualFold(p.NodeKind, "router-vpn")) || p.MultihopEnabled {
+		http.Error(w, "use the routed comparison for external or multihop nodes", http.StatusBadRequest)
 		return
 	}
 	if p.Endpoint == "" {
@@ -105,6 +133,10 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	failed := 0
 	dialer := &net.Dialer{Timeout: 1500 * time.Millisecond}
 	for i := 0; i < q.Samples; i++ {
+		if physicalNetworkIdentity() != networkAtStart {
+			http.Error(w, "physical network metadata changed during direct benchmark", http.StatusConflict)
+			return
+		}
 		started := time.Now()
 		c, dialErr := dialer.DialContext(r.Context(), "tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)))
 		if dialErr != nil {
@@ -116,7 +148,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		_ = c.Close()
-		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
+		values = append(values, math.Max(0.001, float64(time.Since(started).Microseconds())/1000.0))
 		if i%10 == 9 {
 			select {
 			case <-r.Context().Done():
@@ -159,10 +191,33 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		P90Ms:       round3(p90V),
 		MaxMs:       round3(maxV),
 		MeasuredAt:  now,
-		Description: "TCP handshake latency; median and 10% trimmed mean resist outliers",
+		Description: "Disconnected direct TCP handshake latency; network metadata captured; median and 10% trimmed mean resist outliers",
+		Complete:    failed == 0 && len(values) == q.Samples,
 	}
 
+	if physicalNetworkIdentity() != networkAtStart {
+		http.Error(w, "physical network metadata changed during direct benchmark", http.StatusConflict)
+		return
+	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
+	tracker := sessionTrackerFor(a)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	currentSessionID := ""
+	if tracker.session != nil {
+		currentSessionID = tracker.session.ID
+	}
 	a.mu.Lock()
+	if currentSessionID != sessionAtStart || a.profiles.SelectedID != selectionAtStart || activeTelemetryPathToken(a.state) != pathAtStart || profileSettingsBusy(a.state.Connected, a.state.Phase) {
+		a.mu.Unlock()
+		http.Error(w, "VPN or selection changed during direct benchmark", http.StatusConflict)
+		return
+	}
 	// Cancellation while waiting for this save lock must not publish a result.
 	if r.Context().Err() != nil {
 		a.mu.Unlock()
@@ -176,6 +231,15 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "router profile identity changed while durable latency measurement was running", http.StatusConflict)
 		return
 	}
+	if !resp.Complete {
+		// Real partial statistics are useful diagnostics, but cannot replace the
+		// last complete durable benchmark or acquire eligibility by losing Failed.
+		a.mu.Unlock()
+		resp.Description += "; incomplete result, prior saved statistics preserved"
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == p.ID {
 			x := &a.profiles.Profiles[i]
@@ -187,6 +251,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 			x.LatencyP90Ms = resp.P90Ms
 			x.LatencyMaxMs = resp.MaxMs
 			x.LatencyLastTest = now.Format(time.RFC3339)
+			x.LatencyReceipt = &common.NodeLatencyReceipt{Schema: 1, Measurement: savedNodeLatencyMeasurement, Attempts: q.Samples, Failed: failed, SourceToken: liveMeasurementProfileToken(p), NetworkMetadata: networkAtStart}
 			break
 		}
 	}
@@ -199,6 +264,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
 		return
 	}
+	resp.Saved = true
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
