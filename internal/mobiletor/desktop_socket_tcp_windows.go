@@ -47,7 +47,7 @@ type desktopSocketPollFD struct {
 // The separate duplicate still keeps the port until the policy absent readback.
 type desktopWindowsSocket struct {
 	handle      syscall.Handle
-	nativeOwner DesktopSocketNative // UDP retains the descriptor that actually received Bind.
+	nativeOwner DesktopSocketNative // Imported I/O retains the descriptor that actually received Bind.
 	boundLocal  netip.AddrPort      // Captured before import; never overwritten by connected readback.
 	local       netip.AddrPort
 	remote      netip.AddrPort

@@ -14,9 +14,10 @@ import (
 // An imported Winsock socket is not an os.File: CloseHandle is not its close
 // primitive. Control and Close serialize against the exact retained handle.
 type desktopWindowsNativeSocket struct {
-	mu     sync.Mutex
-	handle syscall.Handle
-	closed bool
+	mu      sync.Mutex
+	handle  syscall.Handle
+	closed  bool
+	ioOwner *desktopWindowsNativeIO
 }
 
 type desktopWindowsNativeRaw struct{ socket *desktopWindowsNativeSocket }
@@ -54,6 +55,48 @@ func (s *desktopWindowsNativeSocket) SyscallConn() (syscall.RawConn, error) {
 	return desktopWindowsNativeRaw{s}, nil
 }
 
+// The transferred descriptor is the one Bind and Connect must both use.
+// A private claim prevents its source alias from closing it while entered I/O
+// still owns it. Only imported Close, after joining I/O, consumes this claim.
+type desktopWindowsNativeIO struct{ socket *desktopWindowsNativeSocket }
+
+type desktopWindowsNativeIOClaim interface {
+	claimNativeIO() (DesktopSocketNative, error)
+}
+
+func (s *desktopWindowsNativeSocket) claimNativeIO() (DesktopSocketNative, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.handle == syscall.InvalidHandle || s.ioOwner != nil {
+		return nil, errors.New("Windows native descriptor has no unclaimed I/O owner")
+	}
+	owner := &desktopWindowsNativeIO{socket: s}
+	s.ioOwner = owner
+	return owner, nil
+}
+
+func (owner *desktopWindowsNativeIO) SyscallConn() (syscall.RawConn, error) {
+	return owner.socket.SyscallConn()
+}
+
+func (owner *desktopWindowsNativeIO) Close() error {
+	s := owner.socket
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if s.ioOwner != owner {
+		return errors.New("Windows native I/O close changed its captured owner")
+	}
+	if err := syscall.Closesocket(s.handle); err != nil {
+		return err
+	}
+	s.closed = true
+	s.ioOwner = nil
+	return nil
+}
+
 func (s *desktopWindowsNativeSocket) Close() error {
 	if s == nil {
 		return nil
@@ -62,6 +105,9 @@ func (s *desktopWindowsNativeSocket) Close() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil
+	}
+	if s.ioOwner != nil {
+		return errors.New("Windows native descriptor is retained by imported I/O")
 	}
 	if err := syscall.Closesocket(s.handle); err != nil {
 		return err
@@ -207,23 +253,23 @@ func desktopSocketImportNativeTCPWithConnect(ctx context.Context, network string
 	if err := control(ctx, actual, remote.String(), raw); err != nil {
 		return nil, fmt.Errorf("Windows TCP bind and permit: %w", err)
 	}
-	var keeper *desktopSocketKeeper
-	var boundLocal netip.AddrPort
+	claim, ok := source.(desktopWindowsNativeIOClaim)
+	if !ok {
+		return nil, errors.New("Windows TCP source has no captured native I/O ownership")
+	}
+	owner, err := claim.claimNativeIO()
+	if err != nil {
+		return nil, err
+	}
+	c := &desktopWindowsSocket{nativeOwner: owner, remote: remote}
 	var result error
 	err = raw.Control(func(handle uintptr) {
-		// Capture the actual bound descriptor before duplicating it for I/O.
-		// A fresh duplicate's provider cache need not yet expose that binding;
-		// its independent ALE identity is checked before Connect, and its own
-		// local tuple must match this value after actual completion.
-		boundLocal, result = desktopSocketLocal(syscall.Handle(handle))
-		if result == nil {
-			keeper, result = desktopSocketDuplicate(syscall.Handle(handle))
-		}
+		// Use the exact descriptor that received Bind and the acknowledged
+		// grant. A newly created Winsock duplicate can have stale unbound
+		// provider state and attempt another implicit bind during Connect.
+		c.handle = syscall.Handle(handle)
+		c.boundLocal, result = desktopSocketLocal(c.handle)
 	})
-	if keeper == nil {
-		return nil, errors.Join(err, result)
-	}
-	c := &desktopWindowsSocket{handle: keeper.handle, boundLocal: boundLocal, remote: remote}
 	if err != nil || result != nil {
 		return c, errors.Join(err, result)
 	}

@@ -1094,6 +1094,70 @@ func desktopWindowsIdentityTestKeepTCP(t *testing.T, connection net.Conn) {
 	}
 }
 
+// Both address families execute the shipping connector. The negative cases
+// retain its actual partial owner and prove that failed/cancelled imports do
+// not strand the source's private descriptor claim.
+func TestDesktopSocketWindowsIdentityTCPRetainsBoundDescriptor(t *testing.T) {
+	for _, family := range []struct{ network, address string }{{"tcp4", "127.0.0.1"}, {"tcp6", "::1"}} {
+		t.Run(family.network, func(t *testing.T) {
+			for _, outcome := range []string{"connected", "connect-error", "cancelled"} {
+				t.Run(outcome, func(t *testing.T) {
+					f := desktopWindowsIdentityTestTCPFamilyFixture(t, family.network, family.address)
+					ctx, cancel := context.WithTimeout(f.identity.ctx, 5*time.Second)
+					defer cancel()
+					var boundHandle syscall.Handle
+					control := func(ctx context.Context, network, destination string, raw syscall.RawConn) error {
+						if err := f.control(ctx, network, destination, raw); err != nil {
+							return err
+						}
+						return raw.Control(func(handle uintptr) { boundHandle = syscall.Handle(handle) })
+					}
+					failure := errors.New("deliberate native Connect failure")
+					var entered bool
+					connection, err := desktopSocketImportNativeTCPWithConnect(ctx, family.network, f.remote, f.created.Native, control, func(ctx context.Context, owned *desktopWindowsSocket) error {
+						entered = true
+						if owned.handle != boundHandle || owned.nativeOwner == nil || owned.boundLocal != f.before.Local {
+							return errors.New("TCP Connect replaced the actual bound descriptor or owner")
+						}
+						if _, err := f.created.Native.(*desktopWindowsIdentityNative).claimNativeIO(); err == nil {
+							return errors.New("TCP source accepted a second native I/O claim")
+						}
+						if err := f.created.Native.Close(); err == nil {
+							return errors.New("TCP source closed before its imported I/O joined")
+						}
+						if local, err := desktopSocketLocal(boundHandle); err != nil || local != f.before.Local {
+							return errors.Join(err, errors.New("TCP early source Close lost the actual bound handle"))
+						}
+						switch outcome {
+						case "connect-error":
+							return failure
+						case "cancelled":
+							cancel()
+						}
+						return desktopSocketConnectOwnedTCP(ctx, owned)
+					})
+					desktopWindowsIdentityTestKeepTCP(t, connection)
+					if !entered || connection == nil {
+						t.Fatal("actual TCP import did not reach its captured connector", err)
+					}
+					if outcome == "connected" && err != nil || outcome == "connect-error" && !errors.Is(err, failure) || outcome == "cancelled" && !errors.Is(err, context.Canceled) {
+						t.Fatal("TCP bound-descriptor import lost its actual connector result", err)
+					}
+					if err := connection.Close(); err != nil {
+						t.Fatal("TCP imported close did not consume its exact native owner", err)
+					}
+					if _, err := f.created.Native.SyscallConn(); !errors.Is(err, net.ErrClosed) {
+						t.Fatal("TCP imported close left its captured native descriptor open", err)
+					}
+					if err := f.created.Native.Close(); err != nil {
+						t.Fatal("TCP source close did not acknowledge joined imported closure", err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDesktopSocketWindowsIdentityRejectsUnregisteredConnect(t *testing.T) {
 	f := desktopWindowsIdentityTestTCPFixture(t)
 	ctx, cancel := context.WithTimeout(f.identity.ctx, 5*time.Second)
@@ -1347,8 +1411,11 @@ func TestDesktopSocketWindowsIdentityRetainsPendingConnectUntilJoin(t *testing.T
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if err := f.created.Native.Close(); err != nil {
-		t.Fatal(err)
+	if err := f.created.Native.Close(); err == nil || !strings.Contains(err.Error(), "retained by imported I/O") {
+		t.Fatal("source closed the bound descriptor before pending imported I/O joined", err)
+	}
+	if _, err := f.created.Native.SyscallConn(); err != nil {
+		t.Fatal("refused source Close lost its pending bound descriptor", err)
 	}
 	retireErr := f.identity.ReleaseSocket(inspectionCtx, f.creation)
 	if err := f.identity.call(inspectionCtx, true, func() error {
@@ -1359,11 +1426,17 @@ func TestDesktopSocketWindowsIdentityRetainsPendingConnectUntilJoin(t *testing.T
 		if _, err := record.original.SyscallConn(); err != nil {
 			return errors.Join(err, errors.New("source original closed before pending imported I/O joined"))
 		}
+		// The descriptor claim rejects premature source closure even before
+		// ReleaseSocket reaches its separate entered-I/O retirement guard.
+		// Exercise that guard too; neither barrier may stand in for the other.
+		if err := desktopWindowsIdentityCaptureRetirement(record); err == nil || !strings.Contains(err.Error(), "actual imported I/O close and join") {
+			return errors.Join(err, errors.New("pending source retirement ignored entered I/O"))
+		}
 		return nil
 	}); err != nil {
 		t.Fatal("source original closed before pending imported I/O joined", err)
 	}
-	if retireErr == nil || !strings.Contains(retireErr.Error(), "actual imported I/O close and join") {
+	if retireErr == nil || !strings.Contains(retireErr.Error(), "transferred descriptor closure") {
 		t.Fatal("source retirement escaped the still-entered I/O owner", retireErr)
 	}
 	select {

@@ -27,6 +27,7 @@ SPEC.loader.exec_module(PREP)
 IDENTITY = "desktop_socket_windows_identity.go"
 CONNECT = "desktop_socket_windows_identity_connect.go"
 TCP = "desktop_socket_tcp_windows.go"
+IMPORTED = "desktop_socket_native_windows.go"
 REQUIRED = (
     "TestDesktopSocketWindowsIdentitySDKLayout",
     "TestDesktopSocketWindowsIdentityBoundKernelEndpoints",
@@ -46,6 +47,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityRetainsPendingConnectUntilJoin",
     "TestDesktopSocketWindowsIdentityRenewsAcrossActualEndpointTransition",
     "TestDesktopSocketWindowsIdentityRejectsConnectedLocalReplacement",
+    "TestDesktopSocketWindowsIdentityTCPRetainsBoundDescriptor",
 )
 
 
@@ -145,7 +147,7 @@ def connect_mutants(text):
                                   "pending && connection.operation.Err() != nil", "false"),
                       "pending && record.connect.operation.Err() != nil", "false")),
         ("entered-import-retirement", REQUIRED[15],
-         "source original closed before pending imported I/O joined",
+         "pending source retirement ignored entered I/O",
          replace_once(text, "if !closed {", "if !closed && false {")),
     )
 
@@ -158,6 +160,40 @@ def tcp_mutants(text):
         ("completed-local-readback", REQUIRED[17],
          "connected import skipped actual post-connect local readback",
          replace_once(text, "local, err := readLocal(c.handle)", "local, err := expectedLocal, error(nil)")),
+    )
+
+
+def import_mutants(text):
+    duplicate = replace_once(text,
+                             "c.handle = syscall.Handle(handle)\n\t\tc.boundLocal, result = desktopSocketLocal(c.handle)",
+                             """c.boundLocal, result = desktopSocketLocal(syscall.Handle(handle))
+        if result != nil {
+            return
+        }
+        keeper, duplicateErr := desktopSocketDuplicate(syscall.Handle(handle))
+        if duplicateErr != nil {
+            result = duplicateErr
+            return
+        }
+        c.handle = keeper.handle
+        c.nativeOwner = &desktopWindowsDuplicatedIOControl{DesktopSocketNative: c.nativeOwner, keeper: keeper}""")
+    # The deliberate old I/O duplicate remains fully owned for negative-test
+    # cleanup; its incorrect handle must be rejected before actual Connect.
+    duplicate += """
+type desktopWindowsDuplicatedIOControl struct {
+    DesktopSocketNative
+    keeper *desktopSocketKeeper
+}
+func (c *desktopWindowsDuplicatedIOControl) Close() error {
+    return errors.Join(c.keeper.Close(), c.DesktopSocketNative.Close())
+}
+"""
+    return (
+        ("tcp-import-duplicate", REQUIRED[18],
+         "TCP Connect replaced the actual bound descriptor or owner", duplicate),
+        ("tcp-premature-source-close", REQUIRED[18],
+         "TCP source closed before its imported I/O joined",
+         replace_once(text, "if s.ioOwner != nil {", "if false && s.ioOwner != nil {")),
     )
 
 
@@ -216,6 +252,7 @@ def execute(source=ROOT, go="go", *, env=None):
     changes = [(IDENTITY, *mutation) for mutation in mutants((target / IDENTITY).read_text(encoding="utf-8"))]
     changes += [(CONNECT, *mutation) for mutation in connect_mutants((target / CONNECT).read_text(encoding="utf-8"))]
     changes += [(TCP, *mutation) for mutation in tcp_mutants((target / TCP).read_text(encoding="utf-8"))]
+    changes += [(IMPORTED, *mutation) for mutation in import_mutants((target / IMPORTED).read_text(encoding="utf-8"))]
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-identity-") as directory:
         workspace = Path(directory)
         binary = workspace / "identity.test.exe"
@@ -242,6 +279,9 @@ def execute(source=ROOT, go="go", *, env=None):
                     raise ValueError("Windows identity baseline omitted native imported I/O")
                 if "--- PASS: " + REQUIRED[11] + "/" + network + family + " (" not in output:
                     raise ValueError("Windows identity baseline omitted actual protocol admission")
+            for outcome in ("connected", "connect-error", "cancelled"):
+                if "--- PASS: " + REQUIRED[18] + "/tcp" + family + "/" + outcome + " (" not in output:
+                    raise ValueError("Windows identity baseline omitted exact bound-descriptor ownership")
             for observation in ("address", "port", "family", "read-error"):
                 if "--- PASS: " + REQUIRED[17] + "/tcp" + family + "/" + observation + " (" not in output:
                     raise ValueError("Windows identity baseline omitted an actual completed local observation")
@@ -266,7 +306,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production Windows identity mutant:", name, flush=True)
         if checked_sources(source)[3] != before:
             raise ValueError("Windows identity source changed during its actual native gate")
-    print("Windows isolated identity passed eighteen kernel/lifecycle cases, all four bound/imported-I/O/protocol socket families, IPv4/IPv6 completed-local observations, and fourteen production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
+    print("Windows isolated identity passed nineteen kernel/lifecycle cases, all four bound/imported-I/O/protocol socket families, IPv4/IPv6 completed-local observations, exact TCP bind/Connect ownership, and sixteen production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

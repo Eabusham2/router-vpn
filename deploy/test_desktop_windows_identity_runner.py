@@ -92,6 +92,24 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source/test closure is incomplete"):
             GATE.checked_sources(self.vendor)
 
+    def test_bound_tcp_ownership_and_both_native_controls_are_mandatory(self):
+        self.assertIn("TestDesktopSocketWindowsIdentityTCPRetainsBoundDescriptor", GATE.REQUIRED)
+        raw = (ROOT / "internal/mobiletor" / GATE.IMPORTED).read_text(encoding="utf-8")
+        changes = GATE.import_mutants(raw)
+        self.assertEqual([item[0] for item in changes],
+                         ["tcp-import-duplicate", "tcp-premature-source-close"])
+        for label, test, witness, changed in changes:
+            self.assertEqual(test, GATE.REQUIRED[18])
+            self.assertNotEqual(changed, raw)
+            self.assertIn(witness, (ROOT / "internal/mobiletor/desktop_socket_windows_identity_test.go").read_text(encoding="utf-8"))
+        self.assertIn("c.handle = keeper.handle", changes[0][3])
+        self.assertIn("c.keeper.Close(), c.DesktopSocketNative.Close()", changes[0][3])
+        self.assertIn("if false && s.ioOwner != nil {", changes[1][3])
+        for changed in (raw.replace("c.handle = syscall.Handle(handle)", "c.handle = 0"),
+                        raw.replace("if s.ioOwner != nil {", "if s.ioOwner == nil {")):
+            with self.assertRaisesRegex(ValueError, "lost its exact production boundary"):
+                GATE.import_mutants(changed)
+
     def test_transfer_records_are_required_exact_shipping_inputs(self):
         for name in ("desktop_protection_transfer_record.go", "desktop_protection_transfer_record_test.go"):
             with self.subTest(name=name):

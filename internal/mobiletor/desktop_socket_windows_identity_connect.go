@@ -76,7 +76,7 @@ type desktopWindowsIdentityTCP struct {
 	phase         desktopWindowsTCPPhase
 }
 
-// Only a source-created transfer can register the actual I/O duplicate before
+// Only a source-created transfer can register the actual I/O owner before
 // Connect. Public callers cannot submit a token, endpoint ID, receipt or a new
 // socket to declare that an already observed kernel transition is acceptable.
 type desktopWindowsIdentityNative struct {
@@ -89,6 +89,13 @@ func (n *desktopWindowsIdentityNative) SyscallConn() (syscall.RawConn, error) {
 	return n.native.SyscallConn()
 }
 func (n *desktopWindowsIdentityNative) Close() error { return n.native.Close() }
+func (n *desktopWindowsIdentityNative) claimNativeIO() (DesktopSocketNative, error) {
+	owner, ok := n.native.(desktopWindowsNativeIOClaim)
+	if !ok {
+		return nil, errors.New("Windows captured source has no native I/O ownership")
+	}
+	return owner.claimNativeIO()
+}
 
 func (n *desktopWindowsIdentityNative) beginNativeTCP(ctx context.Context, io *desktopWindowsSocket) error {
 	p := n.identity
@@ -114,8 +121,8 @@ func (n *desktopWindowsIdentityNative) beginNativeTCP(ctx context.Context, io *d
 		}
 		// The returned descriptor actually performed Bind. Confirm its exact
 		// original/returned kernel owner again around the I/O endpoint read.
-		// Do not ask a newly duplicated descriptor's provider cache to stand in
-		// for that proof before Connect. Its own completed tuple is mandatory
+		// The importer keeps this exact bound descriptor for Connect. Its
+		// independently completed tuple remains mandatory
 		// in the connector and in finishNativeTCP before any connection escapes.
 		confirmed, err := p.inspectSocketLocked(n.creation)
 		if err != nil || confirmed.EndpointID != before.EndpointID || confirmed.TokenModifiedID != before.TokenModifiedID ||
