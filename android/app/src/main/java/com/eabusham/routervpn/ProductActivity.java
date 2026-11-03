@@ -132,10 +132,12 @@ public final class ProductActivity extends Activity {
         externalComparisonDialog.show(connectFastest);
     }
 
-    private void showRouterFastConnectMenu(){
+    private void showRouterFastConnectMenu(){runRouterNodeComparison(true);}
+
+    private void runRouterNodeComparison(boolean chooseNode){
         if(mutationBusy()||fastestProgressDialog!=null){toast("Disconnect/finish the current VPN operation before changing the selected fastest node.");return;}
         fastestButton.setEnabled(false);fastestButton.setText("Testing 50 TCP samples…");
-        final AlertDialog progress=new AlertDialog.Builder(this).setTitle("Find fastest Router node")
+        final AlertDialog progress=new AlertDialog.Builder(this).setTitle(chooseNode?"Find fastest Router node":"Compare Router nodes")
             .setMessage("Collecting 50 TCP responses per node on one captured physical network. The lowest 10% trimmed mean wins; incomplete nodes receive no score. Saved benchmark statistics are preserved.")
             .setCancelable(false).setNegativeButton("Cancel measurement",null).create();
         fastestProgressDialog=progress;
@@ -147,6 +149,11 @@ public final class ProductActivity extends Activity {
             fastestProgressDialog=null;progress.dismiss();fastestButton.setEnabled(true);refreshNodes();
             if(error!=null){toast("Fastest-node test failed: "+safe(error));return;}
             if(values==null||values.isEmpty()){toast("No Router node completed all 50 TCP responses.");return;}
+            if(!chooseNode){
+                try{StringBuilder out=new StringBuilder("50 complete TCP responses per ranked node; ordered by 10% trimmed mean. Saved statistics and node selection are unchanged.\n\n");for(AndroidTelemetry.Result result:values){result.requireCurrent();out.append(result.detail()).append('\n');}dialog("50-sample Router comparison",out.toString());refreshMap();}
+                catch(Exception stale){toast(safe(stale));}
+                return;
+            }
             String[]labels=new String[values.size()+1];
             labels[0]="⚡ Fastest — "+values.get(0).name+String.format(Locale.US," • %.1f ms trimmed mean",values.get(0).trimmedMeanMs);
             for(int i=0;i<values.size();i++)labels[i+1]=values.get(i).name+String.format(Locale.US," • %.1f ms trimmed mean",values.get(i).trimmedMeanMs);
@@ -177,7 +184,7 @@ public final class ProductActivity extends Activity {
     private void refreshMultihopTelemetry(){refreshMultihopSummary();}
 
     private void showPerformance(){
-        String[] actions={"Live current tunnel RTT","50-sample selected node","Benchmark all Router nodes","Real current VPN path speed","Routed multihop speeds","Path throughput / Auto MTU status","Last saved 50-sample statistics","Compare all external exits (50 HTTPS)","Compare and connect fastest external path"};
+        String[] actions={"Live current tunnel RTT","50-sample selected node","Compare all Router nodes (50 TCP)","Real current VPN path speed","Routed multihop speeds","Path throughput / Auto MTU status","Last saved 50-sample statistics","Compare all external exits (50 HTTPS)","Compare and connect fastest external path"};
         choiceDialog("Performance","Router node benchmarks use direct TCP while disconnected. A selected external node uses 50 HTTPS responses through its connected, proved native path and selected DNS. These saved measurement types remain separate; external HTTPS results do not enter direct TCP Fastest or Lowest latency rankings. Current-path RTT and throughput are separate actions.").setItems(actions,(d,w)->{
             if(w==0){
                 if(!connection.isConnected()){toast("Connect first for current tunnel RTT.");return;}
@@ -192,7 +199,7 @@ public final class ProductActivity extends Activity {
                     telemetry.measureNode(n,50,(r,e)->runOnUiThread(()->{if(isFinishing()||isDestroyed())return;try{if(e!=null)throw new IllegalStateException(safe(e));r.requireCurrent();dialog("50-sample node benchmark",r.detail()+"\n\n"+(r.samples==50&&r.failed==0?"Saved with this exact node source. Lowest latency uses only complete successful 50-sample records.":"Incomplete run was not saved. The previous complete 50-sample benchmark is retained."));refreshMap();}catch(Exception stale){toast(safe(stale));}}));
                 }catch(Exception e){toast(safe(e));}
             }else if(w==2){
-                toast("Testing direct RTT to linked Router nodes…");telemetry.measureAll(5,(values,e)->runOnUiThread(()->{if(isFinishing()||isDestroyed())return;try{if(e!=null)throw new IllegalStateException(safe(e));StringBuilder out=new StringBuilder();for(AndroidTelemetry.Result r:values){r.requireCurrent();out.append(r.detail()).append('\n');}dialog("Quick node benchmark",out.toString());refreshMap();}catch(Exception stale){toast(safe(stale));}}));
+                runRouterNodeComparison(false);
             }else if(w==3){runCurrentSpeed();}
             else if(w==4){runRoutedHopSpeeds();}
             else if(w==6){showSavedStatistics();}

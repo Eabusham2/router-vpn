@@ -21,7 +21,7 @@ W = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(W)
 
 SIGNATURES = (
-    "void showRouterFastConnectMenu(", "void showPerformance(", "void showNodes(",
+    "void runRouterNodeComparison(", "void showPerformance(", "void showNodes(",
     "void showProfileManager(",
     "void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String entryMode,AndroidViaEntryLatencyProbe.Result selection)",
     "void configureMultihop(", "void showViaEntryExitPicker(",
@@ -156,12 +156,22 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();h.showRouterFastConnectMenu();d=shown(4,"Select node");h.telemetry.results.get(0).stale=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"stale measured source cannot be selected");
  }
  static void performance(){
+  for(boolean close:new boolean[]{false,true}){
+   ProductDialogHarness held=new ProductDialogHarness();held.telemetry.delayFastest=true;held.showPerformance();shown(9,"Performance").clickItem(2);AlertDialog progress=AlertDialog.last;
+   check(held.telemetry.allSamples==50&&progress.showing,"Performance comparison uses owned fifty-sample progress");
+   if(close)progress.dismiss();else progress.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
+   check(held.telemetry.fastestCancels==1&&held.fastestProgressDialog==progress,"Performance cancellation retains original batch until drain");
+   held.telemetry.pendingFastest.result(null,new IllegalStateException("drained cancellation"));
+   check(held.fastestProgressDialog==null&&held.nodeStore.selections==0&&held.saved.writes==0,"Performance cancellation cannot select a node");
+  }
+  ProductDialogHarness compared=new ProductDialogHarness();compared.showPerformance();shown(9,"Performance").clickItem(2);
+  check(compared.infoTitle.equals("50-sample Router comparison")&&compared.info.contains("10% trimmed mean")&&compared.nodeStore.selections==0&&compared.saved.writes==0,"compare-only displays complete statistics without winner adoption");
   ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(9,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
   for(int action=0;action<9;action++){
    ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(9,"Performance");d.clickItem(action);
    switch(action){case 0:check(h.telemetry.currentSamples==5,"current path actual callback");break;
     case 1:check(h.telemetry.nodeSamples==50&&h.telemetry.measuredNode.equals("a"),"durable 50-sample selected node");break;
-    case 2:check(h.telemetry.allSamples==5,"all-node callback");break;
+    case 2:check(h.telemetry.allSamples==50,"all-node callback");break;
     case 3:check(h.telemetry.speedBytes==8<<20,"real transfer requested8MiB");break;
     case 4:check(h.routed==1,"native routed hop speed action");break;
     case 6:check(h.infoTitle.equals("Saved statistics"),"saved durable statistics action");break;
@@ -224,7 +234,7 @@ def main():
     handlers = [method(signature) for signature in SIGNATURES]
     for signature, handler in zip(SIGNATURES, handlers):
         assert handler.count("choiceDialog(") == 1, signature
-    support = method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(") + method("void refreshTelemetry(") + method("void clearCurrentTelemetry(")
+    support = method("void showRouterFastConnectMenu(") + method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(") + method("void refreshTelemetry(") + method("void clearCurrentTelemetry(")
     with tempfile.TemporaryDirectory(prefix="routervpn-product-dialog-") as work:
         tmp = Path(work)
         sources = dict(W.UI)
