@@ -91,18 +91,17 @@ func (n *NodeNetworkOwner) brokerCapture() mobiletor.DesktopSocketCapture {
 }
 
 func (n *NodeNetworkOwner) PrepareNodePhysicalBroker(policy *mobilemultihop.DesktopNodePolicy, factory NodePhysicalBrokerFactory) error {
-	if n == nil || policy == nil || policy.Validate() != nil || factory == nil {
+	if n == nil || policy == nil || factory == nil {
 		return errors.New("Router node desktop physical preparation requires its original compiled authority")
 	}
-	meta := policy.Metadata()
+	_, meta, capture, err := policy.ReadValidated()
+	if err != nil {
+		return err
+	}
 	if meta.TargetOS != runtime.GOOS || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		// The Node constructor retains the complete original compiled profile;
 		// a target alias cannot relabel its actual native socket authority.
 		return errors.New("Router node desktop physical transport requires a proved native target and complete association capability")
-	}
-	capture, err := policy.Capture()
-	if err != nil {
-		return err
 	}
 	allowed, err := desktopPhysicalDestinations(capture.IPv6Mode, capture.PhysicalRoots, capture.SelectedDNS, capture.BootstrapDNS)
 	if err != nil {

@@ -47,11 +47,10 @@ func (n *NodeNetworkOwner) PrepareNodePhysicalPolicy(policy *mobilemultihop.Desk
 
 func (n *NodeNetworkOwner) prepareNodePhysicalWindows(policy *mobilemultihop.DesktopNodePolicy,
 	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error)) error {
-	if policy == nil || policy.Validate() != nil || create == nil {
+	if policy == nil || create == nil {
 		return errors.New("Windows Router node physical sockets lost their captured policy")
 	}
-	meta := policy.Metadata()
-	captured, err := policy.Capture()
+	_, meta, captured, err := policy.ReadValidated()
 	if err != nil || meta.TargetOS != "windows" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		return errors.New("Windows Router node physical sockets belong to another native target")
 	}

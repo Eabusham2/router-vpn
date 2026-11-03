@@ -88,6 +88,10 @@ func NewDesktopNodePolicyWithMTU(original *NodeProfile, sessionID, targetOS stri
 }
 
 func deriveDesktopNodePolicy(original *NodeProfile, inputs desktopNodePolicyInputs) (*DesktopNodePolicy, error) {
+	return deriveDesktopNodePolicyCapture(original, inputs, nil)
+}
+
+func deriveDesktopNodePolicyCapture(original *NodeProfile, inputs desktopNodePolicyInputs, captured *NodeDesktopCapture) (*DesktopNodePolicy, error) {
 	sessionID, targetOS, restoredMTU := inputs.sessionID, inputs.targetOS, inputs.restoredMTU
 	if original == nil || !desktopExternalSessionID.MatchString(sessionID) ||
 		(targetOS != "linux" && targetOS != "windows" && targetOS != "darwin") {
@@ -217,6 +221,9 @@ func deriveDesktopNodePolicy(original *NodeProfile, inputs desktopNodePolicyInpu
 	if policy.seal == "" {
 		return nil, desktopNodePolicyError
 	}
+	if captured != nil {
+		*captured = capture
+	}
 	return policy, nil
 }
 
@@ -280,18 +287,41 @@ func (p *DesktopNodePolicy) currentSeal() string {
 }
 
 func (p *DesktopNodePolicy) Validate() error {
+	_, err := p.validatedCapture()
+	return err
+}
+
+func (p *DesktopNodePolicy) validatedCapture() (NodeDesktopCapture, error) {
+	var capture NodeDesktopCapture
 	if p == nil || p.original == nil || p.seal == "" || p.currentSeal() != p.seal || p.metadata.Schema != 1 ||
 		p.metadata.ConfigSHA256 != externalDigest([]byte(p.config)) {
-		return desktopNodePolicyError
+		return capture, desktopNodePolicyError
 	}
 	// Rebuild from the retained constructor inputs. A matching recomputed hash
 	// must not authorize caller-edited graph bytes, metadata or an MTU value
-	// substituted after the original desktop capture.
-	derived, err := deriveDesktopNodePolicy(p.original, p.inputs)
+	// substituted after the original desktop capture. The fresh capture used by
+	// this exact derivation can also serve the same synchronous read operation.
+	derived, err := deriveDesktopNodePolicyCapture(p.original, p.inputs, &capture)
 	if err != nil || derived.config != p.config || derived.seal != p.seal {
-		return desktopNodePolicyError
+		return NodeDesktopCapture{}, desktopNodePolicyError
 	}
-	return nil
+	return capture, nil
+}
+
+// ReadValidated returns one coherent read of the complete original and desktop
+// adaptation after the same full validation as Validate. It avoids repeating
+// predecessor/graph derivation for each field in a synchronous preparation.
+// Nothing is cached: every call rechecks the retained source and constructor
+// inputs. Returned slices and nested capture data are fresh, and these values
+// grant no native authority or permission to skip a later operation's checks.
+func (p *DesktopNodePolicy) ReadValidated() (string, DesktopNodeMetadata, NodeDesktopCapture, error) {
+	capture, err := p.validatedCapture()
+	if err != nil {
+		return "", DesktopNodeMetadata{}, NodeDesktopCapture{}, err
+	}
+	meta := p.metadata
+	meta.Roots = append([]DesktopNodeRootMetadata(nil), p.metadata.Roots...)
+	return p.config, meta, capture, nil
 }
 
 func (p *DesktopNodePolicy) Config() string {
@@ -311,10 +341,7 @@ func (p *DesktopNodePolicy) Metadata() DesktopNodeMetadata {
 }
 
 func (p *DesktopNodePolicy) Capture() (NodeDesktopCapture, error) {
-	if p.Validate() != nil {
-		return NodeDesktopCapture{}, desktopNodePolicyError
-	}
-	return p.original.DesktopCapture()
+	return p.validatedCapture()
 }
 
 func (p *DesktopNodePolicy) OriginalProfile() *NodeProfile {

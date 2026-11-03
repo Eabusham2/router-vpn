@@ -262,6 +262,10 @@ func TestDesktopNodePolicyRejectsReplacedSourceAndDerivedAuthority(t *testing.T)
 			if _, err := policy.Capture(); err == nil {
 				t.Fatal("mutated desktop plan returned an admissible capture")
 			}
+			config, meta, capture, err := policy.ReadValidated()
+			if err == nil || config != "" || !reflect.DeepEqual(meta, DesktopNodeMetadata{}) || !reflect.DeepEqual(capture, NodeDesktopCapture{}) {
+				t.Fatal("mutated desktop plan returned combined authority")
+			}
 		})
 	}
 	original := desktopNodeFixture(t, "wg", "")

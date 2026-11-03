@@ -84,7 +84,7 @@ func (p *RouterVPNDesktopNodePreparation) RetainedProtection(ctx context.Context
 }
 
 func routerVPNDesktopNodePhysicalAvailable(policy *mobilemultihop.DesktopNodePolicy) bool {
-	if runtime.GOOS != "windows" || policy == nil || policy.Validate() != nil {
+	if runtime.GOOS != "windows" || policy == nil {
 		return false
 	}
 	meta := policy.Metadata()
@@ -96,11 +96,14 @@ func routerVPNDesktopNodePhysicalAvailable(policy *mobilemultihop.DesktopNodePol
 func (s *Box) routerVPNDesktopNodePhysical(policy *mobilemultihop.DesktopNodePolicy) (option.Options, *routervpndesktoppt.NodeNetworkOwner, error) {
 	var empty option.Options
 	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.service == nil || s.routerVPNNodeOptions == "" ||
-		policy == nil || policy.Validate() != nil {
+		policy == nil {
 		return empty, nil, errors.New("Router node physical preparation lost its complete native Box")
 	}
-	meta := policy.Metadata()
-	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	config, meta, _, err := policy.ReadValidated()
+	if err != nil {
+		return empty, nil, err
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(config))
 	if err != nil || meta.TargetOS != runtime.GOOS || routerVPNNodeOptionsDigest(s.ctx, compiled) != s.routerVPNNodeOptions {
 		return empty, nil, errors.New("Router node physical policy differs from its actual derived native graph")
 	}
