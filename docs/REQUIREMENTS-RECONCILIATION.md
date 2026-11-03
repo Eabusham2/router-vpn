@@ -18,7 +18,25 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 60d91297
+## Implementation reconciliation through aaee0ace
+
+The source cutoff is [aaee0ace](https://github.com/Eabusham2/router-vpn/commit/aaee0ace547a414ed4aa353f1f8a5560f5ad50b7).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) distinguishes
+published implementation, actual local execution, foreign-target compilation,
+native CI and release/device evidence. The original sources were recovered
+again for this continuation without replacing their scope or adding overlapping
+lists into a completion denominator.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and native external execution | Retained Windows direct Local SOCKS5 joins SS/HTTP/HTTPS/Hysteria2 for Start Layer Off and On-connect/Always. Independent control/UDP association authority, selected policy and exact restoration are preserved. Linux execution and six Windows component builds passed; actual Windows SOCKS WFP remains required. Broader Windows families/graphs and Darwin retained application session/transition are still code work. Existing generic Darwin execution is not erased. |
+| Complete profiles, selected DNS, #141–148, #222–223 and #335 | Actual generated SOCKS traffic, selected DNS/TLS/exit proof, MTU rollback, exact fifty-sample measurements and stale/cancel/replacement negatives pass on Linux. Windows source/compilation is separate from native traffic acceptance. The original Compare average, same endpoint, failed-candidate exclusion and captured winner restoration remain unchanged. |
+| Native installation and lifecycle | macOS current/incoming image captures, legacy revalidation, linked/unlinked ownership and same-PID trusted Python bootstrap are implemented and locally tested with negatives. Full-host native acceptance is pending. Windows real child launch has a current deadline failure; phase diagnostics and complete bounded baseline groups preserve that failure rather than count it as passed. |
+| Real route/protection and native evidence | Darwin LOCAL routes remain observed, and PF parallel readback keeps the original four-command cap and grant deadline. Both Linux generated-TUN targets passed at bba34c46; Windows bootstrap passed both architectures at 67028f29. These exact-run observations do not establish unrelated graph or physical-device behavior. |
+| Setup teaching and defaults | Actual generated Apple guidance and known legacy page repairs now agree with current supported native paths. First connection recommends SMART AUTO. Unsupported combinations remain visible unfinished work; corrected guidance is not runtime acceptance. |
+| Original 356, C1–C7 and later full scope | All uncancelled native platforms/architectures, map-first UI, full modes/graphs, generic installation/private linking, setup/admin/Methods/recovery, DNS/protection, signing and physical/off-LAN/visual/accessibility/private-target requirements remain binding. Current release publication has not converged; latest verified published prerelease remains 745b3e41. No percentage or smaller closure gate substitutes for full delivery. |
+
+## Earlier implementation reconciliation through 60d91297
 
 The verified source cutoff is [60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c).
 [The current evidence](CONTINUATION-EVIDENCE-2026-11-02.md) preserves source,

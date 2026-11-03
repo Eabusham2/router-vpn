@@ -1,12 +1,50 @@
 # Current implementation status
 
-Updated November 2, 2026 UTC. This file distinguishes published source,
+Updated November 3, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 60d91297
+## Latest implementation continuation — through aaee0ace
+
+The independently verified source cutoff is
+[aaee0ace](https://github.com/Eabusham2/router-vpn/commit/aaee0ace547a414ed4aa353f1f8a5560f5ad50b7).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records ten new
+published units, their executable tests and the actual native results. Original
+requirement recovery was checked against the available original transcripts;
+no shortened handoff replaces the full scope.
+
+- Protected Windows direct Local SOCKS5 now retains separate authenticated
+  control/UDP owners, original policy, DNS, MTU, fifty samples and restoration.
+  Generated Linux execution and all six current Windows component builds pass;
+  actual Windows SOCKS firewall/device acceptance remains separate.
+- macOS first/legacy installation now captures current/incoming image ownership
+  and checks renamed linked copies too. The Go bootstrap exec-replaces itself
+  with validated Python, preserving its PID, status and owned cleanup. All
+  local installer/negative controls and both target builds pass; native host
+  acceptance is still required.
+- Darwin LOCAL host routes remain in the observed cohort. Independent PF
+  reads share the original four-command limit and two-second deadline. Current
+  native route/PF confirmation is pending; no foreign rule is exempted.
+- Both Linux generated-TUN architectures passed at `bba34c46`; both Windows
+  physical bootstrap architectures passed at `67028f29`. Windows saved UI,
+  first-launch timing and installed/Portable Session passed at `bba34c46`.
+- That source's separate real Node/external child launch still expired. The
+  latest runner preserves all 108 roots, 294 verdicts and 46 negative controls
+  in bounded serial groups and records the native launch phase. This is not a
+  claim that the underlying launch timeout has been fixed.
+- Apple SDK preparation, provider-free Windows UI fixtures, MAX observer build
+  separation, and current Apple/SMART AUTO setup teaching are published.
+
+The latest verified release remains `745b3e41`; the current complete release
+has not converged. Broader retained platform/protocol/graph implementation,
+native acceptance, signing, physical/off-LAN checks and private deployment
+remain required. The generic Darwin external path already exists; its newer
+retained session/transition path remains unfinished. No live deployment or
+private network setting was changed.
+
+## Earlier implementation continuation — through 60d91297
 
 The independently verified published source is
 [60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c),
