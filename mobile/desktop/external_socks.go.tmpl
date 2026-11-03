@@ -133,7 +133,7 @@ func (o *ExternalSOCKSOutbound) dial(ctx context.Context, network string, destin
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound, metadata.Destination = o.Tag(), destination
 	operationCtx, cancel := context.WithCancel(ctx)
-	operation := &externalSOCKSOperation{root: o, ctx: operationCtx, cancel: cancel, network: network, done: make(chan struct{})}
+	operation := &externalSOCKSOperation{root: o, ctx: operationCtx, cancel: cancel, network: network, done: make(chan struct{}), drained: make(chan struct{})}
 	o.mu.Lock()
 	if o.closed || len(o.operations) >= mobiletor.DesktopSocketLimit {
 		o.mu.Unlock()
@@ -192,7 +192,7 @@ type externalSOCKSOperation struct {
 	ctx                context.Context
 	cancel             context.CancelFunc
 	network            string
-	done               chan struct{}
+	done, drained      chan struct{}
 	tcp, udp, result   net.Conn
 	tcpAsked, udpAsked bool
 	retired            bool
@@ -356,8 +356,45 @@ func (s *externalSOCKSOperation) close() error {
 		s.root.mu.Lock()
 		delete(s.root.operations, s)
 		s.root.mu.Unlock()
+		close(s.drained)
 	})
 	return s.closeErr
+}
+
+// ObserveAssociationRetirement captures a read-only waiter for one already
+// returned authenticated association. It grants no socket authority and cannot
+// reset a DNS transport, cancel an operation or create a replacement. In the
+// native DNS transport, pool invalidation removes its shared slot before Close
+// joins this operation; the waiter therefore observes that actual retirement.
+func (o *ExternalSOCKSOutbound) ObserveAssociationRetirement(controlLocal, relay netip.AddrPort) (func(context.Context) error, error) {
+	if o == nil || !controlLocal.IsValid() || !relay.IsValid() {
+		return nil, errors.New("SOCKS retirement observation lacks an exact association")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return nil, net.ErrClosed
+	}
+	for operation := range o.operations {
+		operation.mu.Lock()
+		matched := !operation.retired && operation.network == "udp" && operation.result != nil && operation.tcp != nil && operation.udp != nil &&
+			operation.tcp.LocalAddr().String() == controlLocal.String() && operation.tcp.RemoteAddr().String() == o.control.String() && operation.udp.RemoteAddr().String() == relay.String()
+		operation.mu.Unlock()
+		if matched {
+			return func(ctx context.Context) error {
+				if ctx == nil {
+					return errors.New("SOCKS retirement observation requires a bounded caller")
+				}
+				select {
+				case <-operation.drained:
+					return operation.closeErr
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}, nil
+		}
+	}
+	return nil, errors.New("SOCKS retirement observation did not match its original control and relay")
 }
 
 func (o *ExternalSOCKSOutbound) Close() error {

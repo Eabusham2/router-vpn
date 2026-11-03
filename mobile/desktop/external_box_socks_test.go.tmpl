@@ -16,8 +16,6 @@ import (
 	"time"
 
 	mDNS "github.com/miekg/dns"
-	"github.com/sagernet/sing-box/adapter"
-	C "github.com/sagernet/sing-box/constant"
 	dnsCore "github.com/sagernet/sing-box/dns"
 	dnsTransport "github.com/sagernet/sing-box/dns/transport"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
@@ -407,39 +405,9 @@ func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegratio
 		for operation := 0; operation < 2; operation++ {
 			if operation != 0 {
 				before := f.peer.udpQueries.Load()
-				packets := f.peer.physicalUDP.Load()
 				associations := len(f.peer.socks.snapshot())
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "tun-in", InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
-				var routeErr error
-				err := routerVPNStrategyDNSExchange(ctx, func(ctx context.Context, q *mDNS.Msg, options adapter.DNSQueryOptions) (*mDNS.Msg, error) {
-					answer, failure := f.box.dnsRouter.Exchange(ctx, q, options)
-					routeErr = failure
-					return answer, failure
-				})
-				cancel()
-				if err != nil {
-					// Native grant retirement can precede the UDP transport receive loop's
-					// cache invalidation. One query already attached to that old cache may
-					// lose its response. Its exact closed-connection result is delivered
-					// only after removeConn clears the old shared slot under its pool lock.
-					if !desktopExternalSOCKSDNSClosed(routeErr, 0) || retired == nil {
-						t.Fatal("selected DNS failed outside original cached-control retirement", routeErr, err)
-					}
-					select {
-					case <-retired.closed:
-					default:
-						t.Fatal("failed cached DNS query has an unretired original provider")
-					}
-					f.kernel.mu.Lock()
-					grants := len(f.kernel.grants)
-					f.kernel.mu.Unlock()
-					if grants != 0 || f.peer.udpQueries.Load() != before || f.peer.physicalUDP.Load() != packets || len(f.peer.socks.snapshot()) != associations || !f.proof.Healthy() || !f.network.Current() {
-						t.Fatal("failed cached DNS query changed native ownership or sent provider payload")
-					}
-					if err = f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
-						t.Fatal("immediately following selected DNS query failed after observed cache invalidation", err)
-					}
+				if err := f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+					t.Fatal("selected DNS failed after observed original cache retirement", err)
 				}
 				if f.peer.udpQueries.Load() <= before || len(f.peer.socks.snapshot()) != associations+1 {
 					t.Fatal("selected DNS did not create exactly one new authenticated provider association")
@@ -480,6 +448,17 @@ func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegratio
 				}
 				time.Sleep(time.Millisecond)
 			}
+			root, found := f.box.outbound.Outbound(mobilemultihop.ExternalFinalTag)
+			observer, ok := root.(interface {
+				ObserveAssociationRetirement(netip.AddrPort, netip.AddrPort) (func(context.Context) error, error)
+			})
+			if !found || !ok {
+				t.Fatal("selected DNS lost its exact native retirement observer")
+			}
+			wait, err := observer.ObserveAssociationRetirement(tcp.Local, udp.Remote)
+			if err != nil {
+				t.Fatal("selected DNS could not capture its original control/relay retirement", err)
+			}
 			_ = selected.control.Conn.Close()
 			select {
 			case <-selected.closed:
@@ -498,6 +477,16 @@ func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegratio
 					t.Fatal("explicit DNS control retirement did not join its exact socket grants")
 				}
 				time.Sleep(time.Millisecond)
+			}
+			// A forced native read deadline may report a timeout while the old
+			// DNS receiver is retiring. Do not use that error as retry permission.
+			// The pinned pool removes its shared slot before calling this exact
+			// returned connection's Close; observe that joined operation instead.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err = wait(ctx)
+			cancel()
+			if err != nil {
+				t.Fatal("selected DNS did not automatically retire its original cached connection", err)
 			}
 			if !f.proof.Healthy() || !f.network.Current() {
 				t.Fatal("DNS association retirement replaced its original healthy source")

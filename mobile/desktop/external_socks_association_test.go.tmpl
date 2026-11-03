@@ -402,6 +402,40 @@ func TestRouterVPNExternalSOCKSAssociationsOwnDistinctControlAndRelaySockets(t *
 			t.Fatal("another context adopted a captured SOCKS control")
 		}
 	}
+	// Read-only observation must capture this original association, never
+	// manufacture authority or retire it when a waiting caller cancels.
+	waiters := make([]func(context.Context) error, len(packets))
+	for index, packet := range packets {
+		operation := packet.(*externalSOCKSPacket).operation
+		control := netip.MustParseAddrPort(operation.tcp.LocalAddr().String())
+		remote := netip.MustParseAddrPort(operation.udp.RemoteAddr().String())
+		var err error
+		waiters[index], err = f.root.ObserveAssociationRetirement(control, remote)
+		if err != nil {
+			t.Fatal("original association observation", err)
+		}
+		for _, pair := range [][2]netip.AddrPort{
+			{netip.AddrPort{}, remote},
+			{netip.AddrPortFrom(control.Addr(), 1), remote},
+			{control, netip.AddrPortFrom(remote.Addr(), 1)},
+		} {
+			if waiter, err := f.root.ObserveAssociationRetirement(pair[0], pair[1]); err == nil || waiter != nil {
+				t.Fatal("foreign association acquired retirement observation")
+			}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := waiters[index](ctx); !errors.Is(err, context.Canceled) {
+			t.Fatal("live observation ignored caller cancellation", err)
+		}
+		waiting, stopWaiting := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		err = waiters[index](waiting)
+		stopWaiting()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("live association published premature retirement", err)
+		}
+		externalSOCKSExchange(t, packet, "observation-cannot-close-owner")
+	}
 	// Match the actual accepted TCP peer to its native operation by source port,
 	// rather than assuming concurrent server accepts share client completion order.
 	first := packets[0].(*externalSOCKSPacket).operation
@@ -441,6 +475,16 @@ func TestRouterVPNExternalSOCKSAssociationsOwnDistinctControlAndRelaySockets(t *
 	}
 	if err := packets[0].Close(); err != nil {
 		t.Fatal(err)
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	if err := waiters[0](waitCtx); err != nil {
+		t.Fatal("actual original operation did not publish its joined retirement", err)
+	}
+	cancelled, cancelWait := context.WithCancel(context.Background())
+	cancelWait()
+	if err := waiters[1](cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatal("sibling operation incorrectly retired", err)
 	}
 	externalSOCKSExchange(t, packets[1], "replacement-owner-still-live")
 	f.source.mu.Lock()
@@ -509,7 +553,7 @@ func TestRouterVPNExternalSOCKSRejectsRetiredManagersAndForeignRelayCalls(t *tes
 			f.activate(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			operation := &externalSOCKSOperation{root: f.root, ctx: ctx, cancel: cancel, done: make(chan struct{}), network: "udp"}
+			operation := &externalSOCKSOperation{root: f.root, ctx: ctx, cancel: cancel, done: make(chan struct{}), drained: make(chan struct{}), network: "udp"}
 			close(operation.done)
 			if fault != "unregistered" {
 				f.root.mu.Lock()
@@ -619,7 +663,7 @@ func TestRouterVPNExternalSOCKSRootCloseJoinsAndRetainsOriginalFailure(t *testin
 	connection := &externalSOCKSFailedCloseConn{Conn: left, entered: make(chan struct{}), release: release, failure: failure}
 	root := &ExternalSOCKSOutbound{operations: make(map[*externalSOCKSOperation]struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
-	operation := &externalSOCKSOperation{root: root, ctx: ctx, cancel: cancel, done: make(chan struct{}), tcp: connection, result: connection}
+	operation := &externalSOCKSOperation{root: root, ctx: ctx, cancel: cancel, done: make(chan struct{}), drained: make(chan struct{}), tcp: connection, result: connection}
 	close(operation.done)
 	root.operations[operation] = struct{}{}
 	answers := make(chan error, 2)
