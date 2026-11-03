@@ -9,7 +9,9 @@ package mobiletor
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -182,4 +184,273 @@ func DesktopWindowsNodeCompositionRetire(ctx context.Context, target DesktopWind
 		return err
 	}
 	return DesktopWindowsNodeCompositionAbsent(ctx)
+}
+
+// This native test capture retains the actual object/endpoint identities before
+// a refusal. Grant absence alone is insufficient: the source's descriptor and
+// independently queried ALE endpoint must also have retired.
+type DesktopWindowsNodeSocketRetirement struct {
+	policy             *DesktopWindowsSocketPolicy
+	creation           DesktopSocketCreation
+	grant              DesktopSocketGrant
+	endpoints          []uint64
+	rules              []syscall.GUID
+	original, returned DesktopSocketNative
+	io                 *desktopWindowsSocket
+	held               DesktopSocketNative
+}
+
+func DesktopWindowsNodeCompositionCaptureSocketRetirement(ctx context.Context, grant DesktopSocketGrant) (*DesktopWindowsNodeSocketRetirement, error) {
+	desktopWindowsNodeComposition.Lock()
+	p := desktopWindowsNodeComposition.owner
+	desktopWindowsNodeComposition.Unlock()
+	if p == nil {
+		return nil, errors.New("socket retirement has no captured native policy")
+	}
+	// Resource acquisition must join entered native calls even on timeout.
+	if ctx == nil {
+		return nil, errors.New("socket retirement capture has no caller")
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.ctx.Done():
+		return nil, net.ErrClosed
+	case <-p.gate:
+	}
+	defer func() { p.gate <- struct{}{} }()
+	if ctx.Err() != nil || p.ctx.Err() != nil {
+		return nil, errors.Join(ctx.Err(), net.ErrClosed)
+	}
+	capture := func() (*DesktopWindowsNodeSocketRetirement, error) {
+		if grant.Capture != p.capture || grant.Binding.Owner != p.owner || grant.Network != "tcp" {
+			return nil, errors.New("socket retirement capture changed original owner")
+		}
+		creation, ok := p.bindings[grant.SocketID]
+		permit := p.permits[desktopWindowsPermitKey(grant)]
+		if !ok || permit == nil || !desktopSocketSOCKSControlMatches(permit.request, grant) {
+			return nil, errors.New("socket retirement capture lacks original live TCP grant")
+		}
+		if err := p.assertBaseline(); err != nil {
+			return nil, err
+		}
+		actual, err := p.identity.InspectSocket(ctx, creation)
+		if err != nil || !actual.PeerConnected || actual.Local != grant.Local || actual.Remote != grant.Remote {
+			return nil, errors.Join(err, errors.New("socket retirement capture is not its actual connected tuple"))
+		}
+		captured := &DesktopWindowsNodeSocketRetirement{policy: p, creation: creation, grant: grant}
+		for _, rule := range permit.rules {
+			captured.rules = append(captured.rules, rule.Key)
+		}
+		if len(captured.rules) == 0 {
+			return nil, errors.New("socket retirement capture lacks native permit keys")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.identity.ctx.Done():
+			return nil, net.ErrClosed
+		case <-p.identity.gate:
+		}
+		acquire := func() error {
+			defer func() { p.identity.gate <- struct{}{} }()
+			if ctx.Err() != nil || p.identity.ctx.Err() != nil {
+				return errors.Join(ctx.Err(), net.ErrClosed)
+			}
+			record := p.identity.sockets[creation.SocketID]
+			if record == nil || record.creation != creation || record.original == nil || record.returned == nil || record.connect == nil || record.connect.io == nil {
+				return errors.New("socket retirement capture lost retained native descriptors")
+			}
+			captured.original, captured.returned, captured.io = record.original, record.returned, record.connect.io
+			for _, endpoint := range []uint64{record.endpoint, actual.EndpointID, record.finalEndpoint, record.connect.boundEndpoint} {
+				if endpoint == 0 {
+					continue
+				}
+				found := false
+				for _, previous := range captured.endpoints {
+					if previous == endpoint {
+						found = true
+					}
+				}
+				if !found {
+					captured.endpoints = append(captured.endpoints, endpoint)
+				}
+			}
+			// An independent test-owned duplicate deliberately holds the exact kernel
+			// endpoint while production closes its own descriptors. It is released only
+			// after the fixture observes production blocked on native absence readback.
+			raw, err := record.original.SyscallConn()
+			if err != nil {
+				return err
+			}
+			captured.held, err = desktopWindowsNativeDuplicate(raw)
+			if err != nil {
+				return err
+			}
+			heldRaw, err := captured.held.SyscallConn()
+			if err != nil {
+				return err
+			}
+			heldID, err := desktopWindowsALEEndpoint(heldRaw)
+			if err != nil || heldID == 0 || heldID != actual.EndpointID {
+				return errors.Join(err, errors.New("independent held endpoint differs from captured connected ALE identity"))
+			}
+			return nil
+		}
+		err = acquire()
+		if err != nil && captured.held == nil {
+			return nil, err
+		}
+		return captured, errors.Join(err, ctx.Err())
+	}
+	return capture()
+}
+
+func (r *DesktopWindowsNodeSocketRetirement) ReleaseHeldEndpoint() error {
+	if r == nil || r.held == nil {
+		return errors.New("socket retirement lost its independent held endpoint")
+	}
+	return r.held.Close()
+}
+
+func (r *DesktopWindowsNodeSocketRetirement) originalClosed() bool {
+	_, original := r.original.SyscallConn()
+	_, returned := r.returned.SyscallConn()
+	r.io.mu.Lock()
+	closed := r.io.closed
+	r.io.mu.Unlock()
+	return errors.Is(original, net.ErrClosed) && errors.Is(returned, net.ErrClosed) && closed
+}
+
+// ReadyToRelease proves the production release reached real descriptor close
+// while its independently retained kernel endpoint still exists. It rejects a
+// skipped ReleaseSocket or an early source-record deletion as distinct defects.
+func (r *DesktopWindowsNodeSocketRetirement) ReadyToRelease(ctx context.Context) (bool, error) {
+	if r == nil {
+		return false, errors.New("socket retirement capture is missing")
+	}
+	p := r.policy
+	return desktopWindowsPolicyCall(p, ctx, true, func() (bool, error) {
+		if err := p.assertBaseline(); err != nil {
+			return false, err
+		}
+		for _, permit := range p.permits {
+			if permit.request.SocketID == r.grant.SocketID {
+				return false, nil
+			}
+		}
+		ready := false
+		err := p.identity.call(ctx, true, func() error {
+			record := p.identity.sockets[r.creation.SocketID]
+			if record == nil {
+				return errors.New("native retirement bypassed independent endpoint readback")
+			}
+			if record.creation != r.creation {
+				return errors.New("native retirement replaced its source record")
+			}
+			if !r.originalClosed() {
+				return nil
+			}
+			live := false
+			for _, endpoint := range r.endpoints {
+				_, _, err := p.identity.api.endpointProperties(p.identity.engine, endpoint)
+				if err == nil {
+					live = true
+				} else if !errors.Is(err, desktopWindowsEndpointNotFound) {
+					return err
+				}
+			}
+			if !live {
+				return errors.New("independent held native endpoint disappeared before release")
+			}
+			ready = true
+			return nil
+		})
+		if err != nil {
+			return false, err
+		}
+		return ready, nil
+	})
+}
+
+func (r *DesktopWindowsNodeSocketRetirement) RequireRetired(ctx context.Context) error {
+	if r == nil {
+		return errors.New("socket retirement capture is missing")
+	}
+	desktopWindowsNodeComposition.Lock()
+	same := desktopWindowsNodeComposition.owner == r.policy
+	desktopWindowsNodeComposition.Unlock()
+	if !same {
+		return errors.New("native retirement replaced its original policy")
+	}
+	p := r.policy
+	_, err := desktopWindowsPolicyCall(p, ctx, true, func() (struct{}, error) {
+		if p.capture != r.grant.Capture || p.owner != r.grant.Binding.Owner {
+			return struct{}{}, errors.New("native retirement changed its original captured owner")
+		}
+		if err := p.assertBaseline(); err != nil {
+			return struct{}{}, err
+		}
+		if _, exists := p.bindings[r.creation.SocketID]; exists {
+			return struct{}{}, errors.New("native retirement retained its captured source binding")
+		}
+		for _, permit := range p.permits {
+			if permit.request.SocketID == r.grant.SocketID {
+				return struct{}{}, errors.New("native retirement retained its captured socket grant")
+			}
+		}
+		for _, key := range r.rules {
+			if err := p.baselineEngine.Absent(key); err != nil {
+				return struct{}{}, errors.Join(err, errors.New("native retirement retained its original WFP permit filter"))
+			}
+		}
+		return struct{}{}, p.identity.call(ctx, true, func() error {
+			if _, exists := p.identity.sockets[r.creation.SocketID]; exists {
+				return errors.New("native retirement did not join its original socket release")
+			}
+			if !r.originalClosed() {
+				return errors.New("native retirement retained an original descriptor")
+			}
+			for _, endpoint := range r.endpoints {
+				if _, _, err := p.identity.api.endpointProperties(p.identity.engine, endpoint); !errors.Is(err, desktopWindowsEndpointNotFound) {
+					return errors.Join(err, errors.New("native retirement retained its captured ALE endpoint"))
+				}
+			}
+			return nil
+		})
+	})
+	return err
+}
+
+// Cleanup is used only after the case verdict, including deliberate production
+// mutants. It cannot satisfy RequireRetired: the fixture calls that before any
+// cleanup. The exact captured permit/source may be retired, never another owner.
+func (r *DesktopWindowsNodeSocketRetirement) Cleanup(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	heldErr := r.ReleaseHeldEndpoint()
+	p := r.policy
+	_, err := desktopWindowsPolicyCall(p, ctx, true, func() (struct{}, error) {
+		if p.capture != r.creation.Capture || p.owner != r.grant.Binding.Owner {
+			return struct{}{}, errors.New("socket cleanup replaced its original captured owner")
+		}
+		if p.closed {
+			return struct{}{}, nil
+		}
+		if permit := p.permits[desktopWindowsPermitKey(r.grant)]; permit != nil {
+			if !desktopSocketSOCKSControlMatches(permit.request, r.grant) {
+				return struct{}{}, errors.New("socket cleanup changed its exact captured control")
+			}
+			if err := p.revoke(permit.request); err != nil {
+				return struct{}{}, err
+			}
+		}
+		if err := p.identity.ReleaseSocket(ctx, r.creation); err != nil {
+			return struct{}{}, err
+		}
+		delete(p.bindings, r.creation.SocketID)
+		return struct{}{}, nil
+	})
+	return errors.Join(heldErr, err)
 }

@@ -772,10 +772,50 @@ func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixt
 	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 0 })
 }
 
+// Authentication/reply identity is separate from remote terminal delivery.
+// No timeout or provider error can supply the independent local retirement proof.
+func desktopExternalSOCKSRefusalPhaseValid(r, captured desktopExternalSOCKSRefusalReceipt) bool {
+	for _, value := range []string{captured.Control, captured.Server, captured.Relay} {
+		endpoint, err := netip.ParseAddrPort(value)
+		if err != nil || endpoint.Port() == 0 || endpoint.Addr().IsUnspecified() {
+			return false
+		}
+	}
+	return r.Control == captured.Control && r.Server == captured.Server && r.Relay == captured.Relay &&
+		r.Authenticated && r.Associate && r.Replied && r.Bytes == 0 && (r.Terminal == "unproved" || (r.Terminal == "eof" || r.Terminal == "reset") && r.Failure == "")
+}
+
 // Real BFE/token/Wintun identity is exercised. Journal persistence and the TUN
 // packet pump remain explicit fixtures; routes and DNS are never installed.
 func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
-	t.Run("refusal-receipts", desktopExternalSOCKSRefusalChecks)
+	t.Run("refusal-receipts", func(t *testing.T) {
+		desktopExternalSOCKSRefusalChecks(t)
+		captured := desktopExternalSOCKSRefusalReceipt{Control: "192.0.2.1:40000", Server: "192.0.2.2:1080", Relay: "192.0.2.3:5300"}
+		valid := captured
+		valid.Authenticated, valid.Associate, valid.Replied = true, true, true
+		valid.Terminal, valid.Failure = "unproved", "remote read timed out"
+		if !desktopExternalSOCKSRefusalPhaseValid(valid, captured) || desktopExternalSOCKSRefusalValid(valid, captured.Control, captured.Server, captured.Relay) {
+			t.Fatal("authenticated reply phase must remain distinct from unproved remote terminal delivery")
+		}
+		for _, change := range []func(*desktopExternalSOCKSRefusalReceipt){
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Control = "192.0.2.1:40001" },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Server = "192.0.2.4:1080" },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Relay = "192.0.2.4:5300" },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Authenticated = false },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Associate = false },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Replied = false },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Bytes = 1 },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Terminal = "" },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Terminal = "data" },
+			func(r *desktopExternalSOCKSRefusalReceipt) { r.Terminal = "eof" },
+		} {
+			invalid := valid
+			change(&invalid)
+			if desktopExternalSOCKSRefusalPhaseValid(invalid, captured) {
+				t.Fatal("invalid authenticated refusal phase accepted", invalid)
+			}
+		}
+	})
 	ca := newDesktopExternalIntegrationCA(t)
 	roots := x509.NewCertPool()
 	certificate, err := x509.ParseCertificate(ca.der)
@@ -834,6 +874,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 			f.start(t)
 			var captured desktopExternalSOCKSRefusalReceipt
 			var capturedGrant mobiletor.DesktopSocketGrant
+			var nativeRetirement *mobiletor.DesktopWindowsNodeSocketRetirement
 			var raw string
 			var err error
 			if fault == "relay-other-private" {
@@ -863,7 +904,54 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 					t.Fatal("malicious SOCKS reply has no independently captured original native TCP grant", captured)
 				}
 				capturedGrant = actual.Grants[0]
+				captureCtx, cancelCapture := context.WithTimeout(context.Background(), 2*time.Second)
+				nativeRetirement, err = mobiletor.DesktopWindowsNodeCompositionCaptureSocketRetirement(captureCtx, capturedGrant)
+				cancelCapture()
+				if nativeRetirement != nil {
+					t.Cleanup(func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+						defer cancel()
+						if err := nativeRetirement.Cleanup(ctx); err != nil {
+							t.Error("exact negative-control cleanup", err)
+						}
+					})
+				}
+				if err != nil {
+					t.Fatal("malicious SOCKS reply lost its independently captured native identity", err)
+				}
 				p.call(t, "release-refusal", "")
+				// Retain an independent duplicate until production has closed its
+				// original descriptors and actually reached native absence readback.
+				// A skipped Release/readback cannot masquerade as a joined proof.
+				deadline = time.Now().Add(4 * time.Second)
+				for {
+					probeCtx, stopProbe := context.WithTimeout(context.Background(), time.Second)
+					ready, failure := nativeRetirement.ReadyToRelease(probeCtx)
+					stopProbe()
+					if failure != nil {
+						t.Fatal("native retirement bypassed independent endpoint readback", failure)
+					}
+					if ready {
+						break
+					}
+					select {
+					case <-done:
+						t.Fatal("native retirement bypassed exact socket release or grant join")
+					default:
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("native retirement did not reach exact socket release and grant join")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				select {
+				case <-done:
+					t.Fatal("native retirement bypassed independent endpoint readback")
+				default:
+				}
+				if err := nativeRetirement.ReleaseHeldEndpoint(); err != nil {
+					t.Fatal(err)
+				}
 				select {
 				case result := <-done:
 					raw, err = result.raw, result.err
@@ -878,9 +966,10 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 			}
 			r := p.call(t, "stats", "")
 			// The independent provider may observe client EOF just after Run
-			// returns. Require that terminal receipt before evaluating counters.
+			// returns. Require its authenticated reply phase and completed supplemental
+			// remote terminal report before evaluating counters; local retirement is mandatory.
 			deadline := time.Now().Add(4 * time.Second)
-			for (fault == "password" && r.AuthFailures == 0 || (fault == "auth-downgrade" || strings.HasPrefix(fault, "relay-")) && r.Rejected == 0) && time.Now().Before(deadline) {
+			for (fault == "password" && r.AuthFailures == 0 || fault == "relay-other-private" && (len(r.SOCKSRefusals) != 1 || r.SOCKSRefusals[0].Terminal == "") || fault != "relay-other-private" && (fault == "auth-downgrade" || strings.HasPrefix(fault, "relay-")) && r.Rejected == 0) && time.Now().Before(deadline) {
 				time.Sleep(10 * time.Millisecond)
 				r = p.call(t, "stats", "")
 			}
@@ -888,8 +977,19 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 				t.Fatal("SOCKS negative never reached its actual control")
 			}
 			if fault == "relay-other-private" {
-				if len(r.SOCKSRefusals) != 1 || !desktopExternalSOCKSRefusalValid(r.SOCKSRefusals[0], captured.Control, captured.Server, captured.Relay) {
-					t.Fatal("malicious SOCKS reply lacks exact authenticated terminal control evidence", r.SOCKSRefusals)
+				if len(r.SOCKSRefusals) != 1 || !desktopExternalSOCKSRefusalPhaseValid(r.SOCKSRefusals[0], captured) {
+					t.Fatal("malicious SOCKS reply lacks exact authenticated provider phase", r.SOCKSRefusals)
+				}
+				retireCtx, stopRetire := context.WithTimeout(context.Background(), 2*time.Second)
+				retireErr := nativeRetirement.RequireRetired(retireCtx)
+				stopRetire()
+				if retireErr != nil {
+					t.Fatal("refused private SOCKS relay retained its captured native endpoint", retireErr)
+				}
+				if desktopExternalSOCKSRefusalValid(r.SOCKSRefusals[0], captured.Control, captured.Server, captured.Relay) {
+					t.Log("independent provider also observed original remote EOF/reset")
+				} else {
+					t.Log("remote terminal delivery is unproved after fail-closed WFP revocation; exact local descriptors, grants and ALE endpoints independently retired", r.SOCKSRefusals[0].Terminal)
 				}
 				deadline := time.Now().Add(4 * time.Second)
 				for {
@@ -914,7 +1014,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 					t.Fatal("wrong actual SOCKS auth carried inner bytes", r)
 				}
 			case "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "relay-other-private":
-				if r.Rejected == 0 || r.Packets != 0 || r.DNS != 0 || r.Attempts != 0 || len(r.SOCKS) != 0 {
+				if fault != "relay-other-private" && r.Rejected == 0 || r.Packets != 0 || r.DNS != 0 || r.Attempts != 0 || len(r.SOCKS) != 0 {
 					t.Fatal("invalid actual SOCKS reply escaped joined control refusal", r)
 				}
 			case "control-eof":

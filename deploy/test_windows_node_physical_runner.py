@@ -331,7 +331,33 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
 
 
 class OrdinarySOCKSScope(unittest.TestCase):
-    setUp = OrdinaryHysteria2Scope.setUp
+    def setUp(self):
+        OrdinaryHysteria2Scope.setUp(self)
+        relative = "routervpn/mobiletor/desktop_socket_windows_identity.go"
+        self.original[relative] = (ROOT / "internal/mobiletor/desktop_socket_windows_identity.go").read_bytes()
+        (self.source / relative).write_bytes(self.original[relative])
+
+    def test_local_retirement_controls_keep_native_scope_and_exact_source(self):
+        cases = {
+            "missing-socks-release": ("routervpn/mobiletor/desktop_socket_windows_policy.go", "if err := error(nil); err != nil {"),
+            "missing-socks-readback": ("routervpn/mobiletor/desktop_socket_windows_identity.go", "if false && record.endpoint != 0 {"),
+            "missing-socks-grant-removal": ("routervpn/mobiletor/desktop_socket_windows_policy.go", "func (p *DesktopWindowsSocketPolicy) Revoke("),
+        }
+        for mutation, (relative, witness) in cases.items():
+            with self.subTest(mutation=mutation):
+                selected = GATE.external_overlay(self.source, self.observer, mutation)
+                mapping = json.loads(selected.read_text())["Replace"]
+                self.assertEqual(len(mapping), 6 if mutation == "missing-socks-readback" else 5)
+                self.assertIn(witness, Path(mapping[str(self.source / relative)]).read_text())
+                policy = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text()
+                self.assertIn("desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)", policy)
+                self.assertIn(GATE.LOOPBACK_COMPOSITION, policy)
+                self.assertIn('p.pair("deny", family, 1, false, true)', policy)
+                if mutation == "missing-socks-grant-removal":
+                    revoke = policy.split("func (p *DesktopWindowsSocketPolicy) Revoke(", 1)[1].split("func (p *DesktopWindowsSocketPolicy) CreateSocket", 1)[0]
+                    self.assertNotIn("p.revoke(q)", revoke)
+                for path, original in self.original.items():
+                    self.assertEqual((self.source / path).read_bytes(), original)
 
     def test_every_socks_native_verdict_is_required(self):
         expected = (GATE.EXTERNAL_SOCKS_ROOT, *(GATE.EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
@@ -381,6 +407,9 @@ class OrdinarySOCKSScope(unittest.TestCase):
             "ordinary-tcp-deny": ("home-lan-off/tcp-deny", "ordinary token bypassed actual SOCKS WFP TCP deny: independent peer marker"),
             "ordinary-udp-deny": ("home-lan-off/udp-deny", "ordinary token bypassed actual SOCKS WFP UDP deny: independent peer marker"),
             "missing-durable-intent": ("always", "actual SOCKS source skipped its durable WFP intent"),
+            "missing-socket-release": ("reject/relay-other-private", "native retirement bypassed exact socket release or grant join"),
+            "missing-endpoint-readback": ("reject/relay-other-private", "native retirement bypassed independent endpoint readback"),
+            "missing-grant-removal": ("reject/relay-other-private", "native retirement did not reach exact socket release and grant join"),
         }
 
         def run(command, **kwargs):
@@ -432,10 +461,10 @@ class OrdinarySOCKSScope(unittest.TestCase):
             GATE.execute_external_socks(self.source, self.workspace, build, {"captured": "environment"})
         return calls
 
-    def test_real_socks_dispatch_preserves_all_three_compiled_controls(self):
+    def test_real_socks_dispatch_preserves_all_six_compiled_controls(self):
         calls = self.dispatch()
-        self.assertEqual(len(calls), 8)
-        self.assertEqual([timeout for _, timeout in calls], [600, 315, 600, 75, 600, 75, 600, 75])
+        self.assertEqual(len(calls), 14)
+        self.assertEqual([timeout for _, timeout in calls], [600, 315] + [600, 75] * 6)
         for relative, raw in self.original.items():
             self.assertEqual((self.source / relative).read_bytes(), raw)
 
@@ -443,6 +472,8 @@ class OrdinarySOCKSScope(unittest.TestCase):
         for fault, message in (("compile", "compilation failed"), ("leaf", "required native result"),
                                ("image", "native executable changed"), ("ordinary-tcp-deny", "exact defect"),
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("missing-socket-release", "exact defect"), ("missing-endpoint-readback", "exact defect"),
+                               ("missing-grant-removal", "exact defect"),
                                ("timeout", "exact defect"), ("witness", "exact defect"),
                                ("prefixed-failure", "exact defect"), ("duplicate-failure", "exact defect"),
                                ("fatal", "exact defect")):

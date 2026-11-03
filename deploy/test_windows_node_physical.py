@@ -185,7 +185,7 @@ def external_overlay(source, directory, mutation=None):
     # scope the durable constructor used by the real external journal owner.
     # No socket, tunnel, proof, TLS or admission operation is replaced.
     scope_mutation = mutants(source)[2] if mutation == "ordinary-udp-deny" else None
-    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent"):
+    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent", "missing-socks-release", "missing-socks-readback", "missing-socks-grant-removal"):
         raise ValueError("Unknown ordinary Hysteria2 native control")
     path = overlay(source, directory, scope_mutation)
     mapping = json.loads(path.read_text(encoding="utf-8"))["Replace"]
@@ -202,6 +202,21 @@ def external_overlay(source, directory, mutation=None):
             "if commit != nil {", "if false && commit != nil {")
         copied = directory / "external-missing-intent.go"
         copied.write_bytes(raw.encode("utf-8"))
+        mapping[str(source / relative)] = str(copied)
+    if mutation in ("missing-socks-release", "missing-socks-grant-removal"):
+        relative = "routervpn/mobiletor/desktop_socket_windows_policy.go"
+        copied = Path(mapping[str(source / relative)])
+        before, after = {
+            "missing-socks-release": ("if err := p.identity.ReleaseSocket(ctx, creation); err != nil {", "if err := error(nil); err != nil {"),
+            "missing-socks-grant-removal": ("return struct{}{}, p.revoke(q)", "return struct{}{}, nil"),
+        }[mutation]
+        copied.write_text(BOOT.IDENTITY.replace_once(copied.read_text(encoding="utf-8"), before, after), encoding="utf-8")
+    if mutation == "missing-socks-readback":
+        relative = "routervpn/mobiletor/desktop_socket_windows_identity.go"
+        raw = BOOT.IDENTITY.replace_once((source / relative).read_text(encoding="utf-8"),
+            "if record.endpoint != 0 {", "if false && record.endpoint != 0 {")
+        copied = directory / "external-missing-native-retirement-readback.go"
+        copied.write_text(raw, encoding="utf-8")
         mapping[str(source / relative)] = str(copied)
     path.write_text(json.dumps({"Replace": mapping}, sort_keys=True), encoding="utf-8")
     return path
@@ -309,7 +324,10 @@ def execute_external_socks(source, workspace, build, captured):
     for label, mutation, leaf, witness in (
             ("ordinary-tcp-deny", "ordinary-udp-deny", "home-lan-off/tcp-deny", "ordinary token bypassed actual SOCKS WFP TCP deny: independent peer marker"),
             ("ordinary-udp-deny", "ordinary-udp-deny", "home-lan-off/udp-deny", "ordinary token bypassed actual SOCKS WFP UDP deny: independent peer marker"),
-            ("missing-durable-intent", "missing-durable-intent", "always", "actual SOCKS source skipped its durable WFP intent")):
+            ("missing-durable-intent", "missing-durable-intent", "always", "actual SOCKS source skipped its durable WFP intent"),
+            ("missing-socket-release", "missing-socks-release", "reject/relay-other-private", "native retirement bypassed exact socket release or grant join"),
+            ("missing-endpoint-readback", "missing-socks-readback", "reject/relay-other-private", "native retirement bypassed independent endpoint readback"),
+            ("missing-grant-removal", "missing-socks-grant-removal", "reject/relay-other-private", "native retirement did not reach exact socket release and grant join")):
         changed = workspace / ("external-socks-" + label)
         changed.mkdir()
         selected = external_overlay(source, changed, mutation)
