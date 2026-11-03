@@ -47,6 +47,21 @@ class ExternalOutputBoundary(unittest.TestCase):
 
 
 class ExternalRetainedJournalInventory(unittest.TestCase):
+    def test_latency_observer_requires_every_exact_boundary_verdict(self):
+        self.assertEqual(len(EXTERNAL.LATENCY_OBSERVATION_CASES), 13)
+        runs = EXTERNAL.baseline_runs("box", "unused", ())
+        selected = [(name, required) for name, _, required in runs if set(required) & set(EXTERNAL.LATENCY_OBSERVATION_CASES)]
+        self.assertEqual(selected, [("box", EXTERNAL.LATENCY_OBSERVATION_CASES)])
+        required = EXTERNAL.LATENCY_OBSERVATION_CASES
+        complete = "".join("--- PASS: " + name + " (0.01s)\n" for name in required)
+        with contextlib.redirect_stdout(io.StringIO()):
+            EXTERNAL.report_baseline("latency-observation", required, 0, complete)
+        for name in required:
+            line = "--- PASS: " + name + " (0.01s)\n"
+            for changed in (complete.replace(line, ""), complete + line, complete.replace(line, "prefix " + line)):
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                    EXTERNAL.report_baseline("latency-observation", required, 0, changed)
+
     def test_every_new_journal_root_is_mandatory(self):
         expected_command = tuple("TestRouterVPNDesktopExternalPhysicalCommandJournal" + name for name in (
             "BeforePrivateInputs", "PublicRequiresCompleteCapture", "WindowsHasNoFileFallback", "RetainedPipeline",
@@ -88,6 +103,7 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             names.update(EXTERNAL.SOCKS_FACTORY_CASES)
             names.update(EXTERNAL.PACKET_BOX_CASES)
             names.update(EXTERNAL.STREAM_BOX_CASES)
+            names.update(EXTERNAL.LATENCY_OBSERVATION_CASES)
             names.update(EXTERNAL.PACKET_FACTORY_CASES)
             names.update(EXTERNAL.PACKET_COMMANDS)
             names.update(EXTERNAL.OPENVPN_COMMAND_CASES)

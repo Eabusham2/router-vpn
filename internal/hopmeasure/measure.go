@@ -26,6 +26,13 @@ import (
 
 const MaxBytes = 8 << 20
 
+// RequestTimeout is the existing complete worker budget, including all fifty
+// latency samples. Observers must not substitute a shorter sample-count budget.
+const RequestTimeout = 90 * time.Second
+
+// DrainTimeout bounds joining the original worker after completion or cancel.
+const DrainTimeout = 5 * time.Second
+
 var tokenID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var nodeID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var ErrStale = errors.New("hop measurement session or selected route changed")
@@ -222,7 +229,7 @@ func (s *Service) start(id string, work func(context.Context)) error {
 			return errors.New("native measurement resource is busy or retired")
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), RequestTimeout)
 	s.cancel = cancel
 	s.done = make(chan struct{})
 	done := s.done
@@ -253,7 +260,7 @@ func (s *Service) Drain(id string) error {
 	if done == nil {
 		return nil
 	}
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(DrainTimeout)
 	defer timer.Stop()
 	select {
 	case <-done:
@@ -285,7 +292,7 @@ func (s *Service) Close() error {
 	if done != nil {
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(DrainTimeout):
 			return errors.New("hop measurement teardown is still pending")
 		}
 	}

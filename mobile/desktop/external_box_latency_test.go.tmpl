@@ -86,25 +86,237 @@ func (p *desktopExternalLatencyPeer) serve(owner *desktopExternalIntegrationPeer
 	return err
 }
 
+// The native worker owns RequestTimeout for all fifty samples. Completion
+// publishes a result before its scope release finishes, so join the captured
+// request through Drain rather than imposing a shorter polling deadline.
+type desktopExternalLatencyObserver interface {
+	StatusJSON() string
+	Cancel(string)
+	Drain(string) error
+}
+
+func desktopExternalLatencyObserve(service desktopExternalLatencyObserver, request string, deadline, tick <-chan time.Time) (hopmeasure.Status, error) {
+	var status hopmeasure.Status
+	var primary error
+	if request == "" {
+		return status, errors.New("native latency observer has no captured request")
+	}
+	read := func() error {
+		var next hopmeasure.Status
+		if err := json.Unmarshal([]byte(service.StatusJSON()), &next); err != nil {
+			return err
+		}
+		if next.Request != request {
+			return errors.New("native latency observation changed its original request")
+		}
+		status = next
+		return nil
+	}
+observe:
+	for {
+		// An expired observation cannot adopt a concurrently published late result.
+		select {
+		case <-deadline:
+			primary = context.DeadlineExceeded
+			break observe
+		default:
+		}
+		if primary = read(); primary != nil || status.Complete {
+			break
+		}
+		select {
+		case <-tick:
+		case <-deadline:
+			primary = context.DeadlineExceeded
+			break observe
+		}
+	}
+	if primary != nil {
+		service.Cancel(request)
+	}
+	// Drain has its own unchanged five-second bound. A cancellation acknowledgement
+	// or Complete bit alone never establishes retirement of the native operation.
+	if err := service.Drain(request); err != nil {
+		service.Cancel(request)
+		return status, errors.Join(primary, err)
+	}
+	if primary != nil {
+		return status, primary
+	}
+	if err := read(); err != nil {
+		service.Cancel(request)
+		return status, err
+	}
+	if !status.Complete || !status.Drained {
+		service.Cancel(request)
+		return status, errors.New("native latency worker did not actually drain")
+	}
+	return status, nil
+}
+
 func desktopExternalLatencyStatus(t *testing.T, service *hopmeasure.Service) hopmeasure.Status {
 	t.Helper()
-	deadline := time.NewTimer(12 * time.Second)
+	var captured hopmeasure.Status
+	if err := json.Unmarshal([]byte(service.StatusJSON()), &captured); err != nil || captured.Request == "" {
+		t.Fatal("native latency lost its original request", err)
+	}
+	deadline := time.NewTimer(hopmeasure.RequestTimeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
-	for {
-		var status hopmeasure.Status
-		if err := json.Unmarshal([]byte(service.StatusJSON()), &status); err != nil {
-			t.Fatal(err)
+	status, err := desktopExternalLatencyObserve(service, captured.Request, deadline.C, tick.C)
+	if err != nil {
+		t.Fatal("native latency observation or worker drain failed", status, err)
+	}
+	return status
+}
+
+type desktopExternalLatencyObservationFixture struct {
+	read   func() string
+	cancel func(string)
+	drain  func(string) error
+}
+
+func (f desktopExternalLatencyObservationFixture) StatusJSON() string    { return f.read() }
+func (f desktopExternalLatencyObservationFixture) Cancel(id string)      { f.cancel(id) }
+func (f desktopExternalLatencyObservationFixture) Drain(id string) error { return f.drain(id) }
+
+func TestRouterVPNDesktopExternalPhysicalBoxLatencyObservation(t *testing.T) {
+	t.Run("worker-and-drain-bounds", func(t *testing.T) {
+		if hopmeasure.RequestTimeout != 90*time.Second || hopmeasure.DrainTimeout != 5*time.Second {
+			t.Fatal("observer changed the established worker or retirement contract")
 		}
-		if status.Complete && status.Drained {
-			return status
+	})
+	t.Run("blocked-drain-retains-observation", func(t *testing.T) {
+		id := strings.Repeat("b", 32)
+		status := hopmeasure.Status{Request: id, Complete: true}
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		unblock := func() { once.Do(func() { close(release) }) }
+		defer unblock()
+		fixture := desktopExternalLatencyObservationFixture{
+			read:   func() string { raw, _ := json.Marshal(status); return string(raw) },
+			cancel: func(string) { t.Error("completed worker was cancelled before its native join") },
+			drain: func(request string) error {
+				if request != id {
+					t.Error("join adopted a foreign request")
+				}
+				close(entered)
+				<-release
+				status.Drained = true
+				return nil
+			},
+		}
+		finished := make(chan error, 1)
+		go func() { _, err := desktopExternalLatencyObserve(fixture, id, nil, nil); finished <- err }()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("observer never joined its completed worker")
 		}
 		select {
-		case <-tick.C:
-		case <-deadline.C:
-			t.Fatal("native latency worker did not actually drain", status)
+		case err := <-finished:
+			t.Fatal("observer released a still-owned native worker", err)
+		default:
 		}
+		unblock()
+		select {
+		case err := <-finished:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("observer did not return after exact worker release")
+		}
+	})
+	for _, fault := range []string{"progress-through-fifty", "complete-before-drain", "cancelled-before-drain", "deadline", "deadline-and-drain-failure", "late-result", "foreign-request", "malformed-status", "drain-failure", "unjoined", "replacement-after-drain"} {
+		t.Run(fault, func(t *testing.T) {
+			id := strings.Repeat("b", 32)
+			status := hopmeasure.Status{Request: id, Stage: "exit: HTTPS response 34/50"}
+			deadline := make(chan time.Time, 1)
+			tick := make(chan time.Time, 50)
+			for i := 0; i < 50; i++ {
+				tick <- time.Time{}
+			}
+			reads, cancels, drains, samples := 0, 0, 0, 33
+			failure := errors.New("original native drain failure")
+			fixture := desktopExternalLatencyObservationFixture{
+				read: func() string {
+					reads++
+					if fault == "malformed-status" {
+						return "{"
+					}
+					if fault == "foreign-request" {
+						status.Request = strings.Repeat("c", 32)
+					}
+					if fault == "progress-through-fifty" {
+						if samples < 50 {
+							samples++
+						}
+						status.Complete = samples == 50
+					}
+					raw, _ := json.Marshal(status)
+					return string(raw)
+				},
+				cancel: func(request string) {
+					cancels++
+					if request != id {
+						t.Error("cancel adopted replacement request")
+					}
+				},
+				drain: func(request string) error {
+					drains++
+					if request != id {
+						t.Error("drain adopted replacement request")
+					}
+					if fault == "drain-failure" || fault == "deadline-and-drain-failure" {
+						return failure
+					}
+					if fault != "unjoined" {
+						status.Drained = true
+					}
+					if fault == "replacement-after-drain" {
+						status.Request = strings.Repeat("c", 32)
+					}
+					return nil
+				},
+			}
+			switch fault {
+			case "complete-before-drain", "drain-failure", "unjoined", "replacement-after-drain":
+				status.Complete = true
+			case "cancelled-before-drain":
+				status.Complete = true
+				status.Stage = "cancelled"
+				status.Failure = "Measurement cancelled"
+			case "deadline", "deadline-and-drain-failure":
+				deadline <- time.Time{}
+			case "late-result":
+				status.Complete = true
+				status.Drained = true
+				deadline <- time.Time{}
+			}
+			got, err := desktopExternalLatencyObserve(fixture, id, deadline, tick)
+			success := fault == "progress-through-fifty" || fault == "complete-before-drain" || fault == "cancelled-before-drain"
+			if drains != 1 || (err == nil) != success || success && (!got.Complete || !got.Drained || cancels != 0) || !success && cancels == 0 {
+				t.Fatal("observer lost exact completion, cancellation or single bounded join", got, err, cancels, drains)
+			}
+			if fault == "progress-through-fifty" && (samples != 50 || reads < 18) {
+				t.Fatal("observer accepted the previous partial34/50 stage")
+			}
+			if fault == "cancelled-before-drain" && (got.Stage != "cancelled" || got.Failure == "") {
+				t.Fatal("observer relabeled cancellation as successful measurement")
+			}
+			if fault == "deadline" || fault == "deadline-and-drain-failure" || fault == "late-result" {
+				if !errors.Is(err, context.DeadlineExceeded) || reads != 0 {
+					t.Fatal("deadline was replaced by late status or cleanup", err, reads)
+				}
+			}
+			if fault == "drain-failure" || fault == "deadline-and-drain-failure" {
+				if !errors.Is(err, failure) {
+					t.Fatal("observer discarded original native retirement failure", err)
+				}
+			}
+		})
 	}
 }
 

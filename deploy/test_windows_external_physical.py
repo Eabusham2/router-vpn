@@ -80,6 +80,11 @@ PACKET_FACTORY_CASES = tuple(parent + "/" + protocol + suffix
                           ("TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple", "-udp")))
 
 
+LATENCY_OBSERVATION_CASES = tuple("TestRouterVPNDesktopExternalPhysicalBoxLatencyObservation/" + leaf for leaf in (
+    "worker-and-drain-bounds", "blocked-drain-retains-observation", "progress-through-fifty", "complete-before-drain", "cancelled-before-drain",
+    "deadline", "deadline-and-drain-failure", "late-result", "foreign-request", "malformed-status",
+    "drain-failure", "unjoined", "replacement-after-drain"))
+
 LATENCY_BOUNDARIES = ("latency-dns", "latency-tls", "latency-partial", "cancel", "network", "native-owner")
 
 
@@ -89,7 +94,7 @@ def baseline_runs(name, selection, required):
     # Compile one captured image, then execute each independent transport under
     # the original deadlines. No added family consumes another's proof budget.
     parent = "TestRouterVPNDesktopExternalPhysicalIntegration"
-    required = (*required, *(case for case in STREAM_BOX_CASES if case not in required))
+    required = (*required, *LATENCY_OBSERVATION_CASES, *(case for case in STREAM_BOX_CASES if case not in required))
     ordinary = tuple(case for case in required if not case.startswith(parent))
     runs = [("box", "^TestRouterVPNDesktopExternalPhysicalBox", ordinary)]
     for protocol in ("http-connect", "https-connect", "shadowsocks", "hysteria2", *HYSTERIA2_LAYER_PROTOCOLS, "socks5", *PACKET_PROTOCOLS):
