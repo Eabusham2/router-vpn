@@ -1749,20 +1749,45 @@ type desktopExternalInstalledWGPeer struct {
 var desktopExternalInstalledWireGuard func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer
 var desktopExternalInstalledAmnezia func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer
 
+// This optional factory is installed only by the Linux layered reference.
+// Other entries cannot acquire a layer merely by appending request fields.
+type desktopExternalInstalledLayerRequest struct {
+	Mode     string `json:"mode"`
+	Password string `json:"password"`
+	Fault    string `json:"fault,omitempty"`
+}
+type desktopExternalInstalledLayerReceipt struct {
+	Mode          string `json:"mode"`
+	InnerAddress  string `json:"inner_address"`
+	Raw           int64  `json:"raw"`
+	Authenticated int64  `json:"authenticated"`
+	Forwarded     int64  `json:"forwarded"`
+	Rejected      int64  `json:"rejected"`
+}
+type desktopExternalInstalledLayerPeer struct {
+	address string
+	stats   func() desktopExternalInstalledLayerReceipt
+	close   func() error
+}
+
+var desktopExternalInstalledHysteriaLayer func(*testing.T, context.Context, netip.AddrPort, desktopExternalInstalledLayerRequest) desktopExternalInstalledLayerPeer
+
 type desktopExternalInstalledPeerRequest struct {
-	Schema          int                                 `json:"schema"`
-	Protocol        string                              `json:"protocol"`
-	Address         string                              `json:"address"`
-	Password        string                              `json:"password"`
-	Hold            bool                                `json:"hold"`
-	WireGuard       *desktopExternalInstalledWGRequest  `json:"wireguard,omitempty"`
-	Amnezia         *desktopExternalInstalledAWGRequest `json:"amneziawg,omitempty"`
-	OpenVPNNetwork  string                              `json:"openvpn_network,omitempty"`
-	OpenVPNFallback bool                                `json:"openvpn_fallback,omitempty"`
-	SOCKSFault      string                              `json:"socks_fault,omitempty"`
+	Layer           *desktopExternalInstalledLayerRequest `json:"layer,omitempty"`
+	Schema          int                                   `json:"schema"`
+	Protocol        string                                `json:"protocol"`
+	Address         string                                `json:"address"`
+	Password        string                                `json:"password"`
+	Hold            bool                                  `json:"hold"`
+	WireGuard       *desktopExternalInstalledWGRequest    `json:"wireguard,omitempty"`
+	Amnezia         *desktopExternalInstalledAWGRequest   `json:"amneziawg,omitempty"`
+	OpenVPNNetwork  string                                `json:"openvpn_network,omitempty"`
+	OpenVPNFallback bool                                  `json:"openvpn_fallback,omitempty"`
+	SOCKSFault      string                                `json:"socks_fault,omitempty"`
 }
 
 type desktopExternalInstalledPeerReply struct {
+	Layer                *desktopExternalInstalledLayerReceipt   `json:"layer,omitempty"`
 	Latency              *desktopExternalInstalledLatencyReceipt `json:"latency,omitempty"`
 	Schema               int                                     `json:"schema"`
 	Protocol             string                                  `json:"protocol"`
@@ -2219,6 +2244,10 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 // The original Linux entry keeps its fixed namespace address and full set.
 func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress string, protocols map[string]bool, latency bool) {
 	t.Helper()
+	desktopExternalInstalledReferenceProcessWithLayer(t, capturedAddress, protocols, latency, false)
+}
+func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAddress string, protocols map[string]bool, latency, allowLayer bool) {
+	t.Helper()
 	reader := STD.NewReaderSize(os.Stdin, desktopNodeLayerReferenceLimit+1)
 	line, err := reader.ReadSlice('\n')
 	var request desktopExternalInstalledPeerRequest
@@ -2228,6 +2257,19 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 	if err != nil || len(line) > desktopNodeLayerReferenceLimit || decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		request.Address != capturedAddress || !protocols[request.Protocol] {
 		t.Fatal("installed external reference lost its exact bounded request", err)
+	}
+	if allowLayer != (request.Layer != nil) || request.Layer != nil &&
+		(latency || request.Protocol != "hysteria2" || desktopExternalInstalledHysteriaLayer == nil) {
+		t.Fatal("installed external reference acquired an unrequested layer")
+	}
+	if request.Layer != nil {
+		key, err := base64.StdEncoding.Strict().DecodeString(request.Layer.Password)
+		valid := err == nil && len(key) == 32 && (request.Layer.Mode == "aes-256-gcm" || request.Layer.Mode == "aes-256-gcm+xor-whitening") &&
+			(request.Layer.Fault == "" || request.Layer.Fault == "whitening" && request.Layer.Mode == "aes-256-gcm+xor-whitening")
+		clear(key)
+		if !valid {
+			t.Fatal("installed HY2 layer lost its original mode and private key")
+		}
 	}
 	if request.Protocol != "openvpn" && (request.OpenVPNNetwork != "" || request.OpenVPNFallback) {
 		t.Fatal("ordinary external reference acquired uncaptured provider transport")
@@ -2342,6 +2384,7 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 	var wgPeer desktopExternalInstalledWGPeer
 	var openvpnProfile string
 	var socksPeer *desktopExternalInstalledSOCKSPeer
+	var layerPeer desktopExternalInstalledLayerPeer
 	if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		if request.Protocol == "amneziawg" {
@@ -2367,6 +2410,21 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		address = packet.LocalAddr().String()
 		closeTransport = startDesktopExternalInstalledHysteria2(t, server, packet, cert, request.Password)
+		if request.Layer != nil {
+			layerPeer = desktopExternalInstalledHysteriaLayer(t, ctx, netip.MustParseAddrPort(address), *request.Layer)
+			if layerPeer.address == "" || layerPeer.stats == nil || layerPeer.close == nil {
+				t.Fatal("installed HY2 layer lost its independent carrier")
+			}
+			address = layerPeer.address
+			closeInner := closeTransport
+			closeTransport = func() {
+				if err := layerPeer.close(); err != nil {
+					t.Error("installed HY2 layer did not join its transport", err)
+				}
+				closeInner()
+			}
+			request.Layer.Password = ""
+		}
 	} else {
 		listener, err = net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
 		if err != nil {
@@ -2461,6 +2519,10 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
 		if benchmark != nil {
 			reply.Latency = benchmark.receipt()
+		}
+		if layerPeer.stats != nil {
+			value := layerPeer.stats()
+			reply.Layer, reply.PhysicalUDP = &value, value.Raw
 		}
 		if request.Protocol == "openvpn" {
 			reply.OpenVPNNetwork, reply.OpenVPNProfile = request.OpenVPNNetwork, openvpnProfile

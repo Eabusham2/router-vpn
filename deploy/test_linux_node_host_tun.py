@@ -116,7 +116,9 @@ EXTERNAL_OPENVPN_CASES = tuple('external-' + variant + '-' + action for variant 
 EXTERNAL_SOCKS_CASES = tuple('external-socks-' + action for action in
                              ('on-connect', 'always', 'public', 'cancelled', 'wrong-auth', 'auth-downgrade',
                               'relay-domain', 'control-eof', 'dns-failure', 'replacement', 'source'))
-EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES
+EXTERNAL_HYSTERIA2_LAYER_CASES = tuple('external-' + mode + '-' + action for mode in ('hy2aes', 'hy2xor')
+    for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-trust', 'dns-failure', 'wrong-layer-key', 'source', 'replacement')) + ('external-hy2xor-wrong-whitening',)
+EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES + EXTERNAL_HYSTERIA2_LAYER_CASES
 CASES += EXTERNAL_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
@@ -137,6 +139,7 @@ def checked_sources(source):
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
     required = {'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
+                'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
                 'cmd/client/desktop_external_retained.go', 'cmd/client/external_profile_connect.go', 'cmd/client/speed_lab_paths.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
@@ -188,6 +191,24 @@ def bundle_identity(directory, target, env=None):
             raise ValueError('Installed host bundle lost its original regular payload')
         records[name] = {'bytes': info.st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
     return receipt, records
+
+
+LAYER_PEER_CASES = tuple('TestRouterVPNDesktopExternalInstalledLayerCarrier/' + mode + '/' + fault
+                         for mode in ('aes-256-gcm', 'aes-256-gcm+xor-whitening')
+                         for fault in ('valid', 'layer-key', 'destination', *(['whitening'] if mode.endswith('whitening') else [])))
+
+
+LAYER_AUTHORITY_CASES = tuple('TestDesktopLinuxInstalledLayerFixtureKeepsCompiledAuthority/' + mode
+                              for mode in ('aes-256-gcm', 'aes-256-gcm+xor-whitening'))
+
+
+def check_layer_peer_verdict(output, authority=False):
+    if any(value in output for value in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:', 'fatal error:', '[build failed]')):
+        raise ValueError('Installed layer reference did not complete its actual encrypted carrier checks')
+    cases, indent = (LAYER_AUTHORITY_CASES, '    ') if authority else (LAYER_PEER_CASES, '        ')
+    for case in cases:
+        if len(re.findall(r'^' + indent + '--- PASS: ' + re.escape(case) + r' \([^\r\n]*\)$', output, re.MULTILINE)) != 1:
+            raise ValueError('Installed layer reference omitted or duplicated its actual encrypted case: ' + case)
 
 
 def check_verdict(output, case=None):
@@ -245,6 +266,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted independent SIP003 TCP/HY2 UDP identity, selected DNS or retained lifecycle: ' + value)
         if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted actual external DNS/exit, source, cancellation, replacement or exact Router restoration: ' + value)
+        if value in EXTERNAL_HYSTERIA2_LAYER_CASES and 'verified installed host retained layered Hysteria2: ' + value + '\n' not in receipts:
+            raise ValueError('Installed Linux host omitted its exact retained external HY2 layer and physical/private authentication: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):
@@ -360,6 +383,20 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Shipping whitening relay changed after its original build')
         if checked_sources(source)[1] != before or bundle_identity(bundle, 'linux/' + architecture, captured) != (receipt, payloads):
             raise ValueError('Installed Linux host source or completed bundle changed during compilation')
+        status, authority_output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
+                                             '-test.run=^TestDesktopLinuxInstalledLayerFixtureKeepsCompiledAuthority$'],
+                                            cwd=ROOT, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed layer compiled authority witness failed:\n' + authority_output[-16384:])
+        check_layer_peer_verdict(authority_output, authority=True)
+        print(authority_output, end='' if authority_output.endswith('\n') else '\n')
+        status, layer_output = NODE.run([str(peer), '-test.v', '-test.timeout=30s',
+                                        '-test.run=^TestRouterVPNDesktopExternalInstalledLayerCarrier$'],
+                                       cwd=source, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed layer encrypted reference failed:\n' + layer_output[-16384:])
+        check_layer_peer_verdict(layer_output)
+        print(layer_output, end='' if layer_output.endswith('\n') else '\n')
         logs = []
         for case in CASES:
             command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary), '--peer-binary', str(peer),
@@ -386,6 +423,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'native_bundle': payloads,
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
                                 (('installed-controller-test', binary), ('independent-wg-awg2-ss2022-and-hysteria2-peers', peer), ('shipping-whitening-relay', whitening))},
+                  'layer_authority_cases': list(LAYER_AUTHORITY_CASES), 'layer_authority_output_sha256': hashlib.sha256(authority_output.encode()).hexdigest(),
+                  'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')

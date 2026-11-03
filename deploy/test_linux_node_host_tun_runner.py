@@ -41,7 +41,31 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:15: verified installed host layered WireGuard: ' + case for case in cases if case in G.WIREGUARD_LAYER_CASES),
                           *('    native_test.go:16: verified installed host layered AWG2: ' + case for case in cases if case in G.AMNEZIA_LAYER_CASES),
                           *('    native_test.go:17: verified installed host captured SIP003 lanes: ' + case for case in cases if case in G.SIP003_CASES),
-                          *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES)]) + '\n'
+                          *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
+                          *('    native_test.go:19: verified installed host retained layered Hysteria2: ' + case for case in cases if case in G.EXTERNAL_HYSTERIA2_LAYER_CASES)]) + '\n'
+
+    def test_compiled_layer_authority_requires_both_modes(self):
+        self.assertEqual(len(G.LAYER_AUTHORITY_CASES), 2)
+        lines = ['    --- PASS: ' + case + ' (0.01s)' for case in G.LAYER_AUTHORITY_CASES]
+        good = '\n'.join(lines) + '\n'
+        G.check_layer_peer_verdict(good, authority=True)
+        for line in lines:
+            for changed in (good.replace(line + '\n', ''), good + line + '\n', good.replace(line, 'prefix ' + line)):
+                with self.assertRaises(ValueError):
+                    G.check_layer_peer_verdict(changed, authority=True)
+
+    def test_actual_layer_carrier_requires_each_exact_once_leaf(self):
+        self.assertEqual(len(G.LAYER_PEER_CASES), 7)
+        lines = ['        --- PASS: ' + case + ' (0.01s)' for case in G.LAYER_PEER_CASES]
+        good = '\n'.join(lines) + '\n'
+        G.check_layer_peer_verdict(good)
+        for line in lines:
+            for changed in (good.replace(line + '\n', ''), good + line + '\n', good.replace(line, 'prefix ' + line)):
+                with self.assertRaises(ValueError):
+                    G.check_layer_peer_verdict(changed)
+        for bad in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:', 'fatal error:', '[build failed]'):
+            with self.assertRaises(ValueError):
+                G.check_layer_peer_verdict(good + bad)
 
     def test_new_hysteria2_layers_preserve_every_original_case_and_receipt(self):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
@@ -112,8 +136,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_external_succession_keeps_all_original_cases_and_real_lifecycle(self):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
-        self.assertEqual(len(G.EXTERNAL_CASES), 73)
-        self.assertEqual(len(G.CASES), 372)
+        self.assertEqual(len(G.EXTERNAL_CASES), 94)
+        self.assertEqual(len(G.CASES), 393)
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
         self.assertEqual(G.CASES[299:], G.EXTERNAL_CASES)
@@ -204,7 +228,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(G.CASES[:361], G.ORIGINAL_CASES + G.EXTERNAL_PROXY_CASES +
                          G.EXTERNAL_HYSTERIA2_CASES + G.EXTERNAL_WIREGUARD_CASES +
                          G.EXTERNAL_AMNEZIA_CASES + G.EXTERNAL_OPENVPN_CASES)
-        self.assertEqual(G.CASES[361:], G.EXTERNAL_SOCKS_CASES)
+        self.assertEqual(G.CASES[361:372], G.EXTERNAL_SOCKS_CASES)
         self.assertEqual(G.EXTERNAL_SOCKS_CASES, tuple('external-socks-' + action for action in
                          ('on-connect', 'always', 'public', 'cancelled', 'wrong-auth', 'auth-downgrade',
                           'relay-domain', 'control-eof', 'dns-failure', 'replacement', 'source')))
@@ -217,6 +241,23 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                                                'verified installed host plain Shadowsocks:'), case)
         with self.assertRaises(ValueError):
             G.check_verdict(self.completed(G.CASES[:361]))
+
+    def test_external_layered_hysteria2_keeps_original_inventory_and_exact_receipts(self):
+        expected = tuple('external-' + mode + '-' + action for mode in ('hy2aes', 'hy2xor')
+            for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-trust', 'dns-failure', 'wrong-layer-key', 'source', 'replacement')) + ('external-hy2xor-wrong-whitening',)
+        self.assertEqual(len(expected), 21)
+        self.assertEqual(G.EXTERNAL_HYSTERIA2_LAYER_CASES, expected)
+        self.assertEqual(G.CASES[372:], expected)
+        self.assertEqual(G.CASES[:372], G.ORIGINAL_CASES + G.EXTERNAL_PROXY_CASES + G.EXTERNAL_HYSTERIA2_CASES + G.EXTERNAL_WIREGUARD_CASES + G.EXTERNAL_AMNEZIA_CASES + G.EXTERNAL_OPENVPN_CASES + G.EXTERNAL_SOCKS_CASES)
+        for case in expected:
+            output = self.completed((case,))
+            G.check_verdict(output, case)
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                G.check_verdict(output.replace('verified installed host retained external succession:', 'generic encrypted peer:'), case)
+            with self.subTest(layer=case), self.assertRaises(ValueError):
+                G.check_verdict(output.replace('verified installed host retained layered Hysteria2:', 'generic encrypted peer:'), case)
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed(G.CASES[:372]))
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

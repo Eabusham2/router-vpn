@@ -31,7 +31,7 @@ import (
 	"router-vpn/internal/nativeopenvpn"
 )
 
-var linuxHostTUNExternalCases = []string{
+var linuxHostTUNExternalCases = append([]string{
 	"external-ss-on-connect", "external-http-on-connect", "external-https-on-connect",
 	"external-ss-always", "external-http-always", "external-https-always",
 	"external-ss-cancelled", "external-ss-replacement", "external-ss-source", "external-ss-dns-failure",
@@ -65,7 +65,7 @@ var linuxHostTUNExternalCases = []string{
 	"external-socks-on-connect", "external-socks-always", "external-socks-public", "external-socks-cancelled",
 	"external-socks-wrong-auth", "external-socks-auth-downgrade", "external-socks-relay-domain", "external-socks-control-eof",
 	"external-socks-dns-failure", "external-socks-replacement", "external-socks-source",
-}
+}, linuxHostTUNExternalLayerCases...)
 
 func linuxHostTUNExternalCase(scenario string) bool {
 	for _, candidate := range linuxHostTUNExternalCases {
@@ -89,7 +89,7 @@ func linuxHostTUNExternalProtocol(scenario string) string {
 	if strings.HasPrefix(scenario, "external-socks-") {
 		return "socks5"
 	}
-	if strings.HasPrefix(scenario, "external-hy2-") {
+	if strings.HasPrefix(scenario, "external-hy2-") || linuxHostTUNExternalLayerMode(scenario) != "" {
 		return "hysteria2"
 	}
 	if strings.HasPrefix(scenario, "external-wg-") {
@@ -128,33 +128,36 @@ func linuxHostTUNExternalAction(scenario string) string {
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
 	switch linuxHostTUNExternalAction(scenario) {
-	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control", "wrong-auth", "auth-downgrade", "relay-domain", "control-eof":
+	case "wrong-layer-key", "wrong-whitening", "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control", "wrong-auth", "auth-downgrade", "relay-domain", "control-eof":
 		return true
 	}
 	return false
 }
 
 type linuxExternalTUNPeerReply struct {
-	Schema               int      `json:"schema"`
-	Protocol             string   `json:"protocol"`
-	Address              string   `json:"address"`
-	CA                   string   `json:"ca"`
-	Connections          int64    `json:"connections"`
-	Streams              int64    `json:"streams"`
-	PhysicalUDP          int64    `json:"physical_udp"`
-	Packets              int64    `json:"packets"`
-	DNSQueries           uint32   `json:"dns_queries"`
-	PublicAttempts       uint32   `json:"public_attempts"`
-	PublicReplies        uint32   `json:"public_replies"`
-	AuthFailures         uint32   `json:"auth_failures"`
-	ParametersSHA256     string   `json:"parameters_sha256,omitempty"`
-	OpenVPNNetwork       string   `json:"openvpn_network,omitempty"`
-	OpenVPNProfile       string   `json:"openvpn_profile,omitempty"`
-	SOCKSRelays          []string `json:"socks_relays,omitempty"`
-	SOCKSRejectedReplies uint32   `json:"socks_rejected_replies,omitempty"`
+	Layer                *linuxExternalTUNLayerReceipt `json:"layer,omitempty"`
+	Schema               int                           `json:"schema"`
+	Protocol             string                        `json:"protocol"`
+	Address              string                        `json:"address"`
+	CA                   string                        `json:"ca"`
+	Connections          int64                         `json:"connections"`
+	Streams              int64                         `json:"streams"`
+	PhysicalUDP          int64                         `json:"physical_udp"`
+	Packets              int64                         `json:"packets"`
+	DNSQueries           uint32                        `json:"dns_queries"`
+	PublicAttempts       uint32                        `json:"public_attempts"`
+	PublicReplies        uint32                        `json:"public_replies"`
+	AuthFailures         uint32                        `json:"auth_failures"`
+	ParametersSHA256     string                        `json:"parameters_sha256,omitempty"`
+	OpenVPNNetwork       string                        `json:"openvpn_network,omitempty"`
+	OpenVPNProfile       string                        `json:"openvpn_profile,omitempty"`
+	SOCKSRelays          []string                      `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies uint32                        `json:"socks_rejected_replies,omitempty"`
 }
 
 type linuxExternalTUNPeer struct {
+	layerMode, layerPassword       string
+	innerAddress                   netip.AddrPort
 	command                        *exec.Cmd
 	input                          io.WriteCloser
 	output                         *os.File
@@ -191,6 +194,7 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 		t.Fatal("installed external peer changed its endpoint or original private test root")
 	}
 	peer.address, peer.ca = address, reply.CA
+	linuxHostTUNExternalLayerRead(t, peer, reply)
 	if peer.protocol == "amneziawg" {
 		parameters, err := awgpolicy.ParametersUAPI(peer.parameters)
 		digest := sha256.Sum256([]byte(parameters))
@@ -292,6 +296,14 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	}
 	peer := &linuxExternalTUNPeer{protocol: linuxHostTUNExternalProtocol(scenario), password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
 	clear(key[:])
+	peer.layerMode = linuxHostTUNExternalLayerMode(scenario)
+	if peer.layerMode != "" {
+		if _, err := rand.Read(key[:]); err != nil {
+			t.Fatal(err)
+		}
+		peer.layerPassword = base64.StdEncoding.EncodeToString(key[:])
+		clear(key[:])
+	}
 	if peer.protocol == "wireguard" || peer.protocol == "amneziawg" {
 		clientPrivate, clientPublic := linuxHostTUNExternalWGKey(t)
 		serverPrivate, serverPublic := linuxHostTUNExternalWGKey(t)
@@ -311,9 +323,13 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 	t.Cleanup(cancel)
+	test, marker := "TestRouterVPNDesktopExternalInstalledReferenceProcess", "ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD=1"
+	if peer.layerMode != "" {
+		test, marker = "TestRouterVPNDesktopExternalLayerInstalledReferenceProcess", "ROUTERVPN_EXTERNAL_LAYER_INSTALLED_REFERENCE_CHILD=1"
+	}
 	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
-		"-test.run=^TestRouterVPNDesktopExternalInstalledReferenceProcess$", "-test.count=1", "-test.timeout=105s")
-	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD=1"}
+		"-test.run=^"+test+"$", "-test.count=1", "-test.timeout=105s")
+	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", marker}
 	peer.input, err = peer.command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -351,6 +367,13 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	})
 	request := map[string]any{"schema": 1, "protocol": peer.protocol, "address": "11.77.0.2",
 		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}
+	if peer.layerMode != "" {
+		layer := map[string]any{"mode": peer.layerMode, "password": peer.layerPassword}
+		if linuxHostTUNExternalAction(scenario) == "wrong-whitening" {
+			layer["fault"] = "whitening"
+		}
+		request["layer"] = layer
+	}
 	if peer.wireguard != nil {
 		keys := map[string]any{"private_key": peer.serverPrivate, "client_public_key": peer.clientPublic, "preshared_key": peer.wireguard.PresharedKey}
 		if peer.protocol == "amneziawg" {
@@ -376,6 +399,9 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 ||
 		len(initial.SOCKSRelays) != 0 || initial.SOCKSRejectedReplies != 0 {
 		t.Fatal("external reference reported traffic before its selected native child")
+	}
+	if initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
+		t.Fatal("layer reported pre-capture traffic")
 	}
 	return peer
 }
@@ -491,6 +517,22 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 	case "hysteria2":
 		profile.DNSProtocol = "udp"
 		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "11.77.0.2", Port: int(peer.address.Port()), Password: peer.password, TLSServerName: "captured-external.example"}
+		if peer.layerMode != "" {
+			profile.External.Hysteria2.Port = int(peer.innerAddress.Port())
+			profile.StartLayer = peer.layerMode
+			password := peer.layerPassword
+			if linuxHostTUNExternalAction(scenario) == "wrong-layer-key" {
+				var other [32]byte
+				if _, err := rand.Read(other[:]); err != nil {
+					t.Fatal(err)
+				}
+				password = base64.StdEncoding.EncodeToString(other[:])
+				clear(other[:])
+			}
+			profile.External.StartLayer = &common.ExternalStartLayer{Mode: peer.layerMode, API: "http://10.93.0.1:8787", Transport: map[string]any{
+				"type": "shadowsocks", "tag": "captured-private-layer", "server": "11.77.0.2", "server_port": int(peer.address.Port()),
+				"method": "2022-blake3-aes-256-gcm", "password": password}}
+		}
 		if linuxHostTUNExternalAction(scenario) == "wrong-key" {
 			profile.External.Hysteria2.Password += "-different-peer-credential"
 		}
@@ -610,7 +652,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 			action == "control-eof" && (observed.PhysicalUDP == 0 || len(observed.SOCKSRelays) == 0) {
 			t.Fatal("SOCKS rejection did not reach its real selected authentication or association boundary", observed)
 		}
-	} else if action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" || action == "wrong-parameters" || action == "wrong-control" {
+	} else if action == "wrong-layer-key" || action == "wrong-whitening" || action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" || action == "wrong-parameters" || action == "wrong-control" {
 		if !middle.FailedProof || (peer.protocol != "openvpn" && observed.PhysicalUDP == 0) || observed.Connections != 0 || observed.Streams != 0 || observed.Packets != 0 ||
 			observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("wrong external peer credential or TLS identity reached an inner destination or Connected", middle, observed)
@@ -623,10 +665,11 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		middle.MTU != 1376 || (peer.protocol != "hysteria2" && peer.protocol != "wireguard" && peer.protocol != "amneziawg" && peer.protocol != "openvpn" && observed.Connections == 0) || (peer.protocol != "openvpn" && observed.Streams == 0) || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
 		t.Fatal("external succession bypassed its real encrypted/authenticated DNS and exit exchanges", middle, observed)
 	}
-	if (peer.protocol == "hysteria2" || peer.protocol == "wireguard" || peer.protocol == "amneziawg") && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
-		(action != "wrong-key" && action != "wrong-trust" && action != "wrong-psk" && action != "wrong-parameters" && observed.Packets == 0)) {
+	if action != "source" && (peer.protocol == "hysteria2" || peer.protocol == "wireguard" || peer.protocol == "amneziawg") && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
+		(action != "wrong-key" && action != "wrong-trust" && action != "wrong-psk" && action != "wrong-parameters" && action != "wrong-layer-key" && action != "wrong-whitening" && observed.Packets == 0)) {
 		t.Fatal("external selected UDP DNS or TCP proof bypassed its single physical UDP peer", observed)
 	}
+	linuxHostTUNExternalLayerObserved(t, peer, action, observed)
 	// The pinned provider owns its encrypted listener internally. Its decrypted
 	// DNS/HTTPS observations are real upper-layer counters, never substituted
 	// for unavailable raw physical TCP/UDP or netstack stream counts.
@@ -687,6 +730,9 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	}
 	if end := peer.observe(t, "stats"); (action != "wrong-auth" && end.AuthFailures != 0) || action == "cancelled" && end.PublicReplies != 0 {
 		t.Fatal("retired external proof was adopted after cancellation", end)
+	}
+	if peer.layerMode != "" {
+		t.Log("verified installed host retained layered Hysteria2:", scenario)
 	}
 	t.Log("verified installed host retained external succession:", scenario)
 	t.Log("verified installed host native lifecycle:", scenario)

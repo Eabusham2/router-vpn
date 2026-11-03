@@ -201,7 +201,9 @@ func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desk
 		calls++
 		owner.mu.Lock()
 		owner.profiles.Profiles[1] = cloneRouterProfile(saved)
-		if owner.profiles.Profiles[1].External.SOCKS5 != nil {
+		if owner.profiles.Profiles[1].External.StartLayer != nil {
+			owner.profiles.Profiles[1].External.StartLayer.Transport["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+		} else if owner.profiles.Profiles[1].External.SOCKS5 != nil {
 			owner.profiles.Profiles[1].External.SOCKS5.Password = "changed-after-captured-native-preparation"
 		} else {
 			owner.profiles.Profiles[1].External.Shadowsocks.Password = "changed-after-captured-native-preparation"
@@ -257,6 +259,9 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		}
 		return nil
 	}); err != nil {
+		return host, proof, err
+	}
+	if err := linuxHostTUNExternalLayerAuthority(native); err != nil {
 		return host, proof, err
 	}
 	physical := host.external.Metadata()
