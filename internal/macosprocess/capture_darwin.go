@@ -39,6 +39,7 @@ type pinnedFile struct {
 	info      os.FileInfo
 	path      string
 	immutable bool
+	guiSocket bool // Only fixed inherited FD9; its fstat mode describes readiness.
 }
 type guiPeer struct {
 	UID uint32
@@ -123,7 +124,7 @@ func OpenCapture(ctx context.Context, scope Scope, workspace, install, process, 
 		if err != nil {
 			return nil, err
 		}
-		c.files = append(c.files, pinnedFile{file: file, path: path, immutable: index == 1 || index == 2 || index == 6})
+		c.files = append(c.files, pinnedFile{file: file, path: path, immutable: index == 1 || index == 2 || index == 6, guiSocket: index == 5})
 	}
 	if err := c.capture(ctx); err != nil {
 		return nil, err
@@ -147,7 +148,7 @@ func InheritCapture(ctx context.Context, scope Scope) (result *Capture, failure 
 		if file == nil {
 			return nil, errors.New("native child lacks fixed inherited descriptors")
 		}
-		c.files = append(c.files, pinnedFile{file: file, path: path, immutable: index == 1 || index == 2 || index == 6})
+		c.files = append(c.files, pinnedFile{file: file, path: path, immutable: index == 1 || index == 2 || index == 6, guiSocket: index == 5})
 	}
 	if err := c.capture(ctx); err != nil {
 		return nil, err
@@ -295,12 +296,13 @@ func readPinned(p pinnedFile, limit int64) ([]byte, error) {
 }
 func checkPin(p pinnedFile, directory bool) error {
 	actual, err := p.file.Stat()
-	if err != nil || p.info == nil || !os.SameFile(p.info, actual) || actual.Mode() != p.info.Mode() {
+	if err != nil || p.info == nil || !os.SameFile(p.info, actual) {
 		return errors.New("native child lost an original captured object")
 	}
 	before, ok := p.info.Sys().(*syscall.Stat_t)
 	after, ok2 := actual.Sys().(*syscall.Stat_t)
-	if !ok || !ok2 || after.Uid != 0 || before.Uid != after.Uid || before.Gid != after.Gid || before.Nlink != after.Nlink || after.Mode&0022 != 0 {
+	if !ok || !ok2 || !samePinMetadata(pinMetadata{p.info.Mode(), before.Uid, before.Gid, uint64(before.Nlink)},
+		pinMetadata{actual.Mode(), after.Uid, after.Gid, uint64(after.Nlink)}, p.guiSocket) || p.guiSocket && (directory || p.path != "" || p.immutable) {
 		return errors.New("native captured object ownership changed")
 	}
 	if p.path != "" {
