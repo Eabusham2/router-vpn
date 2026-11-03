@@ -247,8 +247,12 @@ jobs:
             @{ Run = '^TestDesktopDNS'; Skip = '' },
             @{ Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'; Skip = '' },
             @{ Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'; Skip = '' },
+            # Native job 125676324275 exhausted the broad Tor package budget
+            # while its active restore leaf had run only 1s. Keep 180s per group.
             @{ Run = '^TestDesktopTorMTU'; Skip = '' },
-            @{ Run = '^TestDesktopTor'; Skip = '^TestDesktopTorMTU' },
+            @{ Run = '^TestDesktopTor(Comparison|Compare|PublicCompare)'; Skip = '' },
+            @{ Run = '^TestDesktopTorOrdinary'; Skip = '' },
+            @{ Run = '^TestDesktopTor'; Skip = '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)' },
             @{ Run = '^TestSpeedLab'; Skip = '' }
           )
           foreach ($scope in $scopes) {

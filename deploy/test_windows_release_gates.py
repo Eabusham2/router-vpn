@@ -51,7 +51,9 @@ WORKSPACE_SCOPES = (
     ('^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)', ''),
     ('^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)', ''),
     ('^TestDesktopTorMTU', ''),
-    ('^TestDesktopTor', '^TestDesktopTorMTU'),
+    ('^TestDesktopTor(Comparison|Compare|PublicCompare)', ''),
+    ('^TestDesktopTorOrdinary', ''),
+    ('^TestDesktopTor', '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)'),
     ('^TestSpeedLab', ''),
 )
 
@@ -352,11 +354,44 @@ class WindowsReleaseGateTests(unittest.TestCase):
                          ("Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'", "Run = '^$'"),
                          ("Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'", "Run = '^$'"),
                          ("Run = '^TestSpeedLab'", "Run = '^$'"),
-                         ("Skip = '^TestDesktopTorMTU'", "Skip = '^TestDesktopTor'"),
+                         ("Skip = '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)'", "Skip = '^TestDesktopTor'"),
+                         ("Run = '^TestDesktopTor(Comparison|Compare|PublicCompare)'", "Run = '^$'"),
+                         ("Run = '^TestDesktopTorOrdinary'", "Run = '^$'"),
                          ("'-timeout=180s'", "'-timeout=600s'"),
                          ("& go @arguments", "& go test -run '^$'")):
             with self.subTest(new=new), self.assertRaises(AssertionError):
                 check_workspace_gate(job.replace(old, new, 1))
+
+    def test_workspace_partition_preserves_every_current_native_test_once(self):
+        # The former broad Tor invocation reached its 180s aggregate after
+        # steady completed cases; the active leaf had run only one second.
+        # Scan all source declarations (including platform variants) so newly
+        # added tests inherit exactly one group without a stale allowlist.
+        original = (
+            '^TestDesktopRuntimeWorkspace', '^TestDesktopDNS',
+            '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)',
+            '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)',
+            '^TestDesktopTor', '^TestSpeedLab',
+        )
+        names = set()
+        for source in (REPOSITORY / 'cmd/client').glob('*_test.go'):
+            names.update(re.findall(r'^func (Test\w+)\(t \*testing\.T\)', source.read_text(), re.M))
+        expected = {name for name in names if any(re.search(selector, name) for selector in original)}
+        selected = []
+        for run, skip in WORKSPACE_SCOPES:
+            group = {name for name in names if re.search(run, name) and not (skip and re.search(skip, name))}
+            self.assertTrue(group, 'empty native workspace test group: ' + run)
+            selected.extend(group)
+        self.assertEqual(set(selected), expected)
+        self.assertEqual(len(selected), len(set(selected)), 'native test selected by multiple package invocations')
+        for name in (
+            'TestDesktopTorComparisonRequiresStoppedReceiptAndActualProcessJoin',
+            'TestDesktopTorPublicCompareHTTPCancellationDrainsOwnedTrial',
+            'TestDesktopTorOrdinarySpeedLabRetainsCompiledSourceAndRestoresAfterCancel',
+            'TestDesktopTorPlainSpeedLabRestoresProvedExecutionAndSource',
+            'TestDesktopTorCheckedCleanupRetainsUnknownChangedAndLinkedFiles',
+        ):
+            self.assertIn(name, expected)
 
     def test_native_node_aggregate_preserves_complete_bounded_execution(self):
         workflow = (REPOSITORY / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
