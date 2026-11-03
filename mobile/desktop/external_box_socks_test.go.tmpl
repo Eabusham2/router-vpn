@@ -392,6 +392,71 @@ func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegratio
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Fatal("ordinary SOCKS5 association acceptance requires the captured native host")
 	}
+	t.Run("socks5/selected-dns-retained-control-retirement", func(t *testing.T) {
+		f := newDesktopExternalIntegrationFixture(t, ca, "socks5", "")
+		f.prove(t)
+		for operation := 0; operation < 2; operation++ {
+			if operation != 0 {
+				before := f.peer.udpQueries.Load()
+				if err := f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil || f.peer.udpQueries.Load() <= before {
+					t.Fatal("selected DNS failed to reconnect through its original native source", err)
+				}
+			}
+			var selected *desktopExternalSOCKSRelay
+			for _, relay := range f.peer.socks.snapshot() {
+				select {
+				case <-relay.closed:
+					continue
+				default:
+				}
+				if selected != nil {
+					t.Fatal("selected DNS retained multiple provider associations")
+				}
+				selected = relay
+			}
+			if selected == nil {
+				t.Fatal("successful proof incorrectly discarded the retained DNS connection")
+			}
+			tcp, udp := selected.receipts(t)
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				f.kernel.mu.Lock()
+				count := len(f.kernel.grants)
+				_, control := f.kernel.grants[tcp.SocketID]
+				_, packet := f.kernel.grants[udp.SocketID]
+				f.kernel.mu.Unlock()
+				if count == 2 && control && packet {
+					break
+				}
+				if !time.Now().Before(deadline) {
+					t.Fatal("selected DNS did not retain exactly its original TCP and UDP grants")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			_ = selected.control.Conn.Close()
+			select {
+			case <-selected.closed:
+			case <-time.After(2 * time.Second):
+				t.Fatal("selected DNS provider control did not join")
+			}
+			deadline = time.Now().Add(2 * time.Second)
+			for {
+				f.kernel.mu.Lock()
+				count := len(f.kernel.grants)
+				f.kernel.mu.Unlock()
+				if count == 0 {
+					break
+				}
+				if !time.Now().Before(deadline) {
+					t.Fatal("explicit DNS control retirement did not join its exact socket grants")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !f.proof.Healthy() || !f.network.Current() {
+				t.Fatal("DNS association retirement replaced its original healthy source")
+			}
+		}
+	})
 	t.Run("socks5/independent-associations-control-eof", func(t *testing.T) {
 		f := newDesktopExternalIntegrationFixture(t, ca, "socks5", "")
 		f.prove(t)

@@ -557,7 +557,43 @@ func desktopExternalSOCKSWFPProve(t *testing.T, f *desktopExternalWFPFixture, p 
 	if r.TCP < 2 || r.Packets == 0 || r.DNS == 0 || r.DNS != r.UDPDNS || r.TLS == 0 || r.Public == 0 || len(r.SOCKS) == 0 || r.AuthFailures != 0 {
 		t.Fatal("actual SOCKS proof bypassed authentication/selected UDP DNS/TLS", r)
 	}
+	// The pinned selected UDP DNS transport retains its multiplexed connection
+	// for future queries. Prove that exact live association before deliberately
+	// retiring its provider control; successful proof alone is not retirement.
+	var dns desktopExternalSOCKSWFPReceipt
+	for _, receipt := range r.SOCKS {
+		if !receipt.Closed {
+			if dns.Index != 0 || receipt.Index <= 0 || receipt.Index > len(r.SOCKS) || receipt.Client == "" || receipt.Packets == 0 {
+				t.Fatal("selected DNS retained an unidentified or additional SOCKS association")
+			}
+			dns = receipt
+		}
+	}
+	if dns.Index == 0 {
+		t.Fatal("successful selected DNS lost its retained original SOCKS control")
+	}
+	actual := desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 2 })
+	var tcp, udp string
+	for _, grant := range actual.Grants {
+		if grant.Network == "tcp" && grant.Local.String() == dns.Control && grant.Remote == p.remote {
+			tcp = grant.SocketID
+		} else if grant.Network == "udp" && grant.Local.String() == dns.Client && grant.Remote.String() == dns.Relay {
+			udp = grant.SocketID
+		} else {
+			t.Fatal("selected DNS retained an unrelated native socket tuple")
+		}
+	}
+	if tcp == "" || udp == "" || tcp == udp {
+		t.Fatal("selected DNS did not retain distinct original TCP and UDP owners")
+	}
+	closed := p.call(t, "close-control", strconv.Itoa(dns.Index))
+	if len(closed.SOCKS) != len(r.SOCKS) || !closed.SOCKS[dns.Index-1].Closed {
+		t.Fatal("selected DNS retirement changed its original provider association")
+	}
 	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 0 })
+	if !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("retiring a selected DNS connection replaced its healthy native source")
+	}
 }
 
 func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixture, p *desktopExternalWFPReference) {
@@ -890,5 +926,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 			desktopExternalSOCKSWFPBlocked(t, p, "udp")
 		})
 	}
-	t.Log("Actual scoped BFE/isolated TCP and negotiated UDP SOCKS ownership, selected DNS/TLS proof, independent control EOF, cancellation, exact succession and retained deny passed. Wintun identity is real; journal storage and packet pump remain explicit fixtures.")
+	if !t.Failed() {
+		t.Log("Actual scoped BFE/isolated TCP and negotiated UDP SOCKS ownership, selected DNS/TLS proof, independent control EOF, cancellation, exact succession and retained deny passed. Wintun identity is real; journal storage and packet pump remain explicit fixtures.")
+	}
 }
