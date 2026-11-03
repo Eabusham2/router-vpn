@@ -377,6 +377,11 @@ func (t *sessionTracker) markStopReason(reason string) {
 func (t *sessionTracker) markRequestFailure(message string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.markRequestFailureLocked(message)
+}
+
+// Caller owns t.mu; atomic app adoption also takes the app lock after it.
+func (t *sessionTracker) markRequestFailureLocked(message string) {
 	homeExitProofs.Delete(t.a)
 	if t.session == nil || t.session.EndedAt != nil {
 		return

@@ -391,7 +391,8 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			return
 		}
 	}
-	sessionTrackerFor(a).declareRequest("external-node", sessionBase)
+	tracker := sessionTrackerFor(a)
+	tracker.declareRequest("external-node", sessionBase)
 	if err = a.stopModeWithIntent(true); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -569,20 +570,48 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 		msg := "external node exit proof failed: " + failure.Error()
 		var cleanupFailed bool
 		msg, cleanupFailed = a.externalProfileStopFailure(startedCmd, msg)
+		// Hand deferred cleanup back to the completed Stop attempt or its retained
+		// retry owner. This flag is lifecycle handoff, not proof cleanup succeeded.
+		retainedComplete = true
 		if cleanupFailed {
 			status = http.StatusInternalServerError
 		}
+		tracker.mu.Lock()
 		a.mu.Lock()
-		a.state.Mode = "external-node"
-		a.state.LogicalMode = "external-node"
-		a.state.RuntimeMode = "external-" + exit.Protocol
-		a.state.Base = sessionBase
-		a.state.RouterID = externalProfile.ID
+		currentTracker, tracked := sessionTrackers.Load(a)
+		owned := tracked && currentTracker == tracker && a.connectionContext == operation && a.cmd == nil
+		if cleanupFailed {
+			owned = tracked && currentTracker == tracker && a.connectionContext == operation && a.cmd == startedCmd
+			if tracked && currentTracker == tracker && a.connectionContext == operation && a.cmd == nil && native != nil {
+				// Legacy native teardown clears cmd before its final cleanup steps.
+				// Only the original retained launch can authorize that retry state.
+				legacy, legacyOK := desktopNodeOwners.Load(a)
+				retained, retainedOK := desktopExternalRetainedLaunches.Load(a)
+				owned = legacyOK && legacy == native || retainedOK && retained == native
+			}
+		}
+		if !owned {
+			a.mu.Unlock()
+			tracker.mu.Unlock()
+			http.Error(w, "external failure cleanup lost its original runtime owner; replacement retained", http.StatusConflict)
+			return
+		}
+		// Successful owned teardown has already cleared the runtime identity.
+		// Keep the failed request in diagnostics without resurrecting a mode
+		// whose native owner no longer exists. Partial cleanup remains retryable.
+		if cleanupFailed {
+			a.state.Mode = "external-node"
+			a.state.LogicalMode = "external-node"
+			a.state.RuntimeMode = "external-" + exit.Protocol
+			a.state.Base = sessionBase
+			a.state.RouterID = externalProfile.ID
+		}
 		a.state.Phase = "failed"
 		a.state.LastError = msg
 		a.state.Connected = false
+		tracker.markRequestFailureLocked(msg)
 		a.mu.Unlock()
-		sessionTrackerFor(a).markRequestFailure(msg)
+		tracker.mu.Unlock()
 		http.Error(w, msg, status)
 		return
 	}
