@@ -256,6 +256,8 @@ struct IOSUnifiedMap: UIViewRepresentable {
 struct IOSUnifiedProductView: View {
     @EnvironmentObject var model: RouterVPNModel
     @StateObject private var telemetry = IOSUnifiedTelemetry.shared
+    @ObservedObject private var externalComparison = IOSExternalNodeComparison.shared
+    @ObservedObject private var externalBenchmark = IOSExternalNodeBenchmark.shared
     @AppStorage(iosUnifiedModeKey) private var selectedMode = IOSUnifiedModeSelection.smart
     @State private var expanded = false
     @State private var showingNodes = false
@@ -264,6 +266,7 @@ struct IOSUnifiedProductView: View {
     @State private var showingDNS = false
     @State private var dnsEditorMode: String?
     @State private var showingSettings = false
+    @State private var showingPerformance = false
     @State private var showingOnboarding = false
     @State private var startupApplied = false
 
@@ -309,6 +312,7 @@ struct IOSUnifiedProductView: View {
         .sheet(isPresented: $showingModes) { IOSUnifiedModePicker(selectedMode: $selectedMode).environmentObject(model) }
         .sheet(isPresented: $showingDNS) { IOSDNSPolicyView(initialMode: dnsEditorMode).environmentObject(model) }
         .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView(telemetry: telemetry).environmentObject(model) }
+        .sheet(isPresented: $showingPerformance) { IOSUnifiedPerformanceView(telemetry: telemetry).environmentObject(model) }
         .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView().presentationDetents([.medium, .large]).presentationDragIndicator(.visible).interactiveDismissDisabled(false) }
         .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
         .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }
@@ -373,17 +377,21 @@ struct IOSUnifiedProductView: View {
                 VStack(spacing: 10) {
                     HStack(spacing: 7) {
                         Menu {
-                            Button { Task { await selectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & select fastest", systemImage: "bolt.fill") }
-                                .disabled(telemetry.isTestingFastest || model.profileMutationBlocked)
+                            Button { Task { await selectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing Router TCP…" : "Fastest Router · 50 TCP samples", systemImage: "bolt.fill") }
+                                .disabled(telemetry.isTestingFastest || model.profileMutationBlocked || externalComparison.running || externalBenchmark.running)
+                            Button("Compare external paths · 50 HTTPS responses") { startExternalComparison(connectFastest: false) }
+                                .disabled(externalComparisonUnavailable)
+                            Button("Compare & connect fastest external · 50 HTTPS responses") { startExternalComparison(connectFastest: true) }
+                                .disabled(externalComparisonUnavailable)
                             Divider()
                             ForEach(routerProfiles) { profile in
                                 Button { selectSpecific(profile) } label: {
                                     let ms = telemetry.cached(profile.id) ?? profile.latencyMedianMs ?? 0
                                     Text(ms > 0 ? String(format: "%@ • %.1f ms", profile.name, ms) : profile.name)
-                                }.disabled(model.profileMutationBlocked)
+                                }.disabled(model.profileMutationBlocked || externalComparison.running || externalBenchmark.running)
                             }
                         } label: { Image(systemName: "bolt.fill").frame(width: 24, height: 32) }
-                        .buttonStyle(.bordered).accessibilityLabel("Fastest node or choose node")
+                        .buttonStyle(.bordered).accessibilityLabel("Compare Router nodes by TCP or external paths by 50 routed HTTPS responses, or choose a Router node")
 
                         Button { connectOrDisconnect() } label: { Text(connectionButtonTitle).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 7) }
                             .buttonStyle(.borderedProminent).tint(model.connected ? .red : .accentColor)
@@ -472,14 +480,24 @@ struct IOSUnifiedProductView: View {
     }
 
     private func selectSpecific(_ profile: RouterProfile) {
-        guard !model.profileMutationBlocked else { return }
+        guard !model.profileMutationBlocked, !externalComparison.running, !externalBenchmark.running else { return }
         model.selectNode(profile.id)
         model.message = "Selected \(profile.name.isEmpty ? profile.id : profile.name). Press Connect when ready."
     }
+    private var externalComparisonUnavailable: Bool {
+        externalComparison.running || externalBenchmark.running || telemetry.measuring ||
+            telemetry.isTestingFastest || !IOSExternalNodeComparison.available(model)
+    }
+    private func startExternalComparison(connectFastest: Bool) {
+        guard !externalComparisonUnavailable else { return }
+        externalComparison.start(model: model, connectFastest: connectFastest)
+        showingPerformance = true
+    }
     private func selectFastest() async {
-        guard !model.profileMutationBlocked else { return }
-        let results = await telemetry.measureAll(routerProfiles, model: model, samples: 4)
-        guard !model.profileMutationBlocked else {
+        guard !model.profileMutationBlocked, !externalComparison.running, !externalBenchmark.running else { return }
+        showingPerformance = true
+        let results = await telemetry.measureFastest(routerProfiles, model: model)
+        guard !model.profileMutationBlocked, !externalComparison.running, !externalBenchmark.running else {
             model.message = "VPN state changed while Fastest was measuring; the result was not selected."
             return
         }
@@ -487,7 +505,7 @@ struct IOSUnifiedProductView: View {
         do { try telemetry.requireDirectResultCurrent(model: model) }
         catch { model.message = "The selected source or network changed after Fastest measured; retest before selecting its result."; return }
         model.selectNode(winner.id)
-        model.message = "Selected fastest live node: \(winner.name) • \(winner.shortLabel). Press Connect when ready with \(selectedModeTitle)."
+        model.message = "Selected fastest Router: \(winner.name) • \(String(format: "%.1f", winner.trimmedMeanMs)) ms, 50 TCP samples, 10% trimmed mean. Press Connect when ready with \(selectedModeTitle)."
     }
     private func connectOrDisconnect() {
         if model.tunnelTransitioning || model.connected { model.disconnect(); return }

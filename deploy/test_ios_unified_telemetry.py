@@ -58,8 +58,9 @@ enum NEVPNStatus { case connected,disconnected,connecting }
 @MainActor enum IOSViaEntryTCP {
  static var probes=0,held=false,failAt:Int?,cancelled=false,observedOwner=false
  static var checkOwner:(()->Bool)?
+ static var response:((String,Int)->Double)?
  private static var waiting:CheckedContinuation<Double,Error>?
- static func reset(){probes=0;held=false;failAt=nil;cancelled=false;observedOwner=false;checkOwner=nil}
+ static func reset(){probes=0;held=false;failAt=nil;cancelled=false;observedOwner=false;checkOwner=nil;response=nil}
  static func endpointHost(_ text:String)->String{URLComponents(string:"tcp://"+text)?.host ?? text}
  static func probeDirect(host:String,port:UInt16,timeoutMS:Int,network:UInt64)async throws->Double{
   guard IOSViaEntryNetwork.shared.current==network else{throw CancellationError()}
@@ -74,7 +75,7 @@ enum NEVPNStatus { case connected,disconnected,connecting }
   }
   try Task.checkCancellation()
   if probes==failAt{throw URLError(.timedOut)}
-  return Double(probes)+0.125
+  return response?(host,probes) ?? (Double(probes)+0.125)
  }
  static func drain(){held=false;let c=waiting;waiting=nil;if cancelled{c?.resume(throwing:CancellationError())}else{c?.resume(returning:1)}}
 }
@@ -290,10 +291,45 @@ TESTS = r'''
   telemetry.invalidateResults(model:model)
   try check("stale direct cache cleared",telemetry.latencyByID.isEmpty)
 
+  do {
+   let model=try fixture(),client=IOSUnifiedTelemetry(),saved=model.bundle!
+   let values=await client.measureFastest(saved.routerProfiles,model:model)
+   try check("Fastest requires fifty timed probes plus endpoint discovery",values.count==1 && values[0].samples==50 && values[0].failed==0 && IOSViaEntryTCP.probes==51)
+   let unchanged=try encoded(model.bundle!)==encoded(saved)
+   try check("Fastest does not overwrite durable measurements",model.commits==0 && unchanged)
+   try client.requireDirectResultCurrent(model:model)
+   client.cancel()
+   try rejects("cancelled completed Fastest cannot be adopted"){try client.requireDirectResultCurrent(model:model)}
+  }
+  do {
+   let model=try fixture(),client=IOSUnifiedTelemetry()
+   IOSViaEntryTCP.failAt=5
+   let values=await client.measureFastest(model.bundle!.routerProfiles,model:model)
+   try check("incomplete fifty-sample candidate receives no ranking",values.isEmpty && client.latencyByID.isEmpty && model.commits==0)
+   try rejects("incomplete Fastest cannot be adopted"){try client.requireDirectResultCurrent(model:model)}
+  }
+  do {
+   let model=try fixture(),client=IOSUnifiedTelemetry()
+   var a=try profile("a"),b=try profile("b");a.endpoint="198.51.100.10";b.endpoint="198.51.100.11"
+   model.bundle!.routerProfiles=[a,b];model.bundle!.selectedRouterID="a"
+   let stored=try encoded(model.bundle!);IOSNodeBundleStore.shared.records=["a":stored,"b":stored]
+   IOSViaEntryTCP.response={host,count in host=="198.51.100.10" ? (count<=27 ? 1:100):20}
+   let values=await client.measureFastest([a,b],model:model)
+   try check("Fastest ranks robust trimmed mean rather than favorable median",values.map(\.id)==["b","a"] && values[1].medianMs<values[0].medianMs && values[0].trimmedMeanMs<values[1].trimmedMeanMs)
+   try check("each ranked candidate owns fifty complete samples",values.allSatisfy{$0.samples==50 && $0.failed==0} && IOSViaEntryTCP.probes==102 && model.commits==0)
+  }
+
+  for fastest in [false,true] {
   for drift in ["cancel","network","selection","mode","decision","source"] {
    let model=try fixture(),client=IOSUnifiedTelemetry()
    IOSViaEntryTCP.held=true
-   let work=Task {try await client.measureOne(model.unifiedSelectedProfile!,model:model)}
+   let work=Task { () throws -> IOSLatencyResult in
+    if fastest {
+     guard let value=await client.measureFastest(model.bundle!.routerProfiles,model:model).first else { throw CancellationError() }
+     return value
+    }
+    return try await client.measureOne(model.unifiedSelectedProfile!,model:model)
+   }
    await wait("held direct probe"){IOSViaEntryTCP.probes>0}
    switch drift {
    case "cancel":client.cancel()
@@ -308,6 +344,7 @@ TESTS = r'''
    IOSViaEntryTCP.drain()
    try await rejectsAsync("discard direct drift \(drift)") {_ = try await work.value}
    try check("direct drain releases owner \(drift)",!model.iosSpeedLabOwnership.active && !client.measuring && model.commits==0)
+  }
   }
 
   do {

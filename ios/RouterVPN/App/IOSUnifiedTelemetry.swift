@@ -63,6 +63,7 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
 
     func cancel() {
         cancellationGeneration &+= 1
+        directReceipt = nil
         if measuring { progress = "Cancelling measurement and waiting for native cleanup…" }
         transaction?.cancel(); cancelWork?()
     }
@@ -86,6 +87,13 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
         catch { lastError = error.localizedDescription; return [] }
     }
 
+    /// Fastest compares complete fifty-sample sets without overwriting each
+    /// node's durable benchmark. Selection still requires this round's receipt.
+    func measureFastest(_ profiles: [RouterProfile], model: RouterVPNModel) async -> [IOSLatencyResult] {
+        do { return try await direct(profiles, model: model, samples: 50, durable: false) }
+        catch { lastError = error.localizedDescription; return [] }
+    }
+
     func measureOne(_ profile: RouterProfile, model: RouterVPNModel, samples: Int = 50) async throws -> IOSLatencyResult {
         guard samples == 50 else { throw IOSLatencyResult.issue("The durable node benchmark requires 50 samples.") }
         guard let value = try await direct([profile], model: model, samples: samples, durable: true).first else { throw URLError(.timedOut) }
@@ -100,7 +108,7 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
         var capture = try IOSDirectTelemetryCapture(model: model, profiles: profiles)
         let generation = cancellationGeneration
         measuring = true; isTestingFastest = true; cleanupPending = false; lastError = ""; directReceipt = nil
-        progress = durable ? "Collecting 50 direct TCP samples…" : "Measuring direct node responses…"
+        progress = samples == 50 ? "Collecting 50 direct TCP samples per node; incomplete nodes receive no score…" : "Measuring direct node responses…"
         defer { measuring = false; isTestingFastest = false; cleanupPending = false; cancelWork = nil }
         let worker = Task { @MainActor [self] in
             capture.network = try await IOSViaEntryNetwork.shared.snapshot()
@@ -118,11 +126,18 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
                         let value = try await Self.measure(profile: profile, samples: samples, network: network) {
                             try capture.requireCurrent(model); try model.iosSpeedLabOwnership.require(owner)
                         }
+                        if samples == 50 && (value.samples != 50 || value.failed != 0) {
+                            throw IOSLatencyResult.issue("This node did not complete all 50 TCP responses; no score.")
+                        }
                         results.append(value)
                     } catch is CancellationError { throw CancellationError() }
                     catch { if durable { throw error }; self.latencyByID.removeValue(forKey: profile.id) }
                 }
-                return results.sorted { $0.medianMs < $1.medianMs }
+                return results.sorted {
+                    let left = samples == 50 ? $0.trimmedMeanMs : $0.medianMs
+                    let right = samples == 50 ? $1.trimmedMeanMs : $1.medianMs
+                    return left == right ? $0.id < $1.id : left < right
+                }
             }
             let watcher = Task { @MainActor in
                 while !Task.isCancelled {
