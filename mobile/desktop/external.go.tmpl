@@ -37,20 +37,21 @@ var routerVPNExternalFailure = errors.New("captured desktop external runtime fai
 func init() { mainCommand.AddCommand(routerVPNNewExternalCommand()) }
 
 func routerVPNNewExternalCommand() *cobra.Command {
-	var directory, session, physicalSource, config, transfer string
+	var directory, session, physicalSource, config, transfer, darwin string
 	var linux routerVPNNodeLinuxParentOptions
 	var journal routerVPNExternalJournalOptions
 	command := &cobra.Command{Use: "routervpn-external", Short: "Run one captured Router VPN external session", Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			return routerVPNRunExternalCommand(ctx, directory, session, physicalSource, config, transfer, linux, journal)
+			return routerVPNRunExternalOwnedCommand(ctx, directory, session, physicalSource, config, transfer, linux, journal, darwin)
 		}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
 	command.Flags().StringVar(&session, "session", "", "captured session identity")
 	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured desktop physical source identity")
 	command.Flags().StringVar(&config, "config-sha256", "", "captured desktop external configuration identity")
 	command.Flags().StringVar(&transfer, "physical-transfer-sha256", "", "captured desktop external protection selection")
+	command.Flags().StringVar(&darwin, "darwin-control", "", "original inherited Darwin controller")
 	command.Flags().IntVar(&linux.ChannelFD, "linux-parent-channel", 0, "original inherited parent channel")
 	command.Flags().IntVar(&linux.DirectoryFD, "linux-parent-directory", 0, "original inherited parent directory")
 	command.Flags().StringVar(&linux.CaptureSHA256, "linux-parent-capture", "", "original inherited command capture")
@@ -571,7 +572,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 		routerVPNExternalStop
 		Closed bool `json:"closed"`
 	}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: policy.SourceSHA256()}, true}
-	physical, err := routerVPNExternalCommandPhysical(files, policy, session, physicalSource)
+	physical, err := routerVPNExternalCapturedPhysical(parent, files, policy, session, physicalSource)
 	if err == nil && journal != nil && (physical == nil || physical.Metadata().TargetOS != "windows" || physical.Metadata().ConfigSHA256 != physicalConfig) {
 		err = routerVPNExternalFailure
 	}

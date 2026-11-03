@@ -36,7 +36,9 @@ PARENT_CASES = ('ParentOriginalSessionAndJoin', 'ParentFailedDependentRetainsOri
                 'ParentRejectsReplacedControllerAndSession', 'ParentLifetimeCancellationAndBoundedJoin',
                 'ParentConcurrentCloseJoinsEnteredDependent', 'SessionCloseDoesNotCloseBorrowedController',
                 'SessionCapturesOriginalApplication', 'ParentCancelledReadDoesNotRetireSharedSession',
-                'SessionReleaseJoinsOnlyOriginalDependent')
+                'SessionReleaseJoinsOnlyOriginalDependent', 'SessionCleanupRetainsOnlyOriginalAuthorityAfterCancellation',
+                'ExternalBaselineExactReceiptAndRetirement', 'ExternalRetirementRetryEscalatesHeldBaseline',
+                'ExternalRetirementRetryDoesNotRemoveWorkspaceTwice', 'ExternalRetirementPreservesReplacementDNSIdentity')
 
 
 def require_native_verdicts(output):
@@ -272,7 +274,7 @@ def main():
                    'ROUTERVPN_MACOS_FIXTURE_PYTHON=' + str(Path(python).absolute()),
                    'ROUTERVPN_MACOS_FIXTURE_INSTALLCAP=' + str(capability),
                    'ROUTERVPN_MACOS_FIXTURE_APPKIT=' + str(appkit), 'GORACE=atexit_sleep_ms=0',
-                   str(binary), '-test.run=^Test(MacOSOwnedControllerNative|DesktopMacOS(Parent|Session))', '-test.v', '-test.timeout=180s']
+                   str(binary), '-test.run=^Test(MacOSOwnedControllerNative|DesktopMacOS(Parent|Session|External))', '-test.v', '-test.timeout=180s']
         if sudo: command = [sudo, '-n', '--', *command]
         output = reported_run(command, cwd=ROOT, env=environment, timeout=200, sudo=sudo)
         print(output, end='')

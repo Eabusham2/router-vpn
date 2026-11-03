@@ -77,6 +77,148 @@ class OwnedDarwinPF(unittest.TestCase):
         self.watcher = self.stack.enter_context(patch.object(D, '_spawn_watcher'))
         self.resolver = self.stack.enter_context(patch('socket.getaddrinfo', side_effect=AssertionError('pre-tunnel DNS')))
 
+    def external_capture(self, policy='always'):
+        self.selected['external'] = {'protocol': 'shadowsocks'}
+        self.selected['kill_switch_policy'] = policy
+        self.private_json(self.root/'routers.json', self.store)
+        self.stack.enter_context(patch.dict(os.environ, {
+            'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_TOR_SESSION': '',
+            'HOMEVPN_TOR_SOURCE_SHA256': '', 'HOMEVPN_ENDPOINT': ''}))
+        return dict(schema=1, profile_id='direct-tor', protocol='shadowsocks',
+                    session_id='c'*32, source_sha256='d'*64, config_sha256='e'*64,
+                    home_lan_access=False, policy=policy)
+
+    def test_external_family_uses_exact_existing_native_journal_and_always_retirement(self):
+        capture = self.external_capture()
+        request = dict(capture=capture, expected=None)
+        with D._darwin_action_guard(self.root):
+            active = D.darwin_external('apply', request)
+        self.assertEqual(active['phase'], 'active')
+        state = self.saved()
+        self.assertEqual(state['native_socket_family'], 'external-v1')
+        self.assertEqual(state['native_external_capture'], capture)
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['session_id'], capture['session_id'])
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['source_sha256'], capture['source_sha256'])
+        self.assertEqual(state['endpoint_ips'], [])
+        self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+        self.assertEqual(D.darwin_external('current', dict(capture=capture, expected=active)), active)
+        self.assertEqual(D.darwin_external('apply', request), active)
+        self.assertEqual(self.commands.count(['-E']), 1)
+        with D._darwin_action_guard(self.root):
+            retired = D.darwin_external('release', dict(capture=capture, expected=active))
+        self.assertEqual(retired['phase'], 'retired')
+        self.assertTrue(retired['baseline']['present'])
+        self.assertEqual(retired['pf_token'], active['pf_token'])
+        self.assertEqual(self.saved()[P._baseline.STATE_KEY]['request']['session_id'], '')
+        self.assertNotIn('anchor ', self.rules[P.OWNED_PF_ANCHOR])
+        self.assertEqual(self.references, {'417', '999'})
+        self.watcher.assert_not_called()
+        self.resolver.assert_not_called()
+
+    def test_external_on_connect_release_proves_original_reference_and_absence(self):
+        capture = self.external_capture('on-connect')
+        active = D.darwin_external('apply', dict(capture=capture, expected=None))
+        retired = D.darwin_external('release', dict(capture=capture, expected=active))
+        self.assertFalse(retired['baseline']['present'])
+        self.assertFalse((self.root/'run/kill-switch.json').exists())
+        self.assertEqual(self.references, {'999'})
+        self.assertEqual(D.darwin_external('release', dict(capture=capture, expected=active)), retired)
+        with self.assertRaisesRegex(RuntimeError, 'retired reference proof'):
+            D.darwin_external('release', dict(capture=capture, expected=None))
+        self.references.add(active['pf_token'])
+        with self.assertRaisesRegex(RuntimeError, 'retired reference proof'):
+            D.darwin_external('release', dict(capture=capture, expected=active))
+
+    def test_external_stale_scope_or_reference_cannot_retire_replacement(self):
+        capture = self.external_capture()
+        active = D.darwin_external('apply', dict(capture=capture, expected=None))
+        before, commands = self.saved(), list(self.commands)
+        for field, other in (('session_id', 'f'*32), ('source_sha256', 'f'*64),
+                             ('config_sha256', 'f'*64), ('protocol', 'http-connect'),
+                             ('home_lan_access', True), ('profile_id', 'foreign-profile')):
+            changed = {**capture, field: other}
+            with self.subTest(field=field), self.assertRaises(RuntimeError, msg='stale external capture retired another native owner'):
+                D.darwin_external('release', dict(capture=changed, expected=None))
+            self.assertEqual(self.saved(), before)
+            self.assertEqual(self.commands, commands)
+        with self.assertRaisesRegex(RuntimeError, 'original PF reference', msg='external cleanup released a different captured PF reference'):
+            D.darwin_external('release', dict(capture=capture, expected={**active, 'pf_token': '999'}))
+        self.assertEqual(self.saved(), before)
+
+    def test_external_on_connect_switch_holds_deny_until_exact_disconnect(self):
+        capture = self.external_capture('on-connect')
+        active = D.darwin_external('apply', dict(capture=capture, expected=None))
+        try:
+            held = D.darwin_external('retire', dict(capture=capture, expected=active))
+        except RuntimeError as error:
+            self.fail('native switch released its deny baseline: '+str(error))
+        self.assertEqual(held['phase'], 'held')
+        self.assertTrue(held['baseline']['present'], 'native switch released its deny baseline')
+        self.assertEqual(self.references, {'417', '999'})
+        self.assertEqual(self.saved()['policy'], 'on-connect')
+        self.assertEqual(self.saved()[P._baseline.STATE_KEY]['request']['session_id'], '')
+        self.assertNotIn('anchor ', self.rules[P.OWNED_PF_ANCHOR])
+        self.assertEqual(D.darwin_external('retire', dict(capture=capture, expected=held)), held)
+        retired = D.darwin_external('release', dict(capture=capture, expected=held))
+        self.assertFalse(retired['baseline']['present'])
+        self.assertEqual(self.references, {'999'})
+
+    def test_external_successor_replaces_only_joined_deny_and_old_owner_cannot_release(self):
+        capture = self.external_capture('on-connect')
+        active = D.darwin_external('apply', dict(capture=capture, expected=None))
+        held = D.darwin_external('retire', dict(capture=capture, expected=active))
+        successor = {**capture, 'session_id': 'a'*32, 'source_sha256': 'b'*64}
+        replacement = D.darwin_external('apply', dict(capture=successor, expected=None))
+        before, commands = self.saved(), list(self.commands)
+        with self.assertRaisesRegex(RuntimeError, 'another retained owner'):
+            D.darwin_external('release', dict(capture=capture, expected=held))
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.commands, commands)
+        self.assertEqual(D.darwin_external('current', dict(capture=successor, expected=replacement)), replacement)
+
+    def test_external_changed_saved_policy_fails_before_any_off_removal(self):
+        capture = self.external_capture()
+        self.legacy_state()
+        before, commands = self.saved(), list(self.commands)
+        for field, value in (('kill_switch_policy', 'off'), ('home_lan_access', True),
+                             ('external', {'protocol': 'tor'})):
+            original = self.selected[field]
+            self.selected[field] = value
+            self.private_json(self.root/'routers.json', self.store)
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'captured saved protection policy'):
+                D.darwin_external('apply', dict(capture=capture, expected=None))
+            self.selected[field] = original
+            self.assertEqual(self.saved(), before)
+            self.assertEqual(self.commands, commands)
+
+    def test_external_ambiguous_native_apply_retains_original_cleanup_owner(self):
+        capture = self.external_capture('on-connect')
+        self.fail_after_load = True
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous applied'):
+            D.darwin_external('apply', dict(capture=capture, expected=None))
+        state = self.saved()
+        self.assertEqual(state['native_external_capture'], capture)
+        self.assertTrue(state['darwin_transition_pending'])
+        self.assertFalse(state[P._baseline.STATE_KEY]['complete'])
+        self.assertNotIn(['-X', '417'], self.commands)
+        self.fail_after_load = False
+        retired = D.darwin_external('release', dict(capture=capture, expected=None))
+        self.assertFalse(retired['baseline']['present'])
+        self.assertEqual(self.references, {'999'})
+
+    def test_external_retained_reassert_keeps_ordinary_family_without_live_session(self):
+        capture = self.external_capture()
+        D.darwin_external('apply', dict(capture=capture, expected=None))
+        self.assertEqual(D.darwin_reassert(), 0)
+        state = self.saved()
+        self.assertEqual(state['native_socket_family'], 'external-v1')
+        self.assertEqual(state['native_external_capture'], capture)
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['session_id'], '')
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['source_sha256'], '')
+        self.assertNotIn('anchor ', self.rules[P.OWNED_PF_ANCHOR])
+        with self.assertRaisesRegex(RuntimeError, 'current native session proof'):
+            D.darwin_external('apply', dict(capture=capture, expected=None))
+
     @staticmethod
     def private_json(path, value):
         path.write_text(json.dumps(value)+'\n')

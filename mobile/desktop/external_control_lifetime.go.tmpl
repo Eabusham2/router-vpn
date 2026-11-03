@@ -1,0 +1,57 @@
+package main
+
+import (
+	"context"
+	"errors"
+)
+
+// The stop protocol owns acknowledgement; the original engine loop owns every
+// native cleanup. A completed or failed proof is never a retirement receipt.
+// Even if the request or controller disappears, join the native loop before
+// releasing its inherited locks. A stuck native cleanup remains owned.
+func routerVPNExternalControlledLifetime(parent context.Context, run func(context.Context) error,
+	waitStop func(context.Context, func(context.Context) error) error,
+	retired func() error, closeTransport func() error) error {
+	if parent == nil || parent.Err() != nil || run == nil || waitStop == nil || retired == nil || closeTransport == nil {
+		return routerVPNExternalFailure
+	}
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	joined := make(chan struct{})
+	var runErr error
+	go func() { defer close(joined); runErr = run(ctx) }()
+	control, stopControl := context.WithCancel(context.Background())
+	defer stopControl()
+	stopped := make(chan error, 1)
+	go func() {
+		err := waitStop(control, func(request context.Context) error {
+			cancel()
+			select {
+			case <-request.Done():
+				return request.Err()
+			case <-joined:
+				return retired()
+			}
+		})
+		cancel() // EOF, invalid peer and failed cleanup revoke the running proof.
+		stopped <- err
+	}()
+	select {
+	case stopErr := <-stopped:
+		<-joined
+		if stopErr == nil {
+			// The actual native cleanup callback succeeded. A failed connection
+			// proof does not turn that acknowledged cleanup into a failed exit.
+			return retired()
+		}
+		return errors.Join(stopErr, runErr, retired())
+	case <-parent.Done():
+		cancel()
+		// Preserve native guardian authority until its cleanup really joins.
+		<-joined
+		transportErr := closeTransport()
+		stopControl()
+		stopErr := <-stopped
+		return errors.Join(parent.Err(), runErr, stopErr, transportErr, retired())
+	}
+}

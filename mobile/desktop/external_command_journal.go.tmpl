@@ -28,6 +28,17 @@ type routerVPNExternalJournal interface {
 // imported ready/ack records never provide an alternate protected admission.
 func routerVPNRunExternalCommand(parent context.Context, directory, session, source, config, transfer string,
 	linux routerVPNNodeLinuxParentOptions, journal routerVPNExternalJournalOptions) error {
+	return routerVPNRunExternalOwnedCommand(parent, directory, session, source, config, transfer, linux, journal, "")
+}
+
+func routerVPNRunExternalOwnedCommand(parent context.Context, directory, session, source, config, transfer string,
+	linux routerVPNNodeLinuxParentOptions, journal routerVPNExternalJournalOptions, darwin string) error {
+	if darwin != "" {
+		if darwin != "inherited-v1" || transfer != "" || linux != (routerVPNNodeLinuxParentOptions{}) || journal != (routerVPNExternalJournalOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunDarwinExternalControlled(parent, directory, session, source, config)
+	}
 	if runtime.GOOS == "windows" && (source != "" || config != "" || transfer != "") || journal != (routerVPNExternalJournalOptions{}) {
 		if linux != (routerVPNNodeLinuxParentOptions{}) {
 			return routerVPNExternalFailure

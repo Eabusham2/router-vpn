@@ -109,8 +109,18 @@ func (w *desktopMacOSNativeWitness) Current(ctx context.Context) error {
 	}
 	for _, object := range w.objects {
 		actual, err := object.file.Stat()
-		if err != nil || object.info == nil || !os.SameFile(object.info, actual) || object.info.Mode() != actual.Mode() {
+		if err != nil || object.info == nil || !os.SameFile(object.info, actual) {
 			return errors.New("macOS parent lost an original retained descriptor")
+		}
+		// XNU exposes socket receive/send readiness through fstat mode bits.
+		// EOF can change them while the original native cleanup still owns the
+		// accepted GUI descriptor. Every named object retains exact modes.
+		if object.path == "" {
+			if object.info.Mode()&^os.FileMode(0666) != os.ModeSocket || actual.Mode()&^os.FileMode(0666) != os.ModeSocket {
+				return errors.New("macOS parent lifetime descriptor changed native type")
+			}
+		} else if object.info.Mode() != actual.Mode() {
+			return errors.New("macOS parent filesystem descriptor changed permissions")
 		}
 		before, beforeOK := object.info.Sys().(*syscall.Stat_t)
 		after, afterOK := actual.Sys().(*syscall.Stat_t)

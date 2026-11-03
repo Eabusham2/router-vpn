@@ -1,0 +1,162 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNExternalControlledStopJoinsNativeBeforeAcknowledgement(t *testing.T) {
+	started, cleanup, joined := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	acknowledged := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			<-cleanup
+			close(joined)
+			return errors.New("connection proof was canceled")
+		}, func(ctx context.Context, retire func(context.Context) error) error {
+			<-started
+			if err := retire(ctx); err != nil {
+				return err
+			}
+			close(acknowledged)
+			return nil
+		}, func() error {
+			select {
+			case <-joined:
+				return nil
+			default:
+				return errors.New("native cleanup has not joined")
+			}
+		}, func() error { return errors.New("graceful cleanup unexpectedly closed its transport") })
+	}()
+	<-started
+	select {
+	case <-acknowledged:
+		t.Fatal("native stop acknowledged before cleanup joined")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(cleanup)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("actual joined cleanup failed to acknowledge")
+	}
+}
+
+func TestRouterVPNExternalControlledFailedCleanupNeverAcknowledges(t *testing.T) {
+	broken := errors.New("retained native owner did not close")
+	var acknowledged atomic.Bool
+	err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+		<-ctx.Done()
+		return nil
+	}, func(ctx context.Context, retire func(context.Context) error) error {
+		if err := retire(ctx); err != nil {
+			return err
+		}
+		acknowledged.Store(true)
+		return nil
+	}, func() error { return broken }, func() error { return nil })
+	if !errors.Is(err, broken) || acknowledged.Load() {
+		t.Fatal("failed native cleanup became a successful stopped acknowledgement", err)
+	}
+}
+
+func TestRouterVPNExternalControlledLostParentJoinsBeforeTransportRelease(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started, cleanup, joined := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var released atomic.Bool
+	result := make(chan error, 1)
+	go func() {
+		result <- routerVPNExternalControlledLifetime(parent, func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			<-cleanup
+			close(joined)
+			return nil
+		}, func(ctx context.Context, _ func(context.Context) error) error { <-ctx.Done(); return ctx.Err() },
+			func() error {
+				select {
+				case <-joined:
+					return nil
+				default:
+					return errors.New("native cleanup pending")
+				}
+			},
+			func() error { released.Store(true); return nil })
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-result:
+		t.Fatal("parent loss discarded a pending native cleanup", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if released.Load() {
+		t.Fatal("inherited transport released before native join")
+	}
+	close(cleanup)
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) || !released.Load() {
+			t.Fatal("parent cancellation lost its original joined retirement", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parent loss did not join control receiver")
+	}
+}
+
+func TestRouterVPNExternalControlledEOFJoinsOriginalLoop(t *testing.T) {
+	peer := errors.New("original peer EOF")
+	var joined atomic.Bool
+	err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+		<-ctx.Done()
+		joined.Store(true)
+		return nil
+	}, func(context.Context, func(context.Context) error) error { return peer },
+		func() error {
+			if !joined.Load() {
+				return errors.New("native loop pending")
+			}
+			return nil
+		}, func() error { return nil })
+	if !errors.Is(err, peer) || !joined.Load() {
+		t.Fatal("peer EOF escaped its original native loop", err)
+	}
+}
+
+func TestRouterVPNExternalControlledFinishedProofStillRequiresStop(t *testing.T) {
+	finished, stop := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- routerVPNExternalControlledLifetime(context.Background(), func(context.Context) error {
+			close(finished)
+			return routerVPNExternalFailure
+		}, func(ctx context.Context, retire func(context.Context) error) error { <-stop; return retire(ctx) },
+			func() error { return nil }, func() error { return nil })
+	}()
+	<-finished
+	select {
+	case err := <-result:
+		t.Fatal("proof completion impersonated native stop", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(stop)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native stop after failed proof did not join")
+	}
+}

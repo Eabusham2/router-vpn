@@ -9,6 +9,7 @@ then only a newly-created utun that owns a public route is promoted.
 from __future__ import annotations
 
 import importlib.util
+import json
 import contextlib
 import fcntl
 import os
@@ -355,7 +356,7 @@ def _spawn_watcher() -> int:
             os.close(descriptor)
 
 
-def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
+def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capture=None) -> int:
     root = _linux.root_dir()
     store = _linux.read_store(root)
     runtime_id = _linux.safe_profile_id()
@@ -364,6 +365,9 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
     control_profile = _linux.required_profile(store, control_id, "policy/control")
     policy = _linux.policy_value(control_profile)
     previous = _linux.read_state(root)
+    if external_capture is not None:
+        external_capture = _darwin_external_capture(external_capture)
+        _darwin_external_profile(control_profile, runtime_id, control_id, external_capture)
 
     if policy == "off":
         if previous and previous.get("platform") == "darwin":
@@ -374,7 +378,10 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
         return 0
 
     endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    socket_broker = _linux.native_socket_broker_policy(control_profile, runtime_id, control_id, retained_state)
+    if external_capture is not None:
+        socket_broker = True
+    else:
+        socket_broker = _linux.native_socket_broker_policy(control_profile, runtime_id, control_id, retained_state)
     retained = _linux.retained_native_policy(retained_state, endpoint) if retained_state is not None and not socket_broker else None
     if socket_broker:
         endpoint, endpoint_ips, native_egress = '', [], None
@@ -386,8 +393,14 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
     lan = bool(control_profile.get("home_lan_access", False))
     _require_watcher_retired(previous)
     socket_capture = ((os.environ['HOMEVPN_TOR_SESSION'], os.environ['HOMEVPN_TOR_SOURCE_SHA256'])
-                      if socket_broker and retained_state is None else None)
+                      if socket_broker and retained_state is None and external_capture is None else None)
+    if external_capture is not None:
+        socket_capture = ((external_capture['session_id'], external_capture['source_sha256'])
+                          if retained_state is None else None)
     state = _darwin_state_base(runtime_id, control_id, endpoint, endpoint_ips, lan, policy)
+    if external_capture is not None:
+        state['native_socket_family'] = 'external-v1'
+        state['native_external_capture'] = external_capture
     if native_egress is not None:
         state["native_egress"] = native_egress
     if socket_broker:
@@ -476,7 +489,7 @@ def darwin_watch(generation: str = '', descriptor: int = -1) -> int:
         os.close(descriptor)
 
 
-def darwin_release(force: bool = False) -> int:
+def darwin_release(force: bool = False, *, retain_protection: bool = False) -> int:
     root = _linux.root_dir()
     try:
         state = _linux.read_state(root)
@@ -507,7 +520,7 @@ def darwin_release(force: bool = False) -> int:
     if not state:
         return 0
     _require_watcher_retired(state)
-    if not force and state.get("policy") == "always":
+    if not force and (state.get("policy") == "always" or retain_protection):
         # Remove the old tunnel-interface permission but retain the fail-closed
         # pre-connect endpoint exception while disconnected.
         socket_broker = state.get('native_socket_broker') is True
@@ -556,7 +569,184 @@ def darwin_reassert() -> int:
     # Record possible protection mutation after read-only profile validation,
     # before apply can acquire a reference or change its durable journal.
     _darwin._baseline.CAPABILITY.possible_mutation()
-    return darwin_apply(spawn_watch=False, retained_state=state)
+    capture = (state.get('native_external_capture')
+               if state.get('native_socket_family') == 'external-v1' else None)
+    return darwin_apply(spawn_watch=False, retained_state=state, external_capture=capture)
+
+
+
+_EXTERNAL_CAPTURE_FIELDS = ('schema', 'profile_id', 'protocol', 'session_id', 'source_sha256',
+                            'config_sha256', 'home_lan_access', 'policy')
+_EXTERNAL_PROTOCOLS = {'shadowsocks', 'http-connect', 'https-connect', 'hysteria2'}
+
+
+def _darwin_external_capture(value):
+    _darwin._baseline._fields(value, _EXTERNAL_CAPTURE_FIELDS)
+    if (type(value['schema']) is not int or value['schema'] != 1
+            or type(value['protocol']) is not str or value['protocol'] not in _EXTERNAL_PROTOCOLS
+            or type(value['home_lan_access']) is not bool
+            or value['policy'] not in ('on-connect', 'always')
+            or type(value['session_id']) is not str or not re.fullmatch('[0-9a-f]{32}', value['session_id'])
+            or any(type(value[key]) is not str or not re.fullmatch('[0-9a-f]{64}', value[key])
+                   for key in ('source_sha256', 'config_sha256'))):
+        raise RuntimeError('macOS external baseline lost its exact ordinary policy capture')
+    _linux.validate_profile_id(value['profile_id'], 'native external profile id')
+    return {key: value[key] for key in _EXTERNAL_CAPTURE_FIELDS}
+
+
+def _darwin_external_profile(profile, runtime_id, control_id, capture):
+    external = profile.get('external')
+    if (runtime_id != control_id or runtime_id != capture['profile_id']
+            or profile.get('node_kind') != 'external' or type(external) is not dict
+            or external.get('protocol') != capture['protocol']
+            or _linux.policy_value(profile) != capture['policy']
+            or bool(profile.get('home_lan_access', False)) != capture['home_lan_access']):
+        raise RuntimeError('macOS external baseline differs from the captured saved protection policy')
+    # Only this independent ordinary family chooses the deny baseline. It
+    # never imports endpoint exceptions or borrows Tor's session marker.
+    if any(os.environ.get(key) for key in ('HOMEVPN_ENDPOINT', 'HOMEVPN_NATIVE_ENDPOINTS_JSON',
+            'HOMEVPN_NATIVE_EGRESS_JSON', 'HOMEVPN_TOR_PHYSICAL_BROKER', 'HOMEVPN_TOR_SESSION',
+            'HOMEVPN_TOR_SOURCE_SHA256', 'HOMEVPN_EXTERNAL_SESSION')):
+        raise RuntimeError('macOS external baseline mixed another native protection family')
+
+
+def _darwin_external_state(state, capture):
+    if (not state or state.get('platform') != 'darwin'
+            or state.get('native_socket_family') != 'external-v1'
+            or state.get('native_socket_broker') is not True
+            or state.get('native_external_capture') != capture
+            or state.get('profile_id') != capture['profile_id']
+            or state.get('policy_profile_id') != capture['profile_id']
+            or state.get('policy') != capture['policy']
+            or state.get('home_lan_access') is not capture['home_lan_access']
+            or state.get('endpoint') != '' or state.get('endpoint_ips') != []
+            or 'native_egress' in state):
+        raise RuntimeError('macOS external cleanup belongs to another retained owner')
+    _darwin._baseline.retained(state)
+    return state
+
+
+def _darwin_external_receipt(value, capture):
+    _darwin._baseline._fields(value, ('schema', 'capture', 'phase', 'pf_token', 'baseline'))
+    if (type(value['schema']) is not int or value['schema'] != 1
+            or value['capture'] != capture or value['phase'] not in ('active', 'held', 'retired')):
+        raise RuntimeError('macOS external baseline receipt belongs to another original capture')
+    _darwin._baseline.token(value['pf_token'])
+    proof = _darwin._baseline._proof(value['baseline'])
+    if proof['present'] is not (value['phase'] in ('active', 'held') or capture['policy'] == 'always'):
+        raise RuntimeError('macOS external receipt changed its selected retirement policy')
+    return value
+
+
+def _darwin_external_result(capture, phase, token, baseline):
+    return _darwin_external_receipt(dict(schema=1, capture=capture, phase=phase,
+                                        pf_token=token, baseline=baseline), capture)
+
+
+def _darwin_external_live_receipt(state, capture):
+    _darwin_external_state(state, capture)
+    value = state[_darwin._baseline.STATE_KEY]
+    request = value['request']
+    if (value['complete'] is not True or state.get('darwin_transition_pending') is True
+            or request['session_id'] != capture['session_id']
+            or request['source_sha256'] != capture['source_sha256']
+            or request['home_lan_access'] is not capture['home_lan_access']
+            or not _darwin._baseline.status(state)):
+        raise RuntimeError('macOS external baseline lacks its current native session proof')
+    return _darwin_external_result(capture, 'active', state['pf_token'], value['target'])
+
+
+def darwin_external(action, value):
+    """Same existing journal/namespace, with an exact ordinary owner boundary.
+
+    The original app holds installation/process authority and serializes this
+    action with the existing state guards. A request cannot introduce rules,
+    executable paths, endpoints, UID exemptions or another PF namespace.
+    """
+    if action not in ('apply', 'current', 'retire', 'release') or _dry_run():
+        raise RuntimeError('macOS external baseline requires its actual native transaction')
+    _darwin._baseline._fields(value, ('capture', 'expected'))
+    capture = _darwin_external_capture(value['capture'])
+    expected = value['expected']
+    if expected is not None:
+        expected = _darwin_external_receipt(expected, capture)
+    root = _linux.root_dir()
+    state = _linux.read_state(root)
+    if action == 'apply':
+        if expected is not None:
+            raise RuntimeError('macOS external application cannot reuse a prior receipt')
+        os.environ['HOMEVPN_PROFILE_ID'] = capture['profile_id']
+        os.environ['HOMEVPN_POLICY_PROFILE_ID'] = capture['profile_id']
+        # Retry the same captured application only by readback. A prior
+        # unfinished transition remains in the existing durable journal.
+        if state.get('native_external_capture') == capture:
+            result = _darwin_external_live_receipt(state, capture)
+        else:
+            darwin_apply(spawn_watch=False, external_capture=capture)
+            result = _darwin_external_live_receipt(_linux.read_state(root), capture)
+    elif action == 'current':
+        result = _darwin_external_live_receipt(state, capture)
+        if expected is None or result != expected:
+            raise RuntimeError('macOS external readback changed its original baseline receipt')
+    elif not state:
+        # Only an originally observed reference can authorize an idempotent
+        # post-removal readback. Unknown partial application stays owned.
+        if (action != 'release' or expected is None or capture['policy'] != 'on-connect'
+                or _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR)
+                or _darwin._baseline.reference(expected['pf_token'])):
+            raise RuntimeError('macOS external removal has no exact retired reference proof')
+        result = _darwin_external_result(capture, 'retired', expected['pf_token'],
+                                          {'present': False, 'rules_sha256': ''})
+    else:
+        _darwin_external_state(state, capture)
+        token = _darwin._baseline.token(state.get('pf_token'))
+        if expected is not None and token != expected['pf_token']:
+            raise RuntimeError('macOS external cleanup changed its original PF reference')
+        # Native baseline transition refuses every live guardian generation,
+        # grant, table and unreferenced child before replacing its deny rules.
+        darwin_release(False, retain_protection=action == 'retire')
+        after = _linux.read_state(root)
+        if action == 'retire' or capture['policy'] == 'always':
+            _darwin_external_state(after, capture)
+            journal = after[_darwin._baseline.STATE_KEY]
+            request = journal['request']
+            if (request['session_id'] != '' or request['source_sha256'] != ''
+                    or journal['complete'] is not True or after.get('darwin_transition_pending') is True
+                    or after.get('pf_token') != token or not _darwin._baseline.status(after)):
+                raise RuntimeError('macOS Always retirement lost its exact empty native baseline')
+            proof = journal['target']
+        else:
+            if (after or _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR)
+                    or _darwin._baseline.reference(token)):
+                raise RuntimeError('macOS On-connect retirement retained its original native reference')
+            proof = {'present': False, 'rules_sha256': ''}
+        result = _darwin_external_result(capture, 'held' if action == 'retire' else 'retired', token, proof)
+    return result
+
+
+@contextlib.contextmanager
+def _darwin_external_authority():
+    # Fixed inherited descriptors, never caller-selected paths or PID labels.
+    # Reasserting flock on their open descriptions proves the exclusive
+    # controller lock was inherited instead of independently reopened.
+    for descriptor, path, operation in ((3, '/opt/router-vpn-client.install.lock', fcntl.LOCK_SH),
+                                         (4, '/opt/router-vpn-client.controller.lock', fcntl.LOCK_EX)):
+        os.set_inheritable(descriptor, False)
+        opened, named = os.fstat(descriptor), os.lstat(path)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_uid != 0
+                or opened.st_gid != 0 or stat.S_IMODE(opened.st_mode) != 0o600
+                or not os.path.samestat(opened, named)):
+            raise RuntimeError('macOS external helper lost its inherited controller lock')
+        fcntl.flock(descriptor, operation | fcntl.LOCK_NB)
+    with _darwin.pf_process_authority((3, 4)):
+        yield
+
+
+def darwin_external_input():
+    raw = sys.stdin.buffer.read(8193)
+    if not raw or len(raw) > 8192:
+        raise RuntimeError('macOS external baseline request exceeds its private bound')
+    return json.loads(raw.decode('ascii'), object_pairs_hook=_darwin._baseline._strict_object)
 
 
 def darwin_status() -> int:
@@ -573,6 +763,14 @@ def main() -> int:
     if sys.platform != "darwin" and os.environ.get("HOMEVPN_KILLSWITCH_DARWIN_TEST") != "1":
         return _linux.main()
     try:
+        if len(sys.argv) == 3 and sys.argv[1] == 'external-native':
+            if os.getuid() != 0 or os.geteuid() != 0 or _linux.root_dir() != _darwin._baseline.ROOT:
+                raise RuntimeError('macOS external baseline requires its fixed privileged controller')
+            with _darwin_external_authority():
+                with _darwin_action_guard(_linux.root_dir()):
+                    result = darwin_external(sys.argv[2], darwin_external_input())
+            print(json.dumps(result, separators=(',', ':')))
+            return 0
         if len(sys.argv) == 5 and sys.argv[1] == 'reassert-install':
             with _darwin._baseline.CAPABILITY.borrow(int(sys.argv[2]), sys.argv[3], int(sys.argv[4])):
                 with _darwin_action_guard(_linux.root_dir()):

@@ -167,7 +167,13 @@ func macOSRuntimeFixtureCases(ctx context.Context, parent *desktopMacOSSessionCa
 				if startErr == nil || process == nil {
 					return errors.New("native runtime admitted another actual main image")
 				}
-				return parent.session.Release(ctx, process)
+				if err := parent.session.Release(ctx, process); err != nil {
+					return err
+				}
+				if process.NativeCleanup(ctx) == nil {
+					return errors.New("foreign exec exit impersonated native cleanup")
+				}
+				return nil
 			}
 			if startErr != nil {
 				return startErr
@@ -207,6 +213,9 @@ func macOSRuntimeFixtureCases(ctx context.Context, parent *desktopMacOSSessionCa
 				if err = parent.session.Release(ctx, process); err != nil {
 					return err
 				}
+				if process.NativeCleanup(ctx) == nil {
+					return errors.New("replaced native input produced a cleanup receipt")
+				}
 				return nil
 			}
 			err = process.StopAndJoin(ctx)
@@ -229,6 +238,13 @@ func macOSRuntimeFixtureCases(ctx context.Context, parent *desktopMacOSSessionCa
 			if err = parent.session.Release(ctx, process); err != nil {
 				return err
 			}
+			if scenario == "cleanup-failure" {
+				if process.NativeCleanup(ctx) == nil {
+					return errors.New("forced child join impersonated acknowledged native cleanup")
+				}
+			} else if err := process.NativeCleanup(ctx); err != nil {
+				return err
+			}
 			select {
 			case <-process.joined:
 			default:
@@ -240,7 +256,8 @@ func macOSRuntimeFixtureCases(ctx context.Context, parent *desktopMacOSSessionCa
 		}
 	}
 	// Keep one actual runtime alive until the original GUI/controller ends.
-	// Parent shutdown must kill/join this exact command before lock release.
+	// Parent shutdown must acknowledge native cleanup and join this exact
+	// command before lock release, regardless of dependent iteration order.
 	directory, err := newPrivateRuntimeDir(macOSOwnedControllerRoot, "native-node")
 	if err != nil {
 		return err
@@ -270,6 +287,9 @@ type macOSRuntimeFixtureDependent struct {
 
 func (d *macOSRuntimeFixtureDependent) Close(ctx context.Context) error {
 	if err := d.process.Close(ctx); err != nil {
+		return err
+	}
+	if err := d.process.NativeCleanup(ctx); err != nil {
 		return err
 	}
 	select {

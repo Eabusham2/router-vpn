@@ -298,8 +298,11 @@ func TestRouterVPNExternalPhysicalFactoryAndActivationRetainExactPolicy(t *testi
 
 func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		protocols = append(protocols, "hysteria2")
+	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
-		protocols = append(protocols, "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong")
+		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong")
 	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "openvpn-tcp", "openvpn-udp", "openvpn-mixed")
@@ -611,62 +614,68 @@ func (c *externalPhysicalFactoryCase) constructed(t *testing.T, ctx context.Cont
 }
 
 func runExternalPhysicalFactoryCases(t *testing.T, prepare func(*testing.T, *externalPhysicalFactoryCase) error) {
+	runExternalPhysicalFactoryProtocolCases(t, []string{"shadowsocks"}, prepare)
+}
+
+func runExternalPhysicalFactoryProtocolCases(t *testing.T, protocols []string, prepare func(*testing.T, *externalPhysicalFactoryCase) error) {
 	t.Helper()
-	for _, lan := range []bool{false, true} {
-		for _, ipv6 := range []string{"off", "on"} {
-			for _, kill := range []string{"on-connect", "always"} {
-				for _, fault := range []string{"live", "during-index", "during-address", "during-mask", "during-down", "partial", "cancel"} {
-					t.Run(map[bool]string{false: "lan-off", true: "lan-on"}[lan]+"/ipv6-"+ipv6+"/"+kill+"/"+fault, func(t *testing.T) {
-						policy := externalPhysicalDeviceFixture(t, "shadowsocks", "192.168.50.7", 8443, lan, runtime.GOOS, ipv6, kill)
-						f := newExternalPhysicalFixture(t, policy)
-						selected := externalPhysicalFactoryInterface(t)
-						manager := &externalPhysicalFactoryNetwork{desktopPTNetwork: f.native.network}
-						manager.selected.Store(selected)
-						service.MustRegister[adapter.NetworkManager](f.native.ctx, manager)
-						source := &externalTunnelFixture{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
-						c := &externalPhysicalFactoryCase{fixture: f, manager: manager, selected: selected, source: source, lan: lan, ipv6: ipv6, kill: kill, fault: fault}
-						if err := prepare(t, c); err != nil {
-							t.Fatal(err)
-						}
-						if c.calls != 0 {
-							t.Fatal("ordinary physical factory entered before native Initialize")
-						}
-						err := f.network.Start(adapter.StartStateInitialize)
-						if c.calls != 1 {
-							t.Fatal("ordinary native Initialize omitted or repeated its exact constructor")
-						}
-						if fault != "live" {
-							if err == nil || !source.cancelled.Load() || f.network.Current() {
-								t.Fatal("late or partial ordinary physical source survived failed initialization", err)
+	for _, protocol := range protocols {
+		for _, lan := range []bool{false, true} {
+			for _, ipv6 := range []string{"off", "on"} {
+				for _, kill := range []string{"on-connect", "always"} {
+					for _, fault := range []string{"live", "during-index", "during-address", "during-mask", "during-down", "partial", "cancel"} {
+						t.Run(protocol+"/"+map[bool]string{false: "lan-off", true: "lan-on"}[lan]+"/ipv6-"+ipv6+"/"+kill+"/"+fault, func(t *testing.T) {
+							policy := externalPhysicalDeviceFixture(t, protocol, "192.168.50.7", 8443, lan, runtime.GOOS, ipv6, kill)
+							f := newExternalPhysicalFixture(t, policy)
+							selected := externalPhysicalFactoryInterface(t)
+							manager := &externalPhysicalFactoryNetwork{desktopPTNetwork: f.native.network}
+							manager.selected.Store(selected)
+							service.MustRegister[adapter.NetworkManager](f.native.ctx, manager)
+							source := &externalTunnelFixture{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
+							c := &externalPhysicalFactoryCase{fixture: f, manager: manager, selected: selected, source: source, lan: lan, ipv6: ipv6, kill: kill, fault: fault}
+							if err := prepare(t, c); err != nil {
+								t.Fatal(err)
 							}
-						} else {
-							if err != nil || f.network.broker == nil || !f.network.broker.Current() {
-								t.Fatal("ordinary captured physical source failed initialization", err)
+							if c.calls != 0 {
+								t.Fatal("ordinary physical factory entered before native Initialize")
 							}
-							for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
-								if err := f.network.Start(stage); err != nil {
-									t.Fatal(err)
+							err := f.network.Start(adapter.StartStateInitialize)
+							if c.calls != 1 {
+								t.Fatal("ordinary native Initialize omitted or repeated its exact constructor")
+							}
+							if fault != "live" {
+								if err == nil || !source.cancelled.Load() || f.network.Current() {
+									t.Fatal("late or partial ordinary physical source survived failed initialization", err)
+								}
+							} else {
+								if err != nil || f.network.broker == nil || !f.network.broker.Current() {
+									t.Fatal("ordinary captured physical source failed initialization", err)
+								}
+								for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+									if err := f.network.Start(stage); err != nil {
+										t.Fatal(err)
+									}
+								}
+								proof, err := f.network.Activate(policy)
+								if err != nil || !f.network.Current() {
+									t.Fatal("ordinary native activation lost its exact source", err)
+								}
+								changed := *selected
+								changed.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+								manager.selected.Store(&changed)
+								if f.network.Current() {
+									t.Fatal("physical generation survived an actual default-interface address replacement")
+								}
+								f.network.Cancel()
+								if proof.Err() == nil || !source.cancelled.Load() {
+									t.Fatal("native replacement did not revoke retained proof and socket authority")
 								}
 							}
-							proof, err := f.network.Activate(policy)
-							if err != nil || !f.network.Current() {
-								t.Fatal("ordinary native activation lost its exact source", err)
+							if err := f.network.Close(); err != nil || !source.closed.Load() {
+								t.Fatal("ordinary native cleanup discarded a retained partial source", err)
 							}
-							changed := *selected
-							changed.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
-							manager.selected.Store(&changed)
-							if f.network.Current() {
-								t.Fatal("physical generation survived an actual default-interface address replacement")
-							}
-							f.network.Cancel()
-							if proof.Err() == nil || !source.cancelled.Load() {
-								t.Fatal("native replacement did not revoke retained proof and socket authority")
-							}
-						}
-						if err := f.network.Close(); err != nil || !source.closed.Load() {
-							t.Fatal("ordinary native cleanup discarded a retained partial source", err)
-						}
-					})
+						})
+					}
 				}
 			}
 		}

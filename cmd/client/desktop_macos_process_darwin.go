@@ -18,19 +18,22 @@ import (
 // This owner proves process retirement only. Native PF/journal retirement
 // belongs to the enclosing host, which must finish before releasing it.
 type desktopMacOSProcess struct {
-	parent            *desktopMacOSSessionCapture
-	scope             macosprocess.Scope
-	capture           *macosprocess.Capture
-	channel           *mobiletor.DesktopDarwinControl
-	bootstrap         *macosprocess.Bootstrap
-	command           *exec.Cmd
-	childChannel      *os.File
-	gate              chan struct{}
-	joined            chan struct{}
-	started, retiring atomic.Bool
-	stopLifetime      func() bool
-	waitErr           error // Read only after joined closes; one command.Wait writer.
-	closed            bool
+	parent             *desktopMacOSSessionCapture
+	scope              macosprocess.Scope
+	capture            *macosprocess.Capture
+	channel            *mobiletor.DesktopDarwinControl
+	bootstrap          *macosprocess.Bootstrap
+	command            *exec.Cmd
+	childChannel       *os.File
+	gate               chan struct{}
+	joined             chan struct{}
+	started, retiring  atomic.Bool
+	stopLifetime       func() bool
+	waitErr            error // Read only after joined closes; one command.Wait writer.
+	closed             bool
+	nativeAcknowledged bool
+	nativeStopped      bool
+	nativeStopErr      error
 }
 
 func desktopMacOSProcessArguments(scope macosprocess.Scope) []string {
@@ -103,7 +106,12 @@ func startDesktopMacOSProcessWithVerifier(ctx context.Context, parent *desktopMa
 	p.started.Store(true)
 	// Exactly one waiter owns this actual created command for its whole life.
 	go func() { p.waitErr = p.command.Wait(); close(p.joined) }()
-	p.stopLifetime = context.AfterFunc(parent.parent.ctx, func() { p.retiring.Store(true); _ = p.channel.Close(); _ = p.command.Process.Kill() })
+	p.stopLifetime = context.AfterFunc(parent.parent.ctx, func() {
+		p.retiring.Store(true)
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = p.Close(cleanup)
+	})
 	if err = p.childChannel.Close(); err != nil {
 		return p, err
 	}
@@ -165,20 +173,58 @@ func (p *desktopMacOSProcess) StopAndJoin(ctx context.Context) error {
 		return err
 	}
 	defer func() { p.gate <- struct{}{} }()
-	if err := p.currentLocked(ctx); err != nil {
-		return err
+	return p.stopAndJoinLocked(ctx)
+}
+func (p *desktopMacOSProcess) stopAndJoinLocked(ctx context.Context) error {
+	if p.nativeStopped {
+		return p.waitErr
 	}
+	if p.closed || !p.started.Load() || p.bootstrap == nil {
+		return errors.New("macOS native cleanup lacks its original completed child handshake")
+	}
+	// Cancellation/replacement revokes admission, not the original cleanup
+	// capability. Bootstrap independently rechecks both native main images,
+	// private inputs and inherited locks before the exact stop exchange.
 	p.retiring.Store(true)
-	if err := p.bootstrap.Stop(ctx); err != nil {
-		return err
+	if !p.nativeAcknowledged {
+		if err := p.bootstrap.Stop(ctx); err != nil {
+			p.nativeStopErr = err
+			return err
+		}
+		p.nativeAcknowledged = true
 	}
 	select {
 	case <-ctx.Done():
+		p.nativeStopErr = ctx.Err()
 		return ctx.Err()
 	case <-p.joined:
 	}
-	return p.waitErr
+	if p.waitErr != nil {
+		p.nativeStopErr = p.waitErr
+		return p.waitErr
+	}
+	p.nativeStopped = true
+	return nil
 }
+
+// NativeCleanup proves both the authenticated native cleanup receipt and its
+// original successful child waiter. Forced Close alone never satisfies it.
+func (p *desktopMacOSProcess) NativeCleanup(ctx context.Context) error {
+	if err := p.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { p.gate <- struct{}{} }()
+	if !p.nativeStopped {
+		return errors.Join(p.nativeStopErr, errors.New("macOS runtime has no joined native cleanup acknowledgment"))
+	}
+	select {
+	case <-p.joined:
+		return p.waitErr
+	default:
+		return errors.New("macOS runtime cleanup has not joined its original child")
+	}
+}
+
 func (p *desktopMacOSProcess) Close(ctx context.Context) error {
 	if p == nil {
 		return nil
@@ -191,6 +237,11 @@ func (p *desktopMacOSProcess) Close(ctx context.Context) error {
 		return nil
 	}
 	p.retiring.Store(true)
+	if p.started.Load() && p.bootstrap != nil && !p.nativeStopped {
+		// A failed/ambiguous stop remains recorded separately. This method
+		// may subsequently prove process exit, never native PF retirement.
+		_ = p.stopAndJoinLocked(ctx)
+	}
 	if p.channel != nil {
 		_ = p.channel.Close()
 	}

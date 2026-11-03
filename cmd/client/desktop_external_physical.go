@@ -31,7 +31,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if owner.physical != nil {
 		return errors.New("ordinary physical preparation cannot replace a captured owner")
 	}
-	if targetOS != "windows" && targetOS != "linux" || !owner.direct || owner.predecessor != "" {
+	if targetOS != "windows" && targetOS != "linux" && targetOS != "darwin" || !owner.direct || owner.predecessor != "" {
 		return nil
 	}
 	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
@@ -41,6 +41,9 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	capture, err := original.DesktopCapture()
 	if err != nil {
 		return err
+	}
+	if targetOS == "darwin" && !desktopExternalDarwinProtocol(capture.Protocol) {
+		return nil
 	}
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
 		capture.Protocol != "wireguard" && capture.Protocol != "amneziawg" && capture.Protocol != "openvpn" ||
@@ -83,7 +86,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 	}
 	meta := physical.Metadata()
 	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
-	if err != nil || meta.TargetOS != "windows" && meta.TargetOS != "linux" || meta.SessionID != owner.session || owner.expected.SessionID != owner.session ||
+	if err != nil || meta.TargetOS != "windows" && meta.TargetOS != "linux" && meta.TargetOS != "darwin" || meta.TargetOS == "darwin" && !desktopExternalDarwinProtocol(meta.Protocol) || meta.SessionID != owner.session || owner.expected.SessionID != owner.session ||
 		meta.OriginalSourceSHA256 != owner.expected.SourceSHA256 || meta.OriginalConfigSHA256 != owner.expected.ConfigSHA256 ||
 		original.SourceSHA256() != meta.OriginalSourceSHA256 || original.Config() != physical.OriginalPolicy().Config() ||
 		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired && !(meta.Protocol == "socks5" && (meta.TargetOS == "linux" || meta.TargetOS == "windows")) ||
@@ -92,6 +95,10 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 		return nil, errors.New("ordinary physical capture differs from its retained original graph")
 	}
 	return &meta, nil
+}
+
+func desktopExternalDarwinProtocol(protocol string) bool {
+	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2"
 }
 
 func desktopExternalPhysicalReceipt(owner *desktopExternalRuntime, received *mobilemultihop.DesktopExternalMetadata) bool {

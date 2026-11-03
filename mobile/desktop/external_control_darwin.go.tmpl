@@ -1,0 +1,152 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNDarwinExternalKey struct{}
+type routerVPNDarwinExternalControl struct {
+	capture   *macosprocess.Capture
+	bootstrap *macosprocess.Bootstrap
+	scope     macosprocess.Scope
+	native    *routerVPNExternalNative // Assigned only by the single joined command loop.
+}
+
+// This entry authenticates the inherited workspace, distinct installed engine
+// and controller images, original locks and GUI peer before the graph is read.
+// A source digest or a file mailbox alone cannot select this physical path.
+func routerVPNRunDarwinExternalControlled(parent context.Context, directory, session, source, config string) (failure error) {
+	if parent == nil || parent.Err() != nil || !routerVPNExternalSession.MatchString(session) ||
+		!routerVPNExternalSource.MatchString(source) || !routerVPNExternalSource.MatchString(config) {
+		return routerVPNExternalFailure
+	}
+	scope := macosprocess.Scope{Session: session, Source: source, Config: config, Workspace: directory}
+	bounded, cancel := context.WithTimeout(parent, 15*time.Second)
+	capture, err := macosprocess.InheritCapture(bounded, scope)
+	if err != nil {
+		cancel()
+		return routerVPNExternalFailure
+	}
+	defer func() { failure = errors.Join(failure, capture.Close()) }()
+	bootstrap, err := macosprocess.BindInherited(bounded, capture)
+	cancel()
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	defer bootstrap.Close()
+	control := &routerVPNDarwinExternalControl{capture: capture, bootstrap: bootstrap, scope: scope}
+	return routerVPNExternalControlledLifetime(parent, func(ctx context.Context) error {
+		ctx = context.WithValue(ctx, routerVPNDarwinExternalKey{}, control)
+		return routerVPNRunExternal(ctx, directory, session, source, control.factory)
+	}, bootstrap.WaitStop, func() error {
+		// Called only after the one command loop has joined. Construction
+		// failures return their partial native owner and are closed by that loop.
+		if control.native == nil {
+			return nil
+		}
+		control.native.mu.Lock()
+		defer control.native.mu.Unlock()
+		if !control.native.joined {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}, bootstrap.Close)
+}
+
+func routerVPNExternalCapturedPhysical(ctx context.Context, files *routerVPNExternalFiles,
+	original *mobilemultihop.ExternalPolicy, session, source string) (*mobilemultihop.DesktopExternalPolicy, error) {
+	if source == "" {
+		return routerVPNExternalCommandPhysical(files, original, session, source)
+	}
+	control, _ := ctx.Value(routerVPNDarwinExternalKey{}).(*routerVPNDarwinExternalControl)
+	if control == nil || control.capture == nil || control.bootstrap == nil || files == nil || files.root == nil ||
+		original == nil || control.scope.Session != session || control.scope.Source != source || control.bootstrap.Current(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	inherited := control.capture.Files()
+	if len(inherited) != 7 {
+		return nil, routerVPNExternalFailure
+	}
+	wanted, first := inherited[0].Stat()
+	actual, second := files.root.Stat(".")
+	if first != nil || second != nil || !os.SameFile(wanted, actual) {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, session, "darwin")
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if meta.SourceSHA256 != source || meta.ConfigSHA256 != control.scope.Config || meta.SOCKSUDPAssociationRequired ||
+		(meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2") {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil || string(staged) != policy.Config() || control.bootstrap.Current(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}
+
+func (control *routerVPNDarwinExternalControl) factory(ctx context.Context, original *mobilemultihop.ExternalPolicy,
+	physical *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+	if control.bootstrap.Current(ctx) != nil || physical == nil || physical.Validate() != nil ||
+		physical.OriginalPolicy() != original || session != control.scope.Session || physical.Metadata().SourceSHA256 != control.scope.Source ||
+		physical.Metadata().ConfigSHA256 != control.scope.Config || control.native != nil {
+		return nil, routerVPNExternalFailure
+	}
+	files := control.capture.Files()
+	if len(files) != 7 {
+		return nil, routerVPNExternalFailure
+	}
+	// The independent guardian and every native PF helper retain these same
+	// original open descriptions, including after their immediate parent dies.
+	ctx = mobiletor.WithDesktopDarwinProcessAuthority(ctx, files[3:5])
+	native, err := routerVPNNewExternalNativeWithPreparation(ctx, original, physical, source, capture, session, nil)
+	if native == nil {
+		return nil, err
+	}
+	control.native = native
+	return &routerVPNDarwinExternalOwner{routerVPNExternalNative: native, control: control}, err
+}
+
+type routerVPNDarwinExternalOwner struct {
+	*routerVPNExternalNative
+	control *routerVPNDarwinExternalControl
+}
+
+func (owner *routerVPNDarwinExternalOwner) current() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return owner.control.bootstrap.Current(ctx)
+}
+func (owner *routerVPNDarwinExternalOwner) Start() error {
+	if err := owner.current(); err != nil {
+		return err
+	}
+	if err := owner.routerVPNExternalNative.Start(); err != nil {
+		return err
+	}
+	return owner.current()
+}
+func (owner *routerVPNDarwinExternalOwner) Healthy() bool {
+	return owner.current() == nil && owner.routerVPNExternalNative.Healthy()
+}
+func (owner *routerVPNDarwinExternalOwner) VerifyCurrentPath() error {
+	if err := owner.current(); err != nil {
+		return err
+	}
+	if err := owner.routerVPNExternalNative.VerifyCurrentPath(); err != nil {
+		return err
+	}
+	return owner.current()
+}

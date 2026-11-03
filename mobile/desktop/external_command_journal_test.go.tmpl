@@ -187,6 +187,7 @@ func TestRouterVPNDesktopExternalPhysicalCommandJournalParserOwnedFlags(t *testi
 		{"runtime-dir", "", false}, {"session", desktopExternalSession, false},
 		{"physical-source-sha256", strings.Repeat("2", 64), false}, {"config-sha256", strings.Repeat("3", 64), false},
 		{"physical-transfer-sha256", strings.Repeat("4", 64), false},
+		{"darwin-control", "inherited-v1", false},
 		{"linux-parent-channel", "7", true}, {"linux-parent-directory", "8", true}, {"linux-parent-capture", strings.Repeat("5", 64), false},
 		{"journal-parent-handle", "777", true}, {"journal-parent-image", "captured-controller.exe", false},
 		{"journal-pipe", "captured-journal", false}, {"journal-capture-sha256", strings.Repeat("6", 64), false},
@@ -442,5 +443,24 @@ func TestRouterVPNDesktopExternalPhysicalCommandJournalAdmissionCloseJoinsCallba
 	}
 	if err := admission.close(); !errors.Is(err, want) || closeCalls.Load() != 1 {
 		t.Fatal("later native journal close changed joined ownership", err, closeCalls.Load())
+	}
+}
+
+func TestRouterVPNDesktopExternalDarwinControlRejectsMixedAuthorityBeforeInputs(t *testing.T) {
+	for _, arguments := range [][]string{
+		{"--darwin-control", "unknown"},
+		{"--darwin-control", "inherited-v1", "--physical-transfer-sha256", strings.Repeat("a", 64)},
+		{"--darwin-control", "inherited-v1", "--linux-parent-channel", "7"},
+		{"--darwin-control", "inherited-v1", "--journal-parent-handle", "777"},
+	} {
+		directory := t.TempDir()
+		arguments = append([]string{"--runtime-dir", directory, "--session", desktopExternalSession}, arguments...)
+		if err := desktopExternalExecuteCommand(t, arguments); !errors.Is(err, routerVPNExternalFailure) {
+			t.Fatal("mixed or unknown Darwin authority did not fail before private inputs", arguments, err)
+		}
+		files, err := os.ReadDir(directory)
+		if err != nil || len(files) != 0 {
+			t.Fatal("rejected Darwin authority modified its workspace", err)
+		}
 	}
 }

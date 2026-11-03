@@ -115,6 +115,55 @@ func TestDesktopMacOSParentOriginalSessionAndJoin(t *testing.T) {
 	}
 }
 
+func TestDesktopMacOSSessionCleanupRetainsOnlyOriginalAuthorityAfterCancellation(t *testing.T) {
+	p, s, c, _, _ := macOSParentFixture(t)
+	a := &app{localController: c}
+	captured := &desktopMacOSSessionCapture{app: a, controller: c, parent: p, session: s}
+	if err := captured.cleanupCurrent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.cancel()
+	if captured.Current(context.Background()) == nil {
+		t.Fatal("canceled parent admitted new work")
+	}
+	if err := captured.cleanupCurrent(context.Background()); err != nil {
+		t.Fatal("original cleanup was revoked with admission", err)
+	}
+	a.localController = &ownedDesktopController{}
+	if err := captured.cleanupCurrent(context.Background()); err != nil {
+		t.Fatal("old cleanup borrowed replacement app instead of its original authority", err)
+	}
+	for name, edit := range map[string]func() func(){
+		"input":   func() func() { old := c.input; c.input = nil; return func() { c.input = old } },
+		"install": func() func() { old := c.installLock; c.installLock = nil; return func() { c.installLock = old } },
+		"process": func() func() { old := c.processLock; c.processLock = nil; return func() { c.processLock = old } },
+		"session": func() func() {
+			old := p.originalSession
+			p.originalSession = &desktopMacOSSession{parent: p}
+			return func() { p.originalSession = old }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			restore := edit()
+			defer restore()
+			if captured.cleanupCurrent(context.Background()) == nil {
+				t.Fatal("cleanup accepted substituted original authority")
+			}
+		})
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := captured.cleanupCurrent(ended); !errors.Is(err, context.Canceled) {
+		t.Fatal("cleanup lost caller cancellation identity", err)
+	}
+	if err := p.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if captured.cleanupCurrent(context.Background()) == nil {
+		t.Fatal("closed original parent admitted cleanup")
+	}
+}
+
 func TestDesktopMacOSParentFailedDependentRetainsOriginalLocks(t *testing.T) {
 	p, s, c, w, _ := macOSParentFixture(t)
 	var attempts atomic.Int32

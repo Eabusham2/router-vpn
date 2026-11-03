@@ -37,7 +37,30 @@ type desktopMacOSParent struct {
 type desktopMacOSSession struct {
 	parent           *desktopMacOSParent
 	dependents       map[ownedDesktopNodeParent]struct{}
-	stopping, closed bool // Protected by the original parent's gate.
+	external         desktopExternalRetainedRuntime // Exact active ordinary host; protected by parent.gate.
+	stopping, closed bool                           // Protected by the original parent's gate.
+}
+
+// Cleanup retains the original authority after admission is canceled. It does
+// not consult a replacement app/controller or a decoded persisted owner. The
+// native witness and original open descriptions must still be intact.
+func (c *desktopMacOSSessionCapture) cleanupCurrent(ctx context.Context) error {
+	if c == nil || c.parent == nil || c.controller == nil || c.session == nil {
+		return errors.New("macOS cleanup lost its original capture")
+	}
+	p := c.parent
+	if err := p.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { p.gate <- struct{}{} }()
+	original := p.controller
+	if p.closed || p.witness == nil || original != c.controller || p.originalSession != c.session || c.session.parent != p ||
+		original.input != p.input || original.installLock != p.installLock || original.processLock != p.processLock ||
+		original.processID != p.processID || p.processID != os.Getpid() || original.callerUID != p.callerUID ||
+		original.ownerDone != p.ownerDone || desktopMacOSCredentials(original) != p.credentials {
+		return errors.New("macOS cleanup belongs to another original controller or session")
+	}
+	return p.witness.Current(ctx)
 }
 
 type desktopMacOSSessionCapture struct {

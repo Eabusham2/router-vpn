@@ -12,7 +12,7 @@ import (
 )
 
 func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *testing.T) {
-	runExternalPhysicalFactoryCases(t, func(t *testing.T, c *externalPhysicalFactoryCase) error {
+	runExternalPhysicalFactoryProtocolCases(t, []string{"shadowsocks", "hysteria2"}, func(t *testing.T, c *externalPhysicalFactoryCase) error {
 		wantInterfaces, err := desktopDarwinPhysicalInterfaces(c.selected, c.ipv6 != "off")
 		if err != nil {
 			t.Fatal(err)
@@ -26,6 +26,9 @@ func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *tes
 		wantPrivate := []mobiletor.DesktopDarwinSocketDestination{
 			{Network: "tcp", Address: netip.MustParseAddrPort("192.168.50.7:8443")},
 			{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")},
+		}
+		if c.fixture.policy.Metadata().Protocol == "hysteria2" {
+			wantPrivate = wantPrivate[1:]
 		}
 		return c.fixture.network.prepareExternalPhysicalDarwin(c.fixture.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopDarwinSocketOptions) (desktopDarwinPhysicalPolicy, error) {
 			if !reflect.DeepEqual(options.Interfaces, wantInterfaces) || !reflect.DeepEqual(options.LANPrefixes, wantLAN) ||

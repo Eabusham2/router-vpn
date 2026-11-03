@@ -20,6 +20,18 @@ FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_install_capability.py', 'm
          'modes/cleanup-private-runtime.py', 'modes/select-standard-engine.sh',
          'modes/tor-prelaunch-witness.py')
 MUTANTS = (
+    ('ordinary captured source owner', 'kill-switch-platform.py',
+     "            or state.get('native_external_capture') != capture\n", '',
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_external_stale_scope_or_reference_cannot_retire_replacement',
+     'stale external capture retired another native owner'),
+    ('ordinary original PF reference', 'kill-switch-platform.py',
+     "        if expected is not None and token != expected['pf_token']:", '        if False:',
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_external_stale_scope_or_reference_cannot_retire_replacement',
+     'external cleanup released a different captured PF reference'),
+    ('ordinary On-connect switch deny', 'kill-switch-platform.py',
+     "darwin_release(False, retain_protection=action == 'retire')", 'darwin_release(False)',
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_external_on_connect_switch_holds_deny_until_exact_disconnect',
+     'native switch released its deny baseline'),
     ('native root journal owner', 'darwin_pf_baseline.py', 'info.st_uid == 0 and info.st_gid == 0 and ',
      '', 'test_darwin_owned_pf.py',
      'OwnedDarwinPF.test_fixture_owner_preserves_native_metadata_and_root_only_admission',

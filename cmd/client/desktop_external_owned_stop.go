@@ -359,6 +359,11 @@ func (a *app) captureDesktopRetainedStop() (desktopRetainedStopCapture, error) {
 		if !ok || launch == nil || launch.external == nil {
 			return nil, errors.New("native Stop lost its retained external launch")
 		}
+		if original, ok := launch.external.retained.(interface {
+			CaptureStop() (desktopRetainedStopCapture, error)
+		}); ok {
+			return original.CaptureStop()
+		}
 		if owner := launch.external.windows; owner != nil {
 			a.mu.Lock()
 			captured := &desktopWindowsExternalStopCapture{owner: owner, command: a.cmd, operation: a.connectionContext}

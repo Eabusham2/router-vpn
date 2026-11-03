@@ -3,14 +3,9 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"os/exec"
 )
-
-func prepareDesktopPlatformMTUStop(context.Context, *app, *exec.Cmd, context.Context, *mtuLiveOwner, bool, error) (bool, error) {
-	return false, nil
-}
 
 func captureDesktopPlatformMTUSnapshot(*app, mtuRetestSnapshot) (mtuLiveSnapshot, bool, error) {
 	return mtuLiveSnapshot{}, false, nil

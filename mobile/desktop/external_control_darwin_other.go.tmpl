@@ -1,0 +1,17 @@
+//go:build !darwin
+
+package main
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func routerVPNRunDarwinExternalControlled(context.Context, string, string, string, string) error {
+	return routerVPNExternalFailure
+}
+
+func routerVPNExternalCapturedPhysical(_ context.Context, files *routerVPNExternalFiles,
+	original *mobilemultihop.ExternalPolicy, session, source string) (*mobilemultihop.DesktopExternalPolicy, error) {
+	return routerVPNExternalCommandPhysical(files, original, session, source)
+}
