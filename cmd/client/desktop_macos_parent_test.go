@@ -316,3 +316,45 @@ func TestDesktopMacOSParentCancelledReadDoesNotRetireSharedSession(t *testing.T)
 		t.Fatal("one cancelled caller retired shared native authority")
 	}
 }
+
+func TestDesktopMacOSSessionReleaseJoinsOnlyOriginalDependent(t *testing.T) {
+	p, s, _, _, _ := macOSParentFixture(t)
+	var fails atomic.Bool
+	fails.Store(true)
+	var calls atomic.Int32
+	child := &macOSParentTestChild{close: func(ctx context.Context) error {
+		calls.Add(1)
+		if fails.Load() {
+			return errors.New("original child not joined")
+		}
+		return ctx.Err()
+	}}
+	if err := s.Retain(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	foreign := &desktopMacOSSession{parent: p, dependents: map[ownedDesktopNodeParent]struct{}{child: {}}}
+	if err := foreign.Release(context.Background(), child); err == nil || calls.Load() != 0 {
+		t.Fatal("another session retired original dependent", err)
+	}
+	if err := s.Release(context.Background(), child); err == nil {
+		t.Fatal("failed join released dependent")
+	}
+	if len(s.dependents) != 1 || p.Current(context.Background()) != nil {
+		t.Fatal("failed dependent join changed shared parent")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.Release(ctx, child); !errors.Is(err, context.Canceled) || calls.Load() != 1 {
+		t.Fatal("canceled release entered dependent", err)
+	}
+	fails.Store(false)
+	if err := s.Release(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.dependents) != 0 || calls.Load() != 2 || p.Current(context.Background()) != nil {
+		t.Fatal("checked release changed parent or omitted join")
+	}
+	if err := s.Release(context.Background(), child); err == nil || calls.Load() != 2 {
+		t.Fatal("retired dependent was reentered", err)
+	}
+}

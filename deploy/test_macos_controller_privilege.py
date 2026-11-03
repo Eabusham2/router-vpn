@@ -30,12 +30,13 @@ SPEC.loader.exec_module(UID)
 PROBE_SPEC = importlib.util.spec_from_file_location('macos_controller_image_probe', ROOT/'deploy/macos_process_inventory_probe.py')
 PROBE = importlib.util.module_from_spec(PROBE_SPEC)
 PROBE_SPEC.loader.exec_module(PROBE)
-CASES = ('InterpreterSelection', 'InstallerCapabilities', 'InstallerExclusionAndRetry', 'LifetimeAndInheritedLocks', 'ParentImageReplacement', 'RejectsForeignUIDAndInvalidFrames',
+CASES = ('InterpreterSelection', 'InstallerCapabilities', 'InstallerExclusionAndRetry', 'LifetimeAndInheritedLocks', 'ParentImageReplacement', 'CapturedRuntimeChild', 'RejectsForeignUIDAndInvalidFrames',
          'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient', 'PFBaselineUtility')
 PARENT_CASES = ('ParentOriginalSessionAndJoin', 'ParentFailedDependentRetainsOriginalLocks',
                 'ParentRejectsReplacedControllerAndSession', 'ParentLifetimeCancellationAndBoundedJoin',
                 'ParentConcurrentCloseJoinsEnteredDependent', 'SessionCloseDoesNotCloseBorrowedController',
-                'SessionCapturesOriginalApplication', 'ParentCancelledReadDoesNotRetireSharedSession')
+                'SessionCapturesOriginalApplication', 'ParentCancelledReadDoesNotRetireSharedSession',
+                'SessionReleaseJoinsOnlyOriginalDependent')
 
 
 def require_native_verdicts(output):
@@ -247,6 +248,9 @@ def main():
         binary = work / 'controller-native-test'
         subprocess.run([str(compiler), 'test', '-race', '-c', '-tags', 'routervpn_controller_privileged',
                         './cmd/client', '-o', str(binary)], cwd=ROOT, env=environment, check=True, timeout=240)
+        subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none',
+                        '--identifier', 'routervpn.fixture.captured.controller', str(binary)],
+                       check=True, timeout=30)
         capability = work/'installcap-native-test'
         subprocess.run([str(compiler), 'build', '-race', '-o', str(capability), 'deploy/installcap_fixture.go'],
                        cwd=ROOT, env=environment, check=True, timeout=120)

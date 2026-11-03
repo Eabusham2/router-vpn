@@ -271,6 +271,45 @@ func (s *desktopMacOSSession) closeDependents(ctx context.Context) error {
 	return nil
 }
 
+// Release closes and joins only a dependent already retained by this exact
+// session. It also works during cancellation; a failed Close stays retained.
+// Dependents never invoke this from their own Close callback.
+func (s *desktopMacOSSession) Release(ctx context.Context, child ownedDesktopNodeParent) error {
+	if s == nil || s.parent == nil || child == nil || ctx == nil {
+		return errors.New("macOS dependent retirement requires its original session")
+	}
+	p := s.parent
+	if p.originalSession != s {
+		return errors.New("macOS dependent belongs to another original session")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.retirement:
+	}
+	defer func() { p.retirement <- struct{}{} }()
+	if err := p.enter(ctx); err != nil {
+		return err
+	}
+	_, retained := s.dependents[child]
+	p.gate <- struct{}{}
+	if !retained {
+		return errors.New("macOS dependent was not retained by this session")
+	}
+	if err := child.Close(ctx); err != nil {
+		return err
+	}
+	if err := p.enter(ctx); err != nil {
+		return err
+	}
+	delete(s.dependents, child)
+	p.gate <- struct{}{}
+	return nil
+}
+
 func (s *desktopMacOSSession) Close(ctx context.Context) error {
 	if s == nil {
 		return nil

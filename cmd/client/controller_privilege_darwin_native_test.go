@@ -235,6 +235,14 @@ func macOSControllerFixtureChild() error {
 	done := make(chan error, 1)
 	go func() {
 		done <- serveClientHTTP(closing, listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/native-runtime-fixture" {
+				if err := macOSRuntimeFixtureCases(r.Context(), captured); err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				_, _ = io.WriteString(w, "captured native runtime cases passed\n")
+				return
+			}
 			if r.URL.Path == "/api/native-parent-current" {
 				if parent.Current(r.Context()) != nil {
 					w.WriteHeader(http.StatusConflict)
