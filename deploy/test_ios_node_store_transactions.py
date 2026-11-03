@@ -239,12 +239,27 @@ func temporary(_ source: ClientBundle) -> ClientBundle {
 
   store.reset(); UserDefaults.standard.removeObject(forKey: "router-vpn.bundle")
   try model.linkNodeBundle(encoded(third))
+  let externalSource = store.bundleData(containing: "third", current: model.bundle)!
+  let externalSelection = try encoded(model.bundle!), externalRecords = store.records
+  let externalDefaults = UserDefaults.standard.data(forKey: "router-vpn.bundle")
+  let externalMeasurements = try IOSLatencyResult.summarize(id: "third", name: "External proxy", values: Array(1...50).map(Double.init), failed: 0)
+  let externalStatisticsOwner = try model.iosSpeedLabOwnership.begin {}
+  try reject("external node cannot publish direct Router statistics") { try model.commitNodeLatency(externalMeasurements, network: 42, expectedRecord: externalSource, expectedSelection: externalSelection, owner: externalStatisticsOwner) }
+  try check("wrong node kind preserves private records defaults and selection", store.records == externalRecords && encoded(model.bundle!) == externalSelection && UserDefaults.standard.data(forKey: "router-vpn.bundle") == externalDefaults)
+  model.iosSpeedLabOwnership.finish(externalStatisticsOwner)
+
+  store.reset(); UserDefaults.standard.removeObject(forKey: "router-vpn.bundle")
+  let statisticsProof = String(repeating: "c", count: 64)
+  let statisticsRouter = bundle(try node("statistics-router", proof: statisticsProof))
+  try model.linkNodeBundle(encoded(statisticsRouter))
+  let statisticsID = model.bundle!.selectedRouterID
+  try check("benchmark captures the canonical Router node identity", statisticsID == "rvpn-" + String(statisticsProof.prefix(16)) && model.bundle!.routerProfiles[0].normalizedNodeKind == "router-vpn" && model.bundle!.routerProfiles[0].external == nil)
   try store.save(second)
-  let directSource = store.bundleData(containing: "third", current: model.bundle)!
+  let directSource = store.bundleData(containing: statisticsID, current: model.bundle)!
   let directSelection = try encoded(model.bundle!)
   model.selectedMode = "exact user raw mode"
   let otherRecord = store.records["bundle-second"]
-  let measurements = try IOSLatencyResult.summarize(id: "third", name: "third", values: Array(1...50).map(Double.init), failed: 0)
+  let measurements = try IOSLatencyResult.summarize(id: statisticsID, name: "Direct Router", values: Array(1...50).map(Double.init), failed: 0)
   try check("50 sample median min max and average are real statistics", measurements.samples == 50 && measurements.medianMs == 25.5 && measurements.minMs == 1 && measurements.maxMs == 50 && measurements.averageMs == 25.5)
   try check("50 sample interpolated p90 and 10 percent trimmed mean are computed", measurements.p90Ms == 45.1 && measurements.trimmedMeanMs == 25.5)
   let statisticsOwner = try model.iosSpeedLabOwnership.begin {}
@@ -254,7 +269,7 @@ func temporary(_ source: ClientBundle) -> ClientBundle {
   store.failAtWrite = nil
   try check("50 sample statistics use one atomic durable write", store.writes == writesBeforeStatistics + 1 && store.records["bundle-second"] == otherRecord)
   try check("statistics commit preserves the user's existing mode choice", model.selectedMode == "exact user raw mode")
-  let statisticsData = store.bundleData(containing: "third", current: model.bundle)!
+  let statisticsData = store.bundleData(containing: statisticsID, current: model.bundle)!
   let savedStatistics = try JSONDecoder().decode(ClientBundle.self, from: statisticsData).routerProfiles[0]
   try check("all requested metrics persist in actual profile fields", savedStatistics.latencySamples == 50 && savedStatistics.latencyMinMs == 1 && savedStatistics.latencyMedianMs == 25.5 && savedStatistics.latencyAverageMs == 25.5 && savedStatistics.latencyTrimmedMeanMs == 25.5 && savedStatistics.latencyP90Ms == 45.1 && savedStatistics.latencyMaxMs == 50 && savedStatistics.latencyLastTest != nil)
   try check("complete saved receipt survives actual store read", IOSNodeLatencyReceipt.eligible(savedStatistics) && savedStatistics.latencyReceipt?.networkMetadata == "ios-network-generation:42")
@@ -268,11 +283,11 @@ func temporary(_ source: ClientBundle) -> ClientBundle {
   let statisticsRecords = store.records, statisticsDefaults = UserDefaults.standard.data(forKey: "router-vpn.bundle")
   try reject("stale source cannot overwrite newer statistics") { try model.commitNodeLatency(measurements, network: 42, expectedRecord: directSource, expectedSelection: directSelection, owner: statisticsOwner) }
   let currentSelection = try encoded(model.bundle!)
-  let partial = try IOSLatencyResult.summarize(id: "third", name: "third", values: Array(1...49).map(Double.init), failed: 1)
+  let partial = try IOSLatencyResult.summarize(id: statisticsID, name: "Direct Router", values: Array(1...49).map(Double.init), failed: 1)
   try reject("failed sample does not overwrite durable 50 sample ranking") { try model.commitNodeLatency(partial, network: 42, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
-  let stale = try IOSLatencyResult.summarize(id: "third", name: "third", values: Array(1...50).map(Double.init), failed: 0, measuredAt: Date().addingTimeInterval(-301))
+  let stale = try IOSLatencyResult.summarize(id: statisticsID, name: "Direct Router", values: Array(1...50).map(Double.init), failed: 0, measuredAt: Date().addingTimeInterval(-301))
   try reject("stale result timestamp cannot become fresh ranking") { try model.commitNodeLatency(stale, network: 42, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
-  try reject("invalid direct values rejected") { _ = try IOSLatencyResult.summarize(id: "third", name: "third", values: [.nan], failed: 0) }
+  try reject("invalid direct values rejected") { _ = try IOSLatencyResult.summarize(id: statisticsID, name: "Direct Router", values: [.nan], failed: 0) }
   store.failWrite = true
   try reject("statistics durable failure is surfaced") { try model.commitNodeLatency(measurements, network: 42, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
   store.failWrite = false
