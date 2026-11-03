@@ -743,8 +743,8 @@ private struct IOSUnifiedPerformanceView: View {
                     } else {
                         Button("50-sample selected node") { runSelected() }.disabled(model.unifiedSelectedProfile == nil || model.profileMutationBlocked || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
                     }
-                    Button("Compare linked Router nodes (TCP)") { runAll() }.disabled(model.profileMutationBlocked || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
-                    Text("Disconnect for direct Router node TCP measurements. A complete 50-sample test atomically saves min, median, average, 10% trimmed mean, p90, max, sample count and test time to that exact node. The short Router comparison does not replace these saved statistics or rank external paths.").font(.caption).foregroundStyle(.secondary)
+                    Button("Compare linked Router nodes (50 TCP)") { runAll() }.disabled(model.profileMutationBlocked || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
+                    Text("Disconnect for direct Router node TCP measurements. A complete 50-sample test atomically saves min, median, average, 10% trimmed mean, p90, max, sample count and test time to that exact node. Router comparison also requires 50 complete samples per node and ranks by the 10% trimmed mean. It does not replace saved statistics or rank external paths.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Compare external paths") {
                     Button("Compare all external nodes") { externalComparison.start(model: model, connectFastest: false) }
@@ -784,7 +784,18 @@ private struct IOSUnifiedPerformanceView: View {
     private func runLive() { busy = true; operation = Task { do { output = String(format: "Current private tunnel median response time: %.1f ms", try await telemetry.measureCurrentRTT(model: model)) } catch { output = error.localizedDescription }; busy = false } }
     private func runSpeed() { busy = true; operation = Task { do { output = try await telemetry.speedTest(model: model).detail } catch { output = error.localizedDescription }; busy = false } }
     private func runSelected() { guard let p = model.unifiedSelectedProfile else { return }; busy = true; operation = Task { do { output = try await telemetry.measureOne(p, model: model, samples: 50).detail + "\nSaved to this node." } catch { output = error.localizedDescription }; busy = false } }
-    private func runAll() { busy = true; operation = Task { let values = await telemetry.measureAll(model.allNodeProfiles, model: model, samples: 5); output = values.isEmpty ? telemetry.lastError : values.map(\.detail).joined(separator: "\n"); busy = false } }
+    private func runAll() {
+        busy = true
+        operation = Task {
+            defer { busy = false }
+            let values = await telemetry.measureFastest(model.allNodeProfiles, model: model)
+            guard !values.isEmpty else { output = telemetry.lastError; return }
+            do {
+                try telemetry.requireDirectResultCurrent(model: model)
+                output = "50 complete TCP responses per ranked Router node; ordered by 10% trimmed mean. Selection and saved statistics are unchanged.\n\n" + values.map(\.detail).joined(separator: "\n")
+            } catch { output = error.localizedDescription }
+        }
+    }
 }
 
 private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect fastest-node live RTT real path Mbps quick kill switch forwarding shortcut Multihop Settings Performance Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates node ms animated packet path IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements Connection Profiles Add Load Update Delete real opt-in user location"

@@ -90,7 +90,8 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
     /// Fastest compares complete fifty-sample sets without overwriting each
     /// node's durable benchmark. Selection still requires this round's receipt.
     func measureFastest(_ profiles: [RouterProfile], model: RouterVPNModel) async -> [IOSLatencyResult] {
-        do { return try await direct(profiles, model: model, samples: 50, durable: false) }
+        let routers = profiles.filter { $0.normalizedNodeKind == "router-vpn" }
+        do { return try await direct(routers, model: model, samples: 50, durable: false) }
         catch { lastError = error.localizedDescription; return [] }
     }
 

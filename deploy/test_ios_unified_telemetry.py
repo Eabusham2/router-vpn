@@ -92,6 +92,7 @@ enum NEVPNStatus { case connected,disconnected,connecting }
  var selectedMode="wg",selectedLogicalMode="fast",iosConnectGeneration=UUID()
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
  var activeEngine:String{activeSessionIdentity?.engine ?? ""}
+ var allNodeProfiles:[RouterProfile]{bundle?.routerProfiles ?? []}
  var unifiedSelectedProfile:RouterProfile?{bundle.flatMap{IOSDNSRuntimePolicy.selectedProfile(in:$0)}}
  var profileMutationBlocked:Bool{connected || tunnelTransitioning || iosUserDisconnectInProgress}
  var refresh:(()->Void)?
@@ -317,6 +318,26 @@ TESTS = r'''
    let values=await client.measureFastest([a,b],model:model)
    try check("Fastest ranks robust trimmed mean rather than favorable median",values.map(\.id)==["b","a"] && values[1].medianMs<values[0].medianMs && values[0].trimmedMeanMs<values[1].trimmedMeanMs)
    try check("each ranked candidate owns fifty complete samples",values.allSatisfy{$0.samples==50 && $0.failed==0} && IOSViaEntryTCP.probes==102 && model.commits==0)
+  }
+
+  do {
+   let model=try fixture(),client=IOSUnifiedTelemetry()
+   var external=try profile("provider");external.nodeKind="external";model.bundle!.routerProfiles.append(external)
+   IOSNodeBundleStore.shared.records["node"]=try encoded(model.bundle!)
+   let before=try encoded(model.bundle!),action=RouterComparisonAction(model:model,telemetry:client)
+   action.begin();await wait("Performance fifty comparison"){!action.busy}
+   try check("Performance comparison requires fifty samples and excludes external nodes",IOSViaEntryTCP.probes==51 && action.output.contains("50 ok / 0 failed") && action.output.contains("10% trimmed mean"))
+   let unchanged=try encoded(model.bundle!)==before
+   try check("Performance comparison cannot adopt or overwrite node statistics",unchanged && model.commits==0 && !model.iosSpeedLabOwnership.active)
+  }
+  for change in ["cancel","decision"] {
+   let model=try fixture(),client=IOSUnifiedTelemetry(),action=RouterComparisonAction(model:model,telemetry:client)
+   IOSViaEntryTCP.held=true;action.begin();await wait("held Performance comparison"){IOSViaEntryTCP.probes>0}
+   if change=="cancel"{action.cancel()}else{model.iosConnectGeneration=UUID()}
+   await wait("Performance cancellation observed"){IOSViaEntryTCP.cancelled}
+   try check("Performance retains busy owner through callback drain",action.busy && model.iosSpeedLabOwnership.active && model.commits==0)
+   IOSViaEntryTCP.drain();await wait("Performance joined cancellation"){!action.busy}
+   try check("Performance cancelled or stale round displays no successful ranking",!action.output.contains("50 ok / 0 failed") && model.commits==0 && !model.iosSpeedLabOwnership.active)
   }
 
   for fastest in [false,true] {
@@ -675,6 +696,15 @@ def main():
     text = text.replace(" // SHIPPING_PROVIDER_TELEMETRY", lifecycle)
     for path in ["IOSMTUControl.swift", "IOSCurrentTelemetryCapture.swift", "IOSUnifiedTelemetry.swift"]:
         text += portable((APP / path).read_text())
+    view = (APP / "IOSUnifiedProductView.swift").read_text()
+    text += """
+@MainActor final class RouterComparisonAction {
+ let model:RouterVPNModel,telemetry:IOSUnifiedTelemetry
+ var busy=false,output="",operation:Task<Void,Never>?
+ init(model:RouterVPNModel,telemetry:IOSUnifiedTelemetry){self.model=model;self.telemetry=telemetry}
+ func begin(){runAll()}
+ func cancel(){operation?.cancel();telemetry.cancel()}
+""" + method(view, "    private func runAll()") + "\n}\n"
     text += TESTS
     with tempfile.TemporaryDirectory(prefix="routervpn-unified-telemetry-") as folder:
         work = Path(folder)
@@ -692,6 +722,7 @@ def main():
         controls = [
             ("native callback join", without_join, text, "FAIL: cancel event alone is not read callback drain"),
             ("direct network source", sources, text.replace("network == nil || IOSViaEntryNetwork.shared.current == network, let bundle", "let bundle", 1), "FAIL: accepted network changed before fastest adoption"),
+            ("Performance fifty samples", sources, text.replace("let values = await telemetry.measureFastest(model.allNodeProfiles, model: model)", "let values = await telemetry.measureAll(model.allNodeProfiles, model: model, samples: 5)", 1), "FAIL: Performance comparison requires fifty samples and excludes external nodes"),
         ]
         for label, inputs, mutant, assertion in controls:
             fixture.write_text(mutant)
