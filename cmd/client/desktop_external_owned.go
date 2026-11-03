@@ -106,14 +106,14 @@ var desktopWindowsExternalPreparations sync.Map // *desktopWindowsExternalRuntim
 
 // Selection names only the supported shape. Full original credentials and
 // paired layer identity are compiled before a prior owner can be retired.
-func desktopWindowsExternalStartLayerSupported(protocol, layer string) bool {
+func desktopExternalStartLayerSupported(protocol, layer string) bool {
 	return layer == "" || layer == common.StartLayerOff || protocol == "hysteria2" &&
 		(layer == common.StartLayerAES256GCM || layer == common.StartLayerAES256GCMXOR)
 }
 
 func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct bool, restored string) bool {
 	if !direct || profile.NodeKind != "external" || profile.External == nil ||
-		!desktopWindowsExternalStartLayerSupported(profile.External.Protocol, profile.StartLayer) ||
+		!desktopExternalStartLayerSupported(profile.External.Protocol, profile.StartLayer) ||
 		profile.MultihopExecution != "" && profile.MultihopExecution != "local" || restored != "" && restored != "local" {
 		return false
 	}

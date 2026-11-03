@@ -48,6 +48,7 @@ func validateDesktopLinuxProtectedArguments(arguments []string, directory string
 func desktopLinuxExternalEligible(launch *desktopNodeLaunch) bool {
 	if launch == nil || launch.external == nil || launch.tor != nil || !launch.external.direct || launch.external.predecessor != "" ||
 		launch.external.selection != "local" || launch.external.profile.External == nil ||
+		!desktopExternalStartLayerSupported(launch.external.profile.External.Protocol, launch.external.profile.StartLayer) ||
 		desktopOwnedNodeProtectionPolicy(launch.external.profile) == "off" {
 		return false
 	}
