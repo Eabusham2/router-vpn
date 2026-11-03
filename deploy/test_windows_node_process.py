@@ -147,6 +147,8 @@ SHARED_TESTS = (
     "TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost",
     "TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant",
     "TestDesktopWindowsExternalOpenVPNAuthorityKeepsOriginalImport",
+    "TestDesktopWindowsExternalHysteria2LayerAuthorityKeepsOriginalSource",
+    "TestDesktopExternalPhysicalWindowsHysteria2LayersKeepOuterAndInnerOwners",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -160,7 +162,7 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsoc
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
-              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
+              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
             *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
               for fault in ("child-join", "journal-flush", "release", "foreign-receipt", "private-file")),
             *("TestDesktopWindowsExternalInvalidProofCannotConnect/" + fault
@@ -172,10 +174,15 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             *("TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal/" + fault
               for fault in ("unchanged", "journal-head", "kernel-target", "constructor-entered")),
             *("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction
-              for direction in ("router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5",
+              for direction in ("router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-hysteria2-aes-router", "hysteria2-aes-router-hysteria2-aes", "router-hysteria2-aes-xor-router", "hysteria2-aes-xor-router-hysteria2-aes-xor", "router-socks5-router", "socks5-router-socks5",
                                 "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast",
                                 "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong",
                                 "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed")),
+            *("TestDesktopWindowsExternalHysteria2LayerAuthorityKeepsOriginalSource/" + protocol + "/" + fault
+              for protocol in ("hysteria2-aes", "hysteria2-aes-xor")
+              for fault in ("layer-key", "layer-mode", "private-peer", "inner-key", "inner-trust", "resolver")),
+            *("TestDesktopExternalPhysicalWindowsHysteria2LayersKeepOuterAndInnerOwners/" + layer + "/" + policy
+              for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening") for policy in ("on-connect", "always")),
             *("TestDesktopWindowsExternalOpenVPNAuthorityKeepsOriginalImport/" + protocol for protocol in ("openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
             *("TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant/" + protocol + suffix
               for protocol in ("wireguard", "amneziawg-fast", "amneziawg-strong")

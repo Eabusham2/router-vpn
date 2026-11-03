@@ -82,6 +82,7 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             # A parent/root PASS never substitutes for its exact native child
             # verdicts at this explicit process boundary.
             names.update(EXTERNAL.HYSTERIA2_BOX_CASES)
+            names.update(EXTERNAL.HYSTERIA2_LAYER_BOX_CASES)
             names.update(EXTERNAL.HYSTERIA2_FACTORY_CASES)
             names.update(EXTERNAL.SOCKS_BOX_CASES)
             names.update(EXTERNAL.SOCKS_FACTORY_CASES)
@@ -134,11 +135,25 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             self.assertIn(EXTERNAL.HYSTERIA2_COMMAND, observed["command"])
             self.assertTrue(set(EXTERNAL.HYSTERIA2_BOX_CASES).issubset(set().union(*(set(required) for name, required in observed.items() if name.startswith("box")))))
             self.assertTrue(set(EXTERNAL.HYSTERIA2_FACTORY_CASES).issubset(observed["factory"]))
-            self.assertEqual(len(calls), 24)
+            self.assertEqual(len(calls), 28)
 
 
 
 class ExternalHysteria2Inventory(unittest.TestCase):
+    def test_layered_encrypted_inventory_is_complete_and_partitioned_once(self):
+        expected = tuple(case.replace("hysteria2", mode) for mode in ("hysteria2-aes", "hysteria2-aes-xor") for case in EXTERNAL.HYSTERIA2_BOX_CASES) + (
+            "TestRouterVPNDesktopExternalPhysicalIntegration/hysteria2-aes/reject/layer-key",
+            "TestRouterVPNDesktopExternalPhysicalIntegration/hysteria2-aes-xor/reject/layer-key",
+            "TestRouterVPNDesktopExternalPhysicalIntegration/hysteria2-aes-xor/reject/whitening")
+        self.assertEqual(EXTERNAL.HYSTERIA2_LAYER_BOX_CASES, expected)
+        self.assertEqual(len(expected), 33)
+        runs = EXTERNAL.baseline_runs("box", "original", expected)
+        self.assertCountEqual([case for _, _, required in runs for case in required if case in expected], expected)
+        output = "".join("--- PASS: " + case + " (0.01s)\n" for case in expected)
+        for case in expected:
+            with self.subTest(missing=case), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                EXTERNAL.report_baseline("hy2-layer", expected, 0, output.replace("--- PASS: " + case + " (0.01s)\n", ""))
+
     def test_actual_encrypted_udp_mtu_latency_and_negative_leaves_are_required(self):
         self.assertEqual(EXTERNAL.HYSTERIA2_COMMAND,
                          "TestRouterVPNDesktopExternalPhysicalCommandHysteria2SupportedTargets")
@@ -321,7 +336,7 @@ class ExternalPacketInventory(unittest.TestCase):
                 with self.subTest(missing=case), contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(ValueError):
                         EXTERNAL.report_baseline("packet", required, 0, output.replace("--- PASS: " + case + " (0.01s)\n", ""))
-        all_cases = EXTERNAL.HYSTERIA2_BOX_CASES + EXTERNAL.SOCKS_BOX_CASES + EXTERNAL.PACKET_BOX_CASES
+        all_cases = EXTERNAL.HYSTERIA2_BOX_CASES + EXTERNAL.HYSTERIA2_LAYER_BOX_CASES + EXTERNAL.SOCKS_BOX_CASES + EXTERNAL.PACKET_BOX_CASES
         runs = EXTERNAL.baseline_runs("box", "original", ("TestRouterVPNDesktopExternalPhysicalBoxRequiresPreparedStartedOwner", *all_cases))
         actual = [case for _, _, required in runs for case in required if case in all_cases]
         self.assertCountEqual(actual, all_cases)

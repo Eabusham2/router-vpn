@@ -1,0 +1,156 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type desktopExternalWFPLayerRequest struct {
+	Mode     string `json:"mode"`
+	Password string `json:"password"`
+}
+
+func TestRouterVPNDesktopExternalWindowsHysteria2LayerPeer(t *testing.T) {
+	desktopExternalWFPRunPeer(t, "hysteria2-layer")
+}
+
+func desktopExternalWFPLayerReference(t *testing.T, ca *desktopExternalIntegrationCA, mode, fault string) *desktopExternalWFPReference {
+	t.Helper()
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	layer := &desktopExternalWFPLayerRequest{Mode: mode, Password: base64.StdEncoding.EncodeToString(key[:])}
+	clear(key[:])
+	return desktopExternalWFPStartReferenceCaptured(t, ca, fault, "hysteria2-layer", layer)
+}
+func desktopExternalWFPLayerOriginal(t *testing.T, p *desktopExternalWFPReference, kill string) (*mobilemultihop.ExternalPolicy, string, string) {
+	t.Helper()
+	if p.layer == nil || p.initial.LayerMode != p.layer.Mode {
+		t.Fatal("layered source lost captured provider")
+	}
+	_, source, capture := desktopExternalWFPOriginal(t, p, kill)
+	var graph, selected map[string]any
+	if json.Unmarshal([]byte(source), &graph) != nil || json.Unmarshal([]byte(capture), &selected) != nil {
+		t.Fatal("layered source lost original HY2 graph")
+	}
+	inner, err := netip.ParseAddrPort(p.initial.InnerAddress)
+	if err != nil || inner.Addr() != p.local || inner == p.remote {
+		t.Fatal("layered source lost private provider tuple", err)
+	}
+	graph["outbounds"].([]any)[0].(map[string]any)["server_port"] = int(inner.Port())
+	profile := selected["profile"].(map[string]any)
+	external := profile["external"].(map[string]any)
+	external["hysteria2"].(map[string]any)["port"] = int(inner.Port())
+	profile["start_layer"], profile["mtu_policy"] = p.layer.Mode, "auto"
+	delete(profile, "manual_mtu")
+	external["start_layer"] = map[string]any{"mode": p.layer.Mode, "api": "http://10.93.0.1:8787", "transport": map[string]any{
+		"type": "shadowsocks", "tag": "captured-private-layer", "server": p.local.String(), "server_port": int(p.remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": p.layer.Password}}
+	raw, _ := json.Marshal(graph)
+	saved, _ := json.Marshal(selected)
+	original, err := mobilemultihop.NewExternalPolicy(string(raw), string(saved))
+	if err != nil {
+		t.Fatal("captured layered HY2 source", err)
+	}
+	return original, string(raw), string(saved)
+}
+
+func desktopExternalWFPLayerMeasurements(t *testing.T, f *desktopExternalWFPFixture, p *desktopExternalWFPReference) {
+	t.Helper()
+	lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.source, f.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	name, index, mtu, err := lease.ClaimDesktopTUN(f.proof.Healthy)
+	if err != nil || name != f.tun.options.InterfaceName || index != f.tun.index || mtu != 1280 {
+		t.Fatal("layered MTU claim lost original Wintun", err)
+	}
+	original, err := lease.Inbound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate, rollback *desktopExternalWFPOpenVPNTUNCandidate
+	current, err := lease.changeMTU(context.Background(), original, 1400, desktopExternalWFPOpenVPNReplace(f, nil, &candidate, &rollback))
+	if err != nil || current != candidate || current == original {
+		t.Fatal("layered Wintun replacement failed", err)
+	}
+	f.tun = candidate.desktopExternalWFPTUN
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned, err := lease.changeMTU(ctx, current, 1500, desktopExternalWFPOpenVPNReplace(f, func(stage adapter.StartStage) {
+		if stage == adapter.StartStateStarted {
+			cancel()
+		}
+	}, &candidate, &rollback))
+	if err == nil || returned != rollback || returned == current || returned == candidate {
+		t.Fatal("layered cancelled MTU lost exact rollback", err)
+	}
+	f.tun = rollback.desktopExternalWFPTUN
+	name, index, mtu, err = lease.ClaimDesktopTUN(f.proof.Healthy)
+	if err != nil || name != f.tun.options.InterfaceName || index != f.tun.index || mtu != 1400 || !lease.Healthy() {
+		t.Fatal("layered MTU rollback lost native reader", err)
+	}
+	called := false
+	if _, err := lease.changeMTU(context.Background(), original, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { called = true; return nil, nil }); err == nil || called {
+		t.Fatal("retired layered reader changed successor")
+	}
+	if err := f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mobilemultihop.ProveExternalPublicIP(context.Background(), f.proof.engine.Dial, mobilemultihop.ExternalFinalTag, desktopExternalIntegrationIP); err != nil {
+		t.Fatal(err)
+	}
+	service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.source, f.capture, f.policy.Metadata().SessionID, f.proof.Healthy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	dns, err := f.box.RouterVPNExternalDNSMeasurement(f.proof, f.source, f.capture, f.policy.Metadata().SessionID, f.proof.Healthy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dns.Close()
+	if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err != nil {
+		t.Fatal(err)
+	}
+	status := desktopExternalLatencyStatus(t, service)
+	if status.Stage != "complete" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil {
+		t.Fatal("layered actual TLS benchmark failed", status)
+	}
+	b := status.Results[0].Benchmark
+	stats := p.call(t, "stats", "")
+	if b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.TrimmedMean <= 0 || stats.LayerLatencyRequests != 50 || stats.LayerLatencyTLS != 50 || stats.LayerLatencyDNS < 1 || stats.Public != 2 || stats.LayerForwarded == 0 {
+		t.Fatal("layered benchmark bypassed encrypted carrier", stats)
+	}
+	if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err == nil {
+		t.Fatal("layered benchmark accepted replay")
+	}
+	f.snapshot(t, p)
+}
+func TestRouterVPNDesktopExternalWindowsHysteria2LayerWFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	certificate, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(certificate)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	for _, mode := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(mode, func(t *testing.T) { desktopExternalWFPHysteria2Cases(t, ca, mode) })
+	}
+}

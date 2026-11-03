@@ -33,6 +33,10 @@ HYSTERIA2_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" +
     "hysteria2/reject/peer-tls-name", "hysteria2/reject/truncated", "hysteria2/cancelled-proof",
     "latency50/hysteria2", "latency50/hysteria2/source", "latency50/hysteria2/capture",
     "latency50/hysteria2/session", "latency50/hysteria2/current"))
+HYSTERIA2_LAYER_PROTOCOLS = ("hysteria2-aes", "hysteria2-aes-xor")
+HYSTERIA2_LAYER_BOX_CASES = tuple(case.replace("hysteria2", protocol) for protocol in HYSTERIA2_LAYER_PROTOCOLS for case in HYSTERIA2_BOX_CASES) + tuple(
+    "TestRouterVPNDesktopExternalPhysicalIntegration/" + protocol + "/reject/layer-key" for protocol in HYSTERIA2_LAYER_PROTOCOLS) + (
+    "TestRouterVPNDesktopExternalPhysicalIntegration/hysteria2-aes-xor/reject/whitening",)
 HYSTERIA2_FACTORY_CASES = ("TestRouterVPNExternalPhysicalStartupSocketPhase/hysteria2",
     "TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple/hysteria2-udp")
 SOCKS_COMMAND = "TestRouterVPNDesktopExternalPhysicalCommandSOCKSSupportedTargets"
@@ -88,7 +92,7 @@ def baseline_runs(name, selection, required):
     required = (*required, *(case for case in STREAM_BOX_CASES if case not in required))
     ordinary = tuple(case for case in required if not case.startswith(parent))
     runs = [("box", "^TestRouterVPNDesktopExternalPhysicalBox", ordinary)]
-    for protocol in ("http-connect", "https-connect", "shadowsocks", "hysteria2", "socks5", *PACKET_PROTOCOLS):
+    for protocol in ("http-connect", "https-connect", "shadowsocks", "hysteria2", *HYSTERIA2_LAYER_PROTOCOLS, "socks5", *PACKET_PROTOCOLS):
         for branch in (protocol, "latency50/" + protocol):
             prefix = parent + "/" + branch
             verdicts = tuple(case for case in required if case == prefix or case.startswith(prefix + "/"))
@@ -236,7 +240,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("box", ".", "^TestRouterVPNDesktopExternalPhysical",
          tuple("TestRouterVPNDesktopExternalPhysical" + name for name in
              ("BoxRejectsChangedDerivedGraph", "BoxRequiresPreparedStartedOwner", "BoxRetainsExactPolicyAndDerivedIdentity",
-              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration")) + HYSTERIA2_BOX_CASES + SOCKS_BOX_CASES + PACKET_BOX_CASES),
+              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration")) + HYSTERIA2_BOX_CASES + HYSTERIA2_LAYER_BOX_CASES + SOCKS_BOX_CASES + PACKET_BOX_CASES),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternal(Physical(Windows|Admission|Journal|Retirement|StartupSocketPhase|ActualBytesAndCapturedTuple)|SOCKS)",
          ("TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner",
           "TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures",

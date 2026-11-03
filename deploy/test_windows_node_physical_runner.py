@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -193,7 +194,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
         original = source.read_bytes()
@@ -215,13 +216,31 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in expected)
         with contextlib.redirect_stdout(io.StringIO()):
             GATE.report_external_hysteria2(0, complete)
-        bad = [(1, complete), (0, complete + "--- SKIP: hidden (0.01s)\n"),
-               (0, complete + "WARNING: DATA RACE\n")]
+        first = "--- PASS: " + expected[0] + " (0.01s)\n"
+        bad = [(1, complete), (0, complete + first), (0, complete.replace(first, "diagnostic: " + first))]
+        bad.extend((0, complete + marker + "\n") for marker in (
+            "--- SKIP: hidden", "WARNING: DATA RACE", "--- FAIL: hidden", "FAIL", "panic: bad", "fatal error: bad", "x [build failed]"))
         bad += [(0, complete.replace("--- PASS: " + case + " (0.01s)\n", "")) for case in expected]
         for status, output in bad:
             with self.subTest(status=status, output=output), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(ValueError, "required native result"):
                     GATE.report_external_hysteria2(status, output)
+
+    def test_layer_inventory_rejects_missing_duplicate_prefixed_or_aborted_verdicts(self):
+        for mode in GATE.EXTERNAL_HY2_LAYERS:
+            cases = GATE.EXTERNAL_HY2_LAYER_CASES[mode]
+            self.assertEqual(len(cases), 14 if mode.endswith("+xor-whitening") else 13)
+            self.assertTrue(all(GATE.EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + case.split("/", 1)[1] in cases for case in GATE.EXTERNAL_HY2_CASES[1:]))
+            complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in cases)
+            with contextlib.redirect_stdout(io.StringIO()):
+                GATE.report_external_hysteria2_layer(mode, 0, complete)
+            bad = [complete.replace("--- PASS: " + case + " (0.01s)\n", "") for case in cases]
+            first = "--- PASS: " + cases[0] + " (0.01s)\n"
+            bad.extend((complete + first, complete.replace(first, "diagnostic: " + first)))
+            bad.extend(complete + marker + "\n" for marker in ("--- SKIP: hidden", "WARNING: DATA RACE", "--- FAIL: hidden", "FAIL", "panic: bad", "fatal error: bad", "x [build failed]"))
+            for output in bad:
+                with self.subTest(mode=mode, output=output), contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "required native result"):
+                    GATE.report_external_hysteria2_layer(mode, 0, output)
 
     def dispatch(self, fault=None):
         calls = []
@@ -247,19 +266,35 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
                 return 0, ""
             binary = Path(command[0])
             if binary.parent.name == "external-hysteria2":
-                self.assertIn("-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$", command)
+                selector = next(value for value in command if value.startswith("-test.run="))
+                mode = next((mode for mode in GATE.EXTERNAL_HY2_LAYERS if selector == "-test.run=^" + GATE.EXTERNAL_HY2_LAYER_ROOT + "$/^" + re.escape(mode) + "$"), None)
+                self.assertTrue(mode or selector == "-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$")
+                result = "".join("--- PASS: " + case + " (0.01s)\n" for case in GATE.EXTERNAL_HY2_LAYER_CASES[mode]) if mode else complete
                 self.assertIn("-test.timeout=180s", command)
                 self.assertEqual(kwargs["timeout"], 195)
                 if fault == "image":
                     binary.write_bytes(b"replaced native image")
                 if fault == "leaf":
                     return 0, complete.replace("--- PASS: " + GATE.EXTERNAL_HY2_ROOT + "/reject/trust (0.01s)\n", "")
-                return 0, complete
+                if fault == "layer-leaf" and mode:
+                    return 0, result.replace("--- PASS: " + GATE.EXTERNAL_HY2_LAYER_CASES[mode][-1] + " (0.01s)\n", "")
+                return 0, result
             label = binary.parent.name.removeprefix("external-hysteria2-")
-            self.assertIn("-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$/^always$", command)
+            selector = next(value for value in command if value.startswith("-test.run="))
+            mode = next((mode for mode in GATE.EXTERNAL_HY2_LAYERS if selector == "-test.run=^" + GATE.EXTERNAL_HY2_LAYER_ROOT + "$/^" + re.escape(mode) + "$/^always$"), None)
+            self.assertTrue(mode or selector == "-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$/^always$")
+            selected = GATE.EXTERNAL_HY2_LAYER_ROOT + "/" + mode if mode else GATE.EXTERNAL_HY2_ROOT
             self.assertIn("-test.timeout=60s", command)
             self.assertEqual(kwargs["timeout"], 75)
-            output = "--- FAIL: " + GATE.EXTERNAL_HY2_ROOT + "/always (0.01s)\n" + witnesses[label] + "\n"
+            output = "--- FAIL: " + selected + "/always (0.01s)\n" + witnesses[label] + "\n"
+            if fault == "control-image":
+                binary.write_bytes(b"changed control image")
+            if fault == "prefixed-failure":
+                return 1, "diagnostic: " + output
+            if fault == "duplicate-failure":
+                return 1, output + output
+            if fault == "layer-control-success" and mode:
+                return 0, output
             if fault == label:
                 return 0, output
             if fault == "timeout":
@@ -273,13 +308,15 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
 
     def test_real_dispatch_keeps_binary_identity_all_cases_and_both_compiled_controls(self):
         calls = self.dispatch()
-        self.assertEqual(len(calls), 6)
-        self.assertEqual([timeout for _, timeout in calls], [600, 195, 600, 75, 600, 75])
+        self.assertEqual(len(calls), 12)
+        self.assertEqual([timeout for _, timeout in calls], [600, 195, 195, 195, 600, 75, 75, 75, 600, 75, 75, 75])
 
     def test_native_dispatch_rejects_missing_result_replaced_image_or_successful_mutants(self):
-        for fault, message in (("leaf", "required native result"), ("image", "native executable changed"),
+        for fault, message in (("layer-leaf", "required native result"), ("leaf", "required native result"), ("image", "native executable changed"),
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
-                               ("timeout", "exact defect")):
+                               ("timeout", "exact defect"), ("prefixed-failure", "exact defect"),
+                               ("duplicate-failure", "exact defect"), ("layer-control-success", "exact defect"),
+                               ("control-image", "control executable changed")):
             with self.subTest(fault=fault):
                 # Each dispatch owns a fresh temporary fixture; an earlier
                 # failed child never supplies the next candidate's image.
@@ -324,7 +361,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_socks_test.go.tmpl"
         original = source.read_bytes()
@@ -427,7 +464,7 @@ class OrdinaryPacketScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_packet_test.go.tmpl"
         original = source.read_bytes()

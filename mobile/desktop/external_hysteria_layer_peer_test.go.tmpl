@@ -1,0 +1,227 @@
+package box
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing/common/buf"
+	B "github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+func desktopExternalHysteriaLayerMode(protocol string) string {
+	switch protocol {
+	case "hysteria2-aes":
+		return "aes-256-gcm"
+	case "hysteria2-aes-xor":
+		return "aes-256-gcm+xor-whitening"
+	default:
+		return ""
+	}
+}
+
+// An independent reference endpoint decrypts the actual pinned SS2022 UDP
+// carrier and forwards only the captured private HY2 tuple to its retained
+// local QUIC socket. It never answers DNS or public proof itself. XOR uses the
+// server's domain-separated wire schedule; SS2022 still authenticates every
+// packet after dewhitening. No raw HY2 datagram reaches the outer listener.
+type desktopExternalHysteriaLayerPeer struct {
+	closeErr                                error
+	ctx                                     context.Context
+	cancel                                  context.CancelFunc
+	outer                                   net.PacketConn
+	inner                                   netip.AddrPort
+	private                                 M.Socksaddr
+	mu                                      sync.Mutex
+	closing                                 bool
+	connections                             map[N.PacketConn]net.Conn
+	workers                                 sync.WaitGroup
+	once                                    sync.Once
+	raw, authenticated, forwarded, rejected atomic.Int32
+}
+
+type desktopExternalLayerWhiteningPacket struct {
+	net.PacketConn
+	key [32]byte
+}
+
+func (p *desktopExternalLayerWhiteningPacket) ReadFrom(body []byte) (int, net.Addr, error) {
+	n, from, err := p.PacketConn.ReadFrom(body)
+	for i := range body[:n] {
+		body[i] ^= p.key[i%len(p.key)]
+	}
+	return n, from, err
+}
+func (p *desktopExternalLayerWhiteningPacket) WriteTo(body []byte, to net.Addr) (int, error) {
+	copy := append([]byte(nil), body...)
+	for i := range copy {
+		copy[i] ^= p.key[i%len(p.key)]
+	}
+	return p.PacketConn.WriteTo(copy, to)
+}
+
+func newDesktopExternalHysteriaLayerPeer(parent context.Context, outer net.PacketConn, inner netip.AddrPort, mode, password, fault string) (*desktopExternalHysteriaLayerPeer, error) {
+	if parent == nil || parent.Err() != nil || outer == nil || !inner.IsValid() || inner.Port() == 0 ||
+		mode != "aes-256-gcm" && mode != "aes-256-gcm+xor-whitening" || len(password) == 0 {
+		return nil, errors.New("HY2 layer reference requires its captured carrier and private destination")
+	}
+	local, err := netip.ParseAddrPort(outer.LocalAddr().String())
+	if err != nil || local.Addr() != inner.Addr() || local == inner || mode == "aes-256-gcm+xor-whitening" && local.Port() != 8389 {
+		return nil, errors.New("HY2 layer reference changed its captured physical listener")
+	}
+	ctx, cancel := context.WithCancel(parent)
+	p := &desktopExternalHysteriaLayerPeer{ctx: ctx, cancel: cancel, outer: outer, inner: inner,
+		private: M.SocksaddrFromNetIP(netip.AddrPortFrom(netip.MustParseAddr("10.93.0.1"), inner.Port())), connections: make(map[N.PacketConn]net.Conn)}
+	var packet net.PacketConn = outer
+	if mode == "aes-256-gcm+xor-whitening" {
+		key := sha256.Sum256([]byte("router-vpn-xor-whitening-v1\x00" + password))
+		if fault == "whitening" {
+			key[0] ^= 0xff
+		}
+		packet = &desktopExternalLayerWhiteningPacket{PacketConn: outer, key: key}
+	}
+	if fault == "layer-key" {
+		// Keep a valid independent SS2022 key; authentication must reject the
+		// client's original key, rather than a constructor rejecting bad syntax.
+		password = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="
+	}
+	service, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 10, p, nil)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	p.workers.Add(1)
+	go func() {
+		defer p.workers.Done()
+		reader := B.NewPacketConn(packet)
+		for {
+			body := buf.NewPacket()
+			source, err := reader.ReadPacket(body)
+			if err != nil {
+				body.Release()
+				return
+			}
+			p.raw.Add(1)
+			if err := service.NewPacket(ctx, reader, body, M.Metadata{Source: source}); err != nil {
+				p.rejected.Add(1)
+				body.Release()
+			}
+		}
+	}()
+	return p, nil
+}
+func (*desktopExternalHysteriaLayerPeer) NewError(context.Context, error) {}
+func (*desktopExternalHysteriaLayerPeer) NewConnection(_ context.Context, c net.Conn, _ M.Metadata) error {
+	_ = c.Close()
+	return errors.New("HY2 layer reference refuses TCP carrier")
+}
+func (p *desktopExternalHysteriaLayerPeer) NewPacketConnection(_ context.Context, connection N.PacketConn, metadata M.Metadata) error {
+	if metadata.Destination != p.private {
+		p.rejected.Add(1)
+		_ = connection.Close()
+		return errors.New("HY2 layer reference refused another private destination")
+	}
+	p.mu.Lock()
+	if p.closing || len(p.connections) >= 16 {
+		p.mu.Unlock()
+		_ = connection.Close()
+		return net.ErrClosed
+	}
+	p.connections[connection] = nil
+	p.workers.Add(1)
+	p.mu.Unlock()
+	defer func() {
+		_ = connection.Close()
+		p.mu.Lock()
+		delete(p.connections, connection)
+		p.mu.Unlock()
+		p.workers.Done()
+	}()
+	p.authenticated.Add(1)
+	raw, err := (&net.Dialer{}).DialContext(p.ctx, "udp4", p.inner.String())
+	if err != nil {
+		return err
+	}
+	defer raw.Close()
+	p.mu.Lock()
+	if p.closing {
+		p.mu.Unlock()
+		return net.ErrClosed
+	}
+	p.connections[connection] = raw
+	p.mu.Unlock()
+	stop := context.AfterFunc(p.ctx, func() { _ = raw.Close(); _ = connection.Close() })
+	defer stop()
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		defer raw.Close()
+		for {
+			body := buf.NewPacket()
+			destination, err := connection.ReadPacket(body)
+			if err == nil && destination != p.private {
+				p.rejected.Add(1)
+				err = errors.New("HY2 layer changed private UDP destination")
+			}
+			if err == nil {
+				_, err = raw.Write(body.Bytes())
+				if err == nil {
+					p.forwarded.Add(1)
+				}
+			}
+			body.Release()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	defer func() { _ = raw.Close(); _ = connection.Close(); <-joined }()
+	for {
+		body := buf.NewSize(65535 + 2048)
+		body.Resize(2048, 0)
+		n, err := raw.Read(body.FreeBytes())
+		body.Truncate(n)
+		if err == nil {
+			err = connection.WritePacket(body, p.private)
+		} else {
+			body.Release()
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+func (p *desktopExternalHysteriaLayerPeer) Close() error {
+	p.once.Do(func() {
+		p.mu.Lock()
+		p.closing = true
+		connections := make([]io.Closer, 0, 2*len(p.connections))
+		for connection, raw := range p.connections {
+			connections = append(connections, connection)
+			if raw != nil {
+				connections = append(connections, raw)
+			}
+		}
+		p.mu.Unlock()
+		p.cancel()
+		closed := func(err error) {
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				p.closeErr = errors.Join(p.closeErr, err)
+			}
+		}
+		closed(p.outer.Close())
+		for _, connection := range connections {
+			closed(connection.Close())
+		}
+		p.workers.Wait()
+	})
+	return p.closeErr
+}

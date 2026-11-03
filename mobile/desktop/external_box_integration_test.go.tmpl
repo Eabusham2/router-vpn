@@ -58,6 +58,7 @@ import (
 	HTTP "github.com/sagernet/sing-box/protocol/http"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -90,7 +91,7 @@ func desktopExternalIntegrationPacketEndpoint(protocol string) bool {
 }
 
 func desktopExternalIntegrationUDP(protocol string) bool {
-	return protocol == "hysteria2" || desktopExternalIntegrationPacketEndpoint(protocol)
+	return protocol == "hysteria2" || desktopExternalHysteriaLayerMode(protocol) != "" || desktopExternalIntegrationPacketEndpoint(protocol)
 }
 
 func desktopExternalIntegrationUDPDNS(protocol string) bool {
@@ -385,6 +386,9 @@ func (ca *desktopExternalIntegrationCA) certificate(t *testing.T, valid bool) tl
 // The peer accepts only the two selected upper destinations. The native lower
 // path must reach this exact local listener under a preexisting broker grant.
 type desktopExternalIntegrationPeer struct {
+	layerInput                                                                                  net.PacketConn
+	layerMode, layerPassword, layerFault                                                        string
+	layer                                                                                       *desktopExternalHysteriaLayerPeer
 	listener                                                                                    net.Listener
 	packet                                                                                      net.PacketConn
 	closeProtocol                                                                               func()
@@ -550,10 +554,28 @@ func (p *desktopExternalIntegrationPeer) startHysteria2(t *testing.T) {
 		err = tlsConfig.Start()
 	}
 	if err == nil {
-		err = service.Start(&desktopExternalIntegrationPacket{PacketConn: p.packet, peer: p})
+		var incoming net.PacketConn = &desktopExternalIntegrationPacket{PacketConn: p.packet, peer: p}
+		if p.layerInput != nil {
+			incoming = p.layerInput
+		}
+		err = service.Start(incoming)
 	}
 	if err != nil {
 		t.Fatal("actual pinned Hysteria2 composition peer failed", err)
+	}
+	if p.layerInput != nil {
+		p.layer, err = newDesktopExternalHysteriaLayerPeer(p.ctx, &desktopExternalIntegrationPacket{PacketConn: p.packet, peer: p},
+			netip.MustParseAddrPort(p.layerInput.LocalAddr().String()), p.layerMode, p.layerPassword, p.layerFault)
+		if err != nil {
+			t.Fatal("actual layered HY2 carrier failed", err)
+		}
+		closeInner := p.closeProtocol
+		p.closeProtocol = func() {
+			if err := p.layer.Close(); err != nil {
+				p.recordFailure(err)
+			}
+			closeInner()
+		}
 	}
 }
 
@@ -989,6 +1011,9 @@ func (p *desktopExternalIntegrationPeer) close() {
 	if p.packet != nil {
 		_ = p.packet.Close()
 	}
+	if p.layerInput != nil {
+		_ = p.layerInput.Close()
+	}
 	if p.closeProtocol != nil {
 		p.closeProtocol()
 	}
@@ -1267,6 +1292,7 @@ func desktopExternalIntegrationDelayedAccept(t *testing.T) {
 func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalIntegrationCA, protocol, fault string) *desktopExternalIntegrationFixture {
 	t.Helper()
 	iface, address := desktopExternalIntegrationAddress(t)
+	layerMode := desktopExternalHysteriaLayerMode(protocol)
 	var listener net.Listener
 	var packet net.PacketConn
 	var remote netip.AddrPort
@@ -1275,7 +1301,11 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 			t.Fatal("direct UDP family has no admitted physical owner on this target")
 		}
-		packet, err = net.ListenPacket("udp4", net.JoinHostPort(address.String(), "0"))
+		port := "0"
+		if layerMode == "aes-256-gcm+xor-whitening" {
+			port = "8389"
+		}
+		packet, err = net.ListenPacket("udp4", net.JoinHostPort(address.String(), port))
 		if err == nil {
 			remote = packet.LocalAddr().(*net.UDPAddr).AddrPort()
 		}
@@ -1297,6 +1327,15 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	f.peer = &desktopExternalIntegrationPeer{listener: listener, packet: packet, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel}
 	if protocol == "socks5" {
 		f.peer.socks = newDesktopExternalSOCKSPeer(f.peer, fault)
+	}
+	if layerMode != "" {
+		f.peer.protocol, f.peer.layerMode, f.peer.layerFault = "hysteria2", layerMode, fault
+		f.peer.layerPassword = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+		f.peer.layerInput, err = net.ListenPacket("udp4", net.JoinHostPort(address.String(), "0"))
+		if err != nil {
+			f.peer.close()
+			t.Fatal("layered HY2 inner bind", err)
+		}
 	}
 	if strings.HasPrefix(fault, "latency-") {
 		f.peer.latency = newDesktopExternalLatencyPeer(t, ca, fault)
@@ -1324,6 +1363,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	transport := map[string]any{"type": "http", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()), "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
 	settings := map[string]any{"host": address.String(), "port": int(remote.Port()), "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
 	actualProtocol := protocol
+	if layerMode != "" {
+		actualProtocol = "hysteria2"
+	}
 	if awgpolicy.IsMode(protocol) {
 		actualProtocol = "amneziawg"
 	}
@@ -1340,14 +1382,18 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	if protocol == "socks5" {
 		transport["type"], transport["version"] = "socks", "5"
 	}
-	if protocol == "hysteria2" {
+	if actualProtocol == "hysteria2" {
+		innerPort := int(remote.Port())
+		if layerMode != "" {
+			innerPort = int(netip.MustParseAddrPort(f.peer.layerInput.LocalAddr().String()).Port())
+		}
 		name := "captured-proxy.example"
 		if fault == "peer-tls-name" {
 			name = "different-captured-proxy.example"
 		}
-		transport = map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()),
+		transport = map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": innerPort,
 			"password": desktopExternalIntegrationPassword, "tls": map[string]any{"enabled": true, "server_name": name}}
-		private["hysteria2"] = map[string]any{"server": address.String(), "port": int(remote.Port()), "password": desktopExternalIntegrationPassword, "tls_server_name": name}
+		private["hysteria2"] = map[string]any{"server": address.String(), "port": innerPort, "password": desktopExternalIntegrationPassword, "tls_server_name": name}
 	}
 	if desktopExternalIntegrationPacketEndpoint(protocol) {
 		clientPrivate, clientPublic := desktopExternalIntegrationWGKey(t)
@@ -1387,6 +1433,11 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	if desktopExternalIntegrationUDPDNS(protocol) {
 		profile["dns_protocol"] = "udp"
 	}
+	if layerMode != "" {
+		profile["start_layer"] = layerMode
+		private["start_layer"] = map[string]any{"mode": layerMode, "api": "http://10.93.0.1:8787", "transport": map[string]any{
+			"type": "shadowsocks", "tag": "captured-private-layer", "server": address.String(), "server_port": int(remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": f.peer.layerPassword}}
+	}
 	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": actualProtocol, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{transport}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
 	if desktopExternalIntegrationPacketEndpoint(protocol) {
@@ -1411,6 +1462,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	outs := outbound.NewRegistry()
 	HTTP.RegisterOutbound(outs)
 	shadowsocks.RegisterOutbound(outs)
+	WH.RegisterOutbound(outs)
 	HY.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
 	routervpndesktoppt.RegisterExternalSOCKSOutbound(outs)
@@ -1528,6 +1580,13 @@ func (f *desktopExternalIntegrationFixture) prove(t *testing.T) {
 			t.Fatal("UDP fixture granted an unrequested physical TCP destination")
 		}
 	}
+	if f.peer.layer != nil {
+		capture, err := f.policy.Capture()
+		if err != nil || capture.StartLayer != f.peer.layerMode || f.policy.Metadata().RootTag != "routervpn-exit-start-layer" ||
+			f.peer.layer.raw.Load() == 0 || f.peer.layer.authenticated.Load() != 1 || f.peer.layer.forwarded.Load() == 0 || f.peer.layer.rejected.Load() != 0 {
+			t.Fatal("HY2 proof bypassed the actual authenticated outer layer", err)
+		}
+	}
 	if f.peer.protocol == "socks5" {
 		f.peer.socks.proved(t, f)
 	}
@@ -1628,7 +1687,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
-		protocols = append(protocols, "hysteria2", "socks5")
+		protocols = append(protocols, "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5")
 	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "wireguard", "awg2-fast", "awg2-strong")
@@ -1702,8 +1761,14 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 			}
 		})
 		faults := []string{"dns", "exit", "credential", "tls-name", "tls-root", "lower-denied"}
-		if protocol == "hysteria2" {
+		if protocol == "hysteria2" || desktopExternalHysteriaLayerMode(protocol) != "" {
 			faults = append(faults, "peer-tls-name", "truncated")
+		}
+		if desktopExternalHysteriaLayerMode(protocol) != "" {
+			faults = append(faults, "layer-key")
+		}
+		if protocol == "hysteria2-aes-xor" {
+			faults = append(faults, "whitening")
 		}
 		if desktopExternalIntegrationPacketEndpoint(protocol) {
 			faults = append(faults, "psk", "truncated")
@@ -1762,6 +1827,11 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 				}
 				if fault == "peer-tls-name" && (f.peer.physicalUDP.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
 					t.Fatal("wrong Hysteria2 server identity bypassed the actual QUIC/TLS boundary", f.peer.diagnostic())
+				}
+				if fault == "layer-key" || fault == "whitening" {
+					if f.peer.layer == nil || f.peer.layer.raw.Load() == 0 || f.peer.layer.rejected.Load() == 0 || f.peer.layer.authenticated.Load() != 0 || f.peer.layer.forwarded.Load() != 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0 {
+						t.Fatal("wrong layer key bypassed actual SS2022 authentication")
+					}
 				}
 				if protocol == "socks5" {
 					f.peer.socks.rejected(t, fault)
@@ -1865,7 +1935,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		}
 	})
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
-		protocols := []string{"hysteria2"}
+		protocols := []string{"hysteria2", "hysteria2-aes", "hysteria2-aes-xor"}
 		if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 			protocols = append(protocols, "wireguard", "awg2-fast", "awg2-strong")
 		}

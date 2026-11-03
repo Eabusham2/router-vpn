@@ -388,3 +388,58 @@ func TestDesktopExternalPhysicalWindowsPacketEndpointsPreserveCapturedPolicy(t *
 		}
 	}
 }
+
+func TestDesktopExternalPhysicalWindowsHysteria2LayersKeepOuterAndInnerOwners(t *testing.T) {
+	for _, layer := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+		for _, kill := range []string{"on-connect", "always"} {
+			t.Run(layer+"/"+kill, func(t *testing.T) {
+				profile := desktopLayerProfile(t, "hysteria2", layer)
+				profile.KillSwitch, profile.KillSwitchPolicy = true, kill
+				profile.MTUPolicy, profile.ManualMTU = "manual", 1360
+				exit, err := standardExitFromExternalProfile(profile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				launch, err := compileDesktopExternalCaptured(context.Background(), profile, common.RouterProfile{}, exit, true, "", nil, nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				owner := launch.external
+				source, capture := bytes.Clone(owner.source), bytes.Clone(owner.capture)
+				original, expected := bytes.Clone(launch.config), owner.expected
+				if err := prepareDesktopExternalPhysical(launch, "windows"); err != nil || owner.physical == nil {
+					t.Fatal("layered original lost physical preparation", err)
+				}
+				meta, err := capturedDesktopExternalPhysical(owner)
+				if err != nil || meta == nil || meta.RootTag != "routervpn-exit-start-layer" || meta.Protocol != "hysteria2" ||
+					!bytes.Equal(source, owner.source) || !bytes.Equal(capture, owner.capture) || owner.expected != expected ||
+					meta.OriginalSourceSHA256 != expected.SourceSHA256 || meta.OriginalConfigSHA256 != expected.ConfigSHA256 || string(original) != owner.physical.OriginalPolicy().Config() {
+					t.Fatal("layered physical capture relabeled original proof or private source", err)
+				}
+				var before, after map[string]any
+				if json.Unmarshal(original, &before) != nil || json.Unmarshal(launch.config, &after) != nil {
+					t.Fatal("invalid graph")
+				}
+				inner := taggedRuntimeItem(after["outbounds"].([]any), mobilemultihop.ExternalFinalTag)
+				outer := taggedRuntimeItem(after["outbounds"].([]any), "routervpn-exit-start-layer")
+				if !reflect.DeepEqual(inner, taggedRuntimeItem(before["outbounds"].([]any), mobilemultihop.ExternalFinalTag)) || outer["detour"] != mobilemultihop.DesktopExternalPhysicalTag {
+					t.Fatal("physical adaptation bypassed or replaced the inner HY2 transport")
+				}
+				measurement, err := capturedDesktopMeasurementRuntime(launch)
+				resolver, dnsErr := capturedDesktopDNSRuntime(launch)
+				if err != nil || dnsErr != nil || measurement.source != meta.SourceSHA256 || measurement.config != meta.ConfigSHA256 || resolver.source != meta.SourceSHA256 || resolver.config != meta.ConfigSHA256 {
+					t.Fatal("layer measurement/DNS mailbox did not retain actual derived owner", err, dnsErr)
+				}
+				for _, target := range []string{"linux", "darwin"} {
+					other, err := compileDesktopExternalCaptured(context.Background(), profile, common.RouterProfile{}, exit, true, "", nil, nil, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := prepareDesktopExternalPhysicalCaptured(other, target); err != nil || other.external.physical != nil {
+						t.Fatal("Windows layer opened another target's physical host", target, err)
+					}
+				}
+			})
+		}
+	}
+}

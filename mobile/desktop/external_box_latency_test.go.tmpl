@@ -111,7 +111,7 @@ func desktopExternalLatencyStatus(t *testing.T, service *hopmeasure.Service) hop
 func desktopExternalLatencyIntegration(t *testing.T, ca *desktopExternalIntegrationCA) {
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
-		protocols = append(protocols, "hysteria2", "socks5")
+		protocols = append(protocols, "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5")
 	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "wireguard", "awg2-fast", "awg2-strong")

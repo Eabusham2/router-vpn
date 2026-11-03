@@ -33,6 +33,15 @@ EXTERNAL_HY2_ROOT = "TestRouterVPNDesktopExternalWindowsHysteria2WFP"
 EXTERNAL_HY2_CASES = (EXTERNAL_HY2_ROOT, *(EXTERNAL_HY2_ROOT + "/" + leaf for leaf in (
     "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
     "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")))
+EXTERNAL_HY2_LAYER_ROOT = "TestRouterVPNDesktopExternalWindowsHysteria2LayerWFP"
+EXTERNAL_HY2_LAYERS = ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+EXTERNAL_HY2_LAYER_CASES = {
+    mode: (EXTERNAL_HY2_LAYER_ROOT, EXTERNAL_HY2_LAYER_ROOT + "/" + mode,
+           *(EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + case.removeprefix(EXTERNAL_HY2_ROOT + "/") for case in EXTERNAL_HY2_CASES[1:]),
+           EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/reject/layer-key",
+           *((EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/reject/whitening",) if mode.endswith("+xor-whitening") else ()))
+    for mode in EXTERNAL_HY2_LAYERS
+}
 EXTERNAL_SOCKS_ROOT = "TestRouterVPNDesktopExternalWindowsSOCKSWFP"
 EXTERNAL_SOCKS_CASES = (EXTERNAL_SOCKS_ROOT, *(EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
     "refusal-receipts", "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
@@ -93,6 +102,14 @@ def checked_sources(source):
     if external.is_symlink() or not external.is_file() or not external.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows Hysteria2 escaped its explicit native test scope")
     records["external_hysteria2"] = hashlib.sha256(external.read_bytes()).hexdigest()
+    layer = ROOT / "mobile/desktop/external_box_windows_hysteria2_layer_test.go.tmpl"
+    if layer.is_symlink() or not layer.is_file() or not layer.read_bytes().startswith(TAG):
+        raise ValueError("Ordinary Windows Hysteria2 layer escaped its explicit native test scope")
+    records["external_hysteria2_layer"] = hashlib.sha256(layer.read_bytes()).hexdigest()
+    peer = ROOT / "mobile/desktop/external_hysteria_layer_peer_test.go.tmpl"
+    if peer.is_symlink() or not peer.is_file():
+        raise ValueError("Ordinary Hysteria2 layer lost its independent encrypted peer")
+    records["external_hysteria2_layer_peer"] = hashlib.sha256(peer.read_bytes()).hexdigest()
     socks = ROOT / "mobile/desktop/external_box_windows_socks_test.go.tmpl"
     if socks.is_symlink() or not socks.is_file() or not socks.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows SOCKS escaped its explicit native test scope")
@@ -192,9 +209,17 @@ def external_overlay(source, directory, mutation=None):
 
 def report_external_hysteria2(status, output):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
-    if status or any("--- PASS: " + case + " (" not in output for case in EXTERNAL_HY2_CASES) or \
-            any(value in output for value in ("--- SKIP:", "DATA RACE")):
+    if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_HY2_CASES) or \
+            socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Actual ordinary Windows Hysteria2 omitted its required native result")
+
+
+def report_external_hysteria2_layer(mode, status, output):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if mode not in EXTERNAL_HY2_LAYER_CASES or status or any(
+            not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_HY2_LAYER_CASES[mode]) or \
+            socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Actual ordinary Windows Hysteria2 layer omitted its required native result")
 
 
 def execute_external_hysteria2(source, workspace, build, captured):
@@ -210,6 +235,12 @@ def execute_external_hysteria2(source, workspace, build, captured):
     status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_ROOT + "$", "-test.count=1", "-test.timeout=180s", "-test.v"],
         cwd=source, env=captured, timeout=195)
     report_external_hysteria2(status, output)
+    for mode in EXTERNAL_HY2_LAYERS:
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Actual ordinary Hysteria2 native executable changed")
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_LAYER_ROOT + "$/^" + re.escape(mode) + "$", "-test.count=1", "-test.timeout=180s", "-test.v"],
+            cwd=source, env=captured, timeout=195)
+        report_external_hysteria2_layer(mode, status, output)
     if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
         raise ValueError("Actual ordinary Hysteria2 native executable changed")
     for label, leaf, witness in (
@@ -223,11 +254,22 @@ def execute_external_hysteria2(source, workspace, build, captured):
             cwd=source, env=captured, timeout=600)
         if status:
             raise ValueError("Actual ordinary Hysteria2 control did not compile: " + label + "\n" + output[-16384:])
+        control_digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_ROOT + "$/^" + leaf + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
             cwd=source, env=captured, timeout=75)
-        if status == 0 or "--- FAIL: " + EXTERNAL_HY2_ROOT + "/" + leaf + " (" not in output or witness not in output or \
-                any(value in output for value in ("--- SKIP:", "DATA RACE", "panic: test timed out")):
+        if status == 0 or not exact_native_verdict(output, "FAIL", EXTERNAL_HY2_ROOT + "/" + leaf) or witness not in output or \
+                socks_native_aborted(output):
             raise ValueError("Actual ordinary Hysteria2 control missed its exact defect: " + label + "\n" + output[-16384:])
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != control_digest:
+            raise ValueError("Actual ordinary Hysteria2 control executable changed")
+        for mode in EXTERNAL_HY2_LAYERS:
+            selected_leaf = EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + leaf
+            status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_LAYER_ROOT + "$/^" + re.escape(mode) + "$/^" + leaf + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
+                cwd=source, env=captured, timeout=75)
+            if status == 0 or not exact_native_verdict(output, "FAIL", selected_leaf) or witness not in output or socks_native_aborted(output):
+                raise ValueError("Actual ordinary Hysteria2 layer control missed its exact defect: " + label)
+            if hashlib.sha256(binary.read_bytes()).hexdigest() != control_digest:
+                raise ValueError("Actual ordinary Hysteria2 layer control executable changed")
         print("Rejected actual ordinary Hysteria2 native control: " + label, flush=True)
 
 

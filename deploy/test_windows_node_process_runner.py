@@ -59,6 +59,18 @@ class NodeProcessRunner(unittest.TestCase):
             for direction in ("router-" + protocol + "-router", protocol + "-router-" + protocol):
                 self.assertIn("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction, GATE.EXPECTED)
 
+    def test_hysteria_layers_keep_public_source_and_restoration_mandatory(self):
+        for protocol in ("hysteria2-aes", "hysteria2-aes-xor"):
+            for policy in ("on-connect", "always"):
+                self.assertIn("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol, GATE.EXPECTED)
+            for direction in ("router-" + protocol + "-router", protocol + "-router-" + protocol):
+                self.assertIn("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction, GATE.EXPECTED)
+            for fault in ("layer-key", "layer-mode", "private-peer", "inner-key", "inner-trust", "resolver"):
+                self.assertIn("TestDesktopWindowsExternalHysteria2LayerAuthorityKeepsOriginalSource/" + protocol + "/" + fault, GATE.EXPECTED)
+        for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening"):
+            for policy in ("on-connect", "always"):
+                self.assertIn("TestDesktopExternalPhysicalWindowsHysteria2LayersKeepOuterAndInnerOwners/" + layer + "/" + policy, GATE.EXPECTED)
+
     def test_complete_source_closure_includes_actual_adapter_and_embedded_command(self):
         records = GATE.sources()
         self.assertTrue(set(GATE.REQUIRED_SOURCES).issubset(records))

@@ -104,8 +104,11 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 		k.locked = true
 		return &desktopWindowsExternalRelease{f: f, target: target, barrier: barrier}, nil
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 		actual := protocol
+		if strings.HasPrefix(protocol, "hysteria2-") {
+			actual = "hysteria2"
+		}
 		if strings.HasPrefix(protocol, "amneziawg-") {
 			actual = "amneziawg"
 		}
@@ -129,6 +132,17 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 		profile.KillSwitch, profile.KillSwitchPolicy = true, policy
 		profile.MTUPolicy, profile.ManualMTU, profile.EffectiveMTU = "manual", 1360, 9000
 		profile.StartLayer, profile.MultihopExecution = "", "local"
+		if strings.HasPrefix(protocol, "hysteria2-") {
+			layer := common.StartLayerAES256GCM
+			if protocol == "hysteria2-aes-xor" {
+				layer = common.StartLayerAES256GCMXOR
+			}
+			provisioned := desktopLayerProfile(t, "hysteria2", layer)
+			profile.StartLayer, profile.External = provisioned.StartLayer, provisioned.External
+			if layer == common.StartLayerAES256GCM {
+				profile.External.StartLayer.Transport["server_port"] = float64(8388)
+			}
+		}
 		if err := common.NormalizeRouterProfile(&profile); err != nil {
 			t.Fatal(err)
 		}
@@ -505,7 +519,7 @@ func (f *desktopWindowsExternalFixture) connect(t *testing.T, protocol string) *
 
 func TestDesktopWindowsExternalPublicConnectAndDisconnect(t *testing.T) {
 	for _, policy := range []string{"on-connect", "always"} {
-		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
+		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 			t.Run(policy+"/"+protocol, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					f := newDesktopWindowsExternalFixture(t, policy)
@@ -1037,7 +1051,7 @@ func TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
-	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong", "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed"} {
+	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-hysteria2-aes-router", "hysteria2-aes-router-hysteria2-aes", "router-hysteria2-aes-xor-router", "hysteria2-aes-xor-router-hysteria2-aes-xor", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong", "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed"} {
 		t.Run(direction, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDesktopWindowsExternalFixture(t, "always")
@@ -1045,6 +1059,12 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				protocol := "https-connect"
 				if strings.Contains(direction, "hysteria2") {
 					protocol = "hysteria2"
+				}
+				if strings.Contains(direction, "hysteria2-aes") {
+					protocol = "hysteria2-aes"
+				}
+				if strings.Contains(direction, "hysteria2-aes-xor") {
+					protocol = "hysteria2-aes-xor"
 				}
 				if strings.Contains(direction, "socks5") {
 					protocol = "socks5"
@@ -1230,5 +1250,68 @@ func TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant(t *tes
 				})
 			}
 		})
+	}
+}
+
+func TestDesktopWindowsExternalHysteria2LayerAuthorityKeepsOriginalSource(t *testing.T) {
+	for _, protocol := range []string{"hysteria2-aes", "hysteria2-aes-xor"} {
+		for _, fault := range []string{"layer-key", "layer-mode", "private-peer", "inner-key", "inner-trust", "resolver"} {
+			t.Run(protocol+"/"+fault, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					f := newDesktopWindowsExternalFixture(t, "always")
+					launch := f.connect(t, protocol)
+					original := cloneRouterProfile(f.profiles[protocol])
+					if err := validateDesktopWindowsExternalSource(original, launch); err != nil || !reflect.DeepEqual(original.External, launch.external.profile.External) {
+						t.Fatal("public layered connection changed original private identity", err)
+					}
+					meta := launch.external.physical.Metadata()
+					captured, err := launch.external.physical.Capture()
+					measurement, measureErr := capturedDesktopMeasurementRuntime(launch)
+					if err != nil || measureErr != nil || captured.StartLayer != original.StartLayer || meta.Protocol != "hysteria2" || meta.RootTag != "routervpn-exit-start-layer" ||
+						len(captured.PhysicalRoots) != 1 || len(captured.PhysicalRoots[0].Destinations) != 1 || captured.PhysicalRoots[0].Destinations[0].Network != "udp" ||
+						measurement.source != meta.SourceSHA256 || measurement.config != meta.ConfigSHA256 || measurement.node != original.ID {
+						t.Fatal("layered measurement lost original outer UDP owner", err, measureErr)
+					}
+					observed := sessionTrackerFor(f.base.a).capture()
+					lookups := 0
+					lookup := func(context.Context, string) ([]string, error) {
+						lookups++
+						return nil, errors.New("unexpected ambient resolver")
+					}
+					if proof := proveSelectedDNSWithLookup(context.Background(), f.base.a, observed, launch.mode, lookup); proof.Status != "passed" || lookups != 0 {
+						t.Fatal("layered DNS did not consume the original proven source", proof)
+					}
+					changed := cloneRouterProfile(original)
+					switch fault {
+					case "layer-key":
+						changed.External.StartLayer.Transport["password"] = testWGKey('p')
+					case "layer-mode":
+						changed.StartLayer = common.StartLayerOff
+					case "private-peer":
+						changed.External.StartLayer.API = "http://10.77.0.2:8787"
+					case "inner-key":
+						changed.External.Hysteria2.Password = "replacement-private-password"
+					case "inner-trust":
+						changed.External.Hysteria2.TLSServerName = "replacement.example"
+					case "resolver":
+						changed.DNSHost = "198.51.100.53"
+					}
+					if desktopOwnedNodeProfileToken(changed) == desktopOwnedNodeProfileToken(original) {
+						t.Fatal("layer negative did not replace its effective source")
+					}
+					candidate := observed
+					candidate.Profile = changed
+					if validateDesktopWindowsExternalSource(changed, launch) == nil {
+						t.Fatal("changed layer identity adopted the original runtime")
+					}
+					if proof := proveSelectedDNSWithLookup(context.Background(), f.base.a, candidate, launch.mode, lookup); proof.Status == "passed" || lookups != 0 {
+						t.Fatal("changed layer reused original DNS authority", proof)
+					}
+					if launch.external.windows.current(true) != nil || f.base.a.nodeProtection.active.external != launch.external.physical || !reflect.DeepEqual(original.External, f.profiles[protocol].External) {
+						t.Fatal("rejected layer substitution changed current protection or saved private source")
+					}
+				})
+			})
+		}
 	}
 }
