@@ -12,6 +12,8 @@ import json
 import re
 import os
 import tempfile
+import subprocess
+import shutil
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +25,116 @@ SPEC.loader.exec_module(GATE)
 
 def failure(parent, case, witness):
     return witness + '\n--- FAIL: ' + parent + ' (0.01s)\n    --- FAIL: ' + parent + '/' + case + ' (0.01s)\nFAIL\n'
+
+
+class MAXObservationCompilation(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='max-observation-driver-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.files = (self.root / 'source.go', self.root / 'source_test.go')
+        for path in self.files:
+            path.write_text('package observer\n')
+        self.environment = {'captured': 'environment'}
+        self.calls = []
+        self.binary = None
+
+    def run_contract(self, operation):
+        with patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER, 'run', side_effect=operation), redirect_stdout(io.StringIO()):
+            GATE.observation_contract(Path('captured-go'), self.root, self.environment, ['-race'],
+                                      self.files, 'TestObservation', ('first', 'second'))
+
+    def owned(self, command, **kwargs):
+        args = [str(value) for value in command]
+        self.calls.append((args, kwargs))
+        self.assertIs(kwargs['env'], self.environment)
+        self.assertEqual(kwargs['cwd'], self.root)
+        if len(self.calls) == 1:
+            self.assertEqual(args[1:4], ['test', '-c', '-mod=readonly'])
+            self.assertIn('-race', args)
+            self.assertEqual(kwargs['timeout'], 180)
+            self.binary = Path(args[args.index('-o')+1])
+            self.binary.write_bytes(b'captured compiled test')
+            return subprocess.CompletedProcess(args, 0, b'', b'')
+        self.assertEqual(args, [str(self.binary), '-test.run=^TestObservation$', '-test.count=1', '-test.timeout=30s', '-test.v'])
+        self.assertEqual(kwargs['timeout'], 45)
+        output = b'--- PASS: TestObservation (0.01s)\n--- PASS: TestObservation/first (0.01s)\n--- PASS: TestObservation/second (0.01s)\nPASS\n'
+        return subprocess.CompletedProcess(args, 0, output, b'')
+
+    def test_cold_compilation_is_separate_from_exact_bounded_execution(self):
+        self.run_contract(self.owned)
+        self.assertEqual(len(self.calls), 2)
+        self.assertFalse(self.binary.parent.exists())
+
+    def test_timeout_preserves_original_failure_and_blocks_later_execution(self):
+        for stage in (1, 2):
+            with self.subTest(stage=stage):
+                self.calls = []
+                failures = []
+                def timed(command, **kwargs):
+                    result = self.owned(command, **kwargs)
+                    if len(self.calls) == stage:
+                        failure = subprocess.TimeoutExpired(result.args, kwargs['timeout'], output=b'original bounded diagnostic')
+                        failures.append(failure)
+                        raise failure
+                    return result
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    self.run_contract(timed)
+                self.assertIs(caught.exception, failures[0])
+                self.assertEqual(len(self.calls), stage)
+                self.assertFalse(self.binary.parent.exists())
+
+    def test_unproved_cleanup_retains_workspace_and_original_timeout(self):
+        failures = []
+        def unjoined(command, **kwargs):
+            result = self.owned(command, **kwargs)
+            original = subprocess.TimeoutExpired(['python', '-I', '-S', 'owned-bootstrap'], kwargs['timeout'])
+            failures.append(original)
+            try:
+                raise original
+            except subprocess.TimeoutExpired:
+                raise RuntimeError('captured native cleanup did not join')
+        try:
+            with self.assertRaises(ExceptionGroup) as caught:
+                self.run_contract(unjoined)
+            self.assertIs(caught.exception.exceptions[0], failures[0])
+            self.assertIn('cleanup did not join', str(caught.exception.exceptions[1]))
+            self.assertTrue(self.binary.is_file())
+            self.assertEqual(len(self.calls), 1)
+        finally:
+            if self.binary is not None:
+                shutil.rmtree(self.binary.parent)
+
+    def test_bootstrap_join_timeout_is_not_original_command_retirement(self):
+        def unjoined(command, **kwargs):
+            self.owned(command, **kwargs)
+            raise subprocess.TimeoutExpired(['python', '-I', '-S', 'owned-bootstrap'], 10)
+        try:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.run_contract(unjoined)
+            self.assertTrue(self.binary.is_file())
+        finally:
+            if self.binary is not None:
+                shutil.rmtree(self.binary.parent)
+
+    def test_missing_verdict_and_changed_executable_or_sources_fail_closed(self):
+        for fault in ('missing', 'executable', 'source'):
+            with self.subTest(fault=fault):
+                self.calls = []
+                def changed(command, **kwargs):
+                    result = self.owned(command, **kwargs)
+                    if fault == 'source' and len(self.calls) == 1:
+                        self.files[0].write_text('package changed\n')
+                    if len(self.calls) == 2:
+                        if fault == 'missing':
+                            result.stdout = result.stdout.replace(b'--- PASS: TestObservation/second (0.01s)\n', b'')
+                        if fault == 'executable':
+                            self.binary.write_bytes(b'changed compiled test')
+                    return result
+                with self.assertRaises(ValueError):
+                    self.run_contract(changed)
+                self.assertEqual(len(self.calls), 1 if fault == 'source' else 2)
+                self.assertFalse(self.binary.parent.exists())
 
 
 class MAXNativeBoundaries(unittest.TestCase):
@@ -615,6 +727,10 @@ class MAXNativeBoundaries(unittest.TestCase):
             stack.enter_context(patch.object(GATE.NODE, 'build_xray_reference', side_effect=xray))
             stack.enter_context(patch.object(GATE.NODE, 'xray_reference_sources', return_value={'test-only-xray': 'source'}))
             stack.enter_context(patch.object(GATE.NODE, 'run', side_effect=command))
+            def observation(compiler, source, captured, race, files, parent, cases):
+                status, output = command([compiler, 'test', *files], cwd=source, env=captured, timeout=45)
+                GATE.MAX.required_output(status, output, parent, cases)
+            stack.enter_context(patch.object(GATE, 'observation_contract', side_effect=observation))
             yield state
 
     def test_shipping_driver_requires_retired_closed_control_and_all_native_cases(self):

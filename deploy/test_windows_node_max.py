@@ -16,6 +16,7 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -81,9 +82,66 @@ def checked_sources(source):
                      'deploy/fixtures/windows-max-control/udp_observation.go',
                      'deploy/fixtures/windows-max-control/udp_observation_test.go',
                      'client/Protect-RouterVPN-Windows-PrivateRoot.ps1', 'client/test-windows-private-acl.ps1',
-                     'deploy/build_pq_reference_fixture.py', 'deploy/test_pq_reference_preparation.py'):
+                     'deploy/build_pq_reference_fixture.py', 'deploy/test_pq_reference_preparation.py',
+                     'deploy/windows_build_owner.py', 'deploy/test_windows_build_owner.py'):
         records['windows-max/' + relative] = MAX.regular_digest(ROOT / relative)
     return source, records
+
+
+def observation_contract(compiler, source, captured, race, files, parent, cases):
+    """Compile cold tooling separately from the original 30-second verdict."""
+    records = {Path(path): MAX.regular_digest(Path(path)) for path in files}
+    workspace = Path(tempfile.mkdtemp(prefix='routervpn-windows-max-observation-'))
+    binary = workspace / 'observation.test.exe'
+    retired = True
+
+    def owned(command, timeout):
+        nonlocal retired
+        retired = False
+        try:
+            result = REFERENCE.BUILD.BUILD_OWNER.run(command, cwd=source, env=captured, timeout=timeout)
+        except Exception as error:
+            arguments = [str(value) for value in command]
+            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)) and error.cmd == arguments:
+                # Only original-command outcomes imply the retained Job and
+                # bootstrap joined. A timeout joining the bootstrap itself
+                # has different argv and cannot release this workspace.
+                retired = True
+                raise
+            # A cleanup exception must not hide the initial deadline failure.
+            # Keep its unproved workspace; no PID lookup grants its removal.
+            seen, previous, expired = set(), error, None
+            while previous is not None and id(previous) not in seen:
+                seen.add(id(previous))
+                if isinstance(previous, subprocess.TimeoutExpired):
+                    expired = previous
+                previous = previous.__cause__ or previous.__context__
+            if expired is not None and expired is not error:
+                # communicate reports the retained bootstrap argv until its
+                # cleanup succeeds. Preserve that first real timeout too.
+                raise ExceptionGroup('Windows MAX observation timeout with unproved owned cleanup',
+                                     [expired, error]) from None
+            raise
+        retired = True
+        return result
+
+    try:
+        # The same bounded cold compilation used for native helper fixtures;
+        # no compile/link work consumes the real test's execution deadline.
+        owned([compiler, 'test', '-c', '-mod=readonly', *race, '-o', binary, *files], 180)
+        if {path: MAX.regular_digest(path) for path in records} != records:
+            raise ValueError('Windows MAX observation sources changed during compilation')
+        digest = MAX.regular_digest(binary)
+        result = owned([binary, '-test.run=^' + parent + '$', '-test.count=1',
+                        '-test.timeout=30s', '-test.v'], 45)
+        output = (result.stdout + result.stderr).decode('utf-8', errors='replace')
+        print(output, end='' if output.endswith('\n') else '\n', flush=True)
+        MAX.required_output(result.returncode, output, parent, cases)
+        if MAX.regular_digest(binary) != digest or {path: MAX.regular_digest(path) for path in records} != records:
+            raise ValueError('Windows MAX observation changed its exact executable or source during execution')
+    finally:
+        if retired:
+            shutil.rmtree(workspace)
 
 
 def prospective_predicate(raw):
@@ -533,14 +591,12 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
         raise ValueError('Windows MAX checksum verification failed:\n' + output[-8192:])
     packet = REFERENCE.BUILD.POLICY.AMNEZIA
     packet.TIMERS.verify(source, compiler, env=captured)
-    status, output = NODE.run([compiler, 'test', *race, '-count=1', '-timeout=30s', '-v',
-        WFP.RESOURCES / 'socket_peer.go', WFP.RESOURCES / 'socket_peer_test.go'], cwd=source, env=captured, timeout=90)
-    print(output, end='' if output.endswith('\n') else '\n', flush=True)
-    MAX.required_output(status, output, 'TestWindowsNodeObserverTransportPeer', ())
-    status, output = NODE.run([compiler, 'test', *race, '-count=1', '-timeout=30s', '-v',
-        UDP_CONTROL / 'udp_observation.go', UDP_CONTROL / 'udp_observation_test.go'], cwd=source, env=captured, timeout=45)
-    print(output, end='' if output.endswith('\n') else '\n', flush=True)
-    MAX.required_output(status, output, UDP_OBSERVATION, UDP_CASES)
+    observation_contract(compiler, source, captured, race,
+                         (WFP.RESOURCES / 'socket_peer.go', WFP.RESOURCES / 'socket_peer_test.go'),
+                         'TestWindowsNodeObserverTransportPeer', ())
+    observation_contract(compiler, source, captured, race,
+                         (UDP_CONTROL / 'udp_observation.go', UDP_CONTROL / 'udp_observation_test.go'),
+                         UDP_OBSERVATION, UDP_CASES)
     with tempfile.TemporaryDirectory(prefix='routervpn-windows-complete-max-') as directory:
         workspace = Path(directory)
         keys = workspace / 'private' / 'keys'
