@@ -51,12 +51,16 @@ public final class NWTest:@unchecked Sendable {
  private var retained:[@Sendable()->Void]=[]
  private var traces:[String]=[]
  private var hold=false
+ private var connectCounts:[String:Int]=[:]
+ private var inverted=false,partial=false,changeDuring=false
  private var delayedInitialPath=false
  public private(set) var excludesVirtual=false
  public func prohibit(_ types:[NWInterface.InterfaceType]){excludesVirtual=types.contains(.other) && types.contains(.loopback)}
  public var events:[String]{lock.lock();defer{lock.unlock()};return traces}
  public func record(_ event:String){lock.lock();traces.append(event);lock.unlock()}
- public func reset(){lock.lock();traces=[];hold=false;lock.unlock()}
+ public func reset(){lock.lock();traces=[];hold=false;connectCounts=[:];inverted=false;partial=false;changeDuring=false;lock.unlock()}
+ public func configure(inverted:Bool=false,partial:Bool=false,changeDuring:Bool=false){lock.lock();self.inverted=inverted;self.partial=partial;self.changeDuring=changeDuring;lock.unlock()}
+ public func connect(_ host:String)->(Double,Bool){lock.lock();let count=(connectCounts[host] ?? 0)+1;connectCounts[host]=count;let invert=inverted,fail=partial && count==11,change=changeDuring && count==11;lock.unlock();if change{changed()};return (invert ? (host.hasSuffix(".20") ? (count<=27 ? 0.001 : 0.035) : 0.010) : 0.003,fail)}
  public func holdCancellation(_ value:Bool){lock.lock();hold=value;lock.unlock()}
  public func cancelled(_ deliver:@escaping @Sendable()->Void){lock.lock();if hold{retained.append(deliver);lock.unlock()}else{lock.unlock();deliver()}}
  public func drain(){lock.lock();hold=false;let work=retained;retained=[];lock.unlock();for f in work{f()}}
@@ -76,8 +80,8 @@ public final class NWConnection:@unchecked Sendable {
  private let requiredInterface:String?
  private var queue:DispatchQueue?
  public init(host:NWEndpoint.Host,port:NWEndpoint.Port,using:NWParameters){self.host=host.value;self.port=port.value;self.requiredInterface=using.requiredInterface?.name}
- public func start(queue:DispatchQueue){self.queue=queue;if let requiredInterface{NWTest.shared.record("bound:"+requiredInterface)};NWTest.shared.record("start:"+host+":"+String(port));queue.asyncAfter(deadline:.now()+0.003){
-   if self.host.hasSuffix(".99"){self.stateUpdateHandler?(.failed(URLError(.cannotConnectToHost)))}else{self.stateUpdateHandler?(.ready)}
+ public func start(queue:DispatchQueue){self.queue=queue;if let requiredInterface{NWTest.shared.record("bound:"+requiredInterface)};NWTest.shared.record("start:"+host+":"+String(port));let (delay,fail)=NWTest.shared.connect(host);queue.asyncAfter(deadline:.now()+delay){
+   if self.host.hasSuffix(".99") || fail{self.stateUpdateHandler?(.failed(URLError(.cannotConnectToHost)))}else{self.stateUpdateHandler?(.ready)}
  }}
  public func cancel(){NWTest.shared.record("cancel:"+host);NWTest.shared.cancelled{[self] in queue?.async{NWTest.shared.record("drained:"+self.host);self.stateUpdateHandler?(.cancelled)}}}
 }
@@ -245,6 +249,39 @@ import Network
    check("probe cannot mutate the replacement private profile",p.id=="replacement" && p.name=="Replacement candidate" && p.endpoint=="203.0.113.22:443")
   }
   do {
+   NWTest.shared.reset();NWTest.shared.configure(inverted:true)
+   let first=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"one",name:"A",endpoint:"203.0.113.20"),excluding:[])
+   let second=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"two",name:"B",endpoint:"203.0.113.21"),excluding:[])
+   check("actual routed comparison has fifty samples",first.samples==50 && second.samples==50 && first.failed==0 && second.failed==0 && NWTest.shared.events.filter{$0.hasPrefix("start:")}.count==102)
+   check("actual routed trimmed mean differs from favorable median",first.medianMS!<second.medianMS! && first.trimmedMeanMS!>second.trimmedMeanMS!)
+   let model=try fresh(),capture=try IOSViaEntryCapture(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
+   let network=try await IOSViaEntryNetwork.shared.snapshot()
+   let ranked=try IOSViaEntryReceipt(capture:capture,values:[first,second],model:model,network:network)
+   check("receipt selects robust fifty-sample winner",ranked.fastest?.id=="two")
+   let summary=IOSViaEntryTCP.summarize(IOSViaEntryTCPTarget(id:"summary",name:"Summary",endpoint:"203.0.113.20"),values:Array(repeating:1.0,count:26)+Array(repeating:100.0,count:24),failed:0)
+   check("actual summary removes five samples at each end",summary.medianMS==1 && abs(summary.trimmedMeanMS!-48.025)<0.000001 && summary.samples==50)
+   let a=IOSViaEntryValue(id:"one",name:"A",medianMS:1,trimmedMeanMS:20,samples:50,failed:0,reason:"fixture")
+   let b=IOSViaEntryValue(id:"two",name:"B",medianMS:2,trimmedMeanMS:20,samples:50,failed:0,reason:"fixture")
+   let tied=try IOSViaEntryReceipt(capture:capture,values:[b,a],model:model,network:network)
+   check("receipt trimmed ties use stable ID",tied.fastest?.id=="one")
+   for value in [IOSViaEntryValue(id:"short",name:"short",medianMS:1,trimmedMeanMS:1,samples:49,failed:0,reason:"fixture"),IOSViaEntryValue(id:"failed",name:"failed",medianMS:1,trimmedMeanMS:1,samples:50,failed:1,reason:"fixture"),IOSViaEntryValue(id:"invalid",name:"invalid",medianMS:1,trimmedMeanMS:.nan,samples:50,failed:0,reason:"fixture")] {check("incomplete/invalid result has no automatic score",!value.eligible)}
+  }
+  do {
+   NWTest.shared.reset();NWTest.shared.configure(partial:true)
+   let value=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"partial",name:"Partial",endpoint:"203.0.113.22"),excluding:[])
+   check("actual partial response preserves failures without a score",value.samples==49 && value.failed==1 && !value.eligible && value.label.contains("no comparison score") && NWTest.shared.events.filter{$0.hasPrefix("start:")}.count==51)
+   NWTest.shared.reset();NWTest.shared.configure(changeDuring:true)
+   let network=try await IOSViaEntryNetwork.shared.snapshot()
+   do{_ = try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"drift",name:"Drift",endpoint:"203.0.113.22"),excluding:[],network:network);fail("network drift inside a fifty-sample candidate returned a result")}catch{}
+   check("network drift stops before another candidate probe",NWTest.shared.events.filter{$0.hasPrefix("start:")}.count==11 && NWTest.shared.events.filter{$0.hasPrefix("start:")}.count==NWTest.shared.events.filter{$0.hasPrefix("drained:")}.count)
+   NWTest.shared.reset()
+   do{_ = try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"expired",name:"Expired",endpoint:"203.0.113.22"),excluding:[],deadline:ProcessInfo.processInfo.systemUptime-1);fail("expired comparison started a candidate")}catch{}
+   check("expired comparison has no native sockets",NWTest.shared.events.isEmpty)
+   do{_ = try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"deadline",name:"Deadline",endpoint:"203.0.113.22"),excluding:[],deadline:ProcessInfo.processInfo.systemUptime+0.100);fail("comparison deadline was only checked between candidates")}catch{}
+   let starts=NWTest.shared.events.filter{$0.hasPrefix("start:")}.count
+   check("comparison deadline drains within one candidate",starts>0 && starts<51 && starts==NWTest.shared.events.filter{$0.hasPrefix("drained:")}.count)
+  }
+  do {
    NWTest.shared.reset();let captured=try await IOSViaEntryNetwork.shared.snapshot()
    _ = try await IOSViaEntryTCP.probeDirect(host:"203.0.113.22",port:443,timeoutMS:100,network:captured)
    check("direct measurements require captured physical interface",NWTest.shared.events.contains("bound:physical-wifi"))
@@ -300,19 +337,24 @@ def main():
             for name, source in contents.items():
                 path = folder / name; path.write_text(source); paths.append(str(path))
             return paths
-        def execute(contents, mutation=None):
+        def execute(contents, mutation=None, expected=None):
             paths = write_sources(contents)
             subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
                 '-Xlinker', '-rpath', '-Xlinker', str(folder)] + paths + ['-o', str(binary)], check=True, timeout=150)
             result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=120)
             if mutation:
                 assert result.returncode != 0 and 'FAIL:' in result.stderr, f'Negative control escaped: {mutation}\n{result.stdout}\n{result.stderr}'
+                if expected:
+                    assert 'FAIL: '+expected in result.stderr, f'{mutation} failed at an unrelated witness: {result.stdout}{result.stderr}'
                 print(f'Apple candidate negative control rejected: {mutation}')
             else:
                 assert result.returncode == 0, result.stdout + result.stderr
                 print(result.stdout.strip())
         execute(code)
         mutations = {
+            'fifty candidate samples': ('for _ in 0..<50 {', 'for _ in 0..<5 {'),
+            'trimmed candidate statistic': ('middle.reduce(0, +) / Double(middle.count)', 'values.reduce(0, +) / Double(values.count)'),
+            'receipt robust winner': ('$0.trimmedMeanMS! == $1.trimmedMeanMS! ? $0.id < $1.id : $0.trimmedMeanMS! < $1.trimmedMeanMS!', '$0.medianMS! < $1.medianMS!'),
             'network changed during native retirement': (
                 'try Task.checkCancellation(); try capture.requireSources(model: model)\n            guard IOSViaEntryNetwork.shared.current == network else { throw CancellationError() }',
                 'try Task.checkCancellation(); try capture.requireSources(model: model)'),
@@ -323,13 +365,31 @@ def main():
                 'if let physical { parameters.requiredInterface = physical }',
                 '_ = physical'),
         }
+        expected_witnesses = {
+            'fifty candidate samples': 'only valid responses can win',
+            'trimmed candidate statistic': 'actual summary removes five samples at each end',
+            'receipt robust winner': 'receipt selects robust fifty-sample winner',
+        }
         for name, (before, after) in mutations.items():
             assert sum(source.count(before) for source in code.values()) == 1, f'Mutation anchor changed: {name}'
-            execute({path: source.replace(before, after) for path, source in code.items()}, name)
+            execute({path: source.replace(before, after) for path, source in code.items()}, name, expected_witnesses.get(name))
         unsafe = dict(code)
         before = '_ target: IOSViaEntryTCPTarget, excluding excluded:'
         assert unsafe['IOSViaEntryTCP.swift'].count(before) == 1
         unsafe['IOSViaEntryTCP.swift'] = unsafe['IOSViaEntryTCP.swift'].replace(before, '_ target: RouterProfile, excluding excluded:')
+        # Keep the unrelated scalar fixture calls well typed so the negative
+        # reaches SIL actor-isolation checking at the shipping caller. This
+        # overload is never executed: the unsafe composition must not compile.
+        unsafe['IOSViaEntryTCP.swift'] = unsafe['IOSViaEntryTCP.swift'].replace(
+            'return summarize(target, values: values, failed: failed)',
+            'return summarize(IOSViaEntryTCPTarget(id: target.id, name: target.name, endpoint: target.endpoint), values: values, failed: failed)')
+        unsafe['IOSViaEntryTCP.swift'] += '''
+extension IOSViaEntryTCP {
+    static func measure(_ target: IOSViaEntryTCPTarget, excluding excluded: Set<String>, allowIPv6: Bool = true, network: UInt64? = nil, deadline: TimeInterval = .infinity) async throws -> IOSViaEntryValue {
+        throw CancellationError()
+    }
+}
+'''
         before = 'IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts'
         assert unsafe['IOSViaEntryLatency.swift'].count(before) == 1
         unsafe['IOSViaEntryLatency.swift'] = unsafe['IOSViaEntryLatency.swift'].replace(before, 'IOSViaEntryTCP.measure(candidate, excluding: capture.excludedHosts')
@@ -351,7 +411,7 @@ def main():
             actual.write_text(value)
             actor = folder / 'ActualActorBoundary.swift'
             capture = ('let target = IOSViaEntryTCPTarget(id: candidate.id, name: candidate.name, endpoint: candidate.endpoint)\n'
-                       '                        let value = try await IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6)')
+                       '                        let value = try await IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6, network: network, deadline: deadline)')
             assert code['IOSViaEntryLatency.swift'].count(capture) == 1
             crossing = capture.replace('capture.excludedHosts', 'excludedHosts').replace('capture.allowsIPv6', 'allowsIPv6')
             actor_code = '''import Foundation
@@ -363,6 +423,8 @@ def main():
         self.candidates = candidates; self.excludedHosts = excludedHosts; self.allowsIPv6 = allowsIPv6
     }
     func measure() async throws -> [IOSViaEntryValue] {
+        let network: UInt64 = 1
+        let deadline = ProcessInfo.processInfo.systemUptime + 120
         var values: [IOSViaEntryValue] = []
         for candidate in candidates {
             // SHIPPING_SCALAR_CAPTURE

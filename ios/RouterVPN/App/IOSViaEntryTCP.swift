@@ -76,11 +76,22 @@ enum IOSViaEntryTCP {
         return false
     }
 
-    static func measure(_ target: IOSViaEntryTCPTarget, excluding excluded: Set<String>, allowIPv6: Bool = true) async throws -> IOSViaEntryValue {
+    static func measure(_ target: IOSViaEntryTCPTarget, excluding excluded: Set<String>, allowIPv6: Bool = true, network: UInt64? = nil, deadline: TimeInterval = .infinity) async throws -> IOSViaEntryValue {
+        func check() throws {
+            try Task.checkCancellation()
+            guard ProcessInfo.processInfo.systemUptime < deadline,
+                  network == nil || IOSViaEntryNetwork.shared.current == network else { throw CancellationError() }
+        }
+        func budget(_ limit: Int) throws -> Int {
+            try check()
+            guard deadline.isFinite else { return limit }
+            return Int(min(Double(limit), max(1, (deadline - ProcessInfo.processInfo.systemUptime) * 1000)))
+        }
+        try check()
         let name = target.name.isEmpty ? target.id : target.name
         let host = endpointHost(target.endpoint)
         func unavailable(_ reason: String) -> IOSViaEntryValue {
-            IOSViaEntryValue(id: target.id, name: name, medianMS: nil, samples: 0, failed: 5, reason: reason)
+            IOSViaEntryValue(id: target.id, name: name, medianMS: nil, trimmedMeanMS: nil, samples: 0, failed: 0, reason: reason)
         }
         guard publicHost(host), !excluded.contains(host), allowIPv6 || IPv6Address(host) == nil else {
             return unavailable("This candidate has no distinct public literal endpoint that can be proved through the entry.")
@@ -91,27 +102,35 @@ enum IOSViaEntryTCP {
         ports += [443, 8388, 10443, 11443, 12443, 13443, 14443, 15443]
         var tried = Set<UInt16>(), selected: UInt16?
         for port in ports where tried.insert(port).inserted {
-            try Task.checkCancellation()
-            do { _ = try await probe(host: host, port: port, timeoutMS: 300); selected = port; break }
+            try check()
+            do { _ = try await probe(host: host, port: port, timeoutMS: try budget(300)); try check(); selected = port; break }
             catch is CancellationError { throw CancellationError() }
             catch { }
         }
         guard let selected else { return unavailable("No TCP response endpoint answered through this entry.") }
         var values: [Double] = [], failed = 0
-        for _ in 0..<5 {
-            try Task.checkCancellation()
-            do { values.append(try await probe(host: host, port: selected, timeoutMS: 950)) }
+        for _ in 0..<50 {
+            try check()
+            do { values.append(try await probe(host: host, port: selected, timeoutMS: try budget(950))); try check() }
             catch is CancellationError { throw CancellationError() }
             catch { failed += 1 }
         }
-        try Task.checkCancellation()
-        values.sort()
+        try check()
+        return summarize(target, values: values, failed: failed)
+    }
+
+    static func summarize(_ target: IOSViaEntryTCPTarget, values: [Double], failed: Int) -> IOSViaEntryValue {
+        let name = target.name.isEmpty ? target.id : target.name
+        let values = values.sorted()
         let median: Double?
         if values.isEmpty { median = nil }
         else if values.count % 2 == 0 { median = (values[values.count / 2 - 1] + values[values.count / 2]) / 2 }
         else { median = values[values.count / 2] }
-        return IOSViaEntryValue(id: target.id, name: name, medianMS: median, samples: values.count, failed: failed,
-            reason: failed == 0 ? "Five TCP connect response samples through the captured entry." : "At least one response failed; excluded from automatic selection.")
+        let trim = values.count / 10
+        let middle = values[trim..<(values.count - trim)]
+        let trimmed: Double? = middle.isEmpty ? nil : middle.reduce(0, +) / Double(middle.count)
+        return IOSViaEntryValue(id: target.id, name: name, medianMS: median, trimmedMeanMS: trimmed, samples: values.count, failed: failed,
+            reason: values.count == 50 && failed == 0 ? "50 TCP connect responses through the captured entry; ranked by 10% trimmed mean." : "At least one response failed; excluded from automatic selection.")
     }
 
     static func probe(host: String, port: UInt16, timeoutMS: Int) async throws -> Double {

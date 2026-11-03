@@ -365,7 +365,7 @@ struct IOSMultihopView: View {
                             if !viaEntry.progress.isEmpty { Text(viaEntry.progress).font(.caption) }
                         }
                         if !viaEntry.error.isEmpty { Text(viaEntry.error).font(.caption).foregroundStyle(.secondary) }
-                        Text("Measures five TCP connection responses per reachable exit through a temporary, proved entry using the selected transport. The temporary VPN stops before results appear. Failed samples exclude automatic selection. These values are separate from direct-node tests and do not start the saved multihop graph.")
+                        Text("Measures 50 TCP connection responses per reachable exit through a temporary, proved entry using the selected transport. The temporary VPN stops before results appear. Only complete zero-failure results enter automatic selection, ranked by the 10% trimmed mean with stable node-ID ties. These values are separate from direct-node tests and do not start the saved multihop graph.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

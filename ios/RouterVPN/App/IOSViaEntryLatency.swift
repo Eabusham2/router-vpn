@@ -5,14 +5,16 @@ struct IOSViaEntryValue: Identifiable, Sendable {
     let id: String
     let name: String
     let medianMS: Double?
+    let trimmedMeanMS: Double?
     let samples: Int
     let failed: Int
     let reason: String
 
-    var eligible: Bool { samples >= 3 && failed == 0 && medianMS.map { $0.isFinite && $0 > 0 } == true }
+    var eligible: Bool { samples == 50 && failed == 0 && medianMS.map { $0.isFinite && $0 > 0 && $0 <= 60_000 } == true && trimmedMeanMS.map { $0.isFinite && $0 > 0 && $0 <= 60_000 } == true }
     var label: String {
         guard let medianMS else { return "\(name) • unavailable" }
-        return String(format: "%@ • %.1f ms • %d/%d responses", name, medianMS, samples, samples + failed)
+        let measured = String(format: "%@ • %.1f ms median • %d/%d responses", name, medianMS, samples, samples + failed)
+        return measured + (eligible ? String(format: " • %.1f ms trimmed mean", trimmedMeanMS!) : " • no comparison score")
     }
 }
 
@@ -169,7 +171,7 @@ final class IOSViaEntryReceipt {
     }
 
     var fastest: IOSViaEntryValue? {
-        values.filter(\.eligible).min { $0.medianMS! < $1.medianMS! }
+        values.filter(\.eligible).min { $0.trimmedMeanMS! == $1.trimmedMeanMS! ? $0.id < $1.id : $0.trimmedMeanMS! < $1.trimmedMeanMS! }
     }
 }
 
@@ -234,7 +236,7 @@ final class IOSViaEntryLatency: ObservableObject {
                     }
                 }, measure: {
                     guard IOSViaEntryNetwork.shared.current == network else { throw CancellationError() }
-                    self.progress = "Measuring candidate TCP responses through \(capture.entryName)…"
+                    self.progress = "Measuring 50 TCP responses per candidate through \(capture.entryName)…"
                     let deadline = ProcessInfo.processInfo.systemUptime + 120
                     var values: [IOSViaEntryValue] = []
                     for candidate in capture.candidates {
@@ -243,7 +245,7 @@ final class IOSViaEntryLatency: ObservableObject {
                               ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
                         self.progress = "\(capture.entryName) → \(candidate.name.isEmpty ? candidate.id : candidate.name) • \(values.count + 1)/\(capture.candidates.count)"
                         let target = IOSViaEntryTCPTarget(id: candidate.id, name: candidate.name, endpoint: candidate.endpoint)
-                        let value = try await IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6)
+                        let value = try await IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6, network: network, deadline: deadline)
                         try Task.checkCancellation()
                         guard IOSViaEntryNetwork.shared.current == network,
                               ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
