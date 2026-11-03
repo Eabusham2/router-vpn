@@ -213,11 +213,10 @@ enum IOSNodeSort: String, CaseIterable, Identifiable {
                 if left != right { return left > right }
                 if (lhs.useCount ?? 0) != (rhs.useCount ?? 0) { return (lhs.useCount ?? 0) > (rhs.useCount ?? 0) }
             case .latency:
-                let lm = (lhs.latencySamples ?? 0) > 0 && (lhs.latencyMedianMs ?? 0) > 0
-                let rm = (rhs.latencySamples ?? 0) > 0 && (rhs.latencyMedianMs ?? 0) > 0
+                let lm = IOSNodeLatencyReceipt.eligible(lhs)
+                let rm = IOSNodeLatencyReceipt.eligible(rhs)
                 if lm != rm { return lm }
-                if lm, lhs.latencyMedianMs != rhs.latencyMedianMs { return lhs.latencyMedianMs! < rhs.latencyMedianMs! }
-                if lm, (lhs.latencyP90Ms ?? 0) != (rhs.latencyP90Ms ?? 0) { return (lhs.latencyP90Ms ?? 0) < (rhs.latencyP90Ms ?? 0) }
+                if lm { return IOSNodeLatencyReceipt.lower(lhs, rhs) }
             case .current:
                 let lc = lhs.id == selectedID, rc = rhs.id == selectedID
                 if lc != rc { return lc }

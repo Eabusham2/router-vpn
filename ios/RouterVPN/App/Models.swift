@@ -590,6 +590,21 @@ struct ExternalNodeConfig: Codable, Hashable {
     }
 }
 
+// Optional provenance; historical scalar statistics remain readable without it.
+struct IOSNodeLatencyReceipt: Codable, Hashable, Sendable {
+    let schema: Int
+    let measurement: String
+    let attempts: Int
+    let failed: Int
+    let sourceToken: String
+    let networkMetadata: String
+    enum CodingKeys: String, CodingKey {
+        case schema, measurement, attempts, failed
+        case sourceToken = "source_token"
+        case networkMetadata = "network_metadata"
+    }
+}
+
 struct RouterProfile: Identifiable, Codable, Hashable {
     var schemaVersion: Int?
     var id: String
@@ -652,6 +667,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var longitude: Double?
     var useCount: Int?
     var lastUsedAt: String?
+    var latencyReceipt: IOSNodeLatencyReceipt?
     var latencySamples: Int?
     var latencyMinMs: Double?
     var latencyMedianMs: Double?
@@ -734,6 +750,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case pathProbeURL = "path_probe_url"
         case useCount = "use_count"
         case lastUsedAt = "last_used_at"
+        case latencyReceipt = "latency_receipt"
         case latencySamples = "latency_samples"
         case latencyMinMs = "latency_min_ms"
         case latencyMedianMs = "latency_median_ms"

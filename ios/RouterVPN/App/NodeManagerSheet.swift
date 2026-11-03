@@ -11,7 +11,7 @@ struct RouterVPNNodeManagerSheet: View {
     @State private var nodeSort: IOSNodeSort = .current
 
     private var measuredProfiles: [RouterProfile] {
-        model.allNodeProfiles.filter { (($0.latencySamples ?? 0) > 0) && (($0.latencyMedianMs ?? 0) > 0) }
+        model.allNodeProfiles.filter(IOSNodeLatencyReceipt.eligible)
     }
 
     private var usageDisplay: IOSNodeUsage.Display {
@@ -76,12 +76,12 @@ struct RouterVPNNodeManagerSheet: View {
                         }
                         Button("Select lowest-latency node") {
                             guard measuredProfiles.count >= 2,
-                                  let best = measuredProfiles.min(by: { ($0.latencyMedianMs ?? .infinity) < ($1.latencyMedianMs ?? .infinity) }) else { return }
+                                  let best = measuredProfiles.min(by: IOSNodeLatencyReceipt.lower) else { return }
                             model.selectNode(best.id)
                             nodeSort = .latency
                         }
                         .disabled(measuredProfiles.count < 2 || model.profileMutationBlocked)
-                        Text(measuredProfiles.count < 2 ? "Run the 50-sample latency test on at least two usable nodes before automatic lowest-latency selection." : "Lowest-latency selection uses measured median latency; untested nodes are never guessed as fastest.")
+                        Text(measuredProfiles.count < 2 ? "Run the 50-sample latency test on at least two usable nodes before automatic lowest-latency selection." : "Saved selection uses complete source-bound 50-sample trimmed means. Saved times/networks may differ; use Fastest for a current comparison.")
                             .font(.caption).foregroundStyle(.secondary)
                         if let warning = usageDisplay.warning {
                             Text(warning).font(.caption).foregroundStyle(.orange)

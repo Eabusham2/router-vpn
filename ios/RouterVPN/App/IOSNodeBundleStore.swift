@@ -93,7 +93,7 @@ final class IOSNodeBundleStore {
 
     /// Compare the exact saved source immediately before the one atomic write.
     /// A relink/edit/removal or another benchmark cannot accept this old result.
-    func recordLatency(_ result: IOSLatencyResult, expectedRecord: Data,
+    func recordLatency(_ result: IOSLatencyResult, network: UInt64, expectedRecord: Data,
                        current: ClientBundle?) throws -> (bundle: ClientBundle, data: Data) {
         try ensureStorageReady()
         let available = readableRecords(current: current)
@@ -102,7 +102,7 @@ final class IOSNodeBundleStore {
                   var bundle = try? decodeStoredBundle(data),
                   bundle.routerProfiles.filter({ $0.id == result.id }).count == 1,
                   let index = bundle.routerProfiles.firstIndex(where: { $0.id == result.id }) else { continue }
-            bundle.routerProfiles[index] = try result.applying(to: bundle.routerProfiles[index])
+            bundle.routerProfiles[index] = try result.applying(to: bundle.routerProfiles[index], network: network)
             let replacement = try JSONEncoder().encode(bundle)
             var next = records; next[key] = replacement
             try commitRecords(next)

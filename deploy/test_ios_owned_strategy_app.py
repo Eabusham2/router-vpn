@@ -675,7 +675,7 @@ def main(negative=True, selected_mutations=None):
     source += '\n@MainActor extension RouterVPNModel {\n' + external_properties + external_methods
     for text in [selection, (APP / 'Models.swift').read_text(), (APP / 'IOSSessionIdentity.swift').read_text(), wire,
                  (APP / 'IOSSpeedLabOwnership.swift').read_text(),
-                 (APP / 'IOSNodeUsage.swift').read_text(), (APP / 'IOSNodeUsageAccounting.swift').read_text(),
+                 (APP / 'IOSNodeLatencyStatistics.swift').read_text(), (APP / 'IOSNodeUsage.swift').read_text(), (APP / 'IOSNodeUsageAccounting.swift').read_text(),
                  (APP / 'IOSStartupPolicy.swift').read_text(),
                  (APP / 'IOSMultihopExecution.swift').read_text(), (APP / 'IOSStartupLastChoice.swift').read_text(),
                  (APP / 'IOSOwnedStrategy.swift').read_text(), (APP / 'IOSStrategySupport.swift').read_text().replace('UserDefaults.standard', 'FixturePreferences.standard'),

@@ -158,8 +158,8 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
             try Task.checkCancellation(); try capture.requireCurrent(model); try model.iosSpeedLabOwnership.require(owner)
             guard !values.isEmpty else { throw IOSLatencyResult.issue("No node returned a valid direct TCP response.") }
             if durable {
-                guard values.count == 1, let value = values.first, let expected = capture.records[value.id] else { throw CancellationError() }
-                try model.commitNodeLatency(value, expectedRecord: expected, expectedSelection: capture.selection, owner: owner)
+                guard values.count == 1, let value = values.first, let expected = capture.records[value.id], let network = capture.network else { throw CancellationError() }
+                try model.commitNodeLatency(value, network: network, expectedRecord: expected, expectedSelection: capture.selection, owner: owner)
                 latencyByID.removeValue(forKey: value.id)
             } else {
                 directReceipt = capture

@@ -165,8 +165,20 @@ func node(_ id: String, external: [String: Any]? = nil) throws -> RouterProfile 
         check("Last used uses time not lexical formatting", IOSNodeSort.recent.ordered(unordered, selectedID: "").map(\.id) == ["d", "a", "c", "b"])
         check("current selection remains first", IOSNodeSort.current.ordered(unordered, selectedID: "b").first?.id == "b")
         check("name sorting retains stable duplicate-name tie", IOSNodeSort.name.ordered(unordered, selectedID: "").map(\.id) == ["a", "c", "b", "d"])
-        a.latencySamples = 50; a.latencyMedianMs = 5; b.latencySamples = 50; b.latencyMedianMs = 10
-        check("measured latency order is preserved", IOSNodeSort.latency.ordered([c, b, a], selectedID: "").map(\.id) == ["a", "b", "c"])
+        a = try IOSLatencyResult.summarize(id: a.id, name: a.name, values: Array(repeating: 5, count: 50), failed: 0).applying(to: a, network: 41)
+        b = try IOSLatencyResult.summarize(id: b.id, name: b.name, values: Array(repeating: 10, count: 50), failed: 0).applying(to: b, network: 42)
+        check("complete saved latency order", IOSNodeSort.latency.ordered([c, b, a], selectedID: "").map(\.id) == ["a", "b", "c"])
+        a = try IOSLatencyResult.summarize(id: a.id, name: a.name, values: Array(repeating: 1, count: 26) + Array(repeating: 100, count: 24), failed: 0).applying(to: a, network: 41)
+        b = try IOSLatencyResult.summarize(id: b.id, name: b.name, values: Array(repeating: 20, count: 50), failed: 0).applying(to: b, network: 42)
+        check("saved ranking uses trimmed mean despite favorable median", a.latencyMedianMs == 1 && IOSNodeSort.latency.ordered([a, b], selectedID: "").first?.id == "b")
+        var legacy = a; legacy.latencyReceipt = nil
+        check("legacy fifty label is not complete provenance", !IOSNodeLatencyReceipt.eligible(legacy) && legacy.latencySamples == 50)
+        var partial = a; partial.latencySamples = 49
+        check("partial saved count is not eligible", !IOSNodeLatencyReceipt.eligible(partial))
+        var stale = b; stale.apiToken = "replacement"
+        check("changed credentials cannot retain saved winner", !IOSNodeLatencyReceipt.eligible(stale))
+        a = try IOSLatencyResult.summarize(id: a.id, name: a.name, values: Array(repeating: 20, count: 50), failed: 0).applying(to: a, network: 41)
+        check("saved trimmed ties use stable ID", IOSNodeSort.latency.ordered([b, a], selectedID: "").first?.id == "a")
         check("Most used is exposed as real picker option", IOSNodeSort.allCases.contains(.used))
         #if canImport(CryptoKit)
         print("iOS node usage + sort: PASS (\(checks) executable checks; real CryptoKit; private-file boundary double)")
@@ -183,6 +195,7 @@ def main():
     if not swift:
         raise SystemExit('swiftc required for executable iOS usage tests')
     source = BOUNDARY + '\n' + (APP / 'Models.swift').read_text()
+    source += '\n' + (APP / 'IOSNodeLatencyStatistics.swift').read_text().replace('import CryptoKit\n', '')
     source += '\n' + (APP / 'IOSNodeUsage.swift').read_text().replace('import CryptoKit\n', '')
     with tempfile.TemporaryDirectory(prefix='routervpn-ios-usage-') as tmp:
         path = Path(tmp) / 'Usage.swift'

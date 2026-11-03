@@ -103,12 +103,12 @@ enum NEVPNStatus { case connected,disconnected,connecting }
  func externalTorEntryData(source:ClientBundle)throws->Data?{try entry.map{try JSONEncoder().encode($0)}}
  // Durable-write correctness is executed against the actual store/model in
  // test_ios_node_store_transactions.py. This boundary observes publication.
- func commitNodeLatency(_ result:IOSLatencyResult,expectedRecord:Data,expectedSelection:Data,owner:UUID)throws{
+ func commitNodeLatency(_ result:IOSLatencyResult,network:UInt64,expectedRecord:Data,expectedSelection:Data,owner:UUID)throws{
   try iosSpeedLabOwnership.require(owner)
   guard !profileMutationBlocked,var value=bundle,let index=value.routerProfiles.firstIndex(where:{$0.id==result.id}),
    IOSNodeBundleStore.shared.bundleData(containing:result.id,current:bundle)==expectedRecord,
    try encoded(value)==expectedSelection else{throw CancellationError()}
-  value.routerProfiles[index]=try result.applying(to:value.routerProfiles[index])
+  value.routerProfiles[index]=try result.applying(to:value.routerProfiles[index],network:network)
   bundle=value;IOSNodeBundleStore.shared.records[result.id]=try encoded(value);commits+=1
  }
 }
