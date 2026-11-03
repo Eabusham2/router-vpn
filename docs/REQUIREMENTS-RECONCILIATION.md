@@ -18,7 +18,23 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through cea693a0
+## Implementation reconciliation through 32b36a63
+
+The verified source cutoff is [32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) now records
+twenty-nine published implementation/verification units. These rows supersede
+the earlier pending statements for the same changes; they do not close broader
+platform, graph or physical-device requirements.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| Selected DNS, Home LAN policy and captured session ownership | The DNS fixture explicitly retires its original retained SOCKS association. Linux's complete retained running-inventory integration is published and passes actual namespace tests; every negotiated relay must join its selected TCP control, expiry and exact native policy. A distinct Windows refusal-observation failure remains under investigation. |
+| #141–148, #222–223, #335 and MTU/restoration | The automatic IPv6 LOCAL route race is repaired in `ce53fca5`; actual generated-command/TUN acceptance passed on both Linux architectures. Windows OpenVPN WFP tests now require real selected DNS, fifty samples, Wintun MTU replacement/rollback and original restoration; their native execution remains pending. The original Compare formula and captured winner are unchanged. |
+| Native installation and lifecycle | The inherited macOS GUI socket uses XNU readiness semantics while filesystem pins retain their exact permission/owner checks. Race tests and both application/generated package builds pass; the actual failed controller-child case requires rerun. Full retained Darwin host/PF integration remains source work. |
+| #112, #200–213, #337 and native external execution | Published Windows OpenVPN acceptance covers all three ordered transport forms and both target architectures at compilation level. Darwin Hysteria2 now has a sealed lower policy with complete graph preservation; public retained host admission remains dependent on unfinished lifecycle integration. Broader retained Start Layers, predecessors and Server/Compare remain required. |
+| Original 356, C1–C7 and later full scope | No scope or numerical/default contract is removed. The latest release remains `745b3e41`; current complete publication, original all-device acceptance, Methods/recovery, signing, private providers and authorized ASUS/Portainer deployment are not established by these source and native milestones. |
+
+## Earlier implementation reconciliation through cea693a0
 
 The source cutoff is [cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199).
 [The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) preserves the

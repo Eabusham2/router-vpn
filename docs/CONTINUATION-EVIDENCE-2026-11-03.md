@@ -2,8 +2,8 @@
 
 This record continues [November 2](CONTINUATION-EVIDENCE-2026-11-02.md).
 The independently verified source cutoff is
-[cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199),
-tree `1c5cf0c8bbedb0a4b732836d763e6ae7e72048fb`. Later drafts are outside
+[32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493),
+tree `bd7fd456d68b2ed7e44313932dc4425226a5b07b`. Later drafts are outside
 this cutoff. Every unit below was committed directly to `main`, published
 against its expected parent without force, and verified through the remote
 reference and exact source tree.
@@ -53,6 +53,12 @@ source/build gate passes.
 | [96159c0c](https://github.com/Eabusham2/router-vpn/commit/96159c0c9c37800fe2ba60dd778992a15e7cb462) | Compile ordinary host-architecture macOS fixture images before assigning ad hoc generation identities. | Twenty-five portable cases and twelve executed defects passed. The actual ARM failure involved re-signing an Apple arm64e system image; the replacement checks its Mach-O architecture and retains all signature/copy/unlink refusals. Native rerun remains required. |
 | [34942f59](https://github.com/Eabusham2/router-vpn/commit/34942f59c95598211c85830e8d59ac9cc9be8a7f) | Correct the stale OpenVPN application test that still required Windows rejection. | Twelve positive profile/DNS/MTU/measurement cases and twenty-two unsupported/malformed-capture cases passed. No shipping validation was relaxed. |
 | [cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199) | Bind Linux SOCKS UDP creation, grant and retirement to its original established TCP descriptor and native nft lease. | Twenty-two native guardian roots passed in bounded groups; ten SOCKS leaves and six parser/native-state groups passed. Three compiled defects failed the intended kernel assertions; namespace cleanup controls and ARM64 compilation passed. All 1,656 normally generated source records were verified. Retained application running-inventory integration is still separate. |
+| [838dbb4c](https://github.com/Eabusham2/router-vpn/commit/838dbb4c56a15b4a8b6aa29f0d15bce13f67b3e9) | Prove the live SOCKS DNS association before explicitly joining its authenticated control and requiring zero grants. | Real Linux SOCKS Box cases, twenty-two runner checks and both Windows WFP builds passed. The native fixture also stops printing success after a failed child case. |
+| [ce53fca5](https://github.com/Eabusham2/router-vpn/commit/ce53fca56fad60eee55624dbaa883ed1e9f9d02f) | Retain the exact original automatic IPv6 LOCAL route when kernel address publication overlaps the owned MTU route addition. | Ten race-enabled groups, four actual namespace cases and ARM64 compilation passed; the previous shipping code fails the new native witness. The actual generated TUN workflow subsequently passed both architectures, recorded below. |
+| [feb5a824](https://github.com/Eabusham2/router-vpn/commit/feb5a82446cc4a32097e1ecf5be383fc6ea9e951) | Require actual Windows OpenVPN WFP/Wintun ownership, encrypted proof, fifty samples, MTU rollback and original restoration across TCP/UDP/ordered fallback. | Six Windows baseline/defect images compile; twelve real encrypted Linux reference cases passed in 19.57 seconds; twenty-five runner checks passed. Native Windows alias/WFP execution remains required. |
+| [76938d4d](https://github.com/Eabusham2/router-vpn/commit/76938d4d169d489e890a6339f0d8c73470e3abd1) | Join live Linux SOCKS relay inventory to the original selected TCP control and retained application host. | Pure inventory race and app capture tests passed; six actual retained native roots and all thirteen NodeRunning leaves passed. Exact mandatory verdict checks reject omissions, prefixed diagnostics, duplicates, failures, skips and panics. |
+| [be682651](https://github.com/Eabusham2/router-vpn/commit/be6826517993f8066bc6370f5fa3d71e62502f78) | Distinguish only inherited GUI FD9's XNU socket readiness from filesystem permissions. | The complete isolated macosprocess race suite and Intel/ARM application and generated-package builds passed. Original owner/type, named-file mode and peer/address checks remain; actual captured-child rerun remains required. |
+| [32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493) | Derive the captured Darwin Hysteria2 UDP lower policy while preserving original graph, credentials, selected DNS, MTU and protection. | The complete 120-case policy matrix and expanded Darwin unsupported-selection guards pass under the race detector. Public retained host admission and actual Darwin Hysteria2 execution remain separate. |
 
 ### Protected Windows SOCKS5
 
@@ -94,8 +100,11 @@ The later `ec25dc63` native run reached the new SOCKS cases on both Windows
 architectures. Its positive proof cases failed a fixture expectation that all
 grants disappear immediately after a successful DNS query. The pinned DNS
 transport retains that original association until reset or close. A correction
-that proves the retained pair and explicitly joins its original control is in
-progress; it is outside this source cutoff.
+that proves the retained pair and explicitly joins its original control is
+published in `838dbb4c`. A subsequent `f9bf9d37` native run also exposed a
+separate other-private-relay refusal-observation failure. Its provider discarded
+the terminal read error, so the actual terminal TCP outcome is not established;
+precise captured-phase/native-grant evidence is still being implemented.
 
 `60816f3d` closes the private-relay transport gap: the same selected private
 control address can own one exact negotiated UDP relay even with Home LAN Off.
@@ -123,8 +132,12 @@ parent retirement and association reuse. Three compiled defects remove native
 permit proof, established-state proof and joined retirement respectively; each
 fails its intended assertion. The half-close peer deliberately remains open so
 another tuple error cannot hide a missing TCP-state check. These are native
-guardian proofs, not yet the complete retained application's running-inventory
-proof or physical-device acceptance.
+guardian proofs. `76938d4d` adds the complete retained application's
+running-inventory projection: exact selected TCP controls, native parent/child
+markers, bounded expiry, ordinary Home LAN semantics and independent interface
+bindings. All six retained native groups and thirteen NodeRunning leaves passed,
+including private IPv4 and public cross-family associations. Physical-device
+acceptance remains separate.
 
 The previous single-process aggregate reached its two-minute test deadline
 after earlier boundaries passed. The runner now requires three disjoint native
@@ -175,6 +188,15 @@ generated package passed. The ordinary PF transition and public external host
 still need their remaining integration; forced process exit is not native
 firewall-retirement evidence.
 
+The real `f9bf9d37` Intel captured-child case rejected a valid GUI socket because
+XNU reports socket readiness as mode bits. `be682651` treats only fixed FD9 as
+that native socket type, preserving root UID/GID and the independent original
+peer/local-address checks. Every named file, directory, executable and lock
+retains its strict filesystem permissions. The
+[pinned XNU soo_stat implementation](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/sys_socket.c)
+documents the observed distinction. Its native controller-child rerun is still
+required; the source and package builds alone do not establish that result.
+
 ### macOS installation and PF ownership
 
 The first/legacy installer previously attempted a bare host inventory, which
@@ -203,6 +225,22 @@ grant deadline, complete joins and prohibition on changing foreign rules remain.
 
 ## Actual native observations and remaining failures
 
+- At `ce53fca5`, the [actual generated Linux command/TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41567611020)
+  passed on [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41567611020/job/125692812099)
+  and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41567611020/job/125692812456).
+  These exact-source jobs cover all six selected-DNS, encrypted TUN, captured
+  MTU/rollback, resolver/key rejection and joined-retirement cases. This closes
+  the earlier automatic-LOCAL-route regression at its actual native boundary.
+- At `f9bf9d37`, the [Intel captured-child job](https://github.com/Eabusham2/router-vpn/actions/runs/41557488016/job/125659810090)
+  reached the real new child and failed its socket metadata check; `be682651`
+  supplies the focused source repair. The earlier ARM arm64e fixture repair
+  and this child repair require their respective native reruns.
+- The `c44da359` [Windows AMD64 complete-MAX job](https://github.com/Eabusham2/router-vpn/actions/runs/41535336142/job/125597862392)
+  passed its executed positive groups, succession and foreign-predecessor
+  cases, then nine compiled ownership controls before the aggregate step's
+  150-minute timeout. ARM64 succeeded. A complete workload partition remains
+  a draft at this cutoff; no omitted control or longer production deadline
+  is accepted as a repair.
 - At `bba34c46`, [the generated Linux command/TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41548601048)
   passed on [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41548601048/job/125630543104)
   and [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41548601048/job/125630543524).
@@ -275,13 +313,14 @@ The existing generic Darwin external runtime is real. The newer retained
 ordinary-external path now has its original application-session and authenticated
 child foundations, but still lacks the complete baseline transition and host
 integration. Its existing lower PF
-broker does not by itself establish that shipping composition. The Linux SOCKS
-guardian still needs its retained running-inventory integration. Broader retained
+broker does not by itself establish that shipping composition. Linux SOCKS
+retained running-inventory integration is now published and natively tested in
+`76938d4d`; it is no longer a missing source feature. Broader retained
 Start Layers, predecessors, multihop and Server/Compare also
 remain implementation work; a safe refusal does not close those requirements.
 
-Current native failures and complete exact-SHA package/image/compose publication
-remain open. The last independently verified published release is still the
+Relevant native reruns and complete exact-SHA package/image/compose publication
+remain open. A fresh release API read still identifies the latest release as the
 twelve-asset [745b3e41 prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b).
 The original all-platform graphs, Methods/recovery, signing, physical/off-LAN
 network/visual/accessibility acceptance, private providers, and deliberately

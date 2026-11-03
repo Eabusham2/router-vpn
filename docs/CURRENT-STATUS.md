@@ -6,7 +6,53 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through cea693a0
+## Latest implementation continuation — through 32b36a63
+
+The verified source cutoff is
+[32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records twenty-nine
+published implementation/verification units. The following supersedes the
+earlier pending descriptions for these specific changes.
+
+- Linux's MTU route-capture repair passed the actual generated command/TUN
+  workflow on both AMD64 and ARM64 at `ce53fca5`. It retains only the original
+  interface's fully captured automatic IPv6 LOCAL route, with unchanged
+  canonical native-byte and ownership checks. Ten focused groups and four
+  real namespace cases passed; the prior code failed the new regression.
+- Linux retained running-inventory integration for SOCKS is published in
+  `76938d4d`. The sealed selection names original TCP controls; every live
+  relay must retain the corresponding native control, sequence and bounded
+  expiry. All six retained native groups and thirteen running-path leaves
+  passed, including private IPv4 and public cross-family associations.
+- The SOCKS DNS fixture now proves the retained two-permission association,
+  closes that exact authenticated control, and requires zero permissions.
+  Its real Linux tests and both Windows builds passed in `838dbb4c`. A separate
+  Windows other-private-relay negative needs precise refusal/closure evidence;
+  the existing log does not yet establish its terminal TCP outcome.
+- `feb5a824` adds mandatory Windows OpenVPN WFP/Wintun acceptance for TCP,
+  UDP and ordered fallback, selected DNS, fifty samples, MTU rollback and
+  restoration. Six Windows baseline/control builds, twelve encrypted Linux
+  reference cases and twenty-five runner checks passed. Actual Windows
+  execution remains required.
+- `be682651` corrects the real macOS captured-child failure: XNU socket
+  readiness bits are distinct from filesystem permissions. Only fixed GUI
+  descriptor FD9 uses that distinction; original credentials, peer and file
+  ownership checks remain. Package race tests and both application/generated
+  package architecture builds passed; the actual controller-child rerun is
+  still required.
+- Darwin Hysteria2 lower-policy derivation now preserves the full original
+  graph and selected policy in the 120-case matrix. Complete retained macOS
+  host/PF/Stop/MTU integration remains an unpublished draft. The separate
+  Windows MAX aggregate timeout is being addressed without removing cases.
+
+The release API was checked again: the latest published release is still the
+twelve-asset `745b3e41` prerelease. Current exact-SHA packages, images, compose
+and publication have not converged. Broader retained graphs/Start Layers,
+original Methods/recovery requirements, physical/off-LAN/visual/accessibility
+acceptance, signing and deliberate private deployment remain separately open.
+No live router, AdGuard, forwarding or deployment configuration was changed.
+
+## Earlier implementation continuation — through cea693a0
 
 The independently verified source is
 [cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199).
