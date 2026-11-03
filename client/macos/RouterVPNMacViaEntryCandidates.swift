@@ -43,7 +43,7 @@ private final class RouterVPNMacViaEntryController: NSWindowController, NSWindow
         NSLayoutConstraint.activate([root.leadingAnchor.constraint(equalTo: content.leadingAnchor), root.trailingAnchor.constraint(equalTo: content.trailingAnchor), root.topAnchor.constraint(equalTo: content.topAnchor), root.bottomAnchor.constraint(equalTo: content.bottomAnchor)])
         let heading = NSTextField(labelWithString: "Router VPN exits via \(entryName)")
         heading.font = .systemFont(ofSize: 22, weight: .semibold); root.addArrangedSubview(heading)
-        let note = NSTextField(wrappingLabelWithString: "A temporary path uses the selected WireGuard or AmneziaWG entry with its saved Start Layer and DNS to measure each exit's TCP response. Five attempts per exit; only complete valid results can be chosen here. Selection changes the exit picker. Use Connect separately.")
+        let note = NSTextField(wrappingLabelWithString: "A temporary path uses the selected WireGuard or AmneziaWG entry with its saved Start Layer and DNS to measure each exit's TCP response. 50 attempts per exit; Fastest ranks complete results by robust mean (10% trimmed mean), then node ID. Partial rows cannot be chosen here. Selection changes the exit picker. Use Connect separately.")
         note.textColor = .secondaryLabelColor; root.addArrangedSubview(note)
         for (id, title, width) in [("node", "Exit", 180.0), ("route", "Measured path", 150.0), ("response", "TCP response", 230.0), ("samples", "Samples", 70.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id)); column.title = title; column.width = width
@@ -94,9 +94,12 @@ private final class RouterVPNMacViaEntryController: NSWindowController, NSWindow
         case "route": return "via \(entryName) · \(receipt.entryLabel)"
         case "response":
             guard Date() < receipt.expiresAt else { return "Expired — Retest" }
-            if let median = value.medianMS { return String(format: "%.2f ms", median) }
+            if let median = value.medianMS {
+                if let robust = value.trimmedMeanMS { return String(format: "Median %.2f · robust mean %.2f ms", median, robust) }
+                return String(format: "Median %.2f ms · incomplete", median)
+            }
             return value.reason ?? "Unavailable"
-        case "samples": return value.medianMS == nil ? "—" : "\(value.samples)"
+        case "samples": return "\(value.samples)/50"
         default: return nil
         }
     }
@@ -126,14 +129,14 @@ private final class RouterVPNMacViaEntryController: NSWindowController, NSWindow
             failureMessage = ""; status.stringValue = "Measuring TCP responses via \(entryName) over its selected entry base…"
             table.reloadData(); updateControls()
             DispatchQueue.global(qos: .userInitiated).async { [self] in
-                let result = Result { try api.request("/api/multihop/candidates", method: "POST", body: ["request_id": captured.requestID, "entry_id": captured.entryID, "base": captured.base, "candidate_ids": captured.candidates, "samples": 5], timeout: 180) }
+                let result = Result { try api.request("/api/multihop/candidates", method: "POST", body: ["request_id": captured.requestID, "entry_id": captured.entryID, "base": captured.base, "candidate_ids": captured.candidates, "samples": 50], timeout: 180) }
                 DispatchQueue.main.async { [self] in
                     guard transaction.ticket == captured, transaction.phase == .measuring else { return }
                     do {
                         guard contextCurrent() else { throw MacViaEntryCandidateReceipt.issue("The selected entry changed during measurement.") }
                         guard try transaction.accept(result.get(), for: captured) else { return }
-                        let count = transaction.receipt?.rows.filter { $0.medianMS != nil }.count ?? 0
-                        status.stringValue = "\(count) measured exit(s) via \(entryName) · \(transaction.receipt?.entryLabel ?? "captured entry"). Unavailable rows remain unmeasured. Results expire in two minutes."
+                        let count = transaction.receipt?.rows.filter { $0.trimmedMeanMS != nil }.count ?? 0
+                        status.stringValue = "\(count) selectable 50-sample exit(s) via \(entryName) · \(transaction.receipt?.entryLabel ?? "captured entry"). Incomplete rows cannot be selected. Results expire in two minutes."
                         table.reloadData(); updateControls()
                     } catch { failureMessage = error.localizedDescription; drain(.stay) }
                 }

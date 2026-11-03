@@ -5,7 +5,7 @@ Add-Type -AssemblyName System.Net.Http
 if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop}
 $script:BaseUrl='https://127.0.0.1:8788'
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-$Names=@('BaseChoice','TestUnifiedCandidateBase','UnifiedCandidateBaseLabel','BeginUnifiedCandidateEntryChoice','MarkUnifiedCandidateEntryChoice','CommitUnifiedCandidateEntryChoice','UnifiedMultihopValue','TestUnifiedCandidateCurrent','TestUnifiedCandidateFresh','ReadUnifiedCandidateReceipt','TestUnifiedCandidateValidation','UpdateUnifiedCandidateButtons','NewUnifiedCandidateRequest','StartUnifiedCandidates','FinishUnifiedCandidateCancel','StopUnifiedCandidates','SelectUnifiedCandidate','PollUnifiedCandidates')
+$Names=@('BaseChoice','TestUnifiedCandidateBase','UnifiedCandidateBaseLabel','UnifiedCandidateNumber','BeginUnifiedCandidateEntryChoice','MarkUnifiedCandidateEntryChoice','CommitUnifiedCandidateEntryChoice','UnifiedMultihopValue','TestUnifiedCandidateCurrent','TestUnifiedCandidateFresh','ReadUnifiedCandidateReceipt','TestUnifiedCandidateValidation','UpdateUnifiedCandidateButtons','NewUnifiedCandidateRequest','StartUnifiedCandidates','FinishUnifiedCandidateCancel','StopUnifiedCandidates','SelectUnifiedCandidate','PollUnifiedCandidates')
 $Original=@{}
 foreach($Name in $Names){
     $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst] -and $N.Name-eq$Name},$true))
@@ -29,7 +29,7 @@ function New-State{
     $script:BaseCombo=[pscustomobject]@{SelectedItem=[pscustomobject]@{Tag='wg'}};$script:MultihopEntryCombo=[pscustomobject]@{SelectedValue='entry'};$script:MultihopExitCombo=[pscustomobject]@{SelectedValue='slow'};$script:UnifiedCandidates=$S
     return $S
 }
-function Receipt($S){return @{schema=1;request_id=$S.RequestID;entry_id=$S.EntryID;entry_mode='wg';entry_base='wg';drained=$true;measured_at=[DateTimeOffset]::UtcNow.ToString('o');expires_at=[DateTimeOffset]::UtcNow.AddSeconds(120).ToString('o');results=@(@{id='slow';samples=5;failed=0;median_ms=20.5},@{id='best';samples=5;failed=0;median_ms=7.25},@{id='failed';samples=4;failed=1;median_ms=1});errors=@(@{id='failed';error='candidate TCP timeout'});fastest_id='best'}}
+function Receipt($S){return @{schema=1;request_id=$S.RequestID;entry_id=$S.EntryID;entry_mode='wg';entry_base='wg';drained=$true;measured_at=[DateTimeOffset]::UtcNow.ToString('o');expires_at=[DateTimeOffset]::UtcNow.AddSeconds(120).ToString('o');results=@(@{id='slow';samples=50;failed=0;min_ms=5;max_ms=40;median_ms=20.5;average_ms=21;p90_ms=30;trimmed_mean_ms=20},@{id='best';samples=50;failed=0;min_ms=3;max_ms=30;median_ms=7.25;average_ms=9;p90_ms=20;trimmed_mean_ms=8},@{id='failed';samples=49;failed=1;min_ms=1;max_ms=3;median_ms=1;average_ms=1;p90_ms=1;trimmed_mean_ms=1});errors=@(@{id='failed';error='candidate TCP timeout'});fastest_id='best'}}
 function Complete($Job,$Value,[int]$Status=200){
     $Response=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]$Status)
     $Response.Content=[System.Net.Http.StringContent]::new(($Value|ConvertTo-Json -Depth 12 -Compress))
@@ -42,7 +42,7 @@ $S=New-State;Measure-CandidatesTest $S
 Check ($S.Client.Jobs[0].Path-eq'/api/multihop/candidates') 'Wrong candidate endpoint'
 Check ($S.Client.Jobs[0].Origin-ceq$script:BaseUrl) 'Candidate request lost its captured controller origin'
 Check ($S.RequestID-cmatch'^[0-9a-f]{32}$' -and $S.Client.Jobs[0].Body.request_id-ceq$S.RequestID) 'Nonce not captured before request'
-Check ($S.Client.Jobs[0].Body.samples-eq5 -and $S.Client.Jobs[0].Body.base-eq'wg' -and @($S.Client.Jobs[0].Body.candidate_ids).Count-eq3 -and $S.Client.Jobs[0].Body.candidate_ids-notcontains'entry') 'Candidate request identities or sample count changed'
+Check ($S.Client.Jobs[0].Body.samples-eq50 -and $S.Client.Jobs[0].Body.base-eq'wg' -and @($S.Client.Jobs[0].Body.candidate_ids).Count-eq3 -and $S.Client.Jobs[0].Body.candidate_ids-notcontains'entry') 'Candidate request identities or sample count changed'
 Check ($S.Rows.Count-eq3 -and $S.Eligible.Count-eq2) 'Partial failures dropped or eligible candidates lost'
 $Failed=@($S.Rows|Where-Object id -eq 'failed')[0]
 Check (-not$Failed.eligible -and $null-eq$Failed.median_ms -and $Failed.response-like'*unavailable*candidate TCP timeout*') 'Failure was displayed as a numeric routed RTT'
@@ -87,16 +87,73 @@ Check ($S.Rows.Count-eq3 -and $S.Eligible.Count-eq0 -and -not$S.FastestID) 'All-
 StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
 
 foreach($Bad in @([double]::NaN,[double]::PositiveInfinity,-1,0)){
-    $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[1].median_ms=$Bad;$R.fastest_id=''
+    $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[1].median_ms=$Bad;$R.fastest_id='slow'
     ReadUnifiedCandidateReceipt $S $R
     Check (-not$S.Eligible.ContainsKey('best') -and $null-eq$S.Rows[1].median_ms) 'Invalid median became a routed score'
     StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
 }
-foreach($Count in @(0,1,2,3.5,[double]::PositiveInfinity)){
-    $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[1].samples=$Count;$R.fastest_id='';ReadUnifiedCandidateReceipt $S $R
-    Check (-not$S.Eligible.ContainsKey('best')) 'Fewer than 3 samples became eligible'
+foreach($Count in @(0,1,2,3.5,49,51,50.5,[double]::PositiveInfinity)){
+    $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[1].samples=$Count;$R.fastest_id='slow';ReadUnifiedCandidateReceipt $S $R
+    Check (-not$S.Eligible.ContainsKey('best')) 'A sample count other than exactly50 became eligible'
     StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
 }
+# Rank the complete distributions by trimmed mean, even when the median order
+# is reversed. Equal scores use stable ordinal IDs, not presentation order.
+$S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[0].median_ms=5
+ReadUnifiedCandidateReceipt $S $R
+Check ($S.FastestID-ceq'best' -and $S.Eligible['slow'].median_ms-lt$S.Eligible['best'].median_ms -and $S.Eligible['best'].trimmed_mean_ms-lt$S.Eligible['slow'].trimmed_mean_ms) 'Fastest followed median instead of complete trimmed-mean ranking'
+Check ($S.Eligible['best'].response-like'*median*trimmed mean*50 samples*') 'Candidate label omitted its distinct median, trimmed mean or fifty samples'
+$R.results[0].trimmed_mean_ms=$R.results[1].trimmed_mean_ms;ReadUnifiedCandidateReceipt $S $R
+Check ($S.FastestID-ceq'best') 'Exact trimmed-mean tie did not choose the ordinal stable ID'
+$R.fastest_id='slow';$Rejected=$false;try{ReadUnifiedCandidateReceipt $S $R}catch{$Rejected=$true}
+Check $Rejected 'Equal scores accepted presentation-order Fastest instead of stable ordinal ID'
+StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
+
+foreach($Fastest in @('','slow','failed','not-captured')){
+    $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.fastest_id=$Fastest
+    $Rejected=$false;try{ReadUnifiedCandidateReceipt $S $R}catch{$Rejected=$true}
+    Check $Rejected 'An absent, slower, failed or unknown Fastest was adopted'
+    StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
+}
+# JSON strings, booleans, nulls, arrays and objects must never become numbers
+# through PowerShell casts. Retain the other complete candidate as Fastest.
+foreach($Field in @('samples','failed','min_ms','median_ms','trimmed_mean_ms','average_ms','p90_ms','max_ms')){
+    foreach($Bad in @('50',$true,$false,$null,@(50),@{value=50})){
+        $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[1][$Field]=$Bad;$R.fastest_id='slow'
+        ReadUnifiedCandidateReceipt $S $R
+        Check (-not$S.Eligible.ContainsKey('best') -and $S.FastestID-ceq'slow') ("Coerced a nonnumeric routed statistic: $Field")
+        StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
+    }
+}
+foreach($Field in @('min_ms','median_ms','trimmed_mean_ms','average_ms','p90_ms','max_ms')){
+    foreach($Bad in @([double]::NaN,[double]::PositiveInfinity,[double]::NegativeInfinity,0,-1,60001)){
+        $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[1][$Field]=$Bad;$R.fastest_id='slow'
+        ReadUnifiedCandidateReceipt $S $R
+        Check (-not$S.Eligible.ContainsKey('best') -and $null-eq$S.Rows[1].trimmed_mean_ms -and $S.FastestID-ceq'slow') ("Invalid finite bounded statistic became eligible: $Field")
+        StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
+    }
+    $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.results[1].Remove($Field);$R.fastest_id='slow'
+    ReadUnifiedCandidateReceipt $S $R
+    Check (-not$S.Eligible.ContainsKey('best') -and $S.FastestID-ceq'slow') ("Incomplete routed distribution became eligible: $Field")
+    StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
+}
+foreach($Case in @('failed','min-median','median-p90','p90-max','trim-min','trim-max','average-min','average-max')){
+    $S=New-State;StartUnifiedCandidates $S;$R=Receipt $S;$R.fastest_id='slow'
+    switch($Case){
+        failed {$R.results[1].failed=1}
+        min-median {$R.results[1].min_ms=8}
+        median-p90 {$R.results[1].median_ms=21}
+        p90-max {$R.results[1].p90_ms=31}
+        trim-min {$R.results[1].trimmed_mean_ms=2}
+        trim-max {$R.results[1].trimmed_mean_ms=31}
+        average-min {$R.results[1].average_ms=2}
+        average-max {$R.results[1].average_ms=31}
+    }
+    ReadUnifiedCandidateReceipt $S $R
+    Check (-not$S.Eligible.ContainsKey('best') -and $S.FastestID-ceq'slow') ("Partial or unordered routed distribution became eligible: $Case")
+    StopUnifiedCandidates $S 'cancel';Complete $S.Client.Jobs[0] @{error='cancelled'} 409;Ack $S
+}
+
 function Reject-Selection([string]$Case){
     $S=New-State;Measure-CandidatesTest $S;SelectUnifiedCandidate $S 'best'
     $V=@{ok=$true;measured=$true;request_id=$S.RequestID;entry_id='entry';exit_id='best';entry_base='wg';entry_mode='wg'};$Status=200

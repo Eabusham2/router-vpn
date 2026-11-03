@@ -443,11 +443,11 @@ func TestViaEntryPinnedNativeUpstreamResponseAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal("pinned native process failed", err)
 	}
-	result, err := measureViaEntryCandidate(ctx, lane, common.RouterProfile{ID: "captured", Endpoint: "measured.invalid"}, 3)
+	result, err := measureViaEntryCandidate(ctx, lane, common.RouterProfile{ID: "captured", Endpoint: "measured.invalid"}, 50)
 	if err != nil || !eligibleViaEntryResult(result) || result.MedianMs < 70 {
 		t.Fatal("native upstream delay was replaced by local acknowledgement timing", result, err)
 	}
-	if _, err := measureViaEntryCandidate(ctx, lane, common.RouterProfile{ID: "refused", Endpoint: "refused.invalid"}, 3); err == nil {
+	if _, err := measureViaEntryCandidate(ctx, lane, common.RouterProfile{ID: "refused", Endpoint: "refused.invalid"}, 50); err == nil {
 		t.Fatal("native upstream refusal became a latency sample")
 	}
 	if conn, err := lane.DialContext(ctx, "tcp", "uncaptured.invalid:443"); err == nil || conn != nil {

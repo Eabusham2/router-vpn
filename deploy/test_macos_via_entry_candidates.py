@@ -15,13 +15,17 @@ import Foundation
 func json(_ object: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) }
 let now = Date(timeIntervalSince1970: 1_790_000_000)
 let nonce = String(repeating: "a", count: 32)
+func measurement(_ id: String, median: Double, robust: Double) -> [String: Any] {
+ ["id": id, "node_kind": "router-vpn", "samples": 50, "failed": 0,
+  "min_ms": 1.0, "median_ms": median, "average_ms": robust, "trimmed_mean_ms": robust, "p90_ms": 40.0, "max_ms": 50.0]
+}
 func receipt(_ request: String = nonce) -> [String: Any] {
  let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
  return ["schema": 1, "request_id": request, "entry_id": "entry", "entry_mode": "wg", "entry_base": "wg", "drained": true,
   "measured_at": formatter.string(from: now), "expires_at": formatter.string(from: now.addingTimeInterval(120)),
   "results": [
-   ["id": "slow", "node_kind": "router-vpn", "samples": 5, "failed": 0, "median_ms": 27.125],
-   ["id": "fast", "node_kind": "router-vpn", "samples": 5, "failed": 0, "median_ms": 11.25]],
+   measurement("slow", median: 27.125, robust: 20.0),
+   measurement("fast", median: 11.25, robust: 10.0)],
   "errors": [["id": "offline", "error": "unavailable routed TCP response through selected entry"]], "fastest_id": "fast"]
 }
 func validation(_ request: String = nonce, exit: String = "fast") -> [String: Any] {
@@ -64,7 +68,7 @@ func drained(_ request: String = nonce) -> [String: Any] { ["ok": true, "request
    case "duplicate": rows[1]["id"] = "slow"
    case "foreign": rows[1]["id"] = "unrequested"
    case "external": rows[1]["node_kind"] = "external"
-   case "too-many-samples": rows[1]["samples"] = 6
+   case "too-many-samples": rows[1]["samples"] = 51
    case "negative-samples": rows[1]["samples"] = -1
    case "negative-failed": rows[1]["failed"] = -1
    case "combined-count": rows[1]["failed"] = 1
@@ -76,17 +80,55 @@ func drained(_ request: String = nonce) -> [String: Any] { ["ok": true, "request
    changed["results"] = rows
    try reject("invalid measurement " + fault) { _ = try decode(changed) }
   }
-  for (samples, failed, median) in [(2, 0, 10.0), (4, 1, 1.0), (5, 0, 0.0), (5, 0, -1.0)] {
+  for (samples, failed) in [(2, 0), (49, 1), (49, 0), (3, 0), (5, 0)] {
    var changed = receipt(), rows = changed["results"] as! [[String: Any]]
-   rows[1]["samples"] = samples; rows[1]["failed"] = failed; rows[1]["median_ms"] = median
+   rows[1]["samples"] = samples; rows[1]["failed"] = failed
    changed["results"] = rows; changed["fastest_id"] = "slow"
    let result = try decode(changed)
-   try check("failed or incomplete row is never eligible", result.fastestID == "slow" && !result.eligible("fast", now: now) && result.rows.first(where: { $0.id == "fast" })?.medianMS == nil)
+   try check("partial row remains visible but ineligible", result.fastestID == "slow" && !result.eligible("fast", now: now) && result.rows.first(where: { $0.id == "fast" })?.medianMS == 11.25)
+   try check("partial median does not increase selectable count", result.rows.filter { $0.trimmedMeanMS != nil }.count == 1)
+   changed["fastest_id"] = "fast"
+   try reject("partial row cannot be declared fastest") { _ = try decode(changed) }
   }
-  for samples in 3...5 {
-   var changed = receipt(), rows = changed["results"] as! [[String: Any]]; rows[1]["samples"] = samples; changed["results"] = rows
-   try check("at least three zero-failure samples qualifies", decode(changed).eligible("fast", now: now))
+  for field in ["min_ms", "median_ms", "average_ms", "trimmed_mean_ms", "p90_ms", "max_ms"] {
+   for invalid in [0.0, -1.0, 60001.0] {
+    var changed = receipt(), rows = changed["results"] as! [[String: Any]]
+    rows[1][field] = invalid; changed["results"] = rows
+    try reject("invalid statistic " + field) { _ = try decode(changed) }
+   }
+   var changed = receipt(), rows = changed["results"] as! [[String: Any]]
+   rows[1].removeValue(forKey: field); changed["results"] = rows
+   try reject("missing statistic " + field) { _ = try decode(changed) }
+   rows = receipt()["results"] as! [[String: Any]]; rows[1][field] = "Infinity"; changed["results"] = rows
+   try reject("nonfinite statistic " + field) { _ = try decode(changed) }
   }
+  for (field, invalid) in [("min_ms", 12.0), ("p90_ms", 10.0), ("max_ms", 30.0), ("average_ms", 0.5), ("trimmed_mean_ms", 51.0)] {
+   var changed = receipt(), rows = changed["results"] as! [[String: Any]]
+   rows[1][field] = invalid; changed["results"] = rows
+   try reject("unordered statistics " + field) { _ = try decode(changed) }
+  }
+  var inverted = receipt()
+  inverted["results"] = [measurement("slow", median: 27.125, robust: 5), measurement("fast", median: 11.25, robust: 10)]
+  inverted["fastest_id"] = "slow"
+  let robustWinner = try decode(inverted)
+  try check("trimmed mean outranks opposite median ordering", robustWinner.rows.first?.id == "slow" && robustWinner.rows.first?.medianMS == 27.125)
+  inverted["fastest_id"] = "fast"
+  try reject("median winner cannot replace robust mean winner") { _ = try decode(inverted) }
+  for reverse in [false, true] {
+   var tied = receipt()
+   let rows = [measurement("slow", median: 10, robust: 10), measurement("fast", median: 20, robust: 10)]
+   tied["results"] = reverse ? Array(rows.reversed()) : rows
+   let result = try decode(tied)
+   try check("equal robust mean uses ordinal ID regardless of row or median order", result.fastestID == "fast" && result.rows.first?.id == "fast")
+   tied["fastest_id"] = "slow"
+   try reject("nondeterministic equal-mean fastest rejected") { _ = try decode(tied) }
+  }
+  var noSamples = receipt(), zeroRows = noSamples["results"] as! [[String: Any]]
+  zeroRows[1]["samples"] = 0; zeroRows[1]["failed"] = 50
+  for field in ["min_ms", "median_ms", "average_ms", "trimmed_mean_ms", "p90_ms", "max_ms"] { zeroRows[1][field] = 0.0 }
+  noSamples["results"] = zeroRows; noSamples["fastest_id"] = "slow"
+  let zeroResult = try decode(noSamples)
+  try check("zero successful samples never fabricate a median", zeroResult.rows.first(where: { $0.id == "fast" })?.medianMS == nil && !zeroResult.eligible("fast", now: now))
   var allUnavailable = receipt(); allUnavailable["results"] = NSNull(); allUnavailable["errors"] = candidates.map { ["id": $0, "error": "unavailable"] }; allUnavailable["fastest_id"] = ""
   try check("all unavailable has no fastest fallback", decode(allUnavailable).fastestID == nil)
   try reject("bounded receipt") { _ = try MacViaEntryCandidateReceipt(data: Data(repeating: 65, count: 256 * 1024 + 1), requestID: nonce, entryID: "entry", candidates: candidates, now: now) }
@@ -202,7 +244,9 @@ def main():
         'guard adopt(id)', 'transaction.failedDrain(captured)', 'NSApp.runModal(for: panel)',
         'while !controller.retired', 'MacViaEntryCandidateReservation.shared.release(lease)',
         'contextCurrent()', 'WireGuard', 'TCP response', 'Use Connect separately.',
-        '"samples": 5', '"base": captured.base', 'timeout: 180', 'timeout: 15', 'windowShouldClose',
+        'rows.filter { $0.trimmedMeanMS != nil }.count', 'selectable 50-sample exit(s)',
+        '50 attempts per exit', '10% trimmed mean', 'Median %.2f · robust mean %.2f ms', 'incomplete',
+        '"samples": 50', '"base": captured.base', 'timeout: 180', 'timeout: 15', 'windowShouldClose',
     ]:
         assert marker in body, marker
     assert body.index('transaction.acceptValidation(') < body.index('guard adopt(id)')

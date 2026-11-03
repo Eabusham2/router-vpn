@@ -107,19 +107,26 @@ static gboolean linux_candidates_receipt_v1(LinuxCandidatesV1 *s, const char *js
     }
     if (valid) {
         const char *base_name = strcmp(mode, "awg2-strong") == 0 ? "AmneziaWG Strong" : strcmp(mode, "awg2-fast") == 0 ? "AmneziaWG Fast" : "WireGuard";
+        const char *expected_fastest = ""; double best_score = INFINITY;
         for (guint i = 0; i < s->ids->len; i++) {
             const char *id = g_ptr_array_index(s->ids, i), *name = g_hash_table_lookup(s->names, id);
             JsonObject *result = g_hash_table_lookup(results, id), *failure = g_hash_table_lookup(errors, id);
             double samples = linux_candidates_number_v1(result, "samples"), failed = linux_candidates_number_v1(result, "failed"), median = linux_candidates_number_v1(result, "median_ms");
-            gboolean eligible = result != NULL && failure == NULL && isfinite(samples) && samples >= 3 && floor(samples) == samples && failed == 0 && isfinite(median) && median > 0;
+            double trimmed = linux_candidates_number_v1(result, "trimmed_mean_ms"), min = linux_candidates_number_v1(result, "min_ms"), max = linux_candidates_number_v1(result, "max_ms"), p90 = linux_candidates_number_v1(result, "p90_ms"), average = linux_candidates_number_v1(result, "average_ms");
+            gboolean eligible = result != NULL && failure == NULL && samples == 50 && failed == 0;
+            double stats[] = {min, median, trimmed, average, p90, max};
+            for (guint stat = 0; stat < G_N_ELEMENTS(stats); stat++) eligible = eligible && isfinite(stats[stat]) && stats[stat] > 0 && stats[stat] <= 60000;
+            eligible = eligible && min <= median && median <= p90 && p90 <= max && min <= trimmed && trimmed <= max && min <= average && average <= max;
             char *line;
             if (eligible) {
-                line = g_strdup_printf("via %s · TCP response %.1f ms · %s · %.0f samples", s->entry_name, median, base_name, samples);
+                line = g_strdup_printf("via %s · TCP response %.1f ms median · %.1f ms trimmed mean · %s · %.0f samples", s->entry_name, median, trimmed, base_name, samples);
+                double score = trimmed;
+                if (score < best_score || (score == best_score && (!expected_fastest[0] || strcmp(id, expected_fastest) < 0))) { best_score = score; expected_fastest = id; }
                 g_hash_table_add(s->eligible, g_strdup(id));
             } else if (failure != NULL) {
                 line = g_strdup_printf("via %s · unavailable — %s", s->entry_name, linux_candidates_string_v1(failure, "error"));
             } else if (result != NULL && isfinite(samples) && isfinite(failed)) {
-                line = g_strdup_printf("via %s · unavailable — %.0f successful samples, %.0f failed; at least 3 and no failures are required", s->entry_name, samples, failed);
+                line = g_strdup_printf("via %s · unavailable — %.0f successful samples, %.0f failed; exactly 50 and no failures are required", s->entry_name, samples, failed);
             } else line = g_strdup_printf("via %s · unavailable — no routed response", s->entry_name);
             GtkTreeIter row; gtk_list_store_append(s->rows, &row);
             gtk_list_store_set(s->rows, &row, LINUX_CANDIDATE_ID_V1, id, LINUX_CANDIDATE_NAME_V1, name,
@@ -127,7 +134,7 @@ static gboolean linux_candidates_receipt_v1(LinuxCandidatesV1 *s, const char *js
             g_free(line);
         }
         const char *fastest = linux_candidates_string_v1(top, "fastest_id");
-        if (fastest[0] && !g_hash_table_contains(s->eligible, fastest)) valid = FALSE;
+        if (strcmp(fastest, expected_fastest) != 0) valid = FALSE;
         if (valid) {
             g_free(s->fastest_id); s->fastest_id = g_strdup(fastest); s->expires_at = expires; s->receipt = TRUE;
             g_free(s->entry_base); g_free(s->entry_mode); s->entry_base = g_strdup(base); s->entry_mode = g_strdup(mode);
@@ -167,7 +174,7 @@ static char *linux_candidates_payload_v1(LinuxCandidatesV1 *s, gboolean cancel, 
             json_builder_set_member_name(b, "base"); json_builder_add_string_value(b, "auto");
             json_builder_set_member_name(b, "candidate_ids"); json_builder_begin_array(b);
             for (guint i = 0; i < s->ids->len; i++) json_builder_add_string_value(b, g_ptr_array_index(s->ids, i));
-            json_builder_end_array(b); json_builder_set_member_name(b, "samples"); json_builder_add_int_value(b, 5);
+            json_builder_end_array(b); json_builder_set_member_name(b, "samples"); json_builder_add_int_value(b, 50);
         }
     }
     json_builder_end_object(b); JsonNode *root = json_builder_get_root(b); JsonGenerator *g = json_generator_new();
@@ -232,7 +239,7 @@ static gboolean linux_candidates_poll_v1(gpointer data) {
             if (atomic_load(&job->cancelled) || job->result != CURLE_OK || job->status != 200) error = linux_candidates_failure_v1(job);
             else if (s->operation == LINUX_CANDIDATES_MEASURE_V1) {
                 if (linux_candidates_receipt_v1(s, job->response, &error))
-                    gtk_label_set_text(GTK_LABEL(s->status), "Routed TCP response medians. Unavailable candidates keep their failure reason. Select an exit, then use Connect in the multihop dialog.");
+                    gtk_label_set_text(GTK_LABEL(s->status), "Routed TCP response medians and 10% trimmed means. Complete zero-failure results determine Fastest; unavailable candidates keep their failure reason. Select an exit, then use Connect in the multihop dialog.");
             } else if (!linux_candidates_validated_v1(s, job->response)) error = g_strdup("The selection receipt is stale or does not match this candidate. Retest. ");
             else if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->parent->exit), s->pending_exit)) error = g_strdup("The measured exit is no longer in the current node list. Retest. ");
             else {

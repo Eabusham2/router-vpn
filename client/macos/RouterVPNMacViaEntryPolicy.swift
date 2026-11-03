@@ -23,6 +23,7 @@ struct MacViaEntryCandidateReceipt {
     struct Row {
         let id: String
         let medianMS: Double?
+        let trimmedMeanMS: Double?
         let samples: Int
         let reason: String?
     }
@@ -42,7 +43,8 @@ struct MacViaEntryCandidateReceipt {
     }
     private struct Measurement: Decodable {
         let id: String, node_kind: String
-        let samples: Int, failed: Int, median_ms: Double
+        let samples: Int, failed: Int
+        let min_ms: Double, median_ms: Double, average_ms: Double, trimmed_mean_ms: Double, p90_ms: Double, max_ms: Double
     }
     private struct Failure: Decodable { let id: String, error: String }
 
@@ -60,38 +62,47 @@ struct MacViaEntryCandidateReceipt {
         var seen = Set<String>(), rows: [Row] = []
         for result in value.results ?? [] {
             guard requested.contains(result.id), seen.insert(result.id).inserted, result.node_kind == "router-vpn",
-                  (0...5).contains(result.samples), (0...5).contains(result.failed), result.samples + result.failed <= 5,
-                  result.median_ms.isFinite else { throw Self.issue("Candidate response contains an invalid or unrelated measurement.") }
-            let eligible = result.samples >= 3 && result.failed == 0 && result.median_ms > 0
-            rows.append(Row(id: result.id, medianMS: eligible ? result.median_ms : nil, samples: result.samples,
+                  (0...50).contains(result.samples), (0...50).contains(result.failed), result.samples + result.failed <= 50 else {
+                throw Self.issue("Candidate response contains an invalid or unrelated measurement.")
+            }
+            let statistics = [result.min_ms, result.median_ms, result.average_ms, result.trimmed_mean_ms, result.p90_ms, result.max_ms]
+            let validStatistics = statistics.allSatisfy { $0.isFinite && $0 > 0 && $0 <= 60000 && $0 >= result.min_ms && $0 <= result.max_ms } &&
+                result.min_ms <= result.median_ms && result.median_ms <= result.p90_ms && result.p90_ms <= result.max_ms
+            guard result.samples == 0 ? statistics.allSatisfy({ $0 == 0 }) : validStatistics else {
+                throw Self.issue("Candidate response contains invalid routed statistics.")
+            }
+            let eligible = result.samples == 50 && result.failed == 0 && validStatistics
+            rows.append(Row(id: result.id, medianMS: result.samples > 0 ? result.median_ms : nil,
+                            trimmedMeanMS: eligible ? result.trimmed_mean_ms : nil, samples: result.samples,
                             reason: eligible ? nil : "Unavailable: routed response samples were incomplete."))
         }
         for failure in value.errors ?? [] {
             guard requested.contains(failure.id), seen.insert(failure.id).inserted else { throw Self.issue("Candidate response contains duplicate or unrelated rows.") }
-            rows.append(Row(id: failure.id, medianMS: nil, samples: 0, reason: "Unavailable through this entry."))
+            rows.append(Row(id: failure.id, medianMS: nil, trimmedMeanMS: nil, samples: 0, reason: "Unavailable through this entry."))
         }
         guard seen == requested else { throw Self.issue("Candidate response is incomplete; Retest before selecting a measured exit.") }
-        let eligible = rows.filter { $0.medianMS != nil }
-        if value.fastest_id.isEmpty {
-            guard eligible.isEmpty else { throw Self.issue("Candidate result has no valid Fastest decision.") }
-        } else {
-            guard let fastest = eligible.first(where: { $0.id == value.fastest_id }),
-                  let minimum = eligible.compactMap(\.medianMS).min(), fastest.medianMS == minimum else {
-                throw Self.issue("Fastest does not identify the lowest valid routed response.")
+        let ordered = rows.sorted {
+            if let a = $0.trimmedMeanMS, let b = $1.trimmedMeanMS {
+                return a == b ? Self.ordinalLess($0.id, $1.id) : a < b
             }
+            if ($0.trimmedMeanMS != nil) != ($1.trimmedMeanMS != nil) { return $0.trimmedMeanMS != nil }
+            return Self.ordinalLess($0.id, $1.id)
+        }
+        let expectedFastest = ordered.first(where: { $0.trimmedMeanMS != nil })?.id ?? ""
+        guard value.fastest_id == expectedFastest else {
+            throw Self.issue("Fastest does not identify the lowest complete 50-sample trimmed mean and ordinal ID tie-break.")
         }
         self.requestID = requestID; self.entryID = entryID; measuredAt = measured; expiresAt = expires
         self.entryBase = value.entry_base; self.entryMode = value.entry_mode
-        self.rows = rows.sorted {
-            if let a = $0.medianMS, let b = $1.medianMS { return a == b ? $0.id < $1.id : a < b }
-            if ($0.medianMS != nil) != ($1.medianMS != nil) { return $0.medianMS != nil }
-            return $0.id < $1.id
-        }
+        self.rows = ordered
         fastestID = value.fastest_id.isEmpty ? nil : value.fastest_id
     }
 
     func eligible(_ id: String, now: Date = Date()) -> Bool {
-        now < expiresAt && rows.contains { $0.id == id && $0.medianMS != nil }
+        now < expiresAt && rows.contains { $0.id == id && $0.trimmedMeanMS != nil }
+    }
+    private static func ordinalLess(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
     }
     static func matches(base: String, mode: String, requested: String) -> Bool {
         ["auto", "wg", "awg"].contains(requested) && (requested == "auto" || requested == base) &&

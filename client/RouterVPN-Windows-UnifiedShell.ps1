@@ -572,7 +572,7 @@ function UnifiedConnect{
         [void](StartUnifiedApiAsync $Label $Path 'POST' $Body $Timeout $Success {param($E)Log ('Connect failed: '+$E)} $null)
     }catch{Log ('Connect failed: '+$_.Exception.Message);RefreshProduct}
 }
-# Candidate medians live only in this owned dialog; direct RTT caches are never changed.
+# Candidate measurements live only in this owned dialog; direct RTT caches are never changed.
 function BeginUnifiedCandidateEntryChoice{
     $script:UnifiedEntryChoice=if($script:Busy -or (UnifiedAsyncBusy)){$null}else{@{Previous=[string]$MultihopEntryCombo.SelectedValue;Changed=$false}}
 }
@@ -595,6 +595,17 @@ function TestUnifiedCandidateBase([string]$Base,[string]$Mode,[string]$Requested
 function UnifiedCandidateBaseLabel([string]$Mode){
     if($Mode-ceq'awg2-fast'){return 'AmneziaWG Fast'};if($Mode-ceq'awg2-strong'){return 'AmneziaWG Strong'};return 'WireGuard'
 }
+function UnifiedCandidateNumber($Value,[string]$Name){
+    # Read the member directly: a PowerShell function return enumerates arrays,
+    # which would turn a one-item JSON array into an apparently numeric scalar.
+    $Number=$null
+    if($null-ne$Value){
+        if($Value-is[System.Collections.IDictionary]){if($Value.Contains($Name)){$Number=$Value[$Name]}}
+        else{$Property=$Value.PSObject.Properties[$Name];if($null-ne$Property){$Number=$Property.Value}}
+    }
+    if($Number-isnot[byte] -and $Number-isnot[int16] -and $Number-isnot[int32] -and $Number-isnot[int64] -and $Number-isnot[single] -and $Number-isnot[double] -and $Number-isnot[decimal]){return [double]::NaN}
+    return [double]$Number
+}
 function ReadUnifiedCandidateReceipt($State,$Receipt){
     $State.Receipt=$null;$State.Expires=[DateTimeOffset]::MinValue
     if([int](UnifiedMultihopValue $Receipt 'schema' 0)-ne1 -or [string](UnifiedMultihopValue $Receipt 'request_id' '')-cne$State.RequestID -or [string](UnifiedMultihopValue $Receipt 'entry_id' '')-cne$State.EntryID -or -not(TestUnifiedCandidateBase ([string](UnifiedMultihopValue $Receipt 'entry_base' '')) ([string](UnifiedMultihopValue $Receipt 'entry_mode' '')) $State.Base) -or (UnifiedMultihopValue $Receipt 'drained' $false)-isnot[bool] -or -not(UnifiedMultihopValue $Receipt 'drained' $false)){throw 'The routed measurement receipt does not match this entry and request, or cleanup is incomplete.'}
@@ -616,19 +627,24 @@ function ReadUnifiedCandidateReceipt($State,$Receipt){
     $Rows=@();$Eligible=@{};$EntryBase=[string](UnifiedMultihopValue $Receipt 'entry_base' '');$EntryMode=[string](UnifiedMultihopValue $Receipt 'entry_mode' '');$EntryLabel=UnifiedCandidateBaseLabel $EntryMode
     foreach($ID in $State.Names.Keys){
         if(-not$Results.ContainsKey($ID) -and -not$Errors.ContainsKey($ID)){throw 'The routed receipt did not account for every requested candidate. Retest.'}
-        $Good=$false;$Median=0.0;$Reason='No routed response';$Samples=0;$Failed=0
+        $Good=$false;$Median=0.0;$Trimmed=0.0;$Reason='No routed response';$Samples=0;$Failed=0
         if($Results.ContainsKey($ID)){
-            $R=$Results[$ID];$Samples=[double](UnifiedMultihopValue $R 'samples' 0);$Failed=[double](UnifiedMultihopValue $R 'failed' -1);$Median=[double](UnifiedMultihopValue $R 'median_ms' 0)
-            $Good=$Samples-ge3 -and [Math]::Floor($Samples)-eq$Samples -and -not[Double]::IsInfinity($Samples) -and $Failed-eq0 -and $Median-gt0 -and -not[Double]::IsNaN($Median) -and -not[Double]::IsInfinity($Median)
-            $Reason="$Samples successful samples, $Failed failed; at least 3 and no failures are required"
+            $R=$Results[$ID];$Samples=UnifiedCandidateNumber $R 'samples';$Failed=UnifiedCandidateNumber $R 'failed';$Median=UnifiedCandidateNumber $R 'median_ms';$Trimmed=UnifiedCandidateNumber $R 'trimmed_mean_ms'
+            $Min=UnifiedCandidateNumber $R 'min_ms';$Max=UnifiedCandidateNumber $R 'max_ms';$P90=UnifiedCandidateNumber $R 'p90_ms';$Average=UnifiedCandidateNumber $R 'average_ms'
+            $Good=$Samples-eq50 -and $Failed-eq0
+            foreach($Number in @($Min,$Median,$Trimmed,$Average,$P90,$Max)){$Good=$Good -and $Number-gt0 -and $Number-le60000 -and -not[Double]::IsNaN($Number) -and -not[Double]::IsInfinity($Number)}
+            $Good=$Good -and $Min-le$Median -and $Median-le$P90 -and $P90-le$Max -and $Min-le$Trimmed -and $Trimmed-le$Max -and $Min-le$Average -and $Average-le$Max
+            $Reason="$Samples successful samples, $Failed failed; exactly 50 and no failures are required"
         }
         if($Errors.ContainsKey($ID)){$Good=$false;$Reason=$Errors[$ID]}
-        $Response=if($Good){'via {0} · TCP response {1:F1} ms · {2} samples' -f $State.EntryName,$Median,$Samples}else{'via '+$State.EntryName+' · unavailable — '+$Reason}
-        $Row=[pscustomobject]@{id=[string]$ID;name=[string]$State.Names[$ID];response=($Response+' | '+$EntryLabel);eligible=$Good;median_ms=if($Good){$Median}else{$null}}
+        $Response=if($Good){'via {0} · TCP response {1:F1} ms median · {2:F1} ms trimmed mean · {3} samples' -f $State.EntryName,$Median,$Trimmed,$Samples}else{'via '+$State.EntryName+' · unavailable — '+$Reason}
+        $Row=[pscustomobject]@{id=[string]$ID;name=[string]$State.Names[$ID];response=($Response+' | '+$EntryLabel);eligible=$Good;median_ms=if($Good){$Median}else{$null};trimmed_mean_ms=if($Good){$Trimmed}else{$null}}
         $Rows+=,$Row;if($Good){$Eligible[$ID]=$Row}
     }
     $Fastest=[string](UnifiedMultihopValue $Receipt 'fastest_id' '')
-    if($Fastest -and -not$Eligible.ContainsKey($Fastest)){throw 'The fastest candidate has no eligible routed response.'}
+    $Expected='';$Best=[double]::PositiveInfinity
+    foreach($ID in $Eligible.Keys){$Score=[double]$Eligible[$ID].trimmed_mean_ms;if($Score-lt$Best -or ($Score-eq$Best -and (-not$Expected -or [string]::CompareOrdinal($ID,$Expected)-lt0))){$Best=$Score;$Expected=[string]$ID}}
+    if($Fastest-cne$Expected){throw 'The fastest candidate does not match the complete routed trimmed-mean ranking. Retest.'}
     $State.Receipt=$Receipt;$State.EntryBase=$EntryBase;$State.EntryMode=$EntryMode;$State.Expires=$Expiry;$State.Rows=$Rows;$State.Eligible=$Eligible;$State.FastestID=$Fastest
 }
 function TestUnifiedCandidateValidation($State,$Value){
@@ -655,8 +671,8 @@ function StartUnifiedCandidates($State){
     if(-not(TestUnifiedCandidateCurrent $State) -or $null-ne$State.Task -or $null-ne$State.CancelTask -or $State.RequestID){return}
     # Publish the nonce before SendAsync so even a queued POST can be cancelled.
     $State.RequestID=[Guid]::NewGuid().ToString('N');$State.Cancelled=$false;$State.CancelAck=$false;$State.PendingExit='';$State.Receipt=$null;$State.Eligible=@{};$State.FastestID='';$State.LastError='';$State.Rows=@();$State.List.ItemsSource=$null;$State.Action='';$State.Operation='measure'
-    $State.Status.Text='Measuring TCP responses via '+$State.EntryName+' with its saved Start Layer and DNS. Selection and Connect remain separate.'
-    try{$Job=NewUnifiedCandidateRequest $State '/api/multihop/candidates' @{request_id=$State.RequestID;entry_id=$State.EntryID;base=$State.Base;candidate_ids=@($State.Names.Keys);samples=5};$State.Task=$Job.Task;$State.Request=$Job.Request;$State.Cts=$Job.Cts}catch{$State.LastError=$_.Exception.Message;StopUnifiedCandidates $State 'cancel'}
+    $State.Status.Text='Measuring 50 TCP responses per candidate via '+$State.EntryName+' with its saved Start Layer and DNS. Selection and Connect remain separate.'
+    try{$Job=NewUnifiedCandidateRequest $State '/api/multihop/candidates' @{request_id=$State.RequestID;entry_id=$State.EntryID;base=$State.Base;candidate_ids=@($State.Names.Keys);samples=50};$State.Task=$Job.Task;$State.Request=$Job.Request;$State.Cts=$Job.Cts}catch{$State.LastError=$_.Exception.Message;StopUnifiedCandidates $State 'cancel'}
     UpdateUnifiedCandidateButtons $State
 }
 function FinishUnifiedCandidateCancel($State){
@@ -699,7 +715,7 @@ function PollUnifiedCandidates($State){
                 if($ErrorText){throw $ErrorText}
                 if($State.Operation-eq'measure'){
                     ReadUnifiedCandidateReceipt $State $Value;$State.List.ItemsSource=@($State.Rows)
-                    $State.Status.Text='Routed TCP response medians. Unavailable candidates cannot be selected from this measured list. Choose an exit, then use Connect on the main sheet.'
+                    $State.Status.Text='Routed TCP response medians and 10% trimmed means. Complete zero-failure results determine Fastest; unavailable candidates cannot be selected from this measured list. Choose an exit, then use Connect on the main sheet.'
                 }elseif($State.Operation-eq'validate'){
                     if(-not(TestUnifiedCandidateValidation $State $Value)){throw 'The routed selection receipt is stale or does not match this candidate. Retest.'}
                     $MultihopExitCombo.SelectedValue=$State.PendingExit

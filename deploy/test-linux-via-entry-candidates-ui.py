@@ -64,7 +64,7 @@ static int phase, beats;
 static char *old_nonce;
 static gboolean main_destroyed, parent_responded;
 static void check(gboolean value, const char *message) { if (!value) g_error("candidate UI assertion: %s", message); }
-static gboolean rejected_case(void) { return strcmp(scenario, "expired") == 0 || strcmp(scenario, "wrong_id") == 0 || strcmp(scenario, "undrained") == 0 || strcmp(scenario, "wrong_mode") == 0 || strcmp(scenario, "missing") == 0 || strcmp(scenario, "malformed") == 0; }
+static gboolean rejected_case(void) { return strcmp(scenario, "expired") == 0 || strcmp(scenario, "wrong_id") == 0 || strcmp(scenario, "undrained") == 0 || strcmp(scenario, "wrong_mode") == 0 || strcmp(scenario, "missing") == 0 || strcmp(scenario, "malformed") == 0 || strcmp(scenario, "short") == 0 || strcmp(scenario, "partial") == 0 || strcmp(scenario, "extra") == 0 || strcmp(scenario, "missing_trim") == 0 || strcmp(scenario, "wrong_fastest") == 0 || strcmp(scenario, "wrong_tie") == 0; }
 static gboolean invalid_selection_case(void) { return strcmp(scenario, "stale_validate") == 0 || strcmp(scenario, "stale_base") == 0 || strcmp(scenario, "stale_mode") == 0 || strcmp(scenario, "conflict") == 0; }
 static void check_rows(LinuxCandidatesV1 *s) {
     check(gtk_tree_model_iter_n_children(GTK_TREE_MODEL(s->rows), NULL) == 3, "candidate rows were lost");
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
     while (g_main_context_iteration(NULL, FALSE)) {}
     g_source_remove(driver); check(owner.auxiliary_jobs == 0, "mutation reservation leaked after drain");
     check(beats >= 5, "UI heartbeat did not run during HTTP request");
-    gboolean chosen = strcmp(scenario, "success") == 0 || strcmp(scenario, "awg") == 0 || strcmp(scenario, "awg_strong") == 0 || strcmp(scenario, "picker") == 0 || strcmp(scenario, "cancel_retest") == 0 || strcmp(scenario, "cancel_retry") == 0;
+    gboolean chosen = strcmp(scenario, "tie") == 0 || strcmp(scenario, "success") == 0 || strcmp(scenario, "awg") == 0 || strcmp(scenario, "awg_strong") == 0 || strcmp(scenario, "picker") == 0 || strcmp(scenario, "cancel_retest") == 0 || strcmp(scenario, "cancel_retry") == 0;
     check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(parent.exit)), chosen ? "best" : "slow") == 0, "final selected exit mismatch");
     for (guint i = 0; i < parent.nodes->len; i++) { LinuxMultihopNodeV7 *node = g_ptr_array_index(parent.nodes, i); check(node->latency_ms == 1000 + i, "routed measurement overwrote direct latency cache"); }
     check(main_destroyed == (strcmp(scenario, "close_main") == 0), "main close ownership was not preserved");
@@ -254,7 +254,7 @@ def main() -> int:
                 scenario = state["case"]
                 state["requests"].append((self.path, body))
             if self.path == "/api/multihop/candidates":
-                if body != {"request_id": nonce, "entry_id": "entry", "base": "auto", "candidate_ids": ["slow", "best", "failed"], "samples": 5}:
+                if body != {"request_id": nonce, "entry_id": "entry", "base": "auto", "candidate_ids": ["slow", "best", "failed"], "samples": 50}:
                     with lock:
                         state["errors"].append(("uncaptured request", body))
                 with lock:
@@ -269,11 +269,21 @@ def main() -> int:
                 now = datetime.datetime.now(datetime.timezone.utc)
                 response = {"schema": 1, "request_id": nonce, "entry_id": "entry", "entry_base": "awg" if scenario in {"awg", "awg_strong"} else "wg", "entry_mode": "awg2-strong" if scenario == "awg_strong" else "awg2-fast" if scenario == "awg" else "wg", "drained": True,
                             "measured_at": now.isoformat(), "expires_at": (now + datetime.timedelta(seconds=120)).isoformat(),
-                            "results": [{"id": "slow", "samples": 5, "failed": 0, "median_ms": 20.5},
-                                        {"id": "best", "samples": 5, "failed": 0, "median_ms": 7.25},
-                                        {"id": "failed", "samples": 4, "failed": 1, "median_ms": 1}],
+                            "results": [{"id": "slow", "samples": 50, "failed": 0, "min_ms": 1, "median_ms": 1, "trimmed_mean_ms": 48.025, "average_ms": 48.52, "p90_ms": 100, "max_ms": 100},
+                                        {"id": "best", "samples": 50, "failed": 0, "min_ms": 7.25, "median_ms": 7.25, "trimmed_mean_ms": 7.25, "average_ms": 7.25, "p90_ms": 7.25, "max_ms": 7.25},
+                                        {"id": "failed", "samples": 49, "failed": 1, "min_ms": 1, "median_ms": 1, "trimmed_mean_ms": 1, "average_ms": 1, "p90_ms": 1, "max_ms": 1}],
                             "errors": [{"id": "failed", "error": "candidate TCP timeout"}], "fastest_id": "best"}
-                if scenario == "all_failed":
+                if scenario in {"tie", "wrong_tie"}:
+                    for field in ("min_ms", "median_ms", "trimmed_mean_ms", "average_ms", "p90_ms", "max_ms"):
+                        response["results"][0][field] = response["results"][1][field]
+                if scenario in {"wrong_fastest", "wrong_tie"}:
+                    response["fastest_id"] = "slow"
+                elif scenario in {"short", "partial", "extra"}:
+                    response["results"][1]["samples"] = 51 if scenario == "extra" else 49
+                    response["results"][1]["failed"] = 1 if scenario == "partial" else 0
+                elif scenario == "missing_trim":
+                    del response["results"][1]["trimmed_mean_ms"]
+                elif scenario == "all_failed":
                     response["results"] = None
                     response["errors"] = [{"id": item, "error": "candidate TCP timeout"} for item in ("slow", "best", "failed")]
                     response["fastest_id"] = ""
@@ -288,7 +298,7 @@ def main() -> int:
                 elif scenario == "missing":
                     response["results"] = response["results"][1:]
                 elif scenario == "malformed":
-                    response["results"] = [{"id": "not-captured", "samples": 5, "failed": 0, "median_ms": 1}]
+                    response["results"] = [{"id": "not-captured", "samples": 50, "failed": 0, "median_ms": 1}]
                 self.reply(response)
             elif self.path == "/api/multihop/candidates/validate":
                 if body != {"request_id": nonce, "entry_id": "entry", "exit_id": "best"}:
@@ -327,7 +337,7 @@ def main() -> int:
             binary = temp / "candidate-ui"
             command = ["gcc", "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-O1", f"-I{temp}", f"-I{SOURCE.parent}", str(harness), "-o", str(binary), *flags, "-lm"]
             subprocess.run(command, check=True)
-            cases = ["success", "awg", "awg_strong", "all_failed", "picker", "cancel_retest", "cancel_retry", "stale_validate", "stale_base", "stale_mode", "conflict", "entry_change", "expired", "wrong_id", "undrained", "wrong_mode", "missing", "malformed", "close_dialog", "close_parent", "close_main"]
+            cases = ["success", "awg", "awg_strong", "all_failed", "picker", "cancel_retest", "cancel_retry", "stale_validate", "stale_base", "stale_mode", "conflict", "entry_change", "expired", "wrong_id", "undrained", "wrong_mode", "missing", "malformed", "close_dialog", "close_parent", "close_main", "tie", "short", "partial", "extra", "missing_trim", "wrong_fastest", "wrong_tie"]
             env = os.environ.copy()
             env["G_DEBUG"] = "fatal-criticals"
             def run(case, *, mutation=False):
@@ -355,7 +365,8 @@ def main() -> int:
                 run(case)
             original = SOURCE.read_text()
             mutations = [("stale_validate", 'else if (!linux_candidates_validated_v1(s, job->response))', 'else if (FALSE)'),
-                         ("undrained", '&& linux_candidates_true_v1(top, "drained")', '&& TRUE')]
+                         ("undrained", '&& linux_candidates_true_v1(top, "drained")', '&& TRUE'),
+                         ("success", 'double score = trimmed;', 'double score = median;')]
             for case, old, new in mutations:
                 if original.count(old) != 1:
                     raise AssertionError("negative-control seam changed")
@@ -366,7 +377,7 @@ def main() -> int:
                 mutation_command.insert(1, "-Wno-unused-function")
                 subprocess.run(mutation_command, check=True)
                 run(case, mutation=True)
-            print("GTK routed candidate UI: PASS (21 real-widget/HTTP lifecycles; 2 behavioral mutations rejected)")
+            print(f"GTK routed candidate UI: PASS ({len(cases)} real-widget/HTTP lifecycles; {len(mutations)} behavioral mutations rejected)")
     finally:
         server.shutdown()
         server.server_close()

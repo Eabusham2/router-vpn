@@ -144,7 +144,7 @@ func viaEntryTestRequest(id string, candidates []common.RouterProfile) string {
 	for _, p := range candidates {
 		ids = append(ids, p.ID)
 	}
-	data, _ := json.Marshal(viaEntryRequest{RequestID: id, EntryID: "entry", CandidateIDs: ids, Samples: 3})
+	data, _ := json.Marshal(viaEntryRequest{RequestID: id, EntryID: "entry", CandidateIDs: ids, Samples: 50})
 	return string(data)
 }
 
@@ -182,7 +182,7 @@ func TestViaEntryCandidatesReceiptOwnsActualProofAndCleanup(t *testing.T) {
 	if json.Unmarshal(w.Body.Bytes(), &receipt) != nil || receipt.Schema != 1 || receipt.EntryBase != "wg" || receipt.EntryMode != "wg" || !receipt.Drained || receipt.FastestID != candidates[0].ID || len(receipt.Results) != 1 || len(receipt.Errors) != 1 || receipt.Errors[0].ID != candidates[1].ID {
 		t.Fatal("receipt did not separate routed measurements from unavailable candidates", w.Body.String())
 	}
-	if receipt.Results[0].MedianMs < 3 || receipt.Results[0].Samples != 3 || receipt.Results[0].Failed != 0 || time.Until(receipt.ExpiresAt) > viaEntryReceiptLifetime || time.Until(receipt.ExpiresAt) < 119*time.Second {
+	if receipt.Results[0].MedianMs < 3 || receipt.Results[0].Samples != 50 || receipt.Results[0].Failed != 0 || time.Until(receipt.ExpiresAt) > viaEntryReceiptLifetime || time.Until(receipt.ExpiresAt) < 119*time.Second {
 		t.Fatal("routed handshake timing or bounded receipt changed")
 	}
 	if !lane.closed || lane.proofs != 2 || lane.closeCalls != 1 {

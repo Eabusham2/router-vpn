@@ -25,6 +25,7 @@ import (
 
 const viaEntryReceiptLifetime = 120 * time.Second
 const viaEntryRequestTimeout = 165 * time.Second
+const viaEntryBenchmarkSamples = 50
 
 var viaEntryProbePorts = []int{443, 8388, 10443, 11443, 12443, 13443, 14443, 15443, 51820, 51822}
 
@@ -334,7 +335,7 @@ func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, dep
 	if !viaEntryDecode(w, r, &q) {
 		return
 	}
-	if !validViaEntryRequestID(q.RequestID) || !validProfileID(q.EntryID) || len(q.CandidateIDs) < 1 || len(q.CandidateIDs) > 64 || q.Samples < 0 || q.Samples > 10 || (q.Base != "" && q.Base != "wg" && q.Base != "awg" && q.Base != "auto") {
+	if !validViaEntryRequestID(q.RequestID) || !validProfileID(q.EntryID) || len(q.CandidateIDs) < 1 || len(q.CandidateIDs) > 64 || (q.Samples != 0 && q.Samples != viaEntryBenchmarkSamples) || (q.Base != "" && q.Base != "wg" && q.Base != "awg" && q.Base != "auto") {
 		http.Error(w, "invalid candidate request identity, count, or sample bound", http.StatusBadRequest)
 		return
 	}
@@ -347,10 +348,7 @@ func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, dep
 		ids[id] = true
 	}
 	if q.Samples == 0 {
-		q.Samples = 5
-	}
-	if q.Samples < 3 {
-		q.Samples = 3
+		q.Samples = viaEntryBenchmarkSamples
 	}
 	if !a.operationMu.TryLock() {
 		http.Error(w, "another connection or candidate transaction is in progress", http.StatusConflict)
@@ -478,18 +476,33 @@ dispatch:
 		}
 		receipt.Results = append(receipt.Results, outcome.value)
 	}
-	best := math.Inf(1)
-	for _, value := range receipt.Results {
-		if eligibleViaEntryResult(value) && value.MedianMs < best {
-			best, receipt.FastestID = value.MedianMs, value.ID
-		}
-	}
+	receipt.FastestID = fastestViaEntryCandidate(receipt.Results)
 	receipt.MeasuredAt = time.Now().UTC()
 	return receipt, snap.validate(a, deps.network)
 }
 
 func eligibleViaEntryResult(value liveLatencyResult) bool {
-	return value.Samples >= 3 && value.Failed == 0 && value.MedianMs > 0 && !math.IsNaN(value.MedianMs) && !math.IsInf(value.MedianMs, 0)
+	if value.Samples != viaEntryBenchmarkSamples || value.Failed != 0 {
+		return false
+	}
+	for _, number := range []float64{value.MinMs, value.MedianMs, value.TrimmedMs, value.AverageMs, value.P90Ms, value.MaxMs} {
+		if math.IsNaN(number) || math.IsInf(number, 0) || number <= 0 || number > 60000 {
+			return false
+		}
+	}
+	return value.MinMs <= value.MedianMs && value.MedianMs <= value.P90Ms && value.P90Ms <= value.MaxMs &&
+		value.MinMs <= value.TrimmedMs && value.TrimmedMs <= value.MaxMs &&
+		value.MinMs <= value.AverageMs && value.AverageMs <= value.MaxMs
+}
+
+func fastestViaEntryCandidate(values []liveLatencyResult) string {
+	winner, score := "", math.Inf(1)
+	for _, value := range values {
+		if eligibleViaEntryResult(value) && (value.TrimmedMs < score || (value.TrimmedMs == score && (winner == "" || value.ID < winner))) {
+			winner, score = value.ID, value.TrimmedMs
+		}
+	}
+	return winner
 }
 
 func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.RouterProfile, samples int) (liveLatencyResult, error) {
@@ -509,7 +522,7 @@ func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.R
 		if err != nil || request.Err() != nil || !lane.Alive() {
 			return 0, errors.New("routed TCP handshake did not complete")
 		}
-		return elapsed, nil
+		return math.Max(.001, elapsed), nil
 	}
 	for _, candidate := range viaEntryProbePorts {
 		if _, err := dial(candidate, 450*time.Millisecond); err == nil {
@@ -543,10 +556,10 @@ func measureViaEntryCandidate(ctx context.Context, lane viaEntryLane, p common.R
 	if ctx.Err() != nil || !lane.Alive() || len(values) == 0 {
 		return liveLatencyResult{}, errors.New("no current routed response samples")
 	}
-	sort.Float64s(values)
-	return liveLatencyResult{ID: p.ID, Name: p.Name, NodeKind: "router-vpn", Endpoint: p.Endpoint, Port: port, Samples: len(values), Failed: failed,
-		MinMs: round3(values[0]), MedianMs: round3(percentile(values, .50)), AverageMs: round3(average(values)), P90Ms: round3(percentile(values, .90)), MaxMs: round3(values[len(values)-1]),
-		MeasuredAt: time.Now().UTC(), Description: "actual routed TCP handshake response through captured entry; not direct client latency"}, nil
+	result := profileLatencySummary(p, port, values, failed)
+	result.NodeKind = "router-vpn"
+	result.Description = "actual routed TCP handshake responses through captured entry; ranked by 10% trimmed mean, not direct client latency"
+	return result, nil
 }
 
 func cleanupViaEntryOwner(c *viaEntryControl, owner *viaEntryOwner) error {
