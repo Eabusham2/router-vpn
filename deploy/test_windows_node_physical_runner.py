@@ -193,7 +193,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
         original = source.read_bytes()
@@ -324,7 +324,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_socks_test.go.tmpl"
         original = source.read_bytes()
@@ -409,6 +409,124 @@ class OrdinarySOCKSScope(unittest.TestCase):
                                ("timeout", "exact defect"), ("witness", "exact defect"),
                                ("prefixed-failure", "exact defect"), ("duplicate-failure", "exact defect"),
                                ("fatal", "exact defect")):
+            with self.subTest(fault=fault):
+                previous = self.workspace
+                self.workspace = previous / fault
+                self.workspace.mkdir()
+                try:
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.dispatch(fault)
+                finally:
+                    self.workspace = previous
+
+
+class OrdinaryPacketScope(unittest.TestCase):
+    setUp = OrdinaryHysteria2Scope.setUp
+
+    def test_packet_fixture_remains_part_of_the_exact_native_scope_digest(self):
+        root = self.workspace / "repository"
+        mobile = root / "mobile/desktop"
+        mobile.mkdir(parents=True)
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl"):
+            (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
+        source = mobile / "external_box_windows_packet_test.go.tmpl"
+        original = source.read_bytes()
+        with patch.object(GATE, "ROOT", root), patch.object(GATE.NODE, "checked_sources", return_value=(self.source, {})):
+            _, before = GATE.checked_sources(self.source)
+            self.assertIn("external_packet", before)
+            source.write_bytes(original.replace(GATE.TAG, b"//go:build windows\n", 1))
+            with self.assertRaisesRegex(ValueError, "explicit native test scope"):
+                GATE.checked_sources(self.source)
+            source.write_bytes(original)
+            self.assertEqual(GATE.checked_sources(self.source)[1], before)
+
+    def test_every_protocol_and_native_leaf_requires_one_real_verdict(self):
+        self.assertEqual(GATE.EXTERNAL_PACKET_PROTOCOLS, ("wireguard", "awg2-fast", "awg2-strong"))
+        for protocol in GATE.EXTERNAL_PACKET_PROTOCOLS:
+            prefix = GATE.EXTERNAL_PACKET_ROOT + "/" + protocol
+            leaves = ("on-connect", "always", "successor-and-original-restore", "reject/private-key", "reject/psk",
+                      "reject/trust", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
+            if protocol != "wireguard":
+                leaves += ("reject/parameters",)
+            expected = (GATE.EXTERNAL_PACKET_ROOT, prefix, *(prefix + "/" + leaf for leaf in leaves))
+            self.assertEqual(GATE.EXTERNAL_PACKET_CASES[protocol], expected)
+            complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in expected)
+            with contextlib.redirect_stdout(io.StringIO()):
+                GATE.report_external_packet(0, complete, protocol)
+            bad = [(1, complete)]
+            bad += [(0, complete + value + "\n") for value in ("--- SKIP: hidden (0.1s)", "DATA RACE", "panic: crash", "fatal error: crash", "[build failed]", "--- FAIL: hidden (0.1s)", "FAIL")]
+            for case in expected:
+                verdict = "--- PASS: " + case + " (0.01s)\n"
+                bad += [(0, complete.replace(verdict, "")), (0, complete.replace(verdict, "expected: " + verdict)), (0, complete + verdict)]
+            for status, output in bad:
+                with self.subTest(protocol=protocol, output=output), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(ValueError, "required native result"):
+                        GATE.report_external_packet(status, output, protocol)
+
+    def dispatch(self, fault=None):
+        calls = []
+        witnesses = {"ordinary-udp-deny": "ordinary token bypassed actual external WFP UDP deny: independent peer marker",
+                     "missing-durable-intent": "actual packet source skipped its durable WFP intent"}
+        def run(command, **kwargs):
+            command = tuple(str(value) for value in command)
+            calls.append((command, kwargs["timeout"]))
+            self.assertEqual(kwargs["cwd"], self.source)
+            self.assertEqual(kwargs["env"], {"captured": "environment"})
+            if "-c" in command:
+                self.assertIn("-mod=readonly", command)
+                self.assertIn("-race", command)
+                selected = Path(next(value.removeprefix("-overlay=") for value in command if value.startswith("-overlay=")))
+                self.assertEqual(len(json.loads(selected.read_text())["Replace"]), 6 if "missing-durable-intent" in selected.parent.name else 5)
+                Path(command[command.index("-o") + 1]).write_bytes(b"captured-native-packet-image")
+                return (1, "compile failed") if fault == "compile" else (0, "")
+            binary = Path(command[0])
+            if binary.parent.name == "external-packet":
+                if any("PacketReference|" in value for value in command):
+                    self.assertIn("-test.timeout=60s", command)
+                    self.assertEqual(kwargs["timeout"], 75)
+                    reference = "TestRouterVPNDesktopExternalPacketReference"
+                    leaves = (reference + "Authority", *(reference + "/" + protocol for protocol in GATE.EXTERNAL_PACKET_PROTOCOLS))
+                    output = "".join("--- PASS: " + case + " (0.01s)\n" for case in leaves)
+                    if fault == "reference":
+                        output = output.replace("--- PASS: " + leaves[-1] + " (0.01s)\n", "")
+                    return 0, output
+                protocol = next(p for p in GATE.EXTERNAL_PACKET_PROTOCOLS if "-test.run=^" + GATE.EXTERNAL_PACKET_ROOT + "$/^" + p + "$" in command)
+                self.assertIn("-test.timeout=180s", command)
+                self.assertEqual(kwargs["timeout"], 195)
+                output = "".join("--- PASS: " + case + " (0.01s)\n" for case in GATE.EXTERNAL_PACKET_CASES[protocol])
+                if fault == "image":
+                    binary.write_bytes(b"another-image")
+                if fault == "leaf":
+                    output = output.replace("--- PASS: " + GATE.EXTERNAL_PACKET_CASES[protocol][-1] + " (0.01s)\n", "")
+                return 0, output
+            label = binary.parent.name.removeprefix("external-packet-")
+            self.assertIn("-test.run=^" + GATE.EXTERNAL_PACKET_ROOT + "$/^wireguard$/^always$", command)
+            self.assertIn("-test.timeout=60s", command)
+            self.assertEqual(kwargs["timeout"], 75)
+            output = "--- FAIL: " + GATE.EXTERNAL_PACKET_ROOT + "/wireguard/always (0.01s)\n" + witnesses[label] + "\n"
+            if fault == "prefix":
+                output = "expected: " + output
+            if fault == "duplicate":
+                output += output
+            if fault == "panic":
+                output += "panic: test timed out\n"
+            if fault == "witness":
+                output = output.replace(witnesses[label], "unrelated failure")
+            return (0 if fault == label else 1), output
+        build = ["owned-go", "test", "-c", "-mod=readonly", "-race", "-tags=windows,routervpn_windows_node_composition"]
+        with patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            GATE.execute_external_packet(self.source, self.workspace, build, {"captured": "environment"})
+        return calls
+
+    def test_all_three_protocols_share_one_owned_build_and_both_controls(self):
+        calls = self.dispatch()
+        self.assertEqual([timeout for _, timeout in calls], [600, 75, 195, 195, 195, 600, 75, 600, 75])
+        self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
+
+    def test_packet_dispatch_rejects_changed_images_missing_leaves_and_invalid_controls(self):
+        for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"), ("reference", "required encrypted result"),
+                               ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect")):
             with self.subTest(fault=fault):
                 previous = self.workspace
                 self.workspace = previous / fault

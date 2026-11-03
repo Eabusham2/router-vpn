@@ -41,6 +41,17 @@ EXTERNAL_SOCKS_CASES = (EXTERNAL_SOCKS_ROOT, *(EXTERNAL_SOCKS_ROOT + "/" + leaf 
     "reject/relay-domain", "reject/relay-wildcard", "reject/relay-zero", "reject/control-eof",
     "successor-and-original-restore", "cancelled-proof", "replacement-keeps-new-source",
     "foreign-predecessor", "commit-refused")))
+EXTERNAL_PACKET_ROOT = "TestRouterVPNDesktopExternalWindowsPacketWFP"
+EXTERNAL_PACKET_PROTOCOLS = ("wireguard", "awg2-fast", "awg2-strong")
+EXTERNAL_PACKET_LEAVES = (
+    "on-connect", "always", "successor-and-original-restore", "reject/private-key", "reject/psk",
+    "reject/trust", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
+EXTERNAL_PACKET_CASES = {
+    protocol: (EXTERNAL_PACKET_ROOT, EXTERNAL_PACKET_ROOT + "/" + protocol,
+               *(EXTERNAL_PACKET_ROOT + "/" + protocol + "/" + leaf for leaf in
+                 (*EXTERNAL_PACKET_LEAVES, *(("reject/parameters",) if protocol != "wireguard" else ()))))
+    for protocol in EXTERNAL_PACKET_PROTOCOLS
+}
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
@@ -77,6 +88,10 @@ def checked_sources(source):
     if socks.is_symlink() or not socks.is_file() or not socks.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows SOCKS escaped its explicit native test scope")
     records["external_socks"] = hashlib.sha256(socks.read_bytes()).hexdigest()
+    packet = ROOT / "mobile/desktop/external_box_windows_packet_test.go.tmpl"
+    if packet.is_symlink() or not packet.is_file() or not packet.read_bytes().startswith(TAG):
+        raise ValueError("Ordinary Windows packet endpoint escaped its explicit native test scope")
+    records["external_packet"] = hashlib.sha256(packet.read_bytes()).hexdigest()
     records["kernel_runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
 
@@ -256,6 +271,65 @@ def execute_external_socks(source, workspace, build, captured):
         print("Rejected actual ordinary SOCKS native control: " + label, flush=True)
 
 
+def report_external_packet(status, output, protocol):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if protocol not in EXTERNAL_PACKET_CASES or status or \
+            any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_PACKET_CASES[protocol]) or \
+            socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Actual ordinary Windows packet endpoint omitted its required native result")
+
+
+def execute_external_packet(source, workspace, build, captured):
+    directory = workspace / "external-packet"
+    directory.mkdir()
+    selected = external_overlay(source, directory)
+    binary = directory / "external-packet.test.exe"
+    status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."],
+        cwd=source, env=captured, timeout=600)
+    if status:
+        raise ValueError("Actual ordinary Windows packet compilation failed:\n" + output[-32768:])
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    reference = "TestRouterVPNDesktopExternalPacketReference"
+    authority = reference + "Authority"
+    status, output = BOOT.IDENTITY.run([binary, "-test.run=^(" + reference + "|" + authority + ")$", "-test.count=1", "-test.timeout=60s", "-test.v"],
+        cwd=source, env=captured, timeout=75)
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    required = (authority, *(reference + "/" + protocol for protocol in EXTERNAL_PACKET_PROTOCOLS))
+    # The isolated TLS-root wrapper repeats its parent verdict; only actual
+    # child leaves and the independent authority test count as evidence.
+    if status or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Independent packet reference omitted its required encrypted result")
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+        raise ValueError("Actual ordinary packet native executable changed")
+    # Each protocol has its own complete lifecycle/negative suite. Compile time
+    # cannot consume its original bounded native execution window.
+    for protocol in EXTERNAL_PACKET_PROTOCOLS:
+        expression = "^" + EXTERNAL_PACKET_ROOT + "$/^" + protocol + "$"
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=180s", "-test.v"],
+            cwd=source, env=captured, timeout=195)
+        report_external_packet(status, output, protocol)
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Actual ordinary packet native executable changed")
+    for label, witness in (
+            ("ordinary-udp-deny", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
+            ("missing-durable-intent", "actual packet source skipped its durable WFP intent")):
+        changed = workspace / ("external-packet-" + label)
+        changed.mkdir()
+        selected = external_overlay(source, changed, label)
+        binary = changed / "external-packet.test.exe"
+        status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."],
+            cwd=source, env=captured, timeout=600)
+        if status:
+            raise ValueError("Actual ordinary packet control did not compile: " + label + "\n" + output[-16384:])
+        leaf = EXTERNAL_PACKET_ROOT + "/wireguard/always"
+        expression = "/".join("^" + part + "$" for part in leaf.split("/"))
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"],
+            cwd=source, env=captured, timeout=75)
+        if status == 0 or not exact_native_verdict(output, "FAIL", leaf) or witness not in output or socks_native_aborted(output):
+            raise ValueError("Actual ordinary packet control missed its exact defect: " + label + "\n" + output[-16384:])
+        print("Rejected actual ordinary packet native control: " + label, flush=True)
+
+
 def mutants(source):
     factory = "routervpn/desktoppt/node_physical_windows.go"
     lower = "routervpn/desktoppt/node_physical.go"
@@ -363,6 +437,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             raise ValueError("Actual WFP Node executable changed during its retained test")
         execute_external_hysteria2(source, workspace, build, captured)
         execute_external_socks(source, workspace, build, captured)
+        execute_external_packet(source, workspace, build, captured)
         for mutation in mutants(source):
             name, relative, test, witness, raw = mutation
             candidate = workspace / name

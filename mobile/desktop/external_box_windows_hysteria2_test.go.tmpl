@@ -41,6 +41,8 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
@@ -60,10 +62,11 @@ const desktopExternalWFPLimit = 64 << 10
 const desktopExternalWFPProbePrefix = "routervpn-ordinary-wfp:"
 
 type desktopExternalWFPRequest struct {
-	Schema                                       int    `json:"schema"`
-	Operation                                    string `json:"operation"`
-	Address                                      string `json:"address,omitempty"`
-	Fault                                        string `json:"fault,omitempty"`
+	Packet                                       *desktopExternalWFPPacketRequest `json:"packet,omitempty"`
+	Schema                                       int                              `json:"schema"`
+	Operation                                    string                           `json:"operation"`
+	Address                                      string                           `json:"address,omitempty"`
+	Fault                                        string                           `json:"fault,omitempty"`
 	Certificate, Key, ProxyCertificate, ProxyKey []byte
 	Nonce                                        string `json:"nonce,omitempty"`
 }
@@ -199,7 +202,7 @@ func desktopExternalWFPReadRequest(input *bufio.Reader) (desktopExternalWFPReque
 		return request, err
 	}
 	var trailing any
-	if decoder.Decode(&trailing) != io.EOF || request.Schema != 1 {
+	if decoder.Decode(&trailing) != io.EOF || request.Schema != 1 || request.Operation != "start" && request.Packet != nil {
 		return request, errors.New("external peer request changed its exact schema")
 	}
 	return request, nil
@@ -209,6 +212,10 @@ func desktopExternalWFPReadRequest(input *bufio.Reader) (desktopExternalWFPReque
 // connection or a resolver on the ordinary network. Its actual pinned QUIC
 // service accepts only the selected inner DNS and fixed TLS proof destination.
 func TestRouterVPNDesktopExternalWindowsHysteria2Peer(t *testing.T) {
+	desktopExternalWFPRunPeer(t, "hysteria2")
+}
+
+func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	if os.Getenv("ROUTERVPN_EXTERNAL_WFP_PEER") == "" {
 		return
 	}
@@ -220,10 +227,15 @@ func TestRouterVPNDesktopExternalWindowsHysteria2Peer(t *testing.T) {
 	if err != nil || request.Operation != "start" || request.Address != desktopExternalWFPAddress(t).String() || request.Nonce != "" {
 		t.Fatal("external peer did not receive its exact initial capture", err)
 	}
-	switch request.Fault {
-	case "", "password", "trust", "dns", "exit", "held":
-	default:
-		t.Fatal("unknown external provider fault")
+	if protocol != "packet" {
+		if request.Packet != nil {
+			t.Fatal("non-packet provider acquired packet keys")
+		}
+		switch request.Fault {
+		case "", "password", "trust", "dns", "exit", "held":
+		default:
+			t.Fatal("unknown external provider fault")
+		}
 	}
 	certificate, err := tls.X509KeyPair(request.Certificate, request.Key)
 	if err != nil {
@@ -245,22 +257,7 @@ func TestRouterVPNDesktopExternalWindowsHysteria2Peer(t *testing.T) {
 	if request.Fault == "held" {
 		peer.publicEntered, peer.publicRelease = make(chan struct{}), make(chan struct{})
 	}
-	logger := log.NewNOPFactory().NewLogger("external-wfp-reference")
-	tlsConfig, err := boxTLS.NewServer(ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{string(request.ProxyCertificate)}, Key: []string{string(request.ProxyKey)}})
-	clear(request.Key)
-	clear(request.ProxyKey)
-	if err != nil {
-		peer.close()
-		t.Fatal(err)
-	}
-	server, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: ctx, Logger: logger, TLSConfig: tlsConfig, UDPTimeout: 10 * time.Second, Handler: peer})
 	var protocolErr error
-	peer.closeProtocol = func() {
-		if server != nil {
-			protocolErr = server.Close()
-		}
-		protocolErr = errors.Join(protocolErr, tlsConfig.Close())
-	}
 	closed := false
 	closePeer := func() {
 		if !closed {
@@ -269,25 +266,50 @@ func TestRouterVPNDesktopExternalWindowsHysteria2Peer(t *testing.T) {
 		}
 	}
 	defer closePeer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	password := desktopExternalIntegrationPassword
-	if request.Fault == "password" {
-		password += "-wrong"
-	}
-	server.UpdateUsers([]int{1}, []string{password})
-	if err = tlsConfig.Start(); err == nil {
-		err = server.Start(observed)
-	}
-	if err != nil {
-		t.Fatal("actual external QUIC provider startup", err)
+	if protocol == "packet" {
+		desktopExternalWFPStartPacketPeer(t, peer, request.Packet, request.Fault)
+		clear(request.Key)
+		clear(request.ProxyKey)
+	} else {
+		logger := log.NewNOPFactory().NewLogger("external-wfp-reference")
+		tlsConfig, err := boxTLS.NewServer(ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{string(request.ProxyCertificate)}, Key: []string{string(request.ProxyKey)}})
+		clear(request.Key)
+		clear(request.ProxyKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: ctx, Logger: logger, TLSConfig: tlsConfig, UDPTimeout: 10 * time.Second, Handler: peer})
+		peer.closeProtocol = func() {
+			if server != nil {
+				protocolErr = server.Close()
+			}
+			protocolErr = errors.Join(protocolErr, tlsConfig.Close())
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		password := desktopExternalIntegrationPassword
+		if request.Fault == "password" {
+			password += "-wrong"
+		}
+		server.UpdateUsers([]int{1}, []string{password})
+		if err = tlsConfig.Start(); err == nil {
+			err = server.Start(observed)
+		}
+		if err != nil {
+			t.Fatal("actual external QUIC provider startup", err)
+		}
 	}
 	appID, err := mobiletor.DesktopWindowsNodeCompositionAppID()
 	if err != nil || len(appID) == 0 {
 		t.Fatal("external peer executable identity", err)
 	}
 	respond := func(nonce string, isClosed bool) {
+		if !isClosed && peer.awgReadback != nil {
+			if err := peer.awgReadback(); err != nil {
+				t.Fatal(err)
+			}
+		}
 		observed.mu.Lock()
 		count := observed.observed[nonce]
 		observed.mu.Unlock()
@@ -394,6 +416,7 @@ type desktopExternalWFPReference struct {
 	cancel      context.CancelFunc
 	local       netip.Addr
 	remote      netip.AddrPort
+	packet      *desktopExternalWFPPacketCapture
 	initial     desktopExternalWFPReply
 	closed      bool
 }
@@ -476,6 +499,8 @@ func desktopExternalWFPStartReferenceProtocol(t *testing.T, ca *desktopExternalI
 	peerTest := "TestRouterVPNDesktopExternalWindowsHysteria2Peer"
 	if protocol == "socks5" {
 		peerTest = "TestRouterVPNDesktopExternalWindowsSOCKSPeer"
+	} else if protocol == "wireguard" || protocol == "awg2-fast" || protocol == "awg2-strong" {
+		peerTest = "TestRouterVPNDesktopExternalWindowsPacketPeer"
 	} else if protocol != "hysteria2" {
 		t.Fatal("unknown native external reference protocol")
 	}
@@ -524,13 +549,16 @@ func desktopExternalWFPStartReferenceProtocol(t *testing.T, ca *desktopExternalI
 	public, key := desktopExternalWFPCertificate(t, ca.certificate(t, true))
 	proxy, proxyKey := desktopExternalWFPCertificate(t, ca.certificate(t, true))
 	if fault == "trust" {
-		if protocol == "socks5" {
+		if protocol != "hysteria2" {
 			public, key = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
 		} else {
 			proxy, proxyKey = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
 		}
 	}
 	request := desktopExternalWFPRequest{Schema: 1, Operation: "start", Address: p.local.String(), Fault: fault, Certificate: public, Key: key, ProxyCertificate: proxy, ProxyKey: proxyKey}
+	if protocol == "wireguard" || protocol == "awg2-fast" || protocol == "awg2-strong" {
+		request.Packet, p.packet = desktopExternalWFPPacketKeys(t, protocol)
+	}
 	encoded, err := json.Marshal(request)
 	if err != nil || len(encoded)+1 > desktopExternalWFPLimit {
 		t.Fatal("external provider initial capture exceeded bound", err)
@@ -541,6 +569,10 @@ func desktopExternalWFPStartReferenceProtocol(t *testing.T, ca *desktopExternalI
 	clear(key)
 	clear(proxyKey)
 	clear(encoded)
+	if request.Packet != nil {
+		request.Packet.PrivateKey, request.Packet.PreSharedKey = "", ""
+		clear(request.Packet.Parameters)
+	}
 	p.initial, err = p.read()
 	p.remote, _ = netip.ParseAddrPort(p.initial.Address)
 	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
@@ -780,7 +812,10 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	endpoints := endpoint.NewRegistry()
+	WG.RegisterEndpoint(endpoints)
+	AWG.RegisterEndpoint(endpoints)
+	ctx = Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
 	if err != nil {
 		t.Fatal(err)
@@ -809,6 +844,9 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 	t.Helper()
 	if err := f.box.RouterVPNStrategyStart(); err != nil {
 		if f.committed != 1 {
+			if f.policy.Metadata().Protocol == "wireguard" || f.policy.Metadata().Protocol == "amneziawg" {
+				t.Fatal("actual packet source skipped its durable WFP intent", err)
+			}
 			if f.policy.Metadata().Protocol == "socks5" {
 				t.Fatal("actual SOCKS source skipped its durable WFP intent", err)
 			}
@@ -816,8 +854,9 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 		}
 		t.Fatal("external actual WFP startup", err)
 	}
-	if f.admitted != 1 || f.committed != 1 || f.network.Current() || f.network.SocketCurrent() {
-		t.Fatal("lazy Hysteria2 gained socket/proof authority before activation")
+	eager := f.policy.Metadata().Protocol == "wireguard" || f.policy.Metadata().Protocol == "amneziawg"
+	if f.admitted != 1 || f.committed != 1 || f.network.Current() || f.network.SocketCurrent() != eager {
+		t.Fatal("external endpoint changed guarded socket/proof startup phase")
 	}
 	var err error
 	f.proof, err = f.box.RouterVPNDesktopExternalCreateProof(f.policy)

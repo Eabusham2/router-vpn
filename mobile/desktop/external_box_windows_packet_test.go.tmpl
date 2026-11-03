@@ -1,0 +1,292 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"context"
+	"crypto/x509"
+	"encoding/json"
+	"maps"
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Private provider keys travel only over the original inherited bounded pipe.
+// The client retains independent private material; public receipts never carry
+// either private key or the preshared secret.
+type desktopExternalWFPPacketRequest struct {
+	Protocol        string            `json:"protocol"`
+	PrivateKey      string            `json:"private_key"`
+	ClientPublicKey string            `json:"client_public_key"`
+	PreSharedKey    string            `json:"preshared_key"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+}
+type desktopExternalWFPPacketCapture struct {
+	protocol, privateKey, peerPublicKey, presharedKey string
+	parameters                                        map[string]string
+}
+
+func desktopExternalWFPPacketKeys(t *testing.T, protocol string) (*desktopExternalWFPPacketRequest, *desktopExternalWFPPacketCapture) {
+	t.Helper()
+	if protocol != "wireguard" && protocol != "awg2-fast" && protocol != "awg2-strong" {
+		t.Fatal("unknown captured packet protocol")
+	}
+	clientPrivate, clientPublic := desktopExternalIntegrationWGKey(t)
+	serverPrivate, serverPublic := desktopExternalIntegrationWGKey(t)
+	shared, _ := desktopExternalIntegrationWGKey(t)
+	var parameters map[string]string
+	if protocol != "wireguard" {
+		parameters = desktopExternalIntegrationAWGParameters(protocol)
+	}
+	return &desktopExternalWFPPacketRequest{protocol, serverPrivate, clientPublic, shared, maps.Clone(parameters)},
+		&desktopExternalWFPPacketCapture{protocol, clientPrivate, serverPublic, shared, maps.Clone(parameters)}
+}
+
+func desktopExternalWFPStartPacketPeer(t *testing.T, peer *desktopExternalIntegrationPeer, request *desktopExternalWFPPacketRequest, fault string) {
+	t.Helper()
+	if request == nil || request.Protocol != "wireguard" && request.Protocol != "awg2-fast" && request.Protocol != "awg2-strong" || peer.kernel != nil {
+		t.Fatal("native packet provider lost its independent transport")
+	}
+	if request.Protocol == "wireguard" && len(request.Parameters) != 0 || request.Protocol != "wireguard" && !reflect.DeepEqual(request.Parameters, desktopExternalIntegrationAWGParameters(request.Protocol)) {
+		t.Fatal("native packet provider parameters were not captured")
+	}
+	peer.protocol, peer.wgPrivate, peer.wgClientPublic, peer.wgPreshared = request.Protocol, request.PrivateKey, request.ClientPublicKey, request.PreSharedKey
+	peer.awgParameters = maps.Clone(request.Parameters)
+	switch fault {
+	case "", "dns", "exit", "trust", "held":
+	case "private-key":
+		_, peer.wgClientPublic = desktopExternalIntegrationWGKey(t)
+	case "psk":
+		peer.wgPreshared, _ = desktopExternalIntegrationWGKey(t)
+	case "parameters":
+		if peer.protocol == "wireguard" {
+			t.Fatal("plain WG cannot acquire AWG parameters")
+		}
+		peer.awgParameters["h1"] = "50000000-59999999"
+	default:
+		t.Fatal("unknown native packet negative")
+	}
+	peer.referenceBind = newDesktopExternalNativePacketBind(peer)
+	peer.start(t)
+	request.PrivateKey, request.ClientPublicKey, request.PreSharedKey = "", "", ""
+	clear(request.Parameters)
+}
+
+func TestRouterVPNDesktopExternalWindowsPacketPeer(t *testing.T) {
+	desktopExternalWFPRunPeer(t, "packet")
+}
+
+func desktopExternalWFPPacketOriginal(t *testing.T, p *desktopExternalWFPReference, kill string) (*mobilemultihop.ExternalPolicy, string, string) {
+	t.Helper()
+	if p.packet == nil {
+		t.Fatal("packet policy lost its independent provider capture")
+	}
+	_, source, capture := desktopExternalWFPOriginal(t, p, kill)
+	var graph, selection map[string]any
+	if json.Unmarshal([]byte(source), &graph) != nil || json.Unmarshal([]byte(capture), &selection) != nil {
+		t.Fatal("packet policy lost its original private capture")
+	}
+	protocol := p.packet.protocol
+	kind := "wireguard"
+	if protocol != "wireguard" {
+		protocol = "amneziawg"
+		kind = mobilemultihop.AmneziaType
+	}
+	addresses, allowed := []string{"10.78.0.2/32", "fd78:78::2/128"}, []string{"0.0.0.0/0", "::/0"}
+	peer := map[string]any{"address": p.local.String(), "port": int(p.remote.Port()), "public_key": p.packet.peerPublicKey, "pre_shared_key": p.packet.presharedKey, "allowed_ips": allowed, "persistent_keepalive_interval": 25}
+	endpoint := map[string]any{"type": kind, "tag": mobilemultihop.ExternalFinalTag, "private_key": p.packet.privateKey, "address": addresses, "mtu": 1280, "peers": []any{peer}}
+	private := map[string]any{"private_key": p.packet.privateKey, "addresses": addresses, "peer_public_key": p.packet.peerPublicKey, "preshared_key": p.packet.presharedKey, "endpoint": p.remote.String(), "allowed_ips": allowed, "mtu": 1280, "persistent_keepalive_interval": 25}
+	if protocol == "amneziawg" {
+		endpoint["amnezia"] = maps.Clone(p.packet.parameters)
+		private["parameters"] = maps.Clone(p.packet.parameters)
+	}
+	graph["outbounds"], graph["endpoints"] = []any{}, []any{endpoint}
+	selection["protocol"] = protocol
+	profile := selection["profile"].(map[string]any)
+	profile["external"] = map[string]any{"protocol": protocol, "expected_public_ip": desktopExternalIntegrationIP, protocol: private}
+	body, _ := json.Marshal(graph)
+	captured, _ := json.Marshal(selection)
+	original, err := mobilemultihop.NewExternalPolicy(string(body), string(captured))
+	if err != nil {
+		t.Fatal("native packet original compiler", err)
+	}
+	return original, string(body), string(captured)
+}
+
+func TestRouterVPNDesktopExternalWindowsPacketWFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	certificate, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(certificate)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	for _, protocol := range []string{"wireguard", "awg2-fast", "awg2-strong"} {
+		t.Run(protocol, func(t *testing.T) {
+			for _, kill := range []string{"on-connect", "always"} {
+				t.Run(kill, func(t *testing.T) {
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					desktopExternalWFPCleanup(t, &retained)
+					peer := desktopExternalWFPStartReferenceProtocol(t, ca, "", protocol)
+					original, source, capture := desktopExternalWFPPacketOriginal(t, peer, kill)
+					f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+					f.start(t)
+					f.prove(t, peer)
+					desktopExternalWFPRequireBlocked(t, peer)
+					first := f.snapshot(t, peer).Grants[0]
+					deadline := time.Now().Add(8 * time.Second)
+					for {
+						if err := f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+							t.Fatal("renewed packet endpoint lost selected UDP DNS", err)
+						}
+						grant := f.snapshot(t, peer).Grants[0]
+						if grant.SocketID != first.SocketID || grant.Local != first.Local || grant.Remote != first.Remote {
+							t.Fatal("packet renewal replaced original socket")
+						}
+						if grant.Sequence > first.Sequence {
+							break
+						}
+						if !time.Now().Before(deadline) {
+							t.Fatal("packet grant did not renew")
+						}
+						time.Sleep(50 * time.Millisecond)
+					}
+					retained = f.drain(t)
+					desktopExternalWFPRequireBlocked(t, peer)
+				})
+			}
+			t.Run("successor-and-original-restore", func(t *testing.T) {
+				var retained mobiletor.DesktopWindowsProtectionTarget
+				desktopExternalWFPCleanup(t, &retained)
+				peer := desktopExternalWFPStartReferenceProtocol(t, ca, "", protocol)
+				original, source, capture := desktopExternalWFPPacketOriginal(t, peer, "always")
+				first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+				first.start(t)
+				first.prove(t, peer)
+				retained = first.drain(t)
+				for i := 0; i < 2; i++ {
+					previous := retained
+					next := desktopExternalWFPBox(t, original, source, capture, &previous, false)
+					next.start(t)
+					next.prove(t, peer)
+					if next.prepared.Capture.SessionID == previous.Capture.SessionID || next.original != original || next.source != source || next.capture != capture || !reflect.DeepEqual(next.commit.Previous, &previous) || first.proof.Healthy() || first.network.Current() {
+						t.Fatal("packet restore changed its keys, parameters or predecessor")
+					}
+					retained = next.drain(t)
+				}
+			})
+			faults := []string{"private-key", "psk", "trust", "dns", "exit"}
+			if protocol != "wireguard" {
+				faults = append(faults, "parameters")
+			}
+			for _, fault := range faults {
+				t.Run("reject/"+fault, func(t *testing.T) {
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					desktopExternalWFPCleanup(t, &retained)
+					peer := desktopExternalWFPStartReferenceProtocol(t, ca, fault, protocol)
+					original, source, capture := desktopExternalWFPPacketOriginal(t, peer, "always")
+					f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+					f.start(t)
+					raw, err := f.proof.Run()
+					if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() {
+						t.Fatal("invalid real packet path acquired Windows proof")
+					}
+					reply := peer.call(t, "stats", "")
+					if reply.Packets == 0 {
+						t.Fatal("packet negative did not reach independent provider")
+					}
+					if (fault == "private-key" || fault == "psk" || fault == "parameters") && (reply.DNS != 0 || reply.Attempts != 0) {
+						t.Fatal("invalid packet keys carried inner proof")
+					}
+					if fault == "dns" && (reply.DNS == 0 || reply.Attempts != 0) {
+						t.Fatal("invalid packet DNS reached public proof")
+					}
+					if fault == "trust" && (reply.DNS == 0 || reply.Public != 0) {
+						t.Fatal("wrong packet trust bypassed authenticated TLS")
+					}
+					if fault == "exit" && (reply.UDPDNS == 0 || reply.TLS != 1 || reply.Public != 1) {
+						t.Fatal("packet exit negative bypassed actual provider")
+					}
+					retained = f.drain(t)
+				})
+			}
+			t.Run("cancelled-proof", func(t *testing.T) {
+				var retained mobiletor.DesktopWindowsProtectionTarget
+				desktopExternalWFPCleanup(t, &retained)
+				peer := desktopExternalWFPStartReferenceProtocol(t, ca, "held", protocol)
+				original, source, capture := desktopExternalWFPPacketOriginal(t, peer, "always")
+				f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+				f.start(t)
+				done := make(chan error, 1)
+				go func() {
+					raw, err := f.proof.Run()
+					if raw != "" {
+						err = nil
+					}
+					done <- err
+				}()
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					reply := peer.call(t, "stats", "")
+					if reply.Public == 1 && reply.TLS == 1 && reply.UDPDNS > 0 {
+						break
+					}
+					if !time.Now().Before(deadline) {
+						t.Fatal("packet proof never reached held provider")
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				f.network.InterfaceUpdated(context.Background())
+				peer.call(t, "release", "")
+				select {
+				case err := <-done:
+					if err == nil || f.proof.Healthy() || f.network.Current() {
+						t.Fatal("cancelled packet proof was adopted")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("cancelled packet proof did not join")
+				}
+				retained = f.drain(t)
+			})
+			for _, fault := range []string{"foreign-predecessor", "commit-refused"} {
+				t.Run(fault, func(t *testing.T) {
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					desktopExternalWFPCleanup(t, &retained)
+					peer := desktopExternalWFPStartReferenceProtocol(t, ca, "", protocol)
+					original, source, capture := desktopExternalWFPPacketOriginal(t, peer, "always")
+					first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+					first.start(t)
+					first.prove(t, peer)
+					retained = first.drain(t)
+					expected := retained
+					if fault == "foreign-predecessor" {
+						expected.Capture.SourceSHA256 = strings.Repeat("f", 64)
+					}
+					before := peer.call(t, "stats", "")
+					next := desktopExternalWFPBox(t, original, source, capture, &expected, fault == "commit-refused")
+					if err := next.box.RouterVPNStrategyStart(); err == nil || next.admitted != 0 || next.network.Current() || next.network.SocketCurrent() {
+						t.Fatal("uncommitted packet successor gained eager socket")
+					}
+					if err := next.close(); err != nil {
+						t.Fatal("failed packet successor did not join", err)
+					}
+					if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+						t.Fatal("failed packet successor changed original deny", err)
+					}
+					after := peer.call(t, "stats", "")
+					if after.Packets != before.Packets || after.DNS != before.DNS || after.Public != before.Public {
+						t.Fatal("refused packet successor sent handshake or proof bytes")
+					}
+				})
+			}
+		})
+	}
+}

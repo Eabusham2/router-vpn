@@ -1,0 +1,210 @@
+package box
+
+import (
+	"context"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	wgconn "github.com/sagernet/wireguard-go/conn"
+)
+
+// The separately retained provider owns this actual UDP listener. Its only
+// authority is the provider's original listener and protocol keys. It has no
+// broker, fake grant, client descriptor or Windows protection capability.
+type desktopExternalNativePacketBind struct {
+	mu             sync.Mutex
+	peer           *desktopExternalIntegrationPeer
+	packet         net.PacketConn
+	local          netip.AddrPort
+	opened, closed bool
+	seen           map[netip.AddrPort]bool
+}
+
+func newDesktopExternalNativePacketBind(peer *desktopExternalIntegrationPeer) *desktopExternalNativePacketBind {
+	local, _ := netip.ParseAddrPort(peer.packet.LocalAddr().String())
+	return &desktopExternalNativePacketBind{peer: peer, packet: peer.packet, local: local, seen: make(map[netip.AddrPort]bool)}
+}
+func (b *desktopExternalNativePacketBind) valid(remote netip.AddrPort) bool {
+	return b.local.IsValid() && b.local.Port() != 0 && remote.IsValid() && remote.Addr() == b.local.Addr() && remote.Port() != 0
+}
+func (b *desktopExternalNativePacketBind) Open(port uint16) ([]wgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if port != 0 || b.opened || b.closed || !b.local.IsValid() || b.local.Port() == 0 {
+		return nil, 0, errors.New("native packet provider cannot replace its original listener")
+	}
+	b.opened = true
+	read := func(packets [][]byte, sizes []int, endpoints []wgconn.Endpoint) (int, error) {
+		if len(packets) != 1 || len(sizes) < 1 || len(endpoints) < 1 {
+			return 0, errors.New("native packet provider lost its bounded receive buffer")
+		}
+		n, source, err := b.packet.ReadFrom(packets[0])
+		if err != nil {
+			return 0, err
+		}
+		remote, err := netip.ParseAddrPort(source.String())
+		if err != nil || !b.valid(remote) {
+			return 0, errors.New("native packet provider received another physical address")
+		}
+		b.mu.Lock()
+		if !b.seen[remote] {
+			b.seen[remote] = true
+			b.peer.accepted.Add(1)
+		}
+		b.mu.Unlock()
+		b.peer.physicalUDP.Add(1)
+		sizes[0], endpoints[0] = n, desktopExternalWireGuardEndpoint(remote)
+		return 1, nil
+	}
+	return []wgconn.ReceiveFunc{read}, b.local.Port(), nil
+}
+func (b *desktopExternalNativePacketBind) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.opened || b.closed {
+		return nil
+	}
+	b.closed = true
+	return b.packet.Close()
+}
+func (b *desktopExternalNativePacketBind) Send(packets [][]byte, endpoint wgconn.Endpoint, offset int) error {
+	remote, err := netip.ParseAddrPort(endpoint.DstToString())
+	if err != nil || !b.valid(remote) {
+		return errors.New("native packet provider selected another physical address")
+	}
+	for _, packet := range packets {
+		if offset < 0 || offset > len(packet) {
+			return errors.New("native packet provider changed send offset")
+		}
+		n, err := b.packet.WriteTo(packet[offset:], net.UDPAddrFromAddrPort(remote))
+		if err != nil {
+			return err
+		}
+		if n != len(packet)-offset {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+func (*desktopExternalNativePacketBind) SetMark(mark uint32) error {
+	if mark != 0 {
+		return errors.New("native packet provider cannot own a route mark")
+	}
+	return nil
+}
+func (*desktopExternalNativePacketBind) BatchSize() int { return 1 }
+func (b *desktopExternalNativePacketBind) ParseEndpoint(value string) (wgconn.Endpoint, error) {
+	remote, err := netip.ParseAddrPort(value)
+	if err != nil || !b.valid(remote) {
+		return nil, errors.New("native packet provider changed endpoint")
+	}
+	return desktopExternalWireGuardEndpoint(remote), nil
+}
+func (*desktopExternalNativePacketBind) SetReservedForEndpoint(_ netip.AddrPort, reserved [3]byte) {
+	if reserved != [3]byte{} {
+		panic("native packet provider has no reserved-byte policy")
+	}
+}
+
+// This portable test executes the same independent provider bind and pinned
+// crypto devices used by Windows WFP. The client OS source and TUN are explicit
+// existing fixtures here; this test cannot claim Windows kernel acceptance.
+func TestRouterVPNDesktopExternalPacketReference(t *testing.T) {
+	const marker = "ROUTERVPN_NATIVE_PACKET_REFERENCE"
+	if os.Getenv(marker) != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, executable, "-test.run=^TestRouterVPNDesktopExternalPacketReference$", "-test.count=1", "-test.timeout=35s", "-test.v")
+		command.Env = append(os.Environ(), marker+"=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("native packet provider child failed: %v\n%s", err, output)
+		}
+		t.Log(string(output))
+		return
+	}
+	ca := newDesktopExternalIntegrationCA(t)
+	if runtime.GOOS == "windows" {
+		roots := x509.NewCertPool()
+		cert, err := x509.ParseCertificate(ca.der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots.AddCert(cert)
+		t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+		x509.SetFallbackRoots(roots)
+	}
+	directory := t.TempDir()
+	path := filepath.Join(directory, "root.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", path)
+	t.Setenv("SSL_CERT_DIR", directory)
+	for _, protocol := range []string{"wireguard", "awg2-fast", "awg2-strong"} {
+		t.Run(protocol, func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, protocol, "native-reference")
+			f.prove(t)
+			if f.peer.referenceBind == nil || f.peer.physicalUDP.Load() == 0 {
+				t.Fatal("native provider never carried actual encrypted handshake")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalPacketReferenceAuthority(t *testing.T) {
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer packet.Close()
+	peer := &desktopExternalIntegrationPeer{packet: packet}
+	bind := newDesktopExternalNativePacketBind(peer)
+	// Both pinned devices close a not-yet-opened bind while applying initial
+	// configuration. That must not consume the one captured provider listener.
+	if err := bind.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, remote := range []string{"127.0.0.2:12345", "127.0.0.1:0", "localhost:12345", "[::1]:12345"} {
+		if _, err := bind.ParseEndpoint(remote); err == nil {
+			t.Fatalf("foreign provider destination accepted: %s", remote)
+		}
+	}
+	if _, _, err := bind.Open(1); err == nil {
+		t.Fatal("provider rebound its original captured port")
+	}
+	reads, port, err := bind.Open(0)
+	if err != nil || len(reads) != 1 || port != packet.LocalAddr().(*net.UDPAddr).AddrPort().Port() {
+		t.Fatal("provider lost its sole original listener", err)
+	}
+	if _, _, err := bind.Open(0); err == nil {
+		t.Fatal("provider reopened its original listener")
+	}
+	if err := bind.SetMark(1); err == nil {
+		t.Fatal("provider gained a routing mark")
+	}
+	if err := bind.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := bind.Open(0); err == nil {
+		t.Fatal("retired provider acquired a new listener")
+	}
+	if err := bind.Close(); err != nil {
+		t.Fatal("provider close did not join idempotently", err)
+	}
+}

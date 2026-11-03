@@ -392,6 +392,7 @@ type desktopExternalIntegrationPeer struct {
 	protocol                                                                                    string
 	certificate, proxyCertificate                                                               tls.Certificate
 	badDNS, badIP, badAuth, truncatedBody                                                       bool
+	referenceBind                                                                               wgconn.Bind // Independent native provider transport; never a client grant.
 	wgPrivate, wgClientPublic, wgPreshared                                                      string
 	awgParameters                                                                               map[string]string
 	awgReadback                                                                                 func() error
@@ -662,7 +663,7 @@ func desktopExternalIntegrationWGKey(t *testing.T) (string, string) {
 
 func (p *desktopExternalIntegrationPeer) startWireGuard(t *testing.T) {
 	t.Helper()
-	if p.packet == nil || p.listener != nil || !p.kernel.udp {
+	if p.packet == nil || p.listener != nil || (p.kernel == nil || !p.kernel.udp) && p.referenceBind == nil {
 		t.Fatal("external WG composition lost its one captured UDP peer")
 	}
 	var values [3][]byte
@@ -684,7 +685,11 @@ func (p *desktopExternalIntegrationPeer) startWireGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal("actual external WG peer stack", err)
 	}
-	device := wgdevice.NewDevice(p.ctx, stack, &desktopExternalWireGuardBind{peer: p}, &wgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}}, 0)
+	bind := p.referenceBind
+	if bind == nil {
+		bind = &desktopExternalWireGuardBind{peer: p}
+	}
+	device := wgdevice.NewDevice(p.ctx, stack, bind, &wgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}}, 0)
 	stack.SetDevice(device)
 	p.closeProtocol = device.Close
 	ipc := fmt.Sprintf("private_key=%x\npublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], values[1], values[2])
@@ -762,10 +767,10 @@ func (t *desktopExternalAWGTUN) Close() error {
 	return nil
 }
 
-type desktopExternalAWGBind struct{ *desktopExternalWireGuardBind }
+type desktopExternalAWGBind struct{ wgconn.Bind }
 
 func (b *desktopExternalAWGBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
-	reads, port, err := b.desktopExternalWireGuardBind.Open(port)
+	reads, port, err := b.Bind.Open(port)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -783,17 +788,17 @@ func (b *desktopExternalAWGBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint1
 	return converted, port, nil
 }
 func (b *desktopExternalAWGBind) Send(packets [][]byte, endpoint awgconn.Endpoint) error {
-	return b.desktopExternalWireGuardBind.Send(packets, endpoint, 0)
+	return b.Bind.Send(packets, endpoint, 0)
 }
 func (b *desktopExternalAWGBind) ParseEndpoint(value string) (awgconn.Endpoint, error) {
-	return b.desktopExternalWireGuardBind.ParseEndpoint(value)
+	return b.Bind.ParseEndpoint(value)
 }
 
 func (p *desktopExternalIntegrationPeer) startAmnezia(t *testing.T) {
 	t.Helper()
 	parameters, err := awgpolicy.ParametersUAPI(p.awgParameters)
 	padding, paddingErr := strconv.Atoi(p.awgParameters["s4"])
-	if err != nil || paddingErr != nil || len(p.awgParameters) != 11 || p.packet == nil || p.listener != nil || !p.kernel.udp {
+	if err != nil || paddingErr != nil || len(p.awgParameters) != 11 || p.packet == nil || p.listener != nil || (p.kernel == nil || !p.kernel.udp) && p.referenceBind == nil {
 		t.Fatal("external AWG peer lost its complete captured parameters or sole UDP endpoint")
 	}
 	var values [3][]byte
@@ -816,7 +821,11 @@ func (p *desktopExternalIntegrationPeer) startAmnezia(t *testing.T) {
 		t.Fatal("actual external AWG peer stack", err)
 	}
 	wrapped := desktopExternalAWGWrap(stack, padding)
-	device := awgdevice.NewDevice(wrapped, &desktopExternalAWGBind{&desktopExternalWireGuardBind{peer: p}}, &awgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+	bind := p.referenceBind
+	if bind == nil {
+		bind = &desktopExternalWireGuardBind{peer: p}
+	}
+	device := awgdevice.NewDevice(wrapped, &desktopExternalAWGBind{bind}, &awgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
 	p.closeProtocol = device.Close
 	ipc := fmt.Sprintf("private_key=%x\n%spublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], parameters, values[1], values[2])
 	err = device.IpcSet(ipc)
@@ -1467,6 +1476,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		return broker, f.source, err
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if fault == "native-reference" {
+		f.peer.referenceBind = newDesktopExternalNativePacketBind(f.peer)
 	}
 	f.peer.start(t)
 	if err = f.box.RouterVPNStrategyStart(); err != nil {
