@@ -154,20 +154,42 @@ func TestDesktopPFReadbackFailureAndCancellationJoin(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 			defer cancel()
-			entered := make(chan struct{})
+			entered, firewallJoined := make(chan struct{}), make(chan struct{})
+			// A deliberately broken production join must still leave this test's
+			// admitted callbacks retired before the synctest bubble exits. Keep
+			// the pre-cleanup observation below: fixture cleanup is not proof that
+			// the production call joined its work before returning.
+			defer func() {
+				cancel()
+				synctest.Wait()
+				select {
+				case <-entered:
+					<-firewallJoined
+				default:
+				}
+				synctest.Wait()
+			}()
 			want := errors.New("captured account was replaced")
 			var retired atomic.Bool
 			err := desktopPFProbeReadback(ctx, func(captured context.Context) error {
+				defer close(firewallJoined)
 				close(entered)
 				<-captured.Done()
 				time.Sleep(5 * time.Millisecond)
 				retired.Store(true)
 				return nil // Late native success cannot authorize this failed probe.
-			}, func(context.Context) error {
-				<-entered
-				return want
+			}, func(captured context.Context) error {
+				select {
+				case <-entered:
+					return want
+				case <-captured.Done():
+					return captured.Err()
+				}
 			})
-			if !errors.Is(err, want) || !retired.Load() {
+			if !retired.Load() {
+				t.Fatal("PF readback returned before its admitted native checks joined", err)
+			}
+			if !errors.Is(err, want) {
 				t.Fatal("probe discarded failed identity or unjoined firewall readback", err)
 			}
 		})
