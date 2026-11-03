@@ -6,7 +6,45 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 9f779cf0
+## Latest implementation continuation — through 14dc92e3
+
+The verified source cutoff is [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a).
+[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records fifty-three
+published implementation/verification units. These are not a requirements
+completion denominator. The original 356 requirements, C1–C7, later 32-item request and later
+corrections remain binding.
+
+- Native main Router Fastest and explicit all-Router comparison now use 50
+  complete samples, captured source/network/decision ownership and robust
+  trimmed ranking. Android's actual Java/dialog tests and desktop Go race/GTK
+  integration pass. Mac and iOS actual Swift/native acceptance remains pending.
+  Legacy durable-statistics eligibility and via-entry candidate-selection scope
+  are separately under review; ordinary background telemetry is not a benchmark.
+- Windows HY2 AES/AES+XOR public retained host and actual encrypted reference
+  integration are published in `b4f59bf4`. The six Windows WFP images and both
+  application images compile; actual WFP execution remains required. Linux's
+  lower policy and public retained layer host are now published; actual layered
+  installed TUN acceptance remains a separate successor gate.
+- The macOS sealed-bundle native gate is published in `a2c2c4e8` for actual
+  On-connect SS/HTTP/HTTPS/HY2 lifecycle. Four Darwin controller/peer images and
+  strict source closure pass. Real PF/utun/system trust execution remains open.
+  The directory-entry growth repair passes its local negative/race checks;
+  actual ARM progresses to a separate fixture `stopped`/`joined` mismatch,
+  now corrected by `abbda3e2` and awaiting native rerun.
+- Linux Compare now accepts its exact computed 330/450-second request without
+  increasing the general 300-second HTTP cap. All 18 owned worker scenarios and
+  complete actual GTK integration pass. Latest published native command/TUN
+  execution at `b4f59bf4` passes AMD64 and ARM64.
+- Current source/native workflows have not converged to a complete release.
+  The server Tor final-response/drain race is repaired in `59831c67` with
+  deterministic real-child and race regressions; the macOS final-frame fixture
+  correction is published. Their exact native/release reruns remain pending.
+  Latest published release remains the twelve-asset 745b3e41
+  prerelease. Signing, physical/off-LAN/visual/accessibility, private providers,
+  and authorized deployment remain distinct obligations. No live router or
+  AdGuard configuration has been changed.
+
+## Earlier implementation continuation — through 9f779cf0
 
 The verified source cutoff is
 [9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671).

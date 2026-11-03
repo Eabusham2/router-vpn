@@ -18,7 +18,22 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 9f779cf0
+## Implementation reconciliation through 14dc92e3
+
+The verified source cutoff is [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a).
+The [November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records fifty-three
+published implementation/verification units without converting them into a
+requirements completion percentage.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| Original minimum of 50 node samples, robust middle statistics and later Fastest placement | Main Router Fastest and explicit all-Router comparison now require 50 complete owned samples and trimmed ranking. Background current-path liveness remains a distinct measurement. Legacy saved-statistics eligibility and explicit via-entry candidate Fastest require separate reconciliation; their scope is not waived by this milestone. |
+| #112, #200–213, #337 and native external execution | Windows HY2 AES/AES+XOR now reaches the public retained host and actual encrypted reference tests. Native WFP acceptance remains pending. Linux lower policy and public retained HY2 layer host are now published; installed TUN layer acceptance remains separate work. Mac native sealed-bundle acceptance is now an explicit mandatory CI gate for four On-connect protocols, with actual execution pending. Broader graphs, layers, predecessors and Server/Compare remain required. |
+| #141–148, #222–223, #335 and measurements/restoration | Actual generated Linux TUN execution passes both architectures at b4f59bf4. Linux Compare preserves the captured graph startup budget and original generic timeout boundary. Complete GTK interaction/cancellation passes; physical device and off-LAN behavior are separate. |
+| Native lifecycle, protection and delivery | APFS owned-directory growth preserves strict file/credential pins. Native ARM reaches a distinct final-frame fixture mismatch now corrected in abbda3e2; the Tor final-response/drain race is repaired in 59831c67 with deterministic and repeated race evidence. Current native workflows and full exact-SHA publication have not converged. |
+| Original 356, C1–C7 and later full scope | No uncancelled requirement/default is removed. The release remains 745b3e41; complete original all-device graphs, Methods/recovery, signing, physical/visual/accessibility, providers and authorized ASUS/Portainer acceptance remain accountable. |
+
+## Earlier implementation reconciliation through 9f779cf0
 
 The verified source cutoff is [9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671).
 [The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records thirty-eight

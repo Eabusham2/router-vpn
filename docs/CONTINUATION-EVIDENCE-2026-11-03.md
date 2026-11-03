@@ -2,8 +2,8 @@
 
 This record continues [November 2](CONTINUATION-EVIDENCE-2026-11-02.md).
 The independently verified source cutoff is
-[9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671),
-tree `204846eebec7992110210b52ce8a37de4eeb9bc4`. Later drafts are outside
+[14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a),
+tree `e59c538b6d9603ff487167d50dfe187cf9f271c7`. Later drafts are outside
 this cutoff. Every unit below was committed directly to `main`, published
 against its expected parent without force, and verified through the remote
 reference and exact source tree.
@@ -68,8 +68,57 @@ source/build gate passes.
 | [049e77ba](https://github.com/Eabusham2/router-vpn/commit/049e77ba570a36826e46f7c85d6db8fb8e134f4c) | Wire retained direct Local macOS SS/HTTP/HTTPS/Hysteria2 with Start Layer Off and On-connect/Always through the original controller, PF baseline, authenticated child, MTU and joined cleanup. | Fifty-three PF cases, twenty-five executed defects, twelve runner checks, parent/lifetime race tests and eight Darwin component builds passed. AMD64 command compilation predates two final test-only cases; its production bytes match, and ARM64 plus actual Linux command execution include those tests. Actual sealed-bundle PF/utun host acceptance remains required. |
 | [7c712e3d](https://github.com/Eabusham2/router-vpn/commit/7c712e3d32fa5b08356445133f467ca89b54cb36) | Identify the captured macOS descriptor, ancestor or private-input class and numeric metadata when native child ownership fails. | Package race tests and both Darwin package builds passed. All admission predicates remain; the diagnostic does not claim to repair the unresolved child failure. |
 | [9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671) | Require selected SOCKS DNS to create a fresh authenticated association after the original cached control retires; record independent provider phase on native proof failure. | Two actual generated Linux cases, a deliberately retained-cache defect, mandatory-leaf controls and both Windows WFP builds passed; 1,661 prepared records remained unchanged. Exactly one proved old-cache in-flight loss may precede the immediately successful new association. Production retry/policy is unchanged; native rerun remains required. |
+| [bcc39266](https://github.com/Eabusham2/router-vpn/commit/bcc392669c1251f419f59f838d08c6cc5c09e2d9) | Preserve provisioned Linux HY2 AES/AES+XOR in the sealed lower policy, keeping the original inner graph and outer UDP owner. | Focused policy and graph tests pass. Public Linux host admission remains outside this published unit. |
+| [fc533e3d](https://github.com/Eabusham2/router-vpn/commit/fc533e3da709481e451b6b8f65701769b40f5267) | Use complete 50-sample owned Router comparisons in iOS main Fastest; keep the separately routed external comparison. | Source and generated fixture checks pass. Actual Swift/native execution remains pending; no local Swift compiler is available. |
+| [7141796c](https://github.com/Eabusham2/router-vpn/commit/7141796c8582a3c0cd3fc5cd6c929cc45784a186) | Use 50 complete Android Router samples and trimmed-mean ranking with original source/network/decision capture, retained cancellation and drain. | 238 Java checks/12 controls and 240 dialog checks/7 controls passed. The subsequently added attach-failure regression passed with its actual broken predicate rejected; no whole-device claim. |
+| [cd03986a](https://github.com/Eabusham2/router-vpn/commit/cd03986ad44f22986e175be47376985258e11255) | Allow an owned macOS directory to gain entries while retaining exact owner, mode, object type, named identity and ACL; keep regular-file hardlink equality. | Package race tests, old-predicate rejection and both tagged Darwin app builds pass. Native ARM proceeds beyond the directory check, then fails the separate final protocol-frame expectation. |
+| [bb7ca4d9](https://github.com/Eabusham2/router-vpn/commit/bb7ca4d9784e03155ff0457a47699d3f67e3016c) | Route Android Performance all-node comparison through the same retained 50-sample operation without selecting a node or replacing durable statistics. | Actual shipping-method dialog harness: 265 checks and seven existing negative controls pass. |
+| [b4f59bf4](https://github.com/Eabusham2/router-vpn/commit/b4f59bf4219af6f77541146fef0e54208de3997e) | Admit provisioned Windows direct Local HY2 AES/AES+XOR through public connection, protection selection, original restoration and actual outer UDP policy. | All 33 encrypted Linux reference verdicts, six Windows WFP baseline/control builds, both tagged app builds and 61 runner checks pass; 1669 source records verified. Actual Windows WFP execution remains required. |
+| [bc38ae60](https://github.com/Eabusham2/router-vpn/commit/bc38ae6030ec09d72d14509f590b222d94c0b334) | Route iOS Performance all-Router comparison through the owned complete 50-sample measurement while preserving selection and durable statistics. | Python syntax and actual Swift-method assembly checked; new full-sample/cancellation/drift controls await native Swift execution. |
+| [a2c2c4e8](https://github.com/Eabusham2/router-vpn/commit/a2c2c4e85cb633f0c614738aca16c2cf107c1588) | Require the actual macOS installed supervisor, public Connect/Disconnect and private sealed bundle against independent SS/HTTP/HTTPS/HY2 peers on explicitly selected disposable CI hosts. | Strict fresh 1521 application/1926 peer records, four Darwin controller/peer builds and nine runner checks pass. Actual PF/utun/system-trust execution is pending; On-connect positive lifecycle scope only. |
+| [14fd714a](https://github.com/Eabusham2/router-vpn/commit/14fd714abfcd85b98adf7ce7ec5df837422b269f) | Keep the iOS runtime gate aligned with the published measured Fastest label and actual action. | All source assertions execute and reject the old label expectation; the full script still needs its native Swift dependency. |
+| [36f34c6a](https://github.com/Eabusham2/router-vpn/commit/36f34c6a5bffb625db6380b9f81483fd5b71b7b8) | Allow only the exact captured Linux multihop Compare POST to use its computed 330/450-second startup budget; retain the generic 300-second cap. | 18 actual loopback worker cases pass, with zero HTTP for malformed/mismatched requests, original auth capture and joined cancellation. Complete GTK acceptance subsequently passes. |
+| [a3977339](https://github.com/Eabusham2/router-vpn/commit/a3977339674d75a7b83ea606eeb75a36e04a225c) | Use 50 complete desktop Router samples, 10% trimmed ranking, captured source/path and latched physical-network drift; add actual cancellable Mac progress and strict terminal replies. | Focused race tests including 50 real TCP accepts pass in 2.236s. Canonical GTK build and complete Speed Lab/main/Fastest/Performance/multihop/CUSTOM fixture pass. Windows source audit passes; actual Mac Swift/AppKit execution pending. |
+| [322ce7b1](https://github.com/Eabusham2/router-vpn/commit/322ce7b1251e77a62946767659da35e28b99b52f) | Require the owned 50 mobile Fastest path and updated labels in native UI gates, preserving cancellation, current-result and separate Connect checks. | The exact current map-first source audit and Android session-mutation gate, including executed Java numeric-address contract, pass. |
+| [abbda3e2](https://github.com/Eabusham2/router-vpn/commit/abbda3e255102f43ccf2b21cc02dcfcfdd465255) | Require the actual supervisor's authenticated joined frame, original started PID and exit zero in native macOS cleanup fixtures; retain rejection of an invented stopped phase. | Actual production protocol/frame tests and both tagged Darwin controller builds pass. Native whole-gate acceptance remains pending. |
+| [59831c67](https://github.com/Eabusham2/router-vpn/commit/59831c6798f290a0be7a56cea028eb630da058a1) | Keep the Tor IPC reader's pipe independent of process Wait, drain the matching final reply, and retain only the pending request's nonce mailbox. | The old code deterministically fails when the child exits before parent read. Twenty repetitions and two full race matrices pass, including missing/foreign/duplicate/malformed cleanup and cancelled snapshot cases. Workspace deletion still requires original acknowledgement plus process and reader join. |
+| [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a) | Admit Linux direct Local protected HY2 AES/AES+XOR through the retained host, preserving the complete original layer/inner graph and source capture. | Exact frozen-source race suite passes in 21.109s across new layer/source/unsupported cases, existing physical policy, Windows HY2 authority and Linux SOCKS/OpenVPN capture. Independent source review found no blocker. Actual layered Linux installed TUN acceptance is a separate successor gate. |
 
-### Latest integration and validation boundaries
+### Latest integration and validation boundaries — through 14dc92e3
+
+The table contains fifty-three published implementation/verification units. These are
+coherent changes, not a count or percentage of completed user requirements.
+The original August 10 request requires at least 50 node samples and robust
+middle statistics; the later Fastest placement request did not waive that rule.
+Main Router Fastest and explicit all-Router comparison now use 50 samples on the
+requested native surfaces. They retain the current source and physical-network
+owner, disqualify incomplete candidates, preserve background telemetry as a
+separate measurement, and do not turn node selection into an implicit Connect.
+The desktop path latches observed network drift so an A-to-B-to-A transition
+cannot revive an old result. Existing durable saved-statistics eligibility and
+via-entry candidate-selection contracts still need their separate evidence.
+
+Windows direct Local HY2 AES/AES+XOR public host integration is now published,
+including real encrypted reference traffic and wrong-key/whitening rejection.
+Its native WFP execution remains distinct. Linux's lower policy and public
+retained HY2 layer host are now published; the actual installed TUN acceptance
+extension is still outside this cutoff.
+The macOS sealed-bundle native gate is now published and explicitly opt-in on
+disposable CI. It requires real selected DNS, HTTPS exit proof, MTU 1376,
+retained process ownership, PF retirement, utun removal and joined controller
+shutdown. It does not yet establish Always, fifty-sample, cancelled-connect or
+temporary-restoration native acceptance.
+
+The actual APFS directory observation at 7c712e3d was a change from five to six
+directory links with unchanged root ownership/mode. cd03986a addresses that
+specific directory class while regular inputs still reject added hardlinks.
+The newer ARM run reaches the captured-runtime cases but fails the fixture's
+final `stopped` frame expectation. The production supervisor emits `joined`;
+`abbda3e2` corrects the fixture and the whole native gate still needs its rerun.
+`59831c67` repairs the server Tor final-reply/drain race, demonstrated by an
+actual exited child whose final pipe data is deliberately read later.
+
+### Earlier integration and validation boundaries — through 9f779cf0
 
 The table now contains thirty-eight published implementation/verification units.
 The complete retained macOS host is published in `049e77ba`; its baseline and
@@ -269,6 +318,25 @@ grant deadline, complete joins and prohibition on changing foreign rules remain.
 
 ## Actual native observations and remaining failures
 
+- At `b4f59bf4`, the [generated Linux command/TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41575320488)
+  passes both [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41575320488/job/125717347526)
+  and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41575320488/job/125717347786).
+  This is actual native execution on that source, not evidence for unpublished
+  Linux HY2 layer-host changes or all physical devices.
+- At `cd03986a`, [native macOS ARM ownership](https://github.com/Eabusham2/router-vpn/actions/runs/41574808089/job/125715728033)
+  advances beyond the directory pin and fails the final captured-controller
+  frame assertion. Intel was cancelled. The old directory mismatch is no
+  longer this run's reported failure; a whole-gate pass remains unestablished.
+- At `fc533e3d`, [iOS runtime source validation](https://github.com/Eabusham2/router-vpn/actions/runs/41573118646/job/125710388594)
+  fails the obsolete Fastest label before Xcode. `14fd714a` corrects that gate.
+  The [Go requirement workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41573118569/job/125710687141)
+  separately fails `TestServerTorIPCRealChildNonceProofAndConfirmedCleanup`
+  while waiting for its process channel. It is not an iOS compiler error.
+- At `14fd714a`, the [native UI source gate](https://github.com/Eabusham2/router-vpn/actions/runs/41575927704/job/125719421548)
+  still expects an old iOS label and the removed Android three-sample call.
+  `322ce7b1` now requires the complete owned 50 path; both relevant source gates
+  pass locally. No native build result is inferred from those source gates.
+
 - At `66c53d3a`, the [later generated Linux command/TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41570438219)
   again passed on [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41570438219/job/125701803166)
   and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41570438219/job/125701802991).
@@ -390,8 +458,10 @@ integration are now published in `049e77ba` for Start Layer Off and
 On-connect/Always. The native inherited-child failure and complete sealed-bundle
 PF/utun host acceptance remain open. Linux SOCKS retained running-inventory
 integration is published and natively tested in `76938d4d`; it is no longer a
-missing source feature. Windows Hysteria2 Start Layer policy is published, while
-its public host and encrypted runtime integration remain active source work.
+missing source feature. Windows Hysteria2 Start Layer policy, public host and encrypted reference
+runtime integration are published in `b4f59bf4`; actual Windows WFP execution
+remains required. Linux layer-host integration is published in `14dc92e3`; its complete
+installed TUN acceptance extension remains separate work.
 Broader retained families, Start Layers, predecessors, multihop and Server/Compare
 remain separately accountable; a safe refusal does not close those requirements.
 
