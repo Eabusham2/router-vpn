@@ -63,16 +63,19 @@ final class AndroidUnifiedNodeCatalog {
 }
 final class AndroidTelemetry {
  static class Result {
-  final String id,name;final double medianMs;final int samples=50,failed=0;final String proof="routed proof";
-  Result(String id,double ms){this.id=id;name="Measured "+id;medianMs=ms;}
+  final String id,name;final double medianMs,trimmedMeanMs;final int samples=50,failed=0;final String proof="routed proof";
+  Result(String id,double ms){this.id=id;name="Measured "+id;medianMs=ms;trimmedMeanMs=ms;}
   boolean stale;void requireCurrent(){if(stale)throw new IllegalStateException("Measured source changed; Retest.");}String shortLabel(){return medianMs+" ms";}String detail(){return "detail "+id;}
  }
  static final class PathResult extends Result {PathResult(){super("current",3);}}
  interface One{void result(Result value,Throwable error);}interface Many{void result(List<Result> values,Throwable error);}
  interface PathOne{void result(PathResult value,Throwable error);}final PathResult path=new PathResult();PathOne pending;boolean delayPath;
  final List<Result> results=Arrays.asList(new Result("b",3),new Result("a",8),new Result("c",12));
+ Many pendingFastest;boolean delayFastest;int fastestCancels;
  int allSamples,nodeSamples,currentSamples,currentCalls,speedBytes;String measuredNode="";
  double cachedMedian(String id){return id.equals("a")?7:0;}
+ void measureFastest(Many callback){allSamples=50;if(delayFastest)pendingFastest=callback;else callback.result(results,null);}
+ void cancelFastest(){fastestCancels++;for(Result r:results)r.stale=true;}
  void measureAll(int count,Many callback){allSamples=count;callback.result(results,null);}
  void measureNode(AndroidNodeStore.Node node,int count,One callback){measuredNode=node.id;nodeSamples=count;callback.result(results.get(0),null);}
  void currentPath(int count,PathOne callback){currentSamples=count;currentCalls++;if(delayPath)pending=callback;else callback.result(path,null);}
@@ -103,6 +106,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  final AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog();final AndroidTelemetry telemetry=new AndroidTelemetry();
  final Connection connection=new Connection();final Button fastestButton=new Button(this);final CheckBox multihopToggle=new CheckBox(this);
  final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
+ AlertDialog fastestProgressDialog;
  boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes,externalBenchmarks,externalComparisons;boolean externalComparisonAdopt;
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
  void refreshNodes(){}void refreshAll(){refreshes++;}void refreshMap(){}void dialog(String title,String text){infoTitle=title;info=text;}
@@ -133,8 +137,18 @@ HARNESS_SUFFIX = r'''
   check(((TextView)header.children.get(1)).getText().length()>20,title+" explanation retained");return value;
  }
  static void fastest(){
+  ProductDialogHarness held=new ProductDialogHarness();held.telemetry.delayFastest=true;held.showRouterFastConnectMenu();
+  AlertDialog progress=AlertDialog.last;check(progress.showing&&!progress.cancelable,"Fastest progress owns its visible cancellation until drain");
+  progress.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
+  check(held.telemetry.fastestCancels==1&&progress.showing&&held.fastestProgressDialog==progress,"Cancel retains original progress before worker drain");
+  held.telemetry.pendingFastest.result(null,new IllegalStateException("cancelled after drain"));
+  check(!progress.showing&&held.fastestProgressDialog==null&&held.nodeStore.selections==0,"drained cancellation cannot select a node");
+  ProductDialogHarness closed=new ProductDialogHarness();closed.telemetry.delayFastest=true;closed.showRouterFastConnectMenu();AlertDialog parent=AlertDialog.last;parent.dismiss();
+  check(closed.telemetry.fastestCancels==1&&closed.fastestProgressDialog==parent,"parent Close retains the cancelling batch until drain");
+  closed.telemetry.pendingFastest.result(null,new IllegalStateException("cancelled after parent close"));
+  check(closed.fastestProgressDialog==null&&closed.nodeStore.selections==0,"parent Close cannot publish a winner");
   ProductDialogHarness h=new ProductDialogHarness();h.showRouterFastConnectMenu();AlertDialog d=shown(4,"Select node");d.clickItem(0);
-  check(h.telemetry.allSamples==3&&h.nodeStore.selected.equals("b")&&h.saved.getString(SELECTED_ID,"").equals("b"),"Fastest chooses measured first node");
+  check(h.telemetry.allSamples==50&&h.nodeStore.selected.equals("b")&&h.saved.getString(SELECTED_ID,"").equals("b"),"Fastest chooses measured first node");
   check(h.message.contains("Press Connect"),"Fastest selects without connecting");
   h=new ProductDialogHarness();h.showRouterFastConnectMenu();d=shown(4,"Select node");d.clickItem(2);check(h.nodeStore.selected.equals("a"),"specific Fastest list choice exact");
   h=new ProductDialogHarness();h.showRouterFastConnectMenu();d=shown(4,"Select node");h.busy=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"late busy prevents Fastest mutation");
@@ -217,6 +231,9 @@ def main():
         sources["android/app/AlertDialog.java"] = sources["android/app/AlertDialog.java"].replace(
             "public Builder setNegativeButton(",
             "public Builder setNeutralButton(CharSequence text,OnClickListener listener){return button(-3,text,listener);}\n  public Builder setNegativeButton(")
+        sources["android/app/AlertDialog.java"] = sources["android/app/AlertDialog.java"].replace(
+            "public CharSequence title,message;", "public boolean cancelable=true;public void setMessage(CharSequence value){message=value;}public CharSequence title,message;").replace(
+            "public Builder setTitle(", "public Builder setCancelable(boolean value){dialog.cancelable=value;return this;}public Builder setTitle(")
         sources["android/graphics/Color.java"] = "package android.graphics;public final class Color {public static final int WHITE=-1;}"
         sources["android/os/SystemClock.java"] = "package android.os;public final class SystemClock {public static long elapsedRealtime(){return 10000;}}"
         sources["android/content/SharedPreferences.java"] = """package android.content;

@@ -77,17 +77,17 @@ SOURCES[APP.replace('.','/')+'/XrayVpnService.java']='package '+APP+';import and
 HARNESS=r'''package com.eabusham.routervpn;
 import java.io.*;import java.net.*;import java.nio.charset.StandardCharsets;import java.nio.file.*;import java.util.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;import javax.net.SocketFactory;import android.content.*;import android.net.*;import org.json.*;
 public final class CurrentTelemetryTest {
- static int checks;static final String PROOF="a".repeat(64),TOKEN="private-node-token";
+ static int checks,attachRefusals;static final String PROOF="a".repeat(64),TOKEN="private-node-token";
  interface Task{void run()throws Exception;}static void check(boolean condition,String message){checks++;if(!condition)throw new AssertionError(message);}static void rejects(Task task,String message)throws Exception{try{task.run();}catch(Exception expected){checks++;return;}throw new AssertionError(message);}
  static void await(CountDownLatch latch,String name)throws Exception{check(latch.await(4,TimeUnit.SECONDS),name);}
  static class Factory extends SocketFactory {
-  final List<FakeSocket> made=Collections.synchronizedList(new ArrayList<>());String healthProof=PROOF,raw="";volatile Runnable healthHook,secondConnectHook;volatile boolean blockDownload,holdClose,failFirstClose,holdHealthClose,failSamples,failAll;volatile CountDownLatch reading=new CountDownLatch(1),closeAttempted=new CountDownLatch(1);int credentials,healthRequests;
+  final List<FakeSocket> made=Collections.synchronizedList(new ArrayList<>());String healthProof=PROOF,raw="";volatile Runnable healthHook,secondConnectHook;volatile boolean blockDownload,holdClose,failFirstClose,holdHealthClose,failSamples,failAll,rankPattern;volatile CountDownLatch reading=new CountDownLatch(1),closeAttempted=new CountDownLatch(1);int credentials,healthRequests;
   public Socket createSocket(){FakeSocket socket=new FakeSocket(this);made.add(socket);return socket;}public Socket createSocket(String h,int p){throw new AssertionError("unbound host dial");}public Socket createSocket(InetAddress h,int p){throw new AssertionError();}public Socket createSocket(String h,int p,InetAddress a,int q){throw new AssertionError();}public Socket createSocket(InetAddress h,int p,InetAddress a,int q){throw new AssertionError();}
  }
  static class FakeSocket extends Socket {
   final Factory owner;final ByteArrayOutputStream output=new ByteArrayOutputStream();volatile boolean closed;int closes;SocketAddress target;
   FakeSocket(Factory owner){this.owner=owner;}
-  public void connect(SocketAddress target,int timeout)throws IOException{this.target=target;if(timeout<=0)throw new AssertionError("unbounded connect");if(owner.made.indexOf(this)==1&&owner.secondConnectHook!=null)owner.secondConnectHook.run();if(owner.failAll||(owner.failSamples&&owner.made.indexOf(this)>0&&owner.made.indexOf(this)%7==0))throw new IOException("bounded sample failed");try{Thread.sleep(1);}catch(InterruptedException error){throw new IOException(error);}}
+  public void connect(SocketAddress target,int timeout)throws IOException{this.target=target;if(timeout<=0)throw new AssertionError("unbounded connect");if(owner.made.indexOf(this)==1&&owner.secondConnectHook!=null)owner.secondConnectHook.run();if(owner.failAll||(owner.failSamples&&owner.made.indexOf(this)>0&&owner.made.indexOf(this)%7==0))throw new IOException("bounded sample failed");try{int sample=owner.made.indexOf(this);Thread.sleep(owner.rankPattern?(sample<=26?1:sample<=50?20:5):1);}catch(InterruptedException error){throw new IOException(error);}}
   public void setSoTimeout(int timeout){if(timeout<=0)throw new AssertionError();}
   public OutputStream getOutputStream(){return output;}
   public InputStream getInputStream()throws IOException{
@@ -178,7 +178,64 @@ public final class CurrentTelemetryTest {
   List<Double> outliers=new ArrayList<>();for(int i=1;i<=45;i++)outliers.add((double)i);for(int i=0;i<5;i++)outliers.add(10000d);check(AndroidTelemetry.trimmedMean(outliers)==25.5,"10% trimmed mean did not remove five values from each tail");
   try(Fixture f=new Fixture()){f.direct();CountDownLatch done=new CountDownLatch(1);AtomicReference<AndroidTelemetry.Result> measured=new AtomicReference<>();AtomicReference<Throwable> error=new AtomicReference<>();f.telemetry.measureNode(f.node,50,(r,e)->{measured.set(r);error.set(e);done.countDown();});await(done,"actual50 durable run");check(error.get()==null&&measured.get()!=null&&measured.get().samples==50&&measured.get().failed==0,"actual50 run failed: "+error.get());AndroidNodeStatistics.Record stored=AndroidNodeStatistics.load(new AndroidNodeStore(f.context).list().get(0));check(stored!=null&&stored.eligible()&&stored.median==measured.get().medianMs&&stored.trimmedMean==measured.get().trimmedMeanMs,"actual50 statistics did not survive fresh store read");check(stored.detail().contains("trimmed mean")&&stored.detail().contains("50 successful"),"full statistics display omitted measured quantity");check(f.telemetry.cachedMedian(f.node.id)==0,"durable50 polluted quick cache");check(f.physicalFactory.made.size()==51&&f.vpnFactory.made.isEmpty(),"50 samples did not use exact captured physical path");}
  }
- public static void main(String[] args)throws Exception{if(args.length>0){switch(args[0]){case "capture":captures();break;case "http":privateIO();break;case "cleanup":retainedCleanup();break;case "stats":statisticsAndImport();break;default:throw new AssertionError("unknown test group");}return;}captures();privateIO();retainedCleanup();statisticsAndImport();System.out.println("Android current telemetry: "+checks+" native owner, source, private HTTP, token ordering, drain, durable50/ranking and import checks PASS");}
+ static void fastestAttachFailure()throws Exception{
+  try(Fixture f=new Fixture()){
+   f.direct();
+   for(int attempt=0;attempt<2;attempt++){
+    CountDownLatch done=new CountDownLatch(1);AtomicReference<Throwable> error=new AtomicReference<>();
+    f.telemetry.measureFastest((r,e)->{check(r==null&&e!=null,"watcher startup failure became a Fastest score");error.set(e);done.countDown();});await(done,"watcher startup refusal callback");
+    check(error.get().getMessage().equals("No Router node completed all 50 TCP responses; no fastest result is available.")&&attachRefusals==attempt+1,"watcher startup refusal was replaced by stranded busy state");
+    java.lang.reflect.Field nodes=AndroidTelemetry.class.getDeclaredField("nodeWork");nodes.setAccessible(true);
+    check(((List<?>)nodes.get(f.telemetry)).isEmpty(),"watcher startup failure retained nodeWork after finished callback");
+    java.lang.reflect.Field batch=AndroidTelemetry.class.getDeclaredField("fastestWork");batch.setAccessible(true);Object work=batch.get(f.telemetry);
+    java.lang.reflect.Field io=work.getClass().getDeclaredField("io");io.setAccessible(true);
+    check(io.get(work)==null,"watcher startup failure retained comparison IO after finished callback");
+    check(f.physicalFactory.made.isEmpty(),"watcher startup refusal opened a node socket");
+   }
+  }
+ }
+ static void fastestFifty()throws Exception{
+  try(Fixture f=new Fixture()){
+   f.direct();CountDownLatch done=new CountDownLatch(1);AtomicReference<List<AndroidTelemetry.Result>> result=new AtomicReference<>();AtomicReference<Throwable> error=new AtomicReference<>();
+   f.telemetry.measureFastest((r,e)->{result.set(r);error.set(e);done.countDown();});await(done,"Fastest50 completion");
+   check(error.get()==null&&result.get().size()==1&&result.get().get(0).samples==50&&result.get().get(0).failed==0,"Fastest did not require fifty complete samples: "+error.get());
+   check(f.physicalFactory.made.size()==51&&f.vpnFactory.made.isEmpty(),"Fastest did not use fifty captured physical samples plus endpoint discovery");
+   for(FakeSocket socket:f.physicalFactory.made)check(socket.closed,"Fastest returned before actual socket drain");
+   check(AndroidNodeStatistics.load(f.node)==null&&f.telemetry.cachedMedian(f.node.id)==0,"Fastest overwrote stored benchmark or quick history");
+   result.get().get(0).requireCurrent();f.telemetry.cancelFastest();rejects(result.get().get(0)::requireCurrent,"cancelled completed Fastest result adopted");
+  }
+  try(Fixture f=new Fixture()){
+   f.direct();f.physicalFactory.failSamples=true;CountDownLatch done=new CountDownLatch(1);
+   f.telemetry.measureFastest((r,e)->{check(r==null&&e!=null,"partial Fastest candidate earned a score");done.countDown();});await(done,"partial Fastest50 completion");
+  }
+  try(Fixture f=new Fixture()){
+   f.direct();f.store.importBundle(bundle("b".repeat(64),"Other"));f.physicalFactory.rankPattern=true;
+   CountDownLatch done=new CountDownLatch(1);AtomicReference<List<AndroidTelemetry.Result>> result=new AtomicReference<>();AtomicReference<Throwable> error=new AtomicReference<>();
+   f.telemetry.measureFastest((r,e)->{result.set(r);error.set(e);done.countDown();});await(done,"robust Fastest50 completion");
+   check(error.get()==null&&result.get().size()==2,"both complete candidates missing: "+error.get());
+   check(result.get().get(0).trimmedMeanMs<result.get().get(1).trimmedMeanMs&&result.get().get(0).medianMs>result.get().get(1).medianMs,"Fastest used favorable median rather than robust trimmed mean");
+   check(f.physicalFactory.made.size()==102,"Fastest skipped samples for one candidate");
+  }
+  for(String change:new String[]{"decision","catalog"})try(Fixture f=new Fixture()){
+   f.direct();CountDownLatch done=new CountDownLatch(1);AtomicReference<List<AndroidTelemetry.Result>> result=new AtomicReference<>();
+   f.telemetry.measureFastest((r,e)->{check(e==null,"completed receipt fixture failed");result.set(r);done.countDown();});await(done,"completed Fastest receipt");
+   if(change.equals("decision"))AndroidHomeStateStore.home.pathGeneration++;else f.store.importBundle(bundle("b".repeat(64),"replacement catalog"));
+   rejects(result.get().get(0)::requireCurrent,"changed Fastest cohort adopted: "+change);
+  }
+  for(String change:new String[]{"decision","source"})try(Fixture f=new Fixture()){
+   f.direct();f.physicalFactory.secondConnectHook=()->{try{if(change.equals("decision"))AndroidHomeStateStore.home.pathGeneration++;else Files.writeString(f.node.file.toPath(),Files.readString(f.node.file.toPath())+" ");}catch(Exception error){throw new RuntimeException(error);}};
+   CountDownLatch done=new CountDownLatch(1);f.telemetry.measureFastest((r,e)->{check(r==null&&e!=null,"sampling drift earned a score: "+change);done.countDown();});await(done,"sampling drift rejection");
+  }
+  for(String change:new String[]{"cancel"})try(Fixture f=new Fixture()){
+   f.direct();f.physicalFactory.holdClose=true;CountDownLatch done=new CountDownLatch(1);AtomicReference<Throwable> error=new AtomicReference<>();
+   f.telemetry.measureFastest((r,e)->{check(r==null&&e!=null,"stale Fastest cohort adopted: "+change);error.set(e);done.countDown();});await(f.physicalFactory.closeAttempted,"Fastest retained close");
+   if(change.equals("cancel"))f.telemetry.cancelFastest();else if(change.equals("decision"))AndroidHomeStateStore.home.pathGeneration++;else Files.writeString(f.node.file.toPath(),Files.readString(f.node.file.toPath())+" ");
+   Thread.sleep(120);check(done.getCount()==1,"Fastest cancellation dropped socket ownership before drain");
+   CountDownLatch second=new CountDownLatch(1);f.telemetry.measureFastest((r,e)->{check(r==null&&e!=null,"new Fastest started before prior drain");second.countDown();});await(second,"second Fastest refusal");
+   f.physicalFactory.holdClose=false;await(done,"Fastest exact retained close drain");check(error.get()!=null,"Fastest refusal lost failure");
+  }
+ }
+ public static void main(String[] args)throws Exception{if(args.length>0){switch(args[0]){case "capture":captures();break;case "http":privateIO();break;case "cleanup":retainedCleanup();break;case "stats":statisticsAndImport();break;case "fastest":fastestFifty();break;case "attach":fastestAttachFailure();break;default:throw new AssertionError("unknown test group");}return;}captures();privateIO();retainedCleanup();statisticsAndImport();fastestFifty();System.out.println("Android current telemetry: "+checks+" native owner, source, private HTTP, token ordering, drain, durable50/ranking and import checks PASS");}
 }
 '''
 
@@ -196,9 +253,31 @@ def run(overrides=None,group=None):
         assert build.returncode==0,build.stderr
         return subprocess.run(['java','-ea','-cp',os.pathsep.join((str(root),JSON_JAR)),'com.eabusham.routervpn.CurrentTelemetryTest',*([group] if group else [])],capture_output=True,text=True,timeout=35)
 
+def attach_failure_controls():
+    io=(JAVA/'AndroidTelemetryIO.java').read_text()
+    boundary='watcher.setDaemon(true);watcher.start();'
+    assert io.count(boundary)==1
+    # Thread.start may reject creation before the watcher begins. Inject that
+    # precise OS refusal after the real attach bookkeeping, before socket work.
+    failed_start=io.replace(boundary,'watcher.setDaemon(true);CurrentTelemetryTest.attachRefusals++;throw new SecurityException("controlled watcher start refusal");',1)
+    result=run({'AndroidTelemetryIO':failed_start},'attach')
+    assert result.returncode==0,result.stdout+result.stderr
+    telemetry=(JAVA/'AndroidTelemetry.java').read_text()
+    guarded='if(comparison!=null)comparison.io=io;Result result=null;Throwable failure=null;\n        try{\n            io.attach();'
+    assert telemetry.count(guarded)==1
+    old=telemetry.replace(guarded,'if(comparison!=null)comparison.io=io;io.attach();Result result=null;Throwable failure=null;\n        try{',1)
+    negative=run({'AndroidTelemetryIO':failed_start,'AndroidTelemetry':old},'attach')
+    assert negative.returncode!=0 and 'watcher startup failure retained nodeWork after finished callback' in negative.stderr,negative.stdout+negative.stderr
+    print('Android Fastest watcher-start refusal: both attempts retired all owners; pre-fix mutation rejected',flush=True)
+
+
 def main():
+    attach_failure_controls()
     result=run();assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())
     negatives=[
+        ('Fastest complete samples','AndroidTelemetry','if(result.samples!=50||result.failed!=0||!Double.isFinite(result.trimmedMeanMs)||result.trimmedMeanMs<=0)throw new IllegalStateException("This node did not complete all 50 TCP responses; no score.");','','fastest','partial Fastest candidate earned a score'),
+        ('Fastest robust ranking','AndroidTelemetry','((Result result)->result.trimmedMeanMs).thenComparing','((Result result)->result.medianMs).thenComparing','fastest','Fastest used favorable median rather than robust trimmed mean'),
+        ('Fastest returned owner','AndroidTelemetry','result.comparison=work::check;','result.comparison=null;','fastest','cancelled completed Fastest result adopted'),
         ('native prefix','AndroidTelemetryNetwork','return java.util.Arrays.toString(address)+"/"+prefix;','return java.util.Arrays.toString(address);','capture','wrong native prefix adopted'),
         ('physical path','AndroidTelemetryNetwork','||!physical.equals(physicalIdentity(connectivity))','','capture','stale capture accepted: physical'),
         ('full source','AndroidTelemetryCapture','!captured.getValue().equals(AndroidTelemetryNetwork.digest(AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','false','capture','stale capture accepted: source'),

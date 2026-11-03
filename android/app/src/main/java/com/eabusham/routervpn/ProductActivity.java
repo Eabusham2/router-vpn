@@ -62,6 +62,7 @@ public final class ProductActivity extends Activity {
     private long importGeneration,telemetryGeneration;
     private boolean resumed;
     private AlertDialog currentSpeedDialog;
+    private AlertDialog fastestProgressDialog;
     private AndroidExternalBenchmarkDialog externalBenchmarkDialog;
     private AndroidExternalComparisonDialog externalComparisonDialog;
     private AndroidTelemetry.PathResult currentPathReceipt;
@@ -74,9 +75,9 @@ public final class ProductActivity extends Activity {
 
     @Override protected void onCreate(Bundle state){super.onCreate(state);nodeStore=new AndroidNodeStore(this);exitStore=new AndroidStandardExitStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);connection=new AndroidUnifiedConnectionController(this,nodeStore);telemetry=new AndroidTelemetry(this,nodeStore);forwardingMaster=new AndroidForwardingMaster(this,nodeStore);viaEntryProbe=new AndroidViaEntryLatencyProbe(this,AndroidRuntimeRegistry.get(this),telemetry);if(state!=null){importDecision=state.getString(STATE_IMPORT_DECISION,"");pendingProbeEntryId=state.getString(STATE_PROBE_ENTRY,"");ArrayList<String> ids=state.getStringArrayList(STATE_PROBE_CANDIDATES);if(ids!=null)pendingProbeCandidateIds=ids;}setContentView(buildUi());refreshAll();if(state!=null&&!AndroidExternalNodeComparison.hasActiveOperation())connection.restorePending(state,callback());applyStartupPolicy(state!=null);AndroidProductOnboarding.showIfNeeded(this);}
     @Override protected void onResume(){super.onResume();resumed=true;if(connection!=null)connection.resumePending();telemetryHandler.removeCallbacks(telemetryTick);telemetryHandler.post(telemetryTick);refreshAll();if(viaEntryProbe!=null&&viaEntryProbe.isBusy()&&!pendingProbeEntryId.isEmpty())statusView.setText("Measuring live via-entry multihop candidate RTT…");}
-    @Override protected void onPause(){resumed=false;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(telemetry!=null)telemetry.cancelCurrent();if(currentSpeedDialog!=null){currentSpeedDialog.dismiss();currentSpeedDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}super.onPause();}
+    @Override protected void onPause(){resumed=false;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(telemetry!=null){telemetry.cancelCurrent();telemetry.cancelFastest();}if(currentSpeedDialog!=null){currentSpeedDialog.dismiss();currentSpeedDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}super.onPause();}
     @Override protected void onSaveInstanceState(Bundle out){if(!importDecision.isEmpty())out.putString(STATE_IMPORT_DECISION,importDecision);if(connection!=null)connection.savePending(out);if(viaEntryProbe==null||!viaEntryProbe.isBusy()){if(!pendingProbeEntryId.isEmpty())out.putString(STATE_PROBE_ENTRY,pendingProbeEntryId);if(!pendingProbeCandidateIds.isEmpty())out.putStringArrayList(STATE_PROBE_CANDIDATES,new ArrayList<>(pendingProbeCandidateIds));}super.onSaveInstanceState(out);}
-    @Override protected void onDestroy(){importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(telemetry!=null)telemetry.close();if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
+    @Override protected void onDestroy(){importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(telemetry!=null)telemetry.close();if(fastestProgressDialog!=null){fastestProgressDialog.dismiss();fastestProgressDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){if(requestCode==IMPORT_ROUTER_BUNDLE){receiveRouterBundle(resultCode,data);return;}if(requestCode==PREPARE_VIA_ENTRY_RTT){if(resultCode==RESULT_OK)runPendingViaEntryProbe();else{AndroidNodeStore.Node entry=quietNode(pendingProbeEntryId);List<AndroidNodeStore.Node> exits=quietNodes(pendingProbeCandidateIds);clearPendingProbe();try{showViaEntryExitPicker(viaEntryProbe.unmeasured(entry,exits),new IllegalStateException("Android VPN permission was not granted; via-entry RTT is unavailable."));}catch(Exception error){toast(safe(error));}}return;}if(connection!=null&&connection.onActivityResult(requestCode,resultCode)){refreshConnectionLater();return;}super.onActivityResult(requestCode,resultCode,data);}
 
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){if(AndroidUpdateDialog.onPermissionResult(this,requestCode))return;super.onRequestPermissionsResult(requestCode,permissions,grantResults);}
@@ -123,7 +124,7 @@ public final class ProductActivity extends Activity {
 
     private void showFastConnectMenu(){
         if(AndroidExternalNodeComparison.hasActiveOperation()||AndroidMTUMeasurementGate.held()||connection.isPermissionPending()||AndroidViaEntryLatencyProbe.hasActiveOperation()){toast("Finish or cancel the active measurement or permission request first.");return;}
-        new AlertDialog.Builder(this).setTitle("Fastest / compare nodes").setItems(new String[]{"Router nodes • direct TCP selection","Compare external exits • 50 routed HTTPS","Compare and connect fastest external path"},(dialog,which)->{if(which==0)showRouterFastConnectMenu();else showExternalComparison(which==2);}).setNegativeButton("Close",null).show();
+        new AlertDialog.Builder(this).setTitle("Fastest / compare nodes").setItems(new String[]{"Router nodes • 50 TCP responses","Compare external exits • 50 routed HTTPS","Compare and connect fastest external path"},(dialog,which)->{if(which==0)showRouterFastConnectMenu();else showExternalComparison(which==2);}).setNegativeButton("Close",null).show();
     }
     private void showExternalComparison(boolean connectFastest){
         if(externalComparisonDialog!=null)externalComparisonDialog.close();
@@ -131,7 +132,31 @@ public final class ProductActivity extends Activity {
         externalComparisonDialog.show(connectFastest);
     }
 
-    private void showRouterFastConnectMenu(){if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing the selected fastest node.");return;}fastestButton.setEnabled(false);fastestButton.setText("Testing…");telemetry.measureAll(3,(values,error)->runOnUiThread(()->{if(isFinishing()||isDestroyed())return;fastestButton.setEnabled(true);refreshNodes();if(error!=null){toast("Fastest-node test failed: "+safe(error));return;}if(values==null||values.isEmpty()){toast("No measurable Router VPN nodes are available.");return;}String[]labels=new String[values.size()+1];labels[0]="⚡ Fastest — "+values.get(0).name+" • "+values.get(0).shortLabel();for(int i=0;i<values.size();i++)labels[i+1]=values.get(i).name+" • "+values.get(i).shortLabel();choiceDialog("Select node","Direct TCP response time is lightweight. Selecting a Router target does not connect; use the separate Connect button when ready. The 50-sample Performance test remains the durable benchmark.").setItems(labels,(d,w)->{if(mutationBusy()){toast("VPN state changed while Fastest was measuring; disconnect/finish before selecting another node.");return;}AndroidTelemetry.Result pick=values.get(w==0?0:w-1);try{pick.requireCurrent();nodeStore.select(pick.id);prefs().edit().putString(SELECTED_KIND,"router-vpn").putString(SELECTED_ID,pick.id).apply();refreshAll();toast("Selected "+pick.name+". Press Connect when ready.");}catch(Exception e){toast(safe(e));}}).setNegativeButton("Cancel",null).show();}));}
+    private void showRouterFastConnectMenu(){
+        if(mutationBusy()||fastestProgressDialog!=null){toast("Disconnect/finish the current VPN operation before changing the selected fastest node.");return;}
+        fastestButton.setEnabled(false);fastestButton.setText("Testing 50 TCP samples…");
+        final AlertDialog progress=new AlertDialog.Builder(this).setTitle("Find fastest Router node")
+            .setMessage("Collecting 50 TCP responses per node on one captured physical network. The lowest 10% trimmed mean wins; incomplete nodes receive no score. Saved benchmark statistics are preserved.")
+            .setCancelable(false).setNegativeButton("Cancel measurement",null).create();
+        fastestProgressDialog=progress;
+        progress.setOnDismissListener(d->{if(fastestProgressDialog==progress)telemetry.cancelFastest();});
+        progress.show();
+        progress.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{telemetry.cancelFastest();progress.setMessage("Cancelling; waiting for the captured sockets to drain…");progress.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);});
+        telemetry.measureFastest((values,error)->runOnUiThread(()->{
+            if(fastestProgressDialog!=progress||isFinishing()||isDestroyed())return;
+            fastestProgressDialog=null;progress.dismiss();fastestButton.setEnabled(true);refreshNodes();
+            if(error!=null){toast("Fastest-node test failed: "+safe(error));return;}
+            if(values==null||values.isEmpty()){toast("No Router node completed all 50 TCP responses.");return;}
+            String[]labels=new String[values.size()+1];
+            labels[0]="⚡ Fastest — "+values.get(0).name+String.format(Locale.US," • %.1f ms trimmed mean",values.get(0).trimmedMeanMs);
+            for(int i=0;i<values.size();i++)labels[i+1]=values.get(i).name+String.format(Locale.US," • %.1f ms trimmed mean",values.get(i).trimmedMeanMs);
+            choiceDialog("Select node","Each ranked node completed 50 TCP responses. Ranking uses the 10% trimmed mean, excluding five samples at each end. Selecting a Router target does not connect; use Connect when ready. Saved benchmark statistics are unchanged.").setItems(labels,(d,w)->{
+                if(mutationBusy()){toast("VPN state changed while Fastest was measuring; disconnect/finish before selecting another node.");return;}
+                AndroidTelemetry.Result pick=values.get(w==0?0:w-1);
+                try{pick.requireCurrent();nodeStore.select(pick.id);prefs().edit().putString(SELECTED_KIND,"router-vpn").putString(SELECTED_ID,pick.id).apply();refreshAll();toast("Selected "+pick.name+". Press Connect when ready.");}catch(Exception e){toast(safe(e));}
+            }).setNegativeButton("Cancel",(d,w)->telemetry.cancelFastest()).show();
+        }));
+    }
 
     private void clearCurrentTelemetry(){currentPathReceipt=null;currentPathMs=0;liveLatency.setText("-- ms");}
     private void refreshTelemetry(boolean force){

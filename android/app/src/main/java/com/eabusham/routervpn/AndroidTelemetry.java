@@ -20,10 +20,10 @@ final class AndroidTelemetry {
     interface Callback<T> { void finished(T value, Throwable error); }
     static final class Result {
         final String id,name; final double minMs,medianMs,averageMs,trimmedMeanMs,p90Ms,maxMs; final int samples,failed;
-        AndroidTelemetryNetwork route; AndroidNodeStore.Node node; String source;
+        AndroidTelemetryNetwork route; AndroidNodeStore.Node node; String source; AndroidTelemetryIO.Check comparison;
         Result(String id,String name,double min,double median,double average,double p90,double max,int samples,int failed){this(id,name,min,median,average,Double.NaN,p90,max,samples,failed);}
         Result(String id,String name,double min,double median,double average,double trimmedMean,double p90,double max,int samples,int failed){this.id=id;this.name=name;this.minMs=min;this.medianMs=median;this.averageMs=average;this.trimmedMeanMs=trimmedMean;this.p90Ms=p90;this.maxMs=max;this.samples=samples;this.failed=failed;}
-        void requireCurrent()throws Exception{if(route!=null)route.check();if(node!=null&&!source.equals(AndroidNodeStatistics.source(node)))throw new IllegalStateException("The measured node changed; retest before selecting it.");}
+        void requireCurrent()throws Exception{if(comparison!=null)comparison.run();if(route!=null)route.check();if(node!=null&&!source.equals(AndroidNodeStatistics.source(node)))throw new IllegalStateException("The measured node changed; retest before selecting it.");}
         String shortLabel(){return String.format(Locale.US,"%.1f ms",medianMs);}
         String detail(){return String.format(Locale.US,"%s — direct TCP median %.1f ms • min %.1f • avg %.1f%s • p90 %.1f • max %.1f • %d ok / %d failed",name,medianMs,minMs,averageMs,Double.isFinite(trimmedMeanMs)?String.format(Locale.US," • 10%% trimmed mean %.1f",trimmedMeanMs):"",p90Ms,maxMs,samples,failed);}
     }
@@ -47,6 +47,22 @@ final class AndroidTelemetry {
     private volatile AndroidTelemetryIO pathIO; private volatile SpeedWork speedWork;
     private final List<AndroidTelemetryIO> nodeWork=new ArrayList<>();
     private volatile boolean closed;
+    private FastestWork fastestWork;
+    private final class FastestWork {
+        final String decision;
+        final AndroidTelemetryNetwork route;
+        volatile boolean cancelled,finished;
+        volatile AndroidTelemetryIO io;
+        volatile Thread worker;
+        FastestWork()throws Exception{decision=AndroidRouterBundleImport.decision(context,store);route=AndroidTelemetryNetwork.direct(context);check();}
+        void check()throws Exception{
+            if(closed||cancelled||Thread.currentThread().isInterrupted())throw new java.util.concurrent.CancellationException("Fastest comparison cancelled; captured sockets are draining.");
+            route.check();
+            if(!decision.equals(AndroidRouterBundleImport.decision(context,store)))throw new IllegalStateException("The node catalog, selection or VPN decision changed during Fastest; retest before selecting.");
+        }
+        void cancel(){cancelled=true;AndroidTelemetryIO owned=io;if(owned!=null)owned.cancel();Thread thread=worker;if(thread!=null)thread.interrupt();}
+    }
+
     private static final class SpeedWork { volatile boolean cancelled; volatile AndroidTelemetryIO io; volatile Thread worker; void cancel(){cancelled=true;AndroidTelemetryIO owned=io;if(owned!=null)owned.cancel();Thread root=worker;if(root!=null)root.interrupt();} }
 
     AndroidTelemetry(Context context,AndroidNodeStore store){this.context=context.getApplicationContext();this.store=store;}
@@ -64,7 +80,7 @@ final class AndroidTelemetry {
     }
     AndroidNodeStatistics.Record savedStatistics(AndroidNodeStore.Node node){return AndroidNodeStatistics.load(node);}
     void cancelCurrent(){AndroidTelemetryIO owned=pathIO;if(owned!=null)owned.cancel();SpeedWork speed=speedWork;if(speed!=null)speed.cancel();}
-    void close(){closed=true;cancelCurrent();synchronized(nodeWork){for(AndroidTelemetryIO owned:nodeWork)owned.cancel();}}
+    void close(){closed=true;cancelCurrent();cancelFastest();synchronized(nodeWork){for(AndroidTelemetryIO owned:nodeWork)owned.cancel();}}
 
     void measureNode(AndroidNodeStore.Node node,int samples,Callback<Result> callback){
         new Thread(()->{try{Result result=probeNode(node,clamp(samples,3,50));result.requireCurrent();
@@ -82,17 +98,48 @@ final class AndroidTelemetry {
         for(Result result:out)result.requireCurrent();Collections.sort(out,Comparator.comparingDouble(result->result.medianMs));callback.finished(out,null);
         }catch(Throwable error){callback.finished(null,error);}},"routervpn-fastest-rtt").start();
     }
+    synchronized void cancelFastest(){if(fastestWork!=null)fastestWork.cancel();}
+    synchronized void measureFastest(Callback<List<Result>> callback){
+        final FastestWork work;
+        try{
+            if(fastestWork!=null&&!fastestWork.finished)throw new IllegalStateException("Wait for the previous Fastest comparison to drain.");
+            if(fastestWork!=null)fastestWork.cancel();
+            work=new FastestWork();fastestWork=work;
+        }catch(Throwable error){callback.finished(null,error);return;}
+        Thread worker=new Thread(()->{
+            List<Result> out=new ArrayList<>();Throwable failure=null;
+            try{
+                List<AndroidNodeStore.Node> nodes=store.list();work.check();
+                for(AndroidNodeStore.Node node:nodes){
+                    work.check();
+                    try{
+                        Result result=probeNode(node,50,work);
+                        if(result.samples!=50||result.failed!=0||!Double.isFinite(result.trimmedMeanMs)||result.trimmedMeanMs<=0)throw new IllegalStateException("This node did not complete all 50 TCP responses; no score.");
+                        result.comparison=work::check;result.requireCurrent();out.add(result);
+                    }catch(Exception unavailable){work.check();}
+                }
+                work.check();for(Result result:out)result.requireCurrent();
+                if(out.isEmpty())throw new IllegalStateException("No Router node completed all 50 TCP responses; no fastest result is available.");
+                out.sort(Comparator.comparingDouble((Result result)->result.trimmedMeanMs).thenComparing(result->result.id));
+            }catch(Throwable error){failure=error;}
+            finally{work.finished=true;}
+            callback.finished(failure==null?Collections.unmodifiableList(out):null,failure);
+        },"routervpn-fastest-fifty");
+        work.worker=worker;worker.start();
+    }
     // The shipping entry chooser uses AndroidViaEntryPathMeter's retained child
     // and complete drain. Keep the old source-compatible API fail-closed.
     void measureNodesViaCurrentPath(String entry,List<AndroidNodeStore.Node> nodes,int samples,Callback<List<Result>> callback){callback.finished(null,new IllegalStateException("Use the captured via-entry candidate operation; ambient Home state does not own a temporary tunnel."));}
 
-    private Result probeNode(AndroidNodeStore.Node node,int samples)throws Exception{
+    private Result probeNode(AndroidNodeStore.Node node,int samples)throws Exception{return probeNode(node,samples,null);}
+    private Result probeNode(AndroidNodeStore.Node node,int samples,FastestWork comparison)throws Exception{
         if(closed||node==null||node.endpoint==null||node.endpoint.trim().isEmpty())throw new IllegalArgumentException("A stored node with a public endpoint is required.");
         if(AndroidMTUMeasurementGate.held())throw new IllegalStateException("Finish the owned measurement before probing node latency.");
-        String source=AndroidNodeStatistics.source(node);AndroidTelemetryNetwork route=AndroidTelemetryNetwork.direct(context);
-        AndroidTelemetryIO io=new AndroidTelemetryIO(route.network.getSocketFactory(),()->{if(closed||AndroidMTUMeasurementGate.held())throw new IllegalStateException("Node latency yielded to an owned measurement.");route.check();},65000);
-        synchronized(nodeWork){nodeWork.add(io);}io.attach();Result result=null;Throwable failure=null;
+        String source=AndroidNodeStatistics.source(node);AndroidTelemetryNetwork route=comparison==null?AndroidTelemetryNetwork.direct(context):comparison.route;
+        AndroidTelemetryIO io=new AndroidTelemetryIO(route.network.getSocketFactory(),()->{if(closed||AndroidMTUMeasurementGate.held())throw new IllegalStateException("Node latency yielded to an owned measurement.");route.check();if(comparison!=null)comparison.check();},65000);
+        synchronized(nodeWork){nodeWork.add(io);}if(comparison!=null)comparison.io=io;Result result=null;Throwable failure=null;
         try{
+            io.attach();
             String host=endpointHost(node.endpoint);InetAddress[] addresses=route.network.getAllByName(host);io.check();
             if(addresses==null||addresses.length==0||addresses.length>16)throw new IllegalStateException("The captured network returned no bounded node addresses.");
             InetSocketAddress target=null;
@@ -103,7 +150,7 @@ final class AndroidTelemetry {
             if(values.isEmpty())throw new IllegalStateException("All direct node latency probes failed.");
             Collections.sort(values);result=new Result(node.id,node.name,round(values.get(0)),round(percentile(values,.5)),round(average(values)),round(trimmedMean(values)),round(percentile(values,.9)),round(values.get(values.size()-1)),values.size(),failed);
             result.route=route;result.node=node;result.source=source;result.requireCurrent();
-        }catch(Throwable error){failure=error;}finally{io.drain();synchronized(nodeWork){nodeWork.remove(io);}}
+        }catch(Throwable error){failure=error;}finally{io.drain();if(comparison!=null)comparison.io=null;synchronized(nodeWork){nodeWork.remove(io);}}
         if(failure!=null)throw exception(failure);if(io.failure()!=null)throw exception(io.failure());result.requireCurrent();return result;
     }
 
