@@ -1084,6 +1084,33 @@ class MacInstallTransactions(unittest.TestCase):
                 self.assertEqual(before, F.snapshot(self.root, metadata=True))
                 self.assertFalse(self.installer.GENERATION.receipt_path(self.root).exists())
 
+    def test_shipping_inventory_captures_incoming_and_original_legacy_images(self):
+        captures = []
+        expected_previous = set()
+        def scanner(images):
+            images.verify()
+            captures.append(images)
+            self.assertTrue(expected_previous <= images.hashes)
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                images.require_foreign_image({'code_directory_hash': next(iter(images.hashes))})
+            images.require_foreign_image({'code_directory_hash': 'a'*40})
+            return []
+        for legacy in (False, True):
+            if legacy:
+                receipt = self.installer.GENERATION.receipt_path(self.root)
+                expected_previous = set(captures[0].hashes)
+                receipt.unlink()
+                for name in self.installer.GENERATION.REQUIRED_IMAGES:
+                    F.write(self.source/name, IMAGE_FIXTURES.thin([(0, IMAGE_FIXTURES.directory(identity=('incoming-'+name).encode()))]), 0o755)
+                self.renew_boundary()
+            with mock.patch.object(self.installer, 'running_executables', scanner):
+                self.installer.install(self.source, self.uid, self.python, root=self.root,
+                                       integration=self.integration, verifier=self.verify,
+                                       process_reader=scanner)
+            self.assertEqual(2 if legacy else 1, len(captures[-1].generations))
+            self.assertTrue(self.installer.GENERATION.receipt_path(self.root).exists())
+        self.assertGreater(len(captures[1].hashes), len(captures[0].hashes))
+
     def test_successful_upgrade_promotes_the_matching_new_generation_receipt(self):
         self.install()
         receipt = self.installer.GENERATION.receipt_path(self.root)
@@ -1433,7 +1460,7 @@ def main():
     for before, after, case in (
         ('with FILES.installation_lock(root) as install_descriptor:', 'with __import__("contextlib").nullcontext(-1) as install_descriptor:', 'test_live_install_lock_prevents_even_service_probe'),
         ('        verifier(stage, python)', '        pass # bypass runtime validation', 'test_verification_failure_preserves_existing_bytes_and_service'),
-        ('        reject_running_previous(root, process_reader)', '        pass # ignore legacy owner', 'test_running_legacy_native_owner_prevents_promotion'),
+        ('                reject_running_previous(root, reader)', '                pass # ignore legacy owner', 'test_running_legacy_native_owner_prevents_promotion'),
         ('                FILES.copy_checked(child, stage/child.name, private=True)', '                pass # discard private state', 'test_upgrade_preserves_private_owner_settings_and_open_file_isolation'),
         ('            integration.restore()', '            pass # omit restoration', 'test_system_failure_restores_old_root_files_and_supervisor'),
         ('    except CAPABILITY.RetainedAuthorityError as retained:',
@@ -1443,10 +1470,10 @@ def main():
          "                False or type(self.reassert_receipt['mutation_possible']) is not bool):",
          'test_missing_join_receipt_never_replaces_the_unproved_current_root'),
         ('                os.rename(previous_receipt, installed_receipt)', '                pass # omit generation rollback', 'test_receipt_promotion_failure_restores_original_generation_and_private_state'),
-        ('        reject_running_previous(root, process_reader)\n        if generation is not None:\n            generation.verify()',
-         '        reject_running_previous(root, process_reader)\n        if generation is not None:\n            pass # omit final original generation proof', 'test_old_generation_changed_during_inventory_cannot_be_promoted_over'),
-        ('    if generation is not None and process_reader is running_executables:',
-         '    if generation is None:\n        process_reader = lambda: [] # fabricate empty legacy inventory\n    if generation is not None and process_reader is running_executables:',
+        ('                images.verify()',
+         '                pass # omit final original generation proof', 'test_old_generation_changed_during_inventory_cannot_be_promoted_over'),
+        ('                reject_running_previous(root, reader)',
+         '                reader = (lambda: []) if generation is None else reader # fabricate empty legacy inventory\n                reject_running_previous(root, reader)',
          'test_first_or_legacy_install_never_infers_empty_prior_native_inventory'),
         (' -BEsS "$@"\\n', ' -EsS "$@"\\n', 'test_actual_runtime_wrapper_excludes_global_site_and_untrusted_current_directory'),
         ('        preserve_download_quarantine(source, stage)', '        pass # discard download provenance', 'test_existing_download_quarantine_is_preserved_on_code'),
@@ -1484,10 +1511,11 @@ def main():
         if not result.wasSuccessful(): raise SystemExit(1)
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacNativeProcesses))
         if not result.wasSuccessful(): raise SystemExit(1)
-        original_self = capture_native_self(M)
-        actual = native_inventory_with_failure_diagnostic(M, baseline=baseline)
-        require_native_self_inventory(M, original_self, actual)
-        print('Actual macOS libproc inventory captured the executing interpreter.')
+        # Acceptance uses the shipping installer's captured image scope. The
+        # separate pre-fixture bare inventory remains diagnostic and cannot
+        # create authority to accept an unknown or matching executable.
+        subprocess.run([sys.executable, str(ROOT/'deploy/test_macos_generation.py'),
+                        '--native-installation-inventory'], check=True)
     if arguments.package is not None:
         if sys.platform != 'darwin': raise RuntimeError('Bundled macOS runtime execution requires an actual matching Mac host')
         source = arguments.package.resolve()

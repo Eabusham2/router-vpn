@@ -5,17 +5,112 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestMacOSInstallerBootstrapExecHelper(t *testing.T) {
+	if os.Getenv("ROUTERVPN_MAC_INSTALLER_EXEC_HELPER") != "1" {
+		return
+	}
+	arguments := os.Args
+	for len(arguments) > 0 && arguments[0] != "--" {
+		arguments = arguments[1:]
+	}
+	if len(arguments) < 5 {
+		os.Exit(97)
+	}
+	private, entry, python := arguments[1], arguments[2], arguments[3]
+	fmt.Printf("original-go-pid=%d\n", os.Getpid())
+	defer os.RemoveAll(private) // Owns cleanup if exec itself fails.
+	if err := execMacInstallerPackage(python, private, entry, arguments[4:],
+		[]string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C"}); err != nil {
+		t.Fatal(err) // Run deferred capture cleanup, then preserve failed exec.
+	}
+	t.Fatal("successful exec returned to the incoming native image")
+}
+
+func TestMacOSInstallerBootstrapExecOwnsPIDStatusAndCleanup(t *testing.T) {
+	for _, mode := range []string{"help", "entry-failure", "capture-replaced", "exec-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			source, private := macInstallerFixture(t)
+			entry, err := captureMacInstallerPackage(source, private)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			probe := "\nimport os, sys\nprint('executing-python-pid='+str(os.getpid()), flush=True)\nprint('original-stderr', file=sys.stderr, flush=True)\n"
+			if mode == "capture-replaced" {
+				probe += "private=os.path.dirname(os.path.dirname(__file__))\nos.rename(private, private+'-retained')\nos.mkdir(private, 0o700)\nopen(os.path.join(private,'foreign-marker'),'w').write('preserve')\nraise RuntimeError('fixture replaced private capture')\n"
+			}
+			body = bytes.Replace(body, []byte("from __future__ import annotations\n"),
+				[]byte("from __future__ import annotations\n"+probe), 1)
+			if err := os.WriteFile(entry, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			python, argument := "/usr/bin/python3", "--help"
+			if mode == "exec-failure" {
+				python = filepath.Join(private, "absent-python")
+			}
+			if mode == "entry-failure" {
+				argument = "--unknown-captured-fixture-argument"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMacOSInstallerBootstrapExecHelper$", "--", private, entry, python, argument)
+			command.Env = append(os.Environ(), "ROUTERVPN_MAC_INSTALLER_EXEC_HELPER=1")
+			output, runErr := command.CombinedOutput()
+			if mode != "exec-failure" {
+				pid := strconv.Itoa(command.Process.Pid)
+				if !bytes.Contains(output, []byte("original-go-pid="+pid)) ||
+					!bytes.Contains(output, []byte("executing-python-pid="+pid)) || !bytes.Contains(output, []byte("original-stderr")) {
+					t.Fatalf("installer forked or lost original process/streams: %s", output)
+				}
+			}
+			switch mode {
+			case "help":
+				if runErr != nil || !bytes.Contains(output, []byte("--caller-uid")) {
+					t.Fatalf("actual captured five-module entry failed: %v\n%s", runErr, output)
+				}
+			case "entry-failure":
+				if command.ProcessState.ExitCode() != 2 || runErr == nil {
+					t.Fatalf("exec lost actual Python entry status: %v\n%s", runErr, output)
+				}
+			case "capture-replaced":
+				if runErr == nil || !bytes.Contains(output, []byte("private capture was replaced")) {
+					t.Fatalf("changed capture acquired cleanup authority: %v\n%s", runErr, output)
+				}
+				if _, err := os.Stat(filepath.Join(private, "foreign-marker")); err != nil {
+					t.Fatal("cleanup removed replacement directory", err)
+				}
+				if _, err := os.Stat(filepath.Join(private+"-retained", "client", "install-macos-native.py")); err != nil {
+					t.Fatal("failed cleanup lost original capture", err)
+				}
+				return
+			case "exec-failure":
+				if runErr == nil || bytes.Contains(output, []byte("executing-python-pid=")) {
+					t.Fatal("failed exec ran an alternative interpreter")
+				}
+			}
+			if _, err := os.Lstat(private); !os.IsNotExist(err) {
+				t.Fatal("joined installer left its owned private capture", err)
+			}
+		})
+	}
+}
 
 var macInstallerTestModules = []string{
 	"client/install-linux-native.py",

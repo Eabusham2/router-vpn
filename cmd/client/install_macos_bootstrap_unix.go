@@ -9,8 +9,58 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 )
+
+// The interpreter has already passed the platform's root-owned runtime and
+// native loader checks. This fixed program replaces the Go bootstrap and runs
+// the captured installer in the same process, retaining exit/stream semantics.
+// Its finalizer owns only the exact private directory captured before exec.
+const macInstallerPythonSupervisor = `
+import os, runpy, shutil, stat, sys
+private, entry, device, inode = sys.argv[1:5]
+expected = (int(device), int(inode))
+def original():
+    info = os.lstat(private)
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or
+            info.st_uid != os.geteuid() or (info.st_dev, info.st_ino) != expected):
+        raise RuntimeError('Native installer private capture was replaced; retained for recovery')
+    return info
+original()
+descriptor = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+try:
+    if (os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino) != expected:
+        raise RuntimeError('Native installer private descriptor changed')
+    if entry != os.path.join(private, 'client', 'install-macos-native.py'):
+        raise RuntimeError('Native installer entry escaped the captured package')
+    sys.argv = [entry] + sys.argv[5:]
+    try:
+        runpy.run_path(entry, run_name='__main__')
+    finally:
+        original()
+        shutil.rmtree(private)
+finally:
+    os.close(descriptor)
+`
+
+func execMacInstallerPackage(python, private, entry string, arguments, environment []string) error {
+	info, err := os.Lstat(private)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 || entry != filepath.Join(private, "client", "install-macos-native.py") {
+		return errors.New("native installer exec lost its protected capture")
+	}
+	identity, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || identity.Uid != uint32(os.Geteuid()) {
+		return errors.New("native installer exec lost its captured directory owner")
+	}
+	if err := os.Chdir(private); err != nil {
+		return err
+	}
+	argv := []string{python, "-BEsS", "-c", macInstallerPythonSupervisor, private, entry,
+		strconv.FormatUint(uint64(identity.Dev), 10), strconv.FormatUint(uint64(identity.Ino), 10)}
+	argv = append(argv, arguments...)
+	return syscall.Exec(python, argv, environment)
+}
 
 type macInstallerPackageSource struct {
 	name        string

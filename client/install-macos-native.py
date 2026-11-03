@@ -524,6 +524,29 @@ def running_executables(generation=None):
                 # complete original generation, not process absence. Unknown
                 # identity and any matching copied/unlinked image still refuse.
                 continue
+            if path is not None:
+                # A renamed or relocated linked copy is still an owned image.
+                # Bind the resolved pathname to one live exec around the actual
+                # kernel image query; pathname spelling alone grants no exclusion.
+                before = native_process_state(library, pid)
+                if before is None or before[3] == 5:
+                    continue
+                execution = GENERATION.IMAGE.native_unique(library, pid)
+                try:
+                    identity = GENERATION.IMAGE.main_image_identity(library, pid, native_process_state)
+                except GENERATION.IMAGE.MainImageCodeDirectoryUnavailable as unavailable:
+                    identity = unavailable.identity
+                after_path = native_executable(library, pid)
+                after = native_process_state(library, pid)
+                if after is None or after[3] == 5:
+                    continue
+                if (before[:3] != after[:3] or path != after_path or
+                        (identity['pid'], identity['start_seconds'], identity['start_microseconds']) != before[:3] or
+                        (identity['uniqueid'], identity['idversion'], identity['main_uuid']) != execution or
+                        GENERATION.IMAGE.native_unique(library, pid) != execution):
+                    raise RuntimeError('Linked native image changed its captured process, exec or path')
+                generation.require_foreign_image(
+                    identity)
         if path is not None:
             paths.append(path)
     if generation is not None:
@@ -616,8 +639,6 @@ def install(source, installing_uid, python, *, root=ROOT, integration=None, veri
 def install_generation(source, installing_uid, python, root, integration, verifier, process_reader, generation, install_descriptor):
     # The caller retains the original installation EX lock and prior receipt
     # through this complete root/receipt/service transaction.
-    if generation is not None and process_reader is running_executables:
-        process_reader = lambda: running_executables(generation)
     prefix = '.' + root.name + '.install-'
     temporary = Path(tempfile.mkdtemp(prefix=prefix, dir=root.parent))
     stage, previous = temporary/'new', temporary/'previous'
@@ -626,20 +647,19 @@ def install_generation(source, installing_uid, python, root, integration, verifi
     stage.mkdir(mode=0o700); os.chown(stage, 0, 0)
     promoted, receipt_promoted = False, False
     try:
-        stage_application(source, root, stage, installing_uid, python)
-        verifier(stage, python)
-        GENERATION.write_prepared(stage, root, prepared_receipt, CODE_TREES, CODE_FILES, FILES.ordinary)
-        integration.prepare(root)
-        if generation is not None:
-            generation.verify()
-        reject_running_previous(root, process_reader)
-        if generation is not None:
-            generation.verify()
-        elif installed_receipt.exists() or installed_receipt.is_symlink():
-            raise ValueError('A managed receipt appeared during the original legacy installation')
-        with GENERATION.capture_receipt(stage, CODE_TREES, CODE_FILES, FILES.ordinary,
-                                        path=prepared_receipt, target_root=root) as prepared:
-            prepared.verify()
+        with GENERATION.current_legacy_generation(root, CODE_TREES, CODE_FILES, FILES.ordinary, generation) as original:
+            stage_application(source, root, stage, installing_uid, python)
+            verifier(stage, python)
+            GENERATION.write_prepared(stage, root, prepared_receipt, CODE_TREES, CODE_FILES, FILES.ordinary)
+            integration.prepare(root)
+            with GENERATION.capture_receipt(stage, CODE_TREES, CODE_FILES, FILES.ordinary,
+                                            path=prepared_receipt, target_root=root) as prepared:
+                images = GENERATION.InstallationImages([prepared] + ([original] if original is not None else []))
+                reader = (lambda: running_executables(images)) if process_reader is running_executables else process_reader
+                reject_running_previous(root, reader)
+                images.verify()
+            if generation is None and (installed_receipt.exists() or installed_receipt.is_symlink()):
+                raise ValueError('A managed receipt appeared during the original legacy installation')
         if root.exists():
             os.rename(root, previous)
         os.rename(stage, root)

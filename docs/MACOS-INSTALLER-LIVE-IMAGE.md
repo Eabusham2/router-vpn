@@ -1,5 +1,65 @@
 # macOS installer: unresolved live executable identity
 
+## Current installation ownership boundary
+
+Installation admission now compares native process images against the complete
+protected **current installation and verified incoming stage**. A managed
+installation retains its original receipt and full-file revalidation. A legacy
+installation without a receipt retains an ephemeral original-directory capture:
+every required native image, every code tree and every code member must be
+present and remain unchanged. Executable private files, symlinks, incomplete
+images and changed original objects remain refusals. This observation never
+writes a retrospective receipt or claims to recover historical deleted code.
+
+A fresh installation has no current tree to overwrite. It still captures the
+verified incoming image set, checks the actual launchd/legacy paths, and scans
+the actual host process list. Absence of a current tree is not an empty image
+set and does not prove that every old executable on the computer has exited.
+An installation appearing during the original absence capture is rejected.
+
+Both resolved and unresolved process paths now undergo native main-image
+comparison. A linked copy renamed outside the installation directory therefore
+cannot escape the same image check that already covered unlinked copies.
+PID/start identity, native unique ID, exec generation and linked-path readback
+are fenced around the kernel query. Unknown identity remains a failure.
+Full original/incoming file verification brackets the bounded process scan;
+the installation lock remains held through promotion. Existing launchd,
+supervisor join, retained-recovery and rollback protections remain mandatory.
+
+Before that scan, the Go package installer replaces itself with the already
+validated Python interpreter through `exec`. The fixed Python supervisor runs
+the five captured modules in that same PID and cleans only its original private
+directory in a `finally` block, with device/inode/owner/mode readback. Failed
+`exec` returns through Go's original cleanup; failed Python execution preserves
+its exit status. Replaced private directories are retained and reported rather
+than deleted. Consequently the incoming Go installer is no longer a live
+package image during admission, and no bootstrap PID exemption is needed.
+
+An independently identified foreign image is excluded from these captured
+generations; it is **not declared absent**, killed, or adopted. This avoids
+requiring the installer to quarantine an unrelated unlinked executable merely
+because its pathname cannot be recovered. A bare inventory without any captured
+image scope still refuses that unresolved process and remains a diagnostic.
+
+The ownership scope is the current installed generation, the incoming package,
+and the existing recorded installation/launch ownership. It cannot identify
+an arbitrary obsolete binary whose entire installation and ownership history
+were removed before this transaction. Such an unrelated unregistered copy is
+not silently claimed as owned. Incomplete *present* legacy installations and
+missing/changed *recorded* generations are refused instead of inventing their
+history. No signer identity, Endpoint Security entitlement, process name or
+runner-specific allowlist is substituted for captured code identity.
+
+The native installer gate exercises first-install and legacy scopes over the
+actual full host inventory, with a live foreign unlinked executable, a matching
+renamed linked executable, its matching unlinked successor, and acceptance only
+after that original owned child has been joined. Its test images have distinct
+native signatures so ordinary system `sleep` processes are not confused with
+the fixture's installation. Native execution of this updated gate is required;
+portable tests do not establish macOS installation acceptance.
+
+## Historical investigation
+
 Recorded from native CI on October 31, 2026. First-install and legacy inventory
 remain an open installation blocker. Managed upgrades now have a separate,
 bounded main-image comparison path backed by a complete original-generation

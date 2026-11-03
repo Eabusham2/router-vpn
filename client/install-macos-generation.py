@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Protected, complete original-code receipts for managed macOS upgrades.
+"""Protected original-code captures for macOS installation and upgrades.
 
 A receipt is created only for freshly captured, verified installation code.
 It is never reconstructed from a legacy installation. Protected metadata alone
 does not establish completeness: every recorded file and directory, the exact
 code scope, root inode, native image set, and absence of executable private
 files are checked again before the receipt can exclude a live native image.
+An ephemeral legacy capture describes only the complete current protected tree,
+never a fabricated historical receipt. Installation also captures its verified
+incoming stage before comparing the actual host's linked and unlinked images.
 """
 from __future__ import annotations
 
@@ -206,7 +209,28 @@ def write_prepared(root, target_root, path, trees, files, ordinary):
     return value
 
 
-class GenerationCapture:
+class ImageComparison:
+    def compare_image(self, identity):
+        if type(identity) is dict and identity.get('identity_kind') == 'kernel-main-uuid':
+            expected = {'pid', 'start_seconds', 'start_microseconds', 'uniqueid', 'idversion',
+                        'main_uuid', 'identity_kind', 'code_directory_error'}
+            if (set(identity) != expected or type(identity['code_directory_error']) is not int or
+                    identity['code_directory_error'] != 85 or not hexadecimal(identity['main_uuid'], 32) or
+                    any(type(identity[key]) is not int or identity[key] <= 0
+                        for key in ('pid', 'start_seconds', 'uniqueid', 'idversion')) or
+                    type(identity['start_microseconds']) is not int or not 0 <= identity['start_microseconds'] < 1000000):
+                raise ValueError('Unknown native executable UUID cannot exclude this installation')
+            if identity['main_uuid'] in self.executable_uuids:
+                raise RuntimeError('Close Router VPN and its previous owned native processes before upgrading.')
+            return
+        value = identity.get('code_directory_hash') if type(identity) is dict else None
+        if not hexadecimal(value, 40):
+            raise ValueError('Unknown native main-image identity cannot exclude this installation')
+        if value in self.hashes:
+            raise RuntimeError('Close Router VPN and its previous owned native processes before upgrading.')
+
+
+class GenerationCapture(ImageComparison):
     def __init__(self, root, trees, files, ordinary, *, path=None, target_root=None):
         self.root, self.trees, self.files, self.ordinary = Path(root), set(trees), set(files), ordinary
         self.path = receipt_path(self.root) if path is None else Path(path)
@@ -272,27 +296,88 @@ class GenerationCapture:
 
     def require_foreign_image(self, identity):
         self.verify()
-        if type(identity) is dict and identity.get('identity_kind') == 'kernel-main-uuid':
-            expected = {'pid', 'start_seconds', 'start_microseconds', 'uniqueid', 'idversion',
-                        'main_uuid', 'identity_kind', 'code_directory_error'}
-            if (set(identity) != expected or type(identity['code_directory_error']) is not int or
-                    identity['code_directory_error'] != 85 or not hexadecimal(identity['main_uuid'], 32) or
-                    any(type(identity[key]) is not int or identity[key] <= 0
-                        for key in ('pid', 'start_seconds', 'uniqueid', 'idversion')) or
-                    type(identity['start_microseconds']) is not int or not 0 <= identity['start_microseconds'] < 1000000):
-                raise ValueError('Unknown native executable UUID cannot exclude this installation')
-            if identity['main_uuid'] in self.executable_uuids:
-                raise RuntimeError('Close Router VPN and its previous owned native processes before upgrading.')
-            return
-        value = identity.get('code_directory_hash') if type(identity) is dict else None
-        if not hexadecimal(value, 40):
-            raise ValueError('Unknown native main-image identity cannot exclude this installation')
-        if value in self.hashes:
-            raise RuntimeError('Close Router VPN and its previous owned native processes before upgrading.')
+        self.compare_image(identity)
 
     def close(self):
         if self.descriptor is not None: os.close(self.descriptor); self.descriptor = None
         if self.root_capture is not None: self.root_capture.close(); self.root_capture = None
+
+
+class LegacyCapture(ImageComparison):
+    """Retain the complete current legacy tree, without inventing its history."""
+    def __init__(self, root, trees, files, ordinary):
+        self.root_capture = RootCapture(root, ordinary)
+        self.trees, self.files = set(trees), set(files)
+        try:
+            uuids = set()
+            self.members = snapshot(self.root_capture, self.trees, self.files, executable_uuids=uuids)
+            self.hashes = frozenset(value for member in self.members.values()
+                                    for value in member.get('code_directory_hashes', ()))
+            self.executable_uuids = frozenset(uuids)
+            if not self.hashes or not self.executable_uuids:
+                raise ValueError('Legacy installation has no complete native image set')
+        except BaseException:
+            self.close()
+            raise
+
+    def verify(self):
+        uuids = set()
+        actual = snapshot(self.root_capture, self.trees, self.files, executable_uuids=uuids)
+        if actual != self.members or frozenset(uuids) != self.executable_uuids:
+            raise ValueError('Legacy code members changed, disappeared or were replaced')
+
+    def require_foreign_image(self, identity):
+        """Compare only after this ephemeral original tree remains complete."""
+        self.verify()
+        self.compare_image(identity)
+
+    def close(self):
+        self.root_capture.close()
+
+
+class InstallationImages(ImageComparison):
+    """One bounded scan of all captured installed and incoming native images.
+
+    Full file revalidation brackets the entire scan; comparing each process
+    does not repeatedly hash a multi-engine installation hundreds of times.
+    The caller must retain its installation lock through promotion.
+    """
+    def __init__(self, generations):
+        self.generations = tuple(generations)
+        if not self.generations or any(value is None for value in self.generations):
+            raise ValueError('Native installation has no captured image authority')
+        self.hashes = frozenset(value for generation in self.generations for value in generation.hashes)
+        self.executable_uuids = frozenset(value for generation in self.generations for value in generation.executable_uuids)
+        self.verify()
+
+    def verify(self):
+        for generation in self.generations:
+            generation.verify()
+        if (self.hashes != frozenset(value for generation in self.generations for value in generation.hashes) or
+                self.executable_uuids != frozenset(value for generation in self.generations for value in generation.executable_uuids)):
+            raise ValueError('Captured installation image scope changed')
+
+    def require_foreign_image(self, identity):
+        self.compare_image(identity)
+
+
+@contextmanager
+def current_legacy_generation(root, trees, files, ordinary, managed):
+    if managed is not None:
+        yield managed
+        return
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        yield None
+        if root.exists() or root.is_symlink():
+            raise ValueError('A legacy installation appeared during original absence capture')
+        return
+    capture = LegacyCapture(root, trees, files, ordinary)
+    try:
+        yield capture
+    finally:
+        capture.close()
 
 
 @contextmanager
@@ -307,8 +392,9 @@ def previous_generation(root, trees, files, ordinary):
     path = receipt_path(root)
     try: path.lstat()
     except FileNotFoundError:
-        # No receipt means legacy/first-install rules, never an empty native
-        # image set or proof that a deleted previous executable did not exist.
+        # No receipt supplies historical image authority. The installer must
+        # separately capture the current legacy tree and verified incoming
+        # package; this None is never an empty native-image permission.
         yield None
         return
     with capture_receipt(root, trees, files, ordinary) as capture:

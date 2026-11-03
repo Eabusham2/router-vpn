@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import ctypes
 import hashlib
 import importlib.util
@@ -232,6 +233,68 @@ class GenerationReceipt(unittest.TestCase):
         self.assertFalse(self.path.exists())
 
 
+class LegacyInstallationImages(unittest.TestCase):
+    generation = M
+    setUp = GenerationReceipt.setUp
+
+    def test_legacy_capture_is_complete_ephemeral_and_revalidated(self):
+        with self.generation.current_legacy_generation(self.root, self.trees, self.files, I.FILES.ordinary, None) as captured:
+            self.assertIsInstance(captured, self.generation.LegacyCapture)
+            self.assertFalse(self.path.exists(), 'Current observation fabricated a historical receipt')
+            captured.require_foreign_image({'code_directory_hash': 'a'*40})
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                captured.require_foreign_image({'code_directory_hash': next(iter(captured.hashes))})
+            member = self.root/'router-vpn-client'
+            member.write_bytes(F.thin([(0, F.directory(identity=b'changed-legacy'))]))
+            with self.assertRaisesRegex(ValueError, 'Legacy code members changed'):
+                captured.verify()
+        self.assertFalse(self.path.exists())
+
+    def test_missing_or_private_legacy_code_cannot_supply_exclusion(self):
+        for fault in ('missing', 'private', 'unsigned'):
+            with self.subTest(fault=fault):
+                member = self.root/'router-vpn-client'
+                saved = member.read_bytes()
+                private = self.root/'nodes/unrecorded-code'
+                if fault == 'missing': member.unlink()
+                elif fault == 'unsigned': member.write_bytes(F.thin(signed=False))
+                else: write(private, F.thin(), 0o600)
+                try:
+                    with self.assertRaises(ValueError):
+                        with self.generation.current_legacy_generation(self.root, self.trees, self.files, I.FILES.ordinary, None):
+                            pass
+                finally:
+                    write(member, saved, 0o755)
+                    private.unlink(missing_ok=True)
+
+    def test_incoming_and_original_images_both_block_copies(self):
+        incoming = self.base/'incoming'
+        shutil.copytree(self.root, incoming)
+        for name in M.REQUIRED_IMAGES:
+            write(incoming/name, F.thin([(0, F.directory(identity=('incoming-'+name).encode()))]), 0o755)
+        receipt = self.base/'prepared.json'
+        M.write_prepared(incoming, self.root, receipt, self.trees, self.files, I.FILES.ordinary)
+        with M.current_legacy_generation(self.root, self.trees, self.files, I.FILES.ordinary, None) as original, \
+                M.capture_receipt(incoming, self.trees, self.files, I.FILES.ordinary, path=receipt, target_root=self.root) as prepared:
+            images = M.InstallationImages([prepared, original])
+            self.assertTrue(original.hashes.isdisjoint(prepared.hashes))
+            for captured in (prepared, original):
+                with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                    images.require_foreign_image({'code_directory_hash': next(iter(captured.hashes))})
+            images.require_foreign_image({'code_directory_hash': 'a'*40})
+            (incoming/'router-vpn-client').unlink()
+            with self.assertRaises(ValueError): images.verify()
+
+    def test_first_install_absence_never_becomes_empty_image_authority(self):
+        root = self.base/'absent'
+        with M.current_legacy_generation(root, self.trees, self.files, I.FILES.ordinary, None) as original:
+            self.assertIsNone(original)
+            with self.assertRaises(ValueError): M.InstallationImages([])
+        with self.assertRaisesRegex(ValueError, 'appeared during original absence'):
+            with M.current_legacy_generation(root, self.trees, self.files, I.FILES.ordinary, None):
+                root.mkdir()
+
+
 class ManagedProcessLibrary(T.ProcessLibrary):
     def __init__(self, digest, *, versions=None, uuids=None, error=0):
         super().__init__(paths={101: (0, 2)})
@@ -289,6 +352,26 @@ class ManagedProcessInventory(unittest.TestCase):
             owned = ManagedProcessLibrary(next(iter(captured.hashes)))
             with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
                 self.read(owned, captured)
+
+    def test_linked_renamed_copy_is_compared_by_native_image(self):
+        self.prepare()
+        with self.capture() as captured:
+            for owned in (False, True):
+                library = ManagedProcessLibrary(next(iter(captured.hashes)) if owned else 'a'*40)
+                library.paths[101] = (b'/unrelated-path/renamed-image', 0)
+                if owned:
+                    with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                        self.read(library, captured)
+                else:
+                    self.assertEqual(['/unrelated-path/renamed-image'], self.read(library, captured))
+            for fault in ('exec', 'path', 'member'):
+                library = ManagedProcessLibrary('a'*40)
+                library.paths[101] = (b'/unrelated-path/renamed-image', 0)
+                if fault == 'exec': library.versions = [9, 9, 9, 10]
+                elif fault == 'path': library.paths[101] = [(b'/first', 0), (b'/second', 0)]
+                else: library.before_hash = lambda: (self.root/'router-vpn-client').unlink()
+                with self.subTest(fault=fault), self.assertRaises((ValueError, RuntimeError)):
+                    self.read(library, captured)
 
     def test_main_image_cannot_replace_the_original_unresolved_exec_generation(self):
         self.prepare()
@@ -374,6 +457,10 @@ class NativeGenerationReceipt(F.NativeMainImage):
         for name in M.REQUIRED_IMAGES:
             path = installed/name; path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile('/bin/sleep', path); path.chmod(0o755)
+            # Distinguish this owned test generation from unrelated /bin/sleep
+            # processes when the whole host's linked images are also compared.
+            self.codesign('--force', '--sign', '-', '--timestamp=none', '--identifier',
+                          'com.routervpn.fixture.' + self.base.name + '.' + name.replace('/', '.'), path)
         write(installed/'bin/python3', '#!/bin/sh\nexec /usr/bin/python3 -BEsS "$@"\n', 0o700)
         # --strict validates the enclosing application, including its sealed
         # Info.plist and resources. A copied standalone tool under .app is not
@@ -437,22 +524,42 @@ class NativeGenerationReceipt(F.NativeMainImage):
 
 class NativeHostManagedInventory(NativeGenerationReceipt):
     inventory_installer = I
+    scope_kind = 'managed'
+
+    @contextmanager
+    def capture_scope(self, installed):
+        installer, generation = self.inventory_installer, self.inventory_installer.GENERATION
+        if self.scope_kind == 'legacy':
+            with generation.current_legacy_generation(installed, installer.CODE_TREES,
+                                                       installer.CODE_FILES, installer.FILES.ordinary, None) as original:
+                self.assertFalse(generation.receipt_path(installed).exists())
+                yield generation.InstallationImages([original])
+            return
+        generation.write_prepared(installed, installed, generation.receipt_path(installed),
+                                  installer.CODE_TREES, installer.CODE_FILES, installer.FILES.ordinary)
+        with generation.capture_receipt(installed, installer.CODE_TREES,
+                                        installer.CODE_FILES, installer.FILES.ordinary) as captured:
+            if self.scope_kind == 'first':
+                absent = self.base/'first-install-target'
+                with generation.current_legacy_generation(absent, installer.CODE_TREES,
+                                                           installer.CODE_FILES, installer.FILES.ordinary, None) as previous:
+                    self.assertIsNone(previous)
+                    yield generation.InstallationImages([captured])
+            else:
+                yield captured
 
     def test_actual_full_host_inventory_requires_the_original_complete_generation(self):
         installer = self.inventory_installer
         generation = installer.GENERATION
         original_self = T.capture_native_self(installer)
         installed, _ = self.complete_native_installation()
-        generation.write_prepared(installed, installed, generation.receipt_path(installed),
-                                  installer.CODE_TREES, installer.CODE_FILES, installer.FILES.ordinary)
         foreign, foreign_file = self.copy_image('/bin/cat', 'full-host-foreign-image')
         unrelated = self.launch(foreign)
         foreign_identity = generation.IMAGE.main_image_identity(
             self.library, unrelated.pid, installer.native_process_state, system=self.system)
         self.assertIn(foreign_identity['code_directory_hash'], foreign_file['code_directory_hashes'])
         foreign.unlink()
-        with generation.capture_receipt(installed, installer.CODE_TREES,
-                                        installer.CODE_FILES, installer.FILES.ordinary) as captured:
+        with self.capture_scope(installed) as captured:
             self.assertNotIn(foreign_identity['code_directory_hash'], captured.hashes)
 
             def scan(observations):
@@ -491,6 +598,11 @@ class NativeHostManagedInventory(NativeGenerationReceipt):
                 self.library, owner.pid, installer.native_process_state, system=self.system)
             self.assertIn(owned_identity['code_directory_hash'], owned_file['code_directory_hashes'])
             self.assertIn(owned_identity['code_directory_hash'], captured.hashes)
+            linked = []
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes',
+                                        msg='Renamed linked original child did not block full host inventory'):
+                scan(linked)
+            self.assertIn({'identity': owned_identity, 'accepted': False}, linked)
             owned.unlink()
             rejected = []
             with self.assertRaisesRegex(RuntimeError, 'previous owned native processes',
@@ -508,13 +620,14 @@ class NativeHostManagedInventory(NativeGenerationReceipt):
               'and passed again only after that child was joined: ' +
               json.dumps({'before_paths': before_count, 'after_paths': after_count,
                           'foreign': foreign_identity, 'owned': owned_identity,
-                          'scope': 'managed inventory; first-install, legacy and package acceptance remain separate'},
+                          'scope': self.scope_kind + ' captured installation images; package acceptance remains separate'},
                          sort_keys=True), flush=True)
 
 
-def full_host_inventory_gate():
+def full_host_inventory_gate(kind='managed'):
     method = 'test_actual_full_host_inventory_requires_the_original_complete_generation'
-    result = unittest.TextTestRunner(verbosity=2).run(NativeHostManagedInventory(method))
+    case = type('NativeHostInstallationImages', (NativeHostManagedInventory,), {'scope_kind': kind})
+    result = unittest.TextTestRunner(verbosity=2).run(case(method))
     if not result.wasSuccessful():
         raise SystemExit(1)
     # Only a successful real full-host baseline authorizes reporting these
@@ -525,7 +638,7 @@ def full_host_inventory_gate():
          'def running_executables(generation=None):\n    return [] # fabricate empty full-host inventory\n',
          'Native process inventory lost the captured executing image'),
         ('accept-matching-native-image', TARGET, 'if value in self.hashes:', 'if False:',
-         'Matching copied/unlinked original child did not block the full host inventory'),
+         'Renamed linked original child did not block full host inventory'),
     )
     for name, target, needle, replacement, witness in mutations:
         source = target.read_text()
@@ -534,7 +647,7 @@ def full_host_inventory_gate():
         changed = source.replace(needle, replacement, 1)
         installer = T.load(changed) if target != TARGET else T.load((ROOT/'client/install-macos-native.py').read_text())
         if target == TARGET: installer.GENERATION = generation_source(changed)
-        broken = type('BrokenNativeHostManagedInventory', (NativeHostManagedInventory,), {'inventory_installer': installer})
+        broken = type('BrokenNativeHostManagedInventory', (case,), {'inventory_installer': installer})
         output = io.StringIO()
         result = unittest.TextTestRunner(stream=output).run(broken(method))
         if result.wasSuccessful() or result.errors or not result.failures or witness not in output.getvalue():
@@ -547,8 +660,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--native-full-host-inventory', action='store_true',
                         help='Require actual full-host managed inventory; unknown native images remain failures')
+    parser.add_argument('--native-installation-inventory', action='store_true',
+                        help='Require first-install and legacy captured-image inventory on the actual host')
     arguments = parser.parse_args()
-    if arguments.native_full_host_inventory and sys.platform != 'darwin':
+    if (arguments.native_full_host_inventory or arguments.native_installation_inventory) and sys.platform != 'darwin':
         raise RuntimeError('Full-host native managed inventory requires actual macOS; no skipped success is permitted')
     if os.geteuid() != 0:
         owner = load(ROOT/'deploy/test_desktop_socket_uid.py', 'managed_generation_elevation')
@@ -559,12 +674,13 @@ def main():
              ROOT/'client/install-linux-native.py', ROOT/'cmd/client/install_macos_bootstrap_darwin.go',
              ROOT/'deploy/test_macos_image_identity.py', ROOT/'deploy/test_macos_native_install.py', Path(__file__).resolve()]
     before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
-    if arguments.native_full_host_inventory:
-        full_host_inventory_gate()
+    if arguments.native_full_host_inventory or arguments.native_installation_inventory:
+        for kind in ('first', 'legacy') if arguments.native_installation_inventory else ('managed',):
+            full_host_inventory_gate(kind)
         if before != {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}:
             raise RuntimeError('Full-host managed-inventory source changed during verification')
         return
-    suites = [GenerationReceipt, ManagedProcessInventory]
+    suites = [GenerationReceipt, LegacyInstallationImages, ManagedProcessInventory]
     if sys.platform == 'darwin': suites.append(NativeGenerationReceipt)
     for case in suites:
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(case))
@@ -593,12 +709,29 @@ def main():
             raise AssertionError('Generation control did not fail the intended assertion: '+name)
         print('Rejected executed managed-generation defect: '+name, flush=True)
     for name, needle, replacement, method in (
+        ('omit-legacy-revalidation', 'if actual != self.members or frozenset(uuids) != self.executable_uuids:',
+         'if False:', 'test_legacy_capture_is_complete_ephemeral_and_revalidated'),
+        ('drop-original-image-scope', 'self.generations = tuple(generations)',
+         'self.generations = tuple(generations[:1])', 'test_incoming_and_original_images_both_block_copies'),
+    ):
+        source = TARGET.read_text()
+        if source.count(needle) != 1: raise AssertionError('Installation-image control lost its source seam: '+name)
+        changed = generation_source(source.replace(needle, replacement, 1))
+        broken = type('BrokenInstallationImages', (LegacyInstallationImages,), {'generation': changed})
+        with mock.patch.dict(globals(), M=changed):
+            result = unittest.TextTestRunner(stream=io.StringIO()).run(broken(method))
+        if result.wasSuccessful() or result.errors or not result.failures:
+            raise AssertionError('Installation-image control missed its actual assertion: '+name)
+        print('Rejected executed installation-image defect: '+name, flush=True)
+    for name, needle, replacement, method in (
         ('adopt-new-exec', "(identity['uniqueid'], identity['idversion'], identity['main_uuid']) != unresolved.execution",
          'False', 'test_main_image_cannot_replace_the_original_unresolved_exec_generation'),
         ('adopt-unresolved-uuid-exec', "(identity['uniqueid'], identity['idversion'], identity['main_uuid']) != unresolved.execution",
          'False', 'test_ebadexec_replaced_exec_or_original_receipt_still_blocks'),
         ('ignore-owned-code', '                generation.require_foreign_image(identity)',
          '                pass # accept matching old native image', 'test_only_complete_generation_excludes_captured_foreign_live_image'),
+        ('ignore-linked-owned-code', '                generation.require_foreign_image(\n                    identity)',
+         '                pass # accept matching linked renamed image', 'test_linked_renamed_copy_is_compared_by_native_image'),
     ):
         source = (ROOT/'client/install-macos-native.py').read_text()
         if source.count(needle) != 1: raise AssertionError('Managed inventory control lost actual source seam: '+name)

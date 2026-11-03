@@ -5,7 +5,6 @@ package main
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -61,9 +60,9 @@ func macOSInstallerUtility(arguments []string) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	command := exec.Command(python, "-BEsS", entry, source, "--caller-uid", strconv.FormatUint(caller, 10), "--python", python)
-	command.Env = macOSPythonEnvironment()
-	command.Dir = private
-	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return true, command.Run()
+	// Replace this package's native image before the installer inventories the
+	// incoming generation. The protected Python supervisor owns cleanup in the
+	// same PID; no still-live incoming bootstrap needs an image/PID exemption.
+	return true, execMacInstallerPackage(python, private, entry,
+		[]string{source, "--caller-uid", strconv.FormatUint(caller, 10), "--python", python}, macOSPythonEnvironment())
 }

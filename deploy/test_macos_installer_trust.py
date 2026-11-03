@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('installer_trust_namespace', ROOT/'deploy/test_linux_controller_privilege.py')
 P = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(P)
 BOOTSTRAP_CASES = {
+    'TestMacOSInstallerBootstrapExecOwnsPIDStatusAndCleanup': (
+        'help', 'entry-failure', 'capture-replaced', 'exec-failure'),
     'TestMacOSInstallerBootstrapPackage': ('actual-import', 'actual-entrypoint'),
     'TestMacOSInstallerBootstrapRejectsUnsafeCapture': (
         'missing-helper', 'wrong-helper-location', 'linked-helper', 'directory-helper',
