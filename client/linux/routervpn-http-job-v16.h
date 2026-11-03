@@ -118,9 +118,9 @@ static RVHttpJobV16 *rv_http_start_bounded_v25(const char *path, const char *bod
     return NULL;
 }
 
-/* The general action budget remains 300 seconds. The sole longer public
- * request is selected only for a source-captured Tor comparison by the GTK
- * dispatcher; this helper cannot target another endpoint or method. */
+/* The general action budget remains 300 seconds. Longer Tor and multihop
+ * comparisons use their separate captured-request helpers; this generic
+ * entry point never acquires either extended budget. */
 static RVHttpJobV16 *rv_http_start_method_v17(const char *path, const char *body, long timeout_ms, const char *label, int get) {
     return rv_http_start_bounded_v25(path, body, timeout_ms, 300000L, RV_HTTP_LIMIT_V16, label, get);
 }

@@ -29,6 +29,7 @@ static void linux_multihop_store_entry_v23(const char *choice) {
 
 /* Composed into the canonical core after its immutable-session transform. */
 #include "routervpn-http-job-v16.h"
+#include "routervpn-multihop-http-v26.h"
 #include "routervpn-comparison-progress-v25.h"
 static void append_diag(App *app, const char *line);
 static void refresh_all(App *app);
@@ -191,6 +192,8 @@ static gboolean linux_async_submit_v17(App *app, const char *path, const char *b
         rv_http_free_v16(s->progress); s->progress = NULL;
     }
     RVHttpJobV16 *job = comparison_request_id[0] ? rv_http_start_tor_comparison_v25(body, label) :
+        !get && timeout_ms > 300000L && strcmp(path, "/api/multihop/connect") == 0 ?
+            rv_http_start_multihop_comparison_v26(path, body, timeout_ms, label, get) :
         get ? rv_http_start_method_v17(path, "", timeout_ms, label, 1) :
         rv_http_start_v16(path, body != NULL ? body : "{}", timeout_ms, label);
     if (job == NULL) {
