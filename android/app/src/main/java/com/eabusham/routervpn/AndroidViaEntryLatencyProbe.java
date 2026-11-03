@@ -55,11 +55,19 @@ final class AndroidViaEntryLatencyProbe {
             for(AndroidTelemetry.Result value:values)if(value.id.equals(id))return value;
             return null;
         }
+        static double score(AndroidTelemetry.Result value) {
+            if(value==null||value.samples!=50||value.failed!=0)return Double.POSITIVE_INFINITY;
+            for(double n:new double[]{value.minMs,value.medianMs,value.averageMs,value.trimmedMeanMs,value.p90Ms,value.maxMs})
+                if(!Double.isFinite(n)||n<=0||n>60000)return Double.POSITIVE_INFINITY;
+            if(value.minMs>value.medianMs||value.medianMs>value.p90Ms||value.p90Ms>value.maxMs||value.trimmedMeanMs<value.minMs||value.trimmedMeanMs>value.maxMs||value.averageMs<value.minMs||value.averageMs>value.maxMs)return Double.POSITIVE_INFINITY;
+            return value.trimmedMeanMs;
+        }
         AndroidNodeStore.Node fastest() {
             AndroidNodeStore.Node winner=null;double best=Double.POSITIVE_INFINITY;
             for(AndroidNodeStore.Node node:candidates){
                 AndroidTelemetry.Result value=measurement(node.id);
-                if(value!=null&&value.samples>=3&&value.failed==0&&Double.isFinite(value.medianMs)&&value.medianMs>0&&value.medianMs<best){winner=node;best=value.medianMs;}
+                double score=score(value);
+                if(Double.isFinite(score)&&(winner==null||score<best||(score==best&&node.id.compareTo(winner.id)<0))){winner=node;best=score;}
             }
             return winner;
         }
@@ -107,11 +115,12 @@ final class AndroidViaEntryLatencyProbe {
     void measure(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,int samples,Callback callback){
         final Job job;
         try{
+            if(samples!=50)throw new IllegalArgumentException("Via-entry candidate comparison requires 50 samples.");
             synchronized(PROCESS_LOCK){
                 if(processOwner!=null||busy.get()||AndroidVpnMutationGuard.isBusy(context))throw new IllegalStateException("Disconnect/finish the current VPN operation before measuring via-entry candidates.");
                 List<AndroidNodeStore.Node> captured=captureCandidates(entry,candidates);
                 Map<File,byte[]> sources=captureSources(entry,captured);
-                job=new Job(this,entry,captured,sources,Math.max(3,Math.min(10,samples)),homeIdentity(context),connectivity().getActiveNetwork(),callback);
+                job=new Job(this,entry,captured,sources,samples,homeIdentity(context),connectivity().getActiveNetwork(),callback);
                 result=null;active=job;processOwner=job;busy.set(true);
             }
         }catch(Throwable error){callback.finished(null,error);return;}
@@ -160,7 +169,7 @@ final class AndroidViaEntryLatencyProbe {
                 if(!network.equals(connectivity().getActiveNetwork()))throw new IllegalStateException("The captured entry VPN network changed; all results discarded.");
             },network::getAllByName,network.getSocketFactory());
             job.io=io;io.attach();if(job.cancelled)io.cancel();
-            progress(job,"Entry proof passed; measuring "+job.candidates.size()+" candidate(s) through "+job.entry.name+"…");
+            progress(job,"Entry proof passed; measuring 50 TCP samples for each of "+job.candidates.size()+" candidate(s) through "+job.entry.name+"…");
             job.values=AndroidViaEntryPathMeter.measure(job.entry,wireGuard,job.candidates,job.samples,io);
             checkJob(job);checkSources(job.sources);
         }catch(Throwable error){job.failure=error;job.values=Collections.emptyList();}

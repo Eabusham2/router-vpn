@@ -404,7 +404,7 @@ public final class ProductActivity extends Activity {
         viaEntryDialog=progressDialog;progressDialog.show();
         progressDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{if(operation==viaEntryGeneration)viaEntryProbe.cancel();});
         statusView.setText("Preparing real "+entry.name+" → candidate response measurement…");
-        viaEntryProbe.measure(entry,exits,5,new AndroidViaEntryLatencyProbe.Callback(){
+        viaEntryProbe.measure(entry,exits,50,new AndroidViaEntryLatencyProbe.Callback(){
             public void progress(String message){runOnUiThread(()->{if(operation==viaEntryGeneration&&!isFinishing()&&!isDestroyed()){statusView.setText(message);progressDialog.setMessage(message);}});}
             public void finished(AndroidViaEntryLatencyProbe.Result result,Throwable error){runOnUiThread(()->{
                 if(operation!=viaEntryGeneration||isFinishing()||isDestroyed())return;
@@ -422,18 +422,17 @@ public final class ProductActivity extends Activity {
         List<AndroidNodeStore.Node> exits=new ArrayList<>(result.candidates);
         Collections.sort(exits,(left,right)->{
             AndroidTelemetry.Result a=result.measurement(left.id),b=result.measurement(right.id);
-            double x=a!=null&&Double.isFinite(a.medianMs)&&a.medianMs>0?a.medianMs:Double.POSITIVE_INFINITY;
-            double y=b!=null&&Double.isFinite(b.medianMs)&&b.medianMs>0?b.medianMs:Double.POSITIVE_INFINITY;
-            return Double.compare(x,y);
+            double x=AndroidViaEntryLatencyProbe.Result.score(a),y=AndroidViaEntryLatencyProbe.Result.score(b);
+            int compared=Double.compare(x,y);return compared!=0?compared:left.id.compareTo(right.id);
         });
         AndroidNodeStore.Node winner=measurementError==null?result.fastest():null;
         String[] labels=new String[exits.size()+1];
-        labels[0]=winner==null?"⚡ Fastest unavailable • Retest":"⚡ Fastest • "+winner.name+String.format(Locale.US," • %.1f ms",result.measurement(winner.id).medianMs);
+        labels[0]=winner==null?"⚡ Fastest unavailable • Retest":"⚡ Fastest • "+winner.name+String.format(Locale.US," • %.1f ms trimmed mean",result.measurement(winner.id).trimmedMeanMs);
         for(int i=0;i<exits.size();i++){
             AndroidTelemetry.Result value=measurementError==null?result.measurement(exits.get(i).id):null;
-            labels[i+1]=entry.name+" → "+exits.get(i).name+" • "+(value==null?"unavailable":String.format(Locale.US,"%.1f ms • %d ok / %d failed",value.medianMs,value.samples,value.failed));
+            labels[i+1]=entry.name+" → "+exits.get(i).name+" • "+(value==null?"unavailable":String.format(Locale.US,"%.1f ms median • %d ok / %d failed%s",value.medianMs,value.samples,value.failed,Double.isFinite(AndroidViaEntryLatencyProbe.Result.score(value))?String.format(Locale.US," • %.1f ms trimmed mean",value.trimmedMeanMs):" • no comparison score"));
         }
-        String note=measurementError==null?"TCP connection response times were measured through the proved temporary WireGuard entry. Its sockets and tunnel are now stopped. Fastest selects the lowest median with at least three successful samples and no failed samples; Connect stays separate. Values are not saved as direct-node RTTs.":"Via-entry response time could not be proven: "+safe(measurementError)+"\n\nChoose a candidate manually or Retest. No direct-node measurement is substituted.";
+        String note=measurementError==null?"TCP connection response times were measured through the proved temporary WireGuard entry. Its sockets and tunnel are now stopped. Fastest requires all 50 successful samples and no failures, then ranks the 10% trimmed mean with stable node-ID ties; Connect stays separate. Values are not saved as direct-node RTTs.":"Via-entry response time could not be proven: "+safe(measurementError)+"\n\nChoose a candidate manually or Retest. No direct-node measurement is substituted.";
         choiceDialog("Multihop hop 2 • measured via "+entry.name,note).setItems(labels,(dialog,index)->{
             try{result.requireCurrent();}catch(Exception stale){toast(safe(stale));return;}
             if(index==0&&winner==null){prepareViaEntryExitMeasurement(entry,result.candidates);return;}

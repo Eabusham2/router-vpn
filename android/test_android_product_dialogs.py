@@ -63,8 +63,9 @@ final class AndroidUnifiedNodeCatalog {
 }
 final class AndroidTelemetry {
  static class Result {
-  final String id,name;final double medianMs,trimmedMeanMs;final int samples=50,failed=0;final String proof="routed proof";
-  Result(String id,double ms){this.id=id;name="Measured "+id;medianMs=ms;trimmedMeanMs=ms;}
+  final String id,name;final double minMs,medianMs,averageMs,trimmedMeanMs,p90Ms,maxMs;final int samples,failed;final String proof="routed proof";
+  Result(String id,double ms){this(id,ms,ms,50,0);}
+  Result(String id,double median,double trimmed,int samples,int failed){this.id=id;name="Measured "+id;medianMs=median;trimmedMeanMs=trimmed;minMs=Math.min(median,trimmed);maxMs=p90Ms=Math.max(median,trimmed);averageMs=trimmed;this.samples=samples;this.failed=failed;}
   boolean stale;void requireCurrent(){if(stale)throw new IllegalStateException("Measured source changed; Retest.");}String shortLabel(){return medianMs+" ms";}String detail(){return "detail "+id;}
  }
  static final class PathResult extends Result {PathResult(){super("current",3);}}
@@ -92,7 +93,7 @@ final class AndroidViaEntryLatencyProbe {
   Result(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,List<AndroidTelemetry.Result> values){this.entry=entry;this.candidates=candidates;this.values=values;}
   void requireCurrent(){if(stale)throw new IllegalStateException("Captured decision changed; Retest.");}
   AndroidTelemetry.Result measurement(String id){for(var value:values)if(value.id.equals(id))return value;return null;}
-  AndroidNodeStore.Node fastest(){AndroidNodeStore.Node best=null;double ms=Double.POSITIVE_INFINITY;for(var node:candidates){var value=measurement(node.id);if(value!=null&&value.medianMs>0&&value.medianMs<ms){best=node;ms=value.medianMs;}}return best;}
+  // SHIPPING_VIA_RANKING
  }
 }
 '''
@@ -214,6 +215,10 @@ HARNESS_SUFFIX = r'''
   AlertDialog d=shown(3,"Multihop hop 2");check(d.items[0].contains("Fastest")&&d.items[1].contains("4.2 ms")&&d.items[2].contains("unavailable"),"only measured via-entry result gets a response time");d.clickItem(2);check(h.entry.equals("a")&&h.exit.equals("c"),"exact manual second-hop callback");
   captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Arrays.asList(new AndroidTelemetry.Result("b",40),new AndroidTelemetry.Result("c",7)));
   h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");check(d.items[0].contains("Node c")&&d.items[1].contains("Node c"),"measured Fastest and sorting use the lowest candidate response");d.clickItem(0);check(h.exit.equals("c"),"Fastest routes to the measured exit");
+  h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Arrays.asList(new AndroidTelemetry.Result("b",1,40,50,0),new AndroidTelemetry.Result("c",20,20,50,0)));
+  h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");check(d.items[0].contains("Node c")&&d.items[1].contains("Node c"),"via-entry UI ranks trimmed mean despite favorable median");d.clickItem(0);check(h.exit.equals("c"),"via-entry Fastest selected robust winner");
+  h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Arrays.asList(new AndroidTelemetry.Result("b",1,1,49,1),new AndroidTelemetry.Result("c",7)));
+  h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");check(d.items[0].contains("Node c")&&d.items[2].contains("no comparison score"),"partial via-entry row obtained a score or lost its diagnostic label");
   h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.emptyList());
   h.showViaEntryExitPicker(captured,new IllegalStateException("no route proof"));d=shown(3,"Multihop hop 2");check(d.items[0].contains("unavailable")&&((TextView)((LinearLayout)d.customTitle).children.get(1)).getText().toString().contains("no route proof"),"failed proof remains visible without invented latency");d.clickItem(0);check(h.exit.equals("2"),"unavailable Fastest retries measurements instead of guessing a winner");
   h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.singletonList(new AndroidTelemetry.Result("b",4.2)));h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");captured.stale=true;d.clickItem(0);check(h.exit.isEmpty()&&h.message.contains("Retest"),"a delayed Fastest callback cannot reuse an old capture");
@@ -249,7 +254,14 @@ def main():
         sources["android/content/SharedPreferences.java"] = """package android.content;
 public interface SharedPreferences {String getString(String key,String fallback);default Editor edit(){throw new UnsupportedOperationException();}
 interface Editor{Editor putString(String key,String value);Editor putBoolean(String key,boolean value);void apply();}}"""
-        sources["com/eabusham/routervpn/ProductBoundaries.java"] = BOUNDARIES
+        via_source=(JAVA / "AndroidViaEntryLatencyProbe.java").read_text()
+        ranking=[]
+        for marker in ("        static double score(","        AndroidNodeStore.Node fastest("):
+            start=via_source.index(marker);end=via_source.index("{",start)+1;depth=1
+            while depth:
+                depth+=(via_source[end]=="{")-(via_source[end]=="}");end+=1
+            ranking.append(via_source[start:end])
+        sources["com/eabusham/routervpn/ProductBoundaries.java"] = BOUNDARIES.replace("  // SHIPPING_VIA_RANKING", "\n".join(ranking))
         for name, text in sources.items():
             path = tmp / name;path.parent.mkdir(parents=True, exist_ok=True);path.write_text(text)
         target = tmp / "com/eabusham/routervpn/ProductDialogHarness.java"

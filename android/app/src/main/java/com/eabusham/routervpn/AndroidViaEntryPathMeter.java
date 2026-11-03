@@ -28,6 +28,7 @@ final class AndroidViaEntryPathMeter {
             NativeWireGuardController wireGuard,
             List<AndroidNodeStore.Node> candidates,
             int samples, AndroidPathProbe.Route route) throws Exception {
+        if (samples != 50) throw new IllegalArgumentException("Via-entry candidate comparison requires 50 samples.");
         if (route == null) throw new IllegalArgumentException("Via-entry measurements require a captured VPN socket owner.");
         route.check();
         if (entry == null || entry.file == null || !entry.file.isFile()) {
@@ -40,7 +41,7 @@ final class AndroidViaEntryPathMeter {
             throw new IllegalStateException("Temporary WireGuard entry failed selected-entry private path proof before candidate RTT measurement.");
         }
 
-        int count = Math.max(3, Math.min(10, samples));
+        int count = samples;
         List<AndroidTelemetry.Result> out = new ArrayList<>();
         for (AndroidNodeStore.Node node : candidates) {
             route.check();
@@ -66,7 +67,7 @@ final class AndroidViaEntryPathMeter {
         if (out.isEmpty()) {
             throw new IllegalStateException("No candidate node returned a live RTT through the selected temporary entry tunnel.");
         }
-        Collections.sort(out, Comparator.comparingDouble(value -> value.medianMs));
+        Collections.sort(out, Comparator.comparingDouble(AndroidViaEntryLatencyProbe.Result::score).thenComparing(value -> value.id));
         route.check();
         return out;
     }
@@ -108,6 +109,7 @@ final class AndroidViaEntryPathMeter {
                 round(values.get(0)),
                 round(percentile(values, 0.50)),
                 round(average(values)),
+                round(trimmedMean(values)),
                 round(percentile(values, 0.90)),
                 round(values.get(values.size() - 1)),
                 values.size(),
@@ -162,7 +164,12 @@ final class AndroidViaEntryPathMeter {
         return total / values.size();
     }
 
-    private static double round(double value) { return Math.round(value * 1000d) / 1000d; }
+    private static double trimmedMean(List<Double> sorted) {
+        int trim=sorted.size()/10;
+        return average(sorted.subList(trim,sorted.size()-trim));
+    }
+
+    private static double round(double value) { return Math.max(0.001, Math.round(value * 1000d) / 1000d); }
 
     private AndroidViaEntryPathMeter() { }
 }

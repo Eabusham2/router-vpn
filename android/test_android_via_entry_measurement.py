@@ -8,11 +8,13 @@ This is lifecycle/routing-boundary coverage, not physical Android VPN evidence.
 """
 from pathlib import Path
 import shutil
+import os
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
+JSON_JAR = os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar")
 CLASSES = ("NativeWireGuardController", "AndroidPathProbe", "AndroidViaEntryProbeIO",
            "AndroidViaEntryPathMeter", "AndroidViaEntryLatencyProbe")
 SOURCES = {
@@ -89,8 +91,8 @@ final class AndroidHomeStateStore {
 final class AndroidRuntimeRegistry {final NativeWireGuardController wireGuard;AndroidRuntimeRegistry(Context context){wireGuard=new NativeWireGuardController(context);}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context context){return busy||AndroidViaEntryLatencyProbe.hasActiveOperation();}}
 final class AndroidTelemetry {static final class Result {
- final String id,name;final double minMs,medianMs,meanMs,p90Ms,maxMs;final int samples,failed;
- Result(String id,String name,double min,double median,double mean,double p90,double max,int samples,int failed){this.id=id;this.name=name;minMs=min;medianMs=median;meanMs=mean;p90Ms=p90;maxMs=max;this.samples=samples;this.failed=failed;}
+ final String id,name;final double minMs,medianMs,averageMs,trimmedMeanMs,p90Ms,maxMs;final int samples,failed;
+ Result(String id,String name,double min,double median,double mean,double trimmed,double p90,double max,int samples,int failed){this.id=id;this.name=name;minMs=min;medianMs=median;averageMs=mean;trimmedMeanMs=trimmed;p90Ms=p90;maxMs=max;this.samples=samples;this.failed=failed;}
 }}
 ''',
 "com/eabusham/routervpn/ViaEntryHarness.java": r'''package com.eabusham.routervpn;
@@ -123,7 +125,7 @@ public final class ViaEntryHarness {
   final List<FakeSocket> sockets=Collections.synchronizedList(new ArrayList<>());final List<String> resolved=Collections.synchronizedList(new ArrayList<>());
   final AtomicInteger proofs=new AtomicInteger(),aConnects=new AtomicInteger(),bConnects=new AtomicInteger();
   final CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
-  volatile boolean blockResolve,blockSocket;volatile int wrongProof,failSample;volatile Runnable change;
+  volatile boolean blockResolve,blockSocket,inverted;volatile int wrongProof,failSample;volatile Runnable change;
   final AndroidRuntimeRegistry runtime;final AndroidViaEntryLatencyProbe probe;
   final AndroidNodeStore.Node entry,a,b;
   Fixture(Path root)throws Exception{
@@ -144,7 +146,7 @@ public final class ViaEntryHarness {
    root.put("profiles",new JSONObject().put("wg",new JSONObject().put("wg.conf",Base64.getEncoder().encodeToString("[Interface]\nPrivateKey=test\n".getBytes(StandardCharsets.UTF_8)))));
    Path file=folder.resolve(id+".json");Files.writeString(file,root.toString());return new AndroidNodeStore.Node(id,file.toFile());
   }
-  Receiver start(){Receiver receiver=new Receiver();probe.measure(entry,Arrays.asList(a,b),3,receiver);return receiver;}
+  Receiver start(){Receiver receiver=new Receiver();probe.measure(entry,Arrays.asList(a,b),50,receiver);return receiver;}
   void drained(){synchronized(sockets){check(sockets.stream().allMatch(value->value.closed),"every captured proof and candidate socket closed");}}
   public void close()throws Exception{
    release.countDown();synchronized(sockets){for(FakeSocket socket:sockets)socket.close();}
@@ -163,7 +165,7 @@ public final class ViaEntryHarness {
    int count=(last==10?fixture.aConnects:fixture.bConnects).incrementAndGet();
    if(fixture.blockSocket){fixture.entered.countDown();synchronized(this){while(!closed)try{wait();}catch(InterruptedException ignored){}}throw new SocketException("captured socket closed");}
    if(last==10&&count==fixture.failSample)throw new SocketException("sample timeout");
-   try{Thread.sleep(last==10?6:25);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new SocketException("interrupted");}
+   try{Thread.sleep(fixture.inverted?(last==10?(count<=27?1:35):10):(last==10?6:25));}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new SocketException("interrupted");}
    Runnable changed=fixture.change;if(changed!=null){fixture.change=null;changed.run();}
   }
   public void setSoTimeout(int timeout){}
@@ -177,14 +179,14 @@ public final class ViaEntryHarness {
   check(f.proofs.get()==2&&f.resolved.containsAll(Arrays.asList("candidate-a.invalid","candidate-b.invalid","127.0.0.1")),"proofs and candidate DNS use captured VPN Network");f.drained();
   GoBackend.releaseDown.countDown();await(r.done,"successful candidate result delivered");check(r.error==null&&r.result!=null&&r.calls.get()==1,"one successful completion");
   r.result.requireCurrent();check(r.result.fastest()==f.a&&r.result.values.size()==2,"Fastest is the lowest fully valid routed candidate");
-  check(r.result.measurement("a").samples==3&&r.result.measurement("a").medianMs>=1,"latency uses elapsed completed socket samples");
+  check(r.result.measurement("a").samples==50&&r.result.measurement("a").medianMs>=1&&f.aConnects.get()==51&&f.bConnects.get()==51,"latency uses elapsed completed socket samples");
   check(f.runtime.wireGuard.getState()==Tunnel.State.DOWN&&!f.probe.isBusy(),"measurement retains no temporary VPN");
   Files.writeString(f.a.file.toPath(),"changed");rejects(r.result::requireCurrent,"source-changed result must be rejected");
  }}
  static void canceled(Path root,boolean dns)throws Exception{try(Fixture f=new Fixture(root)){
   f.blockResolve=dns;f.blockSocket=!dns;Receiver r=f.start();await(f.entered,dns?"resolver entered":"socket entered");f.probe.cancel();
   if(dns){check(f.probe.isBusy()&&r.done.getCount()==1&&GoBackend.downs.get()==0,"cancelled Future/interrupt is not resolver drain evidence");
-   AndroidViaEntryLatencyProbe second=new AndroidViaEntryLatencyProbe(f.context,f.runtime,new AndroidTelemetry());Receiver rejected=new Receiver();second.measure(f.entry,List.of(f.a),3,rejected);await(rejected.done,"second activity rejected");check(rejected.error!=null&&GoBackend.ups.get()==1,"process reservation prevents a second temporary entry");f.release.countDown();}
+   AndroidViaEntryLatencyProbe second=new AndroidViaEntryLatencyProbe(f.context,f.runtime,new AndroidTelemetry());Receiver rejected=new Receiver();second.measure(f.entry,List.of(f.a),50,rejected);await(rejected.done,"second activity rejected");check(rejected.error!=null&&GoBackend.ups.get()==1,"process reservation prevents a second temporary entry");f.release.countDown();}
   await(r.done,"cancel completes after actual worker drain");check(r.result==null&&r.error instanceof CancellationException&&r.calls.get()==1,"cancel never exposes prior partial results");
   check(GoBackend.downs.get()==1&&!f.probe.isBusy(),"cancel stops captured entry once after worker completion");f.drained();
  }}
@@ -200,6 +202,18 @@ public final class ViaEntryHarness {
  static void partial(Path root)throws Exception{try(Fixture f=new Fixture(root)){
   f.failSample=2;Receiver r=f.start();await(r.done,"partial candidate completes");check(r.error==null&&r.result.measurement("a").failed==1,"failed candidate sample remains a failure, not zero time");
   check(r.result.fastest()==f.b,"partial candidate cannot win measured Fastest");
+ }}
+ static void fiftyRanking(Path root)throws Exception{try(Fixture f=new Fixture(root)){
+  Receiver bad=new Receiver();f.probe.measure(f.entry,List.of(f.a),5,bad);await(bad.done,"short comparison refused");check(bad.result==null&&bad.error!=null&&GoBackend.ups.get()==0&&!f.probe.isBusy(),"short via-entry request acquired an owner or score");
+  f.inverted=true;Receiver r=f.start();await(r.done,"fifty-sample robust candidate round");check(r.error==null&&r.result!=null,"robust routed comparison completed");
+  var a=r.result.measurement("a");var b=r.result.measurement("b");
+  check(a.samples==50&&b.samples==50&&f.aConnects.get()==51&&f.bConnects.get()==51,"via-entry comparison did not measure exactly fifty actual connections per candidate");
+  check(a.medianMs<b.medianMs&&a.trimmedMeanMs>b.trimmedMeanMs&&r.result.fastest()==f.b,"routed Fastest used favorable median instead of fifty-sample trimmed mean");
+  r.result.requireCurrent();f.drained();
+  var sameA=new AndroidTelemetry.Result("a","A",1,5,10,10,15,20,50,0);var sameB=new AndroidTelemetry.Result("b","B",1,5,10,10,15,20,50,0);
+  var tie=new AndroidViaEntryLatencyProbe.Result(f.probe,f.entry,List.of(f.b,f.a),List.of(sameB,sameA),Map.of(),0,"",null);
+  check(tie.fastest()==f.a,"routed trimmed ties ignored stable node ID");
+  for(var value:List.of(new AndroidTelemetry.Result("a","A",1,1,1,1,1,1,49,0),new AndroidTelemetry.Result("a","A",1,1,1,1,1,1,50,1),new AndroidTelemetry.Result("a","A",1,1,1,Double.NaN,1,1,50,0)))check(!Double.isFinite(AndroidViaEntryLatencyProbe.Result.score(value)),"invalid candidate received a comparison score");
  }}
  static void api29(Path root)throws Exception{try(Fixture f=new Fixture(root)){
   android.os.Build.VERSION.SDK_INT=29;Receiver r=f.start();await(r.done,"API29 native capture measurement completes");
@@ -234,7 +248,8 @@ public final class ViaEntryHarness {
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("captured")){capturedController(root);return;}
   if(args.length>1&&args[1].equals("route")){success(root);return;}
-  success(root);canceled(root,true);canceled(root,false);for(String invalid:List.of("proof-before","proof-after","foreign","unknown-owner","source","home","network","generation"))invalid(root,invalid);
+  if(args.length>1&&args[1].equals("ranking")){fiftyRanking(root);return;}
+  fiftyRanking(root);success(root);canceled(root,true);canceled(root,false);for(String invalid:List.of("proof-before","proof-after","foreign","unknown-owner","source","home","network","generation"))invalid(root,invalid);
   partial(root);api29(root);cleanupRetry(root);replacedDuringStop(root);capturedController(root);for(String stale:List.of("cancel","home","network","new-measurement","generation"))staleResult(root,stale);
   check(!AndroidViaEntryLatencyProbe.hasActiveOperation(),"all process owners settled");System.out.println("Android shipping via-entry measurement: PASS "+checks+" checks (Network/backend boundary doubles; real loopback startup proof)");
  }
@@ -263,9 +278,9 @@ def main():
             shutil.copyfile(JAVA / (name + ".java"), base / "com/eabusham/routervpn" / (name + ".java"))
 
         def run(argument=None):
-            built = subprocess.run(["javac", "--release", "17", "-cp", "/usr/share/java/com.android.json.jar", "-d", str(base), *map(str, base.rglob("*.java"))], text=True, capture_output=True, timeout=30)
+            built = subprocess.run(["javac", "--release", "17", "-cp", JSON_JAR, "-d", str(base), *map(str, base.rglob("*.java"))], text=True, capture_output=True, timeout=30)
             assert built.returncode == 0, built.stderr
-            return subprocess.run(["java", "-cp", str(base) + ":/usr/share/java/com.android.json.jar", "com.eabusham.routervpn.ViaEntryHarness", str(base), *([] if argument is None else [argument])], text=True, capture_output=True, timeout=60)
+            return subprocess.run(["java", "-cp", str(base) + ":" + JSON_JAR, "com.eabusham.routervpn.ViaEntryHarness", str(base), *([] if argument is None else [argument])], text=True, capture_output=True, timeout=60)
 
         result = run()
         assert result.returncode == 0, result.stdout + result.stderr
@@ -288,7 +303,12 @@ def main():
         probe.write_text(changed)
         result = run("route")
         assert result.returncode != 0 and "proofs and candidate DNS use captured" in result.stderr, result.stdout + result.stderr
-        print("Android via-entry ownership and captured-resolver negative controls: rejected")
+        probe.write_text(original)
+        changed=original.replace("return value.trimmedMeanMs;","return value.medianMs;",1)
+        assert changed!=original
+        probe.write_text(changed);result=run("ranking")
+        assert result.returncode!=0 and "routed Fastest used favorable median" in result.stderr,result.stdout+result.stderr
+        print("Android via-entry ownership, captured resolver and robust ranking negative controls: rejected")
 
 
 if __name__ == "__main__":
