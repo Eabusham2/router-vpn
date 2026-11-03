@@ -64,7 +64,7 @@ final class AndroidNodeStore {static final int MAX_BUNDLE=32*1024*1024;static fi
 final class AndroidStandardExitStore {static final class Entry{String id,name,server,protocol,expectedPublicIp,location;Double latitude,longitude;int serverPort;}List<Entry> list(){return Collections.emptyList();}}
 // This fixture calls selectedProfile only. Full durable loading/ranking executes
 // in test_android_current_telemetry.py with the shipping statistics class.
-final class AndroidNodeStatistics {static final class Record{double median,p90;int samples;boolean eligible(){return false;}}static Record load(AndroidNodeStore.Node node){return null;}}
+final class AndroidNodeStatistics {static final class Record{double median,trimmedMean,p90;int samples;boolean eligible(){return false;}}static Record load(AndroidNodeStore.Node node){return null;}}
 final class AndroidNodeUsage {static final class Metric{int count;boolean available;String lastUsedAt(){return "";}}static Metric routerMetric(AndroidNodeStore.Node n,org.json.JSONObject p){throw new AssertionError("profile selection fixture does not load usage");}static Metric externalMetric(File f,AndroidStandardExitStore.Entry e){throw new AssertionError("profile selection fixture does not load usage");}}
 ''')
         jar=os.environ.get("ANDROID_JSON_JAR","/usr/share/java/com.android.json.jar")
