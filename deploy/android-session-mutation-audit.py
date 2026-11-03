@@ -235,7 +235,10 @@ if "connectOrDisconnect()" in selector:
         f"{product_path}: Router Fastest/node selection must not auto-connect; Connect is a separate control"
     )
 for marker in (
-    "telemetry.measureAll(3",
+    "runRouterNodeComparison(true)",
+    "telemetry.measureFastest(",
+    "telemetry.cancelFastest()",
+    "pick.requireCurrent()",
     "if(mutationBusy())",
     "nodeStore.select(pick.id)",
     "prefs().edit().putString(SELECTED_KIND,\"router-vpn\")",
@@ -243,10 +246,12 @@ for marker in (
 ):
     if marker not in selector:
         raise SystemExit(f"{product_path}: Fastest/node selector missing {marker!r}")
+if "telemetry.measureAll(" in selector:
+    raise SystemExit(f"{product_path}: Fastest must use its owned complete 50-sample comparison")
 
 require(
     product_path,
-    '"Router nodes • direct TCP selection"',
+    '"Router nodes • 50 TCP responses"',
     '"Compare external exits • 50 routed HTTPS"',
     '"Compare and connect fastest external path"',
     "if(which==0)showRouterFastConnectMenu();else showExternalComparison(which==2);",
