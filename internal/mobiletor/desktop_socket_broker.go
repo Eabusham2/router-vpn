@@ -247,6 +247,10 @@ type desktopSocket struct {
 	readUntil    time.Time
 	writeUntil   time.Time
 	lastFailure  error
+	parent       *desktopSocket
+	children     map[*desktopSocket]struct{}
+	socksClaimed bool
+	scopedPolicy DesktopSocketPolicy
 }
 
 type desktopSocketPeer struct {
@@ -358,7 +362,7 @@ func (b *DesktopSocketBroker) begin(ctx context.Context, network string, remote 
 
 func (s *desktopSocket) prepare(ctx context.Context) error {
 	b := s.broker
-	binding, err := b.policy.Select(ctx, b.capture, s.network, s.remote)
+	binding, err := s.policy().Select(ctx, b.capture, s.network, s.remote)
 	if err != nil {
 		return err
 	}
@@ -451,6 +455,10 @@ func (b *DesktopSocketBroker) ListenPacket(ctx context.Context, network, address
 }
 
 func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, remote netip.AddrPort, connected bool) (*desktopSocketPacket, error) {
+	return b.openPacketOwned(ctx, network, remote, connected, nil)
+}
+
+func (b *DesktopSocketBroker) openPacketOwned(ctx context.Context, network string, remote netip.AddrPort, connected bool, parent *desktopSocket) (*desktopSocketPacket, error) {
 	s, operation, release, err := b.begin(ctx, "udp", remote)
 	if err != nil {
 		return nil, err
@@ -464,6 +472,11 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 			s.stop()
 		}
 	}()
+	if parent != nil {
+		if err := s.attachSOCKSParent(parent, remote); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.prepare(operation); err != nil {
 		return nil, fmt.Errorf("desktop UDP source selection: %w", err)
 	}
@@ -474,7 +487,7 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 		if operation.Err() != nil || !b.Current() {
 			return net.ErrClosed
 		}
-		if err := b.policy.Bind(operation, b.capture, s.binding, actualNetwork, raw); err != nil {
+		if err := s.policy().Bind(operation, b.capture, s.binding, actualNetwork, raw); err != nil {
 			return fmt.Errorf("desktop UDP captured policy binding: %w", err)
 		}
 		if err := desktopSocketExclusive(raw); err != nil {
@@ -525,7 +538,7 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 }
 
 func (s *desktopSocket) live() bool {
-	if !s.broker.Current() {
+	if !s.broker.Current() || s.parent != nil && !s.parent.allowed(s.parent.remote) {
 		return false
 	}
 	s.mu.Lock()
@@ -594,7 +607,7 @@ func (s *desktopSocket) apply(ctx context.Context, peer *desktopSocketPeer) erro
 	request := peer.request
 	peer.applying = true
 	peer.mu.Unlock()
-	receipt, err := desktopSocketGrantControlled(ctx, s.broker.policy, request)
+	receipt, err := desktopSocketGrantControlled(ctx, s.policy(), request)
 	if err != nil || ctx.Err() != nil || !s.live() || !validDesktopSocketReceipt(receipt, request, time.Now()) {
 		peer.mu.Lock()
 		peer.valid, peer.applying = false, false
@@ -740,12 +753,31 @@ func (s *desktopSocket) stop() {
 	if s.packet != nil {
 		_ = s.packet.SetDeadline(time.Now())
 	}
+	children := make([]*desktopSocket, 0, len(s.children))
+	for child := range s.children {
+		children = append(children, child)
+	}
 	s.mu.Unlock()
+	for _, child := range children {
+		child.stop()
+	}
 	s.closeOnce.Do(func() { go s.drain() })
 }
 
 func (s *desktopSocket) drain() {
 	<-s.operation
+	// No child can attach after stop marked this control retired. Join every
+	// association before removing or releasing the original TCP authority.
+	s.mu.Lock()
+	children := make([]*desktopSocket, 0, len(s.children))
+	for child := range s.children {
+		children = append(children, child)
+	}
+	s.mu.Unlock()
+	for _, child := range children {
+		child.stop()
+		<-child.done
+	}
 	// A dial may publish its raw handle after cancellation. Interrupt it now
 	// too, before waiting for I/O and before any possible descriptor release.
 	s.mu.Lock()
@@ -764,7 +796,7 @@ func (s *desktopSocket) drain() {
 	for _, peer := range peers {
 		peer.op.Lock()
 		for peer.request.Sequence != 0 {
-			err := desktopSocketRevokeControlled(context.Background(), s.broker.policy, peer.request)
+			err := desktopSocketRevokeControlled(context.Background(), s.policy(), peer.request)
 			if err == nil {
 				peer.mu.Lock()
 				peer.valid = false
@@ -840,6 +872,11 @@ func (s *desktopSocket) drain() {
 	delete(s.broker.sockets, s)
 	s.broker.mu.Unlock()
 	close(s.done)
+	if s.parent != nil {
+		s.parent.mu.Lock()
+		delete(s.parent.children, s)
+		s.parent.mu.Unlock()
+	}
 }
 
 func (b *DesktopSocketBroker) Close(ctx context.Context) error {

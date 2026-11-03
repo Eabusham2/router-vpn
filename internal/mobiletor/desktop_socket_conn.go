@@ -36,6 +36,12 @@ func (s *desktopSocket) leaseDeadline() time.Time {
 			result = until
 		}
 	}
+	if s.parent != nil {
+		control := s.parent.leaseDeadline()
+		if !control.IsZero() && (result.IsZero() || control.Before(result)) {
+			result = control
+		}
+	}
 	return result
 }
 
@@ -49,7 +55,6 @@ func desktopSocketDeadline(user, lease time.Time) time.Time {
 func (s *desktopSocket) updateDeadlines() {
 	lease := s.leaseDeadline()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	read, write := desktopSocketDeadline(s.readUntil, lease), desktopSocketDeadline(s.writeUntil, lease)
 	if s.closing {
 		read, write = time.Now(), time.Now()
@@ -61,6 +66,16 @@ func (s *desktopSocket) updateDeadlines() {
 	if s.packet != nil {
 		_ = s.packet.SetReadDeadline(read)
 		_ = s.packet.SetWriteDeadline(write)
+	}
+	children := make([]*desktopSocket, 0, len(s.children))
+	for child := range s.children {
+		children = append(children, child)
+	}
+	s.mu.Unlock()
+	// A renewed control must refresh an already-blocked relay read too.
+	// Release the parent lock before the child reads its parent's lease.
+	for _, child := range children {
+		child.updateDeadlines()
 	}
 }
 
@@ -85,7 +100,7 @@ func (s *desktopSocket) deadline(value time.Time, read, write bool) error {
 }
 
 func (s *desktopSocket) beginIO() error {
-	if !s.broker.Current() {
+	if !s.live() {
 		s.stop()
 		return net.ErrClosed
 	}

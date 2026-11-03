@@ -46,7 +46,7 @@ SOCKS_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + cas
 SOCKS_FACTORY_CASES = tuple("TestRouterVPNExternalSOCKS" + name for name in (
     "RequiresExactNativeRoot", "AssociationsOwnDistinctControlAndRelaySockets",
     "CancelledAuthenticationJoinsOnlyItsOperation", "RejectsRetiredManagersAndForeignRelayCalls",
-    "OwnedClosePreservesMixedFailures", "RootCloseJoinsAndRetainsOriginalFailure"))
+    "OwnedClosePreservesMixedFailures", "RootCloseJoinsAndRetainsOriginalFailure", "DifferentPublicRelayKeepsExactNumericTuple"))
 STREAM_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + leaf
     for protocol in ("http-connect", "https-connect", "shadowsocks")
     for leaf in (protocol + "/proof-and-mtu",

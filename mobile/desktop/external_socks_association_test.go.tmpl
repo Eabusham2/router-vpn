@@ -195,7 +195,10 @@ type externalSOCKSPeer struct {
 	seen                chan struct{}
 }
 
-func newExternalSOCKSPeer(t *testing.T, hold <-chan struct{}) *externalSOCKSPeer {
+func newExternalSOCKSPeer(t *testing.T, hold <-chan struct{}, advertised ...netip.AddrPort) *externalSOCKSPeer {
+	if len(advertised) > 1 {
+		t.Fatal("SOCKS peer has more than one advertised relay")
+	}
 	t.Helper()
 	address := externalPhysicalByteAddress(t)
 	tcp, err := net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
@@ -272,7 +275,11 @@ func newExternalSOCKSPeer(t *testing.T, hold <-chan struct{}) *externalSOCKSPeer
 				if err != nil || request.Command != socks5.CommandUDPAssociate {
 					return
 				}
-				if socks5.WriteResponse(conn, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.SocksaddrFromNet(p.udp.LocalAddr())}) != nil {
+				bind := M.SocksaddrFromNet(p.udp.LocalAddr())
+				if len(advertised) == 1 {
+					bind = M.SocksaddrFromNetIP(advertised[0])
+				}
+				if socks5.WriteResponse(conn, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: bind}) != nil {
 					return
 				}
 				_ = conn.SetDeadline(time.Time{})
@@ -300,6 +307,46 @@ func externalSOCKSExchange(t *testing.T, packet net.PacketConn, text string) {
 		t.Fatal("SOCKS association lost its owned UDP framing", err)
 	}
 	_ = packet.SetDeadline(time.Time{})
+}
+
+func TestRouterVPNExternalSOCKSDifferentPublicRelayKeepsExactNumericTuple(t *testing.T) {
+	// Negotiate through the actual authenticated TCP peer, then create the
+	// exact returned numeric UDP owner. No datagram is sent to this test-net
+	// address: this checks admission without contacting an outside server.
+	remote := netip.MustParseAddrPort("198.51.100.84:54084")
+	peer := newExternalSOCKSPeer(t, nil, remote)
+	control := netip.MustParseAddrPort(peer.tcp.Addr().String())
+	f := newExternalSOCKSFixture(t, control, "off", remote)
+	f.activate(t)
+	packet, err := f.root.ListenPacket(context.Background(), M.ParseSocksaddr("203.0.113.53:5353"))
+	if err != nil {
+		t.Fatal("authenticated different public relay was replaced or rejected", err)
+	}
+	defer packet.Close()
+	select {
+	case <-peer.accepted:
+	case <-time.After(time.Second):
+		t.Fatal("different public relay skipped actual authentication")
+	}
+	f.kernel.mu.Lock()
+	var tcp, udp int
+	for _, grant := range f.kernel.grants {
+		if grant.Network == "tcp" && grant.Remote == control {
+			tcp++
+		} else if grant.Network == "udp" && grant.Remote == remote {
+			udp++
+		} else {
+			f.kernel.mu.Unlock()
+			t.Fatal("public association admitted another tuple")
+		}
+	}
+	f.kernel.mu.Unlock()
+	if tcp != 1 || udp != 1 || remote.Addr() == control.Addr() {
+		t.Fatal("different public relay lost its separate exact TCP/UDP owners")
+	}
+	if _, err := f.physical.DialContext(context.Background(), "udp", M.SocksaddrFromNetIP(remote)); err == nil {
+		t.Fatal("negotiated public relay entered shared lower permissions")
+	}
 }
 
 func TestRouterVPNExternalSOCKSAssociationsOwnDistinctControlAndRelaySockets(t *testing.T) {

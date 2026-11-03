@@ -178,6 +178,11 @@ func (p *desktopExternalSOCKSWFPProvider) refuse(connection net.Conn, reader *bu
 			bind.Addr = netip.IPv4Unspecified()
 		case "relay-zero":
 			bind.Port = 0
+		case "relay-other-private":
+			bind.Addr = netip.MustParseAddr("10.254.253.252")
+			if bind.Addr == p.local {
+				bind.Addr = netip.MustParseAddr("172.31.254.253")
+			}
 		default:
 			return errors.New("unknown native SOCKS malicious reply")
 		}
@@ -289,7 +294,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSPeer(t *testing.T) {
 		t.Fatal("SOCKS reference lost its captured start", err)
 	}
 	switch request.Fault {
-	case "", "password", "trust", "dns", "exit", "held", "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "control-eof":
+	case "", "password", "trust", "dns", "exit", "held", "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "relay-other-private", "control-eof":
 	default:
 		t.Fatal("unknown SOCKS provider fault")
 	}
@@ -610,6 +615,34 @@ func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixt
 	if len(old) != 2 || len(next) != 2 {
 		t.Fatal("actual SOCKS did not own two TCP and UDP grant pairs")
 	}
+	initial := make(map[string]mobiletor.DesktopSocketGrant)
+	for _, grant := range actual.Grants {
+		initial[grant.SocketID] = grant
+	}
+	renewedBy := time.Now().Add(8 * time.Second)
+	for {
+		if err := desktopExternalSOCKSExchange(b, 604); err != nil {
+			t.Fatal("private SOCKS renewal lost actual UDP traffic", err)
+		}
+		current := desktopExternalSOCKSWFPSnapshot(t, f)
+		renewed := len(current.Grants) == 4
+		for _, grant := range current.Grants {
+			original, exists := initial[grant.SocketID]
+			comparison := grant
+			comparison.Sequence = original.Sequence
+			if !exists || comparison != original {
+				t.Fatal("SOCKS renewal changed an original socket tuple")
+			}
+			renewed = renewed && grant.Sequence > original.Sequence
+		}
+		if renewed {
+			break
+		}
+		if !time.Now().Before(renewedBy) {
+			t.Fatal("SOCKS native control and relay grants did not renew")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	physical, _ := f.box.outbound.Outbound(mobilemultihop.DesktopExternalPhysicalTag)
 	if c, err := physical.DialContext(ctx, "udp", M.ParseSocksaddr(first.Relay)); err == nil || c != nil {
 		if c != nil {
@@ -683,25 +716,26 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 		f.start(t)
 		t.Run("tcp-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "tcp") })
 		t.Run("udp-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "udp") })
-		raw, err := f.proof.Run()
-		if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() {
-			t.Fatal("unselected private SOCKS relay gained proof")
+		before := desktopExternalSOCKSWFPSnapshot(t, f).Options
+		if len(before.LANPrefixes) != 0 || len(before.PrivateDestinations) != 1 || before.PrivateDestinations[0].Network != "tcp" || before.PrivateDestinations[0].Address != p.remote {
+			t.Fatal("private SOCKS baseline gained unrelated LAN authority")
 		}
-		r := p.call(t, "stats", "")
-		if r.TCP == 0 || len(r.SOCKS) == 0 || r.Packets != 0 || r.DNS != 0 || r.Public != 0 {
-			t.Fatal("Home LAN off did not refuse the actual negotiated private relay", r)
+		desktopExternalSOCKSWFPProve(t, f, p)
+		desktopExternalSOCKSWFPAssociations(t, f, p)
+		after := desktopExternalSOCKSWFPSnapshot(t, f).Options
+		if !reflect.DeepEqual(before, after) {
+			t.Fatal("negotiated private SOCKS relay changed immutable shared policy")
 		}
-
 		retained = f.drain(t)
 		t.Run("tcp-retained-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "tcp") })
 		t.Run("udp-retained-deny", func(t *testing.T) { desktopExternalSOCKSWFPBlocked(t, p, "udp") })
 	})
-	for _, fault := range []string{"password", "trust", "dns", "exit", "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "control-eof"} {
+	for _, fault := range []string{"password", "trust", "dns", "exit", "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "relay-other-private", "control-eof"} {
 		t.Run("reject/"+fault, func(t *testing.T) {
 			var retained mobiletor.DesktopWindowsProtectionTarget
 			desktopExternalWFPCleanup(t, &retained)
 			p := desktopExternalWFPStartReferenceProtocol(t, ca, fault, "socks5")
-			original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", true)
+			original, source, capture := desktopExternalSOCKSWFPOriginal(t, p, "always", fault != "relay-other-private")
 			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
 			f.start(t)
 			raw, err := f.proof.Run()
@@ -724,7 +758,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 				if r.AuthFailures == 0 || r.DNS != 0 || r.Attempts != 0 || len(r.SOCKS) != 0 {
 					t.Fatal("wrong actual SOCKS auth carried inner bytes", r)
 				}
-			case "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero":
+			case "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "relay-other-private":
 				if r.Rejected == 0 || r.Packets != 0 || r.DNS != 0 || r.Attempts != 0 || len(r.SOCKS) != 0 {
 					t.Fatal("invalid actual SOCKS reply escaped joined control refusal", r)
 				}

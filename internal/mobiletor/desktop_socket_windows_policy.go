@@ -562,13 +562,27 @@ func (p *DesktopWindowsSocketPolicy) permitRules(q DesktopSocketGrant, item desk
 	return p.pair("socket-"+desktopWindowsPermitKey(q), family, 50, true, false, p.user, desktopWFPNumber(desktopWFPInterface, 4, item.LUID), desktopWFPNumber(desktopWFPProtocol, 1, protocol), desktopWFPAddress(desktopWFPLocalAddress, q.Local.Addr()), desktopWFPNumber(desktopWFPLocalPort, 2, uint64(q.Local.Port())), desktopWFPAddress(desktopWFPRemoteAddress, q.Remote.Addr()), desktopWFPNumber(desktopWFPRemotePort, 2, uint64(q.Remote.Port())))
 }
 func (p *DesktopWindowsSocketPolicy) Grant(ctx context.Context, q DesktopSocketGrant) (DesktopSocketReceipt, error) {
+	return p.grantSocket(ctx, q, nil)
+}
+
+func (p *DesktopWindowsSocketPolicy) grantSocket(ctx context.Context, q DesktopSocketGrant, control *DesktopSocketGrant) (DesktopSocketReceipt, error) {
 	if !p.Current(q.Capture, q.Binding.Owner) || q.Sequence == 0 || !desktopSocketHex(q.SocketID, 32) || q.Network != "tcp" && q.Network != "udp" || !q.Local.IsValid() || q.Local.Port() == 0 || q.Local.Addr() != q.Binding.LocalAddress || q.Local.Addr().Is4() != q.Remote.Addr().Is4() {
 		return DesktopSocketReceipt{}, net.ErrClosed
 	}
-	if err := p.destination(q.Network, q.Remote, false); err != nil {
-		return DesktopSocketReceipt{}, err
+	if control == nil {
+		if err := p.destination(q.Network, q.Remote, false); err != nil {
+			return DesktopSocketReceipt{}, err
+		}
 	}
 	return desktopWindowsPolicyCall(p, ctx, false, func() (DesktopSocketReceipt, error) {
+		if control != nil {
+			if q.Network != "udp" || q.SocketID == control.SocketID || q.Binding != control.Binding {
+				return DesktopSocketReceipt{}, net.ErrClosed
+			}
+			if err := p.checkPrivateSOCKSControl(ctx, *control, q.Remote); err != nil {
+				return DesktopSocketReceipt{}, err
+			}
+		}
 		creation, ok := p.bindings[q.SocketID]
 		if !ok || creation.Capture != q.Capture || creation.Binding != q.Binding || creation.Network != q.Network {
 			return DesktopSocketReceipt{}, errors.New("Windows permit has no exact bound socket owner")
@@ -632,12 +646,25 @@ func (p *DesktopWindowsSocketPolicy) Grant(ctx context.Context, q DesktopSocketG
 		if err := p.assertBaseline(); err != nil {
 			return DesktopSocketReceipt{}, err
 		}
+		if control != nil {
+			if err := p.checkPrivateSOCKSControl(ctx, *control, q.Remote); err != nil {
+				return DesktopSocketReceipt{}, err
+			}
+		}
 		if !p.Current(q.Capture, q.Binding.Owner) || ctx.Err() != nil {
 			return DesktopSocketReceipt{}, net.ErrClosed
 		}
 		now := time.Now()
 		permit.request = q
 		permit.expires = now.Add(7 * time.Second)
+		if control != nil {
+			// Native expiry follows the same ownership edge as broker I/O.
+			// A newly renewed relay cannot outlive its acknowledged control.
+			controlExpiry := p.permits[desktopWindowsPermitKey(*control)].expires
+			if controlExpiry.Before(permit.expires) {
+				permit.expires = controlExpiry
+			}
+		}
 		p.observed.Store(now.UnixMilli())
 		return DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: permit.expires.UnixMilli()}, nil
 	})
