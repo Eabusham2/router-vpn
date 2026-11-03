@@ -221,7 +221,7 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 				t.Error("native GUI lifetime did not half-close", err)
 				return
 			}
-			receipt := macOSControllerNativeReceipt(t, connection, "stopped", started.ProcessID)
+			receipt := macOSControllerNativeReceipt(t, connection, "joined", started.ProcessID)
 			if receipt.ExitCode != 0 {
 				t.Error("native controller failed original cleanup", receipt.ExitCode)
 			}
@@ -279,7 +279,7 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 	if err := connection.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
-	receipt := macOSControllerNativeReceipt(t, connection, "stopped", started.ProcessID)
+	receipt := macOSControllerNativeReceipt(t, connection, "joined", started.ProcessID)
 	joined = true
 	if receipt.ExitCode != 0 {
 		t.Fatal("original installed controller failed joined shutdown", receipt.ExitCode)

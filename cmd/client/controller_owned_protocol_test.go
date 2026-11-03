@@ -84,6 +84,7 @@ func TestOwnedControllerSupervisorCannotInventStartedOrJoinedReceipt(t *testing.
 		{"started", 0, 0, testLocalControllerAccess, testControllerOwner},
 		{"started", 123, 1, testLocalControllerAccess, testControllerOwner},
 		{"discovered", 123, 0, testLocalControllerAccess, testControllerOwner},
+		{"stopped", 123, 0, testLocalControllerAccess, testControllerOwner},
 		{"joined", 123, 0, "", testControllerOwner},
 		{"joined", 123, 0, testLocalControllerAccess, ""},
 		{"joined", 123, -2, testLocalControllerAccess, testControllerOwner},

@@ -355,7 +355,7 @@ func TestMacOSOwnedControllerNativeCapturedRuntimeChild(t *testing.T) {
 	if _, err := connection.Write(macOSControllerNativeFrame()); err != nil {
 		t.Fatal(err)
 	}
-	macOSControllerNativeReceipt(t, connection, "started", 0)
+	started := macOSControllerNativeReceipt(t, connection, "started", 0)
 	client := macOSControllerNativeHTTP(t)
 	client.Timeout = 70 * time.Second
 	macOSControllerNativeAwait(t, func() bool {
@@ -385,7 +385,10 @@ func TestMacOSOwnedControllerNativeCapturedRuntimeChild(t *testing.T) {
 	if err = connection.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
-	macOSControllerNativeReceipt(t, connection, "stopped", 0)
+	joined := macOSControllerNativeReceipt(t, connection, "joined", started.ProcessID)
+	if joined.ExitCode != 0 {
+		t.Fatal("captured runtime controller did not join successfully", joined.ExitCode)
+	}
 	if body, err := os.ReadFile(filepath.Join(macOSOwnedControllerRoot, "fixture-runtime-joined")); err != nil || string(body) != "original runtime joined before locks\n" {
 		t.Fatal("actual runtime was not joined before original locks", string(body), err)
 	}
