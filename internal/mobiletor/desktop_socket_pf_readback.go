@@ -149,6 +149,15 @@ func desktopPFCompleteReadback(ctx context.Context, global [6]func(context.Conte
 	return desktopPFReadback(ctx, checks...)
 }
 
+// A heartbeat proves both the complete firewall and its original disabled
+// account. These independent reads share the same captured deadline and four
+// native-command slots, including nested PF checks. Serial account inspection
+// must not start a fresh two-second budget after the PF inspection has spent
+// the caller's entire two-second response lifetime. Both reads must join.
+func desktopPFProbeReadback(ctx context.Context, firewall, account func(context.Context) error) error {
+	return desktopPFReadback(ctx, firewall, account)
+}
+
 // Each check is read-only and captures the same native proof deadline. A fixed
 // worker bound avoids paying every subprocess startup serially while retaining
 // every validation. No readback survives this invocation or authorizes a write.

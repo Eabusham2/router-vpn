@@ -162,10 +162,11 @@ func RunDesktopDarwinSocketHelper(role string) error {
 			if file != nil {
 				err = errors.New("probe descriptor rejected")
 			} else {
-				err = g.pf.verify(ctx, true)
-				if err == nil {
-					err = desktopDarwinVerifyAccount(g.account, g.uid)
-				}
+				err = desktopPFProbeReadback(ctx,
+					func(captured context.Context) error { return g.pf.verify(captured, true) },
+					func(captured context.Context) error {
+						return desktopDarwinVerifyAccountContext(captured, g.account, g.uid)
+					})
 			}
 		case "create":
 			transferred, err = g.create(ctx, next.Creation)

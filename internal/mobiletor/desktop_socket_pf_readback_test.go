@@ -89,9 +89,89 @@ func TestDesktopPFReadbackCompleteWithinCapturedBudget(t *testing.T) {
 			t.Fatal("PF complete readback lost its required owner checks or shared bounded budget", counts, active.Load(), peak.Load(), time.Since(started), err)
 		}
 	})
+	t.Run("probe-firewall-and-account-share-original-budget", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 140*time.Millisecond)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			budget := make(chan struct{}, 4)
+			ctx = context.WithValue(ctx, desktopPFCommandBudgetKey{}, budget)
+			started := time.Now()
+			var active, peak atomic.Int32
+			var completed [8]atomic.Int32
+			command := func(index int) func(context.Context) error {
+				return func(captured context.Context) error {
+					actual, found := captured.Deadline()
+					if !found || !actual.Equal(deadline) || captured.Value(desktopPFCommandBudgetKey{}) != budget {
+						return errors.New("probe replaced its original deadline or native command slots")
+					}
+					release, err := desktopPFEnterCommand(captured)
+					if err != nil {
+						return err
+					}
+					defer release()
+					current := active.Add(1)
+					defer active.Add(-1)
+					for previous := peak.Load(); current > previous; previous = peak.Load() {
+						if peak.CompareAndSwap(previous, current) {
+							break
+						}
+					}
+					select {
+					case <-captured.Done():
+						return captured.Err()
+					case <-time.After(40 * time.Millisecond):
+						completed[index].Add(1)
+						return nil
+					}
+				}
+			}
+			firewall := func(captured context.Context) error {
+				return desktopPFReadback(captured, command(0), command(1), command(2), command(3), command(4), command(5))
+			}
+			account := func(captured context.Context) error {
+				if err := command(6)(captured); err != nil {
+					return err
+				}
+				return command(7)(captured)
+			}
+			err := desktopPFProbeReadback(ctx, firewall, account)
+			var counts [8]int32
+			for index := range counts {
+				counts[index] = completed[index].Load()
+			}
+			// Serial PF then account reads require 160 ms. The two original
+			// proofs must finish within 120 ms using only four shared slots.
+			if err != nil || counts != [8]int32{1, 1, 1, 1, 1, 1, 1, 1} || active.Load() != 0 || peak.Load() != 4 || time.Since(started) > 120*time.Millisecond {
+				t.Fatal("probe lost complete original firewall/account readback", counts, active.Load(), peak.Load(), time.Since(started), err)
+			}
+		})
+	})
 }
 
 func TestDesktopPFReadbackFailureAndCancellationJoin(t *testing.T) {
+	t.Run("probe-account-failure-joins-firewall", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+			defer cancel()
+			entered := make(chan struct{})
+			want := errors.New("captured account was replaced")
+			var retired atomic.Bool
+			err := desktopPFProbeReadback(ctx, func(captured context.Context) error {
+				close(entered)
+				<-captured.Done()
+				time.Sleep(5 * time.Millisecond)
+				retired.Store(true)
+				return nil // Late native success cannot authorize this failed probe.
+			}, func(context.Context) error {
+				<-entered
+				return want
+			})
+			if !errors.Is(err, want) || !retired.Load() {
+				t.Fatal("probe discarded failed identity or unjoined firewall readback", err)
+			}
+		})
+	})
 	for _, failure := range []bool{false, true} {
 		t.Run(map[bool]string{false: "caller-cancel", true: "native-failure"}[failure], func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -258,6 +338,17 @@ func TestDesktopPFReadbackFailureAndCancellationJoin(t *testing.T) {
 }
 
 func TestDesktopPFReadbackDeadlineAndInvalidCapture(t *testing.T) {
+	for missing := range 2 {
+		started := 0
+		checks := [2]func(context.Context) error{
+			func(context.Context) error { started++; return nil },
+			func(context.Context) error { started++; return nil },
+		}
+		checks[missing] = nil
+		if err := desktopPFProbeReadback(context.Background(), checks[0], checks[1]); err == nil || started != 0 {
+			t.Fatal("probe started without both firewall and identity proof", missing, started, err)
+		}
+	}
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()

@@ -160,11 +160,21 @@ func desktopDarwinIdentityLock() (*os.File, error) {
 }
 
 func desktopDarwinAccountRecord(account string, uid uint32) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return desktopDarwinAccountRecordContext(ctx, account, uid)
+}
+
+func desktopDarwinAccountRecordContext(ctx context.Context, account string, uid uint32) (map[string]string, error) {
+	if ctx == nil {
+		return nil, errors.New("Darwin physical account requires its captured readback")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !strings.HasPrefix(account, "_rvpnt_") || !desktopSocketHex(strings.TrimPrefix(account, "_rvpnt_"), 20) || uid < 0x40000000 || uid >= 0x80000000 {
 		return nil, errors.New("Darwin physical account identity is invalid")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	args := append([]string{"/Local/Default", "-read", "/Users/" + account}, desktopDarwinAccountAttributes...)
 	raw, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, args...)
 	if err != nil {
@@ -176,16 +186,25 @@ func desktopDarwinAccountRecord(account string, uid uint32) (map[string]string, 
 	}
 	search, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", "UniqueID", strconv.FormatUint(uint64(uid), 10))
 	if err != nil {
-		return nil, errors.New("Darwin physical UID local search did not complete")
+		return nil, errors.Join(ctx.Err(), errors.New("Darwin physical UID local search did not complete"))
 	}
 	if err := desktopDarwinUIDSearchProof(search, account, uid, desktopDarwinUIDAccount(uid, account)); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return values, nil
 }
 
 func desktopDarwinVerifyAccount(account string, uid uint32) error {
-	values, err := desktopDarwinAccountRecord(account, uid)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return desktopDarwinVerifyAccountContext(ctx, account, uid)
+}
+
+func desktopDarwinVerifyAccountContext(ctx context.Context, account string, uid uint32) error {
+	values, err := desktopDarwinAccountRecordContext(ctx, account, uid)
 	if err != nil {
 		return err
 	}
@@ -196,7 +215,7 @@ func desktopDarwinVerifyAccount(account string, uid uint32) error {
 	if record.GeneratedUID != values["GeneratedUID"] {
 		return errors.New("Darwin physical account differs from its private recovery capture")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func desktopDarwinReadIdentityRecord(account string, uid uint32) (desktopDarwinIdentityRecord, error) {
