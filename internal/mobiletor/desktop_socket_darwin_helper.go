@@ -16,11 +16,13 @@ import (
 )
 
 type desktopDarwinOwnedSocket struct {
-	creation DesktopSocketCreation
-	file     *os.File
-	identity desktopDarwinKernelSocket
-	bound    bool
-	grants   map[string]DesktopSocketGrant
+	creation   DesktopSocketCreation
+	file       *os.File
+	identity   desktopDarwinKernelSocket
+	bound      bool
+	grants     map[string]DesktopSocketGrant
+	receipts   map[string]DesktopSocketReceipt
+	socksChild string
 }
 
 type desktopDarwinGuardian struct {
@@ -31,6 +33,7 @@ type desktopDarwinGuardian struct {
 	uid     uint32
 	pf      *desktopDarwinPF
 	sockets map[string]*desktopDarwinOwnedSocket
+	socks   map[string]desktopDarwinSOCKSAssociation
 	tunnel  *os.File
 }
 
@@ -146,7 +149,7 @@ func RunDesktopDarwinSocketHelper(role string) error {
 			}
 			return err
 		}
-		if next.Sequence != sequence+1 || next.Capture != g.capture || file != nil && next.Operation != "bind" && next.Operation != "tunnel" {
+		if next.Sequence != sequence+1 || next.Capture != g.capture || file != nil && next.Operation != "bind" && next.Operation != "tunnel" || next.SOCKS != nil && next.Operation != "socks-associate" {
 			if file != nil {
 				file.Close()
 			}
@@ -168,11 +171,18 @@ func RunDesktopDarwinSocketHelper(role string) error {
 						return desktopDarwinVerifyAccountContext(captured, g.account, g.uid)
 					})
 			}
+		case "socks-associate":
+			if next.SOCKS == nil {
+				err = errors.New("Darwin SOCKS association omitted its captured control")
+			} else {
+				err = g.associateSOCKS(ctx, *next.SOCKS)
+				reply.Creation = DesktopSocketCreation{Capture: g.capture, Binding: next.SOCKS.Binding, Network: "udp", SocketID: next.SOCKS.SocketID}
+			}
 		case "create":
 			transferred, err = g.create(ctx, next.Creation)
 			reply.Creation = next.Creation
 		case "bind":
-			err = g.bind(next.Creation, file)
+			err = g.bind(ctx, next.Creation, file)
 		case "grant":
 			reply.Receipt, err = g.grant(ctx, next.Grant)
 		case "revoke":
@@ -226,10 +236,14 @@ func (g *desktopDarwinGuardian) release(c DesktopSocketCreation) error {
 	if c != owned.creation || len(owned.grants) != 0 {
 		return errors.New("Darwin physical release precedes exact permit cleanup")
 	}
+	if err := g.retireSOCKSControl(c.SocketID); err != nil {
+		return err
+	}
 	if err := owned.file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 		return err
 	}
 	delete(g.sockets, c.SocketID)
+	delete(g.socks, c.SocketID)
 	return nil
 }
 
@@ -285,6 +299,14 @@ func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreat
 	if err != nil || !desktopDarwinBindingEqual(want, c.Binding) {
 		return nil, errors.New("Darwin creator binding changed")
 	}
+	if association, exists := g.socks[c.SocketID]; exists {
+		if c.Network != "udp" || c.Binding != association.Binding {
+			return nil, errors.New("Darwin SOCKS creator replaced its captured UDP owner")
+		}
+		if _, _, err := g.checkSOCKSControl(ctx, association); err != nil {
+			return nil, err
+		}
+	}
 	channel, child, err := desktopDarwinSocketPair()
 	if err != nil {
 		return nil, err
@@ -334,7 +356,7 @@ func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreat
 	return file, nil
 }
 
-func (g *desktopDarwinGuardian) bind(c DesktopSocketCreation, file *os.File) error {
+func (g *desktopDarwinGuardian) bind(ctx context.Context, c DesktopSocketCreation, file *os.File) error {
 	if c.Capture != g.capture || c.Binding.Owner != g.owner || file == nil {
 		return errors.New("Darwin bind has no captured socket")
 	}
@@ -351,6 +373,17 @@ func (g *desktopDarwinGuardian) bind(c DesktopSocketCreation, file *os.File) err
 	}
 	if owned == nil || owned.bound || owned.creation.Binding != c.Binding || c.Network != identity.network+map[bool]string{true: "4", false: "6"}[c.Binding.LocalAddress.Is4()] {
 		return errors.New("Darwin bind has another captured socket identity")
+	}
+	if c.SocketID != "" && c.SocketID != owned.creation.SocketID {
+		return errors.New("Darwin bind substituted its requested socket identity")
+	}
+	if association, exists := g.socks[owned.creation.SocketID]; exists {
+		if c.SocketID != association.SocketID {
+			return errors.New("Darwin SOCKS bind lost its exact associated socket")
+		}
+		if _, _, err := g.checkSOCKSControl(ctx, association); err != nil {
+			return err
+		}
 	}
 	raw, err := file.SyscallConn()
 	if err != nil {
@@ -375,8 +408,20 @@ func (g *desktopDarwinGuardian) bind(c DesktopSocketCreation, file *os.File) err
 
 func (g *desktopDarwinGuardian) grant(ctx context.Context, grant DesktopSocketGrant) (DesktopSocketReceipt, error) {
 	owned := g.sockets[grant.SocketID]
-	if owned == nil || !owned.bound || grant.Capture != g.capture || grant.Binding != owned.creation.Binding || grant.Network != owned.creation.Network || grant.Sequence == 0 || !g.options.permits(grant.Network, grant.Remote) {
+	association, associated := g.socks[grant.SocketID]
+	if owned == nil || !owned.bound || grant.Capture != g.capture || grant.Binding != owned.creation.Binding || grant.Network != owned.creation.Network || grant.Sequence == 0 || !associated && !g.options.permits(grant.Network, grant.Remote) {
 		return DesktopSocketReceipt{}, errors.New("Darwin grant has no exact source owner")
+	}
+	var control DesktopSocketGrant
+	if associated {
+		if grant.Network != "udp" || grant.Remote != association.Remote || grant.Binding != association.Binding {
+			return DesktopSocketReceipt{}, errors.New("Darwin SOCKS grant substituted its captured relay")
+		}
+		var err error
+		_, control, err = g.socksControlSocket(association)
+		if err != nil {
+			return DesktopSocketReceipt{}, err
+		}
 	}
 	identity, err := desktopDarwinSocketIdentity(owned.file)
 	if err != nil || identity != owned.identity {
@@ -407,7 +452,23 @@ func (g *desktopDarwinGuardian) grant(ctx context.Context, grant DesktopSocketGr
 	// Retain unknown application outcomes before touching the kernel. Revoke
 	// remains possible when acknowledgment/readback fails.
 	owned.grants[key] = grant
-	return g.pf.grant(ctx, grant)
+	delete(owned.receipts, key)
+	var receipt DesktopSocketReceipt
+	if associated {
+		receipt, err = g.pf.grantSOCKS(ctx, grant, control)
+		if err == nil {
+			_, _, err = g.socksControlSocket(association)
+		}
+	} else {
+		receipt, err = g.pf.grant(ctx, grant)
+	}
+	if err == nil {
+		if owned.receipts == nil {
+			owned.receipts = make(map[string]DesktopSocketReceipt)
+		}
+		owned.receipts[key] = receipt
+	}
+	return receipt, err
 }
 
 func (g *desktopDarwinGuardian) revoke(ctx context.Context, grant DesktopSocketGrant) error {
@@ -416,16 +477,20 @@ func (g *desktopDarwinGuardian) revoke(ctx context.Context, grant DesktopSocketG
 		return errors.New("Darwin revoke changed its retained owner")
 	}
 	previous, exists := owned.grants[grant.Remote.String()]
+	if exists && previous != grant {
+		return errors.New("Darwin revoke changed its exact operation")
+	}
+	if err := g.retireSOCKSControl(grant.SocketID); err != nil {
+		return err
+	}
 	if !exists {
 		return g.pf.absent(ctx, grant)
-	}
-	if previous != grant {
-		return errors.New("Darwin revoke changed its exact operation")
 	}
 	if err := g.pf.revoke(ctx, grant); err != nil {
 		return err
 	}
 	delete(owned.grants, grant.Remote.String())
+	delete(owned.receipts, grant.Remote.String())
 	return nil
 }
 
@@ -452,6 +517,7 @@ func (g *desktopDarwinGuardian) cleanup(release bool) error {
 		}
 		delete(g.sockets, id)
 	}
+	clear(g.socks)
 	if release && g.account != "" {
 		if err := desktopDarwinRetireAccount(g.account, g.uid); err != nil {
 			return err

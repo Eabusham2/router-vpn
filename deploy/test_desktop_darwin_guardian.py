@@ -40,6 +40,9 @@ READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAn
                   'PFReadbackDeadlineAndInvalidCapture', 'PFReadbackNestedNativeCommandBudget',
                   'PFReadbackQueuedCommandCancellation', 'PFReadbackCommandSlotJoinsCleanup',
                   'PFReadbackForeignBranches')
+SOCKS_CASES = ('SOCKSAssociations',)
+SOCKS_LEAVES = ('original-kernel-identity', 'stale-control-permit', 'expired-control-permit',
+                'derived-expiry', 'sibling-claim', 'child-before-parent', 'joined-sibling-isolation')
 PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership')
 
 
@@ -48,7 +51,7 @@ def native_case_name(case):
         return 'TestDesktopPFAnchorProbe'+case
     if case in READBACK_CASES:
         return 'TestDesktop'+case
-    if case in CASES:
+    if case in CASES+SOCKS_CASES:
         return 'TestDesktopDarwinGuardianKernel'+case
     raise ValueError('Darwin native gate requires a known complete test identity')
 
@@ -107,6 +110,82 @@ def system(arguments, *, data=None, timeout=20):
     if result.returncode:
         raise RuntimeError('Native Darwin fixture command failed: '+repr(arguments)+': '+result.stderr[-4096:])
     return result.stdout, result.stderr
+
+
+def native_route(output):
+    """Capture only stable routing identity, never mutable counters/expiry."""
+    fields = {}
+    for line in output.splitlines():
+        match = re.fullmatch(r'\s*(destination|mask|gateway|interface|flags):\s*(\S+)\s*', line)
+        if match:
+            if match[1] in fields:
+                raise ValueError('Native alias route has duplicated identity fields')
+            fields[match[1]] = match[2]
+    if not {'destination', 'interface', 'flags'} <= fields.keys():
+        raise ValueError('Native alias route lacks a complete identity')
+    return fields
+
+
+def require_default_route(route):
+    if (route['destination'] not in ('default', '0.0.0.0') or
+            route.get('mask', 'default') not in ('default', '0.0.0.0') or
+            'HOST' in route['flags'].strip('<>').split(',')):
+        raise ValueError('A planned private alias already has a nondefault route')
+
+
+def private_alias_present(output, address):
+    matches = []
+    interface = None
+    for line in output.splitlines():
+        if line and not line[0].isspace():
+            interface = line.split(':', 1)[0]
+        fields = line.split()
+        if len(fields) >= 2 and fields[:2] == ['inet', address]:
+            matches.append((interface, fields))
+    if not matches:
+        return False
+    if (len(matches) != 1 or matches[0][0] != 'lo0' or
+            len(matches[0][1]) < 4 or matches[0][1][2:4] != ['netmask', '0xffffffff']):
+        raise ValueError('Owned private alias changed interface, uniqueness or /32 mask')
+    return True
+
+
+def private_alias_route(address):
+    output, _ = system(['/sbin/route', '-n', 'get', address])
+    route = native_route(output)
+    if (route['destination'] != address or route['interface'] != 'lo0' or
+            'HOST' not in route['flags'].strip('<>').split(',') or
+            route.get('mask', '255.255.255.255') != '255.255.255.255'):
+        raise ValueError('Owned private alias has no exact native loopback host route')
+    return route
+
+
+def retire_private_alias(address, original, captured):
+    actual, _ = system(['/sbin/ifconfig', '-a'])
+    if private_alias_present(actual, address):
+        route = private_alias_route(address)
+        if captured is not None and route != captured:
+            raise ValueError('Owned private alias route changed before retirement')
+        system(['/sbin/ifconfig', 'lo0', 'inet', address, '-alias'])
+    actual, _ = system(['/sbin/ifconfig', '-a'])
+    if private_alias_present(actual, address):
+        raise ValueError('Owned private alias survived exact retirement')
+    output, _ = system(['/sbin/route', '-n', 'get', address])
+    restored = native_route(output)
+    require_default_route(restored)
+    if restored != original:
+        raise ValueError('Private alias retirement lost its original route identity')
+
+
+def require_socks_verdicts(output):
+    root = native_case_name('SOCKSAssociations')
+    names = [root] + [root+'/ipv'+family for family in ('4', '6')]
+    names += [root+'/ipv'+family+'/'+leaf for family in ('4', '6') for leaf in SOCKS_LEAVES]
+    if re.search(r'(^|\n)(?:.*--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|.*WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
+        raise ValueError('SOCKS native boundary contains a failed or incomplete verdict')
+    for name in names:
+        if len(re.findall(r'^\s*--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)) != 1:
+            raise ValueError('SOCKS native boundary did not execute exactly once: '+name)
 
 
 def owned_children(binary):
@@ -182,13 +261,16 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
     binary.chmod(0o755)
     nonce = secrets.token_hex(16)
     octet = int(nonce[:2], 16)
-    addresses = [f'127.78.{octet}.10', f'127.78.{octet}.11',
+    private = case in SOCKS_CASES
+    ipv4 = '10.254' if private else '127.78'
+    addresses = [f'{ipv4}.{octet}.10', f'{ipv4}.{octet}.11',
                  str(ipaddress.ip_address(f'fd73:{nonce[2:6]}:{nonce[6:10]}::1')),
                  str(ipaddress.ip_address(f'fd73:{nonce[2:6]}:{nonce[6:10]}::2'))]
     (root/'fixture.json').write_text(json.dumps({'Nonce': nonce, 'Addresses': addresses,
-                                               'Baselines': dispatcher_baselines()})+'\n')
+                                               'Baselines': dispatcher_baselines(), 'PrivateIPv4': private})+'\n')
     (root/'fixture.json').chmod(0o644)
     aliases, token, dispatch, started = [], None, False, False
+    private_routes, owned_routes = {}, {}
     result, failure = None, None
     try:
         # This runs the real Go mode/ACL ancestry check before any kernel
@@ -207,7 +289,7 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
             children, _ = system(['/sbin/pfctl', '-a', anchor, '-s', 'Anchors'])
             if rules.strip() or children.strip():
                 raise ValueError('A planned native PF fixture namespace is not independently empty')
-        before, _ = system(['/sbin/ifconfig', 'lo0'])
+        before, _ = system(['/sbin/ifconfig', '-a'])
         existing = set()
         for field in before.split():
             try:
@@ -216,11 +298,24 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
                 pass
         if set(addresses) & existing:
             raise ValueError('A planned loopback alias already belongs to another owner')
+        if private:
+            for address in addresses[:2]:
+                output, _ = system(['/sbin/route', '-n', 'get', address])
+                route = native_route(output)
+                require_default_route(route)
+                private_routes[address] = route
         for address in addresses:
             family = 'inet6' if ':' in address else 'inet'
             mask = ['prefixlen', '128'] if family == 'inet6' else ['netmask', '255.255.255.255']
-            system(['/sbin/ifconfig', 'lo0', family, address, *mask, 'alias'])
+            # Retain the attempted exact address even if the command's result
+            # is lost after kernel creation. Cleanup verifies its actual owner.
             aliases.append(address)
+            system(['/sbin/ifconfig', 'lo0', family, address, *mask, 'alias'])
+            if address in private_routes:
+                actual, _ = system(['/sbin/ifconfig', '-a'])
+                if not private_alias_present(actual, address):
+                    raise ValueError('Private alias creation returned without native readback')
+                owned_routes[address] = private_alias_route(address)
         global_rules, _ = system(['/sbin/pfctl', '-s', 'rules'])
         if not global_rules.strip():
             all_rules, _ = system(['/sbin/pfctl', '-a', '*', '-s', 'rules'])
@@ -235,7 +330,8 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
         token = match[1]
         selector = '^('+native_case_name(case)+'|TestDesktopPFABIRejectsUnprovedKernel)$' if case else '^Test(DesktopDarwinGuardian|DesktopPFReadback|DesktopPFABI)'
         started = True
-        process = subprocess.Popen([str(binary), '-test.run='+selector, '-test.v',
+        excluded = [] if case else ['-test.skip=^TestDesktopDarwinGuardianKernelSOCKSAssociations$']
+        process = subprocess.Popen([str(binary), '-test.run='+selector, *excluded, '-test.v',
                                     '-test.count=1', '-test.timeout=12m'],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    start_new_session=True,
@@ -261,7 +357,10 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
             cleanup_errors.append(error)
         for address in reversed(aliases):
             try:
-                system(['/sbin/ifconfig', 'lo0', 'inet6' if ':' in address else 'inet', address, '-alias'])
+                if address in private_routes:
+                    retire_private_alias(address, private_routes[address], owned_routes.get(address))
+                else:
+                    system(['/sbin/ifconfig', 'lo0', 'inet6' if ':' in address else 'inet', address, '-alias'])
             except BaseException as error:
                 cleanup_errors.append(error)
         if dispatch:
@@ -306,7 +405,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         raise ValueError('The actual Darwin guardian gate requires a matching macOS host')
     source, package, before = checked_sources(source)
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
-            'desktop_socket_darwin_frame_test.go',
+            'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_socks.go',
+            'desktop_socket_darwin_socks_guardian.go', 'desktop_socket_darwin_socks_pf.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
             'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
             'desktop_socket_darwin_pf_probe_nocgo.go', 'desktop_socket_darwin_filter_cgo.go',
@@ -340,7 +440,13 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if sudo:
             command = [sudo, '-n', '--', *command]
         output = reported_run(command, cwd=source, timeout=850, sudo=sudo)
-        wanted = (case,) if case else CASES+READBACK_CASES
+        if case is None:
+            association_output = reported_run(command+['--case', 'SOCKSAssociations'], cwd=source, timeout=850, sudo=sudo)
+            require_socks_verdicts(association_output)
+            output += association_output
+        elif case in SOCKS_CASES:
+            require_socks_verdicts(output)
+        wanted = (case,) if case else CASES+READBACK_CASES+SOCKS_CASES
         if any('--- PASS: '+native_case_name(name)+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
         if '--- PASS: TestDesktopPFABIRejectsUnprovedKernel (' not in output:
@@ -399,11 +505,19 @@ def write_mutation_overlay(directory, index, target, names, replacements, label)
     return overlay
 
 
+def require_mutation_failure(output, case, witness):
+    name = native_case_name(case)
+    if (len(re.findall(r'^--- FAIL: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)) != 1 or
+            witness not in output or
+            re.search(r'--- SKIP:|WARNING: DATA RACE|panic:|fatal error:|\[build failed\]|test timed out|bounded lifetime|Native fixture cleanup retained its recovery record', output)):
+        raise ValueError('Darwin mutation failed before its intended assertion or lost cleanup')
+
+
 def execute_mutations(source: Path, go='go', *, only_case=None):
     """Compile scoped, temporary broken versions and require their exact failure."""
     if platform.system() != 'Darwin':
         raise ValueError('Darwin guardian mutations require the actual native kernel')
-    if only_case not in (None, 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership', 'PFGenerationRetirement'):
+    if only_case not in (None, 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership', 'PFGenerationRetirement', 'SOCKSAssociations'):
         raise ValueError('Darwin guardian mutations require a known scoped positive case')
     if only_case is None:
         # The default guardian selector exercises the shipping loader. The
@@ -418,6 +532,20 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('SOCKS original kernel identity', 'SOCKSAssociations', 'SOCKS authority accepted another original kernel identity',
+         'desktop_socket_darwin_socks_guardian.go', ((' || identity != owned.identity', ''),)),
+        ('SOCKS original permit sequence', 'SOCKSAssociations', 'SOCKS authority accepted a replaced original PF permit',
+         'desktop_socket_darwin_socks_pf.go', ((' || permit.Grant != control', ''),)),
+        ('SOCKS original permit expiry', 'SOCKSAssociations', 'SOCKS authority accepted an expired original PF permit',
+         'desktop_socket_darwin_socks_pf.go', ((' || !time.Now().Before(permit.Expires)', ''),)),
+        ('SOCKS derived expiry cap', 'SOCKSAssociations', 'SOCKS derived expiry exceeded its original control',
+         ('desktop_socket_darwin_socks_pf.go', 'desktop_socket_darwin_pf.go'), (
+             (('if until.Before(expires) {', 'if false && until.Before(expires) {'),),
+             (('if err != nil || expires.After(until) {', 'if err != nil || false && expires.After(until) {'),))),
+        ('SOCKS sibling pending claim', 'SOCKSAssociations', 'SOCKS sibling adopted another pending association',
+         'desktop_socket_darwin_socks_guardian.go', (('if _, exists := g.socks[a.SocketID]; exists {', 'if _, exists := g.socks[a.SocketID]; false && exists {'),)),
+        ('SOCKS child before parent', 'SOCKSAssociations', 'SOCKS control retired before its original UDP descriptor',
+         'desktop_socket_darwin_socks_guardian.go', (('if g.sockets[control.socksChild] != nil {', 'if false && g.sockets[control.socksChild] != nil {'),)),
         ('native PF live reference presence', 'ReferenceOwnership', 'native reference inspection reported an owned live token absent',
          'desktop_socket_darwin_reference_cgo.go', (
              ('return present == 1, nil', 'return false, nil'),)),
@@ -582,9 +710,10 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
                 UID.run(command, cwd=source, timeout=850, sudo=sudo)
             except subprocess.CalledProcessError as error:
                 output = error.output.decode(errors='replace') if isinstance(error.output, bytes) else str(error.output)
-                if ('--- FAIL: '+native_case_name(case)+' (' not in output or message not in output
-                        or 'Native fixture cleanup retained its recovery record' in output):
-                    raise ValueError('Darwin mutation failed before its intended assertion or lost cleanup: '+label+'\n'+output) from error
+                try:
+                    require_mutation_failure(output, case, message)
+                except ValueError as verdict:
+                    raise ValueError(str(verdict)+': '+label+'\n'+output) from error
                 print('Rejected broken '+label+' through '+case+'.', flush=True)
             else:
                 raise ValueError('Darwin mutation bypassed its required kernel assertion: '+label)
@@ -598,7 +727,7 @@ if __name__ == '__main__':
     parser.add_argument('--go', default='go')
     parser.add_argument('--root-test-binary', type=Path)
     parser.add_argument('--sha256')
-    parser.add_argument('--case', choices=CASES+READBACK_CASES+PROBE_CASES)
+    parser.add_argument('--case', choices=CASES+READBACK_CASES+PROBE_CASES+SOCKS_CASES)
     parser.add_argument('--mutations', action='store_true', help='Run scoped production mutation controls after the native positive suite')
     parser.add_argument('--projection-mutations', action='store_true', help='Run only native filter projection mutations after its exact positive case')
     parser.add_argument('--baseline-mutations', action='store_true', help='Run only native baseline transition mutations after its exact positive case')

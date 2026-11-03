@@ -28,9 +28,10 @@ import (
 )
 
 type desktopDarwinFixture struct {
-	Nonce     string
-	Addresses []netip.Addr
-	Baselines []string
+	Nonce       string
+	Addresses   []netip.Addr
+	PrivateIPv4 bool
+	Baselines   []string
 }
 
 var desktopDarwinTestFixture desktopDarwinFixture
@@ -713,7 +714,7 @@ func init() {
 		os.Exit(87)
 	}
 	addresses := desktopDarwinTestFixture.Addresses
-	if !addresses[0].Is4() || !addresses[1].Is4() || !addresses[0].IsLoopback() || !addresses[1].IsLoopback() || !addresses[2].Is6() || !addresses[3].Is6() || !addresses[2].IsPrivate() || !addresses[3].IsPrivate() {
+	if !addresses[0].Is4() || !addresses[1].Is4() || (!desktopDarwinTestFixture.PrivateIPv4 && (!addresses[0].IsLoopback() || !addresses[1].IsLoopback()) || desktopDarwinTestFixture.PrivateIPv4 && (!addresses[0].IsPrivate() || !addresses[1].IsPrivate())) || !addresses[2].Is6() || !addresses[3].Is6() || !addresses[2].IsPrivate() || !addresses[3].IsPrivate() {
 		os.Exit(88)
 	}
 	desktopDarwinPFNamespace = "com.apple/000.t-" + desktopDarwinTestFixture.Nonce[:12]
@@ -1389,6 +1390,11 @@ func TestDesktopDarwinGuardianKernelUIDObserver(t *testing.T) {
 
 func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 	t.Helper()
+	return desktopDarwinKernelPeerWithin(t, network, 20*time.Second)
+}
+
+func desktopDarwinKernelPeerWithin(t *testing.T, network string, lifetime time.Duration) netip.AddrPort {
+	t.Helper()
 	address := desktopDarwinTestFixture.Addresses[1]
 	if strings.HasSuffix(network, "6") {
 		address = desktopDarwinTestFixture.Addresses[3]
@@ -1429,7 +1435,7 @@ func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 						connectionsMu.Unlock()
 						workers.Done()
 					}()
-					connection.SetDeadline(time.Now().Add(20 * time.Second))
+					connection.SetDeadline(time.Now().Add(lifetime))
 					buffer := make([]byte, 8192)
 					for {
 						n, readErr := connection.Read(buffer)
@@ -2442,5 +2448,186 @@ func TestDesktopDarwinGuardianChannelFragmentsAndDescriptorClosure(t *testing.T)
 	output := desktopDarwinCommandBuffer{limit: 8}
 	if n, err := output.Write([]byte("123456789")); n != 8 || err == nil || output.Len() != 8 {
 		t.Fatal("privileged readback exceeded its in-memory bound", n, err, output.Len())
+	}
+}
+
+// The lower capability is exercised through the real broker/guardian/PF path.
+// The echo control represents the already authenticated native caller's TCP
+// object; full SOCKS protocol/Box admission remains a separate host gate.
+func TestDesktopDarwinGuardianKernelSOCKSAssociations(t *testing.T) {
+	if !desktopDarwinTestFixture.PrivateIPv4 {
+		t.Fatal("SOCKS native association requires its explicit owned private alias fixture")
+	}
+	for _, family := range []string{"4", "6"} {
+		t.Run("ipv"+family, func(t *testing.T) {
+			tcpRemote := desktopDarwinKernelPeerWithin(t, "tcp"+family, 60*time.Second)
+			udpRemote := desktopDarwinKernelPeer(t, "udp"+family)
+			policy := desktopDarwinKernelPolicy(t, []DesktopDarwinSocketDestination{{Network: "tcp", Address: tcpRemote}})
+			broker := desktopDarwinKernelBroker(t, policy)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if connection, err := broker.DialContext(ctx, "udp"+family, udpRemote.String()); err == nil || connection != nil {
+				if connection != nil {
+					_ = connection.Close()
+				}
+				t.Fatal("ordinary UDP borrowed the private TCP selection")
+			}
+			var controls, relays []net.Conn
+			for i := 0; i < 2; i++ {
+				control, err := broker.DialContext(ctx, "tcp"+family, tcpRemote.String())
+				if err != nil {
+					t.Fatal("original native TCP control", err)
+				}
+				controls = append(controls, control)
+				t.Cleanup(func() { _ = control.Close() })
+				desktopDarwinExchange(t, control)
+				if escaped, err := broker.DialSOCKSRelay(ctx, control, "127.0.0.1:53"); err == nil || escaped != nil {
+					t.Fatal("SOCKS association widened loopback permission", err)
+				}
+				parent := control.(*desktopSocketConn).socket
+				parent.mu.Lock()
+				peer := parent.peers[parent.remote]
+				parent.mu.Unlock()
+				receipt, _ := peer.snapshot()
+				otherPrivate := netip.AddrPortFrom(parent.binding.LocalAddress, udpRemote.Port())
+				if _, err := policy.socksRelayPolicy(receipt.Grant, otherPrivate, strings.Repeat("a", 32)); err == nil {
+					t.Fatal("SOCKS association widened another private host")
+				}
+				relay, err := broker.DialSOCKSRelay(ctx, control, udpRemote.String())
+				if err != nil {
+					t.Fatal("actual selected-private UDP association", err)
+				}
+				relays = append(relays, relay)
+				t.Cleanup(func() { _ = relay.Close() })
+				desktopDarwinExchange(t, relay)
+				if repeated, err := broker.DialSOCKSRelay(ctx, control, udpRemote.String()); err == nil || repeated != nil {
+					t.Fatal("one TCP control admitted a second UDP association")
+				}
+			}
+			if len(policy.options.LANPrefixes) != 0 || len(policy.options.PrivateDestinations) != 1 || policy.options.PrivateDestinations[0] != (DesktopDarwinSocketDestination{Network: "tcp", Address: tcpRemote}) {
+				t.Fatal("SOCKS association mutated original static destinations or LAN policy")
+			}
+			first := controls[0].(*desktopSocketConn).socket
+			firstUDP := relays[0].(*desktopConnectedPacket).packet.socket
+			second := controls[1].(*desktopSocketConn).socket
+			secondUDP := relays[1].(*desktopConnectedPacket).packet.socket
+			association := firstUDP.scopedPolicy.(*desktopDarwinSOCKSRelayPolicy).association
+			// Counterfactual guardian records retain actual kernel descriptors;
+			// only the named authority field is changed in each negative. The
+			// successful packet path above used the independent real guardian.
+			capture := func() *desktopDarwinGuardian {
+				pf := *policy.pf
+				pf.permits = make(map[string]desktopDarwinPFPermit)
+				g := &desktopDarwinGuardian{capture: policy.capture, owner: policy.owner, uid: policy.uid, options: policy.options, pf: &pf,
+					sockets: make(map[string]*desktopDarwinOwnedSocket), socks: make(map[string]desktopDarwinSOCKSAssociation)}
+				for _, socket := range []*desktopSocket{first, firstUDP, second, secondUDP} {
+					socket.mu.Lock()
+					peer := socket.peers[socket.remote]
+					socket.mu.Unlock()
+					receipt, valid := peer.snapshot()
+					if !valid || !validDesktopSocketReceipt(receipt, receipt.Grant, time.Now()) {
+						t.Fatal("native source fixture lost its original acknowledged permit")
+					}
+					identity, err := desktopDarwinSocketIdentity(socket.sourceFile)
+					if err != nil {
+						t.Fatal("actual retained kernel socket fixture", err)
+					}
+					grant := receipt.Grant
+					g.sockets[socket.id] = &desktopDarwinOwnedSocket{creation: DesktopSocketCreation{Capture: policy.capture, Binding: socket.binding, Network: socket.network, SocketID: socket.id},
+						file: socket.sourceFile, identity: identity, bound: true, grants: map[string]DesktopSocketGrant{socket.remote.String(): grant}, receipts: map[string]DesktopSocketReceipt{socket.remote.String(): receipt}}
+					pf.permits[pf.key(grant)] = desktopDarwinPFPermit{Grant: grant, Expires: time.UnixMilli(receipt.ExpiresAt)}
+				}
+				g.socks[firstUDP.id] = association
+				g.sockets[first.id].socksChild = firstUDP.id
+				return g
+			}
+			t.Run("original-kernel-identity", func(t *testing.T) {
+				g := capture()
+				g.sockets[first.id].identity.socket ^= 1
+				if _, _, err := g.socksControlSocket(association); err == nil {
+					t.Fatal("SOCKS authority accepted another original kernel identity")
+				}
+			})
+			t.Run("stale-control-permit", func(t *testing.T) {
+				g := capture()
+				current := g.sockets[first.id].grants[first.remote.String()]
+				permit := g.pf.permits[g.pf.key(current)]
+				permit.Grant.Sequence++
+				g.pf.permits[g.pf.key(current)] = permit
+				if _, err := g.pf.socksControlExpiry(current); err == nil {
+					t.Fatal("SOCKS authority accepted a replaced original PF permit")
+				}
+			})
+			t.Run("expired-control-permit", func(t *testing.T) {
+				g := capture()
+				current := g.sockets[first.id].grants[first.remote.String()]
+				permit := g.pf.permits[g.pf.key(current)]
+				permit.Expires = time.Now().Add(-time.Second)
+				g.pf.permits[g.pf.key(current)] = permit
+				if _, err := g.pf.socksControlExpiry(current); err == nil {
+					t.Fatal("SOCKS authority accepted an expired original PF permit")
+				}
+			})
+			t.Run("derived-expiry", func(t *testing.T) {
+				g := capture()
+				current := g.sockets[first.id].grants[first.remote.String()]
+				permit := g.pf.permits[g.pf.key(current)]
+				permit.Expires = time.Now().Add(time.Second)
+				g.pf.permits[g.pf.key(current)] = permit
+				until, err := g.pf.socksGrantExpiry(time.Now(), current)
+				if err != nil || !until.Equal(permit.Expires) {
+					t.Fatal("SOCKS derived expiry exceeded its original control", err)
+				}
+			})
+			t.Run("sibling-claim", func(t *testing.T) {
+				g := capture()
+				changed := association
+				changed.Control = g.sockets[second.id].grants[second.remote.String()]
+				// Model the original immutable claim before UDP creation. A
+				// second genuine control cannot adopt that pending child ID.
+				delete(g.sockets, firstUDP.id)
+				if err := g.claimSOCKSAssociation(changed); err == nil {
+					t.Fatal("SOCKS sibling adopted another pending association")
+				}
+			})
+			t.Run("child-before-parent", func(t *testing.T) {
+				g := capture()
+				if err := g.retireSOCKSControl(first.id); err == nil {
+					t.Fatal("SOCKS control retired before its original UDP descriptor")
+				}
+			})
+			t.Run("joined-sibling-isolation", func(t *testing.T) {
+				first.mu.Lock()
+				peer := first.peers[first.remote]
+				first.mu.Unlock()
+				controlReceipt, _ := peer.snapshot()
+				firstUDP.mu.Lock()
+				peer = firstUDP.peers[firstUDP.remote]
+				firstUDP.mu.Unlock()
+				udpReceipt, _ := peer.snapshot()
+				if err := controls[0].Close(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := relays[0].Write([]byte("retired association")); err == nil {
+					t.Fatal("SOCKS UDP survived its joined original TCP close")
+				}
+				if err := policy.pf.absent(ctx, controlReceipt.Grant); err != nil {
+					t.Fatal("original TCP permit survived joined close", err)
+				}
+				if err := policy.pf.absent(ctx, udpReceipt.Grant); err != nil {
+					t.Fatal("original UDP permit survived joined close", err)
+				}
+				desktopDarwinExchange(t, relays[1])
+				if err := controls[1].Close(); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if err := broker.Close(ctx); err != nil {
+				t.Fatal("SOCKS guardian did not join all native source ownership", err)
+			}
+			if err := policy.pf.allAbsent(ctx); err != nil {
+				t.Fatal("SOCKS source retained native PF permissions", err)
+			}
+		})
 	}
 }

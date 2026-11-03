@@ -459,7 +459,11 @@ func (p *desktopDarwinPF) render() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func (p *desktopDarwinPF) grant(ctx context.Context, g DesktopSocketGrant) (receipt DesktopSocketReceipt, failure error) {
+func (p *desktopDarwinPF) grant(ctx context.Context, g DesktopSocketGrant) (DesktopSocketReceipt, error) {
+	return p.grantBounded(ctx, g, nil)
+}
+
+func (p *desktopDarwinPF) grantBounded(ctx context.Context, g DesktopSocketGrant, control *DesktopSocketGrant) (receipt DesktopSocketReceipt, failure error) {
 	progress := desktopPFStartGrant(ctx)
 	started := progress.started
 	defer func() { failure = progress.failure(failure) }()
@@ -469,7 +473,15 @@ func (p *desktopDarwinPF) grant(ctx context.Context, g DesktopSocketGrant) (rece
 	if err := progress.run(1, func() error { return p.verify(ctx, true) }); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
-	p.permits[p.key(g)] = desktopDarwinPFPermit{Grant: g, Expires: started.Add(7 * time.Second)}
+	expires := started.Add(7 * time.Second)
+	if control != nil {
+		var err error
+		expires, err = p.socksGrantExpiry(started, *control)
+		if err != nil {
+			return DesktopSocketReceipt{}, err
+		}
+	}
+	p.permits[p.key(g)] = desktopDarwinPFPermit{Grant: g, Expires: expires}
 	if err := progress.run(2, func() error { return desktopDarwinPFLoad(ctx, p.Anchor, p.render()) }); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
@@ -477,10 +489,16 @@ func (p *desktopDarwinPF) grant(ctx context.Context, g DesktopSocketGrant) (rece
 		return DesktopSocketReceipt{}, err
 	}
 	progress.phase = 4
-	if ctx.Err() != nil || !time.Now().Before(started.Add(5*time.Second)) {
+	if control != nil {
+		until, err := p.socksControlExpiry(*control)
+		if err != nil || expires.After(until) {
+			return DesktopSocketReceipt{}, errors.Join(err, errors.New("Darwin SOCKS derived permit outlived its original control"))
+		}
+	}
+	if ctx.Err() != nil || !time.Now().Before(expires) || !time.Now().Before(started.Add(5*time.Second)) {
 		return DesktopSocketReceipt{}, errors.New("Darwin PF grant readback became stale")
 	}
-	return DesktopSocketReceipt{Grant: g, ObservedAt: time.Now().UnixMilli(), ExpiresAt: started.Add(7 * time.Second).UnixMilli()}, nil
+	return DesktopSocketReceipt{Grant: g, ObservedAt: time.Now().UnixMilli(), ExpiresAt: expires.UnixMilli()}, nil
 }
 
 func (p *desktopDarwinPF) expire(ctx context.Context) error {

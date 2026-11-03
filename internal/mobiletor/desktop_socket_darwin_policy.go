@@ -285,6 +285,10 @@ func (p *DesktopDarwinSocketPolicy) createSocketAdmitted(ctx context.Context, c 
 }
 
 func (p *DesktopDarwinSocketPolicy) Bind(ctx context.Context, c DesktopSocketCapture, b DesktopSocketBinding, network string, raw syscall.RawConn) error {
+	return p.bindSocket(ctx, c, b, network, raw, "")
+}
+
+func (p *DesktopDarwinSocketPolicy) bindSocket(ctx context.Context, c DesktopSocketCapture, b DesktopSocketBinding, network string, raw syscall.RawConn, socketID string) error {
 	if ctx == nil || ctx.Err() != nil || !p.Current(c, b.Owner) || (network != "tcp4" && network != "tcp6" && network != "udp4" && network != "udp6") || raw == nil {
 		return net.ErrClosed
 	}
@@ -313,7 +317,7 @@ func (p *DesktopDarwinSocketPolicy) Bind(ctx context.Context, c DesktopSocketCap
 	if err != nil || failed != nil {
 		return errors.Join(err, failed)
 	}
-	_, file, err := p.call(ctx, desktopDarwinRequest{Operation: "bind", Capture: c, Creation: DesktopSocketCreation{Capture: c, Binding: b, Network: network}}, duplicate, true)
+	_, file, err := p.call(ctx, desktopDarwinRequest{Operation: "bind", Capture: c, Creation: DesktopSocketCreation{Capture: c, Binding: b, Network: network, SocketID: socketID}}, duplicate, true)
 	if file != nil {
 		file.Close()
 		return errors.New("Darwin bind unexpectedly returned a descriptor")

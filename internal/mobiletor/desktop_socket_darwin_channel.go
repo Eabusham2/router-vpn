@@ -22,6 +22,7 @@ type desktopDarwinRequest struct {
 	Options   DesktopDarwinSocketOptions
 	Creation  DesktopSocketCreation
 	Grant     DesktopSocketGrant
+	SOCKS     *desktopDarwinSOCKSAssociation
 	Tunnel    string
 	Index     uint32
 }

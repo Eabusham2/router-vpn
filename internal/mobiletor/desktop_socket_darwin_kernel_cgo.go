@@ -7,6 +7,8 @@ package mobiletor
 #include <errno.h>
 #include <libproc.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_fsm.h>
 #include <pwd.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -37,6 +39,17 @@ static int routervpn_darwin_socket(int fd, uint64_t *socket, uint64_t *pcb,
     *generation = value.psi.soi_proto.pri_in.insi_gencnt;
     *family = value.psi.soi_family;
     *type = value.psi.soi_type;
+    return 0;
+}
+
+// Use the installed SDK type and constants; a peer tuple alone survives TCP
+// closing states and cannot establish this original-control authority.
+static int routervpn_darwin_tcp_established(int fd) {
+    struct tcp_connection_info value;
+    memset(&value, 0, sizeof(value));
+    socklen_t length = sizeof(value);
+    if (getsockopt(fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &value, &length) != 0) return errno;
+    if (length != sizeof(value) || value.tcpi_state != TCPS_ESTABLISHED) return EINVAL;
     return 0;
 }
 
@@ -168,4 +181,11 @@ func desktopDarwinReadTunnel(file *os.File) (string, error) {
 		return "", syscall.Errno(code)
 	}
 	return C.GoString(&name[0]), nil
+}
+
+func desktopDarwinSOCKSEstablished(fd int) error {
+	if code := C.routervpn_darwin_tcp_established(C.int(fd)); code != 0 {
+		return errors.Join(syscall.Errno(code), errors.New("Darwin SOCKS original TCP control is no longer established"))
+	}
+	return nil
 }

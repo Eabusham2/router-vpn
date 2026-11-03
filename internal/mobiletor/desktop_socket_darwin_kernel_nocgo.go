@@ -25,3 +25,7 @@ func desktopDarwinKernelAvailable() bool { return false }
 func desktopDarwinReadTunnel(*os.File) (string, error) {
 	return "", errors.New("Darwin tunnel control requires native libproc proof")
 }
+
+func desktopDarwinSOCKSEstablished(int) error {
+	return errors.New("Darwin SOCKS original TCP state requires the native SDK adapter")
+}
