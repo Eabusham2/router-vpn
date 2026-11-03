@@ -395,10 +395,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 				t.Fatal(err)
 			}
 			if protocol == "hysteria2" {
-				if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "darwin"); err == nil || derived != nil {
-					t.Fatal("layer derivation opened an unsupported Darwin host")
-				}
-				for _, target := range []string{"linux", "windows"} {
+				for _, target := range []string{"linux", "windows", "darwin"} {
 					if plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err != nil || plan.Metadata().TargetOS != target {
 						t.Fatal("captured HY2 layer lost its exact target lower plan", target, err)
 					}
@@ -657,4 +654,11 @@ func desktopExternalHysteria2LayerRejectsReplacedAuthority(t *testing.T, target 
 			})
 		}
 	}
+}
+
+func TestDesktopExternalPolicyDarwinHysteria2LayerPreservesCompleteCapture(t *testing.T) {
+	desktopExternalHysteria2LayerPreservesCompleteCapture(t, "darwin")
+}
+func TestDesktopExternalPolicyDarwinHysteria2LayerRejectsReplacedAuthority(t *testing.T) {
+	desktopExternalHysteria2LayerRejectsReplacedAuthority(t, "darwin")
 }

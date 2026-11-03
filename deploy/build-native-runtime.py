@@ -467,7 +467,9 @@ def verify_installed_darwin_host(source, bundle, target, env):
     receipt = json.loads(records[0], object_pairs_hook=unique)
     if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or receipt.get('target') != target
             or receipt.get('source_sha256') != digest() or receipt.get('bundle_sha256') != original
-            or receipt.get('cases') != ['shadowsocks', 'http-connect', 'https-connect', 'hysteria2']
+            or receipt.get('cases') != ['shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor',
+                                       'hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key', 'hysteria2-aes-xor-wrong-layer-key',
+                                       'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening']
             or not re.fullmatch('[0-9a-f]{64}', receipt.get('sealed_bundle_sha256', ''))
             or set(receipt.get('images', {})) != {'controller', 'peer'}
             or any(not re.fullmatch('[0-9a-f]{64}', value) for value in receipt['images'].values())

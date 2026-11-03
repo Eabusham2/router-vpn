@@ -43,7 +43,7 @@ func TestRouterVPNDesktopDarwinExternalReferenceProcess(t *testing.T) {
 	if found != 1 {
 		t.Fatal("Darwin reference address is not one current physical interface")
 	}
-	desktopExternalInstalledReferenceProcess(t, address.String(), map[string]bool{
+	desktopExternalInstalledReferenceProcessWithLayer(t, address.String(), map[string]bool{
 		"shadowsocks": true, "http-connect": true, "https-connect": true, "hysteria2": true,
-	}, true)
+	}, true, os.Getenv("ROUTERVPN_DARWIN_EXTERNAL_LAYER") == "1")
 }

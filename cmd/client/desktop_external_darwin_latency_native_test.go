@@ -128,5 +128,5 @@ func macOSExternalNativeLatency(t *testing.T, ctx context.Context, client *http.
 	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retained) != nil || !retained.Connected || retained.ProcessID != live.ProcessID || retained.Session != live.Session || retained.Source != live.Source || retained.Config != live.Config || retained.Baseline == nil || retained.Baseline.Token != live.Baseline.Token || retained.Network.Name != live.Network.Name || retained.Network.Index != live.Network.Index || retained.Network.MTU != 1376 {
 		t.Fatal("native Retest/Cancel replaced its original child/PF/TUN owner", status, err, string(raw))
 	}
-	t.Logf("actual sealed Darwin latency accepted %s: held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained", peer.protocol)
+	t.Logf("actual sealed Darwin latency accepted %s: held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained", peer.name)
 }

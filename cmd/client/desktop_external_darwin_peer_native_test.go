@@ -27,7 +27,17 @@ import (
 	"router-vpn/internal/common"
 )
 
+type macOSExternalLayerReceipt struct {
+	Mode          string `json:"mode"`
+	InnerAddress  string `json:"inner_address"`
+	Raw           int64  `json:"raw"`
+	Authenticated int64  `json:"authenticated"`
+	Forwarded     int64  `json:"forwarded"`
+	Rejected      int64  `json:"rejected"`
+}
+
 type macOSExternalPeerReply struct {
+	Layer          *macOSExternalLayerReceipt   `json:"layer,omitempty"`
 	Latency        *macOSExternalLatencyReceipt `json:"latency,omitempty"`
 	Schema         int                          `json:"schema"`
 	Protocol       string                       `json:"protocol"`
@@ -44,15 +54,17 @@ type macOSExternalPeerReply struct {
 }
 
 type macOSExternalNativePeer struct {
-	command                *exec.Cmd
-	input                  io.WriteCloser
-	output                 *os.File
-	reader                 *bufio.Reader
-	joined                 chan struct{}
-	failure                error
-	protocol, password, ca string
-	address                netip.AddrPort
-	physical               netip.Addr
+	command                           *exec.Cmd
+	input                             io.WriteCloser
+	output                            *os.File
+	reader                            *bufio.Reader
+	joined                            chan struct{}
+	failure                           error
+	protocol, password, ca            string
+	name, layer, layerPassword, fault string
+	inner                             netip.AddrPort
+	address                           netip.AddrPort
+	physical                          netip.Addr
 }
 
 func macOSExternalNativeCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -124,6 +136,23 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 		t.Fatal("native peer returned invalid transport counters")
 	}
 	p.address, p.ca = address, reply.CA
+	if p.layer == "" {
+		if reply.Layer != nil {
+			t.Fatal("ordinary Darwin peer acquired an unrequested layer")
+		}
+	} else {
+		if reply.Layer == nil || reply.Layer.Mode != p.layer {
+			t.Fatal("Darwin peer lost its captured encrypted layer")
+		}
+		layer := reply.Layer
+		inner, parseErr := netip.ParseAddrPort(layer.InnerAddress)
+		if parseErr != nil || inner.Addr() != p.physical || inner.Port() == 0 || inner == address || p.inner.IsValid() && p.inner != inner ||
+			p.layer == common.StartLayerAES256GCMXOR && address.Port() != 8389 ||
+			layer.Raw < 0 || layer.Authenticated < 0 || layer.Forwarded < 0 || layer.Rejected < 0 || layer.Raw != reply.PhysicalUDP {
+			t.Fatal("Darwin layer changed its captured outer/private tuples or transport counters", parseErr)
+		}
+		p.inner = inner
+	}
 	return reply
 }
 func (p *macOSExternalNativePeer) stats(t *testing.T) macOSExternalPeerReply {
@@ -134,7 +163,7 @@ func (p *macOSExternalNativePeer) stats(t *testing.T) macOSExternalPeerReply {
 	return p.read(t)
 }
 
-func macOSExternalNativePeerStart(t *testing.T, protocol string) *macOSExternalNativePeer {
+func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalNativePeer {
 	t.Helper()
 	image := os.Getenv("ROUTERVPN_MACOS_EXTERNAL_PEER")
 	expected := os.Getenv("ROUTERVPN_MACOS_EXTERNAL_PEER_SHA256")
@@ -143,15 +172,25 @@ func macOSExternalNativePeerStart(t *testing.T, protocol string) *macOSExternalN
 	if err != nil || !filepath.IsAbs(image) || hex.EncodeToString(sum[:]) != expected {
 		t.Fatal("native fixture lost its captured independent peer image", err)
 	}
-	p := &macOSExternalNativePeer{protocol: protocol, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
+	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
+	p := &macOSExternalNativePeer{name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
 	}
 	p.password = base64.StdEncoding.EncodeToString(key)
+	if layer != "" {
+		if _, err := rand.Read(key); err != nil {
+			t.Fatal(err)
+		}
+		p.layerPassword = base64.StdEncoding.EncodeToString(key)
+	}
 	clear(key)
 	p.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopDarwinExternalReferenceProcess$", "-test.count=1", "-test.timeout=300s")
 	p.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_CHILD=1", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_ADDRESS=" + p.physical.String()}
+	if layer != "" {
+		p.command.Env = append(p.command.Env, "ROUTERVPN_DARWIN_EXTERNAL_LAYER=1")
+	}
 	p.command.Stderr = os.Stderr
 	p.input, err = p.command.StdinPipe()
 	if err != nil {
@@ -188,11 +227,18 @@ func macOSExternalNativePeerStart(t *testing.T, protocol string) *macOSExternalN
 		p.output.Close()
 	})
 	request := map[string]any{"schema": 1, "protocol": protocol, "address": p.physical.String(), "password": p.password, "hold": false}
+	if layer != "" {
+		layerRequest := map[string]any{"mode": layer, "password": p.layerPassword}
+		if fault == "wrong-whitening" {
+			layerRequest["fault"] = "whitening"
+		}
+		request["layer"] = layerRequest
+	}
 	if err = json.NewEncoder(p.input).Encode(request); err != nil {
 		t.Fatal(err)
 	}
 	initial := p.read(t)
-	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 {
+	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
 		t.Fatal("native peer claimed traffic before its captured runtime")
 	}
 	return p
@@ -216,8 +262,30 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 	case "hysteria2":
 		profile.DNSProtocol = "udp"
 		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: p.physical.String(), Port: int(p.address.Port()), Password: p.password, TLSServerName: "captured-external.example"}
+		if p.layer != "" {
+			profile.StartLayer = p.layer
+			profile.External.Hysteria2.Port = int(p.inner.Port())
+			password := p.layerPassword
+			if p.fault == "wrong-layer-key" {
+				var other [32]byte
+				if _, err := rand.Read(other[:]); err != nil {
+					t.Fatal(err)
+				}
+				password = base64.StdEncoding.EncodeToString(other[:])
+				clear(other[:])
+			}
+			profile.External.StartLayer = &common.ExternalStartLayer{Mode: p.layer, API: "http://10.93.0.1:8787", Transport: map[string]any{
+				"type": "shadowsocks", "tag": "captured-private-layer", "server": p.physical.String(), "server_port": int(p.address.Port()),
+				"method": "2022-blake3-aes-256-gcm", "password": password}}
+			if p.fault == "wrong-inner-key" {
+				profile.External.Hysteria2.Password += "-different-captured-inner"
+			}
+		}
 	default:
 		t.Fatal("native fixture refused another protocol")
+	}
+	if err := common.NormalizeRouterProfile(&profile); err != nil {
+		t.Fatal("Darwin fixture profile rejected before native execution", err)
 	}
 	store := common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}
 	raw, err := json.Marshal(store)
@@ -376,4 +444,24 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 	if err != nil || !strings.Contains(string(after), fingerprint) {
 		t.Fatal("native system keychain did not retain the exact peer root", err)
 	}
+}
+
+func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
+	t.Helper()
+	switch scenario {
+	case "shadowsocks", "http-connect", "https-connect", "hysteria2":
+		return scenario, "", ""
+	}
+	for _, entry := range []struct{ name, mode string }{{"hysteria2-aes", common.StartLayerAES256GCM}, {"hysteria2-aes-xor", common.StartLayerAES256GCMXOR}} {
+		if scenario == entry.name {
+			return "hysteria2", entry.mode, ""
+		}
+		for _, negative := range []string{"wrong-layer-key", "wrong-inner-key", "wrong-whitening"} {
+			if scenario == entry.name+"-"+negative && (negative != "wrong-whitening" || entry.mode == common.StartLayerAES256GCMXOR) {
+				return "hysteria2", entry.mode, negative
+			}
+		}
+	}
+	t.Fatal("unregistered Darwin installed scenario", scenario)
+	return
 }

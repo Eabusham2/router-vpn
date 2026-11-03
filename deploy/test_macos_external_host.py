@@ -23,8 +23,12 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FLAG = 'ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE'
-CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2')
+POSITIVE_CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor')
+NEGATIVE_CASES = ('hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key',
+                  'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening')
+CASES = POSITIVE_CASES + NEGATIVE_CASES
 TEST = 'TestMacOSRetainedExternalNativeSealedProtocols'
+POLICY_TESTS = ('TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries')
 PEER_TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego,routervpn_darwin_external_host'
 
 
@@ -58,7 +62,8 @@ def source_identity(core):
     app = CONTROLLER.source_identity()
     for name in ('deploy/test_macos_external_host.py', 'deploy/test_macos_external_host_runner.py',
                  'deploy/seal-native-runtime.py', 'configs/client/modes.json',
-                 'mobile/desktop/node_layer_peer_test.go.tmpl', 'mobile/desktop/node_darwin_external_peer_test.go.tmpl'):
+                 'mobile/desktop/node_layer_peer_test.go.tmpl', 'mobile/desktop/node_darwin_external_peer_test.go.tmpl',
+                 'mobile/desktop/node_external_hysteria_layer_installed_test.go.tmpl'):
         app[name] = sha(ROOT/name)
     files = [core/'go.mod', core/'go.sum', *core.glob('*.go')]
     for directory in ('protocol/routervpnamnezia', 'routervpn', 'experimental/libbox/routervpn'):
@@ -70,19 +75,23 @@ def check_verdict(output):
     if not isinstance(output, str) or re.search(
             r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise ValueError('Native Darwin host output contains failure/skip/race/incomplete evidence')
-    for name in (TEST, *(TEST+'/'+case for case in CASES)):
-        indent = '' if name == TEST else '    '
+    for name in (TEST, *POLICY_TESTS, *(TEST+'/'+case for case in CASES)):
+        indent = '    ' if '/' in name else ''
         pattern = '^'+indent+'--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$'
         if len(re.findall(pattern, output, re.MULTILINE)) != 1:
             raise ValueError('Missing or duplicated exact native Darwin verdict: '+name)
-    for case in CASES:
+    for case in POSITIVE_CASES:
         receipt = 'actual sealed Darwin ordinary host accepted '+case+': native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join'
         if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
             raise ValueError('Native Darwin protocol has no exact ownership receipt: '+case)
-    for case in CASES:
+    for case in POSITIVE_CASES:
         receipt = 'actual sealed Darwin latency accepted '+case+': held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained'
         if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
             raise ValueError('Native Darwin protocol has no exact retained measurement receipt: '+case)
+    for case in NEGATIVE_CASES:
+        receipt = 'actual sealed Darwin layer refused '+case+': encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined'
+        if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
+            raise ValueError('Native Darwin layer has no exact refusal and cleanup receipt: '+case)
     if output.splitlines().count('PASS') != 1 or not output.rstrip().endswith('\nPASS'):
         raise ValueError('Native Darwin host did not finish one complete execution')
 
@@ -160,7 +169,7 @@ def execute(bundle, source=None, go='go', environment=None):
                    'ROUTERVPN_MACOS_FIXTURE_PYTHON='+str(Path(python).absolute()),
                    'ROUTERVPN_MACOS_EXTERNAL_PEER='+str(peer), 'ROUTERVPN_MACOS_EXTERNAL_PEER_SHA256='+identities['peer'],
                    'ROUTERVPN_MACOS_EXTERNAL_BUNDLE='+str(signed), 'ROUTERVPN_MACOS_EXTERNAL_BUNDLE_SHA256='+signed_hash,
-                   'GORACE=atexit_sleep_ms=0', str(controller), '-test.run=^'+TEST+'$', '-test.v', '-test.count=1', '-test.timeout=900s']
+                   'GORACE=atexit_sleep_ms=0', str(controller), '-test.run=^('+('|'.join((TEST, *POLICY_TESTS)))+')$', '-test.v', '-test.count=1', '-test.timeout=900s']
         if sudo:
             command = [sudo, '-n', '--', *command]
         output = CONTROLLER.reported_run(command, cwd=ROOT, env=captured, timeout=930, sudo=sudo)

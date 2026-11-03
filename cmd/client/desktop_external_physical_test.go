@@ -439,7 +439,7 @@ func desktopExternalPhysicalHysteria2Layers(t *testing.T, target string) {
 				if err != nil || dnsErr != nil || measurement.source != meta.SourceSHA256 || measurement.config != meta.ConfigSHA256 || resolver.source != meta.SourceSHA256 || resolver.config != meta.ConfigSHA256 {
 					t.Fatal("layer measurement/DNS mailbox did not retain actual derived owner", err, dnsErr)
 				}
-				for _, unsupported := range []string{"darwin"} {
+				for _, unsupported := range []string{"android", "ios", "freebsd"} {
 					other, err := compileDesktopExternalCaptured(context.Background(), profile, common.RouterProfile{}, exit, true, "", nil, nil, nil)
 					if err != nil {
 						t.Fatal(err)
@@ -451,4 +451,8 @@ func desktopExternalPhysicalHysteria2Layers(t *testing.T, target string) {
 			})
 		}
 	}
+}
+
+func TestDesktopExternalPhysicalDarwinHysteria2LayersKeepOuterAndInnerOwners(t *testing.T) {
+	desktopExternalPhysicalHysteria2Layers(t, "darwin")
 }

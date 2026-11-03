@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +21,8 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/mobiletor"
 )
 
 const macOSExternalNativeMarker = "fixture-external-host"
@@ -69,12 +74,28 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 		a.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(value)
 	})
-	mux.HandleFunc("/api/external-profile/connect", a.externalProfileConnect)
+	var observationMu sync.Mutex
+	var original *desktopMacOSExternalHost
+	// Forward the actual shipping preparation unchanged, retaining only its
+	// returned pointer for failed-start cleanup observations after registry removal.
+	mux.HandleFunc("/api/external-profile/connect", func(w http.ResponseWriter, r *http.Request) {
+		a.externalProfileConnectWithRuntime(w, r, externalConnectRuntime{retained: func(owner *app, launch *desktopNodeLaunch) (desktopExternalRetainedRuntime, error) {
+			retained, err := prepareDesktopRetainedExternalForLaunch(owner, launch)
+			if retained != nil {
+				host, ok := retained.(*desktopMacOSExternalHost)
+				observationMu.Lock()
+				defer observationMu.Unlock()
+				if !ok || host == nil || host.parent.parent != captured.parent || host.parent.session != captured.session || original != nil && original != host {
+					return retained, errors.New("native test observation received a replaced host")
+				}
+				original = host
+			}
+			return retained, err
+		}})
+	})
 	mux.HandleFunc("/api/disconnect", a.disconnect)
 	mux.HandleFunc("/api/speed-lab/external-latency", a.desktopLatencyMeasurement)
 	mux.HandleFunc("/api/speed-lab/external-latency/cancel", a.cancelDesktopLatencyMeasurement)
-	var observationMu sync.Mutex
-	var original *desktopMacOSExternalHost
 	mux.HandleFunc("/api/native-external-observation", func(w http.ResponseWriter, r *http.Request) {
 		observationMu.Lock()
 		defer observationMu.Unlock()
@@ -106,12 +127,13 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 }
 
 type macOSExternalNativeResult struct {
-	Session, Source, Config, Protocol                 string
-	ProcessID                                         int
-	Connected, Closed, NativeJoined, WorkspaceRetired bool
-	Network                                           desktopnetwork.DesktopNetworkReceipt
-	Baseline                                          *desktopMacOSExternalReceipt
-	Proof                                             desktopExternalProof
+	Session, Source, Config, Protocol                                                    string
+	Layer, OuterTag, OuterType, PhysicalNetwork, PhysicalAddress, InnerHost, InnerDetour string
+	ProcessID                                                                            int
+	Connected, Closed, NativeJoined, WorkspaceRetired                                    bool
+	Network                                                                              desktopnetwork.DesktopNetworkReceipt
+	Baseline                                                                             *desktopMacOSExternalReceipt
+	Proof                                                                                desktopExternalProof
 }
 
 func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternalHost) (macOSExternalNativeResult, error) {
@@ -120,6 +142,33 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 		return result, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	if h.policy == nil || h.policy.Validate() != nil {
+		return result, errors.New("native observation lost its sealed policy")
+	}
+	capture, err := h.policy.Capture()
+	if err != nil || len(capture.PhysicalRoots) != 1 {
+		return result, errors.New("native observation lost its one original outer tuple")
+	}
+	root := capture.PhysicalRoots[0]
+	result.Layer, result.OuterTag, result.OuterType = capture.StartLayer, root.Tag, root.Type
+	if capture.StartLayer != "" {
+		if len(root.Destinations) != 1 {
+			return result, errors.New("layer observation lost its one original physical tuple")
+		}
+		destination := root.Destinations[0]
+		result.PhysicalNetwork, result.PhysicalAddress = destination.Network, net.JoinHostPort(destination.Host, strconv.Itoa(destination.Port))
+	}
+	var graph struct {
+		Outbounds []struct{ Tag, Server, Detour string }
+	}
+	if json.Unmarshal([]byte(h.policy.Config()), &graph) != nil {
+		return result, errors.New("native observation lost its original graph")
+	}
+	for _, outbound := range graph.Outbounds {
+		if outbound.Tag == mobilemultihop.ExternalFinalTag {
+			result.InnerHost, result.InnerDetour = outbound.Server, outbound.Detour
+		}
+	}
 	result.Session, result.Source, result.Config, result.Protocol = h.selection.Session, h.selection.Source, h.selection.Config, h.selection.Protocol
 	result.Closed, result.NativeJoined, result.WorkspaceRetired = h.closed, h.nativeRetired, h.workspaceRetired
 	if h.baseline != nil {
@@ -189,16 +238,19 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 }
 
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
+		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening"} {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
 
-func macOSExternalNativeCase(t *testing.T, protocol string) {
+func macOSExternalNativeCase(t *testing.T, scenario string) {
 	t.Helper()
 	fixture := macOSControllerNativeInstall(t)
 	macOSExternalNativeBundle(t)
-	peer := macOSExternalNativePeerStart(t, protocol)
+	peer := macOSExternalNativePeerStart(t, scenario)
+	protocol := peer.protocol
 	macOSExternalNativeTrust(t, peer)
 	macOSExternalNativeInstallProfile(t, peer)
 	fixture.start()
@@ -236,7 +288,21 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 		status, _, err := macOSExternalNativeHTTP(probe, client, http.MethodGet, "/api/status", "")
 		return err == nil && status == http.StatusOK
 	}, "actual external controller did not serve its authenticated original owner")
+	beforeTunnels := macOSExternalNativeTunnels(t)
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/external-profile/connect", `{"profile_id":"installed-macos-external","direct":true,"execution":"local"}`)
+	if peer.fault != "" {
+		macOSExternalNativeLayerRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+		if err := connection.CloseWrite(); err != nil {
+			t.Fatal(err)
+		}
+		receipt := macOSControllerNativeReceipt(t, connection, "joined", started.ProcessID)
+		joined = true
+		if receipt.ExitCode != 0 {
+			t.Fatal("rejected layer controller did not join original cleanup", receipt.ExitCode)
+		}
+		t.Logf("actual sealed Darwin layer refused %s: encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined", scenario)
+		return
+	}
 	var connected struct {
 		OK              bool   `json:"ok"`
 		ProfileID       string `json:"profile_id"`
@@ -253,9 +319,13 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 		live.Baseline == nil || live.Baseline.Phase != "active" || !live.Baseline.Baseline.Present || live.Baseline.Capture.Session != live.Session {
 		t.Fatalf("actual Darwin external ownership/readiness receipt failed: status=%d error=%v response=%s", status, err, raw)
 	}
+	macOSExternalNativeLayerAuthority(t, peer, live)
 	observed := peer.stats(t)
 	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || protocol == "hysteria2" && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && observed.Connections < 1 {
 		t.Fatal("independent peer did not observe the selected native transport, DNS and actual exit proof", observed)
+	}
+	if peer.layer != "" && (observed.Layer == nil || observed.Layer.Authenticated < 1 || observed.Layer.Forwarded < 1 || observed.Layer.Rejected != 0) {
+		t.Fatal("Darwin layer did not decrypt and forward the captured HY2 inner transport", observed)
 	}
 	// The HTTP Connect request has ended. Its original monitor and private
 	// child must remain current, with a live native PF reference and TUN.
@@ -279,6 +349,7 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 	if link, err := net.InterfaceByIndex(int(live.Network.Index)); err == nil && link.Name == live.Network.Name {
 		t.Fatal("actual native utun survived joined Disconnect")
 	}
+	macOSExternalNativeRetiredKernel(t, ctx, retired.Baseline.Token, beforeTunnels)
 	if err := connection.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
@@ -287,5 +358,110 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 	if receipt.ExitCode != 0 {
 		t.Fatal("original installed controller failed joined shutdown", receipt.ExitCode)
 	}
-	t.Logf("actual sealed Darwin ordinary host accepted %s: native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join", protocol)
+	t.Logf("actual sealed Darwin ordinary host accepted %s: native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join", scenario)
+}
+
+func macOSExternalNativeLayerAuthority(t *testing.T, peer *macOSExternalNativePeer, value macOSExternalNativeResult) {
+	t.Helper()
+	if peer.layer == "" {
+		if value.Layer != "" {
+			t.Fatal("ordinary host acquired a layer")
+		}
+		return
+	}
+	kind := "shadowsocks"
+	if peer.layer == common.StartLayerAES256GCMXOR {
+		kind = "routervpn-aes-xor"
+	}
+	if value.Layer != peer.layer || value.OuterTag != "routervpn-exit-start-layer" || value.OuterType != kind ||
+		value.PhysicalNetwork != "udp" || value.PhysicalAddress != peer.address.String() ||
+		value.InnerHost != "10.93.0.1" || value.InnerDetour != value.OuterTag {
+		t.Fatal("Darwin layer promoted the inner transport or lost its captured outer authority", value)
+	}
+	if remote, err := netip.ParseAddrPort(value.PhysicalAddress); err != nil || remote == peer.inner {
+		t.Fatal("Darwin layer used the inner physical socket", err)
+	}
+}
+
+func macOSExternalNativeLayerRefused(t *testing.T, ctx context.Context, client *http.Client, peer *macOSExternalNativePeer, status int, raw []byte, failure error, controllerPID int, beforeTunnels map[int]macOSExternalTunnelIdentity) {
+	t.Helper()
+	if failure != nil || (status != http.StatusConflict && status != http.StatusBadGateway) {
+		t.Fatal("layer negative did not complete the actual native Connect refusal", status, failure, string(raw))
+	}
+	observed := peer.stats(t)
+	layer := observed.Layer
+	if layer == nil || layer.Raw < 1 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || observed.Streams != 0 || observed.Packets != 0 {
+		t.Fatal("layer negative missed encrypted traffic or admitted upper proof", observed)
+	}
+	if peer.fault == "wrong-inner-key" {
+		if layer.Authenticated < 1 || layer.Forwarded < 1 || layer.Rejected != 0 {
+			t.Fatal("inner credential negative failed before authenticated outer transport", observed)
+		}
+	} else if layer.Authenticated != 0 || layer.Forwarded != 0 || layer.Rejected < 1 {
+		t.Fatal("outer authentication negative reached private HY2", observed)
+	}
+	status, raw, failure = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
+	var retired macOSExternalNativeResult
+	if failure != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retired) != nil || !retired.Closed || retired.Connected || !retired.NativeJoined || !retired.WorkspaceRetired ||
+		retired.ProcessID <= 0 || retired.ProcessID == controllerPID || retired.Baseline == nil || retired.Baseline.Capture.Session != retired.Session ||
+		retired.Baseline.Capture.Source != retired.Source || retired.Baseline.Phase != "retired" || retired.Baseline.Baseline.Present {
+		t.Fatal("failed encrypted Connect did not join its exact native child and protective baseline transition", status, failure, string(raw))
+	}
+	macOSExternalNativeLayerAuthority(t, peer, retired)
+	// Failed public Connect calls stopOwnedConnectionRuntime -> stopMode(false),
+	// so On-connect protection must already be retired. Do not repair state by
+	// issuing another Stop or accept a cached held baseline as absence proof.
+	macOSExternalNativeRetiredKernel(t, ctx, retired.Baseline.Token, beforeTunnels)
+}
+
+type macOSExternalTunnelIdentity struct {
+	Name string
+	MTU  int
+}
+
+func macOSExternalNativeTunnels(t *testing.T) map[int]macOSExternalTunnelIdentity {
+	t.Helper()
+	links, err := net.Interfaces()
+	if err != nil {
+		t.Fatal("native utun inventory failed", err)
+	}
+	result := make(map[int]macOSExternalTunnelIdentity)
+	for _, link := range links {
+		if strings.HasPrefix(link.Name, "utun") {
+			result[link.Index] = macOSExternalTunnelIdentity{link.Name, link.MTU}
+		}
+	}
+	return result
+}
+
+// Inspect the exact original kernel reference and native namespace without
+// applying any transition. An error or unknown state is never an absence.
+func macOSExternalNativeRetiredKernel(t *testing.T, parent context.Context, token string, before map[int]macOSExternalTunnelIdentity) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	request, err := mobiletor.EncodeDesktopDarwinPFReferenceRequest(mobiletor.DesktopDarwinPFReferenceRequest{Schema: 1, Token: token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := mobiletor.RunDesktopDarwinPFReference(ctx, request)
+	var reference mobiletor.DesktopDarwinPFReferenceResult
+	if err != nil || decodeRelayControlJSON(raw, &reference) != nil || reference.Schema != 1 || reference.Token != token || reference.Present {
+		t.Fatal("original native PF reference survived joined retirement or became unreadable", err, string(raw))
+	}
+	request, err = mobiletor.EncodeDesktopDarwinPFBaselineRequest(mobiletor.DesktopDarwinPFBaselineRequest{Schema: 1, Action: "clear", Expected: []mobiletor.DesktopDarwinPFBaselineProof{{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = mobiletor.RunDesktopDarwinPFBaseline(ctx, request, false)
+	var baseline mobiletor.DesktopDarwinPFBaselineResult
+	if err != nil || decodeRelayControlJSON(raw, &baseline) != nil || baseline.Schema != 1 || baseline.Applied || baseline.Previous.Present || baseline.Target.Present {
+		t.Fatal("read-only native PF inspection did not prove original namespace absence", err, string(raw))
+	}
+	if _, err := os.Lstat(filepath.Join(macOSOwnedControllerRoot, "run", "kill-switch.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("original On-connect journal survived native retirement", err)
+	}
+	if after := macOSExternalNativeTunnels(t); !maps.Equal(before, after) {
+		t.Fatal("native retirement left a new utun or changed an existing interface", before, after)
+	}
 }

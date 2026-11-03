@@ -111,7 +111,7 @@ BOX_TEMPLATES = {
 PEER_TEMPLATES = {
     'node_darwin_external_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_darwin_external_peer_test.go',
     'node_external_latency_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_latency_peer_test.go',
-    'node_external_hysteria_layer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_hysteria_layer_linux_test.go',
+    'node_external_hysteria_layer_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_hysteria_layer_installed_test.go',
     'node_wg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_wg_peer_test.go',
     'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_awg_peer_test.go',
     'node_linux_peer_test.go.tmpl': 'protocol/routervpnamnezia/node_linux_peer_test.go',
@@ -682,7 +682,9 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
         elif name == 'node_router_peer_linux_test.go.tmpl':
             prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
-        elif name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_hysteria_layer_linux_test.go.tmpl'):
+        elif name == 'node_external_hysteria_layer_installed_test.go.tmpl':
+            prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix
+        elif name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl'):
             prefix = b'//go:build linux && !android\n\n' + prefix
         if path.is_symlink():
             raise ValueError('Desktop encrypted peer test is a symlink: ' + name)

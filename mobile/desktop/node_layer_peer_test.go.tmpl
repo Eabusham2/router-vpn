@@ -1749,7 +1749,7 @@ type desktopExternalInstalledWGPeer struct {
 var desktopExternalInstalledWireGuard func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer
 var desktopExternalInstalledAmnezia func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer
 
-// This optional factory is installed only by the Linux layered reference.
+// This optional factory is installed only by the explicit native layered reference.
 // Other entries cannot acquire a layer merely by appending request fields.
 type desktopExternalInstalledLayerRequest struct {
 	Mode     string `json:"mode"`
@@ -2259,7 +2259,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		t.Fatal("installed external reference lost its exact bounded request", err)
 	}
 	if allowLayer != (request.Layer != nil) || request.Layer != nil &&
-		(latency || request.Protocol != "hysteria2" || desktopExternalInstalledHysteriaLayer == nil) {
+		(request.Protocol != "hysteria2" || desktopExternalInstalledHysteriaLayer == nil) {
 		t.Fatal("installed external reference acquired an unrequested layer")
 	}
 	if request.Layer != nil {
