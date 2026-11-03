@@ -33,7 +33,7 @@ func (p *desktopSOCKSPrivateFixture) Select(ctx context.Context, c DesktopSocket
 	}
 	return p.desktopSocketPolicyFixture.Select(ctx, c, n, r)
 }
-func (p *desktopSOCKSPrivateFixture) privateSOCKSRelayPolicy(c DesktopSocketGrant, r netip.AddrPort, id string) (DesktopSocketPolicy, error) {
+func (p *desktopSOCKSPrivateFixture) socksRelayPolicy(c DesktopSocketGrant, r netip.AddrPort, id string) (DesktopSocketPolicy, error) {
 	if !desktopSocketPrivateSOCKSRelay(c, r) || c.Remote != p.control || !desktopSocketHex(id, 32) || id == c.SocketID {
 		return nil, errors.New("foreign modeled association")
 	}
@@ -432,5 +432,68 @@ func TestDesktopPrivateSOCKSAuthorityMetadataRejectsForeignFields(t *testing.T) 
 				t.Fatal("private control metadata accepted replacement", fault)
 			}
 		})
+	}
+}
+
+func TestDesktopSOCKSOrdinaryPublicRelayStillJoinsItsActualControl(t *testing.T) {
+	_, fixture, listener, _ := desktopSOCKSPrivateFixtureNew(t, "")
+	// Use the ordinary policy without the fixture's private exception factory.
+	// No datagram is sent to the public documentation address.
+	b, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), fixture.desktopSocketPolicyFixture, func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close(context.Background())
+	control := desktopSOCKSPrivateControl(t, b, listener)
+	defer control.Close()
+	for _, address := range []string{"unrequested.example:53", "127.0.0.1:53", "169.254.0.2:53", "0.0.0.0:53", "224.0.0.1:53", "198.51.100.84:0"} {
+		if connection, err := b.DialSOCKSRelay(context.Background(), control, address); err == nil || connection != nil {
+			t.Fatal("generic association admitted an invalid numeric relay", address)
+		}
+	}
+	remote := "198.51.100.84:54084"
+	if connection, err := b.DialPrivateSOCKSRelay(context.Background(), control, remote); err == nil || connection != nil {
+		t.Fatal("private-only compatibility contract accepted a public relay")
+	}
+	relay, err := b.DialSOCKSRelay(context.Background(), control, remote)
+	if err != nil {
+		t.Fatal("ordinary public reply lost its exact owner", err)
+	}
+	defer relay.Close()
+	child := relay.(*desktopConnectedPacket).packet.socket
+	if child.parent != control.(*desktopSocketConn).socket || child.remote.String() != remote || fixture.count() != 2 {
+		t.Fatal("public relay skipped original TCP association ownership")
+	}
+	if connection, err := b.DialSOCKSRelay(context.Background(), control, remote); err == nil || connection != nil {
+		t.Fatal("generic association reused its original control")
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-child.done:
+	default:
+		t.Fatal("actual control close returned before its public relay joined")
+	}
+	if _, err := relay.Write([]byte("must-not-send")); !errors.Is(err, net.ErrClosed) || fixture.count() != 0 {
+		t.Fatal("closed public association retained native authority", err)
+	}
+}
+
+func TestDesktopSOCKSRelayMetadataPreservesIndependentAddressFamilies(t *testing.T) {
+	control := DesktopSocketGrant{Capture: desktopSocketFixtureCapture(), Binding: DesktopSocketBinding{Owner: desktopSocketFixturePolicy().owner, InterfaceName: "owned", InterfaceIndex: 2, LocalAddress: netip.MustParseAddr("10.0.0.2")}, SocketID: strings.Repeat("b", 32), Network: "tcp", Local: netip.MustParseAddrPort("10.0.0.2:40000"), Remote: netip.MustParseAddrPort("198.51.100.1:1080"), Sequence: 1}
+	for _, remote := range []string{"198.51.100.84:54084", "[2001:db8::84]:54084", "10.0.0.9:54084"} {
+		if !desktopSocketSOCKSRelay(control, netip.MustParseAddrPort(remote)) || desktopSocketPrivateSOCKSRelay(control, netip.MustParseAddrPort(remote)) {
+			t.Fatal("generic metadata changed ordinary source admission or derived a private exception", remote)
+		}
+	}
+	control.Remote = netip.MustParseAddrPort("[2001:db8::1]:1080")
+	if desktopSocketSOCKSRelay(control, netip.MustParseAddrPort("198.51.100.84:54084")) {
+		t.Fatal("generic metadata accepted a mismatched actual TCP local/remote family")
+	}
+	control.Local = netip.MustParseAddrPort("[2001:db8::2]:40000")
+	control.Binding.LocalAddress = control.Local.Addr()
+	if !desktopSocketSOCKSRelay(control, netip.MustParseAddrPort("198.51.100.84:54084")) {
+		t.Fatal("IPv6 control could not own an independently selected IPv4 relay")
 	}
 }

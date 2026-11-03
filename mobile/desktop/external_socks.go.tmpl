@@ -241,14 +241,14 @@ func (s *externalSOCKSOperation) DialContext(ctx context.Context, network string
 	// its current interface, then acknowledges only this bound socket tuple.
 	// No dynamic relay is added to ExternalPhysicalOutbound.allowed.
 	var connection net.Conn
-	if network == "udp" && remote.Addr().IsPrivate() && remote.Addr() == s.root.control.Addr {
+	if network == "udp" {
 		// Only this exact per-operation native Client reaches UDP after its
 		// authenticated reply. The broker takes the original TCP object, not
 		// a caller-supplied tuple or permission shared with another operation.
 		s.mu.Lock()
 		control := s.tcp
 		s.mu.Unlock()
-		connection, err = broker.DialPrivateSOCKSRelay(ctx, control, remote.String())
+		connection, err = broker.DialSOCKSRelay(ctx, control, remote.String())
 	} else {
 		connection, err = broker.DialContext(ctx, network, remote.String())
 	}

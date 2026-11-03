@@ -11,7 +11,7 @@ import (
 // Only an in-package native source can derive this per-socket capability. It
 // is never a profile field, context key, shared destination or caller policy.
 type desktopSocketSOCKSOwner interface {
-	privateSOCKSRelayPolicy(DesktopSocketGrant, netip.AddrPort, string) (DesktopSocketPolicy, error)
+	socksRelayPolicy(DesktopSocketGrant, netip.AddrPort, string) (DesktopSocketPolicy, error)
 }
 
 func (s *desktopSocket) policy() DesktopSocketPolicy {
@@ -31,26 +31,45 @@ func desktopSocketSOCKSControlMatches(current, captured DesktopSocketGrant) bool
 	return current == captured
 }
 
-func desktopSocketPrivateSOCKSRelay(control DesktopSocketGrant, remote netip.AddrPort) bool {
+func desktopSocketSOCKSAddress(address netip.Addr) bool {
+	return address.IsValid() && !address.IsUnspecified() && !address.IsMulticast() && !address.IsLoopback() &&
+		!address.IsLinkLocalUnicast() && !address.Is4In6() && address.Zone() == "" && address != netip.MustParseAddr("255.255.255.255")
+}
+
+func desktopSocketSOCKSRelay(control DesktopSocketGrant, remote netip.AddrPort) bool {
 	return control.Capture.valid() && control.Binding.Owner.valid() && control.Network == "tcp" &&
 		desktopSocketHex(control.SocketID, 32) && control.Sequence != 0 && control.Local.IsValid() && control.Local.Port() != 0 &&
 		control.Local.Addr() == control.Binding.LocalAddress && control.Remote.IsValid() && control.Remote.Port() != 0 &&
-		control.Remote.Addr().IsPrivate() && !control.Remote.Addr().Is4In6() && control.Remote.Addr().Zone() == "" &&
-		remote.IsValid() && remote.Port() != 0 && remote.Addr() == control.Remote.Addr() &&
-		control.Local.Addr().Is4() == remote.Addr().Is4()
+		desktopSocketSOCKSAddress(control.Local.Addr()) && desktopSocketSOCKSAddress(control.Remote.Addr()) &&
+		control.Local.Addr().Is4() == control.Remote.Addr().Is4() &&
+		remote.IsValid() && remote.Port() != 0 && desktopSocketSOCKSAddress(remote.Addr())
 }
 
-// DialPrivateSOCKSRelay is called only by the pinned native SOCKS client's
-// per-operation lower dialer after successful authentication and UDP ASSOCIATE.
-// The actual retained TCP object is the authority: a tuple, wrapped connection,
-// copied receipt, sibling source or imported graph cannot stand in for it.
-// Public/different-host relays keep the normal numeric broker path.
+func desktopSocketPrivateSOCKSRelay(control DesktopSocketGrant, remote netip.AddrPort) bool {
+	return desktopSocketSOCKSRelay(control, remote) && control.Remote.Addr().IsPrivate() && remote.Addr() == control.Remote.Addr()
+}
+
+// DialSOCKSRelay is called only by the pinned native SOCKS client's per-operation
+// lower after successful authentication and UDP ASSOCIATE. The retained TCP
+// object owns the one UDP association, including public and cross-family replies.
+// The source independently selects the UDP binding and enforces ordinary
+// destination policy; only a same-selected-private-host exception is derived.
+func (b *DesktopSocketBroker) DialSOCKSRelay(ctx context.Context, control net.Conn, address string) (net.Conn, error) {
+	return b.dialSOCKSRelay(ctx, control, address, false)
+}
+
+// DialPrivateSOCKSRelay retains the narrower private-only contract for callers
+// that explicitly require the selected control's private address.
 func (b *DesktopSocketBroker) DialPrivateSOCKSRelay(ctx context.Context, control net.Conn, address string) (net.Conn, error) {
+	return b.dialSOCKSRelay(ctx, control, address, true)
+}
+
+func (b *DesktopSocketBroker) dialSOCKSRelay(ctx context.Context, control net.Conn, address string, privateOnly bool) (net.Conn, error) {
 	_, remote, err := desktopSocketDestination("udp", address)
 	owned, ok := control.(*desktopSocketConn)
 	if err != nil || !ok || owned == nil || owned.socket == nil || owned.socket.broker != b || owned.socket.network != "tcp" ||
 		ctx == nil || ctx.Err() != nil || !b.Current() || !owned.socket.allowed(owned.socket.remote) {
-		return nil, errors.New("private SOCKS relay has no original live native TCP control")
+		return nil, errors.New("SOCKS relay has no original live native TCP control")
 	}
 	parent := owned.socket
 	parent.mu.Lock()
@@ -60,8 +79,8 @@ func (b *DesktopSocketBroker) DialPrivateSOCKSRelay(ctx context.Context, control
 		return nil, net.ErrClosed
 	}
 	receipt, valid := peer.snapshot()
-	if !valid || !validDesktopSocketReceipt(receipt, receipt.Grant, time.Now()) || !desktopSocketPrivateSOCKSRelay(receipt.Grant, remote) {
-		return nil, errors.New("private SOCKS relay differs from its captured control address")
+	if !valid || !validDesktopSocketReceipt(receipt, receipt.Grant, time.Now()) || !desktopSocketSOCKSRelay(receipt.Grant, remote) || privateOnly && !desktopSocketPrivateSOCKSRelay(receipt.Grant, remote) {
+		return nil, errors.New("SOCKS relay differs from its captured association contract")
 	}
 	parent.mu.Lock()
 	if parent.closing || parent.socksClaimed || parent.ctx.Err() != nil {
@@ -93,7 +112,7 @@ func (s *desktopSocket) attachSOCKSParent(parent *desktopSocket, remote netip.Ad
 		return net.ErrClosed
 	}
 	receipt, valid := peer.snapshot()
-	if !valid || !validDesktopSocketReceipt(receipt, receipt.Grant, time.Now()) || !desktopSocketPrivateSOCKSRelay(receipt.Grant, remote) {
+	if !valid || !validDesktopSocketReceipt(receipt, receipt.Grant, time.Now()) || !desktopSocketSOCKSRelay(receipt.Grant, remote) {
 		parent.mu.Unlock()
 		return net.ErrClosed
 	}
@@ -104,9 +123,9 @@ func (s *desktopSocket) attachSOCKSParent(parent *desktopSocket, remote netip.Ad
 	parent.children[s] = struct{}{}
 	parent.mu.Unlock()
 	if owner, ok := s.broker.policy.(desktopSocketSOCKSOwner); ok {
-		policy, err := owner.privateSOCKSRelayPolicy(receipt.Grant, remote, s.id)
+		policy, err := owner.socksRelayPolicy(receipt.Grant, remote, s.id)
 		if err != nil || policy == nil {
-			return errors.Join(err, errors.New("private SOCKS source omitted its exact association capability"))
+			return errors.Join(err, errors.New("SOCKS source omitted its exact association capability"))
 		}
 		s.scopedPolicy = policy
 	}

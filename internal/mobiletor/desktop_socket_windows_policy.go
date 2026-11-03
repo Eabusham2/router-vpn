@@ -576,10 +576,10 @@ func (p *DesktopWindowsSocketPolicy) grantSocket(ctx context.Context, q DesktopS
 	}
 	return desktopWindowsPolicyCall(p, ctx, false, func() (DesktopSocketReceipt, error) {
 		if control != nil {
-			if q.Network != "udp" || q.SocketID == control.SocketID || q.Binding != control.Binding {
+			if q.Network != "udp" || q.SocketID == control.SocketID || q.Binding.Owner != control.Binding.Owner {
 				return DesktopSocketReceipt{}, net.ErrClosed
 			}
-			if err := p.checkPrivateSOCKSControl(ctx, *control, q.Remote); err != nil {
+			if err := p.checkSOCKSControl(ctx, *control, q.Remote); err != nil {
 				return DesktopSocketReceipt{}, err
 			}
 		}
@@ -647,7 +647,7 @@ func (p *DesktopWindowsSocketPolicy) grantSocket(ctx context.Context, q DesktopS
 			return DesktopSocketReceipt{}, err
 		}
 		if control != nil {
-			if err := p.checkPrivateSOCKSControl(ctx, *control, q.Remote); err != nil {
+			if err := p.checkSOCKSControl(ctx, *control, q.Remote); err != nil {
 				return DesktopSocketReceipt{}, err
 			}
 		}
