@@ -193,7 +193,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
         original = source.read_bytes()
@@ -324,7 +324,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_socks_test.go.tmpl"
         original = source.read_bytes()
@@ -427,7 +427,7 @@ class OrdinaryPacketScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_packet_test.go.tmpl"
         original = source.read_bytes()
@@ -527,6 +527,78 @@ class OrdinaryPacketScope(unittest.TestCase):
         for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"), ("reference", "required encrypted result"),
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
                                ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect")):
+            with self.subTest(fault=fault):
+                previous = self.workspace
+                self.workspace = previous / fault
+                self.workspace.mkdir()
+                try:
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.dispatch(fault)
+                finally:
+                    self.workspace = previous
+
+
+class OrdinaryOpenVPNScope(unittest.TestCase):
+    setUp = OrdinaryHysteria2Scope.setUp
+
+    def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
+        self.assertEqual(GATE.EXTERNAL_OPENVPN_NETWORKS, ("tcp", "udp", "mixed"))
+        self.assertEqual(GATE.EXTERNAL_OPENVPN_LEAVES, ("on-connect", "always", "successor-and-original-restore", "reject/trust", "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused"))
+        for network in ("alias", *GATE.EXTERNAL_OPENVPN_NETWORKS):
+            required = GATE.EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else GATE.EXTERNAL_OPENVPN_CASES[network]
+            complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            with contextlib.redirect_stdout(io.StringIO()):
+                GATE.report_external_openvpn(0, complete, network)
+            bad = [(1, complete)]
+            bad += [(0, complete + value + "\n") for value in ("--- SKIP: hidden (0.1s)", "DATA RACE", "panic: crash", "fatal error: crash", "[build failed]", "--- FAIL: hidden (0.1s)", "FAIL")]
+            for case in required:
+                verdict = "--- PASS: " + case + " (0.01s)\n"
+                bad += [(0, complete.replace(verdict, "")), (0, complete.replace(verdict, "expected: " + verdict)), (0, complete + verdict)]
+            for status, output in bad:
+                with self.subTest(network=network), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(ValueError, "required native result"):
+                        GATE.report_external_openvpn(status, output, network)
+
+    def dispatch(self, fault=None):
+        calls = []
+        def run(command, **kwargs):
+            command = tuple(map(str, command)); calls.append((command, kwargs["timeout"]))
+            if "-c" in command:
+                Path(command[command.index("-o") + 1]).write_bytes(b"captured-openvpn-image")
+                return (1, "compile failed") if fault == "compile" else (0, "")
+            binary = Path(command[0])
+            if binary.parent.name == "external-openvpn":
+                expression = next(value.removeprefix("-test.run=") for value in command if value.startswith("-test.run="))
+                network = "alias" if expression == "^" + GATE.EXTERNAL_OPENVPN_ALIAS + "$" else next(network for network in GATE.EXTERNAL_OPENVPN_NETWORKS if expression.endswith("/^" + network + "$"))
+                required = GATE.EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else GATE.EXTERNAL_OPENVPN_CASES[network]
+                if fault == "image":
+                    binary.write_bytes(b"foreign image")
+                if fault == "leaf":
+                    required = required[:-1]
+                return 0, "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            label = binary.parent.name.removeprefix("external-openvpn-")
+            witness = "ordinary token bypassed actual external WFP UDP deny: independent peer marker" if label == "ordinary-udp-deny" else "actual OpenVPN source skipped its durable WFP intent"
+            self.assertIn("-test.run=^" + GATE.EXTERNAL_OPENVPN_ROOT + "$/^udp$/^always$", command)
+            output = "--- FAIL: " + GATE.EXTERNAL_OPENVPN_ROOT + "/udp/always (0.01s)\n" + witness
+            if fault == "prefix": output = "expected: " + output
+            if fault == "duplicate": output += "\n" + output
+            if fault == "panic": output += "\npanic: deadline"
+            if fault == "witness": output = output.replace(witness, "unrelated failure")
+            if fault == "mutant-image": binary.write_bytes(b"foreign negative image")
+            return (0 if fault == label else 1), output
+        with patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            GATE.execute_external_openvpn(self.source, self.workspace, ["go", "test", "-c", "-mod=readonly", "-race"], {})
+        return calls
+
+    def test_openvpn_builds_are_separate_and_all_native_cases_and_controls_execute(self):
+        calls = self.dispatch()
+        self.assertEqual([timeout for _, timeout in calls], [600, 75, 195, 195, 195, 600, 75, 600, 75])
+        self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
+
+    def test_native_openvpn_rejects_spoofed_controls_changed_images_and_omitted_results(self):
+        for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"),
+                               ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect"), ("mutant-image", "negative executable changed")):
             with self.subTest(fault=fault):
                 previous = self.workspace
                 self.workspace = previous / fault

@@ -52,6 +52,15 @@ EXTERNAL_PACKET_CASES = {
                  (*EXTERNAL_PACKET_LEAVES, *(("reject/parameters",) if protocol != "wireguard" else ()))))
     for protocol in EXTERNAL_PACKET_PROTOCOLS
 }
+EXTERNAL_OPENVPN_ROOT = "TestRouterVPNDesktopExternalWindowsOpenVPNWFP"
+EXTERNAL_OPENVPN_NETWORKS = ("tcp", "udp", "mixed")
+EXTERNAL_OPENVPN_LEAVES = ("on-connect", "always", "successor-and-original-restore", "reject/trust",
+                           "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused")
+EXTERNAL_OPENVPN_CASES = {network: (EXTERNAL_OPENVPN_ROOT, EXTERNAL_OPENVPN_ROOT + "/" + network,
+    *(EXTERNAL_OPENVPN_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_OPENVPN_LEAVES)) for network in EXTERNAL_OPENVPN_NETWORKS}
+EXTERNAL_OPENVPN_ALIAS = "TestRouterVPNDesktopExternalWindowsOpenVPNAlias"
+EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
+    *(EXTERNAL_OPENVPN_ALIAS + "/reject-" + field for field in ("address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin")))
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
@@ -92,6 +101,11 @@ def checked_sources(source):
     if packet.is_symlink() or not packet.is_file() or not packet.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows packet endpoint escaped its explicit native test scope")
     records["external_packet"] = hashlib.sha256(packet.read_bytes()).hexdigest()
+    for name in ("alias", "openvpn"):
+        native = ROOT / ("mobile/desktop/external_box_windows_" + name + "_test.go.tmpl")
+        if native.is_symlink() or not native.is_file() or not native.read_bytes().startswith(TAG):
+            raise ValueError("Ordinary Windows OpenVPN escaped its explicit native test scope")
+        records["external_" + name] = hashlib.sha256(native.read_bytes()).hexdigest()
     records["kernel_runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
 
@@ -330,6 +344,50 @@ def execute_external_packet(source, workspace, build, captured):
         print("Rejected actual ordinary packet native control: " + label, flush=True)
 
 
+def report_external_openvpn(status, output, network):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    required = EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else EXTERNAL_OPENVPN_CASES.get(network, ())
+    if not required or status or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Ordinary Windows OpenVPN omitted its required native result: " + network)
+
+
+def execute_external_openvpn(source, workspace, build, captured):
+    directory = workspace / "external-openvpn"
+    directory.mkdir()
+    selected = external_overlay(source, directory)
+    binary = directory / "external-openvpn.test.exe"
+    status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."], cwd=source, env=captured, timeout=600)
+    if status:
+        raise ValueError("Actual ordinary Windows OpenVPN compilation failed:\n" + output[-32768:])
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    for network in ("alias", *EXTERNAL_OPENVPN_NETWORKS):
+        expression = "^" + EXTERNAL_OPENVPN_ALIAS + "$" if network == "alias" else "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + network + "$"
+        duration = 60 if network == "alias" else 180
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)
+        report_external_openvpn(status, output, network)
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Actual ordinary OpenVPN native executable changed")
+    for label, witness in (
+            ("ordinary-udp-deny", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
+            ("missing-durable-intent", "actual OpenVPN source skipped its durable WFP intent")):
+        changed = workspace / ("external-openvpn-" + label)
+        changed.mkdir()
+        selected = external_overlay(source, changed, label)
+        candidate = changed / "external-openvpn.test.exe"
+        status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", candidate, "."], cwd=source, env=captured, timeout=600)
+        if status:
+            raise ValueError("Actual ordinary OpenVPN control did not compile: " + label + "\n" + output[-16384:])
+        candidate_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        leaf = EXTERNAL_OPENVPN_ROOT + "/udp/always"
+        expression = "/".join("^" + part + "$" for part in leaf.split("/"))
+        status, output = BOOT.IDENTITY.run([candidate, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"], cwd=source, env=captured, timeout=75)
+        if status == 0 or not exact_native_verdict(output, "FAIL", leaf) or witness not in output or socks_native_aborted(output):
+            raise ValueError("Actual ordinary OpenVPN control missed its exact defect: " + label + "\n" + output[-16384:])
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != candidate_digest:
+            raise ValueError("Actual ordinary OpenVPN negative executable changed")
+        print("Rejected actual ordinary OpenVPN native control: " + label, flush=True)
+
+
 def mutants(source):
     factory = "routervpn/desktoppt/node_physical_windows.go"
     lower = "routervpn/desktoppt/node_physical.go"
@@ -438,6 +496,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         execute_external_hysteria2(source, workspace, build, captured)
         execute_external_socks(source, workspace, build, captured)
         execute_external_packet(source, workspace, build, captured)
+        execute_external_openvpn(source, workspace, build, captured)
         for mutation in mutants(source):
             name, relative, test, witness, raw = mutation
             candidate = workspace / name

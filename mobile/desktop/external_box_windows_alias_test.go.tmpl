@@ -1,0 +1,222 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/netip"
+	"testing"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+)
+
+// This address exists only for this native test's independent provider. It is
+// not a production exception to the imported OpenVPN public-remote policy.
+// Native creation, DAD/readback and deletion contracts:
+// https://learn.microsoft.com/windows/win32/api/netioapi/nf-netioapi-createunicastipaddressentry
+// https://learn.microsoft.com/windows/win32/api/netioapi/ns-netioapi-mib_unicastipaddress_row
+var desktopExternalOpenVPNAlias = netip.MustParseAddr("198.18.0.2")
+
+type desktopExternalWindowsAlias struct {
+	original winipcfg.MibUnicastIPAddressRow
+	owned    winipcfg.MibUnicastIPAddressRow
+	closed   bool
+}
+
+func desktopExternalAliasIdentity(a, b *winipcfg.MibUnicastIPAddressRow) bool {
+	return a != nil && b != nil && a.Address.Addr() == b.Address.Addr() &&
+		a.InterfaceLUID == b.InterfaceLUID && a.InterfaceIndex == b.InterfaceIndex &&
+		a.CreationTimeStamp != 0 && a.CreationTimeStamp == b.CreationTimeStamp &&
+		a.PrefixOrigin == b.PrefixOrigin && a.SuffixOrigin == b.SuffixOrigin &&
+		a.OnLinkPrefixLength == b.OnLinkPrefixLength && a.SkipAsSource == b.SkipAsSource
+}
+
+func desktopExternalAliasPhysical(address netip.Addr) (*winipcfg.MibUnicastIPAddressRow, error) {
+	rows, err := winipcfg.GetUnicastIPAddressTable(windows.AF_INET)
+	if err != nil {
+		return nil, err
+	}
+	var original *winipcfg.MibUnicastIPAddressRow
+	for _, row := range rows {
+		if row.Address.Addr() == desktopExternalOpenVPNAlias {
+			return nil, errors.New("OpenVPN test alias already exists; refusing adoption")
+		}
+		if row.Address.Addr() == address {
+			if original != nil || row.SkipAsSource || row.DadState != winipcfg.DadStatePreferred || row.CreationTimeStamp == 0 || row.InterfaceLUID == 0 || row.InterfaceIndex == 0 {
+				return nil, errors.New("OpenVPN carrier address has no unique preferred physical owner")
+			}
+			captured := row
+			original = &captured
+		}
+	}
+	if original == nil {
+		return nil, errors.New("OpenVPN carrier lost captured original IPv4 address")
+	}
+	return original, nil
+}
+
+func (a *desktopExternalWindowsAlias) readback() error {
+	if a == nil || a.closed {
+		return errors.New("OpenVPN alias owner is closed")
+	}
+	original, err := a.original.InterfaceLUID.IPAddress(a.original.Address.Addr())
+	if err != nil || !desktopExternalAliasIdentity(&a.original, original) || original.DadState != winipcfg.DadStatePreferred {
+		return errors.New("OpenVPN alias lost original physical address identity")
+	}
+	luid, err := winipcfg.LUIDFromIndex(a.original.InterfaceIndex)
+	if err != nil || luid != a.original.InterfaceLUID {
+		return errors.New("OpenVPN alias physical interface index was replaced")
+	}
+	owned, err := a.owned.InterfaceLUID.IPAddress(desktopExternalOpenVPNAlias)
+	if err != nil || !desktopExternalAliasIdentity(&a.owned, owned) || !owned.SkipAsSource || owned.OnLinkPrefixLength != 32 {
+		return errors.New("OpenVPN alias creation identity was replaced")
+	}
+	return nil
+}
+
+func (a *desktopExternalWindowsAlias) close() error {
+	if a == nil || a.closed {
+		return nil
+	}
+	if err := a.readback(); err != nil {
+		return err
+	}
+	// Delete receives the exact row whose creation and original interface were
+	// just read back. No address-list replacement or route deletion is allowed.
+	if err := a.owned.Delete(); err != nil {
+		return err
+	}
+	rows, err := winipcfg.GetUnicastIPAddressTable(windows.AF_INET)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.Address.Addr() == desktopExternalOpenVPNAlias {
+			return errors.New("OpenVPN alias remains after exact deletion")
+		}
+	}
+	original, err := a.original.InterfaceLUID.IPAddress(a.original.Address.Addr())
+	if err != nil || !desktopExternalAliasIdentity(&a.original, original) {
+		return errors.New("OpenVPN alias cleanup changed original carrier address")
+	}
+	a.closed = true
+	return nil
+}
+
+func desktopExternalCreateAlias(t *testing.T) *desktopExternalWindowsAlias {
+	t.Helper()
+	if unsafe.Sizeof(winipcfg.MibUnicastIPAddressRow{}) != 80 || unsafe.Offsetof(winipcfg.MibUnicastIPAddressRow{}.CreationTimeStamp) != 72 {
+		t.Fatal("OpenVPN alias has incompatible native IP Helper ABI")
+	}
+	original, err := desktopExternalAliasPhysical(desktopExternalWFPAddress(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := winipcfg.MibUnicastIPAddressRow{}
+	row.Init()
+	row.InterfaceLUID, row.InterfaceIndex = original.InterfaceLUID, original.InterfaceIndex
+	row.PrefixOrigin, row.SuffixOrigin = winipcfg.PrefixOriginManual, winipcfg.SuffixOriginManual
+	row.OnLinkPrefixLength, row.SkipAsSource = 32, true
+	row.ValidLifetime, row.PreferredLifetime = ^uint32(0), ^uint32(0)
+	if err = row.Address.SetAddr(desktopExternalOpenVPNAlias); err != nil {
+		t.Fatal(err)
+	}
+	if err = row.Create(); err != nil {
+		t.Fatal("create exclusively owned OpenVPN test address", err)
+	}
+	a := &desktopExternalWindowsAlias{original: *original, owned: row}
+	// Register joined cleanup as soon as native creation succeeds. If the
+	// creation readback fails, cleanup remains an explicit failure; a row with
+	// no captured creation timestamp can never authorize deleting an address.
+	t.Cleanup(func() {
+		if err := a.close(); err != nil {
+			t.Error("OpenVPN alias exact joined cleanup", err)
+		}
+	})
+	owned, err := row.InterfaceLUID.IPAddress(desktopExternalOpenVPNAlias)
+	if err != nil || owned.CreationTimeStamp == 0 || owned.InterfaceLUID != row.InterfaceLUID || owned.InterfaceIndex != row.InterfaceIndex || owned.Address.Addr() != desktopExternalOpenVPNAlias || !owned.SkipAsSource || owned.OnLinkPrefixLength != 32 || owned.PrefixOrigin != row.PrefixOrigin || owned.SuffixOrigin != row.SuffixOrigin {
+		t.Fatal("created OpenVPN alias has no exact native creation receipt; refusing unknown-address cleanup", err)
+	}
+	a.owned = *owned
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := a.readback(); err != nil {
+			t.Fatal(err)
+		}
+		actual, err := a.owned.InterfaceLUID.IPAddress(desktopExternalOpenVPNAlias)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual.DadState == winipcfg.DadStatePreferred {
+			return a
+		}
+		if actual.DadState != winipcfg.DadStateTentative {
+			t.Fatal("OpenVPN alias failed native duplicate-address detection", actual.DadState)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("OpenVPN alias never became preferred", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestRouterVPNDesktopExternalWindowsOpenVPNAlias(t *testing.T) {
+	a := desktopExternalCreateAlias(t)
+	t.Run("refuse-existing-address", func(t *testing.T) {
+		if _, err := desktopExternalAliasPhysical(a.original.Address.Addr()); err == nil {
+			t.Fatal("existing alias was adopted")
+		}
+	})
+	for _, field := range []string{"address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin"} {
+		t.Run("reject-"+field, func(t *testing.T) {
+			changed := a.owned
+			switch field {
+			case "address":
+				_ = changed.Address.SetAddr(netip.MustParseAddr("198.18.0.3"))
+			case "luid":
+				changed.InterfaceLUID++
+			case "index":
+				changed.InterfaceIndex++
+			case "creation":
+				changed.CreationTimeStamp++
+			case "prefix":
+				changed.OnLinkPrefixLength--
+			case "skip-source":
+				changed.SkipAsSource = false
+			case "prefix-origin":
+				changed.PrefixOrigin++
+			case "suffix-origin":
+				changed.SuffixOrigin++
+			}
+			if desktopExternalAliasIdentity(&a.owned, &changed) {
+				t.Fatal("foreign alias matched original creation")
+			}
+			foreign := *a
+			foreign.owned = changed
+			if err := foreign.close(); err == nil {
+				t.Fatal("foreign alias cleanup reached native deletion")
+			}
+			if err := a.readback(); err != nil {
+				t.Fatal("foreign cleanup changed original owned alias", err)
+			}
+		})
+	}
+	if err := a.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.owned.InterfaceLUID.IPAddress(desktopExternalOpenVPNAlias); !errors.Is(err, windows.ERROR_NOT_FOUND) {
+		t.Fatal(fmt.Errorf("deleted alias readback did not prove absence: %w", err))
+	}
+	if err := a.readback(); err == nil {
+		t.Fatal("retired alias was current")
+	}
+}

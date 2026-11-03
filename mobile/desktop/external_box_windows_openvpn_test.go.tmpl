@@ -1,0 +1,536 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+)
+
+func TestRouterVPNDesktopExternalWindowsOpenVPNPeer(t *testing.T) {
+	raw := os.Getenv("ROUTERVPN_OPENVPN_WFP_PEER")
+	if raw == "" {
+		return
+	}
+	values := strings.Split(raw, ",")
+	if len(values) != 5 {
+		t.Fatal("OpenVPN peer lost captured alias identity")
+	}
+	luid, e1 := strconv.ParseUint(values[0], 10, 64)
+	index, e2 := strconv.ParseUint(values[1], 10, 32)
+	created, e3 := strconv.ParseInt(values[2], 10, 64)
+	original, e4 := netip.ParseAddr(values[3])
+	originalCreated, e5 := strconv.ParseInt(values[4], 10, 64)
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || e5 != nil {
+		t.Fatal("OpenVPN peer malformed alias capture")
+	}
+	alias, err := winipcfg.LUID(luid).IPAddress(desktopExternalOpenVPNAlias)
+	if err != nil || alias.InterfaceIndex != uint32(index) || alias.CreationTimeStamp != created || alias.CreationTimeStamp == 0 || !alias.SkipAsSource || alias.OnLinkPrefixLength != 32 || alias.DadState != winipcfg.DadStatePreferred {
+		t.Fatal("OpenVPN peer alias creation was replaced", err)
+	}
+	carrier, err := winipcfg.LUID(luid).IPAddress(original)
+	if err != nil || carrier.CreationTimeStamp != originalCreated || carrier.SkipAsSource || carrier.DadState != winipcfg.DadStatePreferred || desktopExternalWFPAddress(t) != original {
+		t.Fatal("OpenVPN peer original physical carrier changed", err)
+	}
+	appID, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(appID) == 0 {
+		t.Fatal("OpenVPN peer lost actual executable identity", err)
+	}
+	if err := desktopOpenVPNReferenceServeOwned(desktopExternalOpenVPNAlias.String(), appID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func desktopExternalWFPOpenVPNPeer(t *testing.T, a *desktopExternalWindowsAlias, request desktopOpenVPNCompositionPeerInput) *desktopOpenVPNCompositionProcess {
+	t.Helper()
+	if err := a.readback(); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := filepath.Join(t.TempDir(), "retained-openvpn-provider.test.exe")
+	if err := os.WriteFile(image, raw, 0700); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	capture := strings.Join([]string{strconv.FormatUint(uint64(a.owned.InterfaceLUID), 10), strconv.FormatUint(uint64(a.owned.InterfaceIndex), 10), strconv.FormatInt(a.owned.CreationTimeStamp, 10), a.original.Address.Addr().String(), strconv.FormatInt(a.original.CreationTimeStamp, 10)}, ",")
+	peer := desktopOpenVPNReferenceStart(t, request, desktopExternalOpenVPNAlias.String(), func(ctx context.Context) *exec.Cmd {
+		command := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNDesktopExternalWindowsOpenVPNPeer$", "-test.count=1", "-test.timeout=95s")
+		command.Env = append(os.Environ(), "ROUTERVPN_OPENVPN_WFP_PEER="+capture)
+		return command
+	})
+	own, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(peer.initial.AppID) == 0 || bytes.Equal(own, peer.initial.AppID) || peer.initial.DNS != 0 || peer.initial.PublicRequests != 0 {
+		t.Fatal("OpenVPN provider is not an independent actual captured image", err)
+	}
+	t.Cleanup(func() {
+		actual, err := os.ReadFile(image)
+		if err != nil || sha256.Sum256(actual) != digest {
+			t.Error("OpenVPN provider image changed during captured lifetime", err)
+		}
+	})
+	return peer
+}
+
+func desktopExternalWFPOpenVPNOriginal(t *testing.T, profile nativeopenvpn.Profile, kill string) (*mobilemultihop.ExternalPolicy, string, string) {
+	t.Helper()
+	native, err := nativeopenvpn.CompileProfile(profile, mobilemultihop.ExternalFinalTag, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": map[string]any{"protocol": "openvpn", "expected_public_ip": desktopExternalIntegrationIP, "openvpn": profile}, "dns_mode": "custom", "dns_protocol": "udp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": kill}
+	capture := map[string]any{"schema": 1, "exit_id": selected["id"], "protocol": "openvpn", "expected_public_ip": desktopExternalIntegrationIP, "profile": selected}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "rvpn-ovpn-" + desktopExternalWFPNonce(t)[:16], "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{native}, "outbounds": []any{}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	source, _ := json.Marshal(graph)
+	saved, _ := json.Marshal(capture)
+	original, err := mobilemultihop.NewExternalPolicy(string(source), string(saved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original, string(source), string(saved)
+}
+
+func desktopExternalWFPOpenVPNReceipt(t *testing.T, f *desktopExternalWFPFixture, remotes []nativeopenvpn.Remote) nativeopenvpn.RemoteReceipt {
+	t.Helper()
+	endpoint, ok := f.box.endpoint.Get(mobilemultihop.ExternalFinalTag)
+	native, typed := endpoint.(*OVPN.ClientEndpoint)
+	if !ok || !typed {
+		t.Fatal("OpenVPN lost actual pinned client endpoint")
+	}
+	receipt, err := native.RouterVPNConnectedRemote()
+	var original map[string]any
+	if json.Unmarshal([]byte(f.source), &original) != nil {
+		t.Fatal("OpenVPN original source changed")
+	}
+	compiled := original["endpoints"].([]any)[0].(map[string]any)
+	if err != nil || receipt.Validate() != nil || !receipt.Matches(compiled) || receipt.Remote != remotes[len(remotes)-1] {
+		t.Fatal("OpenVPN current remote lost original import/order/generation", err)
+	}
+	return receipt
+}
+
+func desktopExternalWFPOpenVPNSnapshot(t *testing.T, f *desktopExternalWFPFixture, a *desktopExternalWindowsAlias, remotes []nativeopenvpn.Remote) mobiletor.DesktopWindowsNodeCompositionReadback {
+	t.Helper()
+	if err := a.readback(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || actual.Closed || actual.Target != f.prepared || actual.Owner.Kind != "windows-isolated-token" || len(actual.Grants) == 0 || !actual.Options.RetainBaselineForHandoff || actual.TunnelIndex != uint32(f.tun.index) || actual.TunnelLUID != f.tun.luid || actual.TunnelName != f.tun.options.InterfaceName {
+		t.Fatal("OpenVPN has no actual captured WFP and Wintun receipt", err)
+	}
+	expected := make(map[desktopExternalIntegrationTuple]bool)
+	for _, remote := range remotes {
+		expected[desktopExternalIntegrationTuple{network: remote.Network, remote: netip.AddrPortFrom(netip.MustParseAddr(remote.Host), uint16(remote.Port))}] = true
+	}
+	for _, grant := range actual.Grants {
+		if !expected[desktopExternalIntegrationTuple{network: grant.Network, remote: grant.Remote}] || grant.Local.Addr() != a.original.Address.Addr() || grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || grant.Sequence == 0 {
+			t.Fatal("OpenVPN WFP granted another remote/network or lost physical source")
+		}
+	}
+	return actual
+}
+
+func desktopExternalWFPOpenVPNProve(t *testing.T, f *desktopExternalWFPFixture, p *desktopOpenVPNCompositionProcess, a *desktopExternalWindowsAlias, remotes []nativeopenvpn.Remote) nativeopenvpn.RemoteReceipt {
+	t.Helper()
+	raw, err := f.proof.Run()
+	var result mobilemultihop.ExternalProofResult
+	if err != nil || json.Unmarshal([]byte(raw), &result) != nil {
+		t.Fatal("actual OpenVPN WFP encrypted proof failed", err)
+	}
+	meta := f.policy.Metadata()
+	if result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 || !result.DNSProven || result.EntryProven || result.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("OpenVPN native proof relabeled original source")
+	}
+	stats := p.observe(t, "stats")
+	if stats.DNS == 0 || stats.PublicRequests == 0 || stats.PublicAttempts != stats.PublicRequests || stats.TLS != stats.PublicRequests {
+		t.Fatal("OpenVPN proof omitted actual encrypted selected DNS/TLS", stats)
+	}
+	desktopExternalWFPOpenVPNSnapshot(t, f, a, remotes)
+	if err := f.proof.VerifyCurrentPath(); err != nil {
+		t.Fatal(err)
+	}
+	return desktopExternalWFPOpenVPNReceipt(t, f, remotes)
+}
+
+type desktopExternalWFPOpenVPNTUNCandidate struct {
+	*desktopExternalWFPTUN
+	after func(adapter.StartStage)
+}
+
+func (c *desktopExternalWFPOpenVPNTUNCandidate) Start(stage adapter.StartStage) error {
+	if err := c.desktopExternalWFPTUN.Start(stage); err != nil {
+		return err
+	}
+	if c.after != nil {
+		c.after(stage)
+	}
+	return nil
+}
+func desktopExternalWFPOpenVPNReplace(f *desktopExternalWFPFixture, after func(adapter.StartStage), adopted, restored **desktopExternalWFPOpenVPNTUNCandidate) func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+	return func(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+		reader, ok := expected.(routerVPNDesktopTorTUN)
+		if !ok {
+			return expected, errors.New("OpenVPN MTU replacement lost original native reader")
+		}
+		name, _, oldMTU, err := reader.RouterVPNDesktopMTUInterface()
+		if err != nil {
+			return expected, err
+		}
+		create := func(value int) *desktopExternalWFPOpenVPNTUNCandidate {
+			options := f.tun.options
+			options.InterfaceName = name
+			options.MTU = uint32(value)
+			return &desktopExternalWFPOpenVPNTUNCandidate{desktopExternalWFPTUN: &desktopExternalWFPTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), ctx: f.tun.ctx, options: options, claimed: true, guard: f.proof.engine.physical.current}}
+		}
+		*adopted, *restored = create(mtu), create(oldMTU)
+		(*adopted).after = after
+		return f.box.inbound.RouterVPNReplaceTun(ctx, expected, *adopted, *restored)
+	}
+}
+
+func desktopExternalWFPOpenVPNMeasurements(t *testing.T, f *desktopExternalWFPFixture, p *desktopOpenVPNCompositionProcess, a *desktopExternalWindowsAlias, remotes []nativeopenvpn.Remote, connected nativeopenvpn.RemoteReceipt) {
+	t.Helper()
+	lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.source, f.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	name, index, mtu, err := lease.ClaimDesktopTUN(f.proof.Healthy)
+	if err != nil || name != f.tun.options.InterfaceName || index != f.tun.index || mtu != 1280 {
+		t.Fatal("OpenVPN MTU claim lost actual original Wintun", err)
+	}
+	original, err := lease.Inbound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate, rollback *desktopExternalWFPOpenVPNTUNCandidate
+	current, err := lease.changeMTU(context.Background(), original, 1400, desktopExternalWFPOpenVPNReplace(f, nil, &candidate, &rollback))
+	if err != nil || current != candidate || current == original {
+		t.Fatal("OpenVPN native Wintun MTU replacement failed", err)
+	}
+	f.tun = candidate.desktopExternalWFPTUN
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned, err := lease.changeMTU(ctx, current, 1500, desktopExternalWFPOpenVPNReplace(f, func(stage adapter.StartStage) {
+		if stage == adapter.StartStateStarted {
+			cancel()
+		}
+	}, &candidate, &rollback))
+	if err == nil || returned != rollback || returned == current || returned == candidate {
+		t.Fatal("OpenVPN cancelled Wintun MTU replacement lost original rollback", err)
+	}
+	f.tun = rollback.desktopExternalWFPTUN
+	name, index, mtu, err = lease.ClaimDesktopTUN(f.proof.Healthy)
+	if err != nil || name != f.tun.options.InterfaceName || index != f.tun.index || mtu != 1400 || !lease.Healthy() || !f.network.Current() {
+		t.Fatal("OpenVPN MTU rollback lost actual current Wintun", err)
+	}
+	called := false
+	if _, err := lease.changeMTU(context.Background(), original, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { called = true; return nil, nil }); err == nil || called {
+		t.Fatal("retired OpenVPN Wintun changed its successor")
+	}
+	if err := f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+		t.Fatal("OpenVPN native MTU rollback lost selected DNS", err)
+	}
+	if err := mobilemultihop.ProveExternalPublicIP(context.Background(), f.proof.engine.Dial, mobilemultihop.ExternalFinalTag, desktopExternalIntegrationIP); err != nil {
+		t.Fatal("OpenVPN native MTU rollback lost encrypted public proof", err)
+	}
+	if desktopExternalWFPOpenVPNReceipt(t, f, remotes) != connected || p.observe(t, "stats").PublicRequests != 2 {
+		t.Fatal("OpenVPN MTU rollback changed native provider generation")
+	}
+
+	service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.source, f.capture, f.policy.Metadata().SessionID, f.proof.Healthy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	dns, err := f.box.RouterVPNExternalDNSMeasurement(f.proof, f.source, f.capture, f.policy.Metadata().SessionID, f.proof.Healthy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dns.Close()
+	if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err != nil {
+		t.Fatal(err)
+	}
+	status := desktopExternalLatencyStatus(t, service)
+	if status.Stage != "complete" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil {
+		t.Fatal("OpenVPN native 50-sample benchmark failed", status)
+	}
+	b := status.Results[0].Benchmark
+	stats := p.observe(t, "stats")
+	if b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.TrimmedMean <= 0 || stats.LatencyRequests != 50 || stats.LatencyTLS != 50 || stats.LatencyDNS < 1 || desktopExternalWFPOpenVPNReceipt(t, f, remotes) != connected {
+		t.Fatal("OpenVPN benchmark changed encrypted transport or missed actual TLS samples", b, stats)
+	}
+	if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err == nil {
+		t.Fatal("OpenVPN accepted replayed latency request")
+	}
+	desktopExternalWFPOpenVPNSnapshot(t, f, a, remotes)
+}
+
+func desktopExternalWFPOpenVPNReject(t *testing.T, f *desktopExternalWFPFixture, peer *desktopOpenVPNCompositionProcess, fault string) {
+	t.Helper()
+	type outcome struct {
+		raw string
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() { raw, err := f.proof.Run(); done <- outcome{raw, err} }()
+	if fault == "reject/dns" {
+		select {
+		case result := <-done:
+			if result.err == nil || result.raw != "" {
+				t.Fatal("invalid OpenVPN DNS acquired proof")
+			}
+		case <-time.After(12 * time.Second):
+			f.proof.Cancel()
+			<-done
+			t.Fatal("invalid OpenVPN DNS never produced its actual failure")
+		}
+	} else {
+		value, ok := f.box.endpoint.Get(mobilemultihop.ExternalFinalTag)
+		endpoint, typed := value.(*OVPN.ClientEndpoint)
+		if !ok || !typed {
+			t.Fatal("OpenVPN negative lost native endpoint")
+		}
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		firstSocket := ""
+		observed := false
+		for !observed {
+			changed := endpoint.StatusUpdated()
+			receipt, err := endpoint.RouterVPNConnectedRemote()
+			if !errors.Is(err, nativeopenvpn.ErrRemotePending) || receipt != (nativeopenvpn.RemoteReceipt{}) {
+				t.Fatal("invalid OpenVPN authentication reached connected channel")
+			}
+			status := endpoint.OpenVPNStatus()
+			if fault == "reject/trust" {
+				observed = status.State == adapter.OpenVPNStateError && status.Error != ""
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+				cancel()
+				if err != nil || actual.Target != f.prepared || actual.Closed || len(actual.Grants) > 1 {
+					t.Fatal("OpenVPN control-key rejection lost exact native WFP owner", err)
+				}
+				if len(actual.Grants) == 1 {
+					grant := actual.Grants[0]
+					if grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || grant.Remote.String() != peer.initial.Remote || grant.Network != peer.initial.Network {
+						t.Fatal("OpenVPN retry broadened captured remote")
+					}
+					if firstSocket == "" {
+						firstSocket = grant.SocketID
+					} else if grant.SocketID != firstSocket {
+						if status.State != adapter.OpenVPNStateConnecting || status.Error != "" {
+							t.Fatal("retryable OpenVPN control failure changed native category")
+						}
+						observed = true
+					}
+				}
+			}
+			if observed {
+				break
+			}
+			select {
+			case <-done:
+				t.Fatal("OpenVPN proof stopped before actual authentication rejection")
+			case <-changed:
+			case <-tick.C:
+			case <-deadline.C:
+				f.proof.Cancel()
+				<-done
+				t.Fatal("OpenVPN authentication rejection was not observed")
+			}
+		}
+		f.proof.Cancel()
+		select {
+		case result := <-done:
+			if result.err == nil || result.raw != "" {
+				t.Fatal("invalid OpenVPN authentication acquired proof")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("OpenVPN rejected proof did not join")
+		}
+	}
+	stats := peer.observe(t, "stats")
+	if f.proof.Healthy() || f.network.Current() || stats.PublicRequests != 0 || stats.TLS != 0 || fault != "reject/dns" && stats.DNS != 0 || fault == "reject/dns" && stats.DNS == 0 {
+		t.Fatal("invalid OpenVPN path carried unproved encrypted bytes", stats)
+	}
+}
+
+func TestRouterVPNDesktopExternalWindowsOpenVPNWFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	certificate, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(certificate)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	alias := desktopExternalCreateAlias(t)
+	for _, network := range []string{"tcp", "udp", "mixed"} {
+		t.Run(network, func(t *testing.T) {
+			for _, name := range []string{"on-connect", "always", "successor-and-original-restore", "reject/trust", "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused"} {
+				t.Run(name, func(t *testing.T) {
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					desktopExternalWFPCleanup(t, &retained)
+					carrierNetwork, control := network, "tls-auth"
+					if network != "tcp" {
+						carrierNetwork, control = "udp", "tls-crypt"
+					}
+					pki := desktopOpenVPNCompositionCertificates(t)
+					public, key := desktopExternalWFPCertificate(t, ca.certificate(t, true))
+					fault := ""
+					if name == "reject/dns" {
+						fault = "dns"
+					}
+					if name == "cancelled-proof" {
+						fault = "held-proof"
+					}
+					peer := desktopExternalWFPOpenVPNPeer(t, alias, desktopOpenVPNCompositionPeerInput{Schema: 1, Network: carrierNetwork, Control: control, ControlKey: desktopOpenVPNCompositionControlKey(), CA: pki.ca, Certificate: pki.provider, Key: pki.providerKey, PublicCertificate: string(public), PublicKey: string(key), Fault: fault})
+					clear(key)
+					remote, err := nativeopenvpn.ParseRemote(peer.initial.Remote, carrierNetwork)
+					if err != nil {
+						t.Fatal(err)
+					}
+					remotes := []nativeopenvpn.Remote{remote}
+					if network == "mixed" {
+						first, err := nativeopenvpn.ParseRemote(peer.initial.UnavailableRemote, "tcp")
+						if err != nil {
+							t.Fatal(err)
+						}
+						remotes = append([]nativeopenvpn.Remote{first}, remotes...)
+					}
+					if name == "reject/trust" {
+						pki.ca = desktopOpenVPNCompositionCertificates(t).ca
+					}
+					profileFault := ""
+					if name == "reject/control-key" {
+						profileFault = "wrong-control-key"
+					}
+					profile := desktopOpenVPNCompositionProfile(pki, remotes, control, profileFault)
+					kill := "always"
+					if name == "on-connect" {
+						kill = name
+					}
+					original, source, capture := desktopExternalWFPOpenVPNOriginal(t, profile, kill)
+					if name == "foreign-predecessor" {
+						first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+						first.start(t)
+						desktopExternalWFPOpenVPNProve(t, first, peer, alias, remotes)
+						retained = first.drain(t)
+						foreign := retained
+						foreign.Capture.SourceSHA256 = strings.Repeat("f", 64)
+						next := desktopExternalWFPBox(t, original, source, capture, &foreign, false)
+						if err := next.box.RouterVPNStrategyStart(); err == nil || next.admitted != 0 || next.network.Current() {
+							t.Fatal("OpenVPN adopted foreign predecessor")
+						}
+						return
+					}
+					f := desktopExternalWFPBox(t, original, source, capture, nil, name == "commit-refused")
+					if name == "commit-refused" {
+						if err := f.box.RouterVPNStrategyStart(); err == nil || !strings.Contains(err.Error(), "controlled original journal refuses durable intent") || f.admitted != 0 || f.network.SocketCurrent() {
+							t.Fatal("OpenVPN bypassed original durable barrier", err)
+						}
+						return
+					}
+					f.start(t)
+					if name == "cancelled-proof" {
+						type result struct {
+							raw string
+							err error
+						}
+						done := make(chan result, 1)
+						go func() { raw, err := f.proof.Run(); done <- result{raw, err} }()
+						deadline := time.Now().Add(10 * time.Second)
+						for peer.observe(t, "stats").PublicAttempts == 0 {
+							if !time.Now().Before(deadline) {
+								f.proof.Cancel()
+								peer.observe(t, "release")
+								<-done
+								t.Fatal("OpenVPN cancelled proof never reached captured provider")
+							}
+							time.Sleep(10 * time.Millisecond)
+						}
+						f.proof.Cancel()
+						peer.observe(t, "release")
+						select {
+						case result := <-done:
+							if result.err == nil || result.raw != "" || f.proof.Healthy() || f.network.Current() {
+								t.Fatal("cancelled OpenVPN acquired proof")
+							}
+						case <-time.After(5 * time.Second):
+							t.Fatal("cancelled OpenVPN proof did not join")
+						}
+						stats := peer.observe(t, "stats")
+						if stats.PublicRequests != 1 || stats.TLS != 1 {
+							t.Fatal("cancelled OpenVPN proof silently replayed held request", stats)
+						}
+						retained = f.drain(t)
+						return
+					}
+
+					if strings.HasPrefix(name, "reject/") {
+						desktopExternalWFPOpenVPNReject(t, f, peer, name)
+						retained = f.drain(t)
+						return
+					}
+
+					connected := desktopExternalWFPOpenVPNProve(t, f, peer, alias, remotes)
+					if name == "on-connect" {
+						desktopExternalWFPOpenVPNMeasurements(t, f, peer, alias, remotes, connected)
+					}
+					// An independent provider proves reachability, then verifies this app's
+					// raw UDP is denied while only the captured OpenVPN sockets are granted.
+					oracle := desktopExternalWFPStartReference(t, ca, "")
+					desktopExternalWFPRequireBlocked(t, oracle)
+					retained = f.drain(t)
+					desktopExternalWFPRequireBlocked(t, oracle)
+					if name == "successor-and-original-restore" {
+						for i := 0; i < 2; i++ {
+							previous := retained
+							next := desktopExternalWFPBox(t, original, source, capture, &previous, false)
+							next.start(t)
+							desktopExternalWFPOpenVPNProve(t, next, peer, alias, remotes)
+							if next.original != original || next.source != source || next.capture != capture || next.prepared.Capture.SessionID == previous.Capture.SessionID || !reflect.DeepEqual(next.commit.Previous, &previous) || f.proof.Healthy() || f.network.Current() {
+								t.Fatal("OpenVPN restore changed imported profile or original predecessor")
+							}
+							retained = next.drain(t)
+						}
+					}
+				})
+			}
+		})
+	}
+}

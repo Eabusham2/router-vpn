@@ -41,6 +41,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
 	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -781,6 +782,7 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	dnsRegistry := dns.NewTransportRegistry()
 	DNST.RegisterUDP(dnsRegistry)
 	DNST.RegisterTCP(dnsRegistry)
+	OVPN.RegisterDNSTransport(dnsRegistry)
 	services := boxService.NewRegistry()
 	routervpndesktoppt.RegisterExternalNetworkOwner(services)
 	barrier := func(ctx context.Context, change mobiletor.DesktopWindowsProtectionCommit) error {
@@ -815,6 +817,7 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	endpoints := endpoint.NewRegistry()
 	WG.RegisterEndpoint(endpoints)
 	AWG.RegisterEndpoint(endpoints)
+	OVPN.RegisterEndpoint(endpoints)
 	ctx = Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
 	if err != nil {
@@ -850,11 +853,14 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 			if f.policy.Metadata().Protocol == "socks5" {
 				t.Fatal("actual SOCKS source skipped its durable WFP intent", err)
 			}
+			if f.policy.Metadata().Protocol == "openvpn" {
+				t.Fatal("actual OpenVPN source skipped its durable WFP intent", err)
+			}
 			t.Fatal("actual HY2 source skipped its durable WFP intent", err)
 		}
 		t.Fatal("external actual WFP startup", err)
 	}
-	eager := f.policy.Metadata().Protocol == "wireguard" || f.policy.Metadata().Protocol == "amneziawg"
+	eager := f.policy.Metadata().Protocol == "wireguard" || f.policy.Metadata().Protocol == "amneziawg" || f.policy.Metadata().Protocol == "openvpn"
 	if f.admitted != 1 || f.committed != 1 || f.network.Current() || f.network.SocketCurrent() != eager {
 		t.Fatal("external endpoint changed guarded socket/proof startup phase")
 	}

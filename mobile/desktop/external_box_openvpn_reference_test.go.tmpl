@@ -111,6 +111,7 @@ type desktopOpenVPNCompositionPeerInput struct {
 }
 
 type desktopOpenVPNCompositionPeerReply struct {
+	AppID             []byte `json:"app_id,omitempty"`
 	Schema            int    `json:"schema"`
 	Network           string `json:"network"`
 	Remote            string `json:"remote"`
@@ -241,6 +242,10 @@ func desktopOpenVPNCompositionServeDNS(p *desktopExternalIntegrationPeer) {
 }
 
 func desktopOpenVPNReferenceServe(address string) (failure error) {
+	return desktopOpenVPNReferenceServeOwned(address, nil)
+}
+
+func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure error) {
 	reader := json.NewDecoder(io.LimitReader(os.Stdin, 512<<10))
 	reader.DisallowUnknownFields()
 	var request desktopOpenVPNCompositionPeerInput
@@ -334,7 +339,7 @@ func desktopOpenVPNReferenceServe(address string) (failure error) {
 		return errors.New("actual OpenVPN provider could not bind")
 	}
 	reply := func() desktopOpenVPNCompositionPeerReply {
-		return desktopOpenVPNCompositionPeerReply{Schema: 1, Network: request.Network,
+		return desktopOpenVPNCompositionPeerReply{Schema: 1, Network: request.Network, AppID: appID,
 			Remote: net.JoinHostPort(address, strconv.Itoa(port)), UnavailableRemote: net.JoinHostPort(address, strconv.Itoa(unavailable)),
 			DNS: peer.dnsQueries.Load(), PublicAttempts: peer.publicAttempts.Load(), PublicRequests: peer.publicRequests.Load(), TLS: peer.tlsHandshakes.Load(),
 			LatencyDNS: peer.latency.queries.Load(), LatencyRequests: peer.latency.requests.Load(), LatencyTLS: peer.latency.handshakes.Load()}
@@ -413,7 +418,7 @@ func (p *desktopOpenVPNCompositionProcess) read(t *testing.T) desktopOpenVPNComp
 	remote, e1 := netip.ParseAddrPort(reply.Remote)
 	unavailable, e2 := netip.ParseAddrPort(reply.UnavailableRemote)
 	if e1 != nil || e2 != nil || remote.Addr().String() != p.address || unavailable.Addr() != remote.Addr() || remote.Port() == 0 || unavailable.Port() == 0 || unavailable == remote ||
-		p.initial.Schema != 0 && (reply.Network != p.initial.Network || reply.Remote != p.initial.Remote || reply.UnavailableRemote != p.initial.UnavailableRemote) {
+		p.initial.Schema != 0 && (reply.Network != p.initial.Network || reply.Remote != p.initial.Remote || reply.UnavailableRemote != p.initial.UnavailableRemote || !reflect.DeepEqual(reply.AppID, p.initial.AppID)) {
 		t.Fatal("owned OpenVPN provider changed captured transport")
 	}
 	return reply
