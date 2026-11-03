@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import importlib.util
 import io
+import json
 import re
 import tempfile
 from types import SimpleNamespace
@@ -227,6 +228,78 @@ class NodeProcessRunner(unittest.TestCase):
             else:
                 self.assertIn("-test.timeout=60s", command)
                 self.assertEqual(timeout, 75)
+
+    def test_required_execution_suites_cover_the_complete_gate_once(self):
+        changes = GATE.mutants()
+        partitions = [GATE.suite_controls(suite, changes) for suite in GATE.EXECUTION_SUITES]
+        self.assertEqual(tuple(item for part in partitions for item in part), changes)
+        self.assertEqual(len({item[1] for part in partitions for item in part}), len(changes))
+        self.assertEqual([len(part) for part in partitions], [0, 23, 23, 0])
+        self.assertEqual(GATE.suite_controls("complete", changes), changes)
+        with self.assertRaisesRegex(ValueError, "Unknown native Node process execution suite"):
+            GATE.suite_controls("ownership-controls-3", changes)
+
+        workflow = (ROOT / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
+        node = workflow.split("  node-process:\n", 1)[1].split("  ui-state:\n", 1)[0]
+        selected = re.search(r"suite: \[([^\]]+)\]", node).group(1).split(", ")
+        self.assertEqual(tuple(selected), GATE.EXECUTION_SUITES)
+        self.assertIn("fail-fast: false", node)
+        self.assertNotIn("continue-on-error", node)
+        self.assertIn("windows-node-process-${{ github.ref }}-${{ matrix.suite }}", node)
+        self.assertIn("test_windows_node_process.py --suite '${{ matrix.suite }}'", node)
+        self.assertIn("timeout-minutes: 20", node)
+
+    def test_each_execution_suite_runs_and_reports_only_its_required_cases(self):
+        changes = GATE.mutants()
+        controls = {name: (test, witness) for _, name, test, witness, _ in (*changes, *GATE.all_mutants())}
+        all_executions = []
+        native = SimpleNamespace(shell32=SimpleNamespace(IsUserAnAdmin=lambda: True))
+        for suite in GATE.EXECUTION_SUITES:
+            executions = []
+            def run(command, *, cwd, env, timeout):
+                if "-o" in command:
+                    self.assertEqual(timeout, 240)
+                    Path(command[command.index("-o") + 1]).write_bytes(b"retained compiled fixture")
+                    return 0, ""
+                name = Path(command[0]).name.removesuffix(".test.exe")
+                executions.append(name)
+                if name == "node-process":
+                    self.assertEqual(timeout, 375)
+                    self.assertIn("-test.timeout=360s", command)
+                    selection = next(value.removeprefix("-test.run=") for value in map(str, command) if value.startswith("-test.run="))
+                    return 0, "\n".join("--- PASS: " + case + " (0.01s)" for case in GATE.EXPECTED
+                                         if re.fullmatch(selection, case.split("/", 1)[0]))
+                if name == "node-all":
+                    self.assertEqual(timeout, 255)
+                    self.assertIn("-test.timeout=240s", command)
+                    return 0, "\n".join("--- PASS: " + case + " (0.01s)" for case in GATE.ALL_EXPECTED)
+                self.assertEqual(timeout, 75)
+                self.assertIn("-test.timeout=60s", command)
+                test, witness = controls[name]
+                return 1, "--- FAIL: " + test + " (0.01s)\n    source_test.go:1: " + witness + "\n"
+            with self.subTest(suite=suite), \
+                 patch.object(GATE.platform, "system", return_value="Windows"), \
+                 patch.object(GATE.ctypes, "windll", native, create=True), \
+                 patch.object(GATE.NATIVE, "selected_compiler", return_value=("go", {}, "amd64")), \
+                 patch.object(GATE.NATIVE, "run", side_effect=run), \
+                 patch.object(GATE, "report_baseline", wraps=GATE.check_baseline), \
+                 patch("sys.stdout", new_callable=io.StringIO) as output:
+                GATE.execute(suite=suite)
+                receipt = json.loads(output.getvalue().splitlines()[-1])
+                selected = GATE.suite_controls(suite, changes)
+                self.assertEqual(receipt["execution_suite"], suite)
+                self.assertEqual(receipt["negative_control_names"], [item[1] for item in selected])
+                self.assertEqual(receipt["negative_controls"], len(selected))
+                self.assertEqual(receipt["native_process_cases"], len(GATE.NATIVE_TESTS) if suite == "baseline" else 0)
+                self.assertEqual(receipt["shared_ownership_cases"], len(GATE.SHARED_TESTS) if suite == "baseline" else 0)
+                self.assertEqual(receipt["prospective_all_controls"], len(GATE.all_mutants()) if suite == "prospective-all" else 0)
+                self.assertEqual(receipt["actual_child_fixture_sha256"] is not None, suite == "baseline")
+                self.assertEqual(receipt["prospective_all_capability_sha256"] is not None, suite == "prospective-all")
+                self.assertEqual(len(receipt["source_sha256"]), 64)
+            all_executions.extend(executions)
+        self.assertEqual(all_executions.count("node-process"), len(GATE.baseline_groups()))
+        self.assertEqual(all_executions.count("node-all"), 1)
+        self.assertEqual(sorted(name for name in all_executions if name not in ("node-process", "node-all")), sorted(controls))
 
     def test_serial_groups_cover_every_original_root_and_leaf_once(self):
         groups = GATE.baseline_groups()

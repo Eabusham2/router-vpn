@@ -651,13 +651,29 @@ def mutants():
     )
 
 
-def execute(go="go", *, env=None):
+EXECUTION_SUITES = ("baseline", "ownership-controls-1", "ownership-controls-2", "prospective-all")
+
+
+def suite_controls(suite, changes):
+    if suite not in ("complete", *EXECUTION_SUITES):
+        raise ValueError("Unknown native Node process execution suite: " + suite)
+    if suite == "complete":
+        return changes
+    if suite.startswith("ownership-controls-"):
+        midpoint = (len(changes) + 1) // 2
+        return changes[:midpoint] if suite.endswith("-1") else changes[midpoint:]
+    return ()
+
+
+def execute(go="go", *, env=None, suite="complete"):
     if platform.system() != "Windows":
         raise ValueError("Native Node process proof requires actual Windows execution")
     if not ctypes.windll.shell32.IsUserAnAdmin():
         raise ValueError("Native Node process proof requires its actual elevated primary host")
     before = sources()
-    changes = mutants()
+    changes = suite_controls(suite, mutants())
+    run_baseline = suite in ("complete", "baseline")
+    run_all = suite in ("complete", "prospective-all")
     compiler, captured, architecture = NATIVE.selected_compiler(
         go, ROOT, dict(os.environ if env is None else env))
     race = ["-race"] if architecture == "amd64" else []
@@ -666,12 +682,14 @@ def execute(go="go", *, env=None):
     package = "./cmd/client"
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-node-process-") as directory:
         workspace = Path(directory)
-        binary = workspace / "node-process.test.exe"
-        status, output = NATIVE.run([*build, "-o", binary, package], cwd=ROOT, env=captured, timeout=240)
-        if status:
-            raise ValueError("Actual Windows Node process fixture did not compile:\n" + output[-32768:])
-        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        execute_baseline(binary, captured, digest)
+        digest = None
+        if run_baseline:
+            binary = workspace / "node-process.test.exe"
+            status, output = NATIVE.run([*build, "-o", binary, package], cwd=ROOT, env=captured, timeout=240)
+            if status:
+                raise ValueError("Actual Windows Node process fixture did not compile:\n" + output[-32768:])
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            execute_baseline(binary, captured, digest)
         for filename, name, test, witness, replacement in changes:
             changed = workspace / (name + ".go")
             changed.write_text(replacement, encoding="utf-8")
@@ -693,15 +711,20 @@ def execute(go="go", *, env=None):
                 raise ValueError("Native Node process mutant changed during execution: " + name)
             print("Node process negative control rejected: " + name, flush=True)
             candidate.unlink()
-        all_capability_digest = execute_all_composition(build, captured, workspace)
+        all_capability_digest = execute_all_composition(build, captured, workspace) if run_all else None
         if sources() != before:
             raise ValueError("Native Node process source changed during the gate")
-        print(json.dumps({"schema": 1, "host": "windows/" + architecture,
-                          "native_process_cases": len(NATIVE_TESTS), "shared_ownership_cases": len(SHARED_TESTS),
-                          "command_rejection_cases": len(ARGUMENT_CASES), "negative_controls": len(changes),
-                          "public_connection_mode_layer_cases": len(PUBLIC_MODES) * len(PUBLIC_LAYERS),
+        print(json.dumps({"schema": 2, "host": "windows/" + architecture, "execution_suite": suite,
+                          "required_execution_suites": EXECUTION_SUITES,
+                          "native_process_cases": len(NATIVE_TESTS) if run_baseline else 0,
+                          "shared_ownership_cases": len(SHARED_TESTS) if run_baseline else 0,
+                          "command_rejection_cases": len(ARGUMENT_CASES) if run_baseline else 0,
+                          "negative_controls": len(changes),
+                          "negative_control_names": [item[1] for item in changes],
+                          "public_connection_mode_layer_cases": len(PUBLIC_MODES) * len(PUBLIC_LAYERS) if run_baseline else 0,
                           "actual_child_fixture_sha256": digest, "source_files": len(before),
-                          "prospective_all_markers": len(ALL_EXPECTED), "prospective_all_controls": len(all_mutants()),
+                          "prospective_all_markers": len(ALL_EXPECTED) if run_all else 0,
+                          "prospective_all_controls": len(all_mutants()) if run_all else 0,
                           "prospective_all_capability_sha256": all_capability_digest,
                           "prospective_all_scope": "controller composition only; shipping MAX admission and actual WFP/PQ remain separate",
                           "source_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
@@ -712,4 +735,6 @@ def execute(go="go", *, env=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--go", default="go")
-    execute(parser.parse_args().go)
+    parser.add_argument("--suite", choices=("complete", *EXECUTION_SUITES), default="complete")
+    args = parser.parse_args()
+    execute(args.go, suite=args.suite)
