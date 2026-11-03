@@ -13,7 +13,7 @@ import (
 )
 
 func linuxRunningNativeSource(t *testing.T, baseline *DesktopLinuxNodeBaseline, network string,
-	remote netip.AddrPort) (*DesktopLinuxSocketPolicy, DesktopLinuxNodeRunningSelection, DesktopLinuxProtectionRecord) {
+	remote netip.AddrPort, additional ...DesktopLinuxSocketInterface) (*DesktopLinuxSocketPolicy, DesktopLinuxNodeRunningSelection, DesktopLinuxProtectionRecord) {
 	t.Helper()
 	physical, err := net.InterfaceByName("rvpn-test")
 	if err != nil {
@@ -27,6 +27,7 @@ func linuxRunningNativeSource(t *testing.T, baseline *DesktopLinuxNodeBaseline, 
 		Interfaces:          []DesktopLinuxSocketInterface{{Name: physical.Name, Index: uint32(physical.Index), Address: address}},
 		PrivateDestinations: []DesktopLinuxSocketDestination{{Network: network[:3], Address: remote}},
 	}
+	options.Interfaces = append(options.Interfaces, additional...)
 	source, err := NewDesktopLinuxNodeSocketPolicy(context.Background(), baseline.nft.Capture, options)
 	if source != nil {
 		t.Cleanup(func() {
@@ -66,8 +67,12 @@ func linuxRunningPeerTraffic(t *testing.T, connection net.Conn) {
 }
 
 func TestDesktopLinuxGuardianKernelNodeRunning(t *testing.T) {
-	for _, scenario := range []string{"tcp4", "udp4", "tcp6", "udp6", "wrong-destination", "wrong-interface", "wrong-record", "foreign-counter", "cancelled", "retired"} {
+	for _, scenario := range []string{"tcp4", "udp4", "tcp6", "udp6", "wrong-destination", "wrong-interface", "wrong-record", "foreign-counter", "cancelled", "retired", "socks-association"} {
 		t.Run(scenario, func(t *testing.T) {
+			if scenario == "socks-association" {
+				linuxRunningNativeSOCKS(t)
+				return
+			}
 			network := "udp4"
 			if scenario == "tcp4" || scenario == "udp4" || scenario == "tcp6" || scenario == "udp6" {
 				network = scenario
@@ -157,6 +162,58 @@ func TestDesktopLinuxGuardianKernelNodeRunning(t *testing.T) {
 			}
 			if err := baseline.Release(ctx); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func linuxRunningNativeSOCKS(t *testing.T) {
+	t.Helper()
+	desktopLinuxSOCKSCarrier(t)
+	for _, scenario := range []struct{ name, relay string }{{"private-ipv4", "udp4"}, {"public-cross-family", "udp6-public"}} {
+		t.Run(scenario.name, func(t *testing.T) {
+			remote := desktopLinuxSOCKSKernelPeer(t, "tcp4")
+			relay := desktopLinuxSOCKSKernelPeer(t, scenario.relay)
+			baseline := linuxNodeBaselineFixture(t, false)
+			physical, err := net.InterfaceByName("rvpn-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var additional []DesktopLinuxSocketInterface
+			if relay.Addr().Is6() {
+				additional = append(additional, DesktopLinuxSocketInterface{Name: physical.Name, Index: uint32(physical.Index), Address: netip.MustParseAddr("fd50::1")})
+			}
+			source, selection, original := linuxRunningNativeSource(t, baseline, "tcp4", remote, additional...)
+			selection.SOCKSControls = append([]DesktopLinuxSocketDestination(nil), selection.Destinations...)
+			broker := desktopLinuxKernelBroker(t, source)
+			control, _ := desktopLinuxSOCKSControl(t, broker, remote)
+			defer control.Close()
+			connection, err := broker.DialSOCKSRelay(context.Background(), control, relay.String())
+			if err != nil {
+				t.Fatal("retained native baseline could not derive its original SOCKS relay", err)
+			}
+			defer connection.Close()
+			desktopLinuxSOCKSExchange(t, connection)
+			if err := baseline.ObserveRunning(context.Background(), original, selection); err != nil {
+				t.Fatal("retained host rejected its actual selected control and negotiated UDP inventory", err)
+			}
+			unselected := selection
+			unselected.SOCKSControls = nil
+			if baseline.ObserveRunning(context.Background(), original, unselected) == nil {
+				t.Fatal("dynamic native relay became an unmarked static host exception")
+			}
+			if err := baseline.ObserveRunning(context.Background(), original, selection); err != nil {
+				t.Fatal("refused comparison mutated its original native owner", err)
+			}
+			desktopLinuxSOCKSExchange(t, connection)
+			if err := control.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := connection.Write([]byte("retired")); err == nil {
+				t.Fatal("retained host control close returned with a usable UDP child")
+			}
+			if err := baseline.ObserveRunning(context.Background(), original, selection); err != nil {
+				t.Fatal("joined association did not restore the unchanged empty live inventory", err)
 			}
 		})
 	}

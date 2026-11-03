@@ -280,13 +280,16 @@ def main():
     if flattened != GUARDIAN.KERNEL_CASES or len(flattened) != len(set(flattened)):
         raise AssertionError('Bounded native groups omit or repeat a required kernel boundary')
     for prefix, cases in (('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
-                          ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES)):
+                          ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES),
+                          ('TestDesktopLinuxRunningSOCKS', GUARDIAN.RUNNING_SOCKS_PARSER_CASES),
+                          ('TestDesktopLinuxGuardianKernelNodeRunning/', GUARDIAN.RUNNING_CASES)):
         lines = ['--- PASS: '+prefix+case+' (0.01s)' for case in cases]
         valid = '\n'.join(lines)
         GUARDIAN.require_socks_verdicts(valid, prefix, cases)
         defects = [valid+'\n'+lines[0], valid+'\n--- SKIP: other (0.01s)',
                    valid+'\n--- FAIL: other (0.01s)', valid+'\nFAIL', valid+'\npanic: lost result']
         defects.extend('\n'.join(lines[:index]+lines[index+1:]) for index in range(len(lines)))
+        defects.extend(valid.replace(line, 'expected: '+line) for line in lines)
         for output in defects:
             try:
                 GUARDIAN.require_socks_verdicts(output, prefix, cases)

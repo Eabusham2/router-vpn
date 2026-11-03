@@ -43,8 +43,10 @@ SOCKS_PARSER_CASES = ('DestinationKeepsExactPrivateException', 'PublicRelayRetai
                       'NativeTCPStateRejectsClosedControl', 'KernelExpiryRequiresExactControl',
                       'ChildTimeoutCannotOutliveControl', 'ControlRetirementRequiresJoinedChild')
 RUNNING_CASES = ('tcp4', 'udp4', 'tcp6', 'udp6', 'wrong-destination', 'wrong-interface',
-                 'wrong-record', 'foreign-counter', 'cancelled', 'retired')
+                 'wrong-record', 'foreign-counter', 'cancelled', 'retired',
+                 'socks-association', 'socks-association/private-ipv4', 'socks-association/public-cross-family')
 RUNNING_PARSER_CASES = ('PreservesClosedInventory', 'RejectsUncapturedElements', 'SelectionAndCapacity')
+RUNNING_SOCKS_PARSER_CASES = ('ChecksOriginalControlWithoutChangingInventory', 'RejectsUnownedAndExpiredAssociations')
 ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
 BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagrams',
                   'GenerationRejectsMissingOrAmbiguousIdentity', 'EndpointRequiresRetainedOwner',
@@ -409,13 +411,14 @@ def execute(source: Path, go='go', *, env=None):
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o022 or info.st_size == 0:
             raise ValueError('Linux guardian compiler did not produce its owned executable')
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestDesktopLinuxRunningPolicy|TestDesktopLinuxSOCKS)', '-test.count=1',
+        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestDesktopLinuxRunning|TestDesktopLinuxSOCKS)', '-test.count=1',
                                    '-test.timeout=20s', '-test.v'], cwd=source)
         if any('--- PASS: TestLinuxBaseline' + name + ' (' not in baseline_output for name in BASELINE_CASES) or '--- SKIP:' in baseline_output:
             raise ValueError('Linux baseline receipt gate omitted an owned transaction boundary')
         if any('--- PASS: TestDesktopLinuxRunningPolicy' + name + ' (' not in baseline_output for name in RUNNING_PARSER_CASES):
             raise ValueError('Linux running inventory gate omitted its complete native JSON contract')
         require_socks_verdicts(baseline_output, 'TestDesktopLinuxSOCKS', SOCKS_PARSER_CASES)
+        require_socks_verdicts(baseline_output, 'TestDesktopLinuxRunningSOCKS', RUNNING_SOCKS_PARSER_CASES)
         print(baseline_output, end='' if baseline_output.endswith('\n') else '\n')
         outputs = []
         for group, _ in KERNEL_GROUPS:
@@ -431,9 +434,7 @@ def execute(source: Path, go='go', *, env=None):
         for network in ('tcp4', 'udp4', 'tcp6', 'udp6'):
             if '--- PASS: TestDesktopLinuxGuardianKernelTCPAndUDP/' + network + ' (' not in output:
                 raise ValueError('Linux guardian omitted a real physical transport/address family')
-        for case in RUNNING_CASES:
-            if '--- PASS: TestDesktopLinuxGuardianKernelNodeRunning/' + case + ' (' not in output:
-                raise ValueError('Linux guardian omitted its original live-policy boundary: ' + case)
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeRunning/', RUNNING_CASES)
         for case in ('uncommitted-originals', 'committed-original-and-live-candidate', 'foreign-candidate',
                      'unacknowledged-absence', 'replaced-original-table', 'cancelled-and-closed-native-owner'):
             if '--- PASS: TestDesktopLinuxGuardianKernelNodeRetiredSuccession/' + case + ' (' not in output:

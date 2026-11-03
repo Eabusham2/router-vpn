@@ -208,3 +208,150 @@ func TestDesktopLinuxRunningPolicySelectionAndCapacity(t *testing.T) {
 		})
 	}
 }
+
+func linuxRunningSOCKSFixture(t *testing.T, family string, private bool) (*desktopLinuxNFT, []map[string]any, DesktopLinuxNodeRunningSelection) {
+	t.Helper()
+	n, rows, selection := linuxRunningFixture(t)
+	parent := linuxRunningFirst(rows)
+	parent["comment"] = fmt.Sprintf("%032x:3", 1)
+	control := netip.MustParseAddrPort("198.18.0.2:8443")
+	if private {
+		control = netip.MustParseAddrPort("10.0.0.2:8443")
+		parent["val"].(map[string]any)["concat"].([]any)[3] = control.Addr().String()
+		selection.Destinations[0].Address = control
+	}
+	selection.SOCKSControls = []DesktopLinuxSocketDestination{{Network: "tcp", Address: control}}
+	child := linuxRunningSet(rows, family)["elem"].([]any)[0].(map[string]any)["elem"].(map[string]any)
+	child["comment"] = fmt.Sprintf("%032x:5:socks:%032x:2", 22, 1)
+	child["timeout"], child["expires"] = float64(4), float64(3)
+	tuple := child["val"].(map[string]any)["concat"].([]any)
+	tuple[3], tuple[4] = "198.51.100.84", float64(54084)
+	if family == "udp6" {
+		tuple[3] = "2001:db8::84"
+	} else if private {
+		tuple[3] = control.Addr().String()
+	}
+	return n, rows, selection
+}
+
+func linuxRunningSOCKSChild(rows []map[string]any, family string) map[string]any {
+	return linuxRunningSet(rows, family)["elem"].([]any)[0].(map[string]any)["elem"].(map[string]any)
+}
+
+func TestDesktopLinuxRunningSOCKSChecksOriginalControlWithoutChangingInventory(t *testing.T) {
+	for _, scenario := range []string{"different-public", "cross-family-public", "same-private", "other-private-home-lan", "other-private-selected-static", "child-before-control", "renewed-parent"} {
+		t.Run(scenario, func(t *testing.T) {
+			family := "udp4"
+			if scenario == "cross-family-public" {
+				family = "udp6"
+			}
+			private := strings.Contains(scenario, "private")
+			n, rows, selection := linuxRunningSOCKSFixture(t, family, private)
+			child := linuxRunningSOCKSChild(rows, family)
+			if scenario == "other-private-home-lan" || scenario == "other-private-selected-static" {
+				child["val"].(map[string]any)["concat"].([]any)[3] = "10.0.0.3"
+				if scenario == "other-private-selected-static" {
+					selection.Destinations = append(selection.Destinations, DesktopLinuxSocketDestination{Network: "udp", Address: netip.MustParseAddrPort("10.0.0.3:54084")})
+				}
+			}
+			if scenario == "child-before-control" {
+				first, second := -1, -1
+				for i, row := range rows {
+					if set, ok := row["set"].(map[string]any); ok {
+						if set["name"] == n.Prefix+"_tcp4" {
+							first = i
+						}
+						if set["name"] == n.Prefix+"_udp4" {
+							second = i
+						}
+					}
+				}
+				rows[first], rows[second] = rows[second], rows[first]
+			}
+			if scenario == "renewed-parent" {
+				linuxRunningFirst(rows)["comment"] = fmt.Sprintf("%032x:99", 1)
+			}
+			original := desktopLinuxProtectionCopyRows(t, rows)
+			if err := desktopLinuxRunningRowsWithLAN(n, rows, selection, scenario == "other-private-home-lan"); err != nil {
+				t.Fatal("owned dynamic relay lost original exact native comparison", err)
+			}
+			if !reflect.DeepEqual(rows, original) {
+				t.Fatal("association observation mutated actual kernel inventory")
+			}
+			if desktopLinuxProtectionRows(n, rows, true) == nil {
+				t.Fatal("active association became proof of closed protection")
+			}
+		})
+	}
+}
+
+func TestDesktopLinuxRunningSOCKSRejectsUnownedAndExpiredAssociations(t *testing.T) {
+	for _, fault := range []string{"unmarked", "marker-kind", "marker-extra", "child-zero", "parent-zero", "future-parent", "parent-self", "parent-absent", "parent-not-selected", "parent-duplicate", "child-duplicate", "two-children", "wrong-control-tuple", "other-private", "link-local", "loopback", "wrong-source", "expires-after-parent", "expired", "timeout-zero", "timeout-fraction", "timeout-long", "wrong-protocol", "control-not-static", "duplicate-control"} {
+		t.Run(fault, func(t *testing.T) {
+			n, rows, selection := linuxRunningSOCKSFixture(t, "udp4", true)
+			child := linuxRunningSOCKSChild(rows, "udp4")
+			parent := linuxRunningFirst(rows)
+			tuple := child["val"].(map[string]any)["concat"].([]any)
+			switch fault {
+			case "unmarked":
+				child["comment"] = fmt.Sprintf("%032x:5", 22)
+				child["timeout"] = float64(9)
+			case "marker-kind":
+				child["comment"] = fmt.Sprintf("%032x:5:other:%032x:2", 22, 1)
+			case "marker-extra":
+				child["comment"] = child["comment"].(string) + ":extra"
+			case "child-zero":
+				child["comment"] = fmt.Sprintf("%032x:0:socks:%032x:2", 22, 1)
+			case "parent-zero":
+				child["comment"] = fmt.Sprintf("%032x:5:socks:%032x:0", 22, 1)
+			case "future-parent":
+				child["comment"] = fmt.Sprintf("%032x:5:socks:%032x:4", 22, 1)
+			case "parent-self":
+				child["comment"] = fmt.Sprintf("%032x:5:socks:%032x:2", 22, 22)
+			case "parent-absent":
+				delete(linuxRunningSet(rows, "tcp4"), "elem")
+			case "parent-not-selected":
+				selection.SOCKSControls = nil
+			case "parent-duplicate":
+				set := linuxRunningSet(rows, "tcp4")
+				set["elem"] = append(set["elem"].([]any), set["elem"].([]any)[0])
+			case "child-duplicate":
+				set := linuxRunningSet(rows, "udp4")
+				set["elem"] = append(set["elem"].([]any), set["elem"].([]any)[0])
+			case "two-children":
+				second := linuxRunningSOCKSChild(rows, "udp6")
+				second["comment"] = fmt.Sprintf("%032x:1:socks:%032x:2", 23, 1)
+				second["timeout"], second["expires"] = float64(4), float64(3)
+			case "wrong-control-tuple":
+				parent["val"].(map[string]any)["concat"].([]any)[4] = float64(1080)
+			case "other-private":
+				tuple[3] = "10.0.0.3"
+			case "link-local":
+				tuple[3] = "169.254.1.2"
+			case "loopback":
+				tuple[3] = "127.0.0.1"
+			case "wrong-source":
+				tuple[1] = "198.18.0.9"
+			case "expires-after-parent":
+				parent["expires"] = float64(2)
+			case "expired":
+				child["expires"] = float64(0)
+			case "timeout-zero":
+				child["timeout"] = float64(0)
+			case "timeout-fraction":
+				child["timeout"] = float64(4.5)
+			case "timeout-long":
+				child["timeout"] = float64(10)
+			case "wrong-protocol":
+				parent["comment"] = child["comment"]
+			case "control-not-static":
+				selection.Destinations = selection.Destinations[1:]
+			case "duplicate-control":
+				selection.SOCKSControls = append(selection.SOCKSControls, selection.SOCKSControls[0])
+			}
+			if desktopLinuxRunningRows(n, rows, selection) == nil {
+				t.Fatal("unowned dynamic relay became a running proof", fault)
+			}
+		})
+	}
+}

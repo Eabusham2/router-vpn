@@ -33,9 +33,19 @@ func captureDesktopLinuxNodeRunningPath(policy *mobilemultihop.DesktopNodePolicy
 func captureDesktopLinuxRunningPath(roots []mobilemultihop.ExternalDesktopPhysicalRoot, ipv6 string) (mobiletor.DesktopLinuxNodeRunningSelection, error) {
 	var selected mobiletor.DesktopLinuxNodeRunningSelection
 	seen := make(map[mobiletor.DesktopLinuxSocketDestination]bool)
+	controls := make(map[mobiletor.DesktopLinuxSocketDestination]bool)
 	for _, root := range roots {
 		if root.DynamicSOCKSUDP {
-			return selected, errors.New("Linux running path has no captured dynamic relay owner")
+			networks := make(map[string]bool)
+			for _, network := range root.Networks {
+				networks[network] = true
+			}
+			if root.Type != "socks" || root.SOCKSVersion != "5" || root.SOCKSControl == nil || root.SOCKSControl.Network != "tcp" ||
+				len(root.Destinations) != 1 || root.Destinations[0] != *root.SOCKSControl || len(root.Networks) != 2 || len(networks) != 2 || !networks["tcp"] || !networks["udp"] {
+				return selected, errors.New("Linux running path lost its exact captured SOCKS5 control")
+			}
+		} else if root.SOCKSControl != nil || root.SOCKSVersion != "" {
+			return selected, errors.New("Linux running path has an unowned SOCKS control annotation")
 		}
 		for _, destination := range root.Destinations {
 			ip, err := netip.ParseAddr(destination.Host)
@@ -48,6 +58,13 @@ func captureDesktopLinuxRunningPath(roots []mobilemultihop.ExternalDesktopPhysic
 			if !seen[value] {
 				seen[value] = true
 				selected.Destinations = append(selected.Destinations, value)
+			}
+			if root.DynamicSOCKSUDP {
+				if ip.IsLinkLocalUnicast() || ip == netip.MustParseAddr("255.255.255.255") || controls[value] {
+					return selected, errors.New("Linux running path repeated or changed its selected SOCKS control")
+				}
+				controls[value] = true
+				selected.SOCKSControls = append(selected.SOCKSControls, value)
 			}
 		}
 	}

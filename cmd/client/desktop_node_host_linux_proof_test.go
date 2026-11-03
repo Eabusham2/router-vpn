@@ -181,3 +181,64 @@ func TestDesktopLinuxNodeRunningCaptureExcludesInnerTargets(t *testing.T) {
 		t.Fatal("returned comparison mutated the sealed original graph", err)
 	}
 }
+
+func TestDesktopLinuxSOCKSRunningCaptureKeepsOnlySealedControl(t *testing.T) {
+	profile, launch := desktopRetainedSOCKSFixture(t, "always")
+	if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil {
+		t.Fatal(err)
+	}
+	capture, err := launch.external.physical.Capture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := captureDesktopLinuxRunningPath(capture.PhysicalRoots, capture.IPv6Mode)
+	control := netip.AddrPortFrom(netip.MustParseAddr(profile.External.SOCKS5.Host), uint16(profile.External.SOCKS5.Port))
+	if err != nil || len(selected.Interfaces) == 0 || len(selected.Destinations) != 1 || len(selected.SOCKSControls) != 1 ||
+		selected.SOCKSControls[0] != selected.Destinations[0] || selected.SOCKSControls[0].Network != "tcp" || selected.SOCKSControls[0].Address != control {
+		t.Fatal("retained Linux SOCKS selection lost its sealed TCP association origin", err)
+	}
+	selected.SOCKSControls[0].Address = netip.MustParseAddrPort("10.77.0.1:8787")
+	unchanged, err := captureDesktopLinuxRunningPath(capture.PhysicalRoots, capture.IPv6Mode)
+	if err != nil || unchanged.SOCKSControls[0].Address != control || unchanged.Destinations[0].Address != control {
+		t.Fatal("returned running comparison changed sealed SOCKS authority", err)
+	}
+	for _, fault := range []string{"version", "missing-control", "control-protocol", "control-port", "extra-udp-destination", "missing-udp-network", "duplicate-network", "removed-marker", "wrong-root", "link-local", "duplicate-root"} {
+		t.Run(fault, func(t *testing.T) {
+			root := capture.PhysicalRoots[0]
+			original := *root.SOCKSControl
+			root.SOCKSControl = &original
+			root.Destinations = append([]mobilemultihop.PhysicalEgress(nil), root.Destinations...)
+			root.Networks = append([]string(nil), root.Networks...)
+			switch fault {
+			case "version":
+				root.SOCKSVersion = "4"
+			case "missing-control":
+				root.SOCKSControl = nil
+			case "control-protocol":
+				root.SOCKSControl.Network = "udp"
+			case "control-port":
+				root.SOCKSControl.Port++
+			case "extra-udp-destination":
+				root.Destinations = append(root.Destinations, mobilemultihop.PhysicalEgress{Network: "udp", Host: profile.DNSHost, Port: profile.DNSPort})
+			case "missing-udp-network":
+				root.Networks = []string{"tcp"}
+			case "duplicate-network":
+				root.Networks = []string{"tcp", "tcp"}
+			case "removed-marker":
+				root.DynamicSOCKSUDP = false
+			case "wrong-root":
+				root.Type = "direct"
+			case "link-local":
+				root.SOCKSControl.Host = "169.254.1.2"
+				root.Destinations[0] = *root.SOCKSControl
+			}
+			roots := []mobilemultihop.ExternalDesktopPhysicalRoot{root}
+			if fault == "duplicate-root" {
+				roots = append(roots, root)
+			}
+			if _, err := captureDesktopLinuxRunningPath(roots, capture.IPv6Mode); err == nil {
+				t.Fatal("retained host accepted a changed sealed association origin", fault)
+			}
+		})
+	}
+}
