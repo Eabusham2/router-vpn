@@ -32,11 +32,22 @@ class NodeProcessRunner(unittest.TestCase):
                      "TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost"):
             self.assertIn(root, GATE.SHARED_TESTS)
         for policy in ("on-connect", "always"):
-            for protocol in ("shadowsocks", "http-connect", "https-connect"):
+            for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"):
                 self.assertIn("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol,
                               GATE.EXPECTED)
         self.assertIn("cmd/client/desktop_external_owned_test.go", GATE.REQUIRED_SOURCES)
         self.assertEqual(len(GATE.EXPECTED), len(set(GATE.EXPECTED)))
+
+    def test_packet_identity_and_both_restoration_directions_are_mandatory(self):
+        parent = "TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant"
+        self.assertIn(parent, GATE.SHARED_TESTS)
+        for protocol in ("wireguard", "amneziawg-fast", "amneziawg-strong"):
+            for fault in ("private-key", "peer-key", "preshared-key", "resolver"):
+                self.assertIn(parent + "/" + protocol + "/" + fault, GATE.EXPECTED)
+            if protocol != "wireguard":
+                self.assertIn(parent + "/" + protocol + "/parameters", GATE.EXPECTED)
+            for direction in ("router-" + protocol + "-router", protocol + "-router-" + protocol):
+                self.assertIn("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction, GATE.EXPECTED)
 
     def test_complete_source_closure_includes_actual_adapter_and_embedded_command(self):
         records = GATE.sources()

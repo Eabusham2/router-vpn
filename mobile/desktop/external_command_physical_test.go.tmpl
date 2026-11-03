@@ -268,11 +268,11 @@ func TestRouterVPNDesktopExternalPhysicalCommandHysteria2SupportedTargets(t *tes
 	desktopExternalPhysicalTransportCommand(t, "hysteria2", "")
 }
 
-func TestRouterVPNDesktopExternalPhysicalWireGuardCommandIsLinuxOnly(t *testing.T) {
+func TestRouterVPNDesktopExternalPhysicalCommandWireGuardSupportedTargets(t *testing.T) {
 	desktopExternalPhysicalTransportCommand(t, "wireguard", "")
 }
 
-func TestRouterVPNDesktopExternalPhysicalAmneziaCommandIsLinuxOnly(t *testing.T) {
+func TestRouterVPNDesktopExternalPhysicalCommandAmneziaSupportedTargets(t *testing.T) {
 	for _, variant := range []string{"fast", "strong"} {
 		t.Run(variant, func(t *testing.T) {
 			desktopExternalPhysicalTransportCommand(t, "amneziawg", variant)
@@ -357,10 +357,10 @@ func desktopExternalPhysicalTransportCommand(t *testing.T, protocol, variant str
 		t.Fatal(err)
 	}
 	target := "linux"
-	if (protocol == "hysteria2" || protocol == "socks5") && runtime.GOOS == "windows" {
+	if (protocol == "hysteria2" || protocol == "socks5" || protocol == "wireguard" || protocol == "amneziawg") && runtime.GOOS == "windows" {
 		target = "windows"
 	}
-	supported := runtime.GOOS == "linux" || (protocol == "hysteria2" || protocol == "socks5") && runtime.GOOS == "windows"
+	supported := runtime.GOOS == "linux" || (protocol == "hysteria2" || protocol == "socks5" || protocol == "wireguard" || protocol == "amneziawg") && runtime.GOOS == "windows"
 	physical, err := mobilemultihop.NewDesktopExternalPolicy(original, desktopExternalSession, target)
 	if err != nil {
 		t.Fatal(err)

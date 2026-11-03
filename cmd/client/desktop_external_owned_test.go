@@ -104,8 +104,16 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 		k.locked = true
 		return &desktopWindowsExternalRelease{f: f, target: target, barrier: barrier}, nil
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5"} {
-		profile, _ := desktopExternalNativeFixture(t, protocol)
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
+		actual := protocol
+		if strings.HasPrefix(protocol, "amneziawg-") {
+			actual = "amneziawg"
+		}
+		profile, _ := desktopExternalNativeFixture(t, actual)
+		if protocol == "amneziawg-fast" {
+			parameters := profile.External.AmneziaWG.Parameters
+			parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+		}
 		profile.ID = "external-" + protocol
 		profile.Name = protocol
 		profile.KillSwitch, profile.KillSwitchPolicy = true, policy
@@ -487,7 +495,7 @@ func (f *desktopWindowsExternalFixture) connect(t *testing.T, protocol string) *
 
 func TestDesktopWindowsExternalPublicConnectAndDisconnect(t *testing.T) {
 	for _, policy := range []string{"on-connect", "always"} {
-		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5"} {
+		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
 			t.Run(policy+"/"+protocol, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					f := newDesktopWindowsExternalFixture(t, policy)
@@ -708,8 +716,12 @@ func TestDesktopWindowsExternalStagesBeforeStoppingPrevious(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalPolicyFamiliesStayDistinct(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5"} {
-		l := desktopExternalPhysicalLaunchFixture(t, protocol, "always", "off", false)
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
+		actual, variant := protocol, ""
+		if strings.HasPrefix(protocol, "amneziawg-") {
+			actual, variant = "amneziawg", strings.TrimPrefix(protocol, "amneziawg-")
+		}
+		l := desktopExternalPhysicalLaunchVariant(t, actual, "always", "off", false, variant)
 		if err := prepareDesktopExternalPhysical(l, "windows"); err != nil {
 			t.Fatal(err)
 		}
@@ -860,7 +872,7 @@ func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer finish()
-				for _, change := range []string{"server", "compare", "start-layer", "entry", "wireguard"} {
+				for _, change := range []string{"server", "compare", "start-layer", "entry", "openvpn"} {
 					profile := cloneRouterProfile(f.profiles[protocol])
 					direct := true
 					entry := common.RouterProfile{}
@@ -874,8 +886,8 @@ func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
 						profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
 					case "entry":
 						direct, entry = false, f.base.profile
-					case "wireguard":
-						profile, _ = desktopExternalNativeFixture(t, "wireguard")
+					case "openvpn":
+						profile, _ = desktopExternalNativeFixture(t, "openvpn")
 						profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
 					}
 					exit, err := standardExitFromExternalProfile(profile)
@@ -1014,7 +1026,7 @@ func TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
-	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5"} {
+	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong"} {
 		t.Run(direction, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDesktopWindowsExternalFixture(t, "always")
@@ -1026,7 +1038,12 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				if strings.Contains(direction, "socks5") {
 					protocol = "socks5"
 				}
-				routerFirst := direction == "router-external-router" || direction == "router-hysteria2-router" || direction == "router-socks5-router"
+				for _, packet := range []string{"wireguard", "amneziawg-fast", "amneziawg-strong"} {
+					if strings.Contains(direction, packet) {
+						protocol = packet
+					}
+				}
+				routerFirst := strings.HasPrefix(direction, "router-")
 				var original *desktopNodeLaunch
 				if routerFirst {
 					response := httptest.NewRecorder()
@@ -1111,7 +1128,7 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 					}
 				} else {
 					if restored.launch.ownedNode != nil || restored.launch.external == nil || restored.launch.external.windowsHost != original.external.windowsHost ||
-						!bytes.Equal(source, restored.launch.external.source) || restored.launch.external.selection != "local" || restored.launch.external.windows.policy.Metadata().Protocol != protocol {
+						!bytes.Equal(source, restored.launch.external.source) || restored.launch.external.selection != "local" || restored.launch.external.windows.policy.Metadata().Protocol != f.profiles[protocol].External.Protocol {
 						t.Fatal("ordinary restoration acquired Router proof identity or reselected its host/source/winner")
 					}
 					if mtu, err := captureDesktopMTURestore(restored.launch); err != nil || mtu != 1360 {
@@ -1129,3 +1146,78 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 
 var _ desktopExternalRetainedRuntime = (*desktopWindowsExternalRuntime)(nil)
 var _ desktopNodeJournalAdmission = (*desktopWindowsExternalChild)(nil)
+
+func TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant(t *testing.T) {
+	for _, protocol := range []string{"wireguard", "amneziawg-fast", "amneziawg-strong"} {
+		t.Run(protocol, func(t *testing.T) {
+			faults := []string{"private-key", "peer-key", "preshared-key", "resolver"}
+			if protocol != "wireguard" {
+				faults = append(faults, "parameters")
+			}
+			for _, fault := range faults {
+				t.Run(fault, func(t *testing.T) {
+					synctest.Test(t, func(t *testing.T) {
+						f := newDesktopWindowsExternalFixture(t, "always")
+						launch := f.connect(t, protocol)
+						original := cloneRouterProfile(f.profiles[protocol])
+						if err := validateDesktopWindowsExternalSource(original, launch); err != nil || !reflect.DeepEqual(original.External, launch.external.profile.External) {
+							t.Fatal("public packet connection changed its original keys or variant", err)
+						}
+						measurement, err := capturedDesktopMeasurementRuntime(launch)
+						meta := launch.external.physical.Metadata()
+						if err != nil || measurement.source != meta.SourceSHA256 || measurement.config != meta.ConfigSHA256 || measurement.node != original.ID {
+							t.Fatal("packet measurement lost its captured derived owner", err)
+						}
+						observed := sessionTrackerFor(f.base.a).capture()
+						lookups := 0
+						lookup := func(context.Context, string) ([]string, error) {
+							lookups++
+							return nil, errors.New("unexpected ambient resolver")
+						}
+						if proof := proveSelectedDNSWithLookup(context.Background(), f.base.a, observed, launch.mode, lookup); proof.Status != "passed" || lookups != 0 {
+							t.Fatal("packet DNS did not consume its original proven source", proof)
+						}
+						changed := cloneRouterProfile(original)
+						if fault == "resolver" {
+							changed.DNSMode, changed.DNSProtocol, changed.DNSHost, changed.DNSPort = "custom", "tcp", "198.51.100.53", 5353
+						} else if protocol == "wireguard" {
+							switch fault {
+							case "private-key":
+								changed.External.WireGuard.PrivateKey = testWGKey('p')
+							case "peer-key":
+								changed.External.WireGuard.PeerPublicKey = testWGKey('z')
+							case "preshared-key":
+								changed.External.WireGuard.PresharedKey = testWGKey('r')
+							}
+						} else {
+							switch fault {
+							case "private-key":
+								changed.External.AmneziaWG.PrivateKey = testWGKey('p')
+							case "peer-key":
+								changed.External.AmneziaWG.PeerPublicKey = testWGKey('z')
+							case "preshared-key":
+								changed.External.AmneziaWG.PresharedKey = testWGKey('r')
+							case "parameters":
+								changed.External.AmneziaWG.Parameters["s4"] = "16"
+							}
+						}
+						if desktopOwnedNodeProfileToken(changed) == desktopOwnedNodeProfileToken(original) {
+							t.Fatal("packet negative did not change its effective captured source", fault)
+						}
+						candidate := observed
+						candidate.Profile = changed
+						if validateDesktopWindowsExternalSource(changed, launch) == nil {
+							t.Fatal("packet source substitution adopted original runtime", fault)
+						}
+						if proof := proveSelectedDNSWithLookup(context.Background(), f.base.a, candidate, launch.mode, lookup); proof.Status == "passed" || lookups != 0 {
+							t.Fatal("packet DNS reused foreign private identity", fault, proof)
+						}
+						if launch.external.windows.current(true) != nil || f.base.a.nodeProtection.active.external != launch.external.physical || !reflect.DeepEqual(f.profiles[protocol].External, original.External) {
+							t.Fatal("rejected packet source changed current protection or saved credentials")
+						}
+					})
+				})
+			}
+		})
+	}
+}

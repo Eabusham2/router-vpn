@@ -104,7 +104,7 @@ func TestDesktopExternalPhysicalAdmissionPreservesOtherGraphs(t *testing.T) {
 				if err := prepareDesktopExternalPhysical(launch, target); err != nil {
 					t.Fatal(protocol, target, kill, err)
 				}
-				eligible := target == "windows" && kill != "off" && (protocol == "http-connect" || protocol == "https-connect" || protocol == "shadowsocks" || protocol == "hysteria2" || protocol == "socks5")
+				eligible := target == "windows" && kill != "off" && (protocol == "http-connect" || protocol == "https-connect" || protocol == "shadowsocks" || protocol == "hysteria2" || protocol == "socks5" || protocol == "wireguard" || protocol == "amneziawg")
 				if (launch.external.physical != nil) != eligible {
 					t.Fatal("unsupported graph was admitted or an eligible graph silently fell back", protocol, target, kill)
 				}
@@ -139,22 +139,22 @@ func TestDesktopExternalPhysicalAdmissionPreservesOtherGraphs(t *testing.T) {
 }
 
 func TestDesktopExternalPhysicalLinuxHysteria2PreservesCapturedPolicy(t *testing.T) {
-	desktopExternalPhysicalLinuxUDPPolicy(t, "hysteria2", "")
+	desktopExternalPhysicalUDPPolicy(t, "hysteria2", "", "linux")
 }
 
 func TestDesktopExternalPhysicalLinuxWireGuardPreservesCapturedPolicy(t *testing.T) {
-	desktopExternalPhysicalLinuxUDPPolicy(t, "wireguard", "")
+	desktopExternalPhysicalUDPPolicy(t, "wireguard", "", "linux")
 }
 
 func TestDesktopExternalPhysicalLinuxAmneziaPreservesCapturedPolicy(t *testing.T) {
 	for _, variant := range []string{"fast", "strong"} {
 		t.Run(variant, func(t *testing.T) {
-			desktopExternalPhysicalLinuxUDPPolicy(t, "amneziawg", variant)
+			desktopExternalPhysicalUDPPolicy(t, "amneziawg", variant, "linux")
 		})
 	}
 }
 
-func desktopExternalPhysicalLinuxUDPPolicy(t *testing.T, protocol, variant string) {
+func desktopExternalPhysicalUDPPolicy(t *testing.T, protocol, variant, target string) {
 	t.Helper()
 	for _, kill := range []string{"on-connect", "always"} {
 		for _, ipv6 := range []string{"on", "off"} {
@@ -163,20 +163,20 @@ func desktopExternalPhysicalLinuxUDPPolicy(t *testing.T, protocol, variant strin
 					launch := desktopExternalPhysicalLaunchVariant(t, protocol, kill, ipv6, lan, variant)
 					owner := launch.external
 					source, capture, expected := bytes.Clone(owner.source), bytes.Clone(owner.capture), owner.expected
-					if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil || owner.physical == nil {
-						t.Fatal("captured Linux UDP transport lost its physical owner", protocol, err)
+					if err := prepareDesktopExternalPhysicalCaptured(launch, target); err != nil || owner.physical == nil {
+						t.Fatal("captured UDP transport lost its physical owner", protocol, err)
 					}
 					metadata, err := capturedDesktopExternalPhysical(owner)
-					if err != nil || metadata == nil || metadata.TargetOS != "linux" || metadata.Protocol != protocol ||
+					if err != nil || metadata == nil || metadata.TargetOS != target || metadata.Protocol != protocol ||
 						metadata.KillSwitchPolicy != kill || metadata.IPv6Mode != ipv6 || metadata.HomeLANAccess != lan || metadata.SOCKSUDPAssociationRequired ||
 						!bytes.Equal(source, owner.source) || !bytes.Equal(capture, owner.capture) || expected != owner.expected {
-						t.Fatal("Linux UDP transport changed its original policy or proof identity", metadata, err)
+						t.Fatal("captured UDP transport changed its original policy or proof identity", metadata, err)
 					}
 					physical, err := owner.physical.Capture()
 					if err != nil || physical.ConfiguredMTU != 1360 || len(physical.PhysicalRoots) != 1 ||
 						len(physical.PhysicalRoots[0].Destinations) != 1 || physical.PhysicalRoots[0].Destinations[0].Network != "udp" ||
 						physical.SelectedDNS.Physical {
-						t.Fatal("Linux UDP transport replaced MTU, selected DNS or its captured UDP endpoint", protocol, err)
+						t.Fatal("captured UDP transport replaced MTU, selected DNS or its captured UDP endpoint", protocol, err)
 					}
 					if protocol == "amneziawg" {
 						var graph struct{ Endpoints []json.RawMessage }
@@ -193,11 +193,11 @@ func desktopExternalPhysicalLinuxUDPPolicy(t *testing.T, protocol, variant strin
 					}
 					measurement, err := capturedDesktopMeasurementRuntime(launch)
 					if err != nil || measurement.source != metadata.SourceSHA256 || measurement.config != metadata.ConfigSHA256 || measurement.node != expected.ExitID {
-						t.Fatal("Linux UDP measurements borrowed original proof identity", protocol, err)
+						t.Fatal("captured UDP measurements borrowed original proof identity", protocol, err)
 					}
 					selected, _, _, err := desktopDNSExpectedEndpoints(launch)
 					if err != nil || selected.Address != owner.profile.DNSHost || selected.Port != owner.profile.DNSPort || selected.Transport != owner.profile.DNSProtocol {
-						t.Fatal("Linux UDP transport replaced the captured resolver", protocol, selected, err)
+						t.Fatal("captured UDP transport replaced the captured resolver", protocol, selected, err)
 					}
 				})
 			}
@@ -372,5 +372,19 @@ func TestDesktopExternalPhysicalRetirementRevokesMailboxCapture(t *testing.T) {
 	}
 	if _, err := capturedDesktopDNSRuntime(launch); err == nil {
 		t.Fatal("retired derived DNS mailbox retained admission")
+	}
+}
+
+func TestDesktopExternalPhysicalWindowsPacketEndpointsPreserveCapturedPolicy(t *testing.T) {
+	for _, protocol := range []string{"wireguard", "amneziawg"} {
+		variants := []string{""}
+		if protocol == "amneziawg" {
+			variants = []string{"fast", "strong"}
+		}
+		for _, variant := range variants {
+			t.Run(protocol+"/"+variant, func(t *testing.T) {
+				desktopExternalPhysicalUDPPolicy(t, protocol, variant, "windows")
+			})
+		}
 	}
 }

@@ -83,6 +83,15 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             # verdicts at this explicit process boundary.
             names.update(EXTERNAL.HYSTERIA2_BOX_CASES)
             names.update(EXTERNAL.HYSTERIA2_FACTORY_CASES)
+            names.update(EXTERNAL.SOCKS_BOX_CASES)
+            names.update(EXTERNAL.SOCKS_FACTORY_CASES)
+            names.update(EXTERNAL.PACKET_BOX_CASES)
+            names.update(EXTERNAL.STREAM_BOX_CASES)
+            names.update(EXTERNAL.PACKET_FACTORY_CASES)
+            names.update(EXTERNAL.PACKET_COMMANDS)
+            names.update("TestRouterVPNDesktopExternalPhysicalIntegration/latency50/" + leaf for leaf in EXTERNAL.LATENCY_BOUNDARIES)
+            parent = "TestRouterVPNDesktopExternalPhysicalIntegration"
+            names.update(parent + "/" + leaf for leaf in ("delayed-accept-retains-prior-grant", "network-reset-during-mtu", "network-reset-after-native-publication", "network-reset-during-real-proof"))
 
             def run(command, **kwargs):
                 calls.append(tuple(str(value) for value in command))
@@ -95,7 +104,9 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
                     binary.write_bytes(b"explicit native compiler model")
                     return 0, ""
                 selection = next(str(value).removeprefix("-test.run=") for value in command if str(value).startswith("-test.run="))
-                output = "".join("--- PASS: " + name + " (0.01s)\n" for name in sorted(names) if re.search(selection, name))
+                def selected(name):
+                    return all(re.search(pattern, part) for pattern, part in zip(selection.split("/"), name.split("/")))
+                output = "".join("--- PASS: " + name + " (0.01s)\n" for name in sorted(names) if selected(name))
                 return 0, output
 
             actual_report = EXTERNAL.report_baseline
@@ -115,13 +126,13 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 EXTERNAL.execute(core)
             self.assertEqual(sources.call_count, 2)
-            self.assertEqual(set(observed), {"command", "box", "factory"})
+            self.assertTrue({"command", "box", "factory"}.issubset(observed))
             self.assertTrue(set(EXTERNAL.JOURNAL_COMMAND_CASES).issubset(observed["command"]))
             self.assertTrue(set(EXTERNAL.JOURNAL_FACTORY_CASES).issubset(observed["factory"]))
             self.assertIn(EXTERNAL.HYSTERIA2_COMMAND, observed["command"])
-            self.assertTrue(set(EXTERNAL.HYSTERIA2_BOX_CASES).issubset(observed["box"]))
+            self.assertTrue(set(EXTERNAL.HYSTERIA2_BOX_CASES).issubset(set().union(*(set(required) for name, required in observed.items() if name.startswith("box")))))
             self.assertTrue(set(EXTERNAL.HYSTERIA2_FACTORY_CASES).issubset(observed["factory"]))
-            self.assertEqual(len(calls), 6)
+            self.assertEqual(len(calls), 24)
 
 
 
@@ -275,6 +286,39 @@ func DNSTransportRegistry() *dns.TransportRegistry {
         unsafe = policy.replace('return targetOS == "linux" || targetOS == "windows"', 'return true')
         with self.assertRaisesRegex(ValueError, "predicate changed"):
             GATE.prospective_admission(bridge, unsafe, box)
+
+
+class ExternalPacketInventory(unittest.TestCase):
+    def test_baseline_rejects_prefixed_duplicate_or_failed_verdicts(self):
+        required = ("TestActual/owned",)
+        valid = "    --- PASS: TestActual/owned (0.01s)\n"
+        with contextlib.redirect_stdout(io.StringIO()):
+            EXTERNAL.report_baseline("owned", required, 0, valid)
+        for invalid in (valid + valid, "diagnostic " + valid.strip() + "\n", valid.rstrip() + " trailing\n",
+                        *(valid + marker for marker in ("--- FAIL: TestOther", "--- SKIP: TestOther", "DATA RACE", "panic: timed out", "fatal error: broken", "[build failed]"))):
+            with self.subTest(output=invalid), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(ValueError):
+                    EXTERNAL.report_baseline("owned", required, 0, invalid)
+
+    def test_packet_guards_and_all_encrypted_verdicts_are_required(self):
+        self.assertEqual(len(EXTERNAL.PACKET_FACTORY_CASES), 6)
+        self.assertEqual(len(EXTERNAL.PACKET_BOX_CASES), 47)
+        for required in (EXTERNAL.PACKET_COMMANDS, EXTERNAL.PACKET_BOX_CASES, EXTERNAL.PACKET_FACTORY_CASES):
+            output = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            for case in required:
+                with self.subTest(missing=case), contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(ValueError):
+                        EXTERNAL.report_baseline("packet", required, 0, output.replace("--- PASS: " + case + " (0.01s)\n", ""))
+        all_cases = EXTERNAL.HYSTERIA2_BOX_CASES + EXTERNAL.SOCKS_BOX_CASES + EXTERNAL.PACKET_BOX_CASES
+        runs = EXTERNAL.baseline_runs("box", "original", ("TestRouterVPNDesktopExternalPhysicalBoxRequiresPreparedStartedOwner", *all_cases))
+        actual = [case for _, _, required in runs for case in required if case in all_cases]
+        self.assertCountEqual(actual, all_cases)
+        self.assertEqual(EXTERNAL.LATENCY_BOUNDARIES, ("latency-dns", "latency-tls", "latency-partial", "cancel", "network", "native-owner"))
+        self.assertTrue(set("TestRouterVPNDesktopExternalPhysicalIntegration/latency50/" + leaf for leaf in EXTERNAL.LATENCY_BOUNDARIES).issubset(set(case for _, _, required in runs for case in required)))
+        for name, selection, required in runs:
+            self.assertTrue(required)
+            if name != "box":
+                self.assertTrue(selection.startswith("^TestRouterVPNDesktopExternalPhysicalIntegration$/"))
 
 
 if __name__ == "__main__":

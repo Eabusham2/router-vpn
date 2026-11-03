@@ -145,6 +145,7 @@ SHARED_TESTS = (
     "TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal",
     "TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof",
     "TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost",
+    "TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -158,7 +159,7 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsoc
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
-              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5")),
+              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong")),
             *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
               for fault in ("child-join", "journal-flush", "release", "foreign-receipt", "private-file")),
             *("TestDesktopWindowsExternalInvalidProofCannotConnect/" + fault
@@ -170,7 +171,12 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             *("TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal/" + fault
               for fault in ("unchanged", "journal-head", "kernel-target", "constructor-entered")),
             *("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction
-              for direction in ("router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2")),
+              for direction in ("router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-socks5-router", "socks5-router-socks5",
+                                "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast",
+                                "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong")),
+            *("TestDesktopWindowsExternalPacketAuthorityKeepsOriginalKeysAndVariant/" + protocol + suffix
+              for protocol in ("wireguard", "amneziawg-fast", "amneziawg-strong")
+              for suffix in ("", "/private-key", "/peer-key", "/preshared-key", "/resolver", *(("/parameters",) if protocol != "wireguard" else ()))),
             *("TestDesktopNodeStartAssetsMAXKeepsEmbeddedOwner/" + mode + "/" + layer
               for mode in ("max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg")
               for layer in PUBLIC_LAYERS),

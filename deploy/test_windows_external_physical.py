@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import sys
 import tempfile
 
@@ -46,6 +47,56 @@ SOCKS_FACTORY_CASES = tuple("TestRouterVPNExternalSOCKS" + name for name in (
     "RequiresExactNativeRoot", "AssociationsOwnDistinctControlAndRelaySockets",
     "CancelledAuthenticationJoinsOnlyItsOperation", "RejectsRetiredManagersAndForeignRelayCalls",
     "OwnedClosePreservesMixedFailures", "RootCloseJoinsAndRetainsOriginalFailure"))
+STREAM_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + leaf
+    for protocol in ("http-connect", "https-connect", "shadowsocks")
+    for leaf in (protocol + "/proof-and-mtu",
+        *(protocol + "/reject/" + fault for fault in ("dns", "exit", "credential", "tls-name", "tls-root", "lower-denied")),
+        "latency50/" + protocol,
+        *("latency50/" + protocol + "/" + fault for fault in ("source", "capture", "session", "current"))))
+PACKET_COMMANDS = ("TestRouterVPNDesktopExternalPhysicalCommandWireGuardSupportedTargets",
+                   "TestRouterVPNDesktopExternalPhysicalCommandAmneziaSupportedTargets")
+PACKET_PROTOCOLS = ("wireguard", "awg2-fast", "awg2-strong")
+PACKET_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + leaf
+    for protocol in PACKET_PROTOCOLS
+    for leaf in (protocol + "/proof-and-mtu", protocol + "/cancelled-proof",
+        *(protocol + "/reject/" + fault for fault in
+          ("dns", "exit", "credential", "tls-name", "tls-root", "lower-denied", "psk", "truncated")),
+        *((protocol + "/reject/parameters",) if protocol != "wireguard" else ()),
+        "latency50/" + protocol,
+        *("latency50/" + protocol + "/" + fault for fault in ("source", "capture", "session", "current"))))
+PACKET_FACTORY_CASES = tuple(parent + "/" + protocol + suffix
+    for protocol in ("wireguard", "amneziawg-fast", "amneziawg-strong")
+    for parent, suffix in (("TestRouterVPNExternalPhysicalStartupSocketPhase", ""),
+                          ("TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple", "-udp")))
+
+
+LATENCY_BOUNDARIES = ("latency-dns", "latency-tls", "latency-partial", "cancel", "network", "native-owner")
+
+
+def baseline_runs(name, selection, required):
+    if name != "box":
+        return ((name, selection, required),)
+    # Compile one captured image, then execute each independent transport under
+    # the original deadlines. No added family consumes another's proof budget.
+    parent = "TestRouterVPNDesktopExternalPhysicalIntegration"
+    required = (*required, *(case for case in STREAM_BOX_CASES if case not in required))
+    ordinary = tuple(case for case in required if not case.startswith(parent))
+    runs = [("box", "^TestRouterVPNDesktopExternalPhysicalBox", ordinary)]
+    for protocol in ("http-connect", "https-connect", "shadowsocks", "hysteria2", "socks5", *PACKET_PROTOCOLS):
+        for branch in (protocol, "latency50/" + protocol):
+            prefix = parent + "/" + branch
+            verdicts = tuple(case for case in required if case == prefix or case.startswith(prefix + "/"))
+            runs.append(("box/" + branch, "^" + parent + "$/" + "/".join("^" + part + "$" for part in branch.split("/")),
+                         verdicts))
+    runs.append(("box/latency-retirement", "^" + parent + "$/^latency50$/^(" + "|".join(LATENCY_BOUNDARIES) + ")$",
+                 tuple(parent + "/latency50/" + leaf for leaf in LATENCY_BOUNDARIES)))
+    miscellaneous = ("delayed-accept-retains-prior-grant", "network-reset-during-mtu",
+                     "network-reset-after-native-publication", "network-reset-during-real-proof")
+    runs.append(("box/retirement", "^" + parent + "$/^(" + "|".join(miscellaneous) + ")$",
+                 tuple(parent + "/" + leaf for leaf in miscellaneous)))
+    return tuple(runs)
+
+
 JOURNAL_COMMAND_CASES = tuple("TestRouterVPNDesktopExternalPhysicalCommandJournal" + name for name in (
     "BeforePrivateInputs", "PublicRequiresCompleteCapture", "WindowsHasNoFileFallback", "RetainedPipeline",
     "PartialRetirementRequiresJoin", "AdmissionCloseJoinsCallback", "TransferInput", "RetirementReceipt",
@@ -90,10 +141,15 @@ def mutants(source):
     admission = (source / "cmd/sing-box/routervpn_external_command_admission.go").read_text(encoding="utf-8")
     factory = (source / "routervpn/desktoppt/external_physical_windows.go").read_text(encoding="utf-8")
     dispatch = (source / "cmd/sing-box/routervpn_external_command_journal.go").read_text(encoding="utf-8")
+    network = (source / "routervpn/desktoppt/external_network.go").read_text(encoding="utf-8")
     unjoined = IDENTITY.replace_once(admission,
         "\tif previous := a.state.Swap(2); previous != 2 {",
         "\tprevious := a.state.Swap(2)\n\tif previous == 2 { return nil }\n\tif previous != 2 {")
     return (
+        ("missing-eager-endpoint-phase", "routervpn/desktoppt/external_network.go", "./routervpn/desktoppt",
+         "TestRouterVPNExternalPhysicalStartupSocketPhase",
+         "ordinary transport changed its separate startup socket/readiness phase",
+         IDENTITY.replace_once(network, "n.sockets = meta.TargetOS == runtime.GOOS", "n.sockets = false && meta.TargetOS == runtime.GOOS")),
         ("missing-inherited-parent", "cmd/sing-box/routervpn_external_command_journal.go", "./cmd/sing-box",
          "TestRouterVPNDesktopExternalPhysicalCommandJournalWindowsHasNoFileFallback",
          "public Windows external command read private files before inherited journal admission",
@@ -151,8 +207,9 @@ def report_baseline(name, required, status, output):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="strict")
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
-    if status or any("--- PASS: " + test + " (" not in output for test in required) or \
-            "--- SKIP:" in output or "DATA RACE" in output:
+    if (status or not required or
+            any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(test) + r" \([^\r\n]*\)[ \t]*$", output)) != 1 for test in required) or
+            any(marker in output for marker in ("--- FAIL:", "--- SKIP:", "DATA RACE", "panic:", "fatal error:", "[build failed]"))):
         raise ValueError("Ordinary Windows " + name + " did not prove its native composition")
 
 
@@ -169,16 +226,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNDesktopExternalPhysicalCommand" + name for name in
              ("RequiresExactDerivedInputs", "SeparatesProofAndMailboxIdentity", "RejectsRelabeledNetworkProof", "UsesActualPreparedNativeFactory",
               "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionCannotSkipBarrier",
-              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES + (HYSTERIA2_COMMAND, SOCKS_COMMAND)),
+              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES + (HYSTERIA2_COMMAND, SOCKS_COMMAND) + PACKET_COMMANDS),
         ("box", ".", "^TestRouterVPNDesktopExternalPhysical",
          tuple("TestRouterVPNDesktopExternalPhysical" + name for name in
              ("BoxRejectsChangedDerivedGraph", "BoxRequiresPreparedStartedOwner", "BoxRetainsExactPolicyAndDerivedIdentity",
-              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration")) + HYSTERIA2_BOX_CASES + SOCKS_BOX_CASES),
+              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration")) + HYSTERIA2_BOX_CASES + SOCKS_BOX_CASES + PACKET_BOX_CASES),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternal(Physical(Windows|Admission|Journal|Retirement|StartupSocketPhase|ActualBytesAndCapturedTuple)|SOCKS)",
          ("TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner",
           "TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures",
           "TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback",
-          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES),
+          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES + PACKET_FACTORY_CASES),
     )
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-external-") as directory:
         for name, package, selection, required in suites:
@@ -189,12 +246,13 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             if status:
                 raise ValueError("Ordinary Windows " + name + " compilation failed:\n" + output[-32768:])
             digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-            status, output = IDENTITY.run(
-                [binary, "-test.run=" + selection, "-test.count=1", "-test.timeout=120s", "-test.v"],
-                cwd=source, env=captured, timeout=135)
-            report_baseline(name, required, status, output)
-            if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
-                raise ValueError("Ordinary Windows composition binary changed during execution")
+            for run_name, run_selection, run_required in baseline_runs(name, selection, required):
+                status, output = IDENTITY.run(
+                    [binary, "-test.run=" + run_selection, "-test.count=1", "-test.timeout=120s", "-test.v"],
+                    cwd=source, env=captured, timeout=135)
+                report_baseline(run_name, run_required, status, output)
+                if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+                    raise ValueError("Ordinary Windows composition binary changed during execution")
         for label, relative, package, test, witness, replacement in mutants(source):
             changed = Path(directory) / (label + ".go")
             changed.write_text(replacement, encoding="utf-8")
@@ -214,7 +272,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             print("Rejected actual ordinary native production mutant: " + label, flush=True)
     if checked_sources(source)[1] != before:
         raise ValueError("Ordinary Windows composition source changed during execution")
-    print("Exact ordinary Windows command, generated factory, Box, HTTP/HTTPS CONNECT, Shadowsocks and Hysteria2 "
+    print("Exact ordinary Windows command, generated factory, Box, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2, SOCKS5, WireGuard and AmneziaWG "
           "selected-DNS/exit proof and rejection suites passed. OS permits/TUN are explicit fixtures; "
           "the inherited journal and retirement controls passed with explicit models; actual native journal/WFP/TUN and device acceptance remain separate.", flush=True)
 

@@ -78,17 +78,17 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		// external owner activates. It needs no eager endpoint startup phase.
 		kind, supported = "hysteria2", true
 	}
-	// Linux endpoints retain their original table and complete captured lower
+	// Native packet endpoints retain their original table and complete captured lower
 	// tuples. OpenVPN keeps every ordered TCP/UDP remote; it cannot collapse
 	// fallback into one peer or borrow a Router node identity.
-	if targetOS == "linux" {
+	if targetOS == "linux" || targetOS == "windows" {
 		switch capture.Protocol {
 		case "wireguard":
 			family, kind, supported = "endpoints", "wireguard", true
 		case "amneziawg":
 			family, kind, supported = "endpoints", AmneziaType, true
 		case "openvpn":
-			family, kind, supported = "endpoints", "openvpn-client", true
+			family, kind, supported = "endpoints", "openvpn-client", targetOS == "linux"
 		}
 	}
 	root := capture.PhysicalRoots[0]

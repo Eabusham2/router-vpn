@@ -151,18 +151,18 @@ func TestDesktopExternalPolicyPreservesRoutedDNSBootstrapAndCopies(t *testing.T)
 }
 
 func TestDesktopExternalPolicyWireGuardPreservesEndpointAndSelectedPolicy(t *testing.T) {
-	desktopExternalPacketPolicyPreservesEndpoint(t, "wireguard", "")
+	desktopExternalPacketPolicyPreservesEndpoint(t, "wireguard", "", "linux")
 }
 
 func TestDesktopExternalPolicyAmneziaPreservesExactParametersAndSelectedPolicy(t *testing.T) {
 	for _, variant := range []string{"fast", "strong"} {
 		t.Run(variant, func(t *testing.T) {
-			desktopExternalPacketPolicyPreservesEndpoint(t, "amneziawg", variant)
+			desktopExternalPacketPolicyPreservesEndpoint(t, "amneziawg", variant, "linux")
 		})
 	}
 }
 
-func desktopExternalPacketPolicyPreservesEndpoint(t *testing.T, protocol, variant string) {
+func desktopExternalPacketPolicyPreservesEndpoint(t *testing.T, protocol, variant, target string) {
 	t.Helper()
 	kind := "wireguard"
 	if protocol == "amneziawg" {
@@ -184,11 +184,11 @@ func desktopExternalPacketPolicyPreservesEndpoint(t *testing.T, protocol, varian
 						profile["dns_port"] = float64(5353)
 						original := externalDesktopCompile(t, graph, selection)
 						before, oldMeta := original.Config(), original.Metadata()
-						policy := desktopExternalPlan(t, original, desktopExternalTestSession, "linux")
+						policy := desktopExternalPlan(t, original, desktopExternalTestSession, target)
 						capture, err := policy.Capture()
 						meta := policy.Metadata()
 						if err != nil || policy.Validate() != nil || policy.OriginalPolicy() != original ||
-							meta.TargetOS != "linux" || meta.Protocol != protocol || meta.RootType != kind || meta.RootTag != ExternalFinalTag ||
+							meta.TargetOS != target || meta.Protocol != protocol || meta.RootType != kind || meta.RootTag != ExternalFinalTag ||
 							meta.OriginalSourceSHA256 != original.SourceSHA256() || meta.OriginalConfigSHA256 != externalDigest([]byte(before)) ||
 							meta.OriginalCaptureSHA256 != capture.CaptureSHA256 || meta.ConfigSHA256 != externalDigest([]byte(policy.Config())) ||
 							meta.SourceSHA256 == meta.OriginalSourceSHA256 || meta.SOCKSUDPAssociationRequired ||
@@ -309,7 +309,7 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 	for _, protocol := range []string{"wireguard", "hysteria2", "amneziawg"} {
 		original := desktopExternalPolicyFixture(t, protocol, "always", "on", true)
 		for _, target := range []string{"windows", "darwin"} {
-			if protocol == "hysteria2" && target == "windows" {
+			if target == "windows" {
 				continue // This exact direct UDP owner is independently exercised above.
 			}
 			if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
@@ -360,10 +360,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 			t.Fatal("negative case must retain a valid complete ordinary policy", err)
 		}
 		before := original.Config()
-		targets := []string{"linux"}
-		if protocol == "hysteria2" {
-			targets = append(targets, "windows")
-		}
+		targets := []string{"linux", "windows"}
 		for _, target := range targets {
 			if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil || derived != nil || original.Config() != before {
 				t.Fatal("unsupported selection acquired or changed a physical owner", protocol, target)
@@ -458,6 +455,20 @@ func TestDesktopExternalSOCKSAuthenticationBoundsPreserveExactOriginal(t *testin
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestDesktopExternalPolicyWindowsPacketEndpointsPreserveCapturedPolicy(t *testing.T) {
+	for _, protocol := range []string{"wireguard", "amneziawg"} {
+		variants := []string{""}
+		if protocol == "amneziawg" {
+			variants = []string{"fast", "strong"}
+		}
+		for _, variant := range variants {
+			t.Run(protocol+"/"+variant, func(t *testing.T) {
+				desktopExternalPacketPolicyPreservesEndpoint(t, protocol, variant, "windows")
+			})
 		}
 	}
 }
