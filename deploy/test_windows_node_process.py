@@ -158,7 +158,7 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsoc
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
-              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2")),
+              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "socks5")),
             *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
               for fault in ("child-join", "journal-flush", "release", "foreign-receipt", "private-file")),
             *("TestDesktopWindowsExternalInvalidProofCannotConnect/" + fault
@@ -372,20 +372,56 @@ def invalid_execution(output):
         "--- SKIP:", "DATA RACE", "panic:", "fatal error:", "[build failed]"))
 
 
-def check_baseline(status, output):
+def check_baseline(status, output, expected=EXPECTED):
     if (status or invalid_execution(output) or "--- FAIL:" in output or
-            any(not test_line(output, "PASS", name) for name in EXPECTED)):
+            any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(name) + r" \(", output)) != 1
+                for name in expected)):
         raise ValueError("Native Node process gate did not execute every required ownership case:\n" + output[-32768:])
 
 
-def report_baseline(status, output):
+def report_baseline(status, output, expected=EXPECTED):
     # Windows redirected Python output can default to cp1252 while the native
     # fixture emits UTF-8 private paths. Keep their exact spelling visible;
     # a console encoding error must not hide the actual native exit status.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="strict")
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
-    check_baseline(status, output)
+    check_baseline(status, output, expected)
+
+
+def baseline_groups():
+    # The retained child and real filesystem cases keep their own first phase.
+    # Run the expanded application matrix in bounded, serial groups. Every
+    # original root and leaf remains mandatory and runs exactly once; no child
+    # operation deadline or durable write is changed to fit the larger suite.
+    groups = [("native-child-and-storage", NATIVE_TESTS)]
+    for offset in range(0, len(SHARED_TESTS), 16):
+        groups.append(("shared-ownership-" + str(offset // 16 + 1), SHARED_TESTS[offset:offset + 16]))
+    roots = tuple(root for _, selected in groups for root in selected)
+    if (roots != REQUIRED or len(set(roots)) != len(roots) or len(set(EXPECTED)) != len(EXPECTED) or
+            any(name.split("/", 1)[0] not in roots for name in EXPECTED)):
+        raise ValueError("Native Node baseline groups lost the exact required case partition")
+    return tuple((label, selected, tuple(name for name in EXPECTED if name.split("/", 1)[0] in selected))
+                 for label, selected in groups)
+
+
+def execute_baseline(binary, captured, digest):
+    outputs = []
+    for label, selected, expected in baseline_groups():
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Native Node process fixture changed before baseline group: " + label)
+        expression = "^(" + "|".join(re.escape(name) for name in selected) + ")$"
+        print("Native Node process baseline group: " + label, flush=True)
+        status, output = NATIVE.run(
+            [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=360s", "-test.v"],
+            cwd=ROOT / "cmd/client", env=captured, timeout=375)
+        report_baseline(status, output, expected)
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Native Node process fixture changed during baseline group: " + label)
+        outputs.append(output)
+    # This final combined check rejects omissions or duplicate execution across
+    # phases as well as each phase's own missing/failed/skipped verdicts.
+    check_baseline(0, "\n".join(outputs))
 
 
 def check_rejection(name, test, witness, status, output):
@@ -626,18 +662,7 @@ def execute(go="go", *, env=None):
         if status:
             raise ValueError("Actual Windows Node process fixture did not compile:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        expression = "^(" + "|".join(REQUIRED) + ")$"
-        # The expanded public graph/layer matrix is sequential.
-        # The native 74db baseline passed 82 groups in 237.10 s, then reached
-        # its old 240 s cap three seconds into another required group. Keep a
-        # bounded aggregate for the complete selection without changing any
-        # operation deadline or the 60/75 s individual negative-control bounds.
-        status, output = NATIVE.run(
-            [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=360s", "-test.v"],
-            cwd=ROOT / "cmd/client", env=captured, timeout=375)
-        report_baseline(status, output)
-        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
-            raise ValueError("Native Node process fixture changed during execution")
+        execute_baseline(binary, captured, digest)
         for filename, name, test, witness, replacement in changes:
             changed = workspace / (name + ".go")
             changed.write_text(replacement, encoding="utf-8")

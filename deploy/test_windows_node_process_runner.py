@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Reject missing source and false native-process gate acknowledgments."""
 from pathlib import Path
+import hashlib
 import importlib.util
 import io
+import re
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -74,7 +76,8 @@ class NodeProcessRunner(unittest.TestCase):
                     GATE.check_baseline(0, output.replace("--- PASS: " + name + " (", "--- PASS: omitted ("))
         for status, suffix in ((1, ""), (0, "\n--- SKIP: hidden (0.00s)"),
                                (0, "\nWARNING: DATA RACE"), (0, "\npanic: test timed out"),
-                               (0, "\n--- FAIL: actual (0.01s)")):
+                               (0, "\n--- FAIL: actual (0.01s)"),
+                               (0, "\n--- PASS: " + GATE.EXPECTED[0] + " (0.01s)")):
             with self.subTest(status=status, suffix=suffix):
                 with self.assertRaisesRegex(ValueError, "every required ownership case"):
                     GATE.check_baseline(status, output + suffix)
@@ -176,7 +179,9 @@ class NodeProcessRunner(unittest.TestCase):
                 return 0, ""
             executions.append((command, timeout))
             if Path(command[0]).name == "node-process.test.exe":
-                return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED)
+                selection = next(value.removeprefix("-test.run=") for value in map(str, command) if value.startswith("-test.run="))
+                return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED
+                                     if re.fullmatch(selection, name.split("/", 1)[0]))
             if Path(command[0]).name == "node-all.test.exe":
                 return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.ALL_EXPECTED)
             test, witness = controls[Path(command[0]).name.removesuffix(".test.exe")]
@@ -190,16 +195,76 @@ class NodeProcessRunner(unittest.TestCase):
              patch.object(GATE, "report_baseline", wraps=GATE.check_baseline), \
              patch("sys.stdout", new_callable=io.StringIO):
             GATE.execute()
-        self.assertEqual(len(executions), 2 + len(controls))
-        self.assertIn("-test.timeout=360s", executions[0][0])
-        self.assertEqual(executions[0][1], 375)
-        for command, timeout in executions[1:]:
+        groups = GATE.baseline_groups()
+        self.assertEqual(len(executions), len(groups) + 1 + len(controls))
+        for command, timeout in executions[:len(groups)]:
+            self.assertIn("-test.timeout=360s", command)
+            self.assertEqual(timeout, 375)
+        for command, timeout in executions[len(groups):]:
             if Path(command[0]).name == "node-all.test.exe":
                 self.assertIn("-test.timeout=240s", command)
                 self.assertEqual(timeout, 255)
             else:
                 self.assertIn("-test.timeout=60s", command)
                 self.assertEqual(timeout, 75)
+
+    def test_serial_groups_cover_every_original_root_and_leaf_once(self):
+        groups = GATE.baseline_groups()
+        roots = tuple(root for _, selected, _ in groups for root in selected)
+        leaves = tuple(leaf for _, _, expected in groups for leaf in expected)
+        self.assertEqual(roots, GATE.REQUIRED)
+        self.assertEqual(len(set(roots)), len(roots))
+        self.assertEqual(sorted(leaves), sorted(GATE.EXPECTED))
+        self.assertEqual(len(set(leaves)), len(leaves))
+        self.assertEqual(groups[0][1], GATE.NATIVE_TESTS)
+        self.assertTrue(all(0 < len(selected) <= 16 for _, selected, _ in groups))
+        for policy in ("on-connect", "always"):
+            self.assertIn("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/socks5", leaves)
+        for shared in (GATE.SHARED_TESTS[1:], (*GATE.SHARED_TESTS, GATE.SHARED_TESTS[0])):
+            with patch.object(GATE, "SHARED_TESTS", shared):
+                with self.assertRaisesRegex(ValueError, "exact required case partition"):
+                    GATE.baseline_groups()
+
+    def test_each_group_rejects_missing_failed_duplicate_or_changed_evidence(self):
+        for fault in ("missing-root", "missing-leaf", "duplicate", "failed", "skipped", "changed-image", "timeout"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="node-process-groups-") as directory:
+                binary = Path(directory) / "node-process.test.exe"
+                binary.write_bytes(b"original compiled fixture")
+                digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+                calls = []
+                def run(command, *, cwd, env, timeout):
+                    calls.append(command)
+                    _, _, expected = GATE.baseline_groups()[0]
+                    verdicts = ["--- PASS: " + name + " (0.01s)" for name in expected]
+                    if fault == "missing-root":
+                        verdicts.remove("--- PASS: " + expected[0] + " (0.01s)")
+                    elif fault == "missing-leaf":
+                        verdicts.remove("--- PASS: " + next(name for name in expected if "/" in name) + " (0.01s)")
+                    elif fault == "duplicate":
+                        verdicts.append(verdicts[0])
+                    elif fault in ("failed", "skipped"):
+                        verdicts.append("--- " + ("FAIL" if fault == "failed" else "SKIP") + ": hidden (0.01s)")
+                    elif fault == "changed-image":
+                        binary.write_bytes(b"foreign replacement fixture")
+                    else:
+                        raise TimeoutError("actual bounded group timed out")
+                    return 0, "\n".join(verdicts)
+                with patch.object(GATE.NATIVE, "run", side_effect=run), \
+                     patch("sys.stdout", new_callable=io.StringIO):
+                    with self.assertRaises((ValueError, TimeoutError)):
+                        GATE.execute_baseline(binary, {}, digest)
+                self.assertEqual(len(calls), 1, "a failed group allowed later baseline execution")
+
+    def test_changed_compiled_image_cannot_start_a_group(self):
+        with tempfile.TemporaryDirectory(prefix="node-process-group-image-") as directory:
+            binary = Path(directory) / "node-process.test.exe"
+            binary.write_bytes(b"original compiled fixture")
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            binary.write_bytes(b"foreign replacement fixture")
+            with patch.object(GATE.NATIVE, "run") as run:
+                with self.assertRaisesRegex(ValueError, "changed before baseline group"):
+                    GATE.execute_baseline(binary, {}, digest)
+                run.assert_not_called()
 
 
 if __name__ == "__main__":

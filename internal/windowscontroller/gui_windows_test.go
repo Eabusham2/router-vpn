@@ -791,7 +791,8 @@ func TestWindowsControllerGUICancelledLaunchRunsNothing(t *testing.T) {
 			}
 		})
 	}
-	if !errors.Is(err, context.Canceled) || child == nil || !child.closed || child.job != 0 {
+	if !errors.Is(err, context.Canceled) || child == nil || !child.closed || child.job != 0 ||
+		!strings.Contains(err.Error(), "GUI operation after suspended process creation") {
 		t.Fatal("cancellation during GUI preparation stranded an unjoined creation", err)
 	}
 }

@@ -236,7 +236,7 @@ func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 		return child, errors.New("native GUI creation returned no exact suspended owner")
 	}
 	if err := ctx.Err(); err != nil {
-		return child, err
+		return child, nativeError("GUI operation after suspended process creation", err)
 	}
 	var member uint32
 	handle, release, err := child.process.borrow()
@@ -263,14 +263,14 @@ func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 		return child, errors.Join(err, errors.New("desktop identity changed during native GUI creation"))
 	}
 	if err := ctx.Err(); err != nil {
-		return child, err
+		return child, nativeError("GUI operation after suspended image verification", err)
 	}
 	previous, _, callErr := api.resume.Call(uintptr(created.Thread))
 	if previous != 1 {
 		return child, nativeError("owned GUI primary thread resume", callErr)
 	}
 	if err := ctx.Err(); err != nil {
-		return child, err
+		return child, nativeError("GUI operation after primary thread resume", err)
 	}
 	return child, nil
 }
