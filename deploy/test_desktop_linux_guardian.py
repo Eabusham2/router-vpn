@@ -33,7 +33,15 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning')
+                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
+KERNEL_GROUPS = (('sockets', KERNEL_CASES[:15]), ('retained', KERNEL_CASES[15:-1]),
+                 ('socks', ('SOCKSAssociation',)))
+SOCKS_CASES = ('private-ipv4', 'private-ipv6', 'public-cross-family', 'reject/future-control',
+               'reject/changed-binding', 'reject/native-control-absent', 'reject/closed-control',
+               'reject/plain-relay-bypass', 'reject/parent-before-child', 'reject/association-reuse')
+SOCKS_PARSER_CASES = ('DestinationKeepsExactPrivateException', 'PublicRelayRetainsCapturedFamilies',
+                      'NativeTCPStateRejectsClosedControl', 'KernelExpiryRequiresExactControl',
+                      'ChildTimeoutCannotOutliveControl', 'ControlRetirementRequiresJoinedChild')
 RUNNING_CASES = ('tcp4', 'udp4', 'tcp6', 'udp6', 'wrong-destination', 'wrong-interface',
                  'wrong-record', 'foreign-counter', 'cancelled', 'retired')
 RUNNING_PARSER_CASES = ('PreservesClosedInventory', 'RejectsUncapturedElements', 'SelectionAndCapacity')
@@ -45,6 +53,15 @@ BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagra
                   'NodeCreationReceiptRequiresExactOperations', 'NodeScopeAndAbsence', 'NodePartialOwnerCannotMutate',
                   'GuardianRecordRequiresNativeRelationship', 'GuardianPartialWitnessCannotCreateProof',
                   'NodeCreationRecordBindsPreparedIdentity', 'SourceJoinRecordPreservesPartialOwnership')
+
+
+def require_socks_verdicts(output, prefix, cases):
+    for case in cases:
+        pattern = r'^\s*--- PASS: ' + re.escape(prefix + case) + r' \([0-9.]+s\)$'
+        if len(re.findall(pattern, output, re.MULTILINE)) != 1:
+            raise ValueError('Linux SOCKS gate omitted or repeated its exact native result: ' + case)
+    if '--- FAIL:' in output or '--- SKIP:' in output or re.search(r'^(?:FAIL|panic:|fatal error:)(?:\s|$)', output, re.MULTILINE):
+        raise ValueError('Linux SOCKS gate lost its actual successful execution')
 
 
 def account_mount(source, target, flags):
@@ -234,7 +251,20 @@ def protected_test_image(binary, expected_sha256):
     return executable
 
 
-def namespace_test(binary: Path, case=None, expected_sha256=None) -> int:
+def namespace_test(binary: Path, case=None, expected_sha256=None, group=None) -> int:
+    # The expanded native inventory exceeded the old aggregate two-minute
+    # test deadline despite successful individual boundaries. Retain that
+    # deadline in each fresh namespace and require every disjoint group.
+    if case is not None and group is not None:
+        raise ValueError('A native namespace cannot select both a case and group')
+    if case is None and group is None:
+        for name, _ in KERNEL_GROUPS:
+            status = namespace_test(binary, expected_sha256=expected_sha256, group=name)
+            if status:
+                return status
+        return 0
+    cases = (case,) if case is not None else dict(KERNEL_GROUPS)[group]
+    selector = '^TestDesktopLinuxGuardianKernel(' + '|'.join(map(re.escape, cases)) + ')$'
     if os.geteuid() != 0 or platform.system() != 'Linux' or not binary.is_absolute() or not binary.is_file():
         raise ValueError('The Linux guardian namespace runner requires its real root-owned invocation')
     if not isinstance(expected_sha256, str) or re.fullmatch('[0-9a-f]{64}', expected_sha256) is None:
@@ -297,7 +327,6 @@ def namespace_test(binary: Path, case=None, expected_sha256=None) -> int:
                     namespace_progress('ip ' + ' '.join(arguments))
                     subprocess.run(['ip', *arguments], check=True)
                 environment = dict(os.environ, ROUTERVPN_LINUX_GUARDIAN_TEST_NS='1')
-                selector = '^TestDesktopLinuxGuardianKernel' + (case + '$' if case else '')
                 namespace_progress('execute owned test process')
                 result = subprocess.run([str(executable), '-test.run=' + selector,
                                          '-test.count=1', '-test.timeout=120s', '-test.v'],
@@ -343,6 +372,9 @@ def execute(source: Path, go='go', *, env=None):
     source, before = UID.checked_sources(source)
     required = {'desktop_socket_linux_policy.go', 'desktop_socket_linux_helper.go',
                 'desktop_socket_linux_nft.go', 'desktop_socket_linux_guardian_test.go',
+                'desktop_socket_linux_socks.go', 'desktop_socket_linux_socks_guardian.go',
+                'desktop_socket_linux_socks_nft.go', 'desktop_socket_linux_socks_test.go',
+                'desktop_socket_linux_socks_native_test.go',
                 'desktop_socket_linux_protection.go', 'desktop_socket_linux_protection_record.go',
                 'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_flags_test.go',
                 'desktop_socket_linux_baseline_netlink.go', 'desktop_socket_linux_baseline_netlink_test.go',
@@ -377,20 +409,25 @@ def execute(source: Path, go='go', *, env=None):
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o022 or info.st_size == 0:
             raise ValueError('Linux guardian compiler did not produce its owned executable')
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestDesktopLinuxRunningPolicy)', '-test.count=1',
+        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestDesktopLinuxRunningPolicy|TestDesktopLinuxSOCKS)', '-test.count=1',
                                    '-test.timeout=20s', '-test.v'], cwd=source)
         if any('--- PASS: TestLinuxBaseline' + name + ' (' not in baseline_output for name in BASELINE_CASES) or '--- SKIP:' in baseline_output:
             raise ValueError('Linux baseline receipt gate omitted an owned transaction boundary')
         if any('--- PASS: TestDesktopLinuxRunningPolicy' + name + ' (' not in baseline_output for name in RUNNING_PARSER_CASES):
             raise ValueError('Linux running inventory gate omitted its complete native JSON contract')
+        require_socks_verdicts(baseline_output, 'TestDesktopLinuxSOCKS', SOCKS_PARSER_CASES)
         print(baseline_output, end='' if baseline_output.endswith('\n') else '\n')
-        command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary),
-                   '--namespace-test-sha256', digest]
-        if sudo is not None:
-            command = [sudo, '-n', '--', *command]
-        output = UID.run(command, cwd=source, timeout=150, sudo=sudo)
+        outputs = []
+        for group, _ in KERNEL_GROUPS:
+            command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary),
+                       '--namespace-test-sha256', digest, '--kernel-group', group]
+            if sudo is not None:
+                command = [sudo, '-n', '--', *command]
+            outputs.append(UID.run(command, cwd=source, timeout=150, sudo=sudo))
+        output = '\n'.join(outputs)
         if any('--- PASS: TestDesktopLinuxGuardianKernel' + name + ' (' not in output for name in KERNEL_CASES) or '--- SKIP:' in output:
             raise ValueError('Linux guardian kernel gate did not execute every required boundary')
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelSOCKSAssociation/', SOCKS_CASES)
         for network in ('tcp4', 'udp4', 'tcp6', 'udp6'):
             if '--- PASS: TestDesktopLinuxGuardianKernelTCPAndUDP/' + network + ' (' not in output:
                 raise ValueError('Linux guardian omitted a real physical transport/address family')
@@ -445,8 +482,21 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'reserved Node initial absence': 'scoped Node baseline was hidden from initial journal absence',
         'original retired Node successor': 'acknowledged deletion adopted a different retained candidate',
         'closed retired Node successor': 'live original successor became a closed retirement receipt',
+        'SOCKS native TCP permit': 'missing actual TCP permit admitted a derived SOCKS association',
+        'SOCKS native TCP state': 'non-established actual TCP admitted a derived SOCKS association',
+        'SOCKS joined UDP retirement': 'native TCP permit retired before its original UDP descriptor',
     }
     mutations = (
+        ('SOCKS native TCP permit', 'SOCKSAssociation', 'desktop_socket_linux_socks_guardian.go', (
+            ('expires, err := g.nft.socksControlExpiry(rows, current, started)',
+             '_ = rows; _ = started; expires, err := time.Now().Add(9*time.Second), error(nil)'),
+        )),
+        ('SOCKS native TCP state', 'SOCKSAssociation', 'desktop_socket_linux_socks_guardian.go', (
+            ('|| state != 1 {', '|| false && state != 1 {'),
+        )),
+        ('SOCKS joined UDP retirement', 'SOCKSAssociation', 'desktop_socket_linux_socks_guardian.go', (
+            ('if g.sockets[control.socksChild] != nil {', 'if false && g.sockets[control.socksChild] != nil {'),
+        )),
         ('original retired Node successor', 'NodeRetiredSuccession', 'desktop_socket_linux_node_succession_retired.go', (
             ('b.removed && b.successor != successor || ', ''),
         )),
@@ -596,10 +646,11 @@ if __name__ == '__main__':
     parser.add_argument('--namespace-test-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-test-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--kernel-case', choices=KERNEL_CASES, help=argparse.SUPPRESS)
+    parser.add_argument('--kernel-group', choices=[name for name, _ in KERNEL_GROUPS], help=argparse.SUPPRESS)
     parser.add_argument('--mutations', action='store_true', help='Run temporary production mutation controls against the isolated kernel')
     args = parser.parse_args()
     if args.namespace_test_binary is not None:
-        raise SystemExit(namespace_test(args.namespace_test_binary, args.kernel_case, args.namespace_test_sha256))
+        raise SystemExit(namespace_test(args.namespace_test_binary, args.kernel_case, args.namespace_test_sha256, args.kernel_group))
     if args.source is None:
         parser.error('the exact prepared native source is required')
     try:

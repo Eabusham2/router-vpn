@@ -596,6 +596,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_windows_network_test.go', 'desktop_socket_windows_wfp_traffic_test.go',
                     'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go',
                     'desktop_socket_linux_flags_parser_test.go', 'desktop_socket_linux_flags_test.go',
+                    'desktop_socket_linux_socks_test.go', 'desktop_socket_linux_socks_native_test.go',
                     'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_protection_record_test.go',
                     'desktop_socket_linux_protection_test.go',
                     'desktop_socket_linux_baseline_netlink_test.go', 'desktop_socket_linux_baseline_netlink_native_test.go',

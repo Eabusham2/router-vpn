@@ -272,6 +272,10 @@ func (p *DesktopLinuxSocketPolicy) CreateSocket(ctx context.Context, c DesktopSo
 }
 
 func (p *DesktopLinuxSocketPolicy) Bind(ctx context.Context, c DesktopSocketCapture, b DesktopSocketBinding, network string, raw syscall.RawConn) error {
+	return p.bindSocket(ctx, c, b, network, raw, "")
+}
+
+func (p *DesktopLinuxSocketPolicy) bindSocket(ctx context.Context, c DesktopSocketCapture, b DesktopSocketBinding, network string, raw syscall.RawConn, socketID string) error {
 	if ctx == nil || ctx.Err() != nil || !p.Current(c, b.Owner) || (network != "tcp4" && network != "tcp6" && network != "udp4" && network != "udp6") || raw == nil {
 		return net.ErrClosed
 	}
@@ -300,7 +304,7 @@ func (p *DesktopLinuxSocketPolicy) Bind(ctx context.Context, c DesktopSocketCapt
 	if err != nil || failed != nil {
 		return errors.Join(err, failed)
 	}
-	_, file, err := p.call(ctx, desktopLinuxRequest{Operation: "bind", Capture: c, Creation: DesktopSocketCreation{Capture: c, Binding: b, Network: network}}, duplicate, true)
+	_, file, err := p.call(ctx, desktopLinuxRequest{Operation: "bind", Capture: c, Creation: DesktopSocketCreation{Capture: c, Binding: b, Network: network, SocketID: socketID}}, duplicate, true)
 	if file != nil {
 		file.Close()
 		return errors.New("Linux bind unexpectedly returned a descriptor")
@@ -497,7 +501,7 @@ func (p *DesktopLinuxSocketPolicy) callLocked(ctx context.Context, request deskt
 	if ctx.Err() != nil || requireCurrent && !p.Current(p.capture, p.owner) {
 		return desktopLinuxReply{}, nil, net.ErrClosed
 	}
-	if request.Operation == "create" || request.Operation == "bind" || request.Operation == "grant" {
+	if request.Operation == "create" || request.Operation == "bind" || request.Operation == "grant" || request.Operation == "socks-associate" {
 		// The request may complete after a lost receipt. Mark admission before
 		// sending, even if the resulting native owner needs exceptional cleanup.
 		p.socketActivity = true

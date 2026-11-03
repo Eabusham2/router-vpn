@@ -178,7 +178,7 @@ else:
             contents = executable.read_bytes()
             expected = hashlib.sha256(contents).hexdigest() if digest is None else digest
             print('Guardian nested mount isolation starting test status '+str(status)+'.', flush=True)
-            result = module.namespace_test(executable, expected_sha256=expected)
+            result = module.namespace_test(executable, case='TCPAndUDP', expected_sha256=expected)
             after = executable.stat()
             if ((original.st_dev, original.st_ino, original.st_uid, original.st_gid, original.st_mode,
                  original.st_size, original.st_mtime_ns, original.st_ctime_ns) !=
@@ -276,6 +276,23 @@ def main():
     arguments = parser.parse_args()
     if arguments.isolated:
         raise SystemExit(isolated())
+    flattened = tuple(case for _, cases in GUARDIAN.KERNEL_GROUPS for case in cases)
+    if flattened != GUARDIAN.KERNEL_CASES or len(flattened) != len(set(flattened)):
+        raise AssertionError('Bounded native groups omit or repeat a required kernel boundary')
+    for prefix, cases in (('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
+                          ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES)):
+        lines = ['--- PASS: '+prefix+case+' (0.01s)' for case in cases]
+        valid = '\n'.join(lines)
+        GUARDIAN.require_socks_verdicts(valid, prefix, cases)
+        defects = [valid+'\n'+lines[0], valid+'\n--- SKIP: other (0.01s)',
+                   valid+'\n--- FAIL: other (0.01s)', valid+'\nFAIL', valid+'\npanic: lost result']
+        defects.extend('\n'.join(lines[:index]+lines[index+1:]) for index in range(len(lines)))
+        for output in defects:
+            try:
+                GUARDIAN.require_socks_verdicts(output, prefix, cases)
+            except ValueError:
+                continue
+            raise AssertionError('Native SOCKS verdict gate accepted an omitted, duplicate or failed result')
     from test_linux_guardian_cleanup import check as check_timeout_cleanup
     check_timeout_cleanup()
     sudo = GUARDIAN.UID.privilege_tool()

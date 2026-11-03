@@ -32,6 +32,7 @@ type desktopLinuxRequest struct {
 	NodeScoped bool `json:",omitempty"`
 	Creation   DesktopSocketCreation
 	Grant      DesktopSocketGrant
+	SOCKS      *desktopLinuxSOCKSAssociation `json:",omitempty"`
 }
 
 type desktopLinuxReply struct {
@@ -387,6 +388,10 @@ type desktopLinuxOwnedSocket struct {
 	identity desktopLinuxKernelSocket
 	bound    bool
 	grants   map[string]DesktopSocketGrant
+	receipts map[string]DesktopSocketReceipt
+	// One authenticated UDP association may use this original TCP lifetime.
+	// The claim remains after child retirement and cannot be reused.
+	socksChild string
 }
 
 type desktopLinuxGuardian struct {
@@ -397,6 +402,7 @@ type desktopLinuxGuardian struct {
 	uid     uint32
 	nft     *desktopLinuxNFT
 	sockets map[string]*desktopLinuxOwnedSocket
+	socks   map[string]desktopLinuxSOCKSAssociation
 }
 
 // RunDesktopLinuxSocketHelper is called only by the packaged native command.
@@ -487,6 +493,12 @@ func RunDesktopLinuxSocketHelper(role string) error {
 			}
 			return errors.New("Linux physical operation changed its capture or sequence")
 		}
+		if next.SOCKS != nil && next.Operation != "socks-associate" {
+			if file != nil {
+				file.Close()
+			}
+			return errors.New("Linux physical operation misplaced its SOCKS association capture")
+		}
 		sequence = next.Sequence
 		reply := desktopLinuxReply{Sequence: sequence, Capture: g.capture}
 		var transferred *os.File
@@ -504,8 +516,15 @@ func RunDesktopLinuxSocketHelper(role string) error {
 		case "create":
 			transferred, err = g.create(ctx, next.Creation)
 			reply.Creation = next.Creation
+		case "socks-associate":
+			if file != nil || next.SOCKS == nil {
+				err = errors.New("SOCKS association omitted its captured control or supplied a descriptor")
+			} else {
+				err = g.associateSOCKS(ctx, *next.SOCKS)
+				reply.Creation = DesktopSocketCreation{Capture: g.capture, Binding: next.SOCKS.Binding, Network: "udp", SocketID: next.SOCKS.SocketID}
+			}
 		case "bind":
-			err = g.bind(next.Creation, file)
+			err = g.bind(ctx, next.Creation, file)
 		case "grant":
 			reply.Receipt, err = g.grant(ctx, next.Grant)
 		case "revoke":
@@ -544,10 +563,14 @@ func (g *desktopLinuxGuardian) release(c DesktopSocketCreation) error {
 	if c != owned.creation || len(owned.grants) != 0 {
 		return errors.New("Linux physical release precedes exact permit cleanup")
 	}
+	if err := g.retireSOCKSControl(c.SocketID); err != nil {
+		return err
+	}
 	if err := owned.file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 		return err
 	}
 	delete(g.sockets, c.SocketID)
+	delete(g.socks, c.SocketID)
 	return nil
 }
 
@@ -589,6 +612,14 @@ func (g *desktopLinuxGuardian) create(ctx context.Context, c DesktopSocketCreati
 	want, err := g.options.binding(g.owner, netip.AddrPortFrom(c.Binding.LocalAddress, 1))
 	if err != nil || !desktopLinuxBindingEqual(want, c.Binding) {
 		return nil, errors.New("Linux creator binding changed")
+	}
+	if association, exists := g.socks[c.SocketID]; exists {
+		if c.Network != "udp" || c.Binding != association.Binding {
+			return nil, errors.New("Linux SOCKS creator replaced its captured UDP owner")
+		}
+		if _, _, err := g.checkSOCKSControl(ctx, association); err != nil {
+			return nil, err
+		}
 	}
 	channel, child, err := desktopLinuxSocketPair()
 	if err != nil {
@@ -632,7 +663,7 @@ func (g *desktopLinuxGuardian) create(ctx context.Context, c DesktopSocketCreati
 	return file, nil
 }
 
-func (g *desktopLinuxGuardian) bind(c DesktopSocketCreation, file *os.File) error {
+func (g *desktopLinuxGuardian) bind(ctx context.Context, c DesktopSocketCreation, file *os.File) error {
 	if c.Capture != g.capture || c.Binding.Owner != g.owner || file == nil {
 		return errors.New("Linux bind has no captured socket")
 	}
@@ -649,6 +680,17 @@ func (g *desktopLinuxGuardian) bind(c DesktopSocketCreation, file *os.File) erro
 	}
 	if owned == nil || owned.bound || owned.creation.Binding != c.Binding || c.Network != identity.network+map[bool]string{true: "4", false: "6"}[c.Binding.LocalAddress.Is4()] {
 		return errors.New("Linux bind has another captured socket identity")
+	}
+	if c.SocketID != "" && c.SocketID != owned.creation.SocketID {
+		return errors.New("Linux bind substituted its requested socket identity")
+	}
+	if association, exists := g.socks[owned.creation.SocketID]; exists {
+		if c.SocketID != association.SocketID {
+			return errors.New("Linux SOCKS bind lost its exact associated socket")
+		}
+		if _, _, err := g.checkSOCKSControl(ctx, association); err != nil {
+			return err
+		}
 	}
 	raw, err := file.SyscallConn()
 	if err != nil {
@@ -681,8 +723,21 @@ func (g *desktopLinuxGuardian) bind(c DesktopSocketCreation, file *os.File) erro
 
 func (g *desktopLinuxGuardian) grant(ctx context.Context, grant DesktopSocketGrant) (DesktopSocketReceipt, error) {
 	owned := g.sockets[grant.SocketID]
-	if owned == nil || !owned.bound || grant.Capture != g.capture || grant.Binding != owned.creation.Binding || grant.Network != owned.creation.Network || grant.Sequence == 0 || !g.options.permits(grant.Network, grant.Remote) {
+	association, associated := g.socks[grant.SocketID]
+	if owned == nil || !owned.bound || grant.Capture != g.capture || grant.Binding != owned.creation.Binding || grant.Network != owned.creation.Network || grant.Sequence == 0 || !associated && !g.options.permits(grant.Network, grant.Remote) {
 		return DesktopSocketReceipt{}, errors.New("Linux grant has no exact source owner")
+	}
+	var control DesktopSocketGrant
+	var controlUntil time.Time
+	if associated {
+		if grant.Network != "udp" || grant.Remote != association.Remote || grant.Binding != association.Binding {
+			return DesktopSocketReceipt{}, errors.New("Linux SOCKS grant substituted its captured relay")
+		}
+		var err error
+		control, controlUntil, err = g.checkSOCKSControl(ctx, association)
+		if err != nil {
+			return DesktopSocketReceipt{}, err
+		}
 	}
 	identity, err := desktopLinuxSocketIdentity(owned.file)
 	if err != nil || identity != owned.identity {
@@ -713,7 +768,23 @@ func (g *desktopLinuxGuardian) grant(ctx context.Context, grant DesktopSocketGra
 	// Retain unknown application outcomes before touching the kernel. Revoke
 	// remains possible when acknowledgment/readback fails.
 	owned.grants[key] = grant
-	return g.nft.grant(ctx, grant)
+	delete(owned.receipts, key)
+	var receipt DesktopSocketReceipt
+	if associated {
+		receipt, err = g.nft.grantSOCKS(ctx, grant, control, controlUntil)
+		if err == nil {
+			_, _, err = g.socksControlSocket(association)
+		}
+	} else {
+		receipt, err = g.nft.grant(ctx, grant)
+	}
+	if err == nil {
+		if owned.receipts == nil {
+			owned.receipts = make(map[string]DesktopSocketReceipt)
+		}
+		owned.receipts[key] = receipt
+	}
+	return receipt, err
 }
 
 func (g *desktopLinuxGuardian) revoke(ctx context.Context, grant DesktopSocketGrant) error {
@@ -722,16 +793,20 @@ func (g *desktopLinuxGuardian) revoke(ctx context.Context, grant DesktopSocketGr
 		return errors.New("Linux revoke changed its retained owner")
 	}
 	previous, exists := owned.grants[grant.Remote.String()]
+	if exists && previous != grant {
+		return errors.New("Linux revoke changed its exact operation")
+	}
+	if err := g.retireSOCKSControl(grant.SocketID); err != nil {
+		return err
+	}
 	if !exists {
 		return g.nft.absent(ctx, grant)
-	}
-	if previous != grant {
-		return errors.New("Linux revoke changed its exact operation")
 	}
 	if err := g.nft.revoke(ctx, grant); err != nil {
 		return err
 	}
 	delete(owned.grants, grant.Remote.String())
+	delete(owned.receipts, grant.Remote.String())
 	return nil
 }
 
