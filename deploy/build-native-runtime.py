@@ -452,7 +452,7 @@ def verify_installed_darwin_host(source, bundle, target, env):
     command = [sys.executable, ROOT/'deploy/test_macos_external_host.py', '--bundle', bundle]
     if source is not None:
         command += ['--source', source]
-    output = run(command, cwd=ROOT, env=env, timeout=1500)
+    output = run(command, cwd=ROOT, env=env, timeout=1800)
     prefix = 'Native Darwin retained external acceptance: '
     records = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
     if len(records) != 1:

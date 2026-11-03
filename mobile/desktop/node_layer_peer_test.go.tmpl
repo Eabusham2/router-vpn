@@ -1763,23 +1763,24 @@ type desktopExternalInstalledPeerRequest struct {
 }
 
 type desktopExternalInstalledPeerReply struct {
-	Schema               int      `json:"schema"`
-	Protocol             string   `json:"protocol"`
-	Address              string   `json:"address"`
-	CA                   string   `json:"ca"`
-	Connections          int64    `json:"connections"`
-	Streams              int64    `json:"streams"`
-	PhysicalUDP          int64    `json:"physical_udp"`
-	Packets              int64    `json:"packets"`
-	DNSQueries           uint32   `json:"dns_queries"`
-	PublicAttempts       uint32   `json:"public_attempts"`
-	PublicReplies        uint32   `json:"public_replies"`
-	AuthFailures         uint32   `json:"auth_failures"`
-	ParametersSHA256     string   `json:"parameters_sha256,omitempty"`
-	OpenVPNNetwork       string   `json:"openvpn_network,omitempty"`
-	OpenVPNProfile       string   `json:"openvpn_profile,omitempty"`
-	SOCKSRelays          []string `json:"socks_relays,omitempty"`
-	SOCKSRejectedReplies uint32   `json:"socks_rejected_replies,omitempty"`
+	Latency              *desktopExternalInstalledLatencyReceipt `json:"latency,omitempty"`
+	Schema               int                                     `json:"schema"`
+	Protocol             string                                  `json:"protocol"`
+	Address              string                                  `json:"address"`
+	CA                   string                                  `json:"ca"`
+	Connections          int64                                   `json:"connections"`
+	Streams              int64                                   `json:"streams"`
+	PhysicalUDP          int64                                   `json:"physical_udp"`
+	Packets              int64                                   `json:"packets"`
+	DNSQueries           uint32                                  `json:"dns_queries"`
+	PublicAttempts       uint32                                  `json:"public_attempts"`
+	PublicReplies        uint32                                  `json:"public_replies"`
+	AuthFailures         uint32                                  `json:"auth_failures"`
+	ParametersSHA256     string                                  `json:"parameters_sha256,omitempty"`
+	OpenVPNNetwork       string                                  `json:"openvpn_network,omitempty"`
+	OpenVPNProfile       string                                  `json:"openvpn_profile,omitempty"`
+	SOCKSRelays          []string                                `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies uint32                                  `json:"socks_rejected_replies,omitempty"`
 }
 
 // This actual SOCKS provider has one retained listener per authenticated UDP
@@ -1966,7 +1967,7 @@ func (p *desktopExternalInstalledSOCKSPeer) refuse(connection net.Conn) error {
 	return nil
 }
 
-func desktopExternalInstalledPeerCertificate(t *testing.T) (tls.Certificate, string) {
+func desktopExternalInstalledPeerCertificate(t *testing.T, latency bool) (tls.Certificate, string) {
 	t.Helper()
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -1988,6 +1989,9 @@ func desktopExternalInstalledPeerCertificate(t *testing.T) (tls.Certificate, str
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IPAddresses: []net.IP{net.ParseIP("1.1.1.1")},
 		DNSNames: []string{"captured-external.example"}}
+	if latency {
+		leaf.DNSNames = append(leaf.DNSNames, "speed.cloudflare.com")
+	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, root, &leafKey.PublicKey, rootKey)
 	if err != nil {
 		t.Fatal(err)
@@ -2208,12 +2212,12 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	desktopExternalInstalledReferenceProcess(t, "11.77.0.2", map[string]bool{
 		"shadowsocks": true, "http-connect": true, "https-connect": true, "hysteria2": true,
 		"wireguard": true, "amneziawg": true, "openvpn": true, "socks5": true,
-	})
+	}, false)
 }
 
 // Each native runner independently captures its allowed address and protocols.
 // The original Linux entry keeps its fixed namespace address and full set.
-func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress string, protocols map[string]bool) {
+func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress string, protocols map[string]bool, latency bool) {
 	t.Helper()
 	reader := STD.NewReaderSize(os.Stdin, desktopNodeLayerReferenceLimit+1)
 	line, err := reader.ReadSlice('\n')
@@ -2251,7 +2255,11 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 			t.Fatal("installed external reference lost its captured credential")
 		}
 	}
-	cert, ca := desktopExternalInstalledPeerCertificate(t)
+	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
+	var benchmark *desktopExternalInstalledLatencyPeer
+	if latency {
+		benchmark = newDesktopExternalInstalledLatencyPeer(t, cert)
+	}
 	var dnsQueries, publicAttempts, publicReplies, authFailures atomic.Uint32
 	var failDNS atomic.Bool
 	proofGate := make(chan struct{})
@@ -2267,7 +2275,12 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 	dnsHandler := dns.HandlerFunc(func(writer dns.ResponseWriter, query *dns.Msg) {
 		dnsQueries.Add(1)
 		answer := new(dns.Msg).SetReply(query)
-		if failDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+		if benchmark != nil && !failDNS.Load() && len(query.Question) == 1 && query.Question[0].Name == "speed.cloudflare.com." && (query.Question[0].Qtype == dns.TypeA || query.Question[0].Qtype == dns.TypeAAAA) {
+			benchmark.dns.Add(1)
+			if query.Question[0].Qtype == dns.TypeA {
+				answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "speed.cloudflare.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30}, A: net.ParseIP("203.0.113.54")}}
+			}
+		} else if failDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
 			answer.Rcode = dns.RcodeRefused
 		} else {
 			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30}, A: net.ParseIP("93.184.216.34")}}
@@ -2320,6 +2333,9 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 		{Network: "tcp", Destination: "203.0.113.53:5353", Physical: dnsListener.Addr().String()},
 		{Network: "tcp", Destination: "1.1.1.1:443", Physical: proofListener.Addr().String()},
 	}}
+	if benchmark != nil {
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "203.0.113.54:443", Physical: benchmark.listener.Addr().String()})
+	}
 	var listener net.Listener
 	address := ""
 	closeTransport := func() {}
@@ -2443,6 +2459,9 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
 			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Packets: server.plainUDP.Load(),
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
+		if benchmark != nil {
+			reply.Latency = benchmark.receipt()
+		}
 		if request.Protocol == "openvpn" {
 			reply.OpenVPNNetwork, reply.OpenVPNProfile = request.OpenVPNNetwork, openvpnProfile
 		}
@@ -2477,6 +2496,13 @@ func desktopExternalInstalledReferenceProcess(t *testing.T, capturedAddress stri
 		}
 		switch string(line) {
 		case "stats\n":
+		case "hold-latency\n", "release-latency\n":
+			if benchmark == nil {
+				t.Fatal("unselected latency responder")
+			}
+			if err := benchmark.control(string(line)); err != nil {
+				t.Fatal(err)
+			}
 		case "fail-dns\n":
 			failDNS.Store(true)
 		case "release-proof\n":

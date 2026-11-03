@@ -71,6 +71,8 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 	})
 	mux.HandleFunc("/api/external-profile/connect", a.externalProfileConnect)
 	mux.HandleFunc("/api/disconnect", a.disconnect)
+	mux.HandleFunc("/api/speed-lab/external-latency", a.desktopLatencyMeasurement)
+	mux.HandleFunc("/api/speed-lab/external-latency/cancel", a.cancelDesktopLatencyMeasurement)
 	var observationMu sync.Mutex
 	var original *desktopMacOSExternalHost
 	mux.HandleFunc("/api/native-external-observation", func(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +209,7 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 	started := macOSControllerNativeReceipt(t, connection, "started", 0)
 	client := macOSControllerNativeHTTP(t)
 	client.Timeout = 65 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 	joined := false
 	// This cleanup is registered last: native child/controller joins precede
@@ -263,6 +265,7 @@ func macOSExternalNativeCase(t *testing.T, protocol string) {
 	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retained) != nil || retained.Session != live.Session || retained.ProcessID != live.ProcessID || !retained.Connected || retained.Baseline == nil || retained.Baseline.Token != live.Baseline.Token {
 		t.Fatal("completed public request lost its original retained native owner", status, err, string(raw))
 	}
+	macOSExternalNativeLatency(t, ctx, client, peer, live)
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/disconnect", "{}")
 	if err != nil || status != http.StatusOK || strings.TrimSpace(string(raw)) != `{"ok":true}` {
 		t.Fatal("actual Darwin public Disconnect failed", status, err, string(raw))

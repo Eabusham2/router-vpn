@@ -45,5 +45,5 @@ func TestRouterVPNDesktopDarwinExternalReferenceProcess(t *testing.T) {
 	}
 	desktopExternalInstalledReferenceProcess(t, address.String(), map[string]bool{
 		"shadowsocks": true, "http-connect": true, "https-connect": true, "hysteria2": true,
-	})
+	}, true)
 }

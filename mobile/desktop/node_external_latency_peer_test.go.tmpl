@@ -1,0 +1,227 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// Only the explicitly selected Darwin fixture adds this independent endpoint.
+// The shipping client's fixed resolver, TLS identity, nonce and one-byte HTTP
+// response are exercised through its real captured transport, never replaced.
+type desktopExternalInstalledLatencyReceipt struct {
+	DNS       uint32 `json:"dns"`
+	TLS       uint32 `json:"tls"`
+	Requests  uint32 `json:"requests"`
+	Responses uint32 `json:"responses"`
+	Cancelled uint32 `json:"cancelled"`
+	Active    uint32 `json:"active"`
+}
+type desktopExternalInstalledLatencyPeer struct {
+	listener                                         net.Listener
+	server                                           *http.Server
+	done                                             chan error
+	mu                                               sync.Mutex
+	hold                                             chan struct{}
+	closing                                          bool
+	workers                                          sync.WaitGroup
+	dns, tls, requests, responses, cancelled, active atomic.Uint32
+}
+
+func newDesktopExternalInstalledLatencyPeer(t *testing.T, certificate tls.Certificate) *desktopExternalInstalledLatencyPeer {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &desktopExternalInstalledLatencyPeer{listener: listener, done: make(chan error, 1)}
+	p.server = &http.Server{ReadHeaderTimeout: 3 * time.Second, Handler: http.HandlerFunc(p.serve)}
+	go func() {
+		p.done <- p.server.Serve(tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}))
+	}()
+	t.Cleanup(func() {
+		p.mu.Lock()
+		p.closing = true
+		if p.hold != nil {
+			close(p.hold)
+			p.hold = nil
+		}
+		p.mu.Unlock()
+		err := p.server.Close()
+		_ = listener.Close()
+		ended := <-p.done
+		p.workers.Wait()
+		if err != nil || !errors.Is(ended, http.ErrServerClosed) {
+			t.Error("independent latency responder did not join", err, ended)
+		}
+	})
+	return p
+}
+func (p *desktopExternalInstalledLatencyPeer) serve(w http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	if p.closing {
+		p.mu.Unlock()
+		http.Error(w, "retired", http.StatusServiceUnavailable)
+		return
+	}
+	p.workers.Add(1)
+	held := p.hold
+	p.mu.Unlock()
+	defer p.workers.Done()
+	nonce, err := hex.DecodeString(r.URL.Query().Get("routervpn"))
+	if r.TLS == nil || !r.TLS.HandshakeComplete || r.TLS.ServerName != "speed.cloudflare.com" || r.Method != http.MethodGet || r.Host != "speed.cloudflare.com" || r.URL.Path != "/__down" || len(r.URL.Query()) != 2 || r.URL.Query().Get("bytes") != "1" || err != nil || len(nonce) != 16 || r.Header.Get("Authorization") != "" || r.Header.Get("Accept-Encoding") != "identity" || r.Header.Get("Cache-Control") != "no-store, no-transform" || !r.Close {
+		http.Error(w, "unowned benchmark request", http.StatusForbidden)
+		return
+	}
+	p.tls.Add(1)
+	p.requests.Add(1)
+	p.active.Add(1)
+	defer p.active.Add(^uint32(0))
+	if held != nil {
+		select {
+		case <-held:
+		case <-r.Context().Done():
+			p.cancelled.Add(1)
+			return
+		}
+	}
+	if r.Context().Err() != nil {
+		p.cancelled.Add(1)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", "1")
+	w.Header().Set("Cache-Control", "no-store")
+	if n, err := w.Write([]byte{1}); err == nil && n == 1 {
+		p.responses.Add(1)
+	}
+}
+func (p *desktopExternalInstalledLatencyPeer) control(command string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closing {
+		return net.ErrClosed
+	}
+	switch command {
+	case "hold-latency\n":
+		if p.hold != nil || p.active.Load() != 0 {
+			return errors.New("latency hold already owns active work")
+		}
+		p.hold = make(chan struct{})
+	case "release-latency\n":
+		if p.hold == nil {
+			return errors.New("latency release has no captured hold")
+		}
+		close(p.hold)
+		p.hold = nil
+	default:
+		return errors.New("unknown latency control")
+	}
+	return nil
+}
+func (p *desktopExternalInstalledLatencyPeer) receipt() *desktopExternalInstalledLatencyReceipt {
+	return &desktopExternalInstalledLatencyReceipt{DNS: p.dns.Load(), TLS: p.tls.Load(), Requests: p.requests.Load(), Responses: p.responses.Load(), Cancelled: p.cancelled.Load(), Active: p.active.Load()}
+}
+
+// Exercise the independent responder's real TLS and cancellation semantics on
+// portable hosts before the native gate relies on its counters.
+func TestRouterVPNDesktopInstalledLatencyReferenceTLSAndJoinedCancel(t *testing.T) {
+	certificate, ca := desktopExternalInstalledPeerCertificate(t, true)
+	p := newDesktopExternalInstalledLatencyPeer(t, certificate)
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(ca)) {
+		t.Fatal("missing reference CA")
+	}
+	transport := &http.Transport{DisableKeepAlives: true, Proxy: nil, DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != "speed.cloudflare.com:443" {
+			return nil, errors.New("foreign reference destination")
+		}
+		raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.listener.Addr().String())
+		if err != nil {
+			return nil, err
+		}
+		secure := tls.Client(raw, &tls.Config{RootCAs: roots, ServerName: "speed.cloudflare.com", MinVersion: tls.VersionTLS12})
+		if err = secure.HandshakeContext(ctx); err != nil {
+			raw.Close()
+			return nil, err
+		}
+		return secure, nil
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	request := func(ctx context.Context, nonce string) error {
+		q, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://speed.cloudflare.com/__down?bytes=1&routervpn="+nonce, nil)
+		if err != nil {
+			return err
+		}
+		q.Close = true
+		q.Header.Set("Accept-Encoding", "identity")
+		q.Header.Set("Cache-Control", "no-store, no-transform")
+		response, err := client.Do(q)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(response.Body, 2))
+		if err != nil {
+			return err
+		}
+		if response.StatusCode != 200 || len(body) != 1 {
+			return errors.New("reference refused response")
+		}
+		return nil
+	}
+	if request(context.Background(), "invalid-nonce") == nil || p.requests.Load() != 0 {
+		t.Fatal("reference accepted an unauthenticated benchmark shape")
+	}
+	if err := p.control("hold-latency\n"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- request(ctx, strings.Repeat("a", 32)) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for p.active.Load() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("actual TLS request never reached its hold")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatal("held TLS did not return its original cancellation", err)
+	}
+	for p.active.Load() != 0 || p.cancelled.Load() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("held response did not join")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if p.responses.Load() != 0 {
+		t.Fatal("held cancelled response supplied a sample")
+	}
+	if err := p.control("release-latency\n"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		if err := request(context.Background(), fmt.Sprintf("%032x", i+1)); err != nil {
+			t.Fatal("actual reference TLS sample", i, err)
+		}
+	}
+	actual := p.receipt()
+	if actual.Requests != 51 || actual.TLS != 51 || actual.Responses != 50 || actual.Cancelled != 1 || actual.Active != 0 {
+		t.Fatal("reference lost exact independent counters", actual)
+	}
+}

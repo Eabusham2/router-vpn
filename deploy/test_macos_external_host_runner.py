@@ -20,7 +20,9 @@ class NativeHostVerdicts(unittest.TestCase):
         for case in G.CASES:
             lines += ['    --- PASS: '+G.TEST+'/'+case+' (0.1s)',
                       '    desktop_external_darwin_native_test.go:77: actual sealed Darwin ordinary host accepted '+case+
-                      ': native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join']
+                      ': native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join',
+                      '    desktop_external_darwin_native_test.go:88: actual sealed Darwin latency accepted '+case+
+                      ': held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained']
         return '\n'.join([*lines, 'PASS'])+'\n'
 
     def test_complete_unique_native_execution(self):
@@ -49,6 +51,14 @@ class NativeHostVerdicts(unittest.TestCase):
             marker = 'actual sealed Darwin ordinary host accepted '+case+':'
             with self.subTest(case=case), self.assertRaises(ValueError):
                 G.check_verdict(valid.replace(marker, 'diagnostic only:'))
+
+    def test_each_protocol_requires_unique_actual_measurement_receipt(self):
+        valid = self.completed()
+        for case in G.CASES:
+            line = next(line for line in valid.splitlines(True) if 'actual sealed Darwin latency accepted '+case+':' in line)
+            for broken in (valid.replace(line, ''), valid.replace(line, line*2), valid.replace(line, 'diagnostic only: '+line)):
+                with self.subTest(case=case), self.assertRaises(ValueError):
+                    G.check_verdict(broken)
 
     def test_ordinary_build_never_mutates_native_host(self):
         with patch.object(G.platform, 'system', return_value='Darwin'), patch.object(G.platform, 'machine', return_value='arm64'), patch.object(G.os, 'getuid', return_value=501):

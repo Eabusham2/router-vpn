@@ -28,18 +28,19 @@ import (
 )
 
 type macOSExternalPeerReply struct {
-	Schema         int    `json:"schema"`
-	Protocol       string `json:"protocol"`
-	Address        string `json:"address"`
-	CA             string `json:"ca"`
-	Connections    int64  `json:"connections"`
-	Streams        int64  `json:"streams"`
-	PhysicalUDP    int64  `json:"physical_udp"`
-	Packets        int64  `json:"packets"`
-	DNSQueries     uint32 `json:"dns_queries"`
-	PublicAttempts uint32 `json:"public_attempts"`
-	PublicReplies  uint32 `json:"public_replies"`
-	AuthFailures   uint32 `json:"auth_failures"`
+	Latency        *macOSExternalLatencyReceipt `json:"latency,omitempty"`
+	Schema         int                          `json:"schema"`
+	Protocol       string                       `json:"protocol"`
+	Address        string                       `json:"address"`
+	CA             string                       `json:"ca"`
+	Connections    int64                        `json:"connections"`
+	Streams        int64                        `json:"streams"`
+	PhysicalUDP    int64                        `json:"physical_udp"`
+	Packets        int64                        `json:"packets"`
+	DNSQueries     uint32                       `json:"dns_queries"`
+	PublicAttempts uint32                       `json:"public_attempts"`
+	PublicReplies  uint32                       `json:"public_replies"`
+	AuthFailures   uint32                       `json:"auth_failures"`
 }
 
 type macOSExternalNativePeer struct {
@@ -149,7 +150,7 @@ func macOSExternalNativePeerStart(t *testing.T, protocol string) *macOSExternalN
 	}
 	p.password = base64.StdEncoding.EncodeToString(key)
 	clear(key)
-	p.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopDarwinExternalReferenceProcess$", "-test.count=1", "-test.timeout=150s")
+	p.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopDarwinExternalReferenceProcess$", "-test.count=1", "-test.timeout=300s")
 	p.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_CHILD=1", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_ADDRESS=" + p.physical.String()}
 	p.command.Stderr = os.Stderr
 	p.input, err = p.command.StdinPipe()

@@ -79,6 +79,10 @@ def check_verdict(output):
         receipt = 'actual sealed Darwin ordinary host accepted '+case+': native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join'
         if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
             raise ValueError('Native Darwin protocol has no exact ownership receipt: '+case)
+    for case in CASES:
+        receipt = 'actual sealed Darwin latency accepted '+case+': held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained'
+        if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
+            raise ValueError('Native Darwin protocol has no exact retained measurement receipt: '+case)
     if output.splitlines().count('PASS') != 1 or not output.rstrip().endswith('\nPASS'):
         raise ValueError('Native Darwin host did not finish one complete execution')
 
@@ -156,10 +160,10 @@ def execute(bundle, source=None, go='go', environment=None):
                    'ROUTERVPN_MACOS_FIXTURE_PYTHON='+str(Path(python).absolute()),
                    'ROUTERVPN_MACOS_EXTERNAL_PEER='+str(peer), 'ROUTERVPN_MACOS_EXTERNAL_PEER_SHA256='+identities['peer'],
                    'ROUTERVPN_MACOS_EXTERNAL_BUNDLE='+str(signed), 'ROUTERVPN_MACOS_EXTERNAL_BUNDLE_SHA256='+signed_hash,
-                   'GORACE=atexit_sleep_ms=0', str(controller), '-test.run=^'+TEST+'$', '-test.v', '-test.count=1', '-test.timeout=600s']
+                   'GORACE=atexit_sleep_ms=0', str(controller), '-test.run=^'+TEST+'$', '-test.v', '-test.count=1', '-test.timeout=900s']
         if sudo:
             command = [sudo, '-n', '--', *command]
-        output = CONTROLLER.reported_run(command, cwd=ROOT, env=captured, timeout=630, sudo=sudo)
+        output = CONTROLLER.reported_run(command, cwd=ROOT, env=captured, timeout=930, sudo=sudo)
         print(output, end='')
         check_verdict(output)
         if source_identity(core) != before or sha(controller) != identities['controller'] or sha(peer) != identities['peer']:

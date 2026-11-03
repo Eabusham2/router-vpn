@@ -110,6 +110,7 @@ BOX_TEMPLATES = {
 }
 PEER_TEMPLATES = {
     'node_darwin_external_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_darwin_external_peer_test.go',
+    'node_external_latency_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_latency_peer_test.go',
     'node_wg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_wg_peer_test.go',
     'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_awg_peer_test.go',
     'node_linux_peer_test.go.tmpl': 'protocol/routervpnamnezia/node_linux_peer_test.go',
