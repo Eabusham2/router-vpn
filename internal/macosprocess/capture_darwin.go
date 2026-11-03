@@ -127,7 +127,7 @@ func OpenCapture(ctx context.Context, scope Scope, workspace, install, process, 
 		c.files = append(c.files, pinnedFile{file: file, path: path, immutable: index == 1 || index == 2 || index == 6, guiSocket: index == 5})
 	}
 	if err := c.capture(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opened native capture: %w", err)
 	}
 	return c, nil
 }
@@ -151,7 +151,7 @@ func InheritCapture(ctx context.Context, scope Scope) (result *Capture, failure 
 		c.files = append(c.files, pinnedFile{file: file, path: path, immutable: index == 1 || index == 2 || index == 6, guiSocket: index == 5})
 	}
 	if err := c.capture(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("inherited native capture: %w", err)
 	}
 	cwd, err := os.Stat(".")
 	if err != nil || !os.SameFile(cwd, c.files[0].info) {
@@ -198,12 +198,12 @@ func (c *Capture) capture(ctx context.Context) error {
 	// contents or reasserting locks on the inherited open descriptions.
 	for index, pin := range c.files {
 		if err := checkPin(pin, index == 0); err != nil {
-			return err
+			return fmt.Errorf("fixed inherited FD%d: %w", index+4, err)
 		}
 	}
 	for _, pin := range c.ancestors {
 		if err := checkPin(pin, true); err != nil {
-			return err
+			return fmt.Errorf("captured ancestor: %w", err)
 		}
 	}
 	if c.files[0].info.Mode().Perm() != 0700 || c.files[3].info.Mode().Perm() != 0600 || c.files[4].info.Mode().Perm() != 0600 || c.files[1].info.Mode().Perm()&0111 == 0 || c.files[2].info.Mode().Perm()&0111 == 0 {
@@ -301,9 +301,16 @@ func checkPin(p pinnedFile, directory bool) error {
 	}
 	before, ok := p.info.Sys().(*syscall.Stat_t)
 	after, ok2 := actual.Sys().(*syscall.Stat_t)
-	if !ok || !ok2 || !samePinMetadata(pinMetadata{p.info.Mode(), before.Uid, before.Gid, uint64(before.Nlink)},
+	if !ok || !ok2 {
+		return fmt.Errorf("native captured object ownership changed: stat-type before=%t after=%t", ok, ok2)
+	}
+	if !samePinMetadata(pinMetadata{p.info.Mode(), before.Uid, before.Gid, uint64(before.Nlink)},
 		pinMetadata{actual.Mode(), after.Uid, after.Gid, uint64(after.Nlink)}, p.guiSocket) || p.guiSocket && (directory || p.path != "" || p.immutable) {
-		return errors.New("native captured object ownership changed")
+		// Numeric native metadata only: never include private paths, input
+		// documents or process credentials in the bounded failure diagnostic.
+		return fmt.Errorf("native captured object ownership changed: gui=%t directory=%t named=%t immutable=%t before=(mode=%#o uid=%d gid=%d links=%d) after=(mode=%#o uid=%d gid=%d links=%d)",
+			p.guiSocket, directory, p.path != "", p.immutable, uint32(p.info.Mode()), before.Uid, before.Gid, before.Nlink,
+			uint32(actual.Mode()), after.Uid, after.Gid, after.Nlink)
 	}
 	if p.path != "" {
 		named, err := os.Lstat(p.path)
@@ -333,7 +340,7 @@ func (c *Capture) Current(ctx context.Context) error {
 	}
 	for i, p := range c.files {
 		if err := checkPin(p, i == 0); err != nil {
-			return err
+			return fmt.Errorf("current fixed inherited FD%d: %w", i+4, err)
 		}
 		if (i == 0 && p.info.Mode().Perm() != 0700) || ((i == 3 || i == 4) && p.info.Mode().Perm() != 0600) {
 			return errors.New("native child inherited nonprivate workspace or locks")
@@ -341,12 +348,12 @@ func (c *Capture) Current(ctx context.Context) error {
 	}
 	for _, p := range c.ancestors {
 		if err := checkPin(p, true); err != nil {
-			return err
+			return fmt.Errorf("current captured ancestor: %w", err)
 		}
 	}
 	for _, p := range c.inputs {
 		if err := checkPin(p, false); err != nil {
-			return err
+			return fmt.Errorf("current private input: %w", err)
 		}
 		if p.info.Mode().Perm() != 0600 {
 			return errors.New("native child input is not private")
