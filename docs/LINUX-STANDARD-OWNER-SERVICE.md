@@ -71,7 +71,20 @@ original owner for retry. If controller request preparation fails and cleanup
 cannot finish, a separate registry retains that exact unstarted private capture.
 The existing Stop budget drains it before active runtime/protection cleanup;
 an adopted or replacement owner cannot be put through this private cleanup.
-The controller's earlier pre-RPC event continuity remains separate work.
+
+The installed controller separately opens its own original network tracker
+immediately after namespace capture, before private TUN/workspace/configuration
+validation. It begins the expected transition before transmitting Start. The
+authenticated service returns the exact original child's capture and canonical
+startup ledger only after its own readiness transition succeeds. The controller
+checks source/profile/session identity, the original authenticated RPC peer and
+the locally transmitted absolute deadline before recording that receipt on its
+unchanged tracker. A current topology or replacement observer cannot repair an
+earlier invalid epoch. DNS/current/monitor RPCs check that same tracker before
+and after the operation, and Stop joins it before requesting service teardown.
+Unstarted cleanup consumes the original caller's budget. The service uses the
+earlier of the transmitted absolute deadline and bounded budget; conversion to
+a relative timeout cannot add time to the child's original capture.
 
 ## Explicit Off and owner composition
 
@@ -148,10 +161,10 @@ unit's refusals:
   handoff. This unit completes the proved-idle/Off upgrade path.
 - Same-boot service crash continuation for orphaned protection. A replacement
   service cannot recover the lost original creator from metadata.
-- Controller-side event continuity from initial private preparation through the
-  Start RPC, and active owned MTU/interface transitions. The installed service's
-  authenticated original-child startup ledger is now implemented; this does
-  not establish those separate controller and MTU boundaries.
+- Active owned MTU/interface transitions. Both the service's authenticated
+  original-child startup ledger and the controller's preparation-through-Start
+  event continuity are source-implemented. Their actual installed namespace
+  cases remain mandatory; they do not establish active MTU transition ownership.
 - Exact successful-call route/rule retirement through native startup, reset,
   error unwind and Close. The pinned Linux implementation still has priority
   range cleanup; an original TUN index alone does not authorize deleting a

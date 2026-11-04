@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through b4eaf227
+## Latest implementation continuation — through 5c0b90d3
 
 The verified source cutoff is
-[`b4eaf227`](https://github.com/Eabusham2/router-vpn/commit/b4eaf227fe9979d5e96d21b9003d6fabdad6045e),
-tree `faf373afcf892b5599c78c7697796da63d0494d3`.
+[`5c0b90d3`](https://github.com/Eabusham2/router-vpn/commit/5c0b90d3a98ae6189d99a54221b77f9d53e59252),
+tree `52387a0868c48dfa0dc579a76f972b8638be3a01`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -66,8 +66,15 @@ validation limits. Changes and test counts are not a requirements denominator.
   private preparation retains the original unstarted capture for Stop retry.
   The merged expanded startup/legacy race suite passes in 20.638s, root startup
   repetition in 14.780s, and all twelve bundle/inventory/builder checks pass.
-  Local network receipts are explicitly modeled; actual installed native TUN/nft
-  execution remains mandatory. Controller pre-RPC and owned MTU event continuity,
+  The controller now retains its own original network observer from private
+  preparation through Start and later proof/monitor operations. It accepts only
+  the service's exact original-child ledger, capture and locally transmitted
+  deadline. The server preserves that absolute deadline instead of renewing it
+  through a relative timeout. Original controller-observer join precedes Stop;
+  failed cleanup retains its owner. All 134 portable service and 88 startup
+  verdicts pass in their recorded suites; root focused races pass in 5.213s.
+  Local network receipts are explicitly modeled; all thirteen installed native
+  namespace verdicts remain mandatory. Active owned MTU event continuity,
   exact native route/rule retirement, cross-adapter protected transfer, active Always upgrades and same-boot service-crash recovery
   remain unfinished; see the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 - All legacy standard preparations use the shared captured device policy and
@@ -85,8 +92,15 @@ validation limits. Changes and test counts are not a requirements denominator.
   partitions across AMD64 and ARM64, but predates the allocator correction below.
   The TLS reference now rejects reserved graph-port allocations before retaining
   its original front listener. Real forced-collision and original-owner regressions
-  pass; all eight new native leaves and unchanged full MAX suites still require
-  a native rerun. The iOS runner compiles
+  pass. The corrected-source run at `8f1416a9` completes nine of ten partitions,
+  including both native succession suites. ARM64 ownership-controls-1 fails
+  immediate image deletion after the expected negative verdict with WinError32;
+  the log does not establish which process retained the image. Main MAX commands
+  now use the original Windows job owner, which joins retained descendants before
+  returning. Unproved command or preparation cleanup retains source/private
+  workspaces. Root runs 51 checks with one Windows-only file-sharing case pending,
+  plus sixteen release-wiring checks; three old-behavior mutations fail as intended.
+  Actual Windows reruns of this repair remain required. The iOS runner compiles
   isolated controls alongside the full baseline within the original budget.
   Its original compiler supervisor remains live until acknowledged group
   termination and join. At `84c49e9a`, actual macOS passes all seven fixture and
@@ -99,7 +113,14 @@ validation limits. Changes and test counts are not a requirements denominator.
 - Current Windows native admission already includes WG-PQ and AWG-PQ. The four
   complete-MAX families remain closed on the protected Windows Router path;
   ALL's ordered selection, captured proof and restoration logic already exist.
-  Prospective MAX/WFP tests do not enable those shipping admission cases.
+  At `799480e2`, both AMD64 and ARM64 execute all 26 prospective ALL verdicts,
+  eight compiled rejection controls and four temporary-restoration leaves with
+  the same 1,592-file source closure and unified prospective predicate. These
+  controller tests explicitly model native child/BFE/transport boundaries.
+  The authoritative release now requires the same complete ALL gate on both
+  native architectures before aggregation/publication. Prospective MAX/WFP or
+  ALL tests do not enable those shipping admission cases; corrected-source MAX
+  completion and the shipping admission change remain outstanding.
   Linux retained-host and macOS protected complete-MAX integration have distinct
   source boundaries; mobile ALL selectors already exist. Historical staged-PQ
   statements below describe their dated source, not the current predicate.
@@ -117,8 +138,12 @@ validation limits. Changes and test counts are not a requirements denominator.
   TCP-tuple rebind fixture. The ACL fixture now writes markers inside precreated
   private event directories; deterministic old-layout controls reproduce the
   original metadata change, while the new filesystem race and twenty-two
-  available runner checks pass. Production ACL validation is unchanged, and
-  native confirmation remains pending. The TCP fixture now waits for the original
+  available runner checks pass. Production ACL validation is unchanged. The
+  complete native controller/installer gate subsequently passes all 26 required
+  parent verdicts on both Intel and Apple Silicon at `b4eaf227`, including the
+  formerly failing captured-runtime-child and new metadata-preservation cases.
+  This closes that exact fixture's native confirmation, separately from the
+  166-case external-host gate and full application packaging. The TCP fixture now waits for the original
   client to release its tuple after the actual final ACK. Actual macOS and Ubuntu
   gates at `8216c6f7` pass all eight parent tests and thirteen eligibility leaves,
   including the new final-ACK case; the complete Multihop source job also passes.

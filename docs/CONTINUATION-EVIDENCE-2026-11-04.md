@@ -47,8 +47,8 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`b4eaf227fe9979d5e96d21b9003d6fabdad6045e`](https://github.com/Eabusham2/router-vpn/commit/b4eaf227fe9979d5e96d21b9003d6fabdad6045e),
-tree `faf373afcf892b5599c78c7697796da63d0494d3`.
+[`5c0b90d3a98ae6189d99a54221b77f9d53e59252`](https://github.com/Eabusham2/router-vpn/commit/5c0b90d3a98ae6189d99a54221b77f9d53e59252),
+tree `52387a0868c48dfa0dc579a76f972b8638be3a01`.
 
 | Published commit | Concrete change and focused evidence | Remaining boundary |
 |---|---|---|
@@ -95,8 +95,12 @@ tree `faf373afcf892b5599c78c7697796da63d0494d3`.
 | [`557aff28`](https://github.com/Eabusham2/router-vpn/commit/557aff28971dd9b7b33419822d3bf28cc9b5bbf6) | Counts each exact macOS verdict and receipt once with anchored line parsing. One accepted and 960 rejected differential inputs agree with the original parser. All twelve root runner checks pass in 1.309s, retaining duplicate/missing/FAIL/SKIP/race/build-error rejection. | The original native inventory and 60-second builder budget are unchanged. Parser speed is not actual encrypted/PF/utun acceptance. |
 | [`8f1416a9`](https://github.com/Eabusham2/router-vpn/commit/8f1416a951cab0dd1b419e8d245e19cab4c17a0a) | Extends retained macOS Local ordinary WG/AWG Fast/Strong entry to HY2 exits with separately captured AES-256-GCM or AES plus XOR layers. Only the original encrypted entry owns physical egress; layer/API/credentials/private QUIC, both node proofs, selected policy and sealed restoration remain captured. Root policy/application races pass in 5.888s/26.601s and twelve runner checks in 2.454s. All 48 emitted graphs parse in the actual generated core. | Twelve positives and sixteen refusals preserve all previous 138 cases and raise the required native inventory to 166, with 25 policy tests. Actual new macOS encrypted two-hop/PF/utun execution remains separate. Other entry/final families, predecessors and ordinary Server/Compare remain requirements. |
 | [`8216c6f7`](https://github.com/Eabusham2/router-vpn/commit/8216c6f7f2b437e6243e5a8f03ff784876bcf7dd) | Corrects the real TCP fixture to wait for both peer TIME-WAIT and the original client's final-ACK release of its registered/reserved tuple. A real two-stack test holds that exact ACK, observes LAST-ACK, rejects premature readiness, releases it and reuses the same tuple. Original peer-only control fails at the intended assertion. Root pinned-stack race passes in 1.263s and ten runner checks in 0.017s. | Production gVisor code/pins and original 3/45/180-second bounds are unchanged. All eight native parents and thirteen eligibility leaves remain required; their later actual macOS/Ubuntu result is recorded below. |
-| [`2bdf6a10`](https://github.com/Eabusham2/router-vpn/commit/2bdf6a107d011d91a31071c7e8d481a37ef24532) | Moves macOS fixture observation markers into a precreated private event directory instead of mutating captured installation/workspace ancestors during ACL verification. Exact original root/workspace metadata, owner-separated child markers and replacement refusal are checked. Old root and workspace layouts fail their deterministic causal assertions. Root filesystem race passes in 1.033s and twenty-two available runner checks in 0.263s. | Production ACL, process identity and deadlines are unchanged. The full twenty-third runner case was unavailable at named Unix socket bind in this workspace, not waived. Both Darwin controller packages crosslink; actual native ACL/lifecycle confirmation remains pending. |
-| [`b4eaf227`](https://github.com/Eabusham2/router-vpn/commit/b4eaf227fe9979d5e96d21b9003d6fabdad6045e) | Switches the installed Linux six-stock-protocol service to its verified generated native engine, original sealed executable/configuration/Cronet descriptors and authenticated creation-time child. The original observer opens before check children and accepts only that child's successful-call startup ledger through Begin/Record/End before DNS/public proof. Failed request preparation retains the exact unstarted capture for cleanup under the existing Stop deadline. Expanded reconciled race passes in 20.638s, root startup race in 14.780s, and twelve bundle/inventory/builder checks pass. Three causal controls reject lost cleanup registration, source rebasing and missing ledger Record. | All eighteen app-generated graphs and actual normal/sealed Cronet loader checks pass in the locally built core, which omits the PQ build tag and is not a complete production bundle. Local startup tests use actual children/pidfds/channels with explicitly modeled native network receipts. The mandatory installed real-bundle/TUN/nft/DNS/exit/ABA gate is unavailable locally. Controller pre-RPC and active MTU continuity, exact route/rule retirement, cross-adapter transfer, active Always upgrade and same-boot crash recovery remain unfinished. |
+| [`2bdf6a10`](https://github.com/Eabusham2/router-vpn/commit/2bdf6a107d011d91a31071c7e8d481a37ef24532) | Moves macOS fixture observation markers into a precreated private event directory instead of mutating captured installation/workspace ancestors during ACL verification. Exact original root/workspace metadata, owner-separated child markers and replacement refusal are checked. Old root and workspace layouts fail their deterministic causal assertions. Root filesystem race passes in 1.033s and twenty-two available runner checks in 0.263s. | Production ACL, process identity and deadlines are unchanged. The full twenty-third runner case was unavailable at named Unix socket bind in this workspace, not waived. Both Darwin controller packages crosslink; the later b4eaf227 native result below confirms this fixture on both architectures. |
+| [`b4eaf227`](https://github.com/Eabusham2/router-vpn/commit/b4eaf227fe9979d5e96d21b9003d6fabdad6045e) | Switches the installed Linux six-stock-protocol service to its verified generated native engine, original sealed executable/configuration/Cronet descriptors and authenticated creation-time child. The original observer opens before check children and accepts only that child's successful-call startup ledger through Begin/Record/End before DNS/public proof. Failed request preparation retains the exact unstarted capture for cleanup under the existing Stop deadline. Expanded reconciled race passes in 20.638s, root startup race in 14.780s, and twelve bundle/inventory/builder checks pass. Three causal controls reject lost cleanup registration, source rebasing and missing ledger Record. | All eighteen app-generated graphs and actual normal/sealed Cronet loader checks pass in the locally built core, which omits the PQ build tag and is not a complete production bundle. Local startup tests use actual children/pidfds/channels with explicitly modeled native network receipts. The mandatory installed real-bundle/TUN/nft/DNS/exit/ABA gate is unavailable locally. Controller pre-RPC continuity is subsequently implemented by e88ee4a3; active MTU, exact route/rule retirement, cross-adapter transfer, active Always upgrade and same-boot crash recovery remain unfinished. |
+| [`799480e2`](https://github.com/Eabusham2/router-vpn/commit/799480e216997d07c32a9ef64e92557bb17a14f7) | Adds the mandatory standalone Windows ARM64 ALL controller gate with the same 26 markers, eight compiled controls and four restoration leaves as AMD64. Both gates now use the same prospective MAX predicate bytes. Actual host/target validation controls supported race instrumentation; all original execution/job bounds remain. Root 21 runner checks pass in 16.952s and fifteen wiring checks in 0.082s. | Production admission remains closed. Both actual native architecture results at this commit are recorded below; their controller composition explicitly models child/BFE/transport boundaries and does not establish full MAX traffic or packaging. |
+| [`d8acc092`](https://github.com/Eabusham2/router-vpn/commit/d8acc09275bad858e0fdae200ac000dc1f67563d) | Connects both native ALL architecture gates to the authoritative release through a reusable workflow and mandatory aggregation dependency. Preserves the standalone jobs, complete verdict/control inventory, original bounds and host checks. Sixteen wiring checks, including fourteen broken-edge variants, pass in 0.117s; 21 controller checks pass in 20.955s; the full artifact/workflow parity audit passes. The original release workflow fails the intended missing-edge assertion. | A required release dependency is not a completed current-source native or publication result. No shipping MAX predicate is opened by this unit. |
+| [`e88ee4a3`](https://github.com/Eabusham2/router-vpn/commit/e88ee4a39b3118a122a5554d58973f235f4785d8) | Retains the original Linux controller network observer from private preparation through Start and later RPCs. The service's original-child capture/ledger must match the authenticated peer, original session/source/policy and locally transmitted deadline before Record/End. Stop joins that original observer. The server now preserves the absolute deadline instead of adding time through a relative timeout. All 134 portable service verdicts and 88 startup verdicts pass in 92.949s/24.114s; root focused races pass in 5.213s. Old controller and timeout sources fail their causal controls. | Actual children, sealed descriptors, creation pidfds and authenticated socketpairs execute locally; native network/TUN receipts are explicit models. The native-tag image links, but all thirteen installed namespace verdicts remain mandatory. Active MTU, recoverable exact route/rule retirement, cross-adapter transfer, active Always upgrade and same-boot crash recovery remain separate work. |
+| [`5c0b90d3`](https://github.com/Eabusham2/router-vpn/commit/5c0b90d3a98ae6189d99a54221b77f9d53e59252) | Routes main Windows MAX compile/positive/negative commands through the existing original Windows job owner, joining retained descendants before returning the original command status/output. A failed join retains private and prepared-source workspaces and refuses a successor command; preparation failure retains its enclosing source. Root runner executes 51 checks in 5.653s with one Windows-only check pending; sixteen release-wiring checks pass in 0.110s. Three causal mutations reject the old command path and both premature deletion cases. | The observed ARM64 WinError32 does not itself identify a leaked descendant. The new real Windows test deliberately holds an original image, requires immediate unlink after original-job join and preserves a foreign same-image process; it and the complete corrected MAX suites must execute on Windows. No unlink retry, weakened negative, expanded deadline or production admission change is included. |
 
 ## Native and release evidence
 
@@ -330,10 +334,49 @@ temporary cancellation/failure restoration leaves pass under Always and
 On-connect; their parent completes in 51.67s. The archived receipt records
 the exact 1,579-file source closure. This is prospective controller composition
 with explicit fixture boundaries, separate from actual MAX traffic/WFP/PQ.
-The shipping protected MAX predicate remains closed. The existing ALL overlay
-and MAX overlay insert the same four cases at different source positions;
-their compiled bytes are not described as identical. Aligning that test source
-and executing the missing ARM64 ALL gate remain prerequisites for admission.
+At that source, the ALL and MAX overlays inserted the same four cases at
+different positions, so their compiled bytes were not identical. The later
+`799480e2` source unifies that prospective predicate and adds the ARM64 gate.
+
+Both actual native ALL jobs at `799480e216997d07c32a9ef64e92557bb17a14f7`
+subsequently succeed in [run 41792976841](https://github.com/Eabusham2/router-vpn/actions/runs/41792976841):
+[AMD64 job 126450405692](https://github.com/Eabusham2/router-vpn/actions/runs/41792976841/job/126450405692)
+and [ARM64 job 126450404599](https://github.com/Eabusham2/router-vpn/actions/runs/41792976841/job/126450404599).
+Each contains all 26 exact required verdicts, eight distinct compiled rejection
+controls and all four temporary-restoration leaves. Their receipts agree on
+the 1,592-record source closure
+`678f78c5b5eb8b52cf0d169787ba405e86178f332f864d495ca8085f810e747a`
+and Windows-materialized prospective predicate
+`59ac520e8581f23888acd94d6ebca10bcbbe9c2b0e895048444cdc31d7ec2154`.
+The receipt explicitly describes controller composition with modeled native
+child/BFE/transport boundaries. Shipping protected MAX admission remains closed;
+these results are not full MAX/WFP/PQ traffic, packaged application or device
+acceptance. `d8acc092` makes both complete ALL gates prerequisites of release
+aggregation rather than relying only on the separate standalone workflow.
+
+The allocator-corrected [MAX run 41788641554](https://github.com/Eabusham2/router-vpn/actions/runs/41788641554)
+at `8f1416a9` finishes with nine successful partitions and one failure. Both
+succession jobs pass all twelve reversals: [AMD64 126446333450](https://github.com/Eabusham2/router-vpn/actions/runs/41788641554/job/126446333450)
+in 1480.55s and [ARM64 126446333315](https://github.com/Eabusham2/router-vpn/actions/runs/41788641554/job/126446333315)
+in 330.75s. [ARM64 ownership-controls-1 job 126446333365](https://github.com/Eabusham2/router-vpn/actions/runs/41788641554/job/126446333365)
+fails when immediately deleting the ninth control image after its expected
+negative verdict and source/executable checks passed. Windows reports WinError32
+for `valid-outer-password-control/complete-max-native.test.exe`. The log does
+not prove which process held the image; it is not a missing rejection witness
+or expanded-timeout justification. `5c0b90d3` repairs the concrete missing
+command-tree ownership guarantee. Its actual native rerun remains required.
+
+The macOS fixture correction receives complete native confirmation at `b4eaf227`
+in [installer/controller run 41791794428](https://github.com/Eabusham2/router-vpn/actions/runs/41791794428).
+[Apple Silicon job 126446624993](https://github.com/Eabusham2/router-vpn/actions/runs/41791794428/job/126446624993)
+and [Intel job 126446625139](https://github.com/Eabusham2/router-vpn/actions/runs/41791794428/job/126446625139)
+both succeed. Independent full-log checks find each of the 26 required parent
+verdicts exactly once, with no failure or skip in the native suite. The formerly
+failing captured-runtime-child case passes in 7.85s/20.51s; the new event-directory
+metadata-preservation case also passes on both hosts. This closes that exact
+ACL/lifecycle fixture confirmation without relaxing production ACL rules.
+It does not certify the distinct 166-case external-host gate, whole application
+packaging or the newer source cutoff.
 
 A fresh GitHub releases read still returned the
 [745b3e41 prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b),
@@ -353,9 +396,11 @@ There is no complete exact-current-SHA published release claim in this record.
   recovery remain actual source work. Automatic failure retains On-connect/Always
   protection, and post-readiness event continuity now has a retained observer.
   The installed generated engine now supplies its authenticated original-child
-  startup receipt to the retained service observer. Controller pre-RPC event
-  continuity, active owned MTU transitions and exact native route/rule retirement
-  remain source work. Initial/reset/Close priority-range cleanup cannot become
+  startup receipt to the retained service observer. The controller now retains
+  its own original observer through private preparation, Start and later RPCs;
+  its mandatory installed namespace cases remain unproved locally. Active owned
+  MTU transitions and exact native route/rule retirement remain source work.
+  Initial/reset/Close priority-range cleanup cannot become
   original-object authority, and child exit alone cannot establish native
   cleanup success. Persisted
   metadata alone cannot authorize adopting or deleting a prior table.
@@ -369,6 +414,11 @@ There is no complete exact-current-SHA published release claim in this record.
 - The exact current source still needs complete native/package/image/compose
   gates and publication. Latest-attempt jobs/logs decide current blockers;
   historical errors cannot automatically be carried forward.
+- Protected Windows complete-MAX admission remains closed pending its matching
+  native MAX prerequisites and shipping activation. Both unified prospective
+  ALL architecture gates passed, and both are now required by release; those
+  specific gaps are no longer open. The Windows command-retirement repair still
+  requires its real file-sharing regression and complete native MAX rerun.
 - All original applicable product, map/UI, measurement, profile, Methods,
   onboarding/admin, native-runtime and lifecycle requirements remain accountable
   under the full ledger. This continuation did not independently close every
