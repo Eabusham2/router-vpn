@@ -44,13 +44,13 @@ type nodeMAXTLSReference struct {
 // This is the original pinned Xray reference with an actual captured physical
 // TCP front. The client retains that exact endpoint. Only the server may route
 // the one authenticated private UDP tuple into its owned middle service.
-func nodeMAXTLS(t *testing.T, ip netip.Addr, middle M.Socksaddr, target, fault string, hooks *nodeMAXReferenceHooks) *nodeMAXTLSReference {
+func nodeMAXTLS(t *testing.T, ip netip.Addr, middle M.Socksaddr, packetPort uint16, target, fault string, hooks *nodeMAXReferenceHooks) *nodeMAXTLSReference {
 	t.Helper()
 	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
 	if !filepath.IsAbs(binary) || !ip.Is4() || !ip.IsPrivate() || ip.IsLoopback() || !middle.Addr.IsPrivate() || middle.Port == 0 {
 		t.Fatal("MAX TLS reference lost its pinned server or captured private tuples")
 	}
-	front, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	front, err := nodeMAXTLSFront(ip, packetPort, middle.Port, net.ListenTCP)
 	if err != nil {
 		t.Fatal(err)
 	}

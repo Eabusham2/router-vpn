@@ -369,7 +369,7 @@ func newNodeMAXFixtureWithAssembly(t *testing.T, mode, layer, fault string, asse
 	var tlsReference *nodeMAXTLSReference
 	protocol := "udp"
 	if isTLS {
-		tlsReference = nodeMAXTLS(t, ip, middleDestination, middleAddress.String(), fault, hooks)
+		tlsReference = nodeMAXTLS(t, ip, middleDestination, basePort, middleAddress.String(), fault, hooks)
 		outer, outerAddress = tlsReference.observed, tlsReference.address
 		protocol = "tcp"
 	} else {

@@ -74,6 +74,60 @@ func TestShippingExchangeDiagnosticSuccessAndPayload(t *testing.T){
 '''
 
 
+class NativeTLSFrontAllocation(unittest.TestCase):
+    def test_actual_listener_aliases_and_shipping_allocator_call(self):
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'actual retained TLS listener regression requires Go')
+        stream = (ROOT / 'mobile/desktop/node_max_stream_test.go.tmpl').read_text()
+        tls = (ROOT / 'mobile/desktop/node_max_tls_reference_test.go.tmpl').read_text()
+        peer = (ROOT / 'mobile/desktop/node_max_peer_test.go.tmpl').read_text()
+        self.assertIn('nodeMAXTLS(t, ip, middleDestination, basePort, middleAddress.String(), fault, hooks)', peer)
+        helper = stream[stream.index('func nodeMAXTLSFront('):stream.index('func nodeMAXBoth(')]
+        cases = stream[stream.index('func nodeMAXTLSFrontCases('):stream.index('func TestRouterVPNDesktopNodeMAXPortPair(')]
+        allocation = tls[tls.index('\tfront, err :='):tls.index('\tbridge, err :=')]
+        # Only the native allocation call is injected. The shipping call site,
+        # exact reserved graph ports, retained socket checks and cleanup execute.
+        def source(selected):
+            return (r'''package front
+import("errors";"net";"net/netip";"testing";"time")
+func TestRetainedFront(t *testing.T){nodeMAXTLSFrontCases(t)}
+func shippingFront(t *testing.T, ip netip.Addr, packetPort uint16, middle struct{Port uint16}, listen func(string,*net.TCPAddr)(*net.TCPListener,error))*net.TCPListener{
+''' + selected.replace('net.ListenTCP', 'listen') + r'''
+return front
+}
+func TestShippingTLSFrontAllocation(t *testing.T){
+ ip:=netip.MustParseAddr("127.0.0.1"); calls:=0
+ var original *net.TCPListener
+ front:=shippingFront(t,ip,51820,struct{Port uint16}{31001},func(network string,address *net.TCPAddr)(*net.TCPListener,error){
+  calls++;if calls==1{address=net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip,51822))}
+  socket,err:=net.ListenTCP(network,address);if calls==1{original=socket};return socket,err
+ });defer front.Close()
+ if calls<2||calls>3||original==nil||original.SetDeadline(time.Now())==nil||front.Addr().(*net.TCPAddr).Port==51822{t.Fatal("shipping TLS fixture admitted its original KEM graph alias")}
+}
+''' + helper + cases)
+        with tempfile.TemporaryDirectory(prefix='max-retained-tls-front-') as temporary:
+            path = Path(temporary) / 'front_test.go'
+            env = dict(os.environ, GOTOOLCHAIN='local')
+            def execute(selected, selector):
+                path.write_text(source(selected))
+                command = captured_cleanup_test_command(go, path, env)
+                command.insert(-1, '-run='+selector)
+                return subprocess.run(command,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, timeout=60)
+            baseline = execute(allocation, 'Test')
+            self.assertEqual(baseline.returncode, 0, baseline.stdout)
+            for case in ('packet', 'kem', 'middle', 'whitening', 'exhausted', 'foreign', 'missing', 'error'):
+                self.assertIn('--- PASS: TestRetainedFront/tls-front-'+case+' (', baseline.stdout)
+            self.assertIn('--- PASS: TestShippingTLSFrontAllocation (', baseline.stdout)
+            self.assertNotIn('--- SKIP:', baseline.stdout)
+            old = '\tfront, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))\n\tif err != nil { t.Fatal(err) }\n'
+            negative = execute(old, '^TestShippingTLSFrontAllocation$')
+            self.assertNotEqual(negative.returncode, 0, negative.stdout)
+            self.assertIn('shipping TLS fixture admitted its original KEM graph alias', negative.stdout)
+            self.assertNotIn('DATA RACE', negative.stdout)
+            self.assertNotIn('panic:', negative.stdout)
+
+
 class NativeFailureDiagnostics(unittest.TestCase):
     def test_long_native_failure_retains_early_cause_and_late_stack_with_byte_bound(self):
         output = 'EARLY_ORIGINAL_TEST_FAILURE\n' + ('middle goroutine evidence Ω\n' * 3000) + 'LATE_NATIVE_STACK\n'

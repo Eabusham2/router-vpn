@@ -57,7 +57,9 @@ STARTUP_RECORDS = 'TestRouterVPNDesktopNodeMAXTLSStartupRecords'
 PORT_PAIR = 'TestRouterVPNDesktopNodeMAXPortPair'
 PORT_PAIR_CASES = ('candidate-selection', 'actual-retained-pair', 'occupied-udp-tcp', 'excluded-graph-port',
                    'all-candidates-blocked', 'unrelated-udp', 'foreign-tcp', 'foreign-udp', 'partial-udp-cleanup',
-                   'tcp-cleanup-error', 'udp-cleanup-error', 'invalid-candidates', 'missing-udp')
+                   'tcp-cleanup-error', 'udp-cleanup-error', 'invalid-candidates', 'missing-udp',
+                   'tls-front-packet', 'tls-front-kem', 'tls-front-middle', 'tls-front-whitening',
+                   'tls-front-exhausted', 'tls-front-foreign', 'tls-front-missing', 'tls-front-error')
 PASS = re.compile(r'^\s*--- PASS: ([^\s]+) \([0-9.]+s\)$', re.MULTILINE)
 FAIL = re.compile(r'^\s*--- FAIL: ([^\s]+) \([0-9.]+s\)$', re.MULTILINE)
 INVALID_OUTPUT = ('--- SKIP:', 'DATA RACE', 'panic:', 'fatal error:', 'no tests to run')
