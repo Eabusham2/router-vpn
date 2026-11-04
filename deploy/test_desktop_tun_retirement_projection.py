@@ -135,6 +135,10 @@ class PinnedDBusModuleInventory(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='godbus-original-inventory-') as directory:
             original = Path(directory)/'module'
             shutil.copytree(self.module, original)
+            # copytree preserves Go's read-only module-cache directory mode.
+            # Only this newly created private fixture needs to add/remove its
+            # root-level mutation files; never chmod the original cache tree.
+            original.chmod(0o700)
             target = original/'decoder.go'
             raw = target.read_bytes()
             self.assertIn(b'\n', raw)

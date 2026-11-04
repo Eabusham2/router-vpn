@@ -219,7 +219,7 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Relay OpenVPN helper fixture correction accompanying this record
+## Relay OpenVPN helper fixture correction published at a90f6c97
 
 The exact `a424c763` requirements source gate, [run 41832515645,
 job 126583552270](https://github.com/Eabusham2/router-vpn/actions/runs/41832515645/job/126583552270),
@@ -238,6 +238,39 @@ three cases, after which the original preparer is restored and hash-checked.
 An initial command aimed at another package reported no tests and is excluded
 from evidence. This closes the witnessed fixture mismatch; exact-current-SHA
 native builds and full publication remain separate requirements.
+
+## Pinned D-Bus mutation fixture directory permissions
+
+The exact `a424c763` Linux native workflow
+[41832516033](https://github.com/Eabusham2/router-vpn/actions/runs/41832516033)
+failed its required retirement-preparation regression on both actual hosts:
+[ARM64 job 126587051761](https://github.com/Eabusham2/router-vpn/actions/runs/41832516033/job/126587051761)
+and [AMD64 job 126587051817](https://github.com/Eabusham2/router-vpn/actions/runs/41832516033/job/126587051817).
+`shutil.copytree` preserved the Go module cache's read-only directory mode.
+The copied `decoder.go` could be modified after its existing file chmod, but
+the missing-file and extra-file controls could not unlink or create a file
+in the copied directory. Both raised `PermissionError` before the checksum
+refusal could execute; these were fixture setup failures, not successful
+native retirement results.
+
+The correction sets `0700` only on the newly created private fixture copy's
+root directory. It changes neither the original module cache nor any copied
+source bytes. All four changed-byte, CRLF, missing-file and extra-file controls
+still require the exact complete pinned-module checksum refusal, followed by
+byte-identical restoration and verification. No production helper, pinned sum,
+native test inventory or deadline changes.
+
+Local reproduction used the actual pinned module corpus and the unchanged
+Python test methods. This workspace maps only UID 0, so the original fork
+instead dropped `CAP_DAC_OVERRIDE` and `CAP_DAC_READ_SEARCH` from its effective,
+permitted and inheritable sets before executing the tests. Actual kernel
+permission checks reproduced both missing-file/extra-file errors before the
+fix. Both inventory tests pass afterward in 0.091s, with the original source
+copy's read-only mode and complete bytes independently checked by the joined
+parent. The full four-case projection suite also passes in 1.180s against the
+untouched pinned prepared core; the publication checkout repeats all four
+cases successfully in 1.171s. This evidence covers the fixture correction;
+fresh native workflow and complete package/release acceptance remain required.
 
 ## macOS SS2022 entry to CONNECT final published at 46ac499c
 
