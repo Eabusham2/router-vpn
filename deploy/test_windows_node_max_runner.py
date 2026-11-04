@@ -100,7 +100,7 @@ class NativeFailureDiagnostics(unittest.TestCase):
             self.assertLessEqual(len(actual.encode()), limit)
 
     def test_diagnostic_formatting_never_changes_negative_verdict_or_deadline(self):
-        parent, case, witness = 'TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor', 'max-tls-wg', 'foreign MAX predecessor reached actual native encrypted startup'
+        parent, case, witness = 'TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor', 'max-tls-wg', 'foreign MAX predecessor reached captured native admission'
         raw = failure(parent, case, witness)
         GATE.rejected_output(1, raw, parent, case, witness)
         for invalid in (raw.replace('FAIL\n', ''), raw + '\npanic: test timed out after 90s\n', raw + '\nDATA RACE\n'):
@@ -196,6 +196,70 @@ def captured_cleanup_test_command(go, path, env):
     return [go, 'test', *race, '-count=1', '-timeout=15s', '-v', str(path)]
 
 
+FOREIGN_ADMISSION_HARNESS = r'''package nativefixture
+import("context";"errors";"fmt";"strings";"testing")
+type capture struct{SourceSHA256 string}
+type DesktopWindowsProtectionTarget struct{Capture capture;Policy,BaselineSHA256 string}
+type NodePhysicalPrepared = DesktopWindowsProtectionTarget
+type originalProfile struct{}
+type foreignTest struct{cleanup []func();fatal string}
+func(t *foreignTest)Helper(){}
+func(t *foreignTest)Run(_ string,f func(*foreignTest)){f(t)}
+func(t *foreignTest)Fatal(v ...any){t.fatal=fmt.Sprint(v...);panic(t)}
+func(t *foreignTest)Cleanup(f func()){t.cleanup=append(t.cleanup,f)}
+type notReady struct{}
+func(notReady)Load()bool{return false}
+type nativeTUN struct{ready notReady}
+type nativeNetwork struct{}
+func(*nativeNetwork)Current()bool{return false}
+func(*nativeNetwork)SocketCurrent()bool{return false}
+type nodePQWFPFixture struct{prepared DesktopWindowsProtectionTarget;admitted int;network *nativeNetwork;tun *nativeTUN;box *nativeBox;closed bool}
+type nativeBox struct{fixture *nodePQWFPFixture;predecessor *DesktopWindowsProtectionTarget;admit func(context.Context,NodePhysicalPrepared)error}
+var nodeMAXWFPModes []string
+var rejectForeign bool
+var nativeCurrent,cleanupTarget string
+var fullOriginalProof,originalJoined,candidateJoined,foreignHandshake int
+func DesktopWindowsNodeCompositionAbsent(context.Context)error{if nativeCurrent!=""{return errors.New("not absent")};return nil}
+func DesktopWindowsNodeCompositionVerifyPrepared(_ context.Context,t DesktopWindowsProtectionTarget)error{if t.Capture.SourceSHA256!=nativeCurrent{return errors.New("wrong prepared native owner")};return nil}
+func DesktopWindowsNodeCompositionVerifyRetained(_ context.Context,t DesktopWindowsProtectionTarget)error{if t.Capture.SourceSHA256!="original"||nativeCurrent!="original"{return errors.New("original retained policy changed")};return nil}
+func nodePQWFPCleanup(t *foreignTest,target *DesktopWindowsProtectionTarget){t.Cleanup(func(){cleanupTarget=target.Capture.SourceSHA256;if cleanupTarget!=nativeCurrent{panic("cleanup switched original native target")};nativeCurrent=""})}
+type nativeReference struct{}
+func nodeMAXWFPStartReference(*foreignTest,string,string,string)*nativeReference{return &nativeReference{}}
+func(*nativeReference)original(*foreignTest,string)*originalProfile{return &originalProfile{}}
+func nodeMAXWFPBox(t *foreignTest,p *originalProfile,old *DesktopWindowsProtectionTarget,prepare bool)*nodePQWFPFixture{return nodeMAXWFPBoxWithAdmissionGuard(t,p,old,prepare,nil)}
+func nodeMAXWFPBoxWithAdmissionGuard(t *foreignTest,_ *originalProfile,old *DesktopWindowsProtectionTarget,prepare bool,guard func(DesktopWindowsProtectionTarget)error)*nodePQWFPFixture{
+ if !prepare{panic("lost native preparation")};f:=&nodePQWFPFixture{network:&nativeNetwork{},tun:&nativeTUN{}}
+ f.box=&nativeBox{f,old,actualAdmission(f,guard)};t.Cleanup(func(){_ = f.close()});return f
+}
+func(b *nativeBox)RouterVPNStrategyStart()error{
+ if b.predecessor!=nil&&rejectForeign{return errors.New("original production admission rejected foreign capture")}
+ id:="original";if b.predecessor!=nil{id="candidate"}
+ nativeCurrent=id
+ if err:=b.admit(context.Background(),NodePhysicalPrepared{capture{id},"always","native-baseline"});err!=nil{return err}
+ if b.predecessor!=nil{foreignHandshake++;return errors.New("unrelated second PQ exchange")}
+ return nil
+}
+func(f *nodePQWFPFixture)start(t *foreignTest){if err:=f.box.RouterVPNStrategyStart();err!=nil{t.Fatal(err)}}
+func(f *nodePQWFPFixture)close()error{if !f.closed{f.closed=true;if f.box.predecessor==nil{originalJoined++}else{candidateJoined++}};return nil}
+func nodeMAXWFPRequireTraffic(t *foreignTest,f *nodePQWFPFixture,_ *nativeReference,_ [32]byte,_ bool){if f.admitted!=1||f.prepared.Capture.SourceSHA256!="original"{t.Fatal("lost original full traffic proof")};fullOriginalProof++}
+func nodePQWFPDrain(t *foreignTest,f *nodePQWFPFixture)DesktopWindowsProtectionTarget{if err:=f.close();err!=nil{t.Fatal(err)};return f.prepared}
+func invokeForeign(t *foreignTest){defer func(){if r:=recover();r!=nil&&r!=t{panic(r)}}();TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t)}
+func TestExactForeignAdmission(t *testing.T){
+ for _,mode:=range []string{"max-tls-wg","max-quic-wg"}{for _,control:=range []string{"reject-before-admission","admission-guard-bypassed"}{t.Run(mode+"/"+control,func(t *testing.T){
+  nodeMAXWFPModes=[]string{mode};rejectForeign=control=="reject-before-admission";nativeCurrent="";cleanupTarget=""
+  fullOriginalProof,originalJoined,candidateJoined,foreignHandshake=0,0,0,0
+  fixture:=&foreignTest{};invokeForeign(fixture)
+  for i:=len(fixture.cleanup)-1;i>=0;i--{fixture.cleanup[i]()}
+  if foreignHandshake!=0{t.Fatal("foreign candidate entered unrelated post-admission PQ handshake")}
+  if fullOriginalProof!=1||originalJoined!=1||candidateJoined!=1||nativeCurrent!=""{t.Fatal("foreign rejection dropped original traffic, candidate join or native retirement")}
+  if rejectForeign{if fixture.fatal!=""||cleanupTarget!="original"{t.Fatal("valid early rejection changed original retained owner",fixture.fatal,cleanupTarget)}}else{
+   if fixture.fatal!="foreign MAX predecessor reached captured native admission"||cleanupTarget!="candidate"{t.Fatal("bypassed admission lost its exact witness or new captured cleanup target",fixture.fatal,cleanupTarget)}
+  }
+ })}}
+}
+'''
+
+
 class CapturedNativeCleanup(unittest.TestCase):
     def test_exact_cleanup_keeps_original_target_and_independent_retirement(self):
         go = shutil.which('go')
@@ -218,6 +282,31 @@ class CapturedNativeCleanup(unittest.TestCase):
         for case in ('captured', 'foreign-newer', 'partial', 'missing', 'read-failure',
                      'transaction-failure', 'close-failure', 'absence-failure'):
             self.assertIn('--- PASS: TestCapturedNativeCleanup/' + case + ' (', result.stdout)
+        self.assertNotIn('--- SKIP:', result.stdout)
+
+    def test_foreign_max_rejection_stops_at_exact_admission_and_retires_captured_candidate(self):
+        template = (ROOT / 'mobile/desktop/node_max_peer_windows_test.go.tmpl').read_text()
+        begin = template.index('\t\tadmit := func(ctx context.Context, prepared routervpndesktoppt.NodePhysicalPrepared) error {')
+        end = template.index('\n\t\tif predecessor == nil {', begin)
+        admission = template[begin:end].replace('\t\tadmit := func', 'admit := func')
+        begin = template.index('func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(')
+        end = template.index('func TestRouterVPNDesktopNodeWindowsMAXMarkers(', begin)
+        foreign = template[begin:end].replace('t *testing.T', 't *foreignTest')
+        code = FOREIGN_ADMISSION_HARNESS + '\nfunc actualAdmission(f *nodePQWFPFixture, guard func(DesktopWindowsProtectionTarget) error) func(context.Context, NodePhysicalPrepared) error {\n' + admission + '\nreturn admit\n}\n' + foreign
+        code = code.replace('mobiletor.', '').replace('routervpndesktoppt.', '')
+        code = code.replace('TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(', 'shippingForeignPredecessor(')
+        with tempfile.TemporaryDirectory(prefix='max-foreign-admission-') as temporary:
+            path = Path(temporary) / 'admission_test.go'
+            path.write_text(code)
+            go = shutil.which('go')
+            self.assertIsNotNone(go, 'Foreign native admission regression requires Go')
+            env = dict(os.environ, GOTOOLCHAIN='local')
+            result = subprocess.run(captured_cleanup_test_command(go, path, env), text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60, env=env)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for mode in ('max-tls-wg', 'max-quic-wg'):
+            for control in ('reject-before-admission', 'admission-guard-bypassed'):
+                self.assertIn('--- PASS: TestExactForeignAdmission/' + mode + '/' + control + ' (', result.stdout)
         self.assertNotIn('--- SKIP:', result.stdout)
 
     def test_cleanup_uses_race_on_supported_native_targets_and_executes_windows_arm64(self):

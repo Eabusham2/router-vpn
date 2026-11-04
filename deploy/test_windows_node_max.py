@@ -480,7 +480,7 @@ def mutations(source):
         protocol = 'tcp' if family == 'TLS' else 'udp'
         for label, selected, group, case, witness in (
             ('legacy-max-adoption-' + family.lower(), kernel[0], FOREIGN, mode,
-             'foreign MAX predecessor reached actual native encrypted startup'),
+             'foreign MAX predecessor reached captured native admission'),
             ('late-max-handshake-' + family.lower(), late_handshake_control(kernel[1], protocol), parent, mode + '/off',
              handshake_witness(protocol)),
             ('ordinary-max-' + ('tcp' if family == 'TLS' else 'udp') + '-deny', kernel[2], parent, mode + '/off',

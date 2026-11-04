@@ -809,6 +809,10 @@ func (p *nodeMAXWFPReference) original(t *testing.T, kill string) *mobilemultiho
 }
 
 func nodeMAXWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, predecessor *mobiletor.DesktopWindowsProtectionTarget, prepare bool) *nodePQWFPFixture {
+	return nodeMAXWFPBoxWithAdmissionGuard(t, original, predecessor, prepare, nil)
+}
+
+func nodeMAXWFPBoxWithAdmissionGuard(t *testing.T, original *mobilemultihop.NodeProfile, predecessor *mobiletor.DesktopWindowsProtectionTarget, prepare bool, guard func(mobiletor.DesktopWindowsProtectionTarget) error) *nodePQWFPFixture {
 	t.Helper()
 	policy, err := mobilemultihop.NewDesktopNodePolicy(original, nodePQWFPNonce(t), "windows")
 	if err != nil {
@@ -825,6 +829,9 @@ func nodeMAXWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, predecess
 				return err
 			}
 			f.prepared, f.admitted = target, 1
+			if guard != nil {
+				return guard(target)
+			}
 			return nil
 		}
 		if predecessor == nil {
@@ -1265,12 +1272,18 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 			retained = nodePQWFPDrain(t, first)
 			wrong := retained
 			wrong.Capture.SourceSHA256 = strings.Repeat("f", 64)
-			candidate := nodeMAXWFPBox(t, original, &wrong, true)
+			candidate := nodeMAXWFPBoxWithAdmissionGuard(t, original, &wrong, true, func(target mobiletor.DesktopWindowsProtectionTarget) error {
+				// This admission is already forbidden. Retain the actual newly
+				// prepared owner for independent cleanup, then reject before an
+				// unrelated second PQ exchange can consume the rejection budget.
+				retained = target
+				return errors.New("foreign MAX predecessor reached captured native admission")
+			})
 			if err := candidate.box.RouterVPNStrategyStart(); err == nil || candidate.admitted != 0 {
 				if candidate.admitted != 0 {
 					retained = candidate.prepared
 				}
-				t.Fatal("foreign MAX predecessor reached actual native encrypted startup")
+				t.Fatal("foreign MAX predecessor reached captured native admission")
 			}
 			if err := candidate.close(); err != nil {
 				t.Fatal("rejected MAX successor did not join", err)
