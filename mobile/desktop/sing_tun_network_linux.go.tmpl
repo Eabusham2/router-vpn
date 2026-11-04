@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -14,12 +15,10 @@ import (
 	"slices"
 	"sort"
 	"syscall"
-
-	"github.com/sagernet/netlink"
 )
 
 func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) {
-	current, err := net.InterfaceByName(t.options.Name)
+	current, err := t.routervpnLinuxInterface()
 	if err != nil || current.Index != t.routervpnOwnedIndex || t.routervpnOwnedIndex < 1 {
 		return nil, 0, errors.New("native Linux routing receipt lost its original TUN")
 	}
@@ -27,39 +26,35 @@ func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) 
 }
 
 func routervpnLinuxNetworkObjects(kind string) ([]DesktopNetworkObject, error) {
+	return routervpnLinuxNetworkObjectsContext(context.Background(), kind)
+}
+
+func (t *NativeTun) routervpnLinuxNetworkObjects(kind string) ([]DesktopNetworkObject, error) {
+	ctx := t.options.RouterVPNNetworkContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return routervpnLinuxNetworkObjectsContext(ctx, kind)
+}
+
+func routervpnLinuxNetworkObjectsContext(ctx context.Context, kind string) ([]DesktopNetworkObject, error) {
 	request, response := syscall.RTM_GETROUTE, uint16(syscall.RTM_NEWROUTE)
 	if kind == "rule" {
 		request, response = syscall.RTM_GETRULE, syscall.RTM_NEWRULE
 	}
-	raw, err := syscall.NetlinkRIB(request, syscall.AF_UNSPEC)
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > 4<<20 {
-		return nil, errors.New("native Linux route inventory exceeded its bound")
-	}
-	messages, err := syscall.ParseNetlinkMessage(raw)
+	messages, err := linuxDump(ctx, request, response)
 	if err != nil {
 		return nil, err
 	}
 	var objects []DesktopNetworkObject
 	for _, message := range messages {
-		if message.Header.Flags&0x10 != 0 {
-			return nil, errors.New("native Linux routing dump was interrupted")
-		}
-		if message.Header.Type == syscall.NLMSG_DONE {
-			continue
-		}
-		if message.Header.Type != response {
-			return nil, errors.New("native Linux routing dump contains an unknown result")
-		}
 		object, err := ParseDesktopLinuxNetworkObject(kind, message.Data)
 		if err != nil {
 			return nil, err
 		}
 		objects = append(objects, object)
 	}
-	return objects, nil
+	return objects, ctx.Err()
 }
 
 // Route additions can overlap the kernel's asynchronous publication of the
@@ -121,7 +116,7 @@ func (t *NativeTun) routervpnLinuxRouteOwner() (routerVPNLinuxRouteOwner, error)
 		}
 		expected[prefix] = true
 	}
-	addresses, err := netlink.AddrList(&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Index: current.Index}}, netlink.FAMILY_ALL)
+	addresses, err := t.routervpnLinuxAddresses(current.Index)
 	if err != nil || len(addresses) == 0 || len(addresses) > 32 {
 		return routerVPNLinuxRouteOwner{}, bad
 	}
@@ -165,7 +160,7 @@ func (t *NativeTun) routervpnLinuxRouteOwner() (routerVPNLinuxRouteOwner, error)
 }
 
 func (t *NativeTun) routervpnLinuxBefore(kind string) routerVPNLinuxRoutingBefore {
-	objects, err := routervpnLinuxNetworkObjects(kind)
+	objects, err := t.routervpnLinuxNetworkObjects(kind)
 	if err != nil {
 		t.routervpnNetworkFailure(fmt.Errorf("native Linux %s before inventory: %w", kind, err))
 		return routerVPNLinuxRoutingBefore{}
@@ -187,7 +182,7 @@ func (t *NativeTun) routervpnLinuxBefore(kind string) routerVPNLinuxRoutingBefor
 
 func (t *NativeTun) routervpnLinuxAdded(kind string, capture routerVPNLinuxRoutingBefore) {
 	before := capture.objects
-	after, err := routervpnLinuxNetworkObjects(kind)
+	after, err := t.routervpnLinuxNetworkObjects(kind)
 	if err != nil {
 		t.routervpnNetworkFailure(fmt.Errorf("native Linux %s after inventory: %w", kind, err))
 		return
@@ -578,11 +573,11 @@ func (t *NativeTun) routervpnLinuxResolvedRules(removed, added []DesktopNetworkO
 }
 
 func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {
-	routes, err := routervpnLinuxNetworkObjects("route")
+	routes, err := t.routervpnLinuxNetworkObjects("route")
 	if err != nil {
 		return nil, err
 	}
-	rules, err := routervpnLinuxNetworkObjects("rule")
+	rules, err := t.routervpnLinuxNetworkObjects("rule")
 	if err != nil {
 		return nil, err
 	}

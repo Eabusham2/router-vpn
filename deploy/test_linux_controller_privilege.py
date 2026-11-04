@@ -33,6 +33,9 @@ TRANSACTION_SPEC.loader.exec_module(TRANSACTION)
 SERVICE_SPEC = importlib.util.spec_from_file_location('standard_service_gate', ROOT/'deploy/linux_standard_service_gate.py')
 SERVICE = importlib.util.module_from_spec(SERVICE_SPEC)
 SERVICE_SPEC.loader.exec_module(SERVICE)
+BUNDLE_SPEC = importlib.util.spec_from_file_location('standard_service_bundle', ROOT/'deploy/linux_standard_service_bundle.py')
+BUNDLE = importlib.util.module_from_spec(BUNDLE_SPEC)
+BUNDLE_SPEC.loader.exec_module(BUNDLE)
 CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
          'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart',
@@ -98,14 +101,14 @@ def check_empty_recovery_verdict(output, *, native=False):
 
 
 def source_identity():
-    names = sorted([ROOT/'go.mod', ROOT/'go.sum', ROOT/'modes/kill-switch.py', ROOT/'modes/profile_id.py', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
+    names = sorted(set([*BUNDLE.builder().inputs(), ROOT/'go.mod', ROOT/'go.sum', ROOT/'modes/kill-switch.py', ROOT/'modes/profile_id.py', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
                     *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, *TRANSACTION.RUNNERS, 'test_linux_controller_privilege.py',
-                                                     'test_linux_empty_recovery_runner.py', 'test_linux_sealed_process_runner.py', *SERVICE.RUNNERS))])
+                                                     'test_linux_empty_recovery_runner.py', 'test_linux_sealed_process_runner.py', *SERVICE.RUNNERS))]))
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in names if path.is_file() and not path.is_symlink()}
 
 
-def namespace_test(binary, pattern='^TestLinuxOwnedControllerNamespace', process_sha256=None):
+def namespace_test(binary, pattern='^TestLinuxOwnedControllerNamespace', process_sha256=None, runtime_bundle=None, runtime_manifest=None):
     if os.geteuid() != 0 or platform.system() != 'Linux' or not binary.is_absolute() or not binary.is_file():
         raise ValueError('Controller namespace fixture requires its actual privileged Linux invocation')
     if pattern.startswith('^TestLinuxProcessNamespace') and (
@@ -156,9 +159,13 @@ def namespace_test(binary, pattern='^TestLinuxOwnedControllerNamespace', process
                 if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != 0 or info.st_gid != 0 or
                         info.st_mode & 0o022 or hashlib.sha256(executable.read_bytes()).hexdigest() != process_sha256):
                     raise ValueError('Native process fixture did not preserve its exact compiled protected image')
+            runtime_env = {}
+            if runtime_bundle is not None:
+                staged = BUNDLE.copy_private(runtime_bundle, Path('/opt/routervpn-runtime-proof'), runtime_manifest)
+                runtime_env['ROUTERVPN_STANDARD_RUNTIME_BUNDLE'] = str(staged)
             result = subprocess.run([str(executable), '-test.run=' + pattern,
                                      '-test.count=1', '-test.timeout=120s', '-test.v'],
-                                    env=dict(os.environ, ROUTERVPN_CONTROLLER_PRIVILEGE_TEST_NS='1'),
+                                    env=dict(os.environ, ROUTERVPN_CONTROLLER_PRIVILEGE_TEST_NS='1', **runtime_env),
                                     timeout=135).returncode
             os._exit(result if result >= 0 else 128-result)
         except BaseException as error:
@@ -177,7 +184,7 @@ def namespace_test(binary, pattern='^TestLinuxOwnedControllerNamespace', process
     return os.waitstatus_to_exitcode(status)
 
 
-def execute(go='go'):
+def execute(go='go', runtime_bundle=None):
     if platform.system() != 'Linux':
         raise ValueError('The controller privilege gate requires a matching Linux host')
     before = source_identity()
@@ -211,6 +218,7 @@ def execute(go='go'):
         raise ValueError('The controller privilege gate cannot execute a cross-compiled binary')
     sudo = UID.privilege_tool()
     compiler, env = UID.compiler_toolchain(ROOT, go, env)
+    runtime_manifest = BUNDLE.verify(runtime_bundle, env)
     UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', './internal/linuxprotection', './internal/linuxprocess'], cwd=ROOT, env=env)
     recovery_units = UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', '-v',
                               '-run=^TestDesktopLinux(Empty|Release)Recovery', './cmd/client'], cwd=ROOT, env=env)
@@ -218,6 +226,7 @@ def execute(go='go'):
     print(recovery_units, end='' if recovery_units.endswith('\n') else '\n')
     UID.run([sys.executable, ROOT/'deploy/test_linux_empty_recovery_runner.py'], cwd=ROOT, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_standard_service_runner.py'], cwd=ROOT, env=env)
+    UID.run([sys.executable, ROOT/'deploy/test_linux_standard_service_bundle.py'], cwd=ROOT, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_control_runner.py'], cwd=ROOT, env=env)
     CONTROL.execute(compiler, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_transaction_runner.py'], cwd=ROOT, env=env)
@@ -235,7 +244,8 @@ def execute(go='go'):
         service_digest = hashlib.sha256(service_binary.read_bytes()).hexdigest()
         for group in SERVICE.GROUPS:
             service_command = [sys.executable, str(Path(__file__).resolve()), '--namespace-service-binary', str(service_binary),
-                               '--namespace-service-group', group, '--namespace-service-sha256', service_digest]
+                               '--namespace-service-group', group, '--namespace-service-sha256', service_digest,
+                               '--runtime-bundle', str(runtime_bundle), '--runtime-manifest-sha256', runtime_manifest]
             if sudo is not None:
                 service_command = [sudo, '-n', '--', *service_command]
             service_output = UID.run(service_command, cwd=ROOT, timeout=150, sudo=sudo)
@@ -329,6 +339,8 @@ def execute(go='go'):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--go', default='go')
+    parser.add_argument('--runtime-bundle', type=Path, help='Actual already prepared native runtime directory')
+    parser.add_argument('--runtime-manifest-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--namespace-test-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-process-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-process-sha256', help=argparse.SUPPRESS)
@@ -343,9 +355,11 @@ if __name__ == '__main__':
     if args.namespace_service_binary is not None:
         if args.namespace_service_group is None or not re.fullmatch(r'[0-9a-f]{64}', args.namespace_service_sha256 or ''):
             raise ValueError('Standard service requires its exact native test group')
-        raise SystemExit(namespace_test(args.namespace_service_binary, SERVICE.pattern(args.namespace_service_group), args.namespace_service_sha256))
+        if args.runtime_bundle is None or not args.runtime_bundle.is_absolute() or not re.fullmatch(r'[0-9a-f]{64}', args.runtime_manifest_sha256 or ''):
+            raise ValueError('Standard service requires the actual staged native bundle and exact original catalog')
+        raise SystemExit(namespace_test(args.namespace_service_binary, SERVICE.pattern(args.namespace_service_group), args.namespace_service_sha256, args.runtime_bundle, args.runtime_manifest_sha256))
     try:
-        execute(args.go)
+        execute(args.go, args.runtime_bundle.resolve() if args.runtime_bundle is not None else None)
     except subprocess.CalledProcessError as error:
         if error.output:
             sys.stderr.write(error.output[-32768:].decode('utf-8', errors='replace'))

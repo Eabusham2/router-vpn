@@ -1,0 +1,171 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	var capture string
+	command := &cobra.Command{Use: "routervpn-standard", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			if err := routerVPNRunStandard(ctx, capture); err != nil {
+				return errors.New("original standard engine startup or retirement failed")
+			}
+			return nil
+		}}
+	command.Flags().StringVar(&capture, "capture-sha256", "", "original inherited standard capture")
+	mainCommand.AddCommand(command)
+}
+
+type routerVPNStandardInbound interface {
+	RouterVPNDesktopNetworkStartup(context.Context) error
+	RouterVPNDesktopNetworkStartupReceipt(context.Context, func() bool) (string, error)
+}
+
+func routerVPNRunStandard(lifetime context.Context, expected string) (failure error) {
+	captureFile := os.NewFile(standardengine.CaptureFD, "original-standard-capture")
+	configFile := os.NewFile(standardengine.ConfigFD, "original-standard-config")
+	defer captureFile.Close()
+	defer configFile.Close()
+	workspace := os.NewFile(standardengine.DirectoryFD, "original-standard-workspace")
+	defer workspace.Close()
+	parentFile := os.NewFile(standardengine.ParentFD, "original-standard-parent")
+	defer func() {
+		if parentFile != nil {
+			failure = errors.Join(failure, parentFile.Close())
+		}
+	}()
+	for _, file := range []*os.File{captureFile, configFile, workspace, parentFile} {
+		if err := linuxprocess.SetCloseOnExec(file); err != nil {
+			return err
+		}
+	}
+	raw, err := standardengine.ReadSealed(captureFile, 2048)
+	if err != nil {
+		return err
+	}
+	capture, err := standardengine.DecodeCapture(raw, expected)
+	if err != nil {
+		return err
+	}
+	remaining := time.Until(time.Unix(0, capture.DeadlineNS))
+	if remaining <= 0 || remaining > 2*time.Minute {
+		return errors.New("standard startup lost its original deadline")
+	}
+	startup, cancel := context.WithDeadline(lifetime, time.Unix(0, capture.DeadlineNS))
+	defer cancel()
+	channel, err := linuxprocess.CaptureChannel(os.NewFile(standardengine.ChannelFD, "original-standard-channel"))
+	defer func() {
+		if channel != nil {
+			cleanup, stop := context.WithTimeout(context.Background(), 4*time.Second)
+			defer stop()
+			failure = errors.Join(failure, channel.Close(cleanup))
+		}
+	}()
+	if err != nil {
+		return err
+	}
+	imageFile := os.NewFile(3, "original-sealed-executable")
+	defer imageFile.Close()
+	if err := linuxprocess.SetCloseOnExec(imageFile); err != nil {
+		return err
+	}
+	image, err := linuxprocess.CaptureSealedImage(imageFile)
+	if err != nil {
+		return err
+	}
+	peer, err := linuxprocess.BindInheritedSealedParent(startup, channel, parentFile, expected, image)
+	channel, parentFile = nil, nil
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stop()
+		failure = errors.Join(failure, peer.Close(cleanup))
+	}()
+	if err != nil {
+		return err
+	}
+	raw, err = standardengine.ReadSealed(configFile, standardengine.MaxConfig)
+	if err != nil || standardengine.SHA256(raw) != capture.ConfigSHA256 {
+		return errors.New("standard command lost its original sealed configuration")
+	}
+	shape, err := standardengine.Config(raw, capture.Mode)
+	if err != nil {
+		return err
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](globalCtx, raw)
+	if err != nil {
+		return err
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	owned, stop := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
+	defer stop()
+	instance, err := box.New(box.Options{Context: owned, Options: options})
+	if err != nil {
+		for _, partial := range routerVPNExternalConstructed(owned) {
+			if closer, ok := partial.(interface{ Close() error }); ok {
+				failure = errors.Join(failure, closer.Close())
+			}
+		}
+		return errors.Join(err, failure)
+	}
+	defer func() { failure = errors.Join(failure, instance.Close()) }()
+	inbound, present := instance.Inbound().Get(shape.Tag)
+	reader, valid := inbound.(routerVPNStandardInbound)
+	if !present || !valid {
+		return errors.New("standard command has no actual captured TUN ledger")
+	}
+	if err := reader.RouterVPNDesktopNetworkStartup(startup); err != nil {
+		return err
+	}
+	if err := peer.Current(startup); err != nil {
+		return err
+	}
+	if err := instance.Start(); err != nil {
+		return err
+	}
+	if err := peer.Current(startup); err != nil {
+		return err
+	}
+	guard := func() bool {
+		check, cancel := context.WithTimeout(lifetime, time.Second)
+		defer cancel()
+		return peer.Current(check) == nil
+	}
+	ledger, err := reader.RouterVPNDesktopNetworkStartupReceipt(startup, guard)
+	if err != nil {
+		return err
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(ledger)
+	if err != nil || receipt.Name != shape.Name || receipt.Index < 1 || receipt.MTU != shape.MTU {
+		return errors.New("standard ledger differs from its actual captured inbound")
+	}
+	body, err := (standardengine.Ready{Schema: 1, CaptureSHA256: expected, NetworkReceipt: ledger}).Canonical()
+	if err != nil {
+		return err
+	}
+	if err := peer.Send(startup, body); err != nil {
+		return err
+	}
+	// Only the original creating service can retire this process. Its immutable
+	// creation pidfd and joined Stop remain outside this observational channel.
+	<-lifetime.Done()
+	return nil
+}

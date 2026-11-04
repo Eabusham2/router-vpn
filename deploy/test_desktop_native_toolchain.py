@@ -1486,7 +1486,8 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
             with patch.object(N.platform, 'system', return_value='Linux'), \
                  patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'aarch64'), \
                  patch.object(N, 'environment', return_value=env), patch.object(N, 'digest', return_value='source'), \
-                 patch.object(N, 'reuse', return_value={}), patch.object(N, 'run', side_effect=run):
+                 patch.object(N, 'reuse', return_value={}), patch.object(N, 'run', side_effect=run), \
+                 patch.object(N, 'verify_linux_standard_configs') as configs:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
                 if failure is not None or verdict_failure:
                     with self.assertRaises(type(failure) if failure is not None else ValueError):
@@ -1494,6 +1495,10 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                 else:
                     with contextlib.redirect_stdout(io.StringIO()):
                         invoke()
+            if failure is not None or verdict_failure:
+                configs.assert_not_called()
+            else:
+                configs.assert_called_once_with(bundle, env)
             self.assertTrue(calls, 'completed or reused bundle omitted actual native DNS execution')
             args, options = calls[0]
             self.assertEqual(args, ['go', 'test', '-json', '-race', '-tags=routervpn_stock_dns_native', './cmd/client',
@@ -1548,6 +1553,42 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
             with self.assertRaises(ValueError): N.verify_linux_stock_dns_verdicts(encode(changed))
         for output in ('not-json', '[]', '{"Action":"start","Action":"pass"}', encode(rows)+'\n{}'):
             with self.assertRaises(ValueError): N.verify_linux_stock_dns_verdicts(output)
+
+
+class LinuxStandardConfigNativeGate(unittest.TestCase):
+    def verdict(self):
+        parent=N.STANDARD_CONFIG_TEST
+        names=[parent]
+        names += [parent+'/'+protocol for protocol in N.STANDARD_CONFIG_PROTOCOLS]
+        names += [parent+'/'+protocol+'/'+policy for protocol in N.STANDARD_CONFIG_PROTOCOLS for policy in N.STANDARD_CONFIG_POLICIES]
+        return '\n'.join('--- PASS: '+name+' (0.01s)' for name in names)
+
+    def test_every_stock_selection_requires_exact_verdict(self):
+        output=self.verdict()
+        N.verify_linux_standard_config_verdicts(output)
+        for line in output.splitlines():
+            for changed in (output.replace(line,''),output+'\n'+line,output.replace(line,line.replace('PASS','SKIP')),output.replace(line,line.replace('StartupStockGraphs','MissingStockGraphs'))):
+                with self.assertRaises(ValueError):N.verify_linux_standard_config_verdicts(changed)
+
+    def test_actual_built_core_checks_all_exported_graphs_before_success(self):
+        for failure in ('none','preparation','core'):
+            calls=[]
+            def run(command,**options):
+                command=list(map(str,command));calls.append(command)
+                if command[:2]==['go','test']:
+                    if failure=='preparation':return 'ok no matching tests'
+                    directory=Path(options['env']['ROUTERVPN_STANDARD_CONFIG_FIXTURES'])
+                    for protocol in N.STANDARD_CONFIG_PROTOCOLS:
+                        for policy in N.STANDARD_CONFIG_POLICIES:(directory/(protocol+'-'+policy+'.json')).write_text('{}')
+                    return self.verdict()
+                self.assertEqual(command[:3],['/actual-native-build/sing-box-routervpn','check','-c'])
+                if failure=='core':raise subprocess.CalledProcessError(1,command)
+                return ''
+            with self.subTest(failure=failure),patch.object(N,'run',side_effect=run):
+                if failure=='none':N.verify_linux_standard_configs(Path('/actual-native-build'),{'GOARCH':'amd64'})
+                else:
+                    with self.assertRaises(ValueError if failure=='preparation' else subprocess.CalledProcessError):N.verify_linux_standard_configs(Path('/actual-native-build'),{'GOARCH':'amd64'})
+            self.assertEqual(len(calls),19 if failure=='none' else 1 if failure=='preparation' else 2)
 
 
 if __name__ == '__main__':

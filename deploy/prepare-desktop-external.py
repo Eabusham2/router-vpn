@@ -35,7 +35,7 @@ DESKTOP_MTU = load('prepare-desktop-mtu')
 TOR = load('prepare-mobile-tor')
 PFABI = load('darwin-pf-abi')
 SHARED = tuple(dict.fromkeys((*RELAY.PACKAGES, 'dnsmeasure', 'mobilemtu', 'mtuprobe')))
-PURE = ('desktopnetwork', 'common', 'mobiletor', 'awgpolicy', 'nativeopenvpn', 'windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection', 'macosprocess')
+PURE = ('standardengine', 'desktopnetwork', 'common', 'mobiletor', 'awgpolicy', 'nativeopenvpn', 'windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection', 'macosprocess')
 PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
@@ -653,7 +653,7 @@ def prepare(vendor, go='go', *, env=None):
     EXTERNAL.prepare(vendor, mobile=False)
     prepare_node_capture(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)
-    templates = [*sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),
+    templates = [*sorted((ROOT/'mobile/desktop').glob('standard*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),
                  *sorted((ROOT/'mobile/desktop').glob('node*.go.tmpl')), ROOT/'mobile/desktop/network_command.go.tmpl',
                  ROOT/'mobile/desktop/network_command_test.go.tmpl']
     for template in templates:

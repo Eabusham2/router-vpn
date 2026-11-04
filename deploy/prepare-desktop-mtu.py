@@ -155,6 +155,12 @@ def prepare(vendor):
             if target.is_symlink():
                 raise ValueError('Linked prepared native TUN source')
             raw = path.read_bytes()
+            if relative.as_posix() == 'tun.go':
+                for before, after in [(b'import (', b'import (\n\t"context"'),
+                                      (b'type Options struct {', b'type Options struct {\n\tRouterVPNNetworkContext context.Context')]:
+                    if raw.count(before) != 1:
+                        raise ValueError('Pinned native network context boundary changed')
+                    raw = raw.replace(before, after, 1)
             if relative.as_posix() == 'tun_linux.go':
                 patches = [
                     (b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnOwnedIndex int'),
@@ -220,7 +226,7 @@ def prepare(vendor):
             target.write_bytes(network_receipt_patch(relative.as_posix(), raw))
     # The wire decoder is identical in the parent and native TUN module. It
     # imports only the standard library and never introduces a module cycle.
-    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go'):
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_dump_linux.go'):
         path = ROOT/'internal/desktopnetwork'/name
         raw = path.read_bytes()
         if path.is_symlink() or raw.count(b'package desktopnetwork\n') != 1:
@@ -229,7 +235,15 @@ def prepare(vendor):
         if target.is_symlink():
             raise ValueError('Linked native network receipt destination')
         target.write_bytes(raw.replace(b'package desktopnetwork\n', b'package tun\n', 1))
-    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    inbound = vendor/'protocol/tun/inbound.go'
+    raw = inbound.read_bytes()
+    anchor = b'tunOptions: tun.Options{'
+    if raw.count(anchor) != 1:
+        raise ValueError('Pinned inbound network context constructor changed')
+    replacement = anchor+b'\n\t\t\tRouterVPNNetworkContext: ctx,'
+    if replacement not in raw:
+        inbound.write_bytes(raw.replace(anchor, replacement, 1))
+    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         path = ROOT/'mobile/desktop'/name
         if path.is_symlink():
             raise ValueError('Linked native network receipt template')

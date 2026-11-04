@@ -820,7 +820,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                        ("TestRouterVPNNativeLinuxRoutingResolutionRejectsForeign", "TestRouterVPNNativeLinuxRoutingReceiptNamespace",
                         "TestRouterVPNNativeLinuxRoutingConcurrentAddressProof", "TestRouterVPNNativeLinuxRoutingConcurrentAddressRejectsForeign",
                         "TestRouterVPNNativeLinuxRoutingConcurrentAddressOwnerFences", "TestRouterVPNNativeLinuxRoutingConcurrentAddressAtomicLedger",
-                        "TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics")))
+                        "TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics", "TestRouterVPNNativeLinuxRoutingBoundedInventory",
+                        "TestRouterVPNNativeLinuxRoutingInventoryFraming")))
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
                        tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in

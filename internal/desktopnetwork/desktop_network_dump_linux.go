@@ -151,3 +151,39 @@ func linuxReceiveDump(ctx context.Context, file *os.File, port uint32) (result [
 		}
 	}
 }
+
+func linuxDump(ctx context.Context, request int, response uint16) ([]syscall.NetlinkMessage, error) {
+	raw, err := linuxDumpRequest(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || len(raw) > 4<<20 {
+		return nil, errors.New("Linux network dump is empty or exceeds its bound")
+	}
+	messages, err := syscall.ParseNetlinkMessage(raw)
+	if err != nil {
+		return nil, err
+	}
+	var rows []syscall.NetlinkMessage
+	done := false
+	for _, message := range messages {
+		if done || message.Header.Flags&0x10 != 0 {
+			return nil, errors.New("Linux network dump is interrupted or has trailing records")
+		}
+		if message.Header.Type == syscall.NLMSG_DONE {
+			if len(message.Data) != 0 && (len(message.Data) < 4 || int32(binary.LittleEndian.Uint32(message.Data)) != 0) {
+				return nil, errors.New("Linux network dump ended with an incomplete native result")
+			}
+			done = true
+			continue
+		}
+		if message.Header.Type != response {
+			return nil, errors.New("Linux network dump returned an unrequested record")
+		}
+		rows = append(rows, message)
+	}
+	if !done {
+		return nil, errors.New("Linux network dump has no complete ending")
+	}
+	return rows, nil
+}

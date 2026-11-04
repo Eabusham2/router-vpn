@@ -299,12 +299,12 @@ func (t *Tracker) Begin(ctx context.Context, original *DesktopNetworkReceipt) (r
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("network transition lost its caller")
 	}
-	if err := t.Current(); err != nil {
+	if err := t.CurrentContext(ctx); err != nil {
 		return err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.closing || t.transition || t.failure != nil || receiptKey(original) != receiptKey(t.current) {
+	if ctx.Err() != nil || t.closed || t.closing || t.transition || t.failure != nil || receiptKey(original) != receiptKey(t.current) {
 		return t.failLocked(errors.New("network transition does not own its original native receipt"))
 	}
 	t.old, t.recorded, t.events = cloneReceipt(original), nil, nil
@@ -411,7 +411,7 @@ func (t *Tracker) End(ctx context.Context, current *DesktopNetworkReceipt) (resu
 	_, key, projection := project(snapshot, current)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.closing || !t.transition || t.ctx.Err() != nil {
+	if ctx.Err() != nil || t.closed || t.closing || !t.transition || t.ctx.Err() != nil {
 		return t.failLocked(errors.New("native transition completion has no current observer"))
 	}
 	if err != nil {

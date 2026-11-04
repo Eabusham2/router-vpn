@@ -12,15 +12,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"router-vpn/internal/common"
 	"time"
 )
 
-// The namespace caller installed a real executable fixture for engine
-// lifetime. Internet proof and the DNS router are explicit boundary models;
-// the original-child DNS exchange, retained native network epoch, public route,
-// production remote constructor/RPC and native owner/Stop all execute.
+// The namespace caller installs the actual verified generated native engine.
+// Only public Internet reachability is modeled. Its real TUN, SOCKS transport,
+// selected DNS exchange, original startup ledger, retained kernel epoch and
+// production remote constructor/RPC/Stop all execute against a private peer.
 func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, action string) error {
 	root := linuxOwnedControllerRoot
 	a := &app{localController: owned, cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "routers.json"), ScriptsDir: filepath.Join(root, "modes"), StateFile: filepath.Join(root, "state.json")}}
@@ -59,7 +60,7 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		fmt.Fprintln(os.Stdout, "standard-service-route-joined")
 		return nil
 	}
-	if action != "1" && action != "failure" {
+	if action != "1" && action != "failure" && action != "network-failure" {
 		return errors.New("unknown native service fixture action")
 	}
 	body, err = os.ReadFile(filepath.Join(root, "modes.json"))
@@ -77,8 +78,8 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		prove:         func(*app, string) error { return nil },
 		proveDNS: func(ctx context.Context, captured legacyStandardExitLaunch) error {
 			// Exercise the shipping service proof and observer installation.
-			// Only the fixture child's downstream DNS router is substituted;
-			// the separate pinned-core gate exercises actual resolver routing.
+			// The installed pinned core routes its actual selected resolver
+			// exchange through the private authenticated SOCKS peer.
 			return captured.(*linuxStandardServiceLaunch).ProveSelectedDNS(ctx)
 		},
 		current: func(owner legacyStandardExitLaunch, ctx context.Context) error { return owner.Current(ctx) },
@@ -91,8 +92,8 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	if !exists || !ok || owner.Command().Process != nil || !a.state.Connected {
 		return errors.New("shipping controller did not retain actual remote engine ownership")
 	}
-	if action == "failure" {
-		if err = linuxStandardServiceControllerFailureFixture(a, owner); err != nil {
+	if action == "failure" || action == "network-failure" {
+		if err = linuxStandardServiceControllerFailureFixture(a, owner, action); err != nil {
 			return err
 		}
 	}
@@ -105,7 +106,7 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	if _, err = os.Stat(filepath.Join(root, "run", "kill-switch.json")); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("shipping On-connect Stop retained its state after acknowledged service release")
 	}
-	if action == "failure" {
+	if action == "failure" || action == "network-failure" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		view := a.captureLinuxStandardServiceProtection(ctx)
@@ -117,10 +118,10 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	return nil
 }
 
-// The controller monitor is joined before the cooperative child exit, so only
+// The controller monitor is joined before a real physical link ABA, so only
 // the original service watcher can perform this automatic retirement. The
 // protection-view RPC validates the service's live creator, not saved metadata.
-func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardServiceLaunch) error {
+func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardServiceLaunch, action string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	raw, exists := linuxStandardServiceMonitors.Load(owner)
@@ -134,7 +135,7 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 	select {
 	case <-monitor.finished:
 	case <-ctx.Done():
-		return errors.New("original controller monitor did not join before engine exit")
+		return errors.New("original controller monitor did not join before original network event")
 	}
 	owner.mu.Lock()
 	joined := owner.joined
@@ -167,12 +168,23 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 	if err != nil || json.Unmarshal(body, &state) != nil || state.Policy != "on-connect" || state.Owner.Receipt.Session != owner.request.Session || state.Owner.Receipt.ConfigSHA256 != owner.request.ConfigSHA256 || state.Owner.Receipt.TableHandle == 0 {
 		return errors.New("original service saved protection lost its acknowledged creation")
 	}
-	sentinel, err := os.OpenFile(filepath.Join(linuxOwnedControllerRoot, "run", "standard-service-fixture-exit"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	if err = sentinel.Close(); err != nil {
-		return err
+	if action == "failure" {
+		trigger := filepath.Join(linuxOwnedControllerRoot, "run", "standard-service-fixture-exit")
+		file, err := os.OpenFile(trigger, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return err
+		}
+		_, writeErr := file.WriteString(owner.request.Session)
+		if err := errors.Join(writeErr, file.Close()); err != nil {
+			return err
+		}
+	} else {
+		for _, mtu := range []string{"1496", "1500"} {
+			command := exec.CommandContext(ctx, "ip", "link", "set", "rvphysical", "mtu", mtu)
+			if output, err := command.CombinedOutput(); err != nil {
+				return fmt.Errorf("actual original physical link ABA: %w %s", err, output)
+			}
+		}
 	}
 	for {
 		view := a.captureLinuxStandardServiceProtection(ctx)
@@ -184,7 +196,7 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("service did not join the original cooperatively retired engine")
+			return errors.New("service did not join the original network-invalidated original engine")
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -193,9 +205,12 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 	if err != nil || readErr != nil || !os.SameFile(info, named) || !bytes.Equal(body, after) {
 		return errors.New("automatic retirement lost the exact original saved protection inode or body")
 	}
-	stopped, err := os.ReadFile(filepath.Join(linuxOwnedControllerRoot, "engine-stopped"))
-	if err != nil || string(stopped) != "closed" {
-		return errors.New("service retirement missed actual cooperative fixture exit")
+
+	if action == "failure" {
+		witness, err := readPrivateRegular(filepath.Join(linuxOwnedControllerRoot, "run", "standard-service-fixture-signaled"), 64)
+		if err != nil || string(witness) != owner.request.Session {
+			return errors.New("installed engine did not exit through its exact original creation pidfd")
+		}
 	}
 	if _, err = os.Lstat(owner.request.Directory); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("service claimed joined engine before original workspace retirement")

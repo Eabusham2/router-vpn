@@ -144,6 +144,11 @@ def inputs():
                              ROOT/'deploy/test_linux_node_child_tun_runner.py',
                              ROOT/'deploy/test_linux_node_host_tun.py',
                              ROOT/'deploy/test_linux_node_host_tun_runner.py',
+                             ROOT/'deploy/test_linux_controller_privilege.py',
+                             ROOT/'deploy/linux_standard_service_gate.py',
+                             ROOT/'deploy/test_linux_standard_service_runner.py',
+                             ROOT/'deploy/linux_standard_service_bundle.py',
+                             ROOT/'deploy/test_linux_standard_service_bundle.py',
                              ROOT/'deploy/test_macos_external_host.py',
                              ROOT/'deploy/test_macos_external_host_runner.py',
                              ROOT/'deploy/seal-native-runtime.py',
@@ -479,6 +484,36 @@ def verify_linux_stock_dns_verdicts(output):
         raise ValueError('Stock DNS gate omitted native parent, leaf or package completion')
 
 
+
+STANDARD_CONFIG_TEST = 'TestLinuxStandardServiceStartupStockGraphs'
+STANDARD_CONFIG_PROTOCOLS = ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2')
+STANDARD_CONFIG_POLICIES = ('default', 'fixed', 'ipv6-off')
+
+
+def verify_linux_standard_config_verdicts(output):
+    if '--- SKIP:' in output or '--- FAIL:' in output or 'WARNING: DATA RACE' in output:
+        raise ValueError('Standard engine graph preparation failed or skipped')
+    expected = {STANDARD_CONFIG_TEST}
+    expected.update(STANDARD_CONFIG_TEST+'/'+protocol for protocol in STANDARD_CONFIG_PROTOCOLS)
+    expected.update(STANDARD_CONFIG_TEST+'/'+protocol+'/'+policy for protocol in STANDARD_CONFIG_PROTOCOLS for policy in STANDARD_CONFIG_POLICIES)
+    passed = re.findall(r'(?m)^\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)$', output)
+    if set(passed) != expected or any(passed.count(name) != 1 for name in expected):
+        raise ValueError('Standard engine graph gate omitted, renamed or duplicated a captured stock selection')
+
+
+def verify_linux_standard_configs(bundle, env):
+    with tempfile.TemporaryDirectory(prefix='routervpn-standard-graphs-') as directory:
+        output = run(['go', 'test', '-v', '-race', './cmd/client', '-run', '^'+STANDARD_CONFIG_TEST+'$', '-count=1', '-timeout=60s'],
+                     cwd=ROOT, env={**env, 'ROUTERVPN_STANDARD_CONFIG_FIXTURES':directory}, timeout=300)
+        verify_linux_standard_config_verdicts(output)
+        expected = {protocol+'-'+policy+'.json' for protocol in STANDARD_CONFIG_PROTOCOLS for policy in STANDARD_CONFIG_POLICIES}
+        if {p.name for p in Path(directory).iterdir()} != expected:
+            raise ValueError('Standard engine lost its exact exported graph inventory')
+        binary = Path(bundle)/binary_name('linux/'+env['GOARCH'])
+        for name in sorted(expected):
+            run([binary, 'check', '-c', Path(directory)/name], env=env, timeout=20)
+    print('Native retained standard engine: all eighteen captured stock protocol/device graphs accepted by the actual built core', flush=True)
+
 def verify_linux_stock_dns(bundle, target, env):
     host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
     if platform.system() != 'Linux' or target != host or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
@@ -492,6 +527,7 @@ def verify_linux_stock_dns(bundle, target, env):
                   '-run', '^TestLegacyStandardDNSPinnedCore$', '-count=1', '-timeout=60s'],
                  cwd=ROOT, env=dns_env, timeout=300)
     verify_linux_stock_dns_verdicts(output)
+    verify_linux_standard_configs(bundle, env)
     print('Native retained stock DNS: exact parent and four UDP/TCP uncached/cache-control cases PASS', flush=True)
 
 

@@ -69,7 +69,7 @@ func newLinuxStandardService(root string, image, namespace os.FileInfo) *linuxSt
 // This private constructor always keeps the engine inside the service. The
 // public preparation dispatcher may select a remote owner in a GUI controller.
 func prepareLegacyStandardExitOwnerWithLocalRuntime(a *app, command *exec.Cmd, mode, base, id string) (legacyStandardExitLaunch, error) {
-	return prepareLegacyStandardExitOwnerWithTUN(a, command, mode, base, id, legacyExitTUNAbsent)
+	return prepareLegacyStandardExitOwnerWithEngine(a, command, mode, base, id, legacyExitTUNAbsent, physicalNetworkIdentity, true)
 }
 
 func linuxStandardProfileDigest(profile common.RouterProfile) (string, error) {
@@ -151,7 +151,7 @@ func (s *linuxStandardService) retire(ctx context.Context, release bool) (failur
 		return errors.New("standard service retained an incomplete original engine preparation")
 	}
 	if !owner.registered {
-		if err := owner.Discard(); err != nil {
+		if err := owner.discardContext(ctx); err != nil {
 			return err
 		}
 		s.session.joined = true
@@ -274,6 +274,10 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 	defer finish()
 	prepared, err := s.prepare(s.app, command, request.RuntimeMode, request.Base, request.RouterID)
 	if err != nil {
+		if original, ok := prepared.(*linuxLegacyStandardExitOwner); ok && original != nil {
+			original.session = request.Session
+			s.session = &linuxStandardServiceSession{request: request, peer: peer, owner: original}
+		}
 		return err
 	}
 	owner, ok := prepared.(*linuxLegacyStandardExitOwner)
@@ -283,32 +287,41 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 		}
 		return errors.New("standard service preparation did not retain its actual engine")
 	}
+	// Retain the original prepared observer/files before any later source
+	// validation can fail. Cleanup uses this same owner and peer on retry.
+	owner.session = request.Session
+	s.session = &linuxStandardServiceSession{request: request, peer: peer, owner: owner}
 	if owner.digest != request.ConfigSHA256 {
-		_ = owner.Discard()
 		return errors.New("standard service captured another configuration")
 	}
 	if owner.dns == nil || owner.dns.networkID != request.NetworkID {
-		_ = owner.Discard()
 		return errors.New("standard service physical network changed since controller preparation")
 	}
 	if err = desktopExternalDirectoryCurrent(owner.launch); err != nil {
-		_ = owner.Discard()
 		return err
 	}
 	captured, err := owner.directory.Stat()
 	if err != nil || !os.SameFile(captured, actual) {
-		_ = owner.Discard()
 		return errors.Join(err, errors.New("standard service workspace changed while sealing original engine"))
 	}
-	owner.session = request.Session
-	// Retain the real peer and every partial native preparation before Start.
-	// A lost reply never erases the service's engine or protection Stop owner.
-	s.session = &linuxStandardServiceSession{request: request, peer: peer, owner: owner}
+	if owner.native != nil {
+		native := owner.native
+		s.session.network = &linuxStandardServiceNetwork{session: s.session, owner: owner, observer: native.tracker, lifetime: native.lifetime, cancel: native.cancel}
+		native.adopted = true
+		if err = native.prepareStart(ctx); err != nil {
+			return err
+		}
+	}
 	if err = peer.Current(ctx); err != nil {
 		return err
 	}
 	if err = owner.Start(ctx); err != nil {
 		return err
+	}
+	if owner.native != nil {
+		if err = owner.native.finishStart(ctx); err != nil {
+			return err
+		}
 	}
 	if s.boot != nil && s.boot.closed {
 		s.boot = nil

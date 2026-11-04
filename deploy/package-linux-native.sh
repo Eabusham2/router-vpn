@@ -10,12 +10,11 @@ case "$ARCH" in
   *) echo "Unsupported Linux architecture: $ARCH" >&2; exit 2 ;;
 esac
 
-# A matching host must execute the actual privilege boundary before its native
-# controller is built. A cross-compile cannot certify that host's authority.
+# A matching host must execute the actual installed privilege boundary with
+# the staged verified runtime. A cross-compile cannot certify that authority.
 host_arch=$(uname -m)
 case "$host_arch" in x86_64|amd64) host_arch=amd64 ;; aarch64|arm64) host_arch=arm64 ;; esac
 [[ $(uname -s) == Linux && "$host_arch" == "$goarch" ]] || { echo 'Native Linux packaging requires a matching execution host.' >&2; exit 1; }
-python3 "$ROOT/deploy/test_linux_controller_privilege.py" --go "$(command -v go)"
 
 name="RouterVPN-linux-$ARCH"
 work="$OUT/work-$ARCH"
@@ -144,6 +143,7 @@ TXT
 "$ROOT/deploy/package-xray-runtime.sh" "linux/$ARCH" "$dir"
 "$ROOT/deploy/package-amnezia-runtime.sh" "linux/$ARCH" "$dir"
 "$ROOT/deploy/package-native-runtime.sh" "linux/$ARCH" "$dir"
+python3 "$ROOT/deploy/test_linux_controller_privilege.py" --go "$(command -v go)" --runtime-bundle "$dir/runtime/native"
 python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "linux-$ARCH"
 python3 "$ROOT/deploy/test_linux_runtime_install.py" --package "$dir"
 python3 "$ROOT/deploy/test_linux_native_install.py" --package "$dir"

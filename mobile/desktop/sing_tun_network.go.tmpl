@@ -53,7 +53,7 @@ func (t *NativeTun) RouterVPNDesktopNetworkReceipt() (string, error) {
 	if err != nil || current.Index < 1 || current.Name != t.options.Name || current.MTU != int(t.options.MTU) || current.Flags&net.FlagUp == 0 {
 		return "", errors.New("network receipt lost its current native interface")
 	}
-	addresses, err := current.Addrs()
+	addresses, err := t.routervpnNetworkAddresses(current)
 	if err != nil {
 		return "", err
 	}

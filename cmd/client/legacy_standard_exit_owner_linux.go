@@ -27,6 +27,7 @@ import (
 var legacyStandardExitOwners sync.Map // map[*app]*linuxLegacyStandardExitOwner
 
 type linuxLegacyStandardExitOwner struct {
+	native                                                                    *linuxStandardEngine
 	dns                                                                       *legacyStandardDNS
 	protectionPolicy, protectionRoot, protectionProfileID, protectionEndpoint string
 	protectionLAN                                                             bool
@@ -80,20 +81,43 @@ func legacyExitTUNAbsent() error {
 }
 
 func prepareLegacyStandardExitOwner(a *app, original *exec.Cmd, runtimeMode, base, routerID string) (legacyStandardExitLaunch, error) {
-	prepared, err := prepareLegacyStandardExitOwnerWithTUN(a, original, runtimeMode, base, routerID, legacyExitTUNAbsent)
-	if err != nil || prepared == nil || a.localController == nil {
-		return prepared, err
+	preparation := a.connectionOperationContextOrBackground()
+	var prepared legacyStandardExitLaunch
+	var err error
+	if a.localController != nil {
+		prepared, err = prepareLegacyStandardExitOwnerMode(a, original, runtimeMode, base, routerID, legacyExitTUNAbsent, physicalNetworkIdentity, false, true)
+	} else {
+		prepared, err = prepareLegacyStandardExitOwnerWithTUN(a, original, runtimeMode, base, routerID, legacyExitTUNAbsent)
+	}
+	return finishLegacyStandardExitPreparation(a, preparation, prepared, err)
+}
+
+// The route returns immediately on a preparation error. Keep any exact partial
+// capture here until an original-budget cleanup or a later serialized Stop
+// joins it; it must never replace a retained runtime/protection owner.
+func finishLegacyStandardExitPreparation(a *app, preparation context.Context, prepared legacyStandardExitLaunch, failure error) (legacyStandardExitLaunch, error) {
+	if prepared == nil {
+		return nil, failure
 	}
 	local, ok := prepared.(*linuxLegacyStandardExitOwner)
-	if !ok {
-		_ = prepared.Discard()
-		return nil, errors.New("standard service preparation lost its local source capture")
+	if !ok || local == nil || local.app != a {
+		return prepared, errors.Join(failure, errors.New("standard service preparation lost its local source capture"))
 	}
-	remote, err := prepareLinuxStandardServiceLaunch(a, local)
-	if err != nil {
-		_ = local.Discard()
+	if failure == nil && a.localController == nil {
+		return local, nil
 	}
-	return remote, err
+	if failure == nil {
+		var remote legacyStandardExitLaunch
+		remote, failure = prepareLinuxStandardServiceLaunch(a, local)
+		if failure == nil {
+			return remote, nil
+		}
+	}
+	if cleanup := local.discardContext(preparation); cleanup != nil {
+		legacyStandardExitPreparations.Store(local, a)
+		return local, errors.Join(failure, cleanup)
+	}
+	return nil, failure
 }
 
 func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error) (legacyStandardExitLaunch, error) {
@@ -103,6 +127,17 @@ func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMo
 // Test callers may supply explicit native observation boundaries. Production
 // always captures the real physical network before either child is executed.
 func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error, network func() string) (legacyStandardExitLaunch, error) {
+	return prepareLegacyStandardExitOwnerWithEngine(a, original, runtimeMode, base, routerID, tunAbsent, network, false)
+}
+
+func prepareLegacyStandardExitOwnerWithEngine(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error, network func() string, native bool) (legacyStandardExitLaunch, error) {
+	return prepareLegacyStandardExitOwnerMode(a, original, runtimeMode, base, routerID, tunAbsent, network, native, false)
+}
+
+func prepareLegacyStandardExitOwnerMode(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error, network func() string, native, requestOnly bool) (result legacyStandardExitLaunch, failure error) {
+	if requestOnly && (native || a.localController == nil) {
+		return nil, errors.New("standard source-only request has no original installed controller")
+	}
 	// OpenVPN has distinct route/interface cleanup and remains on its separate
 	// adapter. Only the existing Linux sing-box wrapper is admitted here.
 	if original == nil || len(original.Args) != 6 || filepath.Base(original.Args[1]) != "native-standard-exit-linux.sh" || original.Args[2] != "up" {
@@ -143,10 +178,13 @@ func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, run
 		return nil, err
 	}
 	owner := &linuxLegacyStandardExitOwner{protectionPolicy: policy, protectionRoot: original.Dir, protectionProfileID: control.ID, protectionEndpoint: original.Args[4], protectionLAN: control.HomeLANAccess, protectionFactory: createLegacyExitNativeProtection, protectionAbsence: mobiletor.ReadDesktopLinuxProtectionAbsence, tunAbsent: tunAbsent, app: a, launch: launch, pidfd: -1, runtimeMode: runtimeMode, base: base, routerID: routerID}
+	preparation := a.connectionOperationContextOrBackground()
 	failed := true
 	defer func() {
 		if failed {
-			_ = owner.Discard()
+			if err := owner.discardContext(preparation); err != nil {
+				result, failure = owner, errors.Join(failure, err)
+			}
 		}
 	}()
 	if tunAbsent == nil {
@@ -159,6 +197,9 @@ func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, run
 	owner.namespace, err = os.Open("/proc/thread-self/ns/net")
 	if err == nil {
 		owner.namespaceInfo, err = owner.namespace.Stat()
+	}
+	if err == nil && native {
+		err = owner.prepareNativeEngine(preparation)
 	}
 	if err == nil {
 		err = owner.tunAbsentInNamespace()
@@ -194,34 +235,6 @@ func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, run
 		return nil, err
 	}
 	owner.session = hex.EncodeToString(token)
-	// The captured stock path needs no shell/helper child. Resolve only its
-	// original PATH, then validate and execute exactly the same sealed image.
-	imagePath := ""
-	for _, directory := range filepath.SplitList(environment("PATH")) {
-		if !filepath.IsAbs(directory) {
-			continue
-		}
-		candidate := filepath.Join(directory, "sing-box")
-		if info, err := os.Lstat(candidate); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
-			imagePath = candidate
-			break
-		}
-	}
-	if imagePath == "" {
-		return nil, errors.New("captured stock standard engine is unavailable")
-	}
-	info, err := os.Lstat(imagePath)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
-		return nil, errors.New("legacy selected engine is not a regular executable")
-	}
-	owner.image, err = os.Open(imagePath)
-	if err != nil {
-		return nil, err
-	}
-	opened, err := owner.image.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return nil, errors.New("legacy selected engine changed during capture")
-	}
 	owner.config, err = launch.directoryRoot.Open("sing-box.json")
 	if err != nil {
 		return nil, err
@@ -238,11 +251,7 @@ func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, run
 	if err != nil || !os.SameFile(configInfo, named) {
 		return nil, errors.New("legacy config inode changed during capture")
 	}
-	owner.sourceImage, owner.sourceConfig = owner.image, owner.config
-	owner.image, err = sealLegacyExitFile("legacy-standard-engine", owner.sourceImage, 512<<20)
-	if err != nil {
-		return nil, err
-	}
+	owner.sourceConfig = owner.config
 	owner.config, err = sealLegacyExitFile("legacy-standard-config", strings.NewReader(string(raw)), 8<<20)
 	if err != nil {
 		return nil, err
@@ -252,17 +261,82 @@ func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, run
 	if err != nil {
 		return nil, err
 	}
+	if requestOnly {
+		// This command is an immutable request identity only. The authenticated
+		// service independently verifies and checks its actual installed engine.
+		// No PATH executable or controller-side child participates in this path.
+		owner.command = original
+		launch.command = original
+		if err := owner.legacyDNSNetworkCurrent(); err != nil {
+			return nil, err
+		}
+		failed = false
+		return owner, nil
+	}
+	// The captured stock path needs no shell/helper child. Resolve only its
+	// original PATH, then validate and execute exactly the same sealed image.
+	imagePath := ""
+	if owner.native != nil {
+		imagePath = owner.native.imagePath
+	}
+	for _, directory := range filepath.SplitList(environment("PATH")) {
+		if owner.native != nil {
+			break
+		}
+		if !filepath.IsAbs(directory) {
+			continue
+		}
+		candidate := filepath.Join(directory, "sing-box")
+		if info, err := os.Lstat(candidate); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+			imagePath = candidate
+			break
+		}
+	}
+	if imagePath == "" {
+		return nil, errors.New("captured stock standard engine is unavailable")
+	}
+	info, err := os.Lstat(imagePath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		return nil, errors.New("legacy selected engine is not a regular executable")
+	}
+	if owner.native != nil {
+		owner.image = owner.native.imageSource
+		info = owner.native.imageInfo
+	} else {
+		owner.image, err = os.Open(imagePath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	opened, err := owner.image.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return nil, errors.New("legacy selected engine changed during capture")
+	}
+	owner.sourceImage = owner.image
+	owner.image, err = sealLegacyExitFile("legacy-standard-engine", owner.sourceImage, 512<<20)
+	if err != nil {
+		return nil, err
+	}
+	if owner.native != nil {
+		if err := owner.native.config(raw); err != nil {
+			return nil, err
+		}
+	}
 	makeCommand := func(action string) *exec.Cmd {
 		command := exec.Command("/proc/self/fd/3", action, "-D", "/proc/self/fd/5", "-c", "/proc/self/fd/4")
 		command.Args[0] = imagePath
 		command.Dir = original.Dir
 		command.Env = append([]string(nil), original.Env...)
 		command.ExtraFiles = []*os.File{owner.image, owner.config, owner.directory}
+		if owner.native != nil {
+			command.ExtraFiles = append(command.ExtraFiles, owner.native.library)
+			command.Env = owner.native.environment(command.Env)
+		}
 		command.Stdout, command.Stderr = original.Stdout, original.Stderr
 		return command
 	}
 	check := makeCommand("check")
-	checkCtx, checkCancel := context.WithTimeout(a.connectionOperationContextOrBackground(), 10*time.Second)
+	checkCtx, checkCancel := context.WithTimeout(preparation, 10*time.Second)
 	// CommandContext owns cancellation without changing its pinned descriptors.
 	checked := exec.CommandContext(checkCtx, check.Path, check.Args[1:]...)
 	checked.Args[0] = check.Args[0]
@@ -279,6 +353,11 @@ func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, run
 	}
 	if err != nil {
 		return nil, errors.Join(err, errors.New("pinned legacy engine rejected its captured config"))
+	}
+	if owner.native != nil {
+		if err := owner.native.tracker.CurrentContext(preparation); err != nil {
+			return nil, err
+		}
 	}
 	owner.command = makeCommand("run")
 	owner.command.SysProcAttr = &syscall.SysProcAttr{PidFD: &owner.pidfd, Pdeathsig: syscall.SIGKILL}
@@ -431,6 +510,12 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 }
 
 func (o *linuxLegacyStandardExitOwner) Discard() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	return o.discardContext(ctx)
+}
+
+func (o *linuxLegacyStandardExitOwner) discardContext(ctx context.Context) error {
 	if o == nil {
 		return nil
 	}
@@ -439,7 +524,22 @@ func (o *linuxLegacyStandardExitOwner) Discard() error {
 	if o.registered {
 		return nil
 	} // The published Stop owner, never a defer, owns retry.
+	return o.discardLocked(ctx)
+}
+
+func (o *linuxLegacyStandardExitOwner) discardLocked(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("standard preparation cleanup requires its original budget")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var failures []error
+	if o.native != nil {
+		if err := o.native.close(ctx); err != nil {
+			return err
+		}
+	}
 	for _, f := range []*os.File{o.image, o.config, o.sourceImage, o.sourceConfig, o.directory, o.namespace} {
 		if f != nil {
 			if err := f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
@@ -447,9 +547,14 @@ func (o *linuxLegacyStandardExitOwner) Discard() error {
 			}
 		}
 	}
-	if o.launch != nil && o.launch.directoryRoot != nil {
-		failures = append(failures, cleanupDesktopNodeLaunch(o.launch))
+	if !o.workspaceRetired && o.launch != nil && o.launch.directoryRoot != nil {
+		err := cleanupDesktopNodeLaunch(o.launch)
+		if err == nil {
+			o.workspaceRetired = true
+		}
+		failures = append(failures, err)
 	}
+	failures = append(failures, ctx.Err())
 	return errors.Join(failures...)
 }
 
@@ -599,6 +704,11 @@ func (o *linuxLegacyStandardExitOwner) currentRuntimeLocked(ctx context.Context)
 	if retired {
 		return errors.New("legacy standard exit engine retired before public proof adoption")
 	}
+	if o.native != nil {
+		if err := o.native.current(ctx); err != nil {
+			return err
+		}
+	}
 	return o.legacyDNSNetworkCurrent()
 }
 
@@ -724,6 +834,11 @@ func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.
 	}
 	if err := s.current(); err != nil {
 		return err
+	}
+	if o.native != nil {
+		if err := o.native.close(ctx); err != nil {
+			return err
+		}
 	}
 	// Only this captured native creator may retire or retain its policy.
 	if err := o.retireProtection(ctx, release); err != nil {

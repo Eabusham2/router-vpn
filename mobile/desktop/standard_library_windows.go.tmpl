@@ -1,0 +1,5 @@
+//go:build windows && with_purego
+
+package main
+
+func routerVPNLoadInheritedCronet(int64, string) (bool, error) { return false, nil }

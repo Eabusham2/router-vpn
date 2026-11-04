@@ -49,15 +49,26 @@ CORE = {
     'MonitorRejectsUnprovedOrRepeatedActivation': ('dns', 'joined', 'unattempted', 'wrong-operation', 'foreign-runtime', 'foreign-tracker'),
     'MonitorShippingActivationOrderAndRefusal': ('active', 'monitor-refused', 'persistence-failed'),
 }
-NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
-GROUPS = {'core': CORE, 'native': NATIVE}
+NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-failure', 'on-connect-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
+STARTUP = {
+    'StartupPreparationFailureKeepsRetry': ('preparation-error', 'remote-error', 'replacement-workspace', 'adopted-owner'),
+    'StartupVerificationKeepsOriginalSources': ('unchanged', 'catalog', 'image', 'library', 'in-place', 'foreign-result', 'cancelled'),
+    'StartupUsesOriginalChildLedger': ('complete', 'wrong-source', 'wrong-mtu', 'malformed-ledger', 'late-network', 'cancelled'),
+    'StartupExitObserverKeepsOriginalOwner': ('original-exit', 'cancelled', 'replacement'),
+    'StartupNativeSOCKSDNSFrames': ('selected', 'foreign-resolver', 'foreign-auth'),
+    'StartupInstalledRequestHasNoStockChild': ('installed-request', 'noninstalled-stock-required'),
+    'StartupRequiresVerifiedRuntime': ('absent', 'corrupt'),
+    'StartupRetainsRejectedPreparation': ('configuration', 'network', 'workspace-name', 'workspace-descriptor', 'preparation-error'),
+    'StartupStockGraphs': tuple(protocol+'/'+policy for protocol in ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2') for policy in ('default', 'fixed', 'ipv6-off')),
+}
+GROUPS = {'core': CORE, 'startup': STARTUP, 'native': NATIVE}
 SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'peer_linux.go', 'protocol_linux.go', 'runtime_linux.go', 'client_linux.go', 'dns_linux.go',
     'boot_linux.go', 'other.go', 'upgrade_linux.go', 'peer_native_test.go', 'runtime_native_test.go',
     'channel_native_test.go', 'client_test.go', 'boot_test.go', 'upgrade_native_test.go', 'namespace_test.go', 'route_native_test.go',
-    'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go')}
-SOURCE.update({'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
-RUNNERS = ('linux_standard_service_gate.py', 'test_linux_standard_service_runner.py')
+    'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go','startup_native_test.go','startup_config_test.go','startup_namespace_test.go')}
+SOURCE.update({'cmd/client/linux_standard_engine_linux.go', 'cmd/client/legacy_standard_exit_preparation_linux.go', 'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
+RUNNERS = ('linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
 
 
 def pattern(group):

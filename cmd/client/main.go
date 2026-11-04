@@ -1270,6 +1270,11 @@ func (a *app) stopMode() error {
 }
 
 func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := retireLegacyStandardPreparations(a, ctx); err != nil {
+		return err
+	}
 	nativeStop, err := a.captureDesktopRetainedStop()
 	if err != nil {
 		return err
@@ -1280,8 +1285,6 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 	}
 	defer releaseMTU()
 	if nativeStop != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
 		return nativeStop.Retire(ctx, relayOwner, !holdKillSwitch)
 	}
 	if err := prepareDesktopTorStop(a, relayOwner); err != nil {

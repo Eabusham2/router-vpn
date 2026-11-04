@@ -1066,3 +1066,65 @@ func TestRouterVPNNativeLinuxRoutingConcurrentAddressAtomicLedger(t *testing.T) 
 		}
 	})
 }
+
+// Actual read-only kernel inventory. No TUN owner or routing receipt is
+// manufactured from this fixture index; it exercises only the bounded reader.
+func TestRouterVPNNativeLinuxRoutingBoundedInventory(t *testing.T) {
+	current, err := net.InterfaceByName("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	original := &NativeTun{options: Options{Name: current.Name, RouterVPNNetworkContext: ctx}, routervpnOwnedIndex: current.Index}
+	captured, err := original.routervpnLinuxInterface()
+	if err != nil || captured.Name != current.Name || captured.Index != current.Index || captured.MTU != current.MTU || captured.Flags != current.Flags {
+		t.Fatal("bounded original link dump differs from actual interface", captured, current, err)
+	}
+	addresses, err := original.routervpnLinuxAddresses(current.Index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := current.Addrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := map[string]bool{}
+	for _, address := range expected {
+		wanted[address.String()] = true
+	}
+	for _, address := range addresses {
+		if address.LinkIndex != current.Index || address.IPNet == nil || !wanted[address.IPNet.String()] {
+			t.Fatal("bounded original address dump changed native identity", address)
+		}
+		delete(wanted, address.IPNet.String())
+	}
+	if len(wanted) != 0 {
+		t.Fatal("bounded address dump omitted native addresses", wanted)
+	}
+	original.options.Name = "foreign-original-name"
+	if _, err := original.routervpnLinuxInterface(); err == nil {
+		t.Fatal("bounded link dump adopted a foreign name")
+	}
+	original.options.Name = current.Name
+	cancel()
+	if _, err := original.routervpnLinuxInterface(); err == nil {
+		t.Fatal("cancelled startup performed a fresh link dump")
+	}
+	if _, err := original.routervpnLinuxAddresses(current.Index); err == nil {
+		t.Fatal("cancelled startup performed a fresh address dump")
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingInventoryFraming(t *testing.T) {
+	good := []byte{8, 0, 3, 0, 't', 'u', 'n', 0}
+	attrs, err := routervpnLinuxAttributes(good)
+	if err != nil || string(attrs[3]) != "tun\x00" {
+		t.Fatal("complete native attribute rejected", err)
+	}
+	for _, bad := range [][]byte{append(append([]byte{}, good...), 0), good[:7], append(append([]byte{}, good...), good...), {3, 0, 3, 0}, {5, 0, 3, 0, 'x', 0, 1, 0}} {
+		if _, err := routervpnLinuxAttributes(bad); err == nil {
+			t.Fatal("malformed, repeated or unframed native attribute accepted", bad)
+		}
+	}
+}

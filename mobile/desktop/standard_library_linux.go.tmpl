@@ -1,0 +1,41 @@
+//go:build linux && with_purego
+
+package main
+
+import (
+	"errors"
+	"os"
+	"strconv"
+
+	cronet "github.com/sagernet/cronet-go"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+)
+
+// The inherited route never falls back to a pathname after refusal.
+func routerVPNLoadInheritedCronet(size int64, expected string) (bool, error) {
+	value, present := os.LookupEnv(standardengine.LibraryEnvironment)
+	if !present {
+		return false, nil
+	}
+	if value != strconv.Itoa(standardengine.LibraryFD) {
+		return true, errors.New("native library changed its fixed inherited descriptor")
+	}
+	file := os.NewFile(uintptr(standardengine.LibraryFD), "original-sealed-cronet")
+	if file == nil {
+		return true, errors.New("native library inherited descriptor is unavailable")
+	}
+	defer file.Close()
+	if err := linuxprocess.SetCloseOnExec(file); err != nil {
+		return true, err
+	}
+	if err := standardengine.VerifyLibrary(file, size, expected); err != nil {
+		return true, err
+	}
+	// The loader consumes the exact immutable object just verified. Retain its
+	// descriptor through dlopen; no installation path or ambient lookup enters.
+	if err := cronet.LoadLibrary("/proc/self/fd/" + value); err != nil {
+		return true, err
+	}
+	return true, standardengine.VerifyLibrary(file, size, expected)
+}

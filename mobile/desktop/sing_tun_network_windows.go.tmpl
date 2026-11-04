@@ -97,3 +97,7 @@ func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]De
 	}
 	return objects, nil
 }
+
+func (t *NativeTun) routervpnNetworkAddresses(current *net.Interface) ([]net.Addr, error) {
+	return current.Addrs()
+}

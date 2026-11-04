@@ -285,6 +285,13 @@ func linuxStandardServiceNotifyChannel(ctx context.Context, channel *net.UnixCon
 }
 
 func linuxStandardServiceUtility(arguments []string) (bool, error) {
+	return runLinuxStandardServiceUtility(arguments, nil)
+}
+
+// The optional observer is an explicit in-process constructor boundary for the
+// native installed-service fixture. Production supplies nil; no environment,
+// wire request or saved record can install a runtime control callback.
+func runLinuxStandardServiceUtility(arguments []string, observe func(context.Context, *linuxStandardService) (func() error, error)) (handled bool, failure error) {
 	selected := false
 	for _, argument := range arguments {
 		if argument == linuxStandardServiceArgument {
@@ -390,9 +397,25 @@ func linuxStandardServiceUtility(arguments []string) (bool, error) {
 	lifetime, stopLifetime := context.WithCancel(context.Background())
 	watchJoined := make(chan struct{})
 	go func() { defer close(watchJoined); service.watch(lifetime) }()
+	var observerJoin func() error
+	var observerFailure error
 	var stopWatchOnce sync.Once
-	stopWatch := func() { stopWatchOnce.Do(func() { stopLifetime(); <-watchJoined }) }
-	defer stopWatch()
+	stopWatch := func() {
+		stopWatchOnce.Do(func() {
+			stopLifetime()
+			<-watchJoined
+			if observerJoin != nil {
+				observerFailure = errors.Join(observerFailure, observerJoin())
+			}
+		})
+	}
+	defer func() { stopWatch(); failure = errors.Join(failure, observerFailure) }()
+	if observe != nil {
+		observerJoin, err = observe(lifetime, service)
+		if err != nil {
+			return true, err
+		}
+	}
 	for {
 		err = service.serve(context.Background(), listener)
 		select {

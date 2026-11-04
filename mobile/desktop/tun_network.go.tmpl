@@ -1,6 +1,7 @@
 package tun
 
 import (
+	"context"
 	"errors"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"runtime"
@@ -30,6 +31,44 @@ func (t *Inbound) RouterVPNDesktopNetworkReceipt() (string, error) {
 	}
 	if _, _, _, err := t.routervpnDesktopInterface(); err != nil {
 		return "", err
+	}
+	return raw, nil
+}
+
+// Only an unstarted original inbound accepts its creator's startup budget.
+// The method supplies cancellation to native ledger reads, never ownership.
+func (t *Inbound) RouterVPNDesktopNetworkStartup(ctx context.Context) error {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if ctx == nil || ctx.Err() != nil || t.routervpnReady || t.tunIf != nil || t.platformInterface != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration {
+		return errors.New("native routing startup requires its original unstarted inbound")
+	}
+	t.tunOptions.RouterVPNNetworkContext = ctx
+	return nil
+}
+
+// This read captures only the successfully started original stock inbound's
+// native ledger. It grants no MTU replacement authority and performs no
+// ambient interface lookup; NativeTun binds its actual creation index and the
+// caller's original bounded startup inventory.
+func (t *Inbound) RouterVPNDesktopNetworkStartupReceipt(ctx context.Context, guard func() bool) (string, error) {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if ctx == nil || ctx.Err() != nil || t.tunOptions.RouterVPNNetworkContext != ctx || !t.routervpnReady || t.tunIf == nil ||
+		t.platformInterface != nil || t.autoRedirect != nil || t.routervpnDesktop || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration || guard == nil || !guard() {
+		return "", errors.New("native startup receipt lost its original ready inbound")
+	}
+	reader, ok := t.tunIf.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
+	if !ok {
+		return "", errors.New("original native inbound has no successful-call ledger")
+	}
+	raw, err := reader.RouterVPNDesktopNetworkReceipt()
+	if err != nil {
+		return "", err
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
+	if err != nil || receipt.TargetOS != runtime.GOOS || receipt.Name != t.tunOptions.Name || receipt.Index < 1 || receipt.MTU != int(t.tunOptions.MTU) || ctx.Err() != nil || !guard() {
+		return "", errors.New("native startup ledger differs from its original inbound or caller")
 	}
 	return raw, nil
 }

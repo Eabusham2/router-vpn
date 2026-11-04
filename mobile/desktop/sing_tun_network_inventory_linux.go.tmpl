@@ -1,0 +1,180 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"net"
+	"syscall"
+
+	"github.com/sagernet/netlink"
+)
+
+func (t *NativeTun) routervpnNetworkContext() context.Context {
+	if t.options.RouterVPNNetworkContext != nil {
+		return t.options.RouterVPNNetworkContext
+	}
+	return context.Background()
+}
+
+// These are original operation-owned rtnetlink dumps, not net.Interfaces or
+// netlink.AddrList's uninterruptible ambient sockets. The shared dump reader
+// closes and joins only its original descriptor on cancellation or overflow.
+func routervpnLinuxAttributes(raw []byte) (map[uint16][]byte, error) {
+	result := make(map[uint16][]byte)
+	for len(raw) != 0 {
+		if len(raw) < 4 {
+			return nil, errors.New("native network attributes are truncated")
+		}
+		size := int(binary.LittleEndian.Uint16(raw))
+		aligned := (size + 3) &^ 3
+		kind := binary.LittleEndian.Uint16(raw[2:])
+		if size < 4 || aligned > len(raw) || result[kind] != nil {
+			return nil, errors.New("native network attributes are duplicated or incomplete")
+		}
+		for _, padding := range raw[size:aligned] {
+			if padding != 0 {
+				return nil, errors.New("native network attribute padding changed")
+			}
+		}
+		result[kind] = append([]byte{}, raw[4:size]...)
+		raw = raw[aligned:]
+	}
+	return result, nil
+}
+
+func (t *NativeTun) routervpnLinuxInterface() (*net.Interface, error) {
+	rows, err := linuxDump(t.routervpnNetworkContext(), syscall.RTM_GETLINK, syscall.RTM_NEWLINK)
+	if err != nil {
+		return nil, err
+	}
+	var result *net.Interface
+	for _, row := range rows {
+		if len(row.Data) < 16 {
+			return nil, errors.New("native TUN link record is truncated")
+		}
+		index := int(int32(binary.LittleEndian.Uint32(row.Data[4:])))
+		if index != t.routervpnOwnedIndex {
+			continue
+		}
+		attrs, err := routervpnLinuxAttributes(row.Data[16:])
+		if err != nil {
+			return nil, err
+		}
+		name, mtu := attrs[syscall.IFLA_IFNAME], attrs[syscall.IFLA_MTU]
+		if result != nil || len(name) < 2 || name[len(name)-1] != 0 || bytes.IndexByte(name[:len(name)-1], 0) >= 0 || string(name[:len(name)-1]) != t.options.Name || len(mtu) != 4 {
+			return nil, errors.New("native TUN link lost its original name or MTU")
+		}
+		flags := binary.LittleEndian.Uint32(row.Data[8:])
+		value := &net.Interface{Index: index, Name: t.options.Name, MTU: int(binary.LittleEndian.Uint32(mtu)), HardwareAddr: net.HardwareAddr(append([]byte(nil), attrs[syscall.IFLA_ADDRESS]...))}
+		for _, mapping := range []struct {
+			native uint32
+			flag   net.Flags
+		}{{syscall.IFF_UP, net.FlagUp}, {syscall.IFF_RUNNING, net.FlagRunning}, {syscall.IFF_BROADCAST, net.FlagBroadcast}, {syscall.IFF_LOOPBACK, net.FlagLoopback}, {syscall.IFF_POINTOPOINT, net.FlagPointToPoint}, {syscall.IFF_MULTICAST, net.FlagMulticast}} {
+			if flags&mapping.native != 0 {
+				value.Flags |= mapping.flag
+			}
+		}
+		result = value
+	}
+	if result == nil {
+		return nil, errors.New("native TUN interface disappeared")
+	}
+	return result, t.routervpnNetworkContext().Err()
+}
+
+func (t *NativeTun) routervpnLinuxAddresses(index int) ([]netlink.Addr, error) {
+	rows, err := linuxDump(t.routervpnNetworkContext(), syscall.RTM_GETADDR, syscall.RTM_NEWADDR)
+	if err != nil {
+		return nil, err
+	}
+	var result []netlink.Addr
+	for _, row := range rows {
+		if len(row.Data) < 8 {
+			return nil, errors.New("native TUN address record is truncated")
+		}
+		if int(binary.LittleEndian.Uint32(row.Data[4:])) != index {
+			continue
+		}
+		bits := 32
+		if row.Data[0] == syscall.AF_INET6 {
+			bits = 128
+		} else if row.Data[0] != syscall.AF_INET {
+			return nil, errors.New("native TUN address has another family")
+		}
+		prefix := int(row.Data[1])
+		if prefix > bits {
+			return nil, errors.New("native TUN address has an invalid prefix")
+		}
+		attrs, err := routervpnLinuxAttributes(row.Data[8:])
+		if err != nil {
+			return nil, err
+		}
+		value := netlink.Addr{LinkIndex: index, Flags: int(row.Data[2]), Scope: int(row.Data[3])}
+		var destination, local *net.IPNet
+		for kind, raw := range attrs {
+			switch kind {
+			case syscall.IFA_ADDRESS, syscall.IFA_LOCAL, syscall.IFA_BROADCAST:
+				if len(raw) != bits/8 {
+					return nil, errors.New("native TUN address bytes changed family")
+				}
+				ip := append(net.IP(nil), raw...)
+				if kind == syscall.IFA_ADDRESS {
+					destination = &net.IPNet{IP: ip, Mask: net.CIDRMask(prefix, bits)}
+				} else if kind == syscall.IFA_LOCAL {
+					local = &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)}
+				} else {
+					value.Broadcast = ip
+				}
+			case syscall.IFA_LABEL:
+				if len(raw) < 1 || raw[len(raw)-1] != 0 || bytes.IndexByte(raw[:len(raw)-1], 0) >= 0 {
+					return nil, errors.New("native TUN address label is invalid")
+				}
+				value.Label = string(raw[:len(raw)-1])
+			case 8: // IFA_FLAGS, wider than the original header's eight bits.
+				if len(raw) != 4 {
+					return nil, errors.New("native TUN address flags are incomplete")
+				}
+				value.Flags = int(binary.LittleEndian.Uint32(raw))
+			case syscall.IFA_CACHEINFO:
+				if len(raw) != 16 {
+					return nil, errors.New("native TUN address lifetimes are incomplete")
+				}
+				value.PreferedLft = int(binary.LittleEndian.Uint32(raw))
+				value.ValidLft = int(binary.LittleEndian.Uint32(raw[4:]))
+			}
+		}
+		if local != nil {
+			if bits == 32 && destination != nil && local.IP.Equal(destination.IP) {
+				value.IPNet = destination
+			} else {
+				value.IPNet, value.Peer = local, destination
+			}
+		} else {
+			value.IPNet = destination
+		}
+		if value.IPNet == nil {
+			return nil, errors.New("native TUN address omitted its native local value")
+		}
+		result = append(result, value)
+		if len(result) > 32 {
+			return nil, errors.New("native TUN address inventory exceeds its bound")
+		}
+	}
+	return result, t.routervpnNetworkContext().Err()
+}
+
+func (t *NativeTun) routervpnNetworkAddresses(current *net.Interface) ([]net.Addr, error) {
+	addresses, err := t.routervpnLinuxAddresses(current.Index)
+	if err != nil {
+		return nil, err
+	}
+	var result []net.Addr
+	for _, address := range addresses {
+		result = append(result, address.IPNet)
+	}
+	return result, nil
+}

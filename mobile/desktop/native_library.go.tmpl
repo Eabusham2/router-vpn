@@ -26,6 +26,9 @@ func routerVPNLoadCronet() error {
 	if err != nil || size <= 0 || size > 128<<20 || len(routerVPNCronetSHA) != 64 {
 		return errors.New("native Naive library lacks its build-owned seal")
 	}
+	if handled, err := routerVPNLoadInheritedCronet(size, routerVPNCronetSHA); handled || err != nil {
+		return err
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return err

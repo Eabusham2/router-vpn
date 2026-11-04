@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -39,6 +41,14 @@ func (d *linuxStandardServiceDiagnostic) String() string {
 func init() {
 	if os.Getenv(linuxControllerNamespaceMarker) == "1" && len(os.Args) == 2 &&
 		(os.Args[1] == linuxStandardServiceArgument || os.Args[1] == linuxStandardServiceUpgradeArgument) {
+		if os.Args[1] == linuxStandardServiceArgument && os.Getenv("ROUTERVPN_STANDARD_SERVICE_NATIVE_TRIGGER") == "1" {
+			_, err := runLinuxStandardServiceUtility(os.Args[1:], linuxStandardNativeExitObserver)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
 		main()
 		os.Exit(0)
 	}
@@ -48,13 +58,13 @@ func init() {
 // named Unix listeners, kernel peer pidfds, actual installed service/helper
 // processes, readiness and process join. Missing capabilities fail the gate.
 func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *testing.T) {
-	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "always-off", "always"} {
+	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "on-connect-network-failure", "always-off", "always"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy := scenario
 			if scenario == "always-off" {
 				policy = "always"
 			}
-			if scenario == "on-connect-failure" {
+			if scenario == "on-connect-network-failure" || scenario == "on-connect-failure" {
 				policy = "on-connect"
 			}
 			executable := linuxControllerNamespaceInstall(t)
@@ -72,27 +82,19 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 			// It supplies no creator authority: the service must prove complete
 			// native absence and obtain a new original kernel acknowledgment.
 			linuxStandardServicePreviousBootState(t, linuxOwnedControllerRoot, profile.ID, profile.Endpoint)
+			var nativeQueries *atomic.Int64
 			if policy == "on-connect" {
 				legacyStopBoundaryFiles(t, linuxOwnedControllerRoot)
-				// Keep the actual original-child DNS listener and uncached
-				// exchange in this installed lifecycle case. Its downstream
-				// resolver remains the explicit existing router fixture.
-				engine := strings.Replace(legacyDNSEngineFixture,
-					"signal.signal(signal.SIGINT,lambda *_:sys.exit(0))\nsignal.signal(signal.SIGTERM,lambda *_:sys.exit(0))",
-					"def done(*_):\n (root/'engine-stopped').write_text('closed');sys.exit(0)\nsignal.signal(signal.SIGINT,done)\nsignal.signal(signal.SIGTERM,done)", 1)
-				if scenario == "on-connect-failure" {
-					// Only this private generated engine cooperatively exits. The
-					// service still creates, observes and joins its actual child.
-					loop := "\nwhile True:\n if (root/'close-listener').exists():"
-					if strings.Count(engine, loop) != 1 {
-						t.Fatal("original generated DNS engine loop changed")
-					}
-					engine = strings.Replace(engine, loop, "\nwhile True:\n if (root/'run/standard-service-fixture-exit').exists():done()\n if (root/'close-listener').exists():", 1)
-				}
-				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "bin", "sing-box"), []byte(engine), 0700); err != nil {
+				if err := os.Remove(filepath.Join(linuxOwnedControllerRoot, "bin", "sing-box")); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "dns-mode"), []byte("valid"), 0600); err != nil {
+				// No stock script exists in this installed fixture. The controller
+				// captures a request; the service selects the real verified bundle.
+				linuxStandardInstallRuntimeFixture(t)
+				nativeQueries = linuxStandardNativePeerFixture(t)
+				profile.DNSMode, profile.DNSProtocol, profile.DNSHost, profile.DNSPort = "custom", "tcp", "203.0.113.53", 5353
+				body, _ = json.Marshal(common.RouterProfileStore{SchemaVersion: 4, SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
+				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), body, 0600); err != nil {
 					t.Fatal(err)
 				}
 				catalog, _ := json.Marshal(legacyStopShippingCatalog(t))
@@ -111,6 +113,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 			defer notify.Close()
 			service := exec.Command(executable, linuxStandardServiceArgument)
 			service.Env = []string{linuxControllerNamespaceMarker + "=1", "NOTIFY_SOCKET=" + notifyPath, "GORACE=atexit_sleep_ms=0"}
+			if scenario == "on-connect-failure" {
+				service.Env = append(service.Env, "ROUTERVPN_STANDARD_SERVICE_NATIVE_TRIGGER=1")
+			}
 			var diagnostic linuxStandardServiceDiagnostic
 			service.Stderr = &diagnostic
 			if err = service.Start(); err != nil {
@@ -138,6 +143,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				if scenario == "always-off" {
 					action = "off"
 				}
+				if scenario == "on-connect-network-failure" {
+					action = "network-failure"
+				}
 				if scenario == "on-connect-failure" {
 					action = "failure"
 				}
@@ -153,6 +161,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				}
 				if err = controller.Wait(); err != nil || !strings.Contains(output.String(), "standard-service-route-joined") {
 					t.Fatal("actual controller service route did not complete", err, output.String())
+				}
+				if nativeQueries != nil && nativeQueries.Load() < 1 {
+					t.Fatal("actual standard engine did not route uncached selected DNS through the original SOCKS peer")
 				}
 				_ = writer.Close()
 				_ = reader.Close()
