@@ -7,6 +7,7 @@ package mobiletor
 // matches the actual subject test executable; the separately retained peer
 // executable remains outside that scope.
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -191,6 +192,9 @@ func DesktopWindowsNodeCompositionRetire(ctx context.Context, target DesktopWind
 // independently queried ALE endpoint must also have retired.
 type DesktopWindowsNodeSocketRetirement struct {
 	policy             *DesktopWindowsSocketPolicy
+	identity           *DesktopWindowsSocketIdentity
+	target             DesktopWindowsProtectionTarget
+	scope              []byte
 	creation           DesktopSocketCreation
 	grant              DesktopSocketGrant
 	endpoints          []uint64
@@ -238,7 +242,9 @@ func DesktopWindowsNodeCompositionCaptureSocketRetirement(ctx context.Context, g
 		if err != nil || !actual.PeerConnected || actual.Local != grant.Local || actual.Remote != grant.Remote {
 			return nil, errors.Join(err, errors.New("socket retirement capture is not its actual connected tuple"))
 		}
-		captured := &DesktopWindowsNodeSocketRetirement{policy: p, creation: creation, grant: grant}
+		captured := &DesktopWindowsNodeSocketRetirement{policy: p, identity: p.identity, creation: creation, grant: grant,
+			target: desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata),
+			scope:  append([]byte(nil), p.fixtureScope...)}
 		for _, rule := range permit.rules {
 			captured.rules = append(captured.rules, rule.Key)
 		}
@@ -385,10 +391,23 @@ func (r *DesktopWindowsNodeSocketRetirement) RequireRetired(ctx context.Context)
 	}
 	p := r.policy
 	_, err := desktopWindowsPolicyCall(p, ctx, true, func() (struct{}, error) {
-		if p.capture != r.grant.Capture || p.owner != r.grant.Binding.Owner {
+		if p.capture != r.grant.Capture || p.owner != r.grant.Binding.Owner ||
+			p.identity != r.identity || r.identity == nil || !bytes.Equal(p.fixtureScope, r.scope) ||
+			!r.target.matches(p.capture, p.options.KillSwitchPolicy, p.metadata) {
 			return struct{}{}, errors.New("native retirement changed its original captured owner")
 		}
-		if err := p.assertBaseline(); err != nil {
+		if p.closed {
+			// A failed proof can finish the complete policy teardown before this
+			// observation. Its active lock and engines are then intentionally gone.
+			// Verify the exact retained baseline through a separate native reader;
+			// a missing lock alone never proves successful retirement.
+			if len(p.permits) != 0 || len(p.bindings) != 0 || len(p.tunnel) != 0 || p.locked || !p.installed || !p.baselineDone {
+				return struct{}{}, errors.New("native retirement did not retain its exact drained baseline")
+			}
+			if err := readDesktopWindowsRetainedProtection(ctx, r.target, r.scope); err != nil {
+				return struct{}{}, err
+			}
+		} else if err := p.assertBaseline(); err != nil {
 			return struct{}{}, err
 		}
 		if _, exists := p.bindings[r.creation.SocketID]; exists {
@@ -399,20 +418,34 @@ func (r *DesktopWindowsNodeSocketRetirement) RequireRetired(ctx context.Context)
 				return struct{}{}, errors.New("native retirement retained its captured socket grant")
 			}
 		}
-		for _, key := range r.rules {
-			if err := p.baselineEngine.Absent(key); err != nil {
-				return struct{}{}, errors.Join(err, errors.New("native retirement retained its original WFP permit filter"))
+		closed := p.closed
+		return struct{}{}, r.identity.call(ctx, true, func() (failure error) {
+			if closed && !r.identity.closed {
+				return errors.New("native retirement did not join its original identity close")
 			}
-		}
-		return struct{}{}, p.identity.call(ctx, true, func() error {
-			if _, exists := p.identity.sockets[r.creation.SocketID]; exists {
+			if _, exists := r.identity.sockets[r.creation.SocketID]; exists {
 				return errors.New("native retirement did not join its original socket release")
 			}
 			if !r.originalClosed() {
 				return errors.New("native retirement retained an original descriptor")
 			}
+			// The read-only observer owns its handle inside this joined native
+			// call, independently of both production engines. A caller timeout
+			// cannot close it while an entered endpoint query is still running.
+			reader, err := desktopWFPOpen(false)
+			if reader != nil {
+				defer func() { failure = errors.Join(failure, reader.Close()) }()
+			}
+			if err != nil {
+				return err
+			}
+			for _, key := range r.rules {
+				if err := reader.Absent(key); err != nil {
+					return errors.Join(err, errors.New("native retirement retained its original WFP permit filter"))
+				}
+			}
 			for _, endpoint := range r.endpoints {
-				if _, _, err := p.identity.api.endpointProperties(p.identity.engine, endpoint); !errors.Is(err, desktopWindowsEndpointNotFound) {
+				if _, _, err := r.identity.api.endpointProperties(reader.handle, endpoint); !errors.Is(err, desktopWindowsEndpointNotFound) {
 					return errors.Join(err, errors.New("native retirement retained its captured ALE endpoint"))
 				}
 			}

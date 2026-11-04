@@ -6,6 +6,8 @@ import importlib.util
 import io
 import json
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -331,6 +333,10 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
 
 
 class OrdinarySOCKSScope(unittest.TestCase):
+    def test_exact_retirement_observer_after_full_close_and_during_timeout(self):
+        subprocess.run([sys.executable, str(ROOT / 'deploy/test_windows_socket_retirement_observer.py')],
+                       check=True, timeout=100)
+
     def setUp(self):
         OrdinaryHysteria2Scope.setUp(self)
         relative = "routervpn/mobiletor/desktop_socket_windows_identity.go"
