@@ -354,6 +354,9 @@ type desktopWindowsExternalStopCapture struct {
 }
 
 func (a *app) captureDesktopRetainedStop() (desktopRetainedStopCapture, error) {
+	if captured, err := captureLegacyStandardExitStop(a); captured != nil || err != nil {
+		return captured, err
+	}
 	if raw, exists := desktopExternalRetainedLaunches.Load(a); exists {
 		launch, ok := raw.(*desktopNodeLaunch)
 		if !ok || launch == nil || launch.external == nil {
