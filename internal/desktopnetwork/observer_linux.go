@@ -32,10 +32,19 @@ func openNativeObserver(emit func(Event, error)) (nativeObserver, error) {
 	}
 	// RTMGRP_LINK, IFADDR4/6, ROUTE4/6, RULE4/6. Rule events have no
 	// interface key and are matched against exact successful native installs.
-	groups := uint32(1 | 0x10 | 0x100 | 0x40 | 0x400 | 0x80 | 0x80000)
+	groups := uint32(1<<(syscall.RTNLGRP_LINK-1) | 1<<(syscall.RTNLGRP_IPV4_IFADDR-1) |
+		1<<(syscall.RTNLGRP_IPV6_IFADDR-1) | 1<<(syscall.RTNLGRP_IPV4_ROUTE-1) |
+		1<<(syscall.RTNLGRP_IPV6_ROUTE-1) | 1<<(syscall.RTNLGRP_IPV4_RULE-1) |
+		1<<(syscall.RTNLGRP_IPV6_RULE-1))
 	if err = syscall.Bind(fd, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK, Groups: groups}); err != nil {
 		syscall.Close(fd)
 		return nil, err
+	}
+	address, err := syscall.Getsockname(fd)
+	bound, ok := address.(*syscall.SockaddrNetlink)
+	if err != nil || !ok || bound.Pid == 0 || bound.Groups != groups {
+		syscall.Close(fd)
+		return nil, errors.Join(errors.New("native network observer lost its exact route/rule subscription"), err)
 	}
 	if err = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 1<<20); err != nil {
 		syscall.Close(fd)

@@ -183,6 +183,9 @@ func TestLinuxNativeNetworkCohortEvents(t *testing.T) {
 	networkNativeIP(t, "route", "add", "default", "via", "192.0.2.1", "dev", "rvpn-physical")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	t.Run("ipv6-rule-away-and-back", func(t *testing.T) {
+		networkNativeIPv6RuleObserver(t, ctx)
+	})
 	t.Run("unchanged-physical-owner", func(t *testing.T) {
 		o, _ := networkNativeOwner(t, ctx)
 		if err := o.Current(); err != nil {

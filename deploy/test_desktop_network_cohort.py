@@ -43,6 +43,7 @@ PARENTS = (
     "TestLinuxOwnedGotoRuleTransitions",
 )
 NATIVE_CASES = (
+    "ipv6-rule-away-and-back",
     "unchanged-physical-owner", "gateway-away-and-back", "address-away-and-back",
     "mtu-away-and-back", "unclaimed-virtual-start-and-stop",
     "owned-interface-route-rule-and-drain", "foreign-rule-without-interface-key",
@@ -160,7 +161,7 @@ def main():
             binary = work / "network-native.test"
             execute([go, "test", "-race", "-c", "-o", str(binary), "./internal/desktopnetwork"], env=env)
             linux_namespace_test(binary, env)
-            print("Eight real isolated Linux link/address/gateway/route/rule and join cases passed.")
+            print("Nine real isolated Linux link/address/gateway/route/rule and join cases passed.")
 
         mutant = work / "mutant"
         mutant.mkdir()
