@@ -299,8 +299,8 @@ class LegacyInstallationImages(unittest.TestCase):
 
 
 class ManagedProcessLibrary(T.ProcessLibrary):
-    def __init__(self, digest, *, versions=None, uuids=None, error=0):
-        super().__init__(paths={101: (0, 2)})
+    def __init__(self, digest, *, versions=None, uuids=None, error=0, pids=(101,), paths=None):
+        super().__init__(pids=pids, paths={101: (0, 2)} if paths is None else paths)
         self.digest, self.versions, self.error = bytes.fromhex(digest), list(versions or [9, 9, 9]), error
         self.uuids = list(uuids or ['0' * 32] * 3)
         self.csops_audittoken = T.NativeCall(self.code)
@@ -309,11 +309,11 @@ class ManagedProcessLibrary(T.ProcessLibrary):
 
     def pid_info(self, pid, flavor, argument, buffer, size):
         if flavor != 17: return super().pid_info(pid, flavor, argument, buffer, size)
-        if (pid, argument, size) != (101, 1, 56): raise AssertionError('Managed identity lost original unique-info ABI')
+        if pid not in self.pids or (argument, size) != (1, 56): raise AssertionError('Managed identity lost original unique-info ABI')
         version = self.versions[0]
         if len(self.versions) > 1: self.versions.pop(0)
         info = ctypes.cast(buffer, ctypes.POINTER(I.GENERATION.IMAGE.NativeUniqueInfo)).contents
-        info.uniqueid, info.idversion = 700, version
+        info.uniqueid, info.idversion = 599 + pid, version
         uuid = self.uuids[0]
         if len(self.uuids) > 1: self.uuids.pop(0)
         ctypes.memmove(info.uuid, bytes.fromhex(uuid), 16)
@@ -321,7 +321,7 @@ class ManagedProcessLibrary(T.ProcessLibrary):
         return size
 
     def code(self, pid, opcode, output, size, token):
-        if (pid, opcode, size) != (101, 5, 20): raise AssertionError('Managed comparison lost kernel p_textvp authority')
+        if pid not in self.pids or (opcode, size) != (5, 20): raise AssertionError('Managed comparison lost kernel p_textvp authority')
         self.tokens.append(list(ctypes.cast(token, ctypes.POINTER(ctypes.c_uint32 * 8)).contents))
         self.before_hash()
         if self.error:
@@ -338,11 +338,12 @@ class ManagedProcessInventory(unittest.TestCase):
     prepare = GenerationReceipt.prepare
     capture = GenerationReceipt.capture
 
-    def read(self, library, captured):
+    def read(self, library, captured, *, single_scan=False):
         with mock.patch.object(self.installer, 'native_process_library', return_value=library), \
              mock.patch.object(self.installer.GENERATION.IMAGE, 'code_identity_library', return_value=library), \
              mock.patch.object(self.installer.time, 'sleep'):
-            return self.installer.running_executables(captured)
+            scan = self.installer.running_executables_once if single_scan else self.installer.running_executables
+            return scan(captured)
 
     def test_only_complete_generation_excludes_captured_foreign_live_image(self):
         self.prepare()
@@ -429,7 +430,8 @@ class ManagedProcessInventory(unittest.TestCase):
                 ([9, 9, 9], ['0' * 32, '0' * 32, '3' * 32], 'process or exec generation changed'),
             ):
                 with self.subTest(versions=versions, uuids=uuids), self.assertRaisesRegex(RuntimeError, expected):
-                    self.read(ManagedProcessLibrary('a' * 40, versions=versions, uuids=uuids, error=85), captured)
+                    self.read(ManagedProcessLibrary('a' * 40, versions=versions, uuids=uuids, error=85), captured,
+                              single_scan=expected == 'process or exec generation changed')
             original = self.path.read_bytes()
             foreign = json.loads(original); foreign['target_root'] = str(self.base/'foreign-installation')
             probe = ManagedProcessLibrary('a' * 40, error=85)
@@ -441,6 +443,80 @@ class ManagedProcessInventory(unittest.TestCase):
             probe = ManagedProcessLibrary('a' * 40, error=85)
             probe.before_hash = lambda: (self.root/'router-vpn-client').unlink()
             with self.assertRaises(ValueError): self.read(probe, captured)
+
+    def scan_sequence(self, captured, libraries):
+        pending = iter(libraries)
+        current = [None]
+        def next_library():
+            try:
+                current[0] = next(pending)
+            except StopIteration:
+                self.fail('Native inventory exceeded its permitted complete-scan sequence')
+            return current[0]
+        with mock.patch.object(self.installer, 'native_process_library', side_effect=next_library), \
+             mock.patch.object(self.installer.GENERATION.IMAGE, 'code_identity_library', side_effect=lambda: current[0]), \
+             mock.patch.object(self.installer.time, 'sleep'):
+            return self.installer.running_executables(captured)
+
+    def transitioning_scan(self):
+        # PID101 is fully classified before PID102 changes its exec during
+        # the real image-capture function. Only the native ABI is modeled.
+        return ManagedProcessLibrary('a' * 40, pids=(101, 102),
+                                     paths={101: (b'/discarded-partial-image', 0), 102: (b'/changing-image', 0)},
+                                     versions=[9] * 6 + [10])
+
+    def test_live_transition_restarts_the_entire_inventory_without_partial_paths(self):
+        self.prepare()
+        with self.capture() as captured:
+            first = self.transitioning_scan()
+            second = ManagedProcessLibrary('a' * 40, pids=(103,), paths={103: (b'/fresh-complete-image', 0)})
+            try:
+                actual = self.scan_sequence(captured, [first, second])
+            except RuntimeError as error:
+                self.fail('A valid complete replacement scan was not captured: ' + str(error))
+            self.assertEqual(actual, ['/fresh-complete-image'], 'An incomplete old scan lent its partial paths')
+            for library in (first, second):
+                self.assertEqual(sum(call[0] == 'count' for call in library.calls), 1)
+                self.assertEqual(sum(call[0] == 'inventory' for call in library.calls), 1)
+            self.assertEqual([token[5] for token in first.tokens], [101, 102])
+            self.assertEqual([token[5] for token in second.tokens], [103])
+
+    def test_replacement_inventory_preserves_owned_refusal_and_original_members(self):
+        self.prepare()
+        with self.capture() as captured:
+            first = self.transitioning_scan()
+            owned = ManagedProcessLibrary(next(iter(captured.hashes)), pids=(103,), paths={103: (b'/renamed-owned-image', 0)})
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                self.scan_sequence(captured, [first, owned])
+            self.assertEqual(len(owned.tokens), 1, 'Matching native image was retried or ignored')
+
+            first = self.transitioning_scan()
+            original = self.root/'router-vpn-client'
+            # Mutate the original scope only as the second PID changes exec.
+            count = [0]
+            def replace_original():
+                count[0] += 1
+                if count[0] == 2: original.unlink()
+            first.before_hash = replace_original
+            fresh = ManagedProcessLibrary('a' * 40)
+            with self.assertRaises(ValueError):
+                self.scan_sequence(captured, [first, fresh])
+            self.assertEqual(fresh.calls, [], 'A changed original installation was replaced with new authority')
+
+    def test_whole_inventory_retry_is_bounded_and_does_not_catch_unknown_errors(self):
+        self.prepare()
+        with self.capture() as captured:
+            attempts = [self.transitioning_scan() for _ in range(3)]
+            with self.assertRaises(self.installer.GENERATION.IMAGE.MainImageGenerationChanged):
+                self.scan_sequence(captured, attempts)
+            self.assertEqual([len(library.tokens) for library in attempts], [2, 2, 2])
+            for code_error in (1, 13, 22):
+                library = ManagedProcessLibrary('a' * 40, versions=[9, 9, 10], error=code_error)
+                with self.subTest(error=code_error):
+                    with self.assertRaises(RuntimeError) as failure:
+                        self.scan_sequence(captured, [library])
+                    self.assertNotIsInstance(failure.exception, self.installer.GENERATION.IMAGE.MainImageGenerationChanged)
+                    self.assertEqual(len(library.tokens), 1)
 
 
 
@@ -672,6 +748,7 @@ class NativeHostManagedInventory(NativeGenerationReceipt):
 
             def scan(observations):
                 original = captured.require_foreign_image
+                original_scan = installer.running_executables_once
 
                 def observe(identity):
                     record = {'identity': dict(identity), 'accepted': False}
@@ -679,9 +756,17 @@ class NativeHostManagedInventory(NativeGenerationReceipt):
                     original(identity)
                     record['accepted'] = True
 
+                def fresh_scan(scope):
+                    self.assertIs(scope, captured, 'Retry replaced the original installation authority')
+                    observations.clear()
+                    return original_scan(scope)
+
                 # Observe the exact shipping decision, without replacing its
                 # process list, libproc, code identity, or receipt validation.
-                with mock.patch.object(captured, 'require_foreign_image', side_effect=observe):
+                # A failed attempt cannot lend its foreign-image witness to
+                # the later complete inventory.
+                with mock.patch.object(captured, 'require_foreign_image', side_effect=observe), \
+                     mock.patch.object(installer, 'running_executables_once', side_effect=fresh_scan):
                     return installer.running_executables(captured)
 
             def require_positive_scan():
@@ -840,6 +925,17 @@ def main():
          '                pass # accept matching old native image', 'test_only_complete_generation_excludes_captured_foreign_live_image'),
         ('ignore-linked-owned-code', '                generation.require_foreign_image(\n                    identity)',
          '                pass # accept matching linked renamed image', 'test_linked_renamed_copy_is_compared_by_native_image'),
+        ('omit-complete-retry', '            if attempt == 2:\n                raise',
+         '            if True:\n                raise', 'test_live_transition_restarts_the_entire_inventory_without_partial_paths'),
+        ('retry-unknown-native-error', '        except GENERATION.IMAGE.MainImageGenerationChanged:',
+         '        except RuntimeError:', 'test_whole_inventory_retry_is_bounded_and_does_not_catch_unknown_errors'),
+        ('extend-inventory-retry-bound',
+         '    for attempt in range(3):\n        try:\n            return running_executables_once(generation)\n        except GENERATION.IMAGE.MainImageGenerationChanged:\n            if attempt == 2:',
+         '    for attempt in range(4):\n        try:\n            return running_executables_once(generation)\n        except GENERATION.IMAGE.MainImageGenerationChanged:\n            if attempt == 3:',
+         'test_whole_inventory_retry_is_bounded_and_does_not_catch_unknown_errors'),
+        ('omit-original-scope-before-rescan', '    library = native_process_library()\n    if generation is not None:\n        generation.verify()',
+         '    library = native_process_library()\n    # omit original installation verification before the complete scan',
+         'test_replacement_inventory_preserves_owned_refusal_and_original_members'),
     ):
         source = (ROOT/'client/install-macos-native.py').read_text()
         if source.count(needle) != 1: raise AssertionError('Managed inventory control lost actual source seam: '+name)

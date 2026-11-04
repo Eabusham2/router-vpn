@@ -481,6 +481,22 @@ def native_executable(library, pid, *, capture_generation=False):
 
 
 def running_executables(generation=None):
+    if generation is None:
+        return running_executables_once(generation)
+    # An independently witnessed live exec transition invalidates the whole
+    # scan. Retain the same installation scope, but capture every PID and image
+    # afresh; no partial paths or earlier foreign-image decisions are reused.
+    # Unknown, disappeared, denied, matching and malformed identities still
+    # fail immediately. No native query or outer operation deadline is renewed.
+    for attempt in range(3):
+        try:
+            return running_executables_once(generation)
+        except GENERATION.IMAGE.MainImageGenerationChanged:
+            if attempt == 2:
+                raise
+
+
+def running_executables_once(generation=None):
     # Apple libproc returns a PID count here (not the byte count returned by
     # proc_listpids). Paths come from the kernel, not mutable argv or ps text.
     # https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c

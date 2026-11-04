@@ -224,6 +224,14 @@ def code_identity_library():
     return system
 
 
+class MainImageGenerationChanged(RuntimeError):
+    """A witnessed live-to-live transition invalidated the entire image capture.
+
+    This error contains no reusable identity. A caller may only start a fresh
+    complete inventory under its separately retained installation authority.
+    """
+
+
 class MainImageCodeDirectoryUnavailable(RuntimeError):
     """An EBADEXEC result with a separately fenced kernel executable UUID.
 
@@ -259,6 +267,10 @@ def main_image_identity(library, pid, state_reader, *, system=None):
     after_unique = native_unique(library, pid)
     after = state_reader(library, pid)
     if (after is None or before[:3] != after[:3] or after[3] == 5 or unique != after_unique):
+        if (after is not None and after[3] != 5 and
+                ((result == 0 and any(digest)) or
+                 (result == -1 and error in (errno.ESRCH, 85) and not any(digest)))):
+            raise MainImageGenerationChanged('Native main-image process or exec generation changed')
         raise RuntimeError('Native main-image process or exec generation changed')
     identity = {'pid': pid, 'start_seconds': before[1], 'start_microseconds': before[2],
                 'uniqueid': unique[0], 'idversion': unique[1], 'main_uuid': unique[2]}

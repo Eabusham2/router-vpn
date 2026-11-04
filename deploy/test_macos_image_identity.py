@@ -299,6 +299,31 @@ class MainImageCapture(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'process or exec generation changed'):
                     self.image.main_image_identity(fake, 102, fake.state, system=fake)
 
+    def test_only_valid_live_transition_can_request_a_complete_fresh_inventory(self):
+        for change in ('pid', 'exec', 'start', 'uuid', 'gone', 'zombie'):
+            for code_error in (0, errno.ESRCH, 85, errno.EACCES, errno.EPERM, errno.EINVAL):
+                fake = NativeFixture(); fake.error = code_error
+                if change == 'pid': fake.unique[-1] = (32, 17)
+                elif change == 'exec': fake.unique[-1] = (31, 18)
+                elif change == 'start': fake.states[-1] = (102, 401, 50, 2)
+                elif change == 'uuid': fake.uuids[-1] = '1' * 32
+                elif change == 'gone': fake.states[-1] = None
+                else: fake.states[-1] = (102, 400, 50, 5)
+                with self.subTest(change=change, error=code_error):
+                    with self.assertRaises(RuntimeError) as failure:
+                        self.image.main_image_identity(fake, 102, fake.state, system=fake)
+                    retryable = change not in ('gone', 'zombie') and code_error in (0, errno.ESRCH, 85)
+                    self.assertEqual(isinstance(failure.exception, self.image.MainImageGenerationChanged), retryable)
+                    self.assertFalse(hasattr(failure.exception, 'identity'), 'A failed capture lent image authority')
+        for code_error, result, digest in ((0, 0, bytes(20)), (85, 1, bytes(20)),
+                                           (errno.ESRCH, -1, bytes.fromhex('a1' * 20))):
+            fake = NativeFixture(); fake.error = code_error; fake.error_result = result
+            fake.digest = fake.failed_digest = digest; fake.unique[-1] = (31, 18)
+            with self.subTest(error=code_error, result=result):
+                with self.assertRaises(RuntimeError) as failure:
+                    self.image.main_image_identity(fake, 102, fake.state, system=fake)
+                self.assertNotIsInstance(failure.exception, self.image.MainImageGenerationChanged)
+
 
 @unittest.skipUnless(sys.platform == 'darwin', 'actual Darwin kernel required')
 class NativeMainImage(unittest.TestCase):
@@ -380,6 +405,41 @@ class NativeMainImage(unittest.TestCase):
         self.assertEqual(observed, [(-1, errno.ESRCH)])
         self.assertIsNone(child.poll(), 'Wrong-generation control did not preserve its actual child')
 
+    def test_actual_live_exec_invalidates_the_capture_without_lending_an_image(self):
+        path, _ = self.copy_image('/bin/sh', 'exec-transition-image')
+        child = self.launch(path, '-c', 'read line; exec /bin/cat')
+        original = self.image.native_unique(self.library, child.pid)
+        calls = []
+
+        def transition(pid, operation, output, size, token):
+            self.assertEqual(pid, child.pid)
+            result = self.system.csops_audittoken(pid, operation, output, size, token)
+            saved_error = ctypes.get_errno()
+            self.assertEqual(result, 0, 'Original native image was not captured before exec')
+            child.stdin.write(b'exec\n'); child.stdin.flush()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                self.assertIsNone(child.poll(), 'The original child exited instead of executing')
+                current = self.image.native_unique(self.library, pid)
+                if current != original:
+                    self.assertEqual(current[0], original[0], 'Exec was replaced by a different process')
+                    self.assertNotEqual(current[1], original[1], 'The actual exec generation did not advance')
+                    calls.append((original, current))
+                    ctypes.set_errno(saved_error)
+                    return result
+                time.sleep(0.01)
+            self.fail('Original native child did not complete its requested exec within three seconds')
+
+        with self.assertRaises(self.image.MainImageGenerationChanged) as refused:
+            self.image.main_image_identity(self.library, child.pid, self.installer.native_process_state,
+                                           system=types.SimpleNamespace(csops_audittoken=transition))
+        self.assertFalse(hasattr(refused.exception, 'identity'))
+        self.assertEqual(len(calls), 1)
+        fresh = self.image.main_image_identity(self.library, child.pid, self.installer.native_process_state,
+                                               system=self.system)
+        self.assertEqual((fresh['uniqueid'], fresh['idversion'], fresh['main_uuid']), calls[0][1])
+        self.assertIsNone(child.poll(), 'Fresh capture did not retain the same live child')
+
 
 def later_host_observation():
     """Read one refused PID later; no original-lookup or installation authority."""
@@ -438,6 +498,12 @@ def main():
          MainImageCapture, 'test_only_ebadexec_retains_the_separate_fenced_uuid_failure'),
         ('accept-unknown-code', 'if result != 0 or not any(digest):', 'if False:',
          MainImageCapture, 'test_native_error_unknown_signature_and_zero_hash_never_grant_identity'),
+        ('retry-disappeared-or-zombie-image', 'after is not None and after[3] != 5 and', 'True and',
+         MainImageCapture, 'test_only_valid_live_transition_can_request_a_complete_fresh_inventory'),
+        ('retry-denied-image', 'error in (errno.ESRCH, 85)', 'error != 0',
+         MainImageCapture, 'test_only_valid_live_transition_can_request_a_complete_fresh_inventory'),
+        ('retry-empty-successful-code', 'result == 0 and any(digest)', 'result == 0',
+         MainImageCapture, 'test_only_valid_live_transition_can_request_a_complete_fresh_inventory'),
     )
     for name, needle, replacement, case, method in mutations:
         source = TARGET.read_text()
