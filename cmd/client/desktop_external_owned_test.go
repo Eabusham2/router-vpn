@@ -1141,6 +1141,9 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				}
 				body, _ := json.Marshal(request)
 				response := httptest.NewRecorder()
+				// Connected identity does not join a runnable original proof monitor.
+				// Finish that transaction before this fixture begins its temporary one.
+				synctest.Wait()
 				a.speedLabRun(response, httptest.NewRequest(http.MethodPost, "/api/speed-lab/run", bytes.NewReader(body)).WithContext(ctx))
 				if direction == "external-router-retired-controller" {
 					if response.Code != http.StatusConflict || ctx.Err() == nil || a.state.Connected || len(f.children) != 2 {
