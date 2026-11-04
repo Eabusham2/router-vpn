@@ -141,6 +141,72 @@ class NativeFailureDiagnostics(unittest.TestCase):
         self.assertNotIn('private-secret', result.stdout)
 
 
+CAPTURED_CLEANUP_HARNESS = r'''package mobiletor
+import("context";"errors";"fmt";"reflect";"testing";"time")
+type DesktopWindowsProtectionTarget struct{ ID string }
+func(t DesktopWindowsProtectionTarget)Validate()error{if t.ID==""{return errors.New("no captured target")};return nil}
+type cleanupTest struct{ callbacks []func(); errors []string }
+func(t *cleanupTest)Helper(){}
+func(t *cleanupTest)Cleanup(f func()){t.callbacks=append(t.callbacks,f)}
+func(t *cleanupTest)Error(v ...any){t.errors=append(t.errors,fmt.Sprint(v...))}
+func(t *cleanupTest)run(){for i:=len(t.callbacks)-1;i>=0;i--{t.callbacks[i]()}}
+var calls []string
+var current string
+var partialErr, readErr, transactionErr, closeErr, absentErr error
+func bounded(ctx context.Context){deadline,ok:=ctx.Deadline();if !ok||time.Until(deadline)>10*time.Second||time.Until(deadline)<=0{panic("cleanup lost its original live ten-second bound")}}
+func DesktopWindowsNodeCompositionRetainedTarget(ctx context.Context)(DesktopWindowsProtectionTarget,error){bounded(ctx);calls=append(calls,"partial");return DesktopWindowsProtectionTarget{current},partialErr}
+func DesktopWindowsNodeCompositionAppID()([]byte,error){calls=append(calls,"scope");return []byte("original-executable"),nil}
+func readDesktopWindowsRetainedProtection(ctx context.Context,t DesktopWindowsProtectionTarget,scope []byte)error{bounded(ctx);calls=append(calls,"read:"+t.ID);if string(scope)!="original-executable"{panic("scope changed")};if t.ID!=current{return errors.New("foreign retained target")};return readErr}
+type recovery struct{}
+func newDesktopWindowsProtectionTransactionTarget(ctx context.Context,scope []byte,removeAlways bool,target *DesktopWindowsProtectionTarget)(*recovery,error){bounded(ctx);calls=append(calls,"transaction:"+target.ID);if string(scope)!="original-executable"||!removeAlways||target.ID!=current{panic("retirement widened captured authority")};return &recovery{},transactionErr}
+func(*recovery)Close(ctx context.Context)error{bounded(ctx);calls=append(calls,"close");return closeErr}
+func DesktopWindowsNodeCompositionAbsent(ctx context.Context)error{bounded(ctx);calls=append(calls,"absent");return absentErr}
+func reset(){calls=nil;current="original";partialErr=nil;readErr=nil;transactionErr=nil;closeErr=nil;absentErr=nil}
+func TestCapturedNativeCleanup(t *testing.T){
+ for _,name:=range []string{"captured","foreign-newer","partial","missing","read-failure","transaction-failure","close-failure","absence-failure"}{t.Run(name,func(t *testing.T){
+  reset();target:=DesktopWindowsProtectionTarget{"original"};var want []string;wantErrors:=0
+  switch name{
+  case "captured":want=[]string{"scope","read:original","transaction:original","close","absent"}
+  case "foreign-newer":current="newer";want=[]string{"scope","read:original"};wantErrors=1
+  case "partial":target.ID="";want=[]string{"partial","scope","read:original","transaction:original","close","absent"}
+  case "missing":target.ID="";partialErr=errors.New("no original outcome");absentErr=errors.New("unknown retained policy");want=[]string{"partial","absent"};wantErrors=1
+  case "read-failure":readErr=errors.New("incomplete original rules");want=[]string{"scope","read:original"};wantErrors=1
+  case "transaction-failure":transactionErr=errors.New("late native failure");want=[]string{"scope","read:original","transaction:original","close"};wantErrors=1
+  case "close-failure":closeErr=errors.New("native owner unjoined");want=[]string{"scope","read:original","transaction:original","close"};wantErrors=1
+  case "absence-failure":absentErr=errors.New("native policy remains");want=[]string{"scope","read:original","transaction:original","close","absent"};wantErrors=1
+  }
+  fixture:=&cleanupTest{};nodePQWFPCleanup(fixture,&target);if len(calls)!=0||len(fixture.callbacks)!=1{t.Fatal("cleanup executed before registered Box retirement")};fixture.run()
+  if !reflect.DeepEqual(calls,want)||len(fixture.errors)!=wantErrors{t.Fatalf("captured cleanup switched authority, lost independent readback or skipped joining: calls=%v errors=%v",calls,fixture.errors)}
+  if name!="missing"&&target.ID!="original"{t.Fatal("cleanup replaced original target")}
+ })}
+}
+'''
+
+
+class CapturedNativeCleanup(unittest.TestCase):
+    def test_exact_cleanup_keeps_original_target_and_independent_retirement(self):
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'The captured cleanup regression requires Go')
+        source = (ROOT / 'mobile/desktop/node_pq_peer_windows_test.go.tmpl').read_text()
+        helper = source[source.index('func nodePQWFPCleanup('):source.index('func nodePQWFPRequireBlocked(')]
+        # Only cross-platform type boundaries are modeled. Execute the exact
+        # cleanup and independent retirement control bodies, including errors.
+        helper = helper.replace('t *testing.T', 't *cleanupTest').replace('mobiletor.', '')
+        observer = (ROOT / 'deploy/fixtures/windows-node-physical/kernel_observer.go').read_text()
+        retire = observer[observer.index('func DesktopWindowsNodeCompositionRetire('):observer.index('// This native test capture retains')]
+        with tempfile.TemporaryDirectory(prefix='native-captured-cleanup-') as temporary:
+            path = Path(temporary) / 'cleanup_test.go'
+            path.write_text(CAPTURED_CLEANUP_HARNESS + '\n' + helper + '\n' + retire)
+            result = subprocess.run([go, 'test', '-race', '-count=1', '-timeout=15s', '-v', str(path)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                    env=dict(os.environ, GOTOOLCHAIN='local'), timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for case in ('captured', 'foreign-newer', 'partial', 'missing', 'read-failure',
+                     'transaction-failure', 'close-failure', 'absence-failure'):
+            self.assertIn('--- PASS: TestCapturedNativeCleanup/' + case + ' (', result.stdout)
+        self.assertNotIn('--- SKIP:', result.stdout)
+
+
 class MAXObservationCompilation(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='max-observation-driver-')

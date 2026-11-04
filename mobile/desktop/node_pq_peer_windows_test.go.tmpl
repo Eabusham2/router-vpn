@@ -940,8 +940,14 @@ func nodePQWFPCleanup(t *testing.T, target *mobiletor.DesktopWindowsProtectionTa
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if partial, err := mobiletor.DesktopWindowsNodeCompositionRetainedTarget(ctx); err == nil {
-			*target = partial
+		// Admission already captured the exact source this test may retire.
+		// Keep that identity: looking up the global latest owner would both
+		// repeat a complete native read and silently replace our authority.
+		// Only an unacknowledged startup needs its owned partial outcome.
+		if target.Validate() != nil {
+			if partial, err := mobiletor.DesktopWindowsNodeCompositionRetainedTarget(ctx); err == nil {
+				*target = partial
+			}
 		}
 		if target.Validate() != nil {
 			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(ctx); err != nil {
