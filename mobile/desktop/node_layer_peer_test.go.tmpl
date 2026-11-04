@@ -2300,7 +2300,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
 	var benchmark *desktopExternalInstalledLatencyPeer
 	if latency {
-		benchmark = newDesktopExternalInstalledLatencyPeer(t, cert)
+		benchmark = newDesktopExternalInstalledLatencyPeerWithMTU(t, cert, request.Protocol == "wireguard")
 	}
 	var dnsQueries, publicAttempts, publicReplies, authFailures atomic.Uint32
 	var failDNS atomic.Bool
@@ -2558,7 +2558,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 		switch string(line) {
 		case "stats\n":
-		case "hold-latency\n", "release-latency\n":
+		case "hold-latency\n", "release-latency\n", "hold-mtu\n", "release-mtu\n":
 			if benchmark == nil {
 				t.Fatal("unselected latency responder")
 			}

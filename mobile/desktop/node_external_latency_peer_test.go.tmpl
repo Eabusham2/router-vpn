@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,12 +22,16 @@ import (
 // The shipping client's fixed resolver, TLS identity, nonce and one-byte HTTP
 // response are exercised through its real captured transport, never replaced.
 type desktopExternalInstalledLatencyReceipt struct {
-	DNS       uint32 `json:"dns"`
-	TLS       uint32 `json:"tls"`
-	Requests  uint32 `json:"requests"`
-	Responses uint32 `json:"responses"`
-	Cancelled uint32 `json:"cancelled"`
-	Active    uint32 `json:"active"`
+	DNS          uint32 `json:"dns"`
+	TLS          uint32 `json:"tls"`
+	Requests     uint32 `json:"requests"`
+	Responses    uint32 `json:"responses"`
+	Cancelled    uint32 `json:"cancelled"`
+	Active       uint32 `json:"active"`
+	MTUDownload  uint32 `json:"mtu_download"`
+	MTUUpload    uint32 `json:"mtu_upload"`
+	MTUActive    uint32 `json:"mtu_active"`
+	MTUCancelled uint32 `json:"mtu_cancelled"`
 }
 type desktopExternalInstalledLatencyPeer struct {
 	listener                                         net.Listener
@@ -35,17 +40,23 @@ type desktopExternalInstalledLatencyPeer struct {
 	mu                                               sync.Mutex
 	hold                                             chan struct{}
 	closing                                          bool
+	allowMTU                                         bool
+	mtuHold                                          chan struct{}
+	mtuDownload, mtuUpload, mtuActive, mtuCancelled  atomic.Uint32
 	workers                                          sync.WaitGroup
 	dns, tls, requests, responses, cancelled, active atomic.Uint32
 }
 
 func newDesktopExternalInstalledLatencyPeer(t *testing.T, certificate tls.Certificate) *desktopExternalInstalledLatencyPeer {
+	return newDesktopExternalInstalledLatencyPeerWithMTU(t, certificate, false)
+}
+func newDesktopExternalInstalledLatencyPeerWithMTU(t *testing.T, certificate tls.Certificate, allowMTU bool) *desktopExternalInstalledLatencyPeer {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &desktopExternalInstalledLatencyPeer{listener: listener, done: make(chan error, 1)}
+	p := &desktopExternalInstalledLatencyPeer{listener: listener, done: make(chan error, 1), allowMTU: allowMTU}
 	p.server = &http.Server{ReadHeaderTimeout: 3 * time.Second, Handler: http.HandlerFunc(p.serve)}
 	go func() {
 		p.done <- p.server.Serve(tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}))
@@ -53,6 +64,10 @@ func newDesktopExternalInstalledLatencyPeer(t *testing.T, certificate tls.Certif
 	t.Cleanup(func() {
 		p.mu.Lock()
 		p.closing = true
+		if p.mtuHold != nil {
+			close(p.mtuHold)
+			p.mtuHold = nil
+		}
 		if p.hold != nil {
 			close(p.hold)
 			p.hold = nil
@@ -77,8 +92,13 @@ func (p *desktopExternalInstalledLatencyPeer) serve(w http.ResponseWriter, r *ht
 	}
 	p.workers.Add(1)
 	held := p.hold
+	mtuHeld := p.mtuHold
 	p.mu.Unlock()
 	defer p.workers.Done()
+	if p.allowMTU && (r.Method == http.MethodPost || r.URL.Query().Get("bytes") != "1") {
+		p.serveMTU(w, r, mtuHeld)
+		return
+	}
 	nonce, err := hex.DecodeString(r.URL.Query().Get("routervpn"))
 	if r.TLS == nil || !r.TLS.HandshakeComplete || r.TLS.ServerName != "speed.cloudflare.com" || r.Method != http.MethodGet || r.Host != "speed.cloudflare.com" || r.URL.Path != "/__down" || len(r.URL.Query()) != 2 || r.URL.Query().Get("bytes") != "1" || err != nil || len(nonce) != 16 || r.Header.Get("Authorization") != "" || r.Header.Get("Accept-Encoding") != "identity" || r.Header.Get("Cache-Control") != "no-store, no-transform" || !r.Close {
 		http.Error(w, "unowned benchmark request", http.StatusForbidden)
@@ -114,6 +134,17 @@ func (p *desktopExternalInstalledLatencyPeer) control(command string) error {
 		return net.ErrClosed
 	}
 	switch command {
+	case "hold-mtu\n":
+		if !p.allowMTU || p.mtuHold != nil || p.mtuActive.Load() != 0 {
+			return errors.New("MTU hold lacks idle original responder")
+		}
+		p.mtuHold = make(chan struct{})
+	case "release-mtu\n":
+		if !p.allowMTU || p.mtuHold == nil {
+			return errors.New("MTU release lacks original hold")
+		}
+		close(p.mtuHold)
+		p.mtuHold = nil
 	case "hold-latency\n":
 		if p.hold != nil || p.active.Load() != 0 {
 			return errors.New("latency hold already owns active work")
@@ -131,7 +162,7 @@ func (p *desktopExternalInstalledLatencyPeer) control(command string) error {
 	return nil
 }
 func (p *desktopExternalInstalledLatencyPeer) receipt() *desktopExternalInstalledLatencyReceipt {
-	return &desktopExternalInstalledLatencyReceipt{DNS: p.dns.Load(), TLS: p.tls.Load(), Requests: p.requests.Load(), Responses: p.responses.Load(), Cancelled: p.cancelled.Load(), Active: p.active.Load()}
+	return &desktopExternalInstalledLatencyReceipt{DNS: p.dns.Load(), TLS: p.tls.Load(), Requests: p.requests.Load(), Responses: p.responses.Load(), Cancelled: p.cancelled.Load(), Active: p.active.Load(), MTUDownload: p.mtuDownload.Load(), MTUUpload: p.mtuUpload.Load(), MTUActive: p.mtuActive.Load(), MTUCancelled: p.mtuCancelled.Load()}
 }
 
 // Exercise the independent responder's real TLS and cancellation semantics on
@@ -223,5 +254,170 @@ func TestRouterVPNDesktopInstalledLatencyReferenceTLSAndJoinedCancel(t *testing.
 	actual := p.receipt()
 	if actual.Requests != 51 || actual.TLS != 51 || actual.Responses != 50 || actual.Cancelled != 1 || actual.Active != 0 {
 		t.Fatal("reference lost exact independent counters", actual)
+	}
+}
+
+// Only the explicitly captured WG acceptance enables real bounded MTU payloads.
+// The same TLS identity, uncached nonce and original connection close are required.
+func (p *desktopExternalInstalledLatencyPeer) serveMTU(w http.ResponseWriter, r *http.Request, held <-chan struct{}) {
+	nonce, err := hex.DecodeString(r.URL.Query().Get("routervpn"))
+	upload := r.Method == http.MethodPost
+	size, sizeErr := strconv.Atoi(r.URL.Query().Get("bytes"))
+	if upload {
+		size = int(r.ContentLength)
+		sizeErr = nil
+	}
+	valid := r.TLS != nil && r.TLS.HandshakeComplete && r.TLS.ServerName == "speed.cloudflare.com" && r.Host == "speed.cloudflare.com" && err == nil && len(nonce) == 16 && r.Close && r.Header.Get("Authorization") == "" && r.Header.Get("Accept-Encoding") == "identity" && r.Header.Get("Cache-Control") == "no-store, no-transform" && sizeErr == nil && size >= 2 && size <= 16<<20
+	valid = valid && ((!upload && r.Method == http.MethodGet && r.URL.Path == "/__down" && len(r.URL.Query()) == 2) || (upload && r.URL.Path == "/__up" && len(r.URL.Query()) == 1 && r.Header.Get("Content-Type") == "application/octet-stream"))
+	if !valid {
+		http.Error(w, "unowned MTU payload", http.StatusForbidden)
+		return
+	}
+	p.mtuActive.Add(1)
+	defer p.mtuActive.Add(^uint32(0))
+	if held != nil {
+		select {
+		case <-held:
+		case <-r.Context().Done():
+			p.mtuCancelled.Add(1)
+			return
+		}
+	}
+	if r.Context().Err() != nil {
+		p.mtuCancelled.Add(1)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if upload {
+		n, err := io.Copy(io.Discard, io.LimitReader(r.Body, int64(size)+1))
+		if err != nil || n != int64(size) {
+			http.Error(w, "short MTU upload", http.StatusBadRequest)
+			return
+		}
+		p.mtuUpload.Add(uint32(n))
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(size))
+	body := make([]byte, size)
+	for i := range body {
+		body[i] = byte(i)
+	}
+	if n, err := w.Write(body); err == nil && n == size {
+		p.mtuDownload.Add(uint32(n))
+	}
+}
+
+func TestRouterVPNDesktopInstalledMTUReferenceActualPayloadAndCancel(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			cert, ca := desktopExternalInstalledPeerCertificate(t, true)
+			p := newDesktopExternalInstalledLatencyPeerWithMTU(t, cert, enabled)
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM([]byte(ca)) {
+				t.Fatal("reference CA missing")
+			}
+			transport := &http.Transport{ExpectContinueTimeout: time.Second, DisableKeepAlives: true, Proxy: nil, DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if network != "tcp" || address != "speed.cloudflare.com:443" {
+					return nil, errors.New("foreign reference destination")
+				}
+				raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.listener.Addr().String())
+				if err != nil {
+					return nil, err
+				}
+				secured := tls.Client(raw, &tls.Config{RootCAs: roots, ServerName: "speed.cloudflare.com", MinVersion: tls.VersionTLS12})
+				if err = secured.HandshakeContext(ctx); err != nil {
+					raw.Close()
+					return nil, err
+				}
+				return secured, nil
+			}}
+			defer transport.CloseIdleConnections()
+			client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+			request := func(ctx context.Context, upload bool) (int, []byte, error) {
+				method, path := http.MethodGet, "/__down?bytes=262144&routervpn="+strings.Repeat("a", 32)
+				var body io.Reader
+				if upload {
+					method, path = http.MethodPost, "/__up?routervpn="+strings.Repeat("b", 32)
+					body = strings.NewReader(strings.Repeat("x", 262144))
+				}
+				q, err := http.NewRequestWithContext(ctx, method, "https://speed.cloudflare.com"+path, body)
+				if err != nil {
+					return 0, nil, err
+				}
+				q.Close = true
+				q.Header.Set("Accept-Encoding", "identity")
+				q.Header.Set("Cache-Control", "no-store, no-transform")
+				if upload {
+					q.Header.Set("Content-Type", "application/octet-stream")
+					// Refused opt-in receives a final status before an unread body
+					// can race the server closing its connection.
+					q.Header.Set("Expect", "100-continue")
+				}
+				reply, err := client.Do(q)
+				if err != nil {
+					return 0, nil, err
+				}
+				defer reply.Body.Close()
+				raw, err := io.ReadAll(io.LimitReader(reply.Body, 262145))
+				return reply.StatusCode, raw, err
+			}
+			for _, upload := range []bool{false, true} {
+				code, body, err := request(context.Background(), upload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !enabled {
+					if code != http.StatusForbidden {
+						t.Fatal("ordinary latency responder acquired unrequested transfer")
+					}
+					continue
+				}
+				if code != http.StatusOK || !upload && len(body) != 262144 || upload && len(body) != 0 {
+					t.Fatal("actual bounded transfer incomplete", code, len(body))
+				}
+			}
+			if !enabled {
+				if p.mtuDownload.Load() != 0 || p.mtuUpload.Load() != 0 || p.control("hold-mtu\n") == nil {
+					t.Fatal("ordinary responder accepted MTU authority")
+				}
+				return
+			}
+			if p.mtuDownload.Load() != 262144 || p.mtuUpload.Load() != 262144 {
+				t.Fatal("transfer counters do not describe actual complete payload")
+			}
+			if err := p.control("hold-mtu\n"); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, _, err := request(ctx, false); done <- err }()
+			deadline := time.Now().Add(2 * time.Second)
+			for p.mtuActive.Load() != 1 {
+				if time.Now().After(deadline) {
+					t.Fatal("MTU TLS payload never entered captured hold")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatal("held MTU client lost original cancellation", err)
+			}
+			for p.mtuActive.Load() != 0 || p.mtuCancelled.Load() != 1 {
+				if time.Now().After(deadline) {
+					t.Fatal("held MTU responder did not join")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if p.mtuDownload.Load() != 262144 || p.mtuUpload.Load() != 262144 {
+				t.Fatal("cancelled payload published transferred-byte success")
+			}
+			if err := p.control("release-mtu\n"); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

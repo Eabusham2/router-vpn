@@ -13,11 +13,15 @@ import (
 
 type macOSExternalLatencyReceipt struct {
 	DNS, TLS, Requests, Responses, Cancelled, Active uint32
+	MTUDownload                                      uint32 `json:"mtu_download"`
+	MTUUpload                                        uint32 `json:"mtu_upload"`
+	MTUActive                                        uint32 `json:"mtu_active"`
+	MTUCancelled                                     uint32 `json:"mtu_cancelled"`
 }
 
 func (p *macOSExternalNativePeer) latencyControl(t *testing.T, command string) macOSExternalPeerReply {
 	t.Helper()
-	if command != "hold-latency" && command != "release-latency" {
+	if command != "hold-latency" && command != "release-latency" && command != "hold-mtu" && command != "release-mtu" {
 		t.Fatal("unowned latency reference command")
 	}
 	if _, err := p.input.Write([]byte(command + "\n")); err != nil {
@@ -125,7 +129,7 @@ func macOSExternalNativeLatency(t *testing.T, ctx context.Context, client *http.
 	post(request, endpoint, http.StatusConflict)
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
 	var retained macOSExternalNativeResult
-	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retained) != nil || !retained.Connected || retained.ProcessID != live.ProcessID || retained.Session != live.Session || retained.Source != live.Source || retained.Config != live.Config || retained.Baseline == nil || retained.Baseline.Token != live.Baseline.Token || retained.Network.Name != live.Network.Name || retained.Network.Index != live.Network.Index || retained.Network.MTU != 1376 {
+	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retained) != nil || !retained.Connected || retained.ProcessID != live.ProcessID || retained.Session != live.Session || retained.Source != live.Source || retained.Config != live.Config || retained.Baseline == nil || retained.Baseline.Token != live.Baseline.Token || retained.Network.Name != live.Network.Name || retained.Network.Index != live.Network.Index || retained.Network.MTU != live.Network.MTU {
 		t.Fatal("native Retest/Cancel replaced its original child/PF/TUN owner", status, err, string(raw))
 	}
 	t.Logf("actual sealed Darwin latency accepted %s: held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained", peer.name)

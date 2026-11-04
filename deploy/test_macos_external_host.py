@@ -23,12 +23,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FLAG = 'ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE'
-POSITIVE_CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor')
+POSITIVE_CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto')
 NEGATIVE_CASES = ('hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key',
-                  'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening')
+                  'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit')
 CASES = POSITIVE_CASES + NEGATIVE_CASES
 TEST = 'TestMacOSRetainedExternalNativeSealedProtocols'
-POLICY_TESTS = ('TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries')
+MTU_RECEIPT = 'actual sealed Darwin WireGuard MTU accepted: automatic changed utun, transferred bytes, original Cancel rollback joined, Retest committed and original runtime PF retained'
+POLICY_TESTS = ('TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries', 'TestDesktopMacOSWireGuardRetainsCapturedSourceAndGraphBoundary')
 PEER_TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego,routervpn_darwin_external_host'
 
 
@@ -63,12 +64,23 @@ def source_identity(core):
     for name in ('deploy/test_macos_external_host.py', 'deploy/test_macos_external_host_runner.py',
                  'deploy/seal-native-runtime.py', 'configs/client/modes.json',
                  'mobile/desktop/node_layer_peer_test.go.tmpl', 'mobile/desktop/node_darwin_external_peer_test.go.tmpl',
-                 'mobile/desktop/node_external_hysteria_layer_installed_test.go.tmpl'):
+                 'mobile/desktop/node_external_hysteria_layer_installed_test.go.tmpl', 'mobile/desktop/node_external_wireguard_installed_test.go.tmpl'):
         app[name] = sha(ROOT/name)
     files = [core/'go.mod', core/'go.sum', *core.glob('*.go')]
     for directory in ('protocol/routervpnamnezia', 'routervpn', 'experimental/libbox/routervpn'):
         files.extend((core/directory).rglob('*.go'))
     return dict(application=app, peer={**owned, **{str(p.relative_to(core)): sha(p) for p in sorted(set(files))}})
+
+
+def success_receipt(case):
+    mtu = '1280' if case == 'wireguard-auto' else '1376'
+    return 'actual sealed Darwin ordinary host accepted '+case+': native child, selected DNS, exit proof, MTU'+mtu+', original PF retirement and controller join'
+
+
+def refusal_receipt(case):
+    if case.startswith('wireguard-'):
+        return 'actual sealed Darwin WireGuard refused '+case+': encrypted peer reached, expected proof boundary rejected, native PF reference and utun retired, original controller joined'
+    return 'actual sealed Darwin layer refused '+case+': encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined'
 
 
 def check_verdict(output):
@@ -81,7 +93,7 @@ def check_verdict(output):
         if len(re.findall(pattern, output, re.MULTILINE)) != 1:
             raise ValueError('Missing or duplicated exact native Darwin verdict: '+name)
     for case in POSITIVE_CASES:
-        receipt = 'actual sealed Darwin ordinary host accepted '+case+': native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join'
+        receipt = success_receipt(case)
         if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
             raise ValueError('Native Darwin protocol has no exact ownership receipt: '+case)
     for case in POSITIVE_CASES:
@@ -89,9 +101,11 @@ def check_verdict(output):
         if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
             raise ValueError('Native Darwin protocol has no exact retained measurement receipt: '+case)
     for case in NEGATIVE_CASES:
-        receipt = 'actual sealed Darwin layer refused '+case+': encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined'
+        receipt = refusal_receipt(case)
         if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
             raise ValueError('Native Darwin layer has no exact refusal and cleanup receipt: '+case)
+    if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(MTU_RECEIPT)+'$', output, re.MULTILINE)) != 1:
+        raise ValueError('Native WireGuard MTU omitted original actual transfer/rollback receipt')
     if output.splitlines().count('PASS') != 1 or not output.rstrip().endswith('\nPASS'):
         raise ValueError('Native Darwin host did not finish one complete execution')
 

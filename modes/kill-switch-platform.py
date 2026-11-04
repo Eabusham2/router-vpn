@@ -577,7 +577,7 @@ def darwin_reassert() -> int:
 
 _EXTERNAL_CAPTURE_FIELDS = ('schema', 'profile_id', 'protocol', 'session_id', 'source_sha256',
                             'config_sha256', 'home_lan_access', 'policy')
-_EXTERNAL_PROTOCOLS = {'shadowsocks', 'http-connect', 'https-connect', 'hysteria2'}
+_EXTERNAL_PROTOCOLS = {'shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'wireguard'}
 
 
 def _darwin_external_capture(value):

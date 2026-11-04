@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -62,6 +63,7 @@ type macOSExternalNativePeer struct {
 	failure                           error
 	protocol, password, ca            string
 	name, layer, layerPassword, fault string
+	policy, clientKey, peerKey, psk   string
 	inner                             netip.AddrPort
 	address                           netip.AddrPort
 	physical                          netip.Addr
@@ -173,7 +175,10 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal("native fixture lost its captured independent peer image", err)
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
-	p := &macOSExternalNativePeer{name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
+	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
+	if scenario == "wireguard-always" {
+		p.policy = "always"
+	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
@@ -227,6 +232,21 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		p.output.Close()
 	})
 	request := map[string]any{"schema": 1, "protocol": protocol, "address": p.physical.String(), "password": p.password, "hold": false}
+	if protocol == "wireguard" {
+		provider, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		consumer, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.clientKey = base64.StdEncoding.EncodeToString(consumer.Bytes())
+		p.peerKey = base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes())
+		p.psk, p.password = p.password, ""
+		request["password"] = ""
+		request["wireguard"] = map[string]string{"private_key": base64.StdEncoding.EncodeToString(provider.Bytes()), "client_public_key": base64.StdEncoding.EncodeToString(consumer.PublicKey().Bytes()), "preshared_key": p.psk}
+	}
 	if layer != "" {
 		layerRequest := map[string]any{"mode": layer, "password": p.layerPassword}
 		if fault == "wrong-whitening" {
@@ -251,7 +271,35 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		MTUPolicy: "manual", ManualMTU: 1376, EffectiveMTU: 9000, KillSwitch: true, KillSwitchPolicy: "on-connect", MultihopExecution: "auto",
 		External: &common.ExternalNodeConfig{Protocol: p.protocol, ExpectedPublicIP: "203.0.113.88"}}
 	connect := &common.ExternalHTTPConnectConfig{Host: p.physical.String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
+	profile.KillSwitchPolicy = p.policy
+	if p.policy == "always" {
+		profile.IPv6Mode = "on"
+		profile.HomeLANAccess = true
+	}
+	if p.name == "wireguard-auto" {
+		profile.MTUPolicy, profile.ManualMTU, profile.EffectiveMTU = "auto", 0, 0
+	}
 	switch p.protocol {
+	case "wireguard":
+		profile.DNSProtocol = "udp"
+		profile.External.WireGuard = &common.ExternalWireGuardConfig{PrivateKey: p.clientKey, PeerPublicKey: p.peerKey, PresharedKey: p.psk, Endpoint: p.address.String(), Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1420, PersistentKeepalive: 25}
+		switch p.fault {
+		case "wrong-client-key":
+			other, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile.External.WireGuard.PrivateKey = base64.StdEncoding.EncodeToString(other.Bytes())
+		case "wrong-psk":
+			var other [32]byte
+			if _, err := rand.Read(other[:]); err != nil {
+				t.Fatal(err)
+			}
+			profile.External.WireGuard.PresharedKey = base64.StdEncoding.EncodeToString(other[:])
+			clear(other[:])
+		case "wrong-exit":
+			profile.External.ExpectedPublicIP = "203.0.113.89"
+		}
 	case "shadowsocks":
 		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: p.physical.String(), Port: int(p.address.Port()), Method: "2022-blake3-aes-256-gcm", Password: p.password}
 	case "http-connect":
@@ -449,6 +497,10 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
 	switch scenario {
+	case "wireguard", "wireguard-always", "wireguard-auto":
+		return "wireguard", "", ""
+	case "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit":
+		return "wireguard", "", strings.TrimPrefix(scenario, "wireguard-")
 	case "shadowsocks", "http-connect", "https-connect", "hysteria2":
 		return scenario, "", ""
 	}

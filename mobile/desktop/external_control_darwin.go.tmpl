@@ -87,7 +87,7 @@ func routerVPNExternalCapturedPhysical(ctx context.Context, files *routerVPNExte
 	}
 	meta := policy.Metadata()
 	if meta.SourceSHA256 != source || meta.ConfigSHA256 != control.scope.Config || meta.SOCKSUDPAssociationRequired ||
-		(meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2") {
+		(meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "wireguard") {
 		return nil, routerVPNExternalFailure
 	}
 	staged, err := files.read("sing-box.json", 4<<20)

@@ -301,6 +301,9 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		protocols = append(protocols, "hysteria2")
 	}
+	if runtime.GOOS == "darwin" {
+		protocols = append(protocols, "wireguard")
+	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong")
 	}

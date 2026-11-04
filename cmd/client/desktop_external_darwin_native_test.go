@@ -94,6 +94,9 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 		}})
 	})
 	mux.HandleFunc("/api/disconnect", a.disconnect)
+	mux.HandleFunc("/api/mtu/retest", a.retestMTU)
+	mux.HandleFunc("/api/mtu/status", a.desktopMTUStatus)
+	mux.HandleFunc("/api/mtu/cancel", a.cancelDesktopMTURoute)
 	mux.HandleFunc("/api/speed-lab/external-latency", a.desktopLatencyMeasurement)
 	mux.HandleFunc("/api/speed-lab/external-latency/cancel", a.cancelDesktopLatencyMeasurement)
 	mux.HandleFunc("/api/native-external-observation", func(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +130,9 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 }
 
 type macOSExternalNativeResult struct {
+	IPv6, DNSProtocol, DNSHost                                                           string
+	DNSPort                                                                              int
+	HomeLAN                                                                              bool
 	Session, Source, Config, Protocol                                                    string
 	Layer, OuterTag, OuterType, PhysicalNetwork, PhysicalAddress, InnerHost, InnerDetour string
 	ProcessID                                                                            int
@@ -149,9 +155,11 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 	if err != nil || len(capture.PhysicalRoots) != 1 {
 		return result, errors.New("native observation lost its one original outer tuple")
 	}
+	result.IPv6, result.HomeLAN = capture.IPv6Mode, capture.HomeLANAccess
+	result.DNSProtocol, result.DNSHost, result.DNSPort = capture.SelectedDNS.Type, capture.SelectedDNS.Host, capture.SelectedDNS.Port
 	root := capture.PhysicalRoots[0]
 	result.Layer, result.OuterTag, result.OuterType = capture.StartLayer, root.Tag, root.Type
-	if capture.StartLayer != "" {
+	if capture.StartLayer != "" || capture.Protocol == "wireguard" {
 		if len(root.Destinations) != 1 {
 			return result, errors.New("layer observation lost its one original physical tuple")
 		}
@@ -240,7 +248,7 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
 	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
 		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
-		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening"} {
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit"} {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
@@ -251,7 +259,19 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	macOSExternalNativeBundle(t)
 	peer := macOSExternalNativePeerStart(t, scenario)
 	protocol := peer.protocol
-	macOSExternalNativeTrust(t, peer)
+	configuredMTU := 1376
+	if scenario == "wireguard-auto" {
+		configuredMTU = 1280
+	}
+	if peer.fault != "wrong-trust" {
+		macOSExternalNativeTrust(t, peer)
+	}
+	if peer.fault == "wrong-dns" {
+		if _, err := io.WriteString(peer.input, "fail-dns\n"); err != nil {
+			t.Fatal(err)
+		}
+		peer.read(t)
+	}
 	macOSExternalNativeInstallProfile(t, peer)
 	fixture.start()
 	connection := fixture.connection(fixture.uid)
@@ -291,7 +311,11 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	beforeTunnels := macOSExternalNativeTunnels(t)
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/external-profile/connect", `{"profile_id":"installed-macos-external","direct":true,"execution":"local"}`)
 	if peer.fault != "" {
-		macOSExternalNativeLayerRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+		if protocol == "wireguard" {
+			macOSExternalNativeWireGuardRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+		} else {
+			macOSExternalNativeLayerRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+		}
 		if err := connection.CloseWrite(); err != nil {
 			t.Fatal(err)
 		}
@@ -300,8 +324,15 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		if receipt.ExitCode != 0 {
 			t.Fatal("rejected layer controller did not join original cleanup", receipt.ExitCode)
 		}
-		t.Logf("actual sealed Darwin layer refused %s: encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined", scenario)
+		if protocol == "wireguard" {
+			t.Logf("actual sealed Darwin WireGuard refused %s: encrypted peer reached, expected proof boundary rejected, native PF reference and utun retired, original controller joined", scenario)
+		} else {
+			t.Logf("actual sealed Darwin layer refused %s: encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined", scenario)
+		}
 		return
+	}
+	if scenario == "wireguard-auto" {
+		macOSExternalNativeAwaitAutomaticMTU(t, ctx, client, peer)
 	}
 	var connected struct {
 		OK              bool   `json:"ok"`
@@ -315,13 +346,22 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
 	var live macOSExternalNativeResult
 	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &live) != nil || !live.Connected || live.Closed || live.ProcessID <= 0 || live.ProcessID == started.ProcessID || live.Protocol != protocol ||
-		!live.Proof.Healthy || !live.Proof.DNSProven || live.Proof.EntryProven || live.Network.TargetOS != "darwin" || !strings.HasPrefix(live.Network.Name, "utun") || live.Network.MTU != 1376 ||
+		!live.Proof.Healthy || !live.Proof.DNSProven || live.Proof.EntryProven || live.Network.TargetOS != "darwin" || !strings.HasPrefix(live.Network.Name, "utun") || (scenario != "wireguard-auto" && live.Network.MTU != configuredMTU || scenario == "wireguard-auto" && (live.Network.MTU < 1280 || live.Network.MTU > 1420)) ||
 		live.Baseline == nil || live.Baseline.Phase != "active" || !live.Baseline.Baseline.Present || live.Baseline.Capture.Session != live.Session {
 		t.Fatalf("actual Darwin external ownership/readiness receipt failed: status=%d error=%v response=%s", status, err, raw)
 	}
 	macOSExternalNativeLayerAuthority(t, peer, live)
+	if protocol == "wireguard" {
+		expectedIPv6 := "off"
+		if peer.policy == "always" {
+			expectedIPv6 = "on"
+		}
+		if live.IPv6 != expectedIPv6 || live.HomeLAN != (peer.policy == "always") || live.DNSProtocol != "udp" || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.PhysicalNetwork != "udp" || live.PhysicalAddress != peer.address.String() {
+			t.Fatal("WireGuard changed selected DNS, IPv6, LAN or physical peer", live)
+		}
+	}
 	observed := peer.stats(t)
-	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || protocol == "hysteria2" && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && observed.Connections < 1 {
+	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || (protocol == "hysteria2" || protocol == "wireguard") && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && protocol != "wireguard" && observed.Connections < 1 {
 		t.Fatal("independent peer did not observe the selected native transport, DNS and actual exit proof", observed)
 	}
 	if peer.layer != "" && (observed.Layer == nil || observed.Layer.Authenticated < 1 || observed.Layer.Forwarded < 1 || observed.Layer.Rejected != 0) {
@@ -336,6 +376,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		t.Fatal("completed public request lost its original retained native owner", status, err, string(raw))
 	}
 	macOSExternalNativeLatency(t, ctx, client, peer, live)
+	if scenario == "wireguard-auto" {
+		macOSExternalNativeWireGuardMTU(t, ctx, client, peer, live)
+	}
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/disconnect", "{}")
 	if err != nil || status != http.StatusOK || strings.TrimSpace(string(raw)) != `{"ok":true}` {
 		t.Fatal("actual Darwin public Disconnect failed", status, err, string(raw))
@@ -343,13 +386,17 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
 	var retired macOSExternalNativeResult
 	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retired) != nil || !retired.Closed || !retired.NativeJoined || !retired.WorkspaceRetired || retired.Session != live.Session || retired.ProcessID != live.ProcessID ||
-		retired.Baseline == nil || retired.Baseline.Phase != "retired" || retired.Baseline.Baseline.Present || retired.Baseline.Token != live.Baseline.Token {
+		retired.Baseline == nil || retired.Baseline.Phase != "retired" || retired.Baseline.Baseline.Present != (peer.policy == "always") || retired.Baseline.Token != live.Baseline.Token {
 		t.Fatal("actual Darwin Disconnect did not join native cleanup and retire its exact PF reference", status, err, string(raw))
 	}
 	if link, err := net.InterfaceByIndex(int(live.Network.Index)); err == nil && link.Name == live.Network.Name {
 		t.Fatal("actual native utun survived joined Disconnect")
 	}
-	macOSExternalNativeRetiredKernel(t, ctx, retired.Baseline.Token, beforeTunnels)
+	if peer.policy == "always" {
+		macOSExternalNativeAlwaysKernel(t, ctx, retired.Baseline, beforeTunnels)
+	} else {
+		macOSExternalNativeRetiredKernel(t, ctx, retired.Baseline.Token, beforeTunnels)
+	}
 	if err := connection.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +405,10 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	if receipt.ExitCode != 0 {
 		t.Fatal("original installed controller failed joined shutdown", receipt.ExitCode)
 	}
-	t.Logf("actual sealed Darwin ordinary host accepted %s: native child, selected DNS, exit proof, MTU1376, original PF retirement and controller join", scenario)
+	if peer.policy == "always" {
+		macOSExternalNativeReleaseAlways(t, ctx, retired.Baseline, beforeTunnels)
+	}
+	t.Logf("actual sealed Darwin ordinary host accepted %s: native child, selected DNS, exit proof, MTU%d, original PF retirement and controller join", scenario, configuredMTU)
 }
 
 func macOSExternalNativeLayerAuthority(t *testing.T, peer *macOSExternalNativePeer, value macOSExternalNativeResult) {

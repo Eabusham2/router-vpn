@@ -357,7 +357,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 		}
 		before := original.Config()
 		targets := []string{"linux", "windows"}
-		if protocol == "hysteria2" {
+		if protocol == "hysteria2" || protocol == "wireguard" {
 			targets = append(targets, "darwin")
 		}
 		for _, target := range targets {
@@ -661,4 +661,8 @@ func TestDesktopExternalPolicyDarwinHysteria2LayerPreservesCompleteCapture(t *te
 }
 func TestDesktopExternalPolicyDarwinHysteria2LayerRejectsReplacedAuthority(t *testing.T) {
 	desktopExternalHysteria2LayerRejectsReplacedAuthority(t, "darwin")
+}
+
+func TestDesktopExternalPolicyDarwinWireGuardPreservesCapturedEndpoint(t *testing.T) {
+	desktopExternalPacketPolicyPreservesEndpoint(t, "wireguard", "", "darwin")
 }

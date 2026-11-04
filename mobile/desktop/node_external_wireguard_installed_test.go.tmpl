@@ -1,0 +1,367 @@
+//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service/pause"
+	wgconn "github.com/sagernet/wireguard-go/conn"
+	wgdevice "github.com/sagernet/wireguard-go/device"
+	"io"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// This independent provider owns a cryptographic device and userspace stack.
+// Its only routes are the fixed captured DNS, public TLS and latency responders.
+// It has no client PF grant, source descriptor or utun capability.
+func startDesktopDarwinInstalledWireGuard(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr) desktopExternalInstalledWGPeer {
+	t.Helper()
+	if !physical.Is4() || !physical.IsGlobalUnicast() {
+		t.Fatal("external packet reference lost its exact cryptographic backend")
+	}
+	var values [3][]byte
+	defer func() {
+		for _, value := range values {
+			clear(value)
+		}
+	}()
+	for index, encoded := range []string{request.PrivateKey, request.ClientPublicKey, request.PresharedKey} {
+		raw, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		if err != nil || len(raw) != 32 || base64.StdEncoding.EncodeToString(raw) != encoded || bytes.Equal(raw, make([]byte, 32)) {
+			clear(raw)
+			t.Fatal("external WireGuard reference lost its exact cryptographic peer")
+		}
+		values[index] = raw
+	}
+	private, err := ecdh.X25519().NewPrivateKey(values[0])
+	if err != nil || bytes.Equal(private.PublicKey().Bytes(), values[1]) || bytes.Equal(values[0], values[2]) || bytes.Equal(values[1], values[2]) {
+		t.Fatal("external WireGuard reference requires independent peer keys and PSK")
+	}
+	rules := make(map[string]desktopReferenceRule)
+	for _, wanted := range []struct{ network, destination string }{{"udp", "203.0.113.53:5353"}, {"tcp", "1.1.1.1:443"}, {"tcp", "203.0.113.54:443"}} {
+		route, ok := server.route(wanted.network, wanted.destination)
+		address, addressErr := netip.ParseAddrPort(wanted.destination)
+		physical, physicalErr := netip.ParseAddrPort(route)
+		if !ok || addressErr != nil || physicalErr != nil || !physical.Addr().IsLoopback() || physical.Port() == 0 {
+			t.Fatal("external WireGuard reference lost its owned DNS/public responders")
+		}
+		rules[wanted.network+"/"+wanted.destination] = desktopReferenceRule{Network: wanted.network, Address: address.Addr().String(), Port: int(address.Port()), Target: route}
+	}
+	ctx, cancel := context.WithCancel(server.ctx)
+	handler := &desktopDarwinWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler,
+		UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: 1420,
+		Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+	if err != nil {
+		handler.close()
+		t.Fatal("external WireGuard reference failed to create its native stack", err)
+	}
+	bind := &desktopDarwinWGBind{local: physical, remote: physical}
+	ipc := fmt.Sprintf("private_key=%x\npublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], values[1], values[2])
+	device, err := startDesktopDarwinWGDevice(ctx, stack, bind, ipc)
+	ipc = ""
+	if err != nil {
+		handler.close()
+		t.Fatal("external WireGuard reference failed its exact device configuration", err)
+	}
+	var once sync.Once
+	close := func() { once.Do(func() { handler.close(); device.close() }) }
+	t.Cleanup(close)
+	return desktopExternalInstalledWGPeer{address: bind.address(), close: close, stats: func() (int64, int64, int64) {
+		return bind.packets.Load(), handler.tcp.Load(), handler.udp.Load()
+	}}
+}
+
+type desktopDarwinWGBind struct {
+	mu             sync.Mutex
+	local, remote  netip.Addr
+	connection     *net.UDPConn
+	packets        atomic.Int64
+	opened, closed bool
+}
+
+func (b *desktopDarwinWGBind) Open(port uint16) ([]wgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection != nil || b.opened || b.closed || port != 0 {
+		return nil, 0, errors.New("WireGuard reference attempted to replace its original UDP listener")
+	}
+	connection, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(b.local, 0)))
+	if err != nil {
+		return nil, 0, err
+	}
+	b.connection = connection
+	b.opened = true
+	read := func(packets [][]byte, sizes []int, endpoints []wgconn.Endpoint) (int, error) {
+		for {
+			n, remote, err := connection.ReadFromUDPAddrPort(packets[0])
+			if err != nil {
+				return 0, err
+			}
+			if remote.Addr() != b.remote {
+				continue
+			}
+			b.packets.Add(1)
+			sizes[0], endpoints[0] = n, peerEndpoint(remote)
+			return 1, nil
+		}
+	}
+	return []wgconn.ReceiveFunc{read}, uint16(connection.LocalAddr().(*net.UDPAddr).Port), nil
+}
+func (b *desktopDarwinWGBind) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection == nil {
+		return nil
+	}
+	b.closed = true
+	err := b.connection.Close()
+	b.connection = nil
+	return err
+}
+func (b *desktopDarwinWGBind) Send(packets [][]byte, endpoint wgconn.Endpoint, offset int) error {
+	remote, err := netip.ParseAddrPort(endpoint.DstToString())
+	if err != nil || remote.Addr() != b.remote || remote.Port() == 0 {
+		return errors.New("WireGuard reference tried another physical peer")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection == nil {
+		return net.ErrClosed
+	}
+	for _, packet := range packets {
+		if offset < 0 || offset > len(packet) {
+			return errors.New("WireGuard reference lost its exact packet offset")
+		}
+		n, err := b.connection.WriteToUDPAddrPort(packet[offset:], remote)
+		if err != nil {
+			return err
+		}
+		if n != len(packet)-offset {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+func (*desktopDarwinWGBind) SetMark(mark uint32) error {
+	if mark != 0 {
+		return errors.New("WireGuard reference cannot acquire a routing mark")
+	}
+	return nil
+}
+func (*desktopDarwinWGBind) BatchSize() int { return 1 }
+func (b *desktopDarwinWGBind) ParseEndpoint(value string) (wgconn.Endpoint, error) {
+	remote, err := netip.ParseAddrPort(value)
+	if err != nil || remote.Addr() != b.remote || remote.Port() == 0 {
+		return nil, errors.New("WireGuard reference lost its one remote endpoint")
+	}
+	return peerEndpoint(remote), nil
+}
+func (*desktopDarwinWGBind) SetReservedForEndpoint(_ netip.AddrPort, reserved [3]byte) {
+	if reserved != [3]byte{} {
+		panic("plain WireGuard reference has no reserved-byte policy")
+	}
+}
+func (b *desktopDarwinWGBind) address() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection == nil {
+		return ""
+	}
+	return b.connection.LocalAddr().String()
+}
+
+type desktopDarwinWGHandler struct {
+	*desktopReferenceHandler
+	tcp, udp atomic.Int64
+}
+
+func (h *desktopDarwinWGHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if _, ok := h.rule("tcp", destination); ok {
+		h.tcp.Add(1)
+	}
+	h.desktopReferenceHandler.NewConnectionEx(ctx, c, source, destination, done)
+}
+func (h *desktopDarwinWGHandler) NewPacketConnectionEx(ctx context.Context, c N.PacketConn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if _, ok := h.rule("udp", destination); ok {
+		h.udp.Add(1)
+	}
+	h.desktopReferenceHandler.NewPacketConnectionEx(ctx, c, source, destination, done)
+}
+
+type desktopDarwinWGDevice struct{ close func() }
+
+func startDesktopDarwinWGDevice(ctx context.Context, stack wg.Device, bind *desktopDarwinWGBind, ipc string) (desktopDarwinWGDevice, error) {
+	device := wgdevice.NewDevice(ctx, stack, bind, &wgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}}, 0)
+	stack.SetDevice(device)
+	err := device.IpcSet(ipc)
+	if err == nil {
+		err = stack.Start()
+	}
+	if err == nil {
+		err = device.Up()
+	}
+	if err != nil {
+		device.Close()
+		return desktopDarwinWGDevice{}, err
+	}
+	return desktopDarwinWGDevice{close: device.Close}, nil
+}
+
+// This dialer is confined to the one listener returned by the independent
+// provider. It cannot create a generic listener or contact an Internet peer.
+type desktopDarwinWGReferenceDialer struct{ target string }
+
+func (d desktopDarwinWGReferenceDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != "udp" || destination.String() != d.target {
+		return nil, errors.New("WireGuard reference client selected a foreign physical destination")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "udp4", d.target)
+}
+func (desktopDarwinWGReferenceDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("WireGuard reference client cannot own an ambient listener")
+}
+
+func TestRouterVPNDesktopDarwinInstalledWireGuardReference(t *testing.T) {
+	// Exercise encrypted loopback-to-this-host traffic on its observed interface;
+	// this does not claim native PF/utun admission on the portable runner.
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var physical netip.Addr
+	for _, device := range interfaces {
+		if device.Flags&net.FlagUp == 0 || device.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := device.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range addresses {
+			prefix, err := netip.ParsePrefix(raw.String())
+			if err == nil && prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+				physical = prefix.Addr()
+				break
+			}
+		}
+		if physical.IsValid() {
+			break
+		}
+	}
+	if !physical.IsValid() {
+		t.Fatal("portable encrypted reference lacks an owned IPv4 interface")
+	}
+	for _, fault := range []string{"success", "client-key", "psk"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+			defer cancel()
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			served := make(chan struct{})
+			go func() {
+				defer close(served)
+				connection, err := listener.Accept()
+				if err == nil {
+					defer connection.Close()
+					_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+					_, _ = io.Copy(connection, connection)
+				}
+			}()
+			defer func() { _ = listener.Close(); <-served }()
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer packet.Close()
+			provider, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumer, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var secret [32]byte
+			if _, err := rand.Read(secret[:]); err != nil {
+				t.Fatal(err)
+			}
+			defer clear(secret[:])
+			encode := base64.StdEncoding.EncodeToString
+			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, routes: []desktopNodeLayerRoute{
+				{Network: "udp", Destination: "203.0.113.53:5353", Physical: packet.LocalAddr().String()},
+				{Network: "tcp", Destination: "1.1.1.1:443", Physical: listener.Addr().String()},
+				{Network: "tcp", Destination: "203.0.113.54:443", Physical: listener.Addr().String()},
+			}}
+			peer := startDesktopDarwinInstalledWireGuard(t, server, desktopExternalInstalledWGRequest{PrivateKey: encode(provider.Bytes()), ClientPublicKey: encode(consumer.PublicKey().Bytes()), PresharedKey: encode(secret[:])}, physical)
+			defer peer.close()
+			if fault == "client-key" {
+				consumer, err = ecdh.X25519().GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fault == "psk" {
+				secret[0] ^= 1
+			}
+			client, err := wg.NewEndpoint(wg.EndpointOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Dialer: desktopDarwinWGReferenceDialer{peer.address}, MTU: 1420, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.2/32")}, PrivateKey: encode(consumer.Bytes()), Peers: []wg.PeerOptions{{Endpoint: M.ParseSocksaddr(peer.address), PublicKey: encode(provider.PublicKey().Bytes()), PreSharedKey: encode(secret[:]), AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}}}})
+			if err != nil {
+				t.Fatal("reference client construction failed")
+			}
+			defer client.Close()
+			if err = client.Start(false); err != nil {
+				t.Fatal("reference client did not start")
+			}
+			bounded, stop := context.WithTimeout(ctx, 2*time.Second)
+			defer stop()
+			connection, err := client.DialContext(bounded, "tcp", M.ParseSocksaddr("203.0.113.54:443"))
+			if fault != "success" {
+				if connection != nil {
+					_ = connection.Close()
+				}
+				if err == nil {
+					t.Fatal("wrong WireGuard credential reached plaintext stream")
+				}
+				raw, streams, packets := peer.stats()
+				if raw < 1 || streams != 0 || packets != 0 {
+					t.Fatal("negative did not reach encrypted provider or authenticated plaintext", raw, streams, packets)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("encrypted reference did not reach fixed latency route", err)
+			}
+			defer connection.Close()
+			_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+			const body = "captured wireguard latency destination"
+			if _, err = io.WriteString(connection, body); err != nil {
+				t.Fatal(err)
+			}
+			reply := make([]byte, len(body))
+			if _, err = io.ReadFull(connection, reply); err != nil || string(reply) != body {
+				t.Fatal("real WireGuard changed encrypted payload", err)
+			}
+			raw, streams, _ := peer.stats()
+			if raw < 1 || streams != 1 {
+				t.Fatal("reference omitted encrypted and inner counters", raw, streams)
+			}
+		})
+	}
+}

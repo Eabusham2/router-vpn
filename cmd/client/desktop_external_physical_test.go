@@ -456,3 +456,7 @@ func desktopExternalPhysicalHysteria2Layers(t *testing.T, target string) {
 func TestDesktopExternalPhysicalDarwinHysteria2LayersKeepOuterAndInnerOwners(t *testing.T) {
 	desktopExternalPhysicalHysteria2Layers(t, "darwin")
 }
+
+func TestDesktopExternalPhysicalDarwinWireGuardPreservesCapturedPolicy(t *testing.T) {
+	desktopExternalPhysicalUDPPolicy(t, "wireguard", "", "darwin")
+}
