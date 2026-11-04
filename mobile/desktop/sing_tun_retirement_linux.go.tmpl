@@ -931,7 +931,7 @@ func (t *NativeTun) routervpnLinuxReceiptContext(ctx context.Context) (string, e
 	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
 		return "", err
 	}
-	raw, err := t.routervpnObserveNetworkReceipt()
+	raw, err := t.routervpnObserveNetworkReceiptContext(ctx)
 	if err != nil {
 		return "", err
 	}

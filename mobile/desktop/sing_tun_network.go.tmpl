@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -55,14 +56,24 @@ func (t *NativeTun) RouterVPNDesktopNetworkReceipt() (string, error) {
 // The observational kernel shape alone grants no creator capability. Linux's
 // public method also requires its original descriptor and notification stream.
 func (t *NativeTun) routervpnObserveNetworkReceipt() (string, error) {
+	return t.routervpnObserveNetworkReceiptContext(context.Background())
+}
+
+func (t *NativeTun) routervpnObserveNetworkReceiptContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("native receipt lost its original read operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if t.options.FileDescriptor != 0 || t.options.NetNs != "" || t.options.EXP_ExternalConfiguration {
 		return "", errors.New("network receipt requires the original native TUN constructor")
 	}
-	current, luid, err := t.routervpnNetworkInterface()
+	current, luid, err := t.routervpnNetworkInterfaceContext(ctx)
 	if err != nil || current.Index < 1 || current.Name != t.options.Name || current.MTU != int(t.options.MTU) || current.Flags&net.FlagUp == 0 {
 		return "", errors.New("network receipt lost its current native interface")
 	}
-	addresses, err := t.routervpnNetworkAddresses(current)
+	addresses, err := t.routervpnNetworkAddressesContext(ctx, current)
 	if err != nil {
 		return "", err
 	}
@@ -101,15 +112,18 @@ func (t *NativeTun) routervpnObserveNetworkReceipt() (string, error) {
 	if failure != nil {
 		return "", failure
 	}
-	objects, err := t.routervpnNetworkObjects(receipt)
+	objects, err := t.routervpnNetworkObjectsContext(ctx, receipt)
 	if err != nil {
 		return "", err
 	}
 	receipt.Objects = objects
 	SortDesktopNetworkObjects(receipt.Objects)
-	after, afterLUID, err := t.routervpnNetworkInterface()
+	after, afterLUID, err := t.routervpnNetworkInterfaceContext(ctx)
 	if err != nil || after.Index != current.Index || after.Name != current.Name || after.MTU != current.MTU || after.Flags != current.Flags || afterLUID != luid {
 		return "", errors.New("native TUN changed while capturing its routing receipt")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	return CanonicalDesktopNetworkReceipt(receipt)
 }

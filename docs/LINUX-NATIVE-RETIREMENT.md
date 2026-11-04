@@ -112,6 +112,13 @@ the exact startup operation, and explicit later receipt reads require their
 own existing deadline. Borrowed/mobile readers and other operating systems
 preserve their previous rollback and lifetime behavior.
 
+Explicit native receipt reads carry that same operation through both link
+inventories, address inventory, route and rule dumps, and the event barriers.
+They do not reuse or rewrite the completed construction context. A caller
+canceled after the original event barrier cannot publish a receipt from a
+different read lifetime. The native MTU gate ends each candidate's construction
+operation before reading its adopted adapter with the retained test operation.
+
 Ordinary no-context projection callers still read under the Box lifetime. That
 does not supply a per-request bound and can delay Stop while a native read owns
 the retirement mutex. Threading their original caller operation through those

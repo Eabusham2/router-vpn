@@ -684,4 +684,60 @@ func TestRouterVPNNativeLinuxRoutingReceiptKeepsOriginalLifetimeAndCallerBudget(
 	if _, err := native.RouterVPNDesktopNetworkReceiptContext(bounded); err == nil || entered != 2 {
 		t.Fatal("fresh operation resurrected the retired original read lifetime")
 	}
+	active, model, _ := retirementFixture(t)
+	operation, finish := context.WithCancel(retirementStop(t))
+	defer finish()
+	active.options.RouterVPNNetworkContext = startup
+	active.options.RouterVPNNetworkLifetime = context.Background()
+	active.routervpnRetirement.watch = &retirementCancelOnDrain{retirementModel: model, cancel: finish}
+	if _, err := active.RouterVPNDesktopNetworkReceiptContext(operation); !errors.Is(err, context.Canceled) {
+		t.Fatal("native receipt inventory escaped cancellation after its original event barrier", err)
+	}
+
+	// Reach each actual inventory helper, not just the descriptor fence above.
+	// A canceled caller stops linuxDumpRequest before opening a kernel socket.
+	// The construction context is independently observed so substituting it
+	// cannot pass by returning an unrelated inventory or permission failure.
+	for _, read := range []func(*NativeTun, context.Context) error{
+		func(n *NativeTun, ctx context.Context) error {
+			_, _, err := n.routervpnNetworkInterfaceContext(ctx)
+			return err
+		},
+		func(n *NativeTun, ctx context.Context) error {
+			_, err := n.routervpnNetworkAddressesContext(ctx, &net.Interface{Index: 8})
+			return err
+		},
+		func(n *NativeTun, ctx context.Context) error {
+			_, err := n.routervpnNetworkObjectsContext(ctx, DesktopNetworkReceipt{Index: 8})
+			return err
+		},
+	} {
+		operation := &retirementReadContext{Context: bounded}
+		construction := &retirementReadContext{Context: bounded}
+		n := &NativeTun{options: Options{RouterVPNNetworkContext: construction}, routervpnOwnedIndex: 8}
+		if err := read(n, operation); err == nil || operation.calls == 0 || construction.calls != 0 {
+			t.Fatal("native inventory replaced its explicit operation with construction lifetime", err, operation.calls, construction.calls)
+		}
+	}
+}
+
+type retirementCancelOnDrain struct {
+	*retirementModel
+	cancel context.CancelFunc
+}
+
+func (w *retirementCancelOnDrain) drain(ctx context.Context) ([]routerVPNLinuxRoutingEvent, error) {
+	events, err := w.retirementModel.drain(ctx)
+	w.cancel()
+	return events, err
+}
+
+type retirementReadContext struct {
+	context.Context
+	calls int
+}
+
+func (c *retirementReadContext) Err() error {
+	c.calls++
+	return context.Canceled
 }

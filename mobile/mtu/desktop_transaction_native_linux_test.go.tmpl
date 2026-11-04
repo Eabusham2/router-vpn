@@ -251,10 +251,12 @@ func TestRouterVPNNativeLinuxMTUTransactionNamespace(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				operation, finishOperation := context.WithCancel(ctx)
 				if attempt == 0 {
 					// Existing shipping callers execute this same transaction, even
 					// when the first candidate equals the captured original MTU.
-					next, e := engine.RouterVPNChangeMTU(ctx, current, mtu)
+					next, e := engine.RouterVPNChangeMTU(operation, current, mtu)
+					finishOperation()
 					if e != nil || next == current {
 						t.Fatal("shipping native mutation", e)
 					}
@@ -270,7 +272,8 @@ func TestRouterVPNNativeLinuxMTUTransactionNamespace(t *testing.T) {
 				} else {
 					failed := selected == "failed-candidate-and-original-restore" && attempt == 2
 					reject.Store(failed)
-					transaction, e := engine.RouterVPNChangeMTUTransaction(ctx, current, mtu)
+					transaction, e := engine.RouterVPNChangeMTUTransaction(operation, current, mtu)
+					finishOperation()
 					if transaction == nil || transaction.Current() == nil || transaction.Current() == current || (e != nil) != failed {
 						t.Fatal("actual candidate/rollback lost its exact owner", attempt, e)
 					}
@@ -298,6 +301,11 @@ func TestRouterVPNNativeLinuxMTUTransactionNamespace(t *testing.T) {
 						}
 					}
 					current = transaction.Current()
+				}
+				// Every adopted candidate is read after its construction operation
+				// finishes. Its actual native dumps must consume ctx, not operation.
+				if operation.Err() == nil {
+					t.Fatal("native construction operation was not completed")
 				}
 				nextReceipt := receipt(current)
 				want := mtu

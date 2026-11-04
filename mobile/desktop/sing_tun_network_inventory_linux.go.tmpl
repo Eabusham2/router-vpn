@@ -51,6 +51,9 @@ func (t *NativeTun) routervpnLinuxInterface() (*net.Interface, error) {
 }
 
 func (t *NativeTun) routervpnLinuxInterfaceContext(ctx context.Context) (*net.Interface, error) {
+	if ctx == nil {
+		return nil, errors.New("native link inventory lost its original caller")
+	}
 	rows, err := linuxDump(ctx, syscall.RTM_GETLINK, syscall.RTM_NEWLINK)
 	if err != nil {
 		return nil, err
@@ -91,7 +94,14 @@ func (t *NativeTun) routervpnLinuxInterfaceContext(ctx context.Context) (*net.In
 }
 
 func (t *NativeTun) routervpnLinuxAddresses(index int) ([]netlink.Addr, error) {
-	rows, err := linuxDump(t.routervpnNetworkContext(), syscall.RTM_GETADDR, syscall.RTM_NEWADDR)
+	return t.routervpnLinuxAddressesContext(t.routervpnNetworkContext(), index)
+}
+
+func (t *NativeTun) routervpnLinuxAddressesContext(ctx context.Context, index int) ([]netlink.Addr, error) {
+	if ctx == nil {
+		return nil, errors.New("native address inventory lost its original caller")
+	}
+	rows, err := linuxDump(ctx, syscall.RTM_GETADDR, syscall.RTM_NEWADDR)
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +178,15 @@ func (t *NativeTun) routervpnLinuxAddresses(index int) ([]netlink.Addr, error) {
 			return nil, errors.New("native TUN address inventory exceeds its bound")
 		}
 	}
-	return result, t.routervpnNetworkContext().Err()
+	return result, ctx.Err()
 }
 
 func (t *NativeTun) routervpnNetworkAddresses(current *net.Interface) ([]net.Addr, error) {
-	addresses, err := t.routervpnLinuxAddresses(current.Index)
+	return t.routervpnNetworkAddressesContext(t.routervpnNetworkContext(), current)
+}
+
+func (t *NativeTun) routervpnNetworkAddressesContext(ctx context.Context, current *net.Interface) ([]net.Addr, error) {
+	addresses, err := t.routervpnLinuxAddressesContext(ctx, current.Index)
 	if err != nil {
 		return nil, err
 	}

@@ -18,7 +18,11 @@ import (
 )
 
 func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) {
-	current, err := t.routervpnLinuxInterface()
+	return t.routervpnNetworkInterfaceContext(t.routervpnNetworkContext())
+}
+
+func (t *NativeTun) routervpnNetworkInterfaceContext(ctx context.Context) (*net.Interface, uint64, error) {
+	current, err := t.routervpnLinuxInterfaceContext(ctx)
 	if err != nil || current.Index != t.routervpnOwnedIndex || t.routervpnOwnedIndex < 1 {
 		return nil, 0, errors.New("native Linux routing receipt lost its original TUN")
 	}
@@ -573,11 +577,15 @@ func (t *NativeTun) routervpnLinuxResolvedRules(removed, added []DesktopNetworkO
 }
 
 func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {
-	routes, err := t.routervpnLinuxNetworkObjects("route")
+	return t.routervpnNetworkObjectsContext(t.routervpnNetworkContext(), receipt)
+}
+
+func (t *NativeTun) routervpnNetworkObjectsContext(ctx context.Context, receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {
+	routes, err := routervpnLinuxNetworkObjectsContext(ctx, "route")
 	if err != nil {
 		return nil, err
 	}
-	rules, err := t.routervpnLinuxNetworkObjects("rule")
+	rules, err := routervpnLinuxNetworkObjectsContext(ctx, "rule")
 	if err != nil {
 		return nil, err
 	}

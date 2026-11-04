@@ -47,10 +47,10 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`c336566d952812a99cba7d81d37d6cbe7eb224b4`](https://github.com/Eabusham2/router-vpn/commit/c336566d952812a99cba7d81d37d6cbe7eb224b4),
-tree `fcb3ba212dc99355996b8dc50dc6b2805fd8f11f`. The native Linux MTU
-transaction prerequisite accompanying this record is described below; it does
-not inherit this cutoff's CI results.
+[`ab861d66236a492e453978ae5f396bf0b8543bb7`](https://github.com/Eabusham2/router-vpn/commit/ab861d66236a492e453978ae5f396bf0b8543bb7),
+tree `af6d2c634390ee76df315b1713b8d5fbd0917837`. The native Linux receipt
+operation correction accompanying this record is described below; it does not
+inherit this cutoff's CI results.
 
 | Published commit | Concrete change and focused evidence | Remaining boundary |
 |---|---|---|
@@ -219,7 +219,32 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Native Linux MTU transaction prerequisite accompanying this record
+## Native Linux receipt operation correction accompanying this record
+
+The explicit receipt path previously used the later operation for its original
+descriptor/event fences but reused the constructor's context inside ordinary
+link, address, route and rule readbacks. A completed MTU construction could
+therefore reject a later valid read; that mixed context also failed to honor
+the later operation throughout the full receipt.
+
+The same captured operation now reaches every native dump and both final
+checks. Construction wrappers keep their original startup context; no option
+is rewritten and no new authority or deadline is created. Darwin/Windows
+retain their existing synchronous native inventories and reject canceled
+result adoption. The ordinary no-context command/Box projection callers remain
+a separate follow-on, explicitly recorded in the native retirement contract.
+
+The final focused native race passes in 1.032s. Four exact-source controls
+independently substitute the old receipt, link, address and route context paths;
+each fails the intended executable assertion without a compile failure or
+unintended data race. Actual reprepare/read-only verification passes four tests
+in 1.208s. Darwin ARM64 test-image and Windows AMD64 package-archive compilation
+pass; neither is native execution. The expanded existing kernel-inventory case
+requires fresh reads after canceled construction, and every mandatory native
+MTU candidate now ends its construction operation before the real adopted-TUN
+receipt. Those kernel cases remain required in CI and were not run locally.
+
+## Native Linux MTU transaction prerequisite published at ab861d66
 
 The existing Box MTU call now uses the same factory-owned transaction as the
 new receipt-bearing API. Admission and directly owned Linux history capacity

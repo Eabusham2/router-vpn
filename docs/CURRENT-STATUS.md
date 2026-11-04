@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — verified through c336566d
+## Latest implementation continuation — verified through ab861d66
 
 The verified source cutoff is
-[`c336566d`](https://github.com/Eabusham2/router-vpn/commit/c336566d952812a99cba7d81d37d6cbe7eb224b4),
-tree `fcb3ba212dc99355996b8dc50dc6b2805fd8f11f`.
+[`ab861d66`](https://github.com/Eabusham2/router-vpn/commit/ab861d66236a492e453978ae5f396bf0b8543bb7),
+tree `af6d2c634390ee76df315b1713b8d5fbd0917837`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -99,7 +99,11 @@ validation limits. Changes and test counts are not a requirements denominator.
   and rollback adapter, partial constructors, failed retirement and separate
   lifetime/operation budgets. Four focused pinned packages pass under race;
   actual preparation and 31 routing-runner checks pass. Three new native
-  transaction cases remain mandatory in CI. Installed service Retest/Cancel,
+  transaction cases remain mandatory in CI. The subsequent native receipt
+  correction carries the explicit caller through every link/address/route/rule
+  dump instead of reusing an expired constructor. Its focused race and four
+  causal controls pass; the ordinary no-context projection callers still need
+  their own operation-bound integration. Installed service Retest/Cancel,
   coordinated transition history, cross-adapter protected transfer, active
   Always upgrades and same-boot service-crash recovery remain unfinished; see
   the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).

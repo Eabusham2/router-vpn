@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/netip"
@@ -84,4 +85,36 @@ func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]De
 
 func (t *NativeTun) routervpnNetworkAddresses(current *net.Interface) ([]net.Addr, error) {
 	return current.Addrs()
+}
+
+// The native OS inventory remains synchronous; a canceled caller never adopts
+// its result. Linux supplies the same caller to each interruptible native dump.
+func (t *NativeTun) routervpnNetworkInterfaceContext(ctx context.Context) (*net.Interface, uint64, error) {
+	if ctx == nil {
+		return nil, 0, errors.New("native receipt lost its read operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	return t.routervpnNetworkInterface()
+}
+
+func (t *NativeTun) routervpnNetworkAddressesContext(ctx context.Context, current *net.Interface) ([]net.Addr, error) {
+	if ctx == nil {
+		return nil, errors.New("native receipt lost its read operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return t.routervpnNetworkAddresses(current)
+}
+
+func (t *NativeTun) routervpnNetworkObjectsContext(ctx context.Context, receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {
+	if ctx == nil {
+		return nil, errors.New("native receipt lost its read operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return t.routervpnNetworkObjects(receipt)
 }

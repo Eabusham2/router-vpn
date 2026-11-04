@@ -1138,6 +1138,23 @@ func TestRouterVPNNativeLinuxRoutingBoundedInventory(t *testing.T) {
 	if _, err := original.routervpnLinuxAddresses(current.Index); err == nil {
 		t.Fatal("cancelled startup performed a fresh address dump")
 	}
+	// The completed constructor must stay canceled. A later caller reads the
+	// same original index through its own existing deadline without mutating
+	// the construction context or accepting a stale snapshot.
+	later, finish := context.WithTimeout(context.Background(), time.Second)
+	defer finish()
+	if value, _, err := original.routervpnNetworkInterfaceContext(later); err != nil || value.Index != current.Index {
+		t.Fatal("later link read reused completed construction", err)
+	}
+	if _, err := original.routervpnNetworkAddressesContext(later, current); err != nil {
+		t.Fatal("later address read reused completed construction", err)
+	}
+	if _, err := original.routervpnNetworkObjectsContext(later, DesktopNetworkReceipt{Index: ^uint32(0)}); err != nil {
+		t.Fatal("later route/rule read reused completed construction", err)
+	}
+	if original.options.RouterVPNNetworkContext != ctx || ctx.Err() == nil {
+		t.Fatal("later read changed or renewed construction authority")
+	}
 }
 
 func TestRouterVPNNativeLinuxRoutingInventoryFraming(t *testing.T) {
