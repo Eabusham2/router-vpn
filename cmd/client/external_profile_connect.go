@@ -22,6 +22,32 @@ func (a *app) externalProfileStopFailure(cmd *exec.Cmd, cause string) (string, b
 	return cause, false
 }
 
+// A failed Start or its deferred retirement can return after another owner has
+// been adopted. History is part of that owner's state too: an old error must
+// not end the replacement session or invalidate its path proof.
+func (a *app) markExternalRequestFailure(tracker *sessionTracker, operation context.Context, command *exec.Cmd, native *desktopNodeLaunch, message string) bool {
+	if tracker == nil || operation == nil {
+		return false
+	}
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current, tracked := sessionTrackers.Load(a)
+	if !tracked || current != tracker || a.connectionContext != operation ||
+		tracker.requestedMode != "external-node" || a.cmd != nil && a.cmd != command {
+		return false
+	}
+	if owner, exists := desktopNodeOwners.Load(a); exists && (native == nil || owner != native) {
+		return false
+	}
+	if owner, exists := desktopExternalRetainedLaunches.Load(a); exists && (native == nil || owner != native) {
+		return false
+	}
+	tracker.markRequestFailureLocked(message)
+	return true
+}
+
 type externalProfileConnectRequest struct {
 	ProfileID              string            `json:"profile_id"`
 	EntryID                string            `json:"entry_id"`
@@ -338,6 +364,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	}
 	var nativeRetained desktopExternalRetainedRuntime
 	retainedComplete := false
+	var tracker *sessionTracker
 	if native != nil {
 		prepare := driver.retained
 		if prepare == nil {
@@ -350,7 +377,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 					cleanup, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 					defer cancel()
 					if closeErr := nativeRetained.Close(cleanup); closeErr != nil {
-						sessionTrackerFor(a).markRequestFailure("Native external cleanup remains owned: " + closeErr.Error())
+						a.markExternalRequestFailure(tracker, operation, native.command, native, "Native external cleanup remains owned: "+closeErr.Error())
 					}
 				}
 			}()
@@ -391,7 +418,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			return
 		}
 	}
-	tracker := sessionTrackerFor(a)
+	tracker = sessionTrackerFor(a)
 	tracker.declareRequest("external-node", sessionBase)
 	if err = a.stopModeWithIntent(true); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
@@ -424,7 +451,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			return
 		}
 		if err = cmd.Start(); err != nil {
-			sessionTrackerFor(a).markRequestFailure(err.Error())
+			a.markExternalRequestFailure(tracker, operation, cmd, native, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -498,7 +525,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			if native != nil && nativeRetained == nil && native.directory != "" {
 				_ = cleanupDesktopNodeLaunch(native)
 			}
-			sessionTrackerFor(a).markRequestFailure(err.Error())
+			a.markExternalRequestFailure(tracker, operation, realCmd, native, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
