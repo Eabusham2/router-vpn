@@ -50,7 +50,14 @@ def namespace_test(binary, case=None, expected_sha256=None):
     previous = os.environ.get(key)
     os.environ[key] = str(current.st_dev) + ":" + str(current.st_ino)
     try:
-        return GUARD.namespace_test(binary, case, expected_sha256)
+        # The guardian's default groups own a different test inventory. Name
+        # every lifecycle case explicitly, retaining its fresh namespace and
+        # the original outer run budget and first failing child status.
+        for selected in ((case,) if case is not None else CASES):
+            status = GUARD.namespace_test(binary, selected, expected_sha256)
+            if status:
+                return status
+        return 0
     finally:
         if previous is None:
             os.environ.pop(key, None)

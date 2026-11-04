@@ -108,6 +108,44 @@ class LinuxNodeRunner(unittest.TestCase):
                         RUNNER.namespace_test(Path("/captured-test-binary"), "NodeLifecycle", digest)
                 self.assertEqual(os.environ.get(key), previous)
 
+    def test_default_namespace_dispatches_every_lifecycle_case(self):
+        key = "ROUTERVPN_NODE_OUTER_NETNS_ID"
+        namespace = os.stat("/proc/self/ns/net")
+        expected = str(namespace.st_dev) + ":" + str(namespace.st_ino)
+        binary, digest = Path("/captured-test-binary"), "a" * 64
+        for previous in (None, "previous-captured-value"):
+            with self.subTest(previous=previous), patch.dict(os.environ):
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
+                observed = []
+                def enter(actual_binary, case, actual_digest):
+                    self.assertEqual(os.environ[key], expected)
+                    self.assertEqual((actual_binary, actual_digest), (binary, digest))
+                    observed.append(case)
+                    return 0
+                with patch.object(RUNNER.GUARD, "namespace_test", side_effect=enter):
+                    self.assertEqual(RUNNER.namespace_test(binary, expected_sha256=digest), 0)
+                self.assertEqual(tuple(observed), RUNNER.CASES,
+                                 "Node lifecycle delegated to the guardian's different default inventory")
+                self.assertEqual(os.environ.get(key), previous)
+
+    def test_first_failed_lifecycle_namespace_preserves_its_status(self):
+        key = "ROUTERVPN_NODE_OUTER_NETNS_ID"
+        binary, digest = Path("/captured-test-binary"), "b" * 64
+        for failed in range(len(RUNNER.CASES)):
+            with self.subTest(failed=RUNNER.CASES[failed]), patch.dict(os.environ, {key: "original-outer"}):
+                observed = []
+                def enter(actual_binary, case, actual_digest):
+                    self.assertEqual((actual_binary, actual_digest), (binary, digest))
+                    observed.append(case)
+                    return 37 if case == RUNNER.CASES[failed] else 0
+                with patch.object(RUNNER.GUARD, "namespace_test", side_effect=enter):
+                    self.assertEqual(RUNNER.namespace_test(binary, expected_sha256=digest), 37)
+                self.assertEqual(tuple(observed), RUNNER.CASES[:failed + 1])
+                self.assertEqual(os.environ[key], "original-outer")
+
 
 if __name__ == "__main__":
     unittest.main()
