@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import types
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -94,19 +95,88 @@ from pathlib import Path
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 if name == 'sudo':
-    assert args[0] == '-n'
-    os.execv(args[1], args[1:])
+    assert args and args[0] == '-n', 'fixture requires noninteractive sudo'
+    if len(args) >= 4 and args[1] == '-C':
+        assert args[2].isascii() and args[2].isdecimal(), 'invalid closefrom limit'
+        descriptor = int(args[2]) - 1
+        assert descriptor >= 3 and args[2] == str(descriptor + 1), 'invalid retained descriptor'
+        expected = os.stat(Path(os.environ['HOMEVPN_ROOT']) / 'run/kill-switch.lock', follow_symlinks=False)
+        assert os.path.samestat(os.fstat(descriptor), expected), 'wrong inherited mutation lease'
+        os.environ['ROUTERVPN_EGRESS_INHERITED_LEASE'] = str(descriptor)
+        command, tool = args[3:], 'nft'
+    else:
+        command, tool = args[1:], 'pfctl'
+    # Accept exactly the two shipping command forms and these private tools.
+    # Missing preservation, unknown flags and a foreign executable all reject.
+    assert command and command[0] == str(Path(__file__).with_name(tool)), 'unexpected fixture sudo command'
+    os.execv(command[0], command)
+lease_preserved = False
+if name == 'nft' and os.environ.get('ROUTERVPN_EGRESS_INHERITED_LEASE'):
+    import fcntl
+    descriptor = int(os.environ['ROUTERVPN_EGRESS_INHERITED_LEASE'])
+    lock = Path(os.environ['HOMEVPN_ROOT']) / 'run/kill-switch.lock'
+    assert os.path.samestat(os.fstat(descriptor), lock.stat()), 'nft lost its exact inherited lease'
+    # A separately opened description must still be excluded after sudo exec.
+    with lock.open('rb') as competitor:
+        try:
+            fcntl.flock(competitor.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lease_preserved = True
+        else:
+            raise AssertionError('nft lost original mutation exclusion')
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
 rules = ''
 if '-f' in args:
     source = args[args.index('-f') + 1]
     rules = sys.stdin.read() if source == '-' else Path(source).read_text()
 with open(os.environ['ROUTERVPN_EGRESS_COMMAND_LOG'], 'a') as output:
-    output.write(json.dumps(dict(tool=name, args=args, rules=rules)) + '\n')
+    output.write(json.dumps(dict(tool=name, args=args, rules=rules, lease_preserved=lease_preserved)) + '\n')
 if name == 'nft' and args[:2] == ['list', 'table']:
     sys.exit(1)
 if name == 'pfctl' and args == ['-E']:
     print('Token : 123456')
 '''
+
+# Execute the shipping nonroot prefix even when this test host is root. Only
+# that function's euid query is substituted: real lease ownership checks,
+# run_nft, subprocess/pass_fds, sudo exec and the child descriptor stay real.
+with tempfile.TemporaryDirectory(prefix='routervpn-egress-sudo-') as directory:
+    root = Path(directory)
+    (root / 'run').mkdir(mode=0o700)
+    binary = root / 'bin'
+    binary.mkdir(mode=0o700)
+    for name in ('nft', 'pfctl', 'sudo'):
+        path = binary / name
+        path.write_text(fake)
+        path.chmod(0o700)
+    log = root / 'commands.jsonl'
+    env = dict(HOMEVPN_ROOT=str(root), ROUTERVPN_EGRESS_COMMAND_LOG=str(log),
+               PATH=str(binary) + os.pathsep + os.environ['PATH'])
+    prefix_globals = dict(linux.nft_prefix.__globals__, os=types.SimpleNamespace(geteuid=lambda: 1000))
+    nonroot_prefix = types.FunctionType(linux.nft_prefix.__code__, prefix_globals)
+    with mock.patch.dict(os.environ, env), mock.patch.object(linux, 'nft_prefix', nonroot_prefix):
+        with linux.mutation_guard(root) as lease:
+            result = linux.run_nft(['list', 'table', 'inet', linux.TABLE], check=False)
+            assert result.returncode == 1 and not result.stderr, result.stderr
+            commands = [json.loads(line) for line in log.read_text().splitlines()]
+            assert len(commands) == 1 and commands[0]['tool'] == 'nft' and commands[0]['lease_preserved']
+            valid = ['-n', '-C', str(lease.descriptor + 1), str(binary / 'nft'), 'list', 'tables']
+            invalid = [valid[1:], ['-n', *valid[3:]], ['-n', '-C', 'invalid', *valid[3:]],
+                       ['-n', '-C', str(lease.descriptor + 2), *valid[3:]],
+                       ['-n', '-C', valid[2], sys.executable, '-c', 'raise SystemExit(0)'],
+                       ['-n', '--unknown', *valid[3:]]]
+            before = log.read_bytes()
+            for args in invalid:
+                rejected = linux.subprocess.run([str(binary / 'sudo'), *args], env=os.environ,
+                                                 pass_fds=(lease.descriptor,), capture_output=True, timeout=5)
+                assert rejected.returncode != 0 and log.read_bytes() == before, args
+            missing = linux.subprocess.run([str(binary / 'sudo'), *valid], env=os.environ,
+                                            capture_output=True, timeout=5)
+            assert missing.returncode != 0 and log.read_bytes() == before
+        # The Darwin prefix legitimately has no Linux mutation descriptor.
+        result = linux.subprocess.run([str(binary / 'sudo'), '-n', str(binary / 'pfctl'), '-E'],
+                                      env=os.environ, capture_output=True, text=True, timeout=5)
+        assert result.returncode == 0 and 'Token : 123456' in result.stdout, result.stderr
 
 for platform in ('linux', 'darwin'):
     with tempfile.TemporaryDirectory(prefix='routervpn-egress-') as directory:
