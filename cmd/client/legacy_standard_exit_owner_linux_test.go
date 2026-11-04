@@ -148,7 +148,7 @@ func (f *legacyExitFixture) prepareOff(t *testing.T) (*linuxLegacyStandardExitOw
 	if err != nil {
 		t.Fatal(err)
 	}
-	captured, err := prepareLegacyStandardExitOwnerWithTUN(f.a, command, "standard-socks5", "external", "standard:"+f.exit.ID, func() error { return nil })
+	captured, err := prepareLegacyStandardExitOwnerWithObservers(f.a, command, "standard-socks5", "external", "standard:"+f.exit.ID, func() error { return nil }, func() string { return "captured-test-network" })
 	if err != nil || captured == nil {
 		t.Fatal("shipping retained Off adapter unavailable", err)
 	}
@@ -469,7 +469,7 @@ func TestLegacyStandardOffHandlerLateIntentAndReplacementCannotAdopt(t *testing.
 			var replacementTracker *sessionTracker
 			adapter := platformStandardExitRuntime{
 				prepareLegacy: func(a *app, cmd *exec.Cmd, mode, base, id string) (legacyStandardExitLaunch, error) {
-					captured, err := prepareLegacyStandardExitOwnerWithTUN(a, cmd, mode, base, id, func() error { return nil })
+					captured, err := prepareLegacyStandardExitOwnerWithObservers(a, cmd, mode, base, id, func() error { return nil }, func() string { return "captured-test-network" })
 					if err != nil || captured == nil {
 						return captured, err
 					}

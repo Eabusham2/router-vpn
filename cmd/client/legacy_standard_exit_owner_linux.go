@@ -27,6 +27,7 @@ import (
 var legacyStandardExitOwners sync.Map // map[*app]*linuxLegacyStandardExitOwner
 
 type linuxLegacyStandardExitOwner struct {
+	dns                                                                       *legacyStandardDNS
 	protectionPolicy, protectionRoot, protectionProfileID, protectionEndpoint string
 	protectionLAN                                                             bool
 	protectionFactory                                                         legacyExitProtectionFactory
@@ -83,6 +84,12 @@ func prepareLegacyStandardExitOwner(a *app, original *exec.Cmd, runtimeMode, bas
 }
 
 func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error) (legacyStandardExitLaunch, error) {
+	return prepareLegacyStandardExitOwnerWithObservers(a, original, runtimeMode, base, routerID, tunAbsent, physicalNetworkIdentity)
+}
+
+// Test callers may supply explicit native observation boundaries. Production
+// always captures the real physical network before either child is executed.
+func prepareLegacyStandardExitOwnerWithObservers(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error, network func() string) (legacyStandardExitLaunch, error) {
 	// OpenVPN has distinct route/interface cleanup and remains on its separate
 	// adapter. Only the existing Linux sing-box wrapper is admitted here.
 	if original == nil || len(original.Args) != 6 || filepath.Base(original.Args[1]) != "native-standard-exit-linux.sh" || original.Args[2] != "up" {
@@ -157,6 +164,18 @@ func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMo
 	}
 	sum := sha256.Sum256(raw)
 	owner.digest = hex.EncodeToString(sum[:])
+	runtime.LockOSThread()
+	err = owner.namespaceCurrent()
+	if err == nil {
+		owner.dns, err = captureLegacyStandardDNS(control, raw, network)
+	}
+	if err == nil {
+		err = owner.namespaceCurrent()
+	}
+	runtime.UnlockOSThread()
+	if err != nil {
+		return nil, err
+	}
 	token := make([]byte, 16)
 	if _, err = rand.Read(token); err != nil {
 		return nil, err
@@ -215,6 +234,7 @@ func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMo
 	if err != nil {
 		return nil, err
 	}
+	owner.dns.source, owner.dns.sealed = owner.sourceConfig, owner.config
 	owner.directory, err = launch.directoryRoot.Open(".")
 	if err != nil {
 		return nil, err
@@ -236,8 +256,14 @@ func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMo
 	checked.Dir = check.Dir
 	checked.Env = check.Env
 	checked.ExtraFiles = check.ExtraFiles
-	err = checked.Run()
+	err = owner.legacyDNSNetworkCurrent()
+	if err == nil {
+		err = checked.Run()
+	}
 	checkCancel()
+	if err == nil {
+		err = owner.legacyDNSNetworkCurrent()
+	}
 	if err != nil {
 		return nil, errors.Join(err, errors.New("pinned legacy engine rejected its captured config"))
 	}
@@ -300,6 +326,9 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil || o.started || o.registered {
 		return errors.New("legacy standard exit launch was cancelled or reused")
 	}
+	if err := o.legacyDNSNetworkCurrent(); err != nil {
+		return err
+	}
 	if err := desktopExternalDirectoryCurrent(o.launch); err != nil {
 		return err
 	}
@@ -346,6 +375,9 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 		defer close(o.creatorDone)
 		defer runtime.UnlockOSThread()
 		err := o.current(o.command)
+		if err == nil {
+			err = o.legacyDNSNetworkCurrent()
+		}
 		o.app.mu.Lock()
 		if err == nil {
 			err = o.app.checkCapturedConnectionOperationLocked(ctx)
@@ -487,6 +519,16 @@ func legacyExitPIDFDRetired(file *os.File) error {
 func (o *linuxLegacyStandardExitOwner) Current(ctx context.Context) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if err := o.currentOperationLocked(ctx); err != nil {
+		return err
+	}
+	return o.currentRuntimeLocked(ctx)
+}
+
+// The connection request is required for adoption, but intentionally finishes
+// once Connected is published. Later observers retain the same runtime and
+// kernel authority without reviving that finished request.
+func (o *linuxLegacyStandardExitOwner) currentOperationLocked(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("legacy standard exit proof lost its original operation")
 	}
@@ -499,8 +541,17 @@ func (o *linuxLegacyStandardExitOwner) Current(ctx context.Context) error {
 		admissionErr = errConnectionOperationCancelled
 	}
 	o.app.mu.Unlock()
-	if admissionErr != nil {
-		return admissionErr
+	return admissionErr
+}
+
+// Caller holds o.mu. All process, workspace and native protection checks are
+// shared by activation and the post-activation DNS receipt observer.
+func (o *linuxLegacyStandardExitOwner) currentRuntimeLocked(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("legacy standard exit observation has no live context")
+	}
+	if err := o.current(o.command); err != nil {
+		return err
 	}
 	if err := desktopExternalDirectoryCurrent(o.launch); err != nil {
 		return err
@@ -522,7 +573,7 @@ func (o *linuxLegacyStandardExitOwner) Current(ctx context.Context) error {
 	if retired {
 		return errors.New("legacy standard exit engine retired before public proof adoption")
 	}
-	return nil
+	return o.legacyDNSNetworkCurrent()
 }
 
 func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.Cmd, release bool) (failure error) {

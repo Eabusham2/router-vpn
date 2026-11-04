@@ -181,6 +181,9 @@ func prepareCapturedStandardExit(parent context.Context, root string, control, e
 	if err != nil {
 		return result, err
 	}
+	if err := prepareLegacyStandardDNSGraph(graph, direct, exit); err != nil {
+		return result, err
+	}
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}

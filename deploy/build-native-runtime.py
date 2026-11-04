@@ -429,6 +429,72 @@ def reuse(directory, target, policy=None, env=None):
     return receipt
 
 
+STOCK_DNS_TEST = 'TestLegacyStandardDNSPinnedCore'
+STOCK_DNS_CASES = tuple(STOCK_DNS_TEST+'/'+case for case in (
+    'udp-uncached', 'udp-cached-negative-control', 'tcp-uncached', 'tcp-cached-negative-control'))
+
+
+def verify_linux_stock_dns_verdicts(output):
+    # Keep the same exact run/pass inventory discipline as the existing native
+    # forwarder and Tor importer gates. A successful Go selector can run zero
+    # tests, and package success alone cannot attest these four boundaries.
+    required = {STOCK_DNS_TEST, *STOCK_DNS_CASES}
+    ran, passed, package_started, package_passed = set(), set(), False, False
+    for line in output.splitlines():
+        try:
+            row = json.loads(line, object_pairs_hook=unique_object)
+        except (ValueError, TypeError) as error:
+            raise ValueError('Stock DNS gate emitted malformed Go verdict JSON') from error
+        if not isinstance(row, dict):
+            raise ValueError('Stock DNS gate emitted a non-object verdict')
+        action, name = row.get('Action'), row.get('Test')
+        if action in ('skip', 'fail', 'build-fail') or 'WARNING: DATA RACE' in str(row.get('Output', '')):
+            raise ValueError('Stock DNS native case failed, skipped, raced or failed to build')
+        if row.get('Package') != 'router-vpn/cmd/client' or package_passed:
+            raise ValueError('Stock DNS verdict belongs to a foreign or completed package')
+        if name is not None:
+            if not isinstance(name, str) or name not in required or not package_started:
+                raise ValueError('Stock DNS native case inventory changed')
+            if action == 'run':
+                if name in ran or STOCK_DNS_TEST in passed or name != STOCK_DNS_TEST and STOCK_DNS_TEST not in ran:
+                    raise ValueError('Stock DNS native case duplicated or reordered its run')
+                ran.add(name)
+            elif action == 'pass':
+                if name not in ran or name in passed or name == STOCK_DNS_TEST and passed != set(STOCK_DNS_CASES):
+                    raise ValueError('Stock DNS native case passed without its exact preceding execution')
+                passed.add(name)
+            elif action not in ('output', 'pause', 'cont'):
+                raise ValueError('Stock DNS native case emitted an unknown action')
+        elif action == 'start':
+            if package_started:
+                raise ValueError('Stock DNS package duplicated its start')
+            package_started = True
+        elif action == 'pass':
+            if ran != required or passed != required or not package_started:
+                raise ValueError('Stock DNS package omitted an actual required native case')
+            package_passed = True
+        elif action != 'output':
+            raise ValueError('Stock DNS package emitted an unknown action')
+    if ran != required or passed != required or not package_passed:
+        raise ValueError('Stock DNS gate omitted native parent, leaf or package completion')
+
+
+def verify_linux_stock_dns(bundle, target, env):
+    host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
+    if platform.system() != 'Linux' or target != host or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Stock DNS native gate requires its matching completed Linux bundle')
+    # The exact completed core must execute the shared mixed-inbound DNS rules
+    # against real UDP/TCP responders. Cache-enabled negative controls must
+    # expose stale success; the shipping uncached path must reject it.
+    dns_env = {**env, 'ROUTERVPN_STOCK_DNS_CORE': str(Path(bundle).resolve()/binary_name(target)),
+               'ROUTERVPN_STOCK_DNS_CORE_SHA256': hashlib.sha256((Path(bundle)/binary_name(target)).read_bytes()).hexdigest()}
+    output = run(['go', 'test', '-json', '-race', '-tags=routervpn_stock_dns_native', './cmd/client',
+                  '-run', '^TestLegacyStandardDNSPinnedCore$', '-count=1', '-timeout=60s'],
+                 cwd=ROOT, env=dns_env, timeout=300)
+    verify_linux_stock_dns_verdicts(output)
+    print('Native retained stock DNS: exact parent and four UDP/TCP uncached/cache-control cases PASS', flush=True)
+
+
 def verify_installed_linux_host(source, bundle, target, env):
     if target not in ('linux/amd64', 'linux/arm64') or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
         raise ValueError('Installed Linux host gate requires its matching complete native target')
@@ -436,6 +502,7 @@ def verify_installed_linux_host(source, bundle, target, env):
     # native libraries and Tor, after every original payload/provenance check.
     # It runs before stage publication and uses the ordinary app verifier.
     reuse(bundle, target, env=env)
+    verify_linux_stock_dns(bundle, target, env)
     run([sys.executable, ROOT/'deploy/test_linux_node_host_tun_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_linux_node_host_tun.py', source, '--bundle', bundle], cwd=ROOT, env=env, timeout=2400)
 
@@ -557,6 +624,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
         reuse(destination, target, policy, env)
         if target.startswith('darwin/'):
             verify_installed_darwin_host(None, destination, target, env)
+        elif platform.system() == 'Linux' and target == 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), ''):
+            verify_linux_stock_dns(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:

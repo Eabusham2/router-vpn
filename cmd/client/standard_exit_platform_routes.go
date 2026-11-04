@@ -75,6 +75,7 @@ func standardExitEntry(profiles []common.RouterProfile, control common.RouterPro
 type platformStandardExitRuntime struct {
 	prepareLegacy func(*app, *exec.Cmd, string, string, string) (legacyStandardExitLaunch, error)
 	prove         func(*app, string) error
+	proveDNS      func(context.Context, legacyStandardExitLaunch) error
 	current       func(legacyStandardExitLaunch, context.Context) error
 }
 
@@ -82,7 +83,13 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 	a.platformStandardExitConnectOwned(w, r, platformStandardExitRuntime{
 		prepareLegacy: prepareLegacyStandardExitOwner,
 		prove:         (*app).proveStandardExitForOperation,
-		current:       func(owner legacyStandardExitLaunch, ctx context.Context) error { return owner.Current(ctx) },
+		proveDNS: func(ctx context.Context, owner legacyStandardExitLaunch) error {
+			if proof, ok := owner.(interface{ ProveSelectedDNS(context.Context) error }); ok {
+				return proof.ProveSelectedDNS(ctx)
+			}
+			return errors.New("retained standard exit has no original DNS proof capability")
+		},
+		current: func(owner legacyStandardExitLaunch, ctx context.Context) error { return owner.Current(ctx) },
 	})
 }
 
@@ -265,9 +272,12 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var proofErr error
-	if exit.Protocol == "openvpn" {
+	if adapter.proveDNS != nil && retained != nil {
+		proofErr = adapter.proveDNS(operation, retained)
+	}
+	if proofErr == nil && exit.Protocol == "openvpn" {
 		proofErr = a.proveOpenVPNStandardExitForOperation(exit.ExpectedPublicIP)
-	} else {
+	} else if proofErr == nil {
 		proofErr = adapter.prove(a, exit.ExpectedPublicIP)
 	}
 	if proofErr == nil && retained != nil {

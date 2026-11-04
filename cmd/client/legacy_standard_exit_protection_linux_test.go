@@ -157,7 +157,7 @@ func (f *legacyExitFixture) prepareProtected(t *testing.T, m *legacyProtectionMo
 		finish()
 		t.Fatal(err)
 	}
-	retained, err := prepareLegacyStandardExitOwnerWithTUN(f.a, command, "standard-"+f.exit.Protocol, "external", "standard:"+f.exit.ID, func() error { return nil })
+	retained, err := prepareLegacyStandardExitOwnerWithObservers(f.a, command, "standard-"+f.exit.Protocol, "external", "standard:"+f.exit.ID, func() error { return nil }, func() string { return "captured-test-network" })
 	if err != nil || retained == nil {
 		finish()
 		t.Fatal("captured protected preparation unavailable", err)
@@ -405,7 +405,7 @@ func TestLegacyStandardProtectedHandlerLateCancellationRetiresCapturedPolicy(t *
 			var owner *linuxLegacyStandardExitOwner
 			adapter := platformStandardExitRuntime{
 				prepareLegacy: func(a *app, cmd *exec.Cmd, mode, base, id string) (legacyStandardExitLaunch, error) {
-					captured, err := prepareLegacyStandardExitOwnerWithTUN(a, cmd, mode, base, id, func() error { return nil })
+					captured, err := prepareLegacyStandardExitOwnerWithObservers(a, cmd, mode, base, id, func() error { return nil }, func() string { return "captured-test-network" })
 					if err != nil || captured == nil {
 						return captured, err
 					}

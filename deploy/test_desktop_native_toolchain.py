@@ -1458,5 +1458,97 @@ func TestChangesSource(t *testing.T) {
                          ['TestFirst', 'TestRejected'])
 
 
+class LinuxStockDNSNativeGate(unittest.TestCase):
+    @staticmethod
+    def verdict_rows():
+        package, parent = 'router-vpn/cmd/client', 'TestLegacyStandardDNSPinnedCore'
+        rows = [{'Package': package, 'Action': 'start'}, {'Package': package, 'Test': parent, 'Action': 'run'}]
+        for case in ('udp-uncached', 'udp-cached-negative-control', 'tcp-uncached', 'tcp-cached-negative-control'):
+            rows += [{'Package': package, 'Test': parent+'/'+case, 'Action': action} for action in ('run', 'pass')]
+        return rows + [{'Package': package, 'Test': parent, 'Action': 'pass'}, {'Package': package, 'Action': 'pass'}]
+
+    def exercise(self, arch, reused, failure=None, output=None, verdict_failure=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary)/'bundle'
+            bundle.mkdir()
+            binary = bundle/N.binary_name('linux/'+arch)
+            binary.write_bytes(b'exact completed core boundary')
+            env = {'GOOS': 'linux', 'GOARCH': arch, 'CGO_ENABLED': '1'}
+            calls = []
+            def run(command, **kwargs):
+                args = [str(item) for item in command]
+                calls.append((args, kwargs))
+                if args[:2] == ['go', 'test']:
+                    if failure is not None:
+                        raise failure
+                    return '\n'.join(json.dumps(row) for row in self.verdict_rows()) if output is None else output
+                return ''
+            with patch.object(N.platform, 'system', return_value='Linux'), \
+                 patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'aarch64'), \
+                 patch.object(N, 'environment', return_value=env), patch.object(N, 'digest', return_value='source'), \
+                 patch.object(N, 'reuse', return_value={}), patch.object(N, 'run', side_effect=run):
+                invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
+                if failure is not None or verdict_failure:
+                    with self.assertRaises(type(failure) if failure is not None else ValueError):
+                        invoke()
+                else:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        invoke()
+            self.assertTrue(calls, 'completed or reused bundle omitted actual native DNS execution')
+            args, options = calls[0]
+            self.assertEqual(args, ['go', 'test', '-json', '-race', '-tags=routervpn_stock_dns_native', './cmd/client',
+                                    '-run', '^TestLegacyStandardDNSPinnedCore$', '-count=1', '-timeout=60s'])
+            self.assertEqual(options['cwd'], ROOT)
+            self.assertEqual(options['timeout'], 300)
+            self.assertEqual(options['env']['ROUTERVPN_STOCK_DNS_CORE'], str(binary.resolve()))
+            self.assertEqual(options['env']['ROUTERVPN_STOCK_DNS_CORE_SHA256'], hashlib.sha256(binary.read_bytes()).hexdigest())
+            self.assertEqual(len(calls), 1 if reused or failure or verdict_failure else 3)
+
+    def test_completed_and_reused_matching_bundles_require_actual_pinned_dns_gate(self):
+        for arch in ('amd64', 'arm64'):
+            for reused in (False, True):
+                with self.subTest(arch=arch, reused=reused):
+                    self.exercise(arch, reused)
+
+    def test_failed_or_timed_out_dns_gate_cannot_reach_host_acceptance_or_reuse_publication(self):
+        for reused in (False, True):
+            for error in (subprocess.CalledProcessError(1, 'native-dns'), subprocess.TimeoutExpired('native-dns', 300)):
+                with self.subTest(reused=reused, failure=type(error).__name__):
+                    self.exercise('amd64', reused, error)
+
+    def test_zero_case_and_incomplete_success_cannot_publish_new_or_reused_bundle(self):
+        rows = self.verdict_rows()
+        for reused in (False, True):
+            for output in ('', json.dumps({'Package': 'router-vpn/cmd/client', 'Action': 'pass'}),
+                           '\n'.join(json.dumps(row) for row in rows if not row.get('Test', '').endswith('/tcp-cached-negative-control'))):
+                with self.subTest(reused=reused, output=output[:30]):
+                    self.exercise('amd64', reused, output=output, verdict_failure=True)
+
+    def test_every_exact_parent_leaf_and_package_verdict_is_required_once(self):
+        rows = self.verdict_rows()
+        encode = lambda values: '\n'.join(json.dumps(row) for row in values)
+        N.verify_linux_stock_dns_verdicts(encode(rows))
+        for index in range(len(rows)):
+            for changed in (rows[:index]+rows[index+1:], rows[:index]+[rows[index]]+rows[index:]):
+                with self.subTest(index=index, length=len(changed)):
+                    with self.assertRaises(ValueError):
+                        N.verify_linux_stock_dns_verdicts(encode(changed))
+        for action in ('skip', 'fail', 'build-fail', 'unknown'):
+            for index in (1, 3, len(rows)-1):
+                changed = [dict(row) for row in rows]; changed[index]['Action'] = action
+                with self.subTest(action=action, index=index), self.assertRaises(ValueError):
+                    N.verify_linux_stock_dns_verdicts(encode(changed))
+        for index in (0, 2):
+            changed = [dict(row) for row in rows]; changed[index]['Package'] = 'foreign'
+            with self.assertRaises(ValueError): N.verify_linux_stock_dns_verdicts(encode(changed))
+        changed = [dict(row) for row in rows]; changed[2]['Test'] += '-unexpected'
+        with self.assertRaises(ValueError): N.verify_linux_stock_dns_verdicts(encode(changed))
+        for changed in (rows[:2]+[rows[3],rows[2]]+rows[4:], rows[:2]+[rows[-2]]+rows[2:-2]+[rows[-1]],
+                        rows[:-1]+[{'Package':'router-vpn/cmd/client','Action':'output','Output':'WARNING: DATA RACE'}]+rows[-1:]):
+            with self.assertRaises(ValueError): N.verify_linux_stock_dns_verdicts(encode(changed))
+        for output in ('not-json', '[]', '{"Action":"start","Action":"pass"}', encode(rows)+'\n{}'):
+            with self.assertRaises(ValueError): N.verify_linux_stock_dns_verdicts(output)
+
+
 if __name__ == '__main__':
     unittest.main()
