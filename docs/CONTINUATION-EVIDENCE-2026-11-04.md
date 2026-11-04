@@ -219,7 +219,35 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Linux retained partial cleanup accompanying this record
+## Windows ALL first forbidden-release witness accompanying this record
+
+The actual `c336566d` Windows AMD64 ALL negative control timed out after its
+unchanged sixty-second bound, before reaching its late final-state assertion.
+The captured stack showed a later profile FlushFileBuffers call; it does not
+establish a production deadlock or why that call was slow. The corresponding
+positive branch passed earlier in the same job, and the relevant code was
+unchanged from the earlier successful native run.
+
+The fixture now observes the first forbidden release attempt on its exact
+captured protection slot while the public Speed Lab handler owns temporary
+work and restoration. Its truthful witness says that release was attempted,
+without claiming native release completed. A defer restores the original
+modeled callback before teardown, including an assertion failure. Valid paths
+still execute the original handler, actual persistence and all final source,
+reader, MTU, predecessor, runtime, profile and ownership assertions. Only the
+two temporary-release mutants' required witnesses change; all eight controls,
+26 positive cases, production persistence and existing deadlines remain.
+
+Root verified both exact frozen files and the unchanged source mutants. All
+four positive branches and their parent pass under race in 34.302s using
+an explicitly declared local physical-inventory model, with no skipped or
+missing verdicts. The two actual source controls are rejected by the unchanged
+native-driver classifier at their intended first release attempt. All 23 runner
+tests pass in 20.744s. An initial local selector matched no tests; that output
+is retained and contributes no acceptance. Exact native Windows execution
+remains required; local modeled inventory is not a physical-host result.
+
+## Linux retained partial cleanup published at 3c25e74a
 
 The original legacy Node shutdown performed one settled partial-cleanup call
 and then waited for another process signal even though its accepted fifteen-second

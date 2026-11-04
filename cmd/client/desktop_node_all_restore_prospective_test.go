@@ -13,6 +13,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"router-vpn/internal/mobiletor"
 )
 
 // The complete-MAX capability is the unchanged shipping predicate used by
@@ -91,7 +93,21 @@ func TestDesktopNodeProspectiveALLTemporaryRestoreKeepsExactWinner(t *testing.T)
 					request := httptest.NewRequest(http.MethodPost, "/api/speed-lab/run", strings.NewReader(
 						`{"scope":"temporary","topology":"router","node_id":"`+f.profile.ID+`","mode":"all","base":"awg","duration_mode":"custom","min_seconds":1,"max_seconds":1}`)).WithContext(ctx)
 					response := httptest.NewRecorder()
-					f.a.speedLabRun(response, request)
+					func() {
+						// Releasing the captured protection is already forbidden at
+						// this original backend boundary. Observe that first wrong
+						// attempt before unrelated later persistence can obscure it.
+						// The public handler and every final restore assertion still
+						// execute unchanged for the valid production path.
+						slot := f.a.nodeProtection
+						release := slot.backend.release
+						slot.backend.release = func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error) {
+							t.Fatal("temporary ALL attempted protection release during captured restoration")
+							return nil, nil
+						}
+						defer func() { slot.backend.release = release }()
+						f.a.speedLabRun(response, request)
+					}()
 					if response.Code < 400 || (ctx.Err() != nil) != (outcome == "cancel") || !f.a.state.Connected || f.a.state.Phase != "connected" ||
 						f.a.state.RuntimeMode != "max-quic-wg" || f.a.state.LogicalMode != "all" || f.a.state.Base != "wg" || len(f.children) != 4+trials {
 						t.Fatal("temporary ALL did not restore its exact previously proved winner", response.Code, response.Body.String(), len(f.children), f.a.state)
