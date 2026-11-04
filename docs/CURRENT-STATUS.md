@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through d93284c7
+## Latest implementation continuation — through df262aea
 
 The verified source cutoff is
-[`d93284c7`](https://github.com/Eabusham2/router-vpn/commit/d93284c77a9fbd2eb307ab50cb165ec84dcfb2d3),
-tree `06b528baf34ef132e6c585d19469a860ebd786a7`.
+[`df262aea`](https://github.com/Eabusham2/router-vpn/commit/df262aeaec353734021f3113691e322199b93244),
+tree `1db520ac32622da2d45aa280089e996fe545119a`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -21,11 +21,14 @@ validation limits. Changes and test counts are not a requirements denominator.
   local/remote content tree.
 - Retained macOS direct Local SOCKS5, AWG Fast/Strong and bounded OpenVPN are
   integrated with their captured credentials, selected policy and original
-  native cleanup. The Local ordinary WG/AWG-entry-to-SS-exit host additionally retains
-  both private sources and separate proofs, with the correct final-node identity
-  for publication, Stop, measurements and exact Local restoration. The native
-  gate requires its full 76-case inventory. Source/race/build checks pass;
-  actual encrypted peers, PF/utun, physical transitions and broader graph
+  native cleanup. The Local ordinary WG/AWG-entry host also admits SS, HTTP CONNECT,
+  HTTPS CONNECT and unlayered Hysteria2 exits while retaining both private sources
+  and separate proofs. The final node owns publication, Stop, measurements and
+  exact Local restoration; only the entry receives physical egress. CONNECT
+  retains independent proxy credentials/TLS settings, and HY2 retains its final
+  QUIC/TLS/password peer and selected UDP DNS. The native gate requires its full
+  117-case inventory. Focused source/race/build checks pass; actual encrypted
+  peers, PF/utun, physical transitions and broader graph
   families retain their distinct acceptance and implementation obligations.
 - Linux legacy direct stock engines retain their original sealed image,
   configuration, creation pidfd, native protection creator, state-file capability
@@ -34,14 +37,21 @@ validation limits. Changes and test counts are not a requirements denominator.
   Selected DNS must be proved through the original uncached engine path before
   connection adoption, with immutable preparation-time physical-network capture.
   The installed persistent service now retains that original authority across
-  controller retirement. Authenticated explicit Off releases native protection
-  before saving the exact preference; cold boot dispatch preserves graph
-  selection, and proved-idle upgrades join the original service. The integrated
-  race suite passes in 77.654s, with installer and mutation-lock checks. Actual
-  installed nft/TUN acceptance remains mandatory. Cross-adapter protected
-  transfer, active Always upgrades, same-boot service-crash recovery and a
-  monotonic network event epoch remain unfinished source work; see the
-  [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
+  controller retirement. Automatic Start failure, channel loss and watcher
+  cleanup now hold the original On-connect/Always protection until an explicit
+  owned release; controller loss cannot silently clear On-connect policy.
+  Authenticated explicit Off releases native protection before saving the exact
+  preference; cold boot dispatch preserves graph
+  selection, and proved-idle upgrades join the original service. The service
+  integration and later focused hold/observer races pass, with installer and
+  mutation-lock checks recorded separately in the evidence. Actual
+  installed nft/TUN acceptance remains mandatory. After original child/listener
+  readiness, one retained native event observer now gates a second uncached DNS
+  proof and later runtime/proof observations. Away-and-back changes remain invalid; native
+  dump reads are bounded and exact, and cleanup joins only the original observer.
+  Initial preparation/startup and owned MTU event continuity, cross-adapter
+  protected transfer, active Always upgrades and same-boot service-crash recovery
+  remain unfinished; see the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 - All legacy standard preparations use the shared captured device policy and
   bounded transport-host bootstrap. Invalid policy is rejected before lookup;
   transport bootstrap never replaces the selected active-path DNS policy.
@@ -53,15 +63,21 @@ validation limits. Changes and test counts are not a requirements denominator.
   native acceptance of that repair remains pending. The iOS runner compiles
   isolated controls alongside the full baseline within the original budget.
   Its original compiler supervisor remains live until acknowledged group
-  termination and join, repairing the native cleanup failure. Every negative,
-  all 50 samples and the original deadlines remain; native reruns decide
-  acceptance of these newer changes.
+  termination and join. At `84c49e9a`, actual macOS passes all seven fixture and
+  ownership runner tests, the complete 259-check Swift baseline, all six mutation controls,
+  the full-profile actor negative and real iOS SDK positive/negative checks
+  within the unchanged 150-second budget. The job was cancelled later during
+  other contracts; complete Xcode/IPA and current-head release acceptance remain
+  separate. Every negative, all 50 samples and the original deadlines remain.
 - Actual macOS controller cleanup passes both architectures at `4550b091`.
   Actual generated Linux Router-node TUN checks pass both architectures at
   `71fc8139`, including protection, MTU rollback, bad DNS and bad key cases.
-  Those are exact-SHA bounded results. The latest observed published release
-  remains the twelve-asset `745b3e41` prerelease; current native packages,
-  publication, private deployment and device acceptance are distinct.
+  Native guardian namespace/timeout/isolation controls also pass both Linux
+  architectures at `d93284c7`; they do not execute the distinct installed standard
+  service lifecycle gate. These are exact-SHA bounded results. The latest
+  observed published release remains the twelve-asset `745b3e41` prerelease;
+  current native packages, publication, private deployment and device acceptance
+  are distinct.
 - Existing Tor Server/Compare, ordinary predecessors and cover paths remain
   implemented and must not be recreated from stale missing-feature summaries.
   Original optional macOS notarization scope remains separate from legitimate
