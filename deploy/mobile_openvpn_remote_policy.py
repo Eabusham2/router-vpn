@@ -33,7 +33,7 @@ def digest():
     return value.hexdigest()
 
 
-CHANGES = [('type clientState struct {\n',
+CHANGES = [('\t"sync/atomic"\n', '\t"sync/atomic"\n\t"syscall"\n', 1), ('type clientState struct {\n',
   'type clientState struct {\n'
   '\trouterVPNTransportGeneration uint64\n'
   '\trouterVPNTransport net.Conn\n',
@@ -45,6 +45,9 @@ CHANGES = [('type clientState struct {\n',
   '\t})\n'
   '\tc.stateAccess.Unlock()\n'
   '\treturn connection, nil\n',
+  '\tif _, kernelTransport := common.Cast[syscall.Conn](connection); !kernelTransport {\n'
+  '\t\tconnection = &routerVPNOpenVPNOriginalTransport{Conn: connection}\n'
+  '\t}\n'
   '\tc.stateAccess.Lock()\n'
   '\tif c.state.Load().routerVPNTransportGeneration >= 1<<53-1 {\n'
   '\t\tc.stateAccess.Unlock()\n'

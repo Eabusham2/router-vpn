@@ -22,5 +22,5 @@ install -m 0644 "$ROOT/mobile/openvpn/server_close_policy_test.go.tmpl" "$SERVER
 install -m 0644 "$ROOT/mobile/routervpn_openvpn_native_test.go.tmpl" "$TEST"
 python3 "$ROOT/deploy/prepare-mobile-openvpn.py" "$VENDOR"
 cd "$VENDOR"
-go test -count=1 -timeout=30s -ldflags=-checklinkname=0 -tags with_openvpn,with_wireguard,with_quic,with_gvisor ./protocol/openvpn -run '^TestRouterVPNOpenVPN(CloseError|ServerCloseOwnedListener)$' -v
+go test -count=1 -timeout=30s -ldflags=-checklinkname=0 -tags with_openvpn,with_wireguard,with_quic,with_gvisor ./protocol/openvpn -run '^TestRouterVPNOpenVPN(CloseError|CloseErrorOriginalTransport|CloseErrorOriginalTransportJoins|OriginalTransportCapture|ServerCloseOwnedListener)$' -v
 go test -count=1 -timeout=120s -ldflags=-checklinkname=0 -tags with_openvpn,with_wireguard,with_quic,with_gvisor ./experimental/libbox -run '^TestRouterOpenVPNNative' -v

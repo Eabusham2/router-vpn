@@ -169,7 +169,7 @@ class Tests(unittest.TestCase):
         runner = (ROOT/'deploy/test_mobile_openvpn_pinned.sh').read_text()
         self.assertIn('mobile_openvpn_close_policy.py', runner)
         self.assertIn('./protocol/openvpn -run', runner)
-        self.assertIn('TestRouterVPNOpenVPN(CloseError|ServerCloseOwnedListener)', runner)
+        self.assertIn('TestRouterVPNOpenVPN(CloseError|CloseErrorOriginalTransport|CloseErrorOriginalTransportJoins|OriginalTransportCapture|ServerCloseOwnedListener)', runner)
         self.assertIn('server_close_policy_test.go.tmpl', runner)
         self.assertIn(ROOT/'mobile/openvpn/server_close_policy_test.go.tmpl', POLICY.inputs())
         native = (ROOT/'deploy/test_desktop_node_physical.py').read_text()

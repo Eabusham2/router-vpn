@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
+	"syscall"
 	"testing"
 )
 
@@ -56,5 +58,94 @@ func TestRouterVPNOpenVPNCloseError(t *testing.T) {
 				t.Fatalf("close failure was hidden or rewritten: %v", got)
 			}
 		})
+	}
+}
+
+type routerVPNOpenVPNOriginalTransportFixture struct {
+	net.Conn
+	writes, closes atomic.Int32
+	failure        error
+	joined         chan struct{}
+	release        chan struct{}
+}
+
+func (c *routerVPNOpenVPNOriginalTransportFixture) Read([]byte) (int, error) { return 0, syscall.EPIPE }
+func (c *routerVPNOpenVPNOriginalTransportFixture) Write([]byte) (int, error) {
+	c.writes.Add(1)
+	return 0, syscall.EPIPE
+}
+func (c *routerVPNOpenVPNOriginalTransportFixture) Close() error {
+	c.closes.Add(1)
+	if c.joined != nil {
+		close(c.joined)
+		<-c.release
+	}
+	return c.failure
+}
+func TestRouterVPNOpenVPNCloseErrorOriginalTransport(t *testing.T) {
+	t.Run("foreign-original", func(t *testing.T) {
+		first, second := &routerVPNOpenVPNOriginalTransportFixture{}, &routerVPNOpenVPNOriginalTransportFixture{}
+		owned, foreign := &routerVPNOpenVPNOriginalTransport{Conn: first}, &routerVPNOpenVPNOriginalTransport{Conn: second}
+		if e := foreign.Close(); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := owned.Write(nil); e != syscall.EPIPE || first.writes.Load() != 1 || first.closes.Load() != 0 {
+			t.Fatal("another original close lent authority", e)
+		}
+	})
+
+	for _, failure := range []error{nil, syscall.EPERM, net.ErrClosed} {
+		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+			original := &routerVPNOpenVPNOriginalTransportFixture{failure: failure}
+			owner := &routerVPNOpenVPNOriginalTransport{Conn: original}
+			if _, e := owner.Write(nil); e != syscall.EPIPE {
+				t.Fatal("preclose failure rewritten", e)
+			}
+			if e := owner.Close(); e != failure {
+				t.Fatal("original close failure hidden", e)
+			}
+			n, e := owner.Write(nil)
+			if failure == nil {
+				if n != 0 || e != net.ErrClosed || original.writes.Load() != 1 {
+					t.Fatal("successful original close did not stop postclose TLS write", e)
+				}
+			} else if e != syscall.EPIPE || original.writes.Load() != 2 {
+				t.Fatal("failed close became retirement authority", e)
+			}
+			if e := owner.Close(); e != failure || original.closes.Load() != 1 {
+				t.Fatal("original close result or identity replaced", e)
+			}
+		})
+	}
+}
+func TestRouterVPNOpenVPNCloseErrorOriginalTransportJoins(t *testing.T) {
+	original := &routerVPNOpenVPNOriginalTransportFixture{joined: make(chan struct{}), release: make(chan struct{})}
+	owner := &routerVPNOpenVPNOriginalTransport{Conn: original}
+	done := make(chan error, 2)
+	go func() { done <- owner.Close() }()
+	<-original.joined
+	go func() { done <- owner.Close() }()
+	if owner.closed.Load() {
+		t.Fatal("unjoined original close claimed success")
+	}
+	if _, e := owner.Write(nil); e != syscall.EPIPE {
+		t.Fatal("inflight close hid real write failure", e)
+	}
+	select {
+	case <-done:
+		t.Fatal("close returned before original joined")
+	default:
+	}
+	close(original.release)
+	for i := 0; i < 2; i++ {
+		if e := <-done; e != nil {
+			t.Fatal(e)
+		}
+	}
+	if original.closes.Load() != 1 {
+		t.Fatal("duplicate original close")
+	}
+	if _, e := owner.Read(nil); e != net.ErrClosed {
+		t.Fatal("retired read reacquired original stream", e)
 	}
 }

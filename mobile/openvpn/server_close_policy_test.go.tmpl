@@ -3,8 +3,10 @@ package openvpn
 import (
 	"context"
 	"errors"
+	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -93,5 +95,75 @@ func TestRouterVPNOpenVPNServerCloseOwnedListener(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The real dial/capture boundary must preserve kernel socket capabilities and
+// wrap only the original userspace transport before assigning its generation.
+type routerVPNOriginalTransportDialer struct{ connection net.Conn }
+
+func (d routerVPNOriginalTransportDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return d.connection, nil
+}
+func (d routerVPNOriginalTransportDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("unexpected packet listener")
+}
+func TestRouterVPNOpenVPNOriginalTransportCapture(t *testing.T) {
+	for _, network := range []string{"tcp", "udp", "userspace-tcp", "userspace-udp"} {
+		t.Run(network, func(t *testing.T) {
+			var original net.Conn
+			transport := strings.TrimPrefix(network, "userspace-")
+			if strings.HasPrefix(network, "userspace-") {
+				original = &routerVPNOpenVPNOriginalTransportFixture{}
+			} else if network == "udp" {
+				c, e := net.Dial("udp4", "127.0.0.1:9")
+				if e != nil {
+					t.Fatal(e)
+				}
+				original = c
+			} else {
+				l, e := net.Listen("tcp4", "127.0.0.1:0")
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer l.Close()
+				joined := make(chan net.Conn, 1)
+				go func() { c, _ := l.Accept(); joined <- c }()
+				c, e := net.Dial("tcp4", l.Addr().String())
+				if e != nil {
+					_ = l.Close() // Join the original Accept even when the dial fails.
+				}
+				peer := <-joined
+				if peer != nil {
+					defer peer.Close()
+				}
+				if e != nil {
+					t.Fatal(e)
+				}
+				original = c
+			}
+			defer original.Close()
+			c := &ClientEndpoint{loopContext: context.Background(), outboundDialer: routerVPNOriginalTransportDialer{original}, statusUpdated: make(chan struct{})}
+			c.state.Store(&clientState{})
+			captured, e := c.transportDialContextWithAddressIndex(context.Background(), transport, "198.51.100.240:8388", 0)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if strings.HasPrefix(network, "userspace-") {
+				wrapped, ok := captured.(*routerVPNOpenVPNOriginalTransport)
+				if !ok || wrapped.Conn != original {
+					t.Fatal("userspace transport did not retain original connection")
+				}
+			} else if captured != original {
+				t.Fatal("original kernel socket capabilities/type changed")
+			}
+			if c.routerVPNTransportGenerationFor(captured) != 1 || c.state.Load().routerVPNTransport != captured {
+				t.Fatal("capture did not retain exact returned transport")
+			}
+			foreign := &routerVPNOpenVPNOriginalTransport{Conn: original}
+			if c.routerVPNTransportGenerationFor(foreign) != 0 {
+				t.Fatal("foreign wrapper inherited original generation")
+			}
+		})
 	}
 }

@@ -1,6 +1,10 @@
 package openvpn
 
-import "net"
+import (
+	"net"
+	"sync"
+	"sync/atomic"
+)
 
 // The pinned OpenVPN session interrupts its packet transport before closing
 // TLS. A closeNotify write can therefore report net.ErrClosed after shutdown
@@ -39,4 +43,37 @@ func routerVPNOpenVPNOnlyClosed(err error, depth int) bool {
 	default:
 		return err == net.ErrClosed
 	}
+}
+
+// A userspace connected transport need not return net.ErrClosed after its own successful
+// Close (gVisor can return EPIPE or EINVAL). Keep the exact original local close milestone
+// so the library's later TLS closeNotify never writes to a retired transport. This
+// does not classify remote errors, failed closes or in-flight writes as success.
+type routerVPNOpenVPNOriginalTransport struct {
+	net.Conn
+	closeOnce sync.Once
+	closed    atomic.Bool
+	closeErr  error
+}
+
+func (c *routerVPNOpenVPNOriginalTransport) Read(p []byte) (int, error) {
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Read(p)
+}
+func (c *routerVPNOpenVPNOriginalTransport) Write(p []byte) (int, error) {
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	return c.Conn.Write(p)
+}
+func (c *routerVPNOpenVPNOriginalTransport) Close() error {
+	c.closeOnce.Do(func() {
+		c.closeErr = c.Conn.Close()
+		if c.closeErr == nil {
+			c.closed.Store(true)
+		}
+	})
+	return c.closeErr
 }
