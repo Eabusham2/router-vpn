@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 4f186c90
+## Latest implementation continuation — through d93284c7
 
 The verified source cutoff is
-[`4f186c90`](https://github.com/Eabusham2/router-vpn/commit/4f186c907c378babd667daacf5b3c10933abb072),
-tree `e29ab3b1ea315cfaadd6dbcdcab1dc92e6d398be`.
+[`d93284c7`](https://github.com/Eabusham2/router-vpn/commit/d93284c77a9fbd2eb307ab50cb165ec84dcfb2d3),
+tree `06b528baf34ef132e6c585d19469a860ebd786a7`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -33,18 +33,29 @@ validation limits. Changes and test counts are not a requirements denominator.
   model. Force Off cannot report success while reserved protection remains.
   Selected DNS must be proved through the original uncached engine path before
   connection adoption, with immutable preparation-time physical-network capture.
-  Persistent ownership across controller exit/restart, cold startup and installer
-  replacement is active service integration work.
+  The installed persistent service now retains that original authority across
+  controller retirement. Authenticated explicit Off releases native protection
+  before saving the exact preference; cold boot dispatch preserves graph
+  selection, and proved-idle upgrades join the original service. The integrated
+  race suite passes in 77.654s, with installer and mutation-lock checks. Actual
+  installed nft/TUN acceptance remains mandatory. Cross-adapter protected
+  transfer, active Always upgrades, same-boot service-crash recovery and a
+  monotonic network event epoch remain unfinished source work; see the
+  [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 - All legacy standard preparations use the shared captured device policy and
   bounded transport-host bootstrap. Invalid policy is rejected before lookup;
   transport bootstrap never replaces the selected active-path DNS policy.
 - Windows negative cleanup retains the original admitted target. The native
   ARM64 runner executes the same eight cleanup cases without unsupported race
-  instrumentation; supported platforms retain race checks. The fresh iOS
-  diagnostic located repeated full mutation suites exhausting their aggregate
-  budget; targeted execution preserves the original full baseline, every
-  negative, all 50 samples and the unchanged native deadline. Current native
-  reruns decide whether each observed blocker is closed.
+  instrumentation; supported platforms retain race checks. All five actual
+  ARM64 MAX/WFP partitions pass at `ce746e87`. A distinct AMD64 foreign-admission
+  fixture now rejects its forbidden candidate before an unrelated handshake;
+  native acceptance of that repair remains pending. The iOS runner compiles
+  isolated controls alongside the full baseline within the original budget.
+  Its original compiler supervisor remains live until acknowledged group
+  termination and join, repairing the native cleanup failure. Every negative,
+  all 50 samples and the original deadlines remain; native reruns decide
+  acceptance of these newer changes.
 - Actual macOS controller cleanup passes both architectures at `4550b091`.
   Actual generated Linux Router-node TUN checks pass both architectures at
   `71fc8139`, including protection, MTU rollback, bad DNS and bad key cases.
