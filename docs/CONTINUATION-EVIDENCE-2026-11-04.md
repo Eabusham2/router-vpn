@@ -219,7 +219,27 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## macOS SS2022 entry to CONNECT final accompanying this record
+## Relay OpenVPN helper fixture correction accompanying this record
+
+The exact `a424c763` requirements source gate, [run 41832515645,
+job 126583552270](https://github.com/Eabusham2/router-vpn/actions/runs/41832515645/job/126583552270),
+failed three preparation fixtures because they still expected the ordinary
+relay path to omit `OPENVPN_CLOSE.prepare`. Published `12e8abc0` requires that
+original helper before its caller, fixing the actual AWG build dependency.
+The fixture now requires both close and remote helpers exactly once, and
+exactly twice after repeated base preparation. HY2 remains deferred until
+native preparation. Source-byte equality, foreign-file and failure-scope
+controls remain intact; no runtime or deadline behavior changes here.
+
+Root's seven actual Python cases pass in 2.831s. The shipping Go wrapper
+`internal/applexray.TestPinnedNativeCompositionAndFailureScope` passes in
+3.590s. A causal removal of only the required base helper call fails the same
+three cases, after which the original preparer is restored and hash-checked.
+An initial command aimed at another package reported no tests and is excluded
+from evidence. This closes the witnessed fixture mismatch; exact-current-SHA
+native builds and full publication remain separate requirements.
+
+## macOS SS2022 entry to CONNECT final published at 46ac499c
 
 Retained Local SS2022 entries now support ordinary HTTP CONNECT and HTTPS
 CONNECT finals, with all three admitted SS2022 methods and both On-connect

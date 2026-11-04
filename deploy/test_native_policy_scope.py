@@ -57,11 +57,12 @@ class NativePolicyScope(unittest.TestCase):
                         copied=vendor/'experimental/libbox/routervpn'/package/path.name
                         self.assertEqual(copied.read_bytes(),expected,
                             'Windows text translation changed the exact native compiler: '+package+'/'+path.name)
-            # The relay copies policy here, then applies its native runtime
-            # guards in prepare_native. Mobile applies both in prepare.
+            # Both base paths emit the original OpenVPN transport helper
+            # before its caller. Only the relay's HY2 guard waits for
+            # prepare_native; repeated base preparation verifies both helpers.
             for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES'):
                 if hook in prepared:
-                    expected=[] if name=='prepare-relay-core.py' and hook in ('OPENVPN_CLOSE','HY2_DEADLINES') else [mock.call(vendor.resolve())]
+                    expected=[] if name=='prepare-relay-core.py' and hook=='HY2_DEADLINES' else [mock.call(vendor.resolve())]
                     self.assertEqual(prepared[hook].call_args_list,expected)
             self.assertFalse(parent.exists())
             for filename in ('config.go','config_test.go','start_layer.go','start_layer_test.go'):
@@ -78,7 +79,7 @@ class NativePolicyScope(unittest.TestCase):
             module.prepare(vendor)
             for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES'):
                 if hook in prepared:
-                    expected=[] if name=='prepare-relay-core.py' and hook in ('OPENVPN_CLOSE','HY2_DEADLINES') else [mock.call(vendor.resolve())]*2
+                    expected=[] if name=='prepare-relay-core.py' and hook=='HY2_DEADLINES' else [mock.call(vendor.resolve())]*2
                     self.assertEqual(prepared[hook].call_args_list,expected)
             self.assertEqual(before,{str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
     def test_relay_native_guards_follow_verified_package_preparation(self):
