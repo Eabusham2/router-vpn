@@ -34,7 +34,7 @@ func desktopRetainedSOCKSFixture(t *testing.T, kill string) (common.RouterProfil
 }
 
 func TestDesktopExternalPhysicalSOCKSKeepsOriginalSourceAndOwnedAssociation(t *testing.T) {
-	for _, target := range []string{"linux", "windows"} {
+	for _, target := range []string{"linux", "windows", "darwin"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			t.Run(target+"/"+kill, func(t *testing.T) {
 				profile, launch := desktopRetainedSOCKSFixture(t, kill)
@@ -86,7 +86,7 @@ func TestDesktopExternalPhysicalSOCKSKeepsOriginalSourceAndOwnedAssociation(t *t
 }
 
 func TestDesktopExternalPhysicalSOCKSKeepsOtherPlatformAndUnownedGuards(t *testing.T) {
-	for _, target := range []string{"darwin", ""} {
+	for _, target := range []string{"freebsd", ""} {
 		t.Run(target, func(t *testing.T) {
 			_, launch := desktopRetainedSOCKSFixture(t, "always")
 			if err := prepareDesktopExternalPhysicalCaptured(launch, target); err != nil || launch.external.physical != nil {
@@ -94,7 +94,7 @@ func TestDesktopExternalPhysicalSOCKSKeepsOtherPlatformAndUnownedGuards(t *testi
 			}
 		})
 	}
-	for _, target := range []string{"linux", "windows"} {
+	for _, target := range []string{"linux", "windows", "darwin"} {
 		for _, fault := range []string{"off", "predecessor", "not-direct", "changed-source"} {
 			t.Run(target+"/"+fault, func(t *testing.T) {
 				kill := "always"

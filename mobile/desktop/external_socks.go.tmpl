@@ -51,7 +51,7 @@ type ExternalSOCKSOutbound struct {
 
 func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options ExternalSOCKSOptions) (adapter.Outbound, error) {
 	address, err := netip.ParseAddr(options.Server)
-	if (runtime.GOOS != "linux" && runtime.GOOS != "windows") || ctx == nil || ctx.Err() != nil || tag != mobilemultihop.ExternalFinalTag ||
+	if (runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin") || ctx == nil || ctx.Err() != nil || tag != mobilemultihop.ExternalFinalTag ||
 		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) ||
 		err != nil || address.String() != options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || options.ServerPort == 0 ||
 		options.Version != "5" || options.Network != "" || options.UDPOverTCP != nil ||
@@ -66,7 +66,7 @@ func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.Conte
 }
 
 func (o *ExternalSOCKSOutbound) prepare(policy *mobilemultihop.DesktopExternalPolicy, owner *ExternalNetworkOwner, lower *ExternalPhysicalOutbound) error {
-	if o == nil || policy == nil || policy.Validate() != nil || owner == nil || lower == nil || (runtime.GOOS != "linux" && runtime.GOOS != "windows") {
+	if o == nil || policy == nil || policy.Validate() != nil || owner == nil || lower == nil || (runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin") {
 		return errors.New("retained SOCKS5 has no original native preparation")
 	}
 	meta := policy.Metadata()

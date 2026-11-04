@@ -261,7 +261,7 @@ def pt_copies():
                    'external_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
                    'external_physical_windows.go.tmpl': b'//go:build windows\n\n',
                    'external_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'external_socks_association_test.go.tmpl': b'//go:build linux || windows\n\n',
+                   'external_socks_association_test.go.tmpl': b'//go:build linux || windows || darwin\n\n',
                    'external_socks_linux_lifecycle_test.go.tmpl': b'//go:build linux && routervpn_linux_external_lifecycle\n\n',
                    'external_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'external_physical_windows_test.go.tmpl': b'//go:build windows\n\n',

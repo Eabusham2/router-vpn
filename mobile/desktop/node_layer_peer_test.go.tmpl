@@ -1863,7 +1863,7 @@ type desktopExternalInstalledSOCKSRelay struct {
 }
 
 func (l *desktopExternalInstalledSOCKSListener) ListenPacket(config net.ListenConfig, ctx context.Context, network, address string) (net.PacketConn, error) {
-	if ctx.Err() != nil || l.relay != nil || network != "udp" || l.peer.request.Address != "11.77.0.2" || address != net.JoinHostPort(l.peer.request.Address, "0") {
+	if ctx.Err() != nil || l.relay != nil || network != "udp" || l.control.LocalAddr().(*net.TCPAddr).IP.String() != l.peer.request.Address || address != net.JoinHostPort(l.peer.request.Address, "0") {
 		return nil, errors.New("installed SOCKS peer changed its actual association bind")
 	}
 	var packet net.PacketConn

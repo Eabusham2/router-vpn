@@ -60,7 +60,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	metadata := physical.Metadata()
 	if !bytes.Equal(launch.config, []byte(original.Config())) || !bytes.Equal(launch.metadata, []byte(original.Metadata())) ||
 		metadata.OriginalSourceSHA256 != owner.expected.SourceSHA256 || metadata.OriginalConfigSHA256 != owner.expected.ConfigSHA256 ||
-		owner.expected.SessionID != owner.session || metadata.SOCKSUDPAssociationRequired && !(metadata.Protocol == "socks5" && (targetOS == "linux" || targetOS == "windows")) {
+		owner.expected.SessionID != owner.session || metadata.SOCKSUDPAssociationRequired && !(metadata.Protocol == "socks5" && (targetOS == "linux" || targetOS == "windows" || targetOS == "darwin")) {
 		return errors.New("ordinary physical preparation lost its original proof or configuration identity")
 	}
 	receipt, err := json.Marshal(metadata)
@@ -89,7 +89,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 	if err != nil || meta.TargetOS != "windows" && meta.TargetOS != "linux" && meta.TargetOS != "darwin" || meta.TargetOS == "darwin" && !desktopExternalDarwinProtocol(meta.Protocol) || meta.SessionID != owner.session || owner.expected.SessionID != owner.session ||
 		meta.OriginalSourceSHA256 != owner.expected.SourceSHA256 || meta.OriginalConfigSHA256 != owner.expected.ConfigSHA256 ||
 		original.SourceSHA256() != meta.OriginalSourceSHA256 || original.Config() != physical.OriginalPolicy().Config() ||
-		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired && !(meta.Protocol == "socks5" && (meta.TargetOS == "linux" || meta.TargetOS == "windows")) ||
+		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired && !(meta.Protocol == "socks5" && (meta.TargetOS == "linux" || meta.TargetOS == "windows" || meta.TargetOS == "darwin")) ||
 		(meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "shadowsocks" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" &&
 			meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn") {
 		return nil, errors.New("ordinary physical capture differs from its retained original graph")
@@ -98,7 +98,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 }
 
 func desktopExternalDarwinProtocol(protocol string) bool {
-	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "wireguard"
+	return protocol == "socks5" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "wireguard"
 }
 
 func desktopExternalPhysicalReceipt(owner *desktopExternalRuntime, received *mobilemultihop.DesktopExternalMetadata) bool {

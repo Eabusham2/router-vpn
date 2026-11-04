@@ -38,20 +38,22 @@ type macOSExternalLayerReceipt struct {
 }
 
 type macOSExternalPeerReply struct {
-	Layer          *macOSExternalLayerReceipt   `json:"layer,omitempty"`
-	Latency        *macOSExternalLatencyReceipt `json:"latency,omitempty"`
-	Schema         int                          `json:"schema"`
-	Protocol       string                       `json:"protocol"`
-	Address        string                       `json:"address"`
-	CA             string                       `json:"ca"`
-	Connections    int64                        `json:"connections"`
-	Streams        int64                        `json:"streams"`
-	PhysicalUDP    int64                        `json:"physical_udp"`
-	Packets        int64                        `json:"packets"`
-	DNSQueries     uint32                       `json:"dns_queries"`
-	PublicAttempts uint32                       `json:"public_attempts"`
-	PublicReplies  uint32                       `json:"public_replies"`
-	AuthFailures   uint32                       `json:"auth_failures"`
+	SOCKSRelays          []string                     `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies uint32                       `json:"socks_rejected_replies,omitempty"`
+	Layer                *macOSExternalLayerReceipt   `json:"layer,omitempty"`
+	Latency              *macOSExternalLatencyReceipt `json:"latency,omitempty"`
+	Schema               int                          `json:"schema"`
+	Protocol             string                       `json:"protocol"`
+	Address              string                       `json:"address"`
+	CA                   string                       `json:"ca"`
+	Connections          int64                        `json:"connections"`
+	Streams              int64                        `json:"streams"`
+	PhysicalUDP          int64                        `json:"physical_udp"`
+	Packets              int64                        `json:"packets"`
+	DNSQueries           uint32                       `json:"dns_queries"`
+	PublicAttempts       uint32                       `json:"public_attempts"`
+	PublicReplies        uint32                       `json:"public_replies"`
+	AuthFailures         uint32                       `json:"auth_failures"`
 }
 
 type macOSExternalNativePeer struct {
@@ -176,7 +178,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
-	if scenario == "wireguard-always" {
+	if scenario == "wireguard-always" || scenario == "socks5-always" {
 		p.policy = "always"
 	}
 	key := make([]byte, 32)
@@ -232,6 +234,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		p.output.Close()
 	})
 	request := map[string]any{"schema": 1, "protocol": protocol, "address": p.physical.String(), "password": p.password, "hold": false}
+	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof") {
+		request["socks_fault"] = fault
+	}
 	if protocol == "wireguard" {
 		provider, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
@@ -280,6 +285,15 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		profile.MTUPolicy, profile.ManualMTU, profile.EffectiveMTU = "auto", 0, 0
 	}
 	switch p.protocol {
+	case "socks5":
+		profile.DNSProtocol = "udp"
+		profile.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: p.physical.String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
+		if p.fault == "wrong-password" {
+			profile.External.SOCKS5.Password += "-different"
+		}
+		if p.fault == "wrong-exit" {
+			profile.External.ExpectedPublicIP = "203.0.113.89"
+		}
 	case "wireguard":
 		profile.DNSProtocol = "udp"
 		profile.External.WireGuard = &common.ExternalWireGuardConfig{PrivateKey: p.clientKey, PeerPublicKey: p.peerKey, PresharedKey: p.psk, Endpoint: p.address.String(), Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1420, PersistentKeepalive: 25}
@@ -497,6 +511,10 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
 	switch scenario {
+	case "socks5", "socks5-always":
+		return "socks5", "", ""
+	case "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit":
+		return "socks5", "", strings.TrimPrefix(scenario, "socks5-")
 	case "wireguard", "wireguard-always", "wireguard-auto":
 		return "wireguard", "", ""
 	case "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit":

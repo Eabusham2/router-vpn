@@ -156,7 +156,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
 		return nil, desktopExternalPolicyError
 	}
-	if (targetOS == "linux" || targetOS == "windows") && root.DynamicSOCKSUDP {
+	if root.DynamicSOCKSUDP {
 		username, _ := physical["username"].(string)
 		password, _ := physical["password"].(string)
 		if len(username) > 255 || len(password) > 255 {
@@ -182,7 +182,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		return nil, desktopExternalPolicyError
 	}
 	physical["detour"] = DesktopExternalPhysicalTag
-	if (targetOS == "linux" || targetOS == "windows") && root.DynamicSOCKSUDP {
+	if root.DynamicSOCKSUDP {
 		// The original native SOCKS options remain sealed and unchanged. This
 		// derived host creates a distinct native client/lower owner per call,
 		// so a negotiated UDP relay cannot become another call's permission.

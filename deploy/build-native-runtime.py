@@ -467,9 +467,10 @@ def verify_installed_darwin_host(source, bundle, target, env):
     receipt = json.loads(records[0], object_pairs_hook=unique)
     if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or receipt.get('target') != target
             or receipt.get('source_sha256') != digest() or receipt.get('bundle_sha256') != original
-            or receipt.get('cases') != ['shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto',
+            or receipt.get('cases') != ['shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto', 'socks5', 'socks5-always',
                                        'hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key', 'hysteria2-aes-xor-wrong-layer-key',
-                                       'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit']
+                                       'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit', 'socks5-wrong-password', 'socks5-auth-downgrade', 'socks5-relay-domain',
+                                       'socks5-control-eof', 'socks5-wrong-dns', 'socks5-wrong-trust', 'socks5-wrong-exit']
             or not re.fullmatch('[0-9a-f]{64}', receipt.get('sealed_bundle_sha256', ''))
             or set(receipt.get('images', {})) != {'controller', 'peer'}
             or any(not re.fullmatch('[0-9a-f]{64}', value) for value in receipt['images'].values())

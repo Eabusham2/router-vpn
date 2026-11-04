@@ -2,8 +2,8 @@
 """Execute retained ordinary external hosts on an explicitly disposable macOS CI host.
 
 The actual installed supervisor/controller consumes a complete private signed
-copy of the native bundle. Real independent SS2022, HTTP, HTTPS and Hysteria2
-peers exercise selected DNS, public-exit TLS, utun MTU, captured PF reference and
+copy of the native bundle. Real independent SS2022, HTTP, HTTPS, Hysteria2,
+WireGuard and authenticated SOCKS5 peers exercise selected DNS, public-exit TLS, utun MTU, captured PF reference and
 joined Disconnect. This gate temporarily installs only its fingerprint-bound
 peer root in the native system keychain and removes it after all clients join.
 It must never be selected implicitly by an ordinary developer bundle build.
@@ -23,13 +23,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FLAG = 'ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE'
-POSITIVE_CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto')
+POSITIVE_CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto', 'socks5', 'socks5-always')
 NEGATIVE_CASES = ('hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key',
-                  'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit')
+                  'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit', 'socks5-wrong-password', 'socks5-auth-downgrade', 'socks5-relay-domain', 'socks5-control-eof', 'socks5-wrong-dns', 'socks5-wrong-trust', 'socks5-wrong-exit')
 CASES = POSITIVE_CASES + NEGATIVE_CASES
 TEST = 'TestMacOSRetainedExternalNativeSealedProtocols'
 MTU_RECEIPT = 'actual sealed Darwin WireGuard MTU accepted: automatic changed utun, transferred bytes, original Cancel rollback joined, Retest committed and original runtime PF retained'
-POLICY_TESTS = ('TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries', 'TestDesktopMacOSWireGuardRetainsCapturedSourceAndGraphBoundary')
+POLICY_TESTS = ('TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries', 'TestDesktopMacOSWireGuardRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary')
 PEER_TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego,routervpn_darwin_external_host'
 
 
@@ -78,6 +78,8 @@ def success_receipt(case):
 
 
 def refusal_receipt(case):
+    if case.startswith('socks5-'):
+        return 'actual sealed Darwin SOCKS refused '+case+': actual peer reached, expected association or proof boundary rejected, original control UDP PF and utun retired, controller joined'
     if case.startswith('wireguard-'):
         return 'actual sealed Darwin WireGuard refused '+case+': encrypted peer reached, expected proof boundary rejected, native PF reference and utun retired, original controller joined'
     return 'actual sealed Darwin layer refused '+case+': encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined'

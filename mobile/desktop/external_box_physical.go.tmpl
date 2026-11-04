@@ -135,8 +135,8 @@ func routerVPNDesktopExternalPhysicalAvailable(policy *mobilemultihop.DesktopExt
 	}
 	if runtime.GOOS == "darwin" && policy != nil && policy.Validate() == nil {
 		meta := policy.Metadata()
-		return meta.TargetOS == "darwin" && !meta.SOCKSUDPAssociationRequired &&
-			(meta.Protocol == "http-connect" || meta.Protocol == "https-connect" || meta.Protocol == "shadowsocks" || meta.Protocol == "hysteria2" || meta.Protocol == "wireguard")
+		return meta.TargetOS == "darwin" && meta.SOCKSUDPAssociationRequired == (meta.Protocol == "socks5") &&
+			(meta.Protocol == "http-connect" || meta.Protocol == "https-connect" || meta.Protocol == "shadowsocks" || meta.Protocol == "hysteria2" || meta.Protocol == "socks5" || meta.Protocol == "wireguard")
 	}
 	if runtime.GOOS != "windows" || policy == nil || policy.Validate() != nil {
 		return false

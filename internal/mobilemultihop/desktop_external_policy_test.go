@@ -92,7 +92,7 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 								t.Fatal("Hysteria2 lost its one captured UDP destination")
 							}
 							delete(root, "detour")
-							if protocol == "socks5" && (target == "linux" || target == "windows") {
+							if protocol == "socks5" {
 								if root["type"] != DesktopExternalSOCKSType || root["session_id"] != meta.SessionID || root["source_sha256"] != meta.SourceSHA256 {
 									t.Fatal("SOCKS association lost its exact derived source owner")
 								}
@@ -444,7 +444,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 // The native SOCKS authentication frame has one-byte lengths. Reject before
 // deriving either admitted host; never truncate or change captured credentials.
 func TestDesktopExternalSOCKSAuthenticationBoundsPreserveExactOriginal(t *testing.T) {
-	for _, target := range []string{"linux", "windows"} {
+	for _, target := range []string{"linux", "windows", "darwin"} {
 		for _, field := range []string{"username", "password"} {
 			for _, size := range []int{255, 256} {
 				t.Run(target+"/"+field+"/"+strconv.Itoa(size), func(t *testing.T) {

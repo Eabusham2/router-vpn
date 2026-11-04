@@ -393,7 +393,7 @@ func (r *desktopExternalSOCKSRelay) receipts(t *testing.T) (tcp, udp mobiletor.D
 }
 
 func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegrationCA) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
 		t.Fatal("ordinary SOCKS5 association acceptance requires the captured native host")
 	}
 	t.Run("socks5/dns-cached-control-loss", desktopExternalSOCKSDNSCachedLoss)

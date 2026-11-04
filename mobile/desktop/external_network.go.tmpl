@@ -95,7 +95,7 @@ func (n *ExternalNetworkOwner) PrepareExternalPhysicalBroker(policy *mobilemulti
 		return errors.New("ordinary desktop physical preparation requires its original compiled authority")
 	}
 	meta := policy.Metadata()
-	if meta.TargetOS != runtime.GOOS || meta.SOCKSUDPAssociationRequired && !(meta.Protocol == "socks5" && (runtime.GOOS == "linux" || runtime.GOOS == "windows")) || !n.Matches(meta.SessionID, meta.SourceSHA256) {
+	if meta.TargetOS != runtime.GOOS || meta.SOCKSUDPAssociationRequired && !(meta.Protocol == "socks5" && (runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin")) || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		// A live SOCKS TCP socket alone does not establish permission for its
 		// negotiated UDP relay. Do not start a partially protected SOCKS graph.
 		return errors.New("ordinary desktop physical transport requires a proved native target and complete association capability")
