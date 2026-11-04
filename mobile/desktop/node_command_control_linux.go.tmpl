@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"syscall"
@@ -217,11 +218,11 @@ func (owner *routerVPNLinuxNodeControl) joinNative(ctx context.Context) error {
 		return nil
 	}
 	if err := owner.native.CloseContext(ctx); err != nil {
-		return err
+		return fmt.Errorf("Linux Node original Box close: %w", err)
 	}
 	if owner.preparation != nil {
 		if err := owner.preparation.CloseSource(ctx); err != nil {
-			return err
+			return fmt.Errorf("Linux Node original source close: %w", err)
 		}
 	}
 	if ctx.Err() != nil {
@@ -248,18 +249,18 @@ func (owner *routerVPNLinuxNodeControl) retire(ctx context.Context) error {
 		var err error
 		joined, returned, err = owner.preparation.JoinedSource(ctx)
 		if err != nil || returned != (joined != nil) {
-			return errors.Join(err, routerVPNExternalFailure)
+			return fmt.Errorf("Linux Node original joined-source receipt: %w", errors.Join(err, routerVPNExternalFailure))
 		}
 	}
 	if !owner.acknowledged {
 		if err := owner.control.Retire(ctx, joined); err != nil {
-			return err
+			return fmt.Errorf("Linux Node original retirement exchange: %w", err)
 		}
 		owner.acknowledged = true
 	}
 	if owner.preparation != nil {
 		if err := owner.preparation.CloseProtection(ctx); err != nil {
-			return err
+			return fmt.Errorf("Linux Node original retained protection close: %w", err)
 		}
 	}
 	owner.retired = true

@@ -65,16 +65,19 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 		// Retain only this original partial Box/source across cleanup retries.
 		// A failed Box close stays a failure; no replacement or named native
 		// object is discovered to manufacture a joined source receipt.
+		var lastJoinFailure error
 		for {
 			if err := control.joinNative(cleanup); err == nil {
 				break
 			} else if cleanup.Err() != nil {
-				failure = errors.Join(failure, err, cleanup.Err())
+				failure = errors.Join(failure, lastJoinFailure, err, cleanup.Err())
 				return
+			} else {
+				lastJoinFailure = err
 			}
 			select {
 			case <-cleanup.Done():
-				failure = errors.Join(failure, cleanup.Err())
+				failure = errors.Join(failure, lastJoinFailure, cleanup.Err())
 				return
 			case <-time.After(50 * time.Millisecond):
 			}

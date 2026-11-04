@@ -239,7 +239,7 @@ An initial command aimed at another package reported no tests and is excluded
 from evidence. This closes the witnessed fixture mismatch; exact-current-SHA
 native builds and full publication remain separate requirements.
 
-## Pinned D-Bus mutation fixture directory permissions
+## Pinned D-Bus mutation fixture directory permissions published at 85cffe93
 
 The exact `a424c763` Linux native workflow
 [41832516033](https://github.com/Eabusham2/router-vpn/actions/runs/41832516033)
@@ -271,6 +271,54 @@ parent. The full four-case projection suite also passes in 1.180s against the
 untouched pinned prepared core; the publication checkout repeats all four
 cases successfully in 1.171s. This evidence covers the fixture correction;
 fresh native workflow and complete package/release acceptance remain required.
+
+## Original Linux Node cleanup phase diagnostics (unit 86)
+
+At exact `85cffe93967f11840412e1f39cf692fa2c255925`, the generated Linux Node/TUN
+[run 41836649104](https://github.com/Eabusham2/router-vpn/actions/runs/41836649104)
+fails only the ARM64 `always` case in
+[job 126598491797](https://github.com/Eabusham2/router-vpn/actions/runs/41836649104/job/126598491797).
+The worker returns after 17.66s with `context deadline exceeded` and retains
+unacknowledged original retirement; the parent then refuses its lost child
+receipt. The other five ARM64 cases pass. The same-source
+[AMD64 job 126598492620](https://github.com/Eabusham2/router-vpn/actions/runs/41836649104/job/126598492620)
+passes all six cases, including `always` in 3.61s. Earlier ARM64 `always`
+results at [2f31dfda](https://github.com/Eabusham2/router-vpn/actions/runs/41828373994)
+and [0829ef23](https://github.com/Eabusham2/router-vpn/actions/runs/41829037896)
+pass in 3.57s and 3.66s respectively.
+These comparisons do not establish the cause of the newer native failure.
+
+The original cleanup loop discarded its last native join refusal when its
+existing context expired during the retry wait. This diagnostic change retains
+that original error on both exhaustion branches and labels five existing
+owned boundaries: Box close, source close, joined-source receipt, retirement
+exchange and retained protection close. Error wrapping preserves `errors.Is`.
+The same original objects, 15-second cleanup limit, 50ms retry cadence, teardown
+order, authenticated acknowledgement/EOF and stopped-publication conditions
+remain unchanged. This is a diagnostic improvement, not an ARM64 repair or
+successful native-retirement claim.
+
+All eighteen runner tests pass in the isolated cut in 3.294s. Seven new Go
+cases execute the exact shipping cleanup defer and join/retire methods under
+race instrumentation, with explicit modeled native callbacks and virtual time
+for the unchanged real context/timer operations. They require the original
+phase, prior error and deadline identities to survive exhaustion, forbid
+terminal exchange/stopped publication after unresolved join, and preserve
+successful retry/retirement order. Independently restoring either the original
+cleanup loop or the original unlabeled methods causes the intended phase/cause
+assertion to fail; both source files are restored and hash-checked afterward.
+These are executable diagnostic controls, not privileged namespace acceptance.
+
+Separately, exact `85cffe93` has a successful
+[requirements source job 126597325498](https://github.com/Eabusham2/router-vpn/actions/runs/41836649088/job/126597325498):
+`go test ./...` passes, including `cmd/client` in 464.961s and
+`internal/applexray` in 18.189s, followed by the source/orchestration audits.
+The [Multihop contract](https://github.com/Eabusham2/router-vpn/actions/runs/41836648907)
+also succeeds. The authoritative
+[release run 41836649190](https://github.com/Eabusham2/router-vpn/actions/runs/41836649190)
+is still queued at the publication check. The historical `745b3e41` prerelease
+remains the latest published release; no exact-current-SHA release completion
+is inferred from these bounded source results.
 
 ## macOS SS2022 entry to CONNECT final published at 46ac499c
 

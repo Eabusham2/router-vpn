@@ -363,5 +363,95 @@ func TestActualOriginalOwnerRecordsReachStrictParser(t *testing.T) {
                 self.assertEqual(G.receipt_diagnostic_output(replaced+'\n'), '')
 
 
+class LinuxChildOriginalCleanupDiagnostics(unittest.TestCase):
+    def test_exact_original_cleanup_loop_preserves_its_phase_and_error_identity(self):
+        # Execute the shipping methods and unchanged 15s/50ms defer body.
+        # Native callbacks are explicit models; this is not namespace evidence.
+        source = (ROOT/'mobile/desktop/node_command_control_linux.go.tmpl').read_text()
+        methods = []
+        for name in ('joinNative', 'retire'):
+            start = source.index('func (owner *routerVPNLinuxNodeControl) '+name+'(')
+            end = source.index('\nfunc ', start + 1)
+            methods.append(source[start:end])
+        run = (ROOT/'mobile/desktop/node_command_run_linux.go.tmpl').read_text()
+        start = run.index('\tdefer func() {\n\t\tstopped.Store(true)')
+        end = run.index('\n\tfor _, name := range', start)
+        cleanup = run[start:end]
+        fixture = r"""package main
+import (
+ "context"
+ "errors"
+ "fmt"
+ "strings"
+ "sync/atomic"
+ "testing"
+ "testing/synctest"
+ "time"
+ mobiletor "cleanup-phase/mobiletor"
+)
+var routerVPNExternalFailure = errors.New("original admission refused")
+var cause = errors.New("original native operation refused")
+var preceding = errors.New("original operation failed before Stop")
+type trace struct { fault string; ctx context.Context; started time.Time; native, source, receipt, exchange, protection, removed, published int }
+func (s *trace) called(ctx context.Context, phase string) error {
+ if s.ctx == nil { s.ctx=ctx } else if s.ctx!=ctx {panic("cleanup substituted original request")}
+ deadline,ok:=ctx.Deadline();if !ok||deadline.Sub(s.started)!=15*time.Second{panic("cleanup extended or replaced original bound")}
+ if s.fault==phase {return cause}
+ return nil
+}
+type phaseNative struct { s *trace }
+func(n *phaseNative)CloseContext(ctx context.Context)error{n.s.native++;if n.s.fault=="retry"&&n.s.native<3{return cause};return n.s.called(ctx,"Box close")}
+type phasePreparation struct{s *trace}
+func(p *phasePreparation)CloseSource(ctx context.Context)error{p.s.source++;return p.s.called(ctx,"source close")}
+func(p *phasePreparation)JoinedSource(ctx context.Context)(*mobiletor.DesktopLinuxSourceJoinRecord,bool,error){p.s.receipt++;return &mobiletor.DesktopLinuxSourceJoinRecord{},true,p.s.called(ctx,"joined-source receipt")}
+func(p *phasePreparation)CloseProtection(ctx context.Context)error{p.s.protection++;return p.s.called(ctx,"retained protection close")}
+type phaseControl struct{s *trace}
+func(c *phaseControl)Retire(ctx context.Context,_ *mobiletor.DesktopLinuxSourceJoinRecord)error{c.s.exchange++;return c.s.called(ctx,"retirement exchange")}
+type routerVPNLinuxNodeControl struct{native *phaseNative;preparation *phasePreparation;control *phaseControl;retiring atomic.Bool;closed,joined,retired,acknowledged bool}
+type routerVPNExternalStop struct {Schema int;Session,SourceSHA256 string}
+type phaseFiles struct{s *trace}
+func(f *phaseFiles)remove(name string)error{if name!="node-ready.json"{panic("different ready owner")};f.s.removed++;return nil}
+func(f *phaseFiles)publish(name string,_ any)error{if name!="stopped.json"{panic("different stopped owner")};f.s.published++;return nil}
+"""
+        fixture += '\n'.join(methods)
+        fixture += '\nfunc originalCleanup(control *routerVPNLinuxNodeControl, files *phaseFiles, incoming error)(failure error){\n failure=incoming\n var stopped atomic.Bool\n cancel:=func(){}\n session,config:="original-session","original-source"\n' + cleanup + '\n return failure\n}\n'
+        fixture += r"""
+func TestOriginalCleanupPhase(t *testing.T){
+ for _,phase:=range []string{"Box close","source close","joined-source receipt","retirement exchange","retained protection close","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
+  s:=&trace{fault:phase,started:time.Now()}
+  owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},preparation:&phasePreparation{s},control:&phaseControl{s}}
+  failure:=originalCleanup(owner,&phaseFiles{s},preceding)
+  if !errors.Is(failure,preceding){t.Fatal("prior failure identity was discarded",failure)}
+  if s.removed!=1||owner.closed{t.Fatal("diagnostics changed original ready/descriptor ownership")}
+  if phase=="retry"||phase=="current"{
+   if errors.Is(failure,cause)||!owner.joined||!owner.acknowledged||!owner.retired||s.published!=1{t.Fatal("successful original cleanup changed",failure,s)}
+   want:=1;if phase=="retry"{want=3};if s.native!=want||s.source!=1||s.receipt!=1||s.exchange!=1||s.protection!=1{t.Fatal("original cleanup order/count changed",s)}
+   if phase=="retry"&&time.Since(s.started)!=100*time.Millisecond{t.Fatal("existing retry cadence changed")}
+   return
+  }
+  if !errors.Is(failure,cause)||!strings.Contains(failure.Error(),fmt.Sprintf("Linux Node original %s:",phase)){t.Fatal("original cleanup phase/cause was discarded",failure)}
+  if s.published!=0||owner.retired{t.Fatal("unresolved native cleanup became stopped")}
+  if phase=="Box close"||phase=="source close"{
+   if !errors.Is(failure,context.DeadlineExceeded)||time.Since(s.started)!=15*time.Second{t.Fatal("exhaustion lost original Stop deadline",failure,time.Since(s.started))}
+   if s.exchange!=0||s.protection!=0||owner.joined||owner.acknowledged{t.Fatal("failed original join entered terminal exchange")}
+  }
+ })})}
+}
+"""
+        with tempfile.TemporaryDirectory(prefix='routervpn-original-cleanup-phase-') as directory:
+            root = Path(directory)
+            (root/'go.mod').write_text('module cleanup-phase\ngo 1.26.3\n')
+            (root/'mobiletor').mkdir()
+            (root/'mobiletor/types.go').write_text('package mobiletor\ntype DesktopLinuxSourceJoinRecord struct{}\n')
+            (root/'phase_test.go').write_text(fixture)
+            result = subprocess.run(['go', 'test', '-race', '-count=1', '-timeout=30s', '-v', '.'],
+                                    cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            for phase in ('Box_close', 'source_close', 'joined-source_receipt', 'retirement_exchange',
+                          'retained_protection_close', 'retry', 'current'):
+                self.assertEqual(result.stdout.count('--- PASS: TestOriginalCleanupPhase/'+phase+' '), 1, result.stdout)
+            self.assertNotIn('--- SKIP:', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
