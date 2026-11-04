@@ -596,7 +596,8 @@ def prepare(vendor, go='go', *, env=None):
     # no embedded Tor implementation or C package is installed here.
     for package in PURE:
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
-            if path.name.endswith('_test.go') and not (package == 'mobiletor' and path.name in (
+            if path.name.endswith('_test.go') and not (package == 'mobiletor' and (
+                    path.name.startswith('desktop_standard_') or path.name in (
                     'desktop_socket_broker_test.go', 'desktop_socket_socks_test.go', 'desktop_socket_account_readback_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
                     'desktop_socket_tcp_completion_test.go',
                     'desktop_socket_grant_admission_test.go',
@@ -632,7 +633,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_pf_filter_native_test.go', 'desktop_socket_darwin_filter_test.go',
                     'desktop_socket_pf_baseline_test.go', 'desktop_socket_pf_baseline_transition_test.go',
                     'desktop_socket_darwin_baseline_test.go', 'desktop_socket_pf_reference_test.go',
-                    'desktop_socket_darwin_reference_test.go')):
+                    'desktop_socket_darwin_reference_test.go'))):
                 continue
             raw = relocated_shared_source(path.read_bytes())
             write(vendor, 'routervpn/'+package+'/'+path.name, raw)

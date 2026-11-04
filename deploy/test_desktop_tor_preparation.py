@@ -147,9 +147,8 @@ class DesktopPTPreparation(unittest.TestCase):
             # The standard-exit creator shares the mandatory native inventory
             # with the socket owner. Both native witnesses must be copied by
             # this actual shipping preparation, not merely present in our tree.
-            standard = ('desktop_standard_linux_protection.go',
-                        'desktop_standard_linux_protection_test.go',
-                        'desktop_standard_linux_protection_native_test.go')
+            standard = tuple(path.name for path in sorted((ROOT/'internal/mobiletor').glob('desktop_standard_*.go')))
+            self.assertIn('desktop_standard_linux_absence_test.go', standard)
             spec = importlib.util.spec_from_file_location('prepared_standard_uid_gate', ROOT/'deploy/test_desktop_socket_uid.py')
             uid_gate = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(uid_gate)
