@@ -5,6 +5,10 @@ import re
 PREFIX = 'TestLinuxStandardService'
 CORE = {
     'OriginalPeerAndForeignPIDFD': (),
+    'NetworkShippingDNSRepeatsRealOriginalExchange': (),
+    'NetworkProofArmsOnceAndLatchesABA': ('link', 'address', 'route', 'rule', 'overflow', 'reader-failure'),
+    'NetworkInitializationAndProofFailuresStayRetained': ('initialization', 'missing-reader', 'second-proof', 'late-event', 'cancelled'),
+    'NetworkRetirementPreservesUnjoinedAndReplacement': (),
     'RetainedPeerRejectsSameImageRoleReexec': (),
     'RetainsActualEngineAndAlwaysAcrossController': (),
     'StopRejectsDelayedStart': (),
@@ -45,13 +49,13 @@ CORE = {
     'MonitorRejectsUnprovedOrRepeatedActivation': ('dns', 'joined', 'unattempted', 'wrong-operation', 'foreign-runtime', 'foreign-tracker'),
     'MonitorShippingActivationOrderAndRefusal': ('active', 'monitor-refused', 'persistence-failed'),
 }
-NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-failure', 'always-off', 'always')}
+NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
 GROUPS = {'core': CORE, 'native': NATIVE}
 SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'peer_linux.go', 'protocol_linux.go', 'runtime_linux.go', 'client_linux.go', 'dns_linux.go',
     'boot_linux.go', 'other.go', 'upgrade_linux.go', 'peer_native_test.go', 'runtime_native_test.go',
     'channel_native_test.go', 'client_test.go', 'boot_test.go', 'upgrade_native_test.go', 'namespace_test.go', 'route_native_test.go',
-    'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go')}
+    'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go')}
 SOURCE.update({'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
 RUNNERS = ('linux_standard_service_gate.py', 'test_linux_standard_service_runner.py')
 

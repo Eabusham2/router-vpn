@@ -17,6 +17,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "internal/desktopnetwork"
 PARENTS = (
+    "TestNetworkRetainedLifetimeKeepsOriginalOperationBudget",
+    "TestNetworkInitializationCannotAdoptCancelledCaller",
     "TestNetworkCohortOwnedTransitionsAndTransient",
     "TestNetworkCohortPhysicalAndUnclaimedChangesStayInvalid",
     "TestNetworkCohortOriginalAndUnregisterOwnership",
@@ -126,6 +128,9 @@ def main():
                     "./internal/desktopnetwork"], env=env)
     for parent in PARENTS:
         require_pass(base.stdout, parent)
+    if sys.platform == "linux":
+        for parent in ("TestLinuxNetworkDumpCancellationJoinsOriginalSocket", "TestLinuxNetworkDumpStrictOriginalDatagrams"):
+            require_pass(base.stdout, parent)
     if sys.platform == "darwin":
         for parent in ("TestDarwinNetworkMessageAlignmentAndOwnership",
                        "TestDarwinNetworkMessageSocketAddressBounds",

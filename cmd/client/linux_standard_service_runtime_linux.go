@@ -29,6 +29,7 @@ type linuxStandardServiceSession struct {
 	joined         bool
 	cleanupPending bool
 	cleanupError   string
+	network        *linuxStandardServiceNetwork
 }
 
 // The app here is the service's actual process/state owner. Its commands are
@@ -54,6 +55,7 @@ type linuxStandardService struct {
 	protectionView    *linuxStandardServiceProtection
 	protectionAbsence func(context.Context) error
 	tunAbsent         func() error
+	openNetwork       func(context.Context, context.Context) (linuxStandardNetworkObserver, error) // explicit native-observer fixture boundary; nil uses the kernel
 }
 
 func newLinuxStandardService(root string, image, namespace os.FileInfo) *linuxStandardService {
@@ -131,6 +133,9 @@ func (s *linuxStandardService) retire(ctx context.Context, release bool) (failur
 	}()
 	finish := s.operation(ctx)
 	defer finish()
+	if err := s.closeNetwork(ctx, s.session); err != nil {
+		return err
+	}
 	if s.session.joined {
 		// A previous hold-protection Stop joined the engine but can still own
 		// On-connect policy. A later ordinary Stop must use that same retained
@@ -236,7 +241,10 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 		}
 		finish := s.operation(ctx)
 		defer finish()
-		return s.session.owner.Current(ctx)
+		if err := s.session.owner.Current(ctx); err != nil {
+			return err
+		}
+		return s.networkCurrent(ctx, s.session, false)
 	}
 	if s.bootFailure != nil {
 		if err := s.repairBoot(ctx); err != nil {
@@ -373,7 +381,10 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 		}
 		finish := s.operation(ctx)
 		defer finish()
-		return s.session.owner.Current(ctx)
+		if err := s.session.owner.Current(ctx); err != nil {
+			return err
+		}
+		return s.networkCurrent(ctx, s.session, false)
 	case "observe":
 		if request.Release || s.session.joined || s.session.cleanupPending {
 			return errors.New("standard service original runtime is retired or needs cleanup")
@@ -381,7 +392,13 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 		if err := s.loadProfiles(); err != nil {
 			return err
 		}
-		return s.session.owner.legacyDNSCurrent(ctx)
+		if err := s.networkCurrent(ctx, s.session, true); err != nil {
+			return err
+		}
+		if err := s.session.owner.legacyDNSCurrent(ctx); err != nil {
+			return err
+		}
+		return s.networkCurrent(ctx, s.session, true)
 	case "prove-dns", "dns-current":
 		if request.Release || s.session.joined || s.session.cleanupPending {
 			return errors.New("standard service DNS has no original live engine")
@@ -392,9 +409,15 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 			return err
 		}
 		if request.Action == "prove-dns" {
-			return s.session.owner.ProveSelectedDNS(ctx)
+			return s.proveDNSWithNetwork(ctx)
 		}
-		return linuxStandardServiceDNSReceiptCurrent(ctx, s.session.owner)
+		if err := s.networkCurrent(ctx, s.session, true); err != nil {
+			return err
+		}
+		if err := linuxStandardServiceDNSReceiptCurrent(ctx, s.session.owner); err != nil {
+			return err
+		}
+		return s.networkCurrent(ctx, s.session, true)
 	default:
 		return errors.New("standard service action is unavailable")
 	}
@@ -570,6 +593,9 @@ func (s *linuxStandardService) watch(ctx context.Context) {
 				}
 				if err == nil {
 					err = s.session.owner.legacyDNSCurrent(observation)
+				}
+				if err == nil {
+					err = s.networkCurrent(observation, s.session, false)
 				}
 				runtime.UnlockOSThread()
 				cancel()

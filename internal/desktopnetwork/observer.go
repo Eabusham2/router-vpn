@@ -81,17 +81,24 @@ type Tracker struct {
 }
 
 func Open(ctx context.Context, original *DesktopNetworkReceipt) (*Tracker, error) {
-	if ctx == nil || ctx.Err() != nil {
+	return OpenWithLifetime(ctx, ctx, original)
+}
+
+// OpenWithLifetime installs and drains the original observer within the
+// initialization caller's deadline, while retaining a separate owned lifetime.
+// It never refreshes an existing tracker or its physical baseline.
+func OpenWithLifetime(initialization, lifetime context.Context, original *DesktopNetworkReceipt) (*Tracker, error) {
+	if initialization == nil || initialization.Err() != nil || lifetime == nil || lifetime.Err() != nil {
 		return nil, errors.New("network observation requires a live bounded caller")
 	}
 	if original != nil && (original.Validate() != nil || original.TargetOS != runtime.GOOS) {
 		return nil, errors.New("network observation has no exact original native receipt")
 	}
-	t := &Tracker{ctx: ctx, initializing: true, current: cloneReceipt(original)}
+	t := &Tracker{ctx: lifetime, initializing: true, current: cloneReceipt(original)}
 	n, err := openNativeObserver(t.observe)
 	t.native = n
 	if err == nil {
-		err = t.initialize(ctx)
+		err = t.initialize(initialization)
 	}
 	if err != nil {
 		t.mu.Lock()
@@ -135,6 +142,9 @@ func (t *Tracker) initialize(ctx context.Context) error {
 	defer t.mu.Unlock()
 	if err != nil {
 		return err
+	}
+	if ctx.Err() != nil || t.ctx.Err() != nil {
+		return errors.New("network initialization lost its original caller or retained lifetime")
 	}
 	if t.failure != nil || len(t.events) != 0 {
 		return errors.Join(errors.New("network changed while the observer was being installed"), t.failure)
@@ -241,8 +251,17 @@ func (t *Tracker) Identity() string {
 // Current never calls the application or its selection lock. This permits the
 // final durable selection guard to use it while holding the captured app state.
 func (t *Tracker) Current() (result error) {
-	defer t.reportFailure(&result)
 	if t == nil {
+		return errors.New("network observer is missing")
+	}
+	return t.CurrentContext(t.ctx)
+}
+
+// CurrentContext drains the same retained event stream using this operation's
+// budget. Cancellation/read failure cannot produce a current observation.
+func (t *Tracker) CurrentContext(ctx context.Context) (result error) {
+	defer t.reportFailure(&result)
+	if t == nil || ctx == nil || ctx.Err() != nil {
 		return errors.New("network observer is missing")
 	}
 	t.mu.Lock()
@@ -256,9 +275,9 @@ func (t *Tracker) Current() (result error) {
 	}
 	native, current := t.native, cloneReceipt(t.current)
 	t.mu.Unlock()
-	snapshot, err := native.Snapshot(t.ctx)
+	snapshot, err := native.Snapshot(ctx)
 	if err == nil {
-		err = native.Barrier(t.ctx)
+		err = native.Barrier(ctx)
 	}
 	_, key, projection := project(snapshot, current)
 	t.mu.Lock()
@@ -269,7 +288,7 @@ func (t *Tracker) Current() (result error) {
 	if projection != nil {
 		return t.failLocked(projection)
 	}
-	if t.closed || t.closing || t.transition || t.ctx.Err() != nil || receiptKey(t.current) != receiptKey(current) || key != t.baseline {
+	if t.closed || t.closing || t.transition || t.ctx.Err() != nil || ctx.Err() != nil || receiptKey(t.current) != receiptKey(current) || key != t.baseline {
 		return t.failLocked(errors.New("network snapshot changed its frozen physical cohort"))
 	}
 	return t.failure

@@ -74,19 +74,26 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 			linuxStandardServicePreviousBootState(t, linuxOwnedControllerRoot, profile.ID, profile.Endpoint)
 			if policy == "on-connect" {
 				legacyStopBoundaryFiles(t, linuxOwnedControllerRoot)
+				// Keep the actual original-child DNS listener and uncached
+				// exchange in this installed lifecycle case. Its downstream
+				// resolver remains the explicit existing router fixture.
+				engine := strings.Replace(legacyDNSEngineFixture,
+					"signal.signal(signal.SIGINT,lambda *_:sys.exit(0))\nsignal.signal(signal.SIGTERM,lambda *_:sys.exit(0))",
+					"def done(*_):\n (root/'engine-stopped').write_text('closed');sys.exit(0)\nsignal.signal(signal.SIGINT,done)\nsignal.signal(signal.SIGTERM,done)", 1)
 				if scenario == "on-connect-failure" {
 					// Only this private generated engine cooperatively exits. The
 					// service still creates, observes and joins its actual child.
-					enginePath := filepath.Join(linuxOwnedControllerRoot, "bin", "sing-box")
-					engine, err := os.ReadFile(enginePath)
-					if err != nil || bytes.Count(engine, []byte("while True:time.sleep(.02)")) != 1 {
-						t.Fatal("original generated engine loop changed", err)
+					loop := "\nwhile True:\n if (root/'close-listener').exists():"
+					if strings.Count(engine, loop) != 1 {
+						t.Fatal("original generated DNS engine loop changed")
 					}
-					exitLoop := "while True:\n if (root/'run/standard-service-fixture-exit').exists():done()\n time.sleep(.02)"
-					engine = bytes.Replace(engine, []byte("while True:time.sleep(.02)"), []byte(exitLoop), 1)
-					if err = os.WriteFile(enginePath, engine, 0700); err != nil {
-						t.Fatal(err)
-					}
+					engine = strings.Replace(engine, loop, "\nwhile True:\n if (root/'run/standard-service-fixture-exit').exists():done()\n if (root/'close-listener').exists():", 1)
+				}
+				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "bin", "sing-box"), []byte(engine), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "dns-mode"), []byte("valid"), 0600); err != nil {
+					t.Fatal(err)
 				}
 				catalog, _ := json.Marshal(legacyStopShippingCatalog(t))
 				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "modes.json"), catalog, 0600); err != nil {

@@ -86,6 +86,9 @@ func (o *linuxObserver) run() {
 			return
 		}
 		messages, parse := syscall.ParseNetlinkMessage(buffer[:size])
+		if parse == nil {
+			parse = linuxNetworkFraming(buffer[:size], messages)
+		}
 		if parse != nil {
 			o.emit(Event{}, parse)
 			return
@@ -159,9 +162,10 @@ func (o *linuxObserver) Barrier(ctx context.Context) error {
 	raw, err := o.file.SyscallConn()
 	if err == nil {
 		var sendErr error
-		err = raw.Write(func(fd uintptr) bool {
-			sendErr = syscall.Sendto(int(fd), request, 0, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK})
-			return sendErr != syscall.EAGAIN && sendErr != syscall.EWOULDBLOCK
+		// The subscribed socket is nonblocking. A full send queue fails this
+		// observation instead of waiting outside the original ACK deadline.
+		err = raw.Control(func(fd uintptr) {
+			sendErr = syscall.Sendto(int(fd), request, syscall.MSG_DONTWAIT, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK})
 		})
 		if err == nil {
 			err = sendErr
@@ -313,8 +317,8 @@ func parseLinuxEvent(message syscall.NetlinkMessage) (Event, error) {
 	return e, nil
 }
 
-func linuxDump(request int, response uint16) ([]syscall.NetlinkMessage, error) {
-	raw, err := syscall.NetlinkRIB(request, syscall.AF_UNSPEC)
+func linuxDump(ctx context.Context, request int, response uint16) ([]syscall.NetlinkMessage, error) {
+	raw, err := linuxDumpRequest(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +336,9 @@ func linuxDump(request int, response uint16) ([]syscall.NetlinkMessage, error) {
 			return nil, errors.New("Linux network dump is interrupted or has trailing records")
 		}
 		if message.Header.Type == syscall.NLMSG_DONE {
+			if len(message.Data) != 0 && (len(message.Data) < 4 || int32(binary.LittleEndian.Uint32(message.Data)) != 0) {
+				return nil, errors.New("Linux network dump ended with an incomplete native result")
+			}
 			done = true
 			continue
 		}
@@ -356,7 +363,7 @@ func (o *linuxObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 		if ctx == nil || ctx.Err() != nil {
 			return snapshot, errors.New("Linux network snapshot lost its caller")
 		}
-		rows, err := linuxDump(kind.request, kind.response)
+		rows, err := linuxDump(ctx, kind.request, kind.response)
 		if err != nil {
 			return snapshot, err
 		}

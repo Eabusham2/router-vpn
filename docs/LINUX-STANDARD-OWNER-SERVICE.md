@@ -38,6 +38,23 @@ Selected-DNS proof executes in the service against the actual engine's
 original listener and captured configuration. Controller reconnect does not
 refresh the original physical-network snapshot or substitute ambient DNS.
 
+After the first real selected-DNS exchange establishes original child/listener
+readiness, the service arms one native event tracker in its captured namespace.
+That readiness result is not returned as activation success. A second uncached
+exchange must pass under the same tracker, and later public-proof adoption,
+DNS observations and runtime monitoring check that same retained epoch. Every
+link, address, route or rule notification invalidates the epoch permanently,
+including an away-and-back change whose final topology is identical. Startup
+loss, truncated/overflowed notifications, read errors and cancelled observation
+barriers cannot become valid results or reopen the observer.
+
+The tracker includes the current TUN in its observed inventory and grants no
+interface-name or synthetic-receipt exemptions. Its lifetime is independent of
+the request that armed it. Original Stop closes and joins that exact observer
+before engine teardown; a failed native close retains the original engine and
+cleanup retry. This post-readiness boundary does not prove event continuity
+between initial preparation and the first readiness exchange.
+
 ## Explicit Off and owner composition
 
 The protection UI observes both the retained Node parent and this service.
@@ -108,9 +125,13 @@ unit's refusals:
   handoff. This unit completes the proved-idle/Off upgrade path.
 - Same-boot service crash continuation for orphaned protection. A replacement
   service cannot recover the lost original creator from metadata.
-- A monotonic native physical-network event epoch covering away-and-back
-  changes. The retained snapshot detects identity changes but is not an ABA
-  event receipt.
+- Native event continuity from initial preparation through engine startup and
+  owned MTU/interface transitions. The post-readiness epoch now rejects ABA,
+  but cannot exempt startup/teardown effects without an original engine-issued
+  routing receipt. The stock executable does not emit the existing generated
+  native TUN ledger; adding that authenticated original-child receipt to its
+  pinned build is the next required boundary. A readback snapshot or matching
+  TUN name must not manufacture it.
 
 These boundaries remain truthful errors or retained pending states; they must
 not be represented as successful Off, connected readiness or completed handoff.

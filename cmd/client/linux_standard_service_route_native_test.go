@@ -18,8 +18,9 @@ import (
 )
 
 // The namespace caller installed a real executable fixture for engine
-// lifetime. Only Internet/DNS proof is outside this lifecycle case; the public
-// route, production remote constructor/RPC and native owner/Stop all execute.
+// lifetime. Internet proof and the DNS router are explicit boundary models;
+// the original-child DNS exchange, retained native network epoch, public route,
+// production remote constructor/RPC and native owner/Stop all execute.
 func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, action string) error {
 	root := linuxOwnedControllerRoot
 	a := &app{localController: owned, cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "routers.json"), ScriptsDir: filepath.Join(root, "modes"), StateFile: filepath.Join(root, "state.json")}}
@@ -74,14 +75,11 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	a.platformStandardExitConnectOwned(response, httptest.NewRequest(http.MethodPost, "/api/standard-exit/connect", bytes.NewReader(request)), platformStandardExitRuntime{
 		prepareLegacy: prepareLegacyStandardExitOwner,
 		prove:         func(*app, string) error { return nil },
-		proveDNS: func(_ context.Context, captured legacyStandardExitLaunch) error {
-			// This case proves process/protection/RPC lifecycle only. The
-			// separate pinned-core native gate exercises real selected DNS.
-			owner := captured.(*linuxStandardServiceLaunch)
-			owner.mu.Lock()
-			owner.dnsProved = true
-			owner.mu.Unlock()
-			return nil
+		proveDNS: func(ctx context.Context, captured legacyStandardExitLaunch) error {
+			// Exercise the shipping service proof and observer installation.
+			// Only the fixture child's downstream DNS router is substituted;
+			// the separate pinned-core gate exercises actual resolver routing.
+			return captured.(*linuxStandardServiceLaunch).ProveSelectedDNS(ctx)
 		},
 		current: func(owner legacyStandardExitLaunch, ctx context.Context) error { return owner.Current(ctx) },
 	})
