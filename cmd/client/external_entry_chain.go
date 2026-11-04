@@ -82,6 +82,10 @@ func prepareExternalEntryStandardExit(root string, control, entryProfile common.
 }
 
 func nativeExternalEntryStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit) (*exec.Cmd, error) {
+	return nativeExternalEntryStandardExitCommandWithBootstrap(a, control, entry, exit, standardExitSystemBootstrap())
+}
+
+func nativeExternalEntryStandardExitCommandWithBootstrap(a *app, control, entry common.RouterProfile, exit standardExit, bootstrap standardExitBootstrap) (*exec.Cmd, error) {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	entryExit, err := standardExitFromExternalProfile(entry)
 	if err != nil {
@@ -101,14 +105,11 @@ func nativeExternalEntryStandardExitCommand(a *app, control, entry common.Router
 			return nil, err
 		}
 	}
-	runtimeDir, tunAlias, err := prepareExternalEntryStandardExit(root, control, entry, exit)
+	prepared, err := prepareCapturedStandardExit(a.connectionOperationContextOrBackground(), root, control, entry, exit, false, bootstrap)
 	if err != nil {
 		return nil, err
 	}
-	endpoint := entry.Endpoint
-	if endpoint == "" {
-		endpoint = entryExit.Server
-	}
+	runtimeDir, tunAlias, endpoint := prepared.directory, prepared.alias, prepared.endpoint
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":

@@ -295,6 +295,10 @@ func writeStandardExitRuntime(root string, cfg map[string]any) (string, string, 
 }
 
 func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
+	return nativeStandardExitCommandWithBootstrap(a, control, entry, exit, direct, standardExitSystemBootstrap())
+}
+
+func nativeStandardExitCommandWithBootstrap(a *app, control, entry common.RouterProfile, exit standardExit, direct bool, bootstrap standardExitBootstrap) (*exec.Cmd, error) {
 	if desktopTorProtocol(exit.Protocol) {
 		// The fixed-exit store excludes Tor. External Connect and Speed Lab
 		// dispatch it to the owned adapter with dynamic Tor proof before reaching
@@ -312,19 +316,16 @@ func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit
 			return nil, err
 		}
 	}
-	var runtimeDir, tunAlias, endpoint, runtimeProfileID string
-	var err error
-	if direct {
-		runtimeDir, tunAlias, err = prepareDirectStandardExit(root, control, exit)
-		endpoint = exit.Server
-		runtimeProfileID = control.ID
-	} else {
-		runtimeDir, tunAlias, err = prepareNativeStandardExit(root, control, entry, exit)
-		endpoint = entry.Endpoint
-		runtimeProfileID = entry.ID
-	}
+	prepared, err := prepareCapturedStandardExit(a.connectionOperationContextOrBackground(), root, control, entry, exit, direct, bootstrap)
 	if err != nil {
 		return nil, err
+	}
+	runtimeDir, tunAlias, endpoint := prepared.directory, prepared.alias, prepared.endpoint
+	var runtimeProfileID string
+	if direct {
+		runtimeProfileID = control.ID
+	} else {
+		runtimeProfileID = entry.ID
 	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
