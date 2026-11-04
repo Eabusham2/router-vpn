@@ -176,22 +176,24 @@ func desktopDarwinAccountRecordContext(ctx context.Context, account string, uid 
 		return nil, errors.New("Darwin physical account identity is invalid")
 	}
 	args := append([]string{"/Local/Default", "-read", "/Users/" + account}, desktopDarwinAccountAttributes...)
-	raw, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, args...)
+	var values map[string]string
+	err := desktopDarwinIdentityReadback(ctx,
+		func(captured context.Context) error {
+			raw, err := desktopDarwinCommand(captured, "/usr/bin/dscl", nil, args...)
+			if err != nil {
+				return err
+			}
+			values, err = desktopDarwinParseAccountRecord(raw, account, uid)
+			return err
+		},
+		func(captured context.Context) error {
+			search, err := desktopDarwinCommand(captured, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", "UniqueID", strconv.FormatUint(uint64(uid), 10))
+			if err != nil {
+				return errors.Join(err, errors.New("Darwin physical UID local search did not complete"))
+			}
+			return desktopDarwinUIDSearchProof(search, account, uid, desktopDarwinUIDAccount(uid, account))
+		})
 	if err != nil {
-		return nil, err
-	}
-	values, err := desktopDarwinParseAccountRecord(raw, account, uid)
-	if err != nil {
-		return nil, err
-	}
-	search, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", "UniqueID", strconv.FormatUint(uint64(uid), 10))
-	if err != nil {
-		return nil, errors.Join(ctx.Err(), errors.New("Darwin physical UID local search did not complete"))
-	}
-	if err := desktopDarwinUIDSearchProof(search, account, uid, desktopDarwinUIDAccount(uid, account)); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return values, nil
@@ -298,6 +300,20 @@ func desktopDarwinAllocateAccount(c DesktopSocketCapture) (string, uint32, error
 }
 
 func desktopDarwinRetireAccount(account string, uid uint32) error {
+	// Standalone recovery keeps the former two-plus-two-second upper bound.
+	// Guardian finish supplies its stricter original cleanup deadline below.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	return desktopDarwinRetireAccountContext(ctx, account, uid)
+}
+
+func desktopDarwinRetireAccountContext(ctx context.Context, account string, uid uint32) error {
+	if ctx == nil {
+		return errors.New("Darwin identity retirement lacks its original cleanup context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	lock, err := desktopDarwinIdentityLock()
 	if err != nil {
 		return err
@@ -307,8 +323,18 @@ func desktopDarwinRetireAccount(account string, uid uint32) error {
 	if err != nil {
 		return err
 	}
-	verifyErr := desktopDarwinVerifyAccount(account, uid)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Verification, deletion, fresh-process observation and final ownership
+	// revalidation all spend the same original operation budget. No later
+	// phase starts a new background deadline after earlier work has elapsed.
+	verification, stopVerification := context.WithTimeout(ctx, 2*time.Second)
+	verifyErr := desktopDarwinVerifyAccountContext(verification, account, uid)
+	stopVerification()
+	if err := ctx.Err(); err != nil {
+		return errors.Join(verifyErr, err)
+	}
+	// The whole destructive/readback phase retains its original two-second
+	// cap as well as the caller's remaining cleanup budget.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if verifyErr != nil {
 		// A prior attempt may already have deleted the exact account while
@@ -351,14 +377,17 @@ func desktopDarwinRetireAccount(account string, uid uint32) error {
 }
 
 func desktopDarwinLocalIdentityAbsent(ctx context.Context, account string, uid uint32) error {
-	for _, query := range [][2]string{{"UniqueID", strconv.FormatUint(uint64(uid), 10)}, {"RecordName", account}} {
-		raw, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", query[0], query[1])
-		if err != nil {
-			return errors.New("Darwin physical identity retirement local absence query did not complete")
-		}
-		if len(raw) > 4096 || len(bytes.TrimSpace(raw)) != 0 {
-			return errors.New("Darwin physical identity retirement retains a local name or UID owner")
+	query := func(attribute, value string) func(context.Context) error {
+		return func(captured context.Context) error {
+			raw, err := desktopDarwinCommand(captured, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", attribute, value)
+			if err != nil {
+				return errors.Join(err, errors.New("Darwin physical identity retirement local absence query did not complete"))
+			}
+			if len(raw) > 4096 || len(bytes.TrimSpace(raw)) != 0 {
+				return errors.New("Darwin physical identity retirement retains a local name or UID owner")
+			}
+			return nil
 		}
 	}
-	return nil
+	return desktopDarwinIdentityReadback(ctx, query("UniqueID", strconv.FormatUint(uint64(uid), 10)), query("RecordName", account))
 }

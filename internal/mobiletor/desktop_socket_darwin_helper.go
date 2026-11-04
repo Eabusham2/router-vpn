@@ -519,7 +519,7 @@ func (g *desktopDarwinGuardian) cleanup(release bool) error {
 	}
 	clear(g.socks)
 	if release && g.account != "" {
-		if err := desktopDarwinRetireAccount(g.account, g.uid); err != nil {
+		if err := desktopDarwinRetireAccountContext(ctx, g.account, g.uid); err != nil {
 			return err
 		}
 		g.account = ""

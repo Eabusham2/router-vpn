@@ -1,6 +1,7 @@
 package mobiletor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -93,4 +94,10 @@ func desktopDarwinAccountAttributeFailure(values map[string]string, account stri
 			label, present, present && value == pair[1], len(value), native, standard))
 	}
 	return fmt.Errorf("Darwin physical account lost its exclusive disabled identity: fields=%d; %s", len(values), strings.Join(parts, "; "))
+}
+
+// Independent local-directory reads share the caller's original deadline and
+// existing native-command budget. Both workers join before a proof is returned.
+func desktopDarwinIdentityReadback(ctx context.Context, first, second func(context.Context) error) error {
+	return desktopPFReadback(ctx, first, second)
 }
