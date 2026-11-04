@@ -5,16 +5,94 @@ Shipping Swift is compiled with only the OS network/PacketTunnel/storage
 boundaries doubled. This is not a claim of physical-device routed traffic.
 """
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
+import os
+import signal
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 spec = importlib.util.spec_from_file_location('speed_path_fixture', ROOT / 'deploy/test_ios_speed_lab_external_paths.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
+
+
+class OwnedCandidateCompiler:
+    """One original compiler child, joined before the fixture scope exits."""
+
+    def __init__(self, deadline):
+        self.deadline = deadline
+        self.lock = threading.Lock()
+        self.process = None
+        self.cancelled = False
+        self.wake = threading.Event()
+
+    def terminate_original_group(self, process):
+        # The original child has not been reaped: its creation-time PID still
+        # pins the session/group established by start_new_session. Never poll
+        # or rediscover a process number before signalling this retained group.
+        if self.process is process and process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def run(self, command, *, check, timeout):
+        assert check
+        with self.lock:
+            if self.cancelled:
+                raise RuntimeError('Candidate compilation was cancelled')
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            if os.name != 'posix' or not hasattr(os, 'waitid') or not hasattr(os, 'WNOWAIT'):
+                raise RuntimeError('Candidate compiler requires original unreaped POSIX child ownership')
+            if self.process is not None:
+                raise RuntimeError('Candidate compiler already owns an unjoined child')
+            process = subprocess.Popen(command, start_new_session=True)
+            self.process = process
+        deadline = min(self.deadline, time.monotonic() + timeout)
+        try:
+            while True:
+                # WNOWAIT observes completion without releasing the original
+                # child identity before its frontend/linker group is drained.
+                exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                if exited is not None:
+                    if exited.si_pid != process.pid:
+                        raise RuntimeError('Candidate compiler observed another child')
+                    # Darwin can report stopped children even with WEXITED.
+                    if exited.si_code in (os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED):
+                        break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                self.wake.wait(min(.01, remaining))
+            with self.lock:
+                self.terminate_original_group(process)
+                result = process.wait()
+        except BaseException:
+            with self.lock:
+                self.terminate_original_group(process)
+                process.wait()
+            raise
+        finally:
+            with self.lock:
+                if self.process is process:
+                    self.process = None
+        if result:
+            raise subprocess.CalledProcessError(result, command)
+
+    def cancel(self):
+        with self.lock:
+            self.cancelled = True
+            if self.process is not None:
+                self.terminate_original_group(self.process)
+            self.wake.set()
 
 NETWORK = r'''
 import Foundation
@@ -336,6 +414,7 @@ import Network
 
 
 def main():
+    aggregate_deadline = time.monotonic() + 150
     swift = shutil.which('swiftc')
     if not swift: raise SystemExit('swiftc is required')
     types = (APP / 'IOSSpeedLab.swift').read_text().split('// One shared HTTP policy', 1)[0].replace('import Security', '')
@@ -366,18 +445,22 @@ def main():
         args = [swift, '-swift-version', '6', '-module-cache-path', str(folder / 'modules')]
         subprocess.run(args + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network),
             '-emit-module-path', str(folder / 'Network.swiftmodule'), '-o', str(folder / ('libNetwork' + suffix))], check=True, timeout=120)
-        binary = folder / 'tests'
-        def write_sources(contents):
+        def write_sources(contents, destination=folder):
+            destination.mkdir(parents=True, exist_ok=True)
             paths = []
             for name, source in contents.items():
-                path = folder / name; path.write_text(source); paths.append(str(path))
+                path = destination / name; path.write_text(source); paths.append(str(path))
             return paths
-        def execute(contents, mutation=None, expected=None, witness=None):
-            label = mutation or 'shipping baseline'
+        def compile_fixture(contents, label, destination, owned_compiler=None):
             print(f'Apple candidate stage: compile {label}', flush=True)
-            paths = write_sources(contents)
-            subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
+            paths = write_sources(contents, destination)
+            binary = destination / 'tests'
+            compile_run = owned_compiler.run if owned_compiler is not None else subprocess.run
+            compile_run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
                 '-Xlinker', '-rpath', '-Xlinker', str(folder)] + paths + ['-o', str(binary)], check=True, timeout=150)
+            return binary
+        def execute(binary, mutation=None, expected=None, witness=None):
+            label = mutation or 'shipping baseline'
             print(f'Apple candidate stage: execute {label}', flush=True)
             result = subprocess.run([str(binary)] + ([witness] if witness else []), text=True, capture_output=True, timeout=120)
             if mutation:
@@ -389,7 +472,6 @@ def main():
             else:
                 assert result.returncode == 0, result.stdout + result.stderr
                 print(result.stdout.strip(), flush=True)
-        execute(code)
         mutations = {
             'fifty candidate samples': ('for _ in 0..<50 {', 'for _ in 0..<5 {'),
             'trimmed candidate statistic': ('middle.reduce(0, +) / Double(middle.count)', 'values.reduce(0, +) / Double(values.count)'),
@@ -423,9 +505,29 @@ def main():
             'direct probe lost its required physical interface': 'physical-binding',
         }
         assert set(mutations) == set(expected_witnesses) == set(focused_witnesses)
+        variants = []
         for name, (before, after) in mutations.items():
             assert sum(source.count(before) for source in code.values()) == 1, f'Mutation anchor changed: {name}'
-            execute({path: source.replace(before, after) for path, source in code.items()}, name, expected_witnesses[name], focused_witnesses[name])
+            variants.append((name, {path: source.replace(before, after) for path, source in code.items()}))
+        baseline = compile_fixture(code, 'shipping baseline', folder / 'baseline')
+        # The full baseline spends real time delivering every response and
+        # draining every owned socket. Compile independent mutant executables
+        # during that work, with at most one compiler and one running fixture.
+        # Each compiler input/output directory is immutable after compilation;
+        # all six native witnesses still execute serially after the baseline.
+        # No shipping sample count, timer, deadline or aggregate bound changes.
+        owned_compiler = OwnedCandidateCompiler(aggregate_deadline)
+        with ThreadPoolExecutor(max_workers=1) as compiler:
+            pending = [(name, compiler.submit(compile_fixture, contents, name, folder / ('mutation-' + str(index)), owned_compiler))
+                       for index, (name, contents) in enumerate(variants)]
+            try:
+                execute(baseline)
+                for name, compiled in pending:
+                    execute(compiled.result(), name, expected_witnesses[name], focused_witnesses[name])
+            finally:
+                owned_compiler.cancel()
+                for _, compiled in pending:
+                    compiled.cancel()
         unsafe = dict(code)
         before = '_ target: IOSViaEntryTCPTarget, excluding excluded:'
         assert unsafe['IOSViaEntryTCP.swift'].count(before) == 1
@@ -450,6 +552,7 @@ extension IOSViaEntryTCP {
         # Region-isolation diagnostics are emitted during SIL/code generation;
         # a typecheck-only invocation can accept the historical broken call.
         print('Apple candidate stage: reject full-profile actor crossing', flush=True)
+        binary = folder / 'tests'
         rejected = subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
             '-Xlinker', '-rpath', '-Xlinker', str(folder)] + write_sources(unsafe) + ['-o', str(binary)],
             text=True, capture_output=True, timeout=150)
