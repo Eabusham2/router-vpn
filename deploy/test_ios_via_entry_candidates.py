@@ -53,13 +53,19 @@ public final class NWTest:@unchecked Sendable {
  private var hold=false
  private var connectCounts:[String:Int]=[:]
  private var inverted=false,partial=false,changeDuring=false
+ private var measuredClock:UInt64=1,measuredReads=0
  private var delayedInitialPath=false
  public private(set) var excludesVirtual=false
  public func prohibit(_ types:[NWInterface.InterfaceType]){excludesVirtual=types.contains(.other) && types.contains(.loopback)}
  public var events:[String]{lock.lock();defer{lock.unlock()};return traces}
  public func record(_ event:String){lock.lock();traces.append(event);lock.unlock()}
- public func reset(){lock.lock();traces=[];hold=false;connectCounts=[:];inverted=false;partial=false;changeDuring=false;lock.unlock()}
+ public func reset(){lock.lock();traces=[];hold=false;connectCounts=[:];inverted=false;partial=false;changeDuring=false;measuredClock=1;measuredReads=0;lock.unlock()}
  public func configure(inverted:Bool=false,partial:Bool=false,changeDuring:Bool=false){lock.lock();self.inverted=inverted;self.partial=partial;self.changeDuring=changeDuring;lock.unlock()}
+ // Only the synthetic inversion uses this clock. Queue delivery, cancellation,
+ // timeout tasks and the production network/deadline checks remain real.
+ public var measurementReads:Int{lock.lock();defer{lock.unlock()};return measuredReads}
+ public func measurementNow()->UInt64{lock.lock();defer{lock.unlock()};if inverted{measuredReads+=1;return measuredClock};return DispatchTime.now().uptimeNanoseconds}
+ public func measurementDelivered(_ delay:Double){lock.lock();if inverted{measuredClock+=UInt64((delay*1_000_000_000).rounded())};lock.unlock()}
  public func connect(_ host:String)->(Double,Bool){lock.lock();let count=(connectCounts[host] ?? 0)+1;connectCounts[host]=count;let invert=inverted,fail=partial && count==11,change=changeDuring && count==11;lock.unlock();if change{changed()};return (invert ? (host.hasSuffix(".20") ? (count<=27 ? 0.001 : 0.035) : 0.010) : 0.003,fail)}
  public func holdCancellation(_ value:Bool){lock.lock();hold=value;lock.unlock()}
  public func cancelled(_ deliver:@escaping @Sendable()->Void){lock.lock();if hold{retained.append(deliver);lock.unlock()}else{lock.unlock();deliver()}}
@@ -81,6 +87,7 @@ public final class NWConnection:@unchecked Sendable {
  private var queue:DispatchQueue?
  public init(host:NWEndpoint.Host,port:NWEndpoint.Port,using:NWParameters){self.host=host.value;self.port=port.value;self.requiredInterface=using.requiredInterface?.name}
  public func start(queue:DispatchQueue){self.queue=queue;if let requiredInterface{NWTest.shared.record("bound:"+requiredInterface)};NWTest.shared.record("start:"+host+":"+String(port));let (delay,fail)=NWTest.shared.connect(host);queue.asyncAfter(deadline:.now()+delay){
+   NWTest.shared.measurementDelivered(delay)
    if self.host.hasSuffix(".99") || fail{self.stateUpdateHandler?(.failed(URLError(.cannotConnectToHost)))}else{self.stateUpdateHandler?(.ready)}
  }}
  public func cancel(){NWTest.shared.record("cancel:"+host);NWTest.shared.cancelled{[self] in queue?.async{NWTest.shared.record("drained:"+self.host);self.stateUpdateHandler?(.cancelled)}}}
@@ -253,6 +260,7 @@ import Network
    let first=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"one",name:"A",endpoint:"203.0.113.20"),excluding:[])
    let second=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"two",name:"B",endpoint:"203.0.113.21"),excluding:[])
    check("actual routed comparison has fifty samples",first.samples==50 && second.samples==50 && first.failed==0 && second.failed==0 && NWTest.shared.events.filter{$0.hasPrefix("start:")}.count==102)
+   check("synthetic clock observes both edges of all discovery and fifty-response probes",NWTest.shared.measurementReads==204)
    check("actual routed trimmed mean differs from favorable median",first.medianMS!<second.medianMS! && first.trimmedMeanMS!>second.trimmedMeanMS!)
    let model=try fresh(),capture=try IOSViaEntryCapture(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
    let network=try await IOSViaEntryNetwork.shared.snapshot()
@@ -319,6 +327,12 @@ def main():
     # Preserve the shipping source-file boundaries. Concatenating Models with
     # the caller masks Swift's non-Sendable cross-file actor diagnostics.
     code = {name: (APP / name).read_text().replace('import Combine\n', '') for name in source_names}
+    # The Network double controls callback delivery. Make its inversion values
+    # deterministic without changing shipping probe queues, timers or ownership.
+    # Real elapsed reads remain in use for every non-inversion fixture case.
+    elapsed = 'DispatchTime.now().uptimeNanoseconds'
+    assert code['IOSViaEntryTCP.swift'].count(elapsed) == 2, 'Probe elapsed clock boundary changed'
+    code['IOSViaEntryTCP.swift'] = code['IOSViaEntryTCP.swift'].replace(elapsed, 'NWTest.shared.measurementNow()')
     view = (APP / 'IOSMultihopView.swift').read_text()
     manual = view.split('    private func chooseExit(id: String) {', 1)[1].rsplit('\n}', 1)[0]
     manual = '    func chooseExit(id: String) {' + manual
