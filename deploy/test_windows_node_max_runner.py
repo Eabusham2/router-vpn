@@ -183,6 +183,19 @@ func TestCapturedNativeCleanup(t *testing.T){
 '''
 
 
+def captured_cleanup_test_command(go, path, env):
+    # Execute the same cleanup cases on both native Windows architectures.
+    # Go does not support race instrumentation on Windows ARM64; preserve it
+    # on every other supported native host and reject cross-target execution.
+    target = subprocess.check_output([go, 'env', 'GOHOSTOS', 'GOHOSTARCH', 'GOOS', 'GOARCH'],
+                                     env=env, text=True, timeout=15).split()
+    if (len(target) != 4 or target[:2] != target[2:] or
+            target[0] not in ('linux', 'darwin', 'windows') or target[1] not in ('amd64', 'arm64')):
+        raise ValueError('Captured cleanup regression requires a matching supported native Go target')
+    race = [] if target[:2] == ['windows', 'arm64'] else ['-race']
+    return [go, 'test', *race, '-count=1', '-timeout=15s', '-v', str(path)]
+
+
 class CapturedNativeCleanup(unittest.TestCase):
     def test_exact_cleanup_keeps_original_target_and_independent_retirement(self):
         go = shutil.which('go')
@@ -197,14 +210,57 @@ class CapturedNativeCleanup(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='native-captured-cleanup-') as temporary:
             path = Path(temporary) / 'cleanup_test.go'
             path.write_text(CAPTURED_CLEANUP_HARNESS + '\n' + helper + '\n' + retire)
-            result = subprocess.run([go, 'test', '-race', '-count=1', '-timeout=15s', '-v', str(path)],
+            env = dict(os.environ, GOTOOLCHAIN='local')
+            result = subprocess.run(captured_cleanup_test_command(go, path, env),
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                    env=dict(os.environ, GOTOOLCHAIN='local'), timeout=60)
+                                    env=env, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout)
         for case in ('captured', 'foreign-newer', 'partial', 'missing', 'read-failure',
                      'transaction-failure', 'close-failure', 'absence-failure'):
             self.assertIn('--- PASS: TestCapturedNativeCleanup/' + case + ' (', result.stdout)
         self.assertNotIn('--- SKIP:', result.stdout)
+
+    def test_cleanup_uses_race_on_supported_native_targets_and_executes_windows_arm64(self):
+        for system in ('linux', 'darwin', 'windows'):
+            for arch in ('amd64', 'arm64'):
+                with self.subTest(system=system, arch=arch):
+                    env = {'GOTOOLCHAIN': 'local'}
+                    with patch('subprocess.check_output', return_value='\n'.join((system, arch, system, arch))) as observe:
+                        command = captured_cleanup_test_command('captured-go', Path('cleanup_test.go'), env)
+                    observe.assert_called_once_with(['captured-go', 'env', 'GOHOSTOS', 'GOHOSTARCH', 'GOOS', 'GOARCH'],
+                                                    env=env, text=True, timeout=15)
+                    race = [] if (system, arch) == ('windows', 'arm64') else ['-race']
+                    self.assertEqual(command, ['captured-go', 'test', *race, '-count=1', '-timeout=15s', '-v', 'cleanup_test.go'])
+
+    def test_windows_targets_execute_the_same_shipping_cleanup_cases(self):
+        cases = ('captured', 'foreign-newer', 'partial', 'missing', 'read-failure',
+                 'transaction-failure', 'close-failure', 'absence-failure')
+        output = '\n'.join('--- PASS: TestCapturedNativeCleanup/'+case+' (0.01s)' for case in cases)
+        for arch in ('amd64', 'arm64'):
+            with self.subTest(arch=arch):
+                def execute(command, **kwargs):
+                    self.assertEqual(command[:2], ['captured-go', 'test'])
+                    self.assertEqual('-race' in command, arch == 'amd64')
+                    self.assertEqual(command[2:-1], (['-race'] if arch == 'amd64' else []) + ['-count=1', '-timeout=15s', '-v'])
+                    self.assertEqual(kwargs['timeout'], 60)
+                    self.assertEqual(kwargs['env']['GOTOOLCHAIN'], 'local')
+                    source = Path(command[-1]).read_text()
+                    self.assertIn('func nodePQWFPCleanup(', source)
+                    self.assertIn('func DesktopWindowsNodeCompositionRetire(', source)
+                    for case in cases:
+                        self.assertIn('"'+case+'"', source)
+                    return subprocess.CompletedProcess(command, 0, output)
+                with patch('shutil.which', return_value='captured-go'), \
+                     patch('subprocess.check_output', return_value='\n'.join(('windows', arch, 'windows', arch))), \
+                     patch('subprocess.run', side_effect=execute) as run:
+                    CapturedNativeCleanup('test_exact_cleanup_keeps_original_target_and_independent_retirement').test_exact_cleanup_keeps_original_target_and_independent_retirement()
+                self.assertEqual(run.call_count, 1)
+
+    def test_cleanup_rejects_foreign_or_incomplete_go_target(self):
+        for target in ('windows\narm64\nwindows\namd64', 'linux\namd64\nwindows\namd64',
+                       'windows\narm64', 'linux\n386\nlinux\n386', ''):
+            with self.subTest(target=target), patch('subprocess.check_output', return_value=target), self.assertRaises(ValueError):
+                captured_cleanup_test_command('captured-go', Path('cleanup_test.go'), {})
 
 
 class MAXObservationCompilation(unittest.TestCase):
