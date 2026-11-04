@@ -117,6 +117,9 @@ import sys
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_provenance_order.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_runner.py')], check=True, timeout=30)
 if platform.system() == 'Darwin':
+    # This self-contained native fixture also compiles against the real SDK.
+    # Keep its full budget/negative controls early in both shipping lanes.
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_candidates.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_startup_policy.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_quick_protection.py')], check=True, timeout=180)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_node_usage.py')], check=True, timeout=180)
@@ -140,8 +143,7 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_provider_runtime_driver.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_owned_strategy_app.py')], check=True, timeout=300)
     for speed_lab_contract in ['test_ios_speed_lab_ownership.py', 'test_ios_speed_lab_external_paths.py',
-                               'test_ios_speed_lab_tunnel.py', 'test_ios_multihop_execution.py', 'test_ios_multihop_startup_deadline.py',
-                               'test_ios_via_entry_candidates.py']:
+                               'test_ios_speed_lab_tunnel.py', 'test_ios_multihop_execution.py', 'test_ios_multihop_startup_deadline.py']:
         subprocess.run([sys.executable, str(root / 'deploy' / speed_lab_contract)], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_selection.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_xray_profiles.py')], check=True, timeout=150)
