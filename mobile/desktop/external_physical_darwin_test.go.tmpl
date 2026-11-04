@@ -12,7 +12,7 @@ import (
 )
 
 func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *testing.T) {
-	for _, selected := range []string{"shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
+	for _, selected := range []string{"shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss"} {
 		runExternalPhysicalFactoryProtocolCases(t, []string{selected}, func(t *testing.T, c *externalPhysicalFactoryCase) error {
 			wantInterfaces, err := desktopDarwinPhysicalInterfaces(c.selected, c.ipv6 != "off")
 			if err != nil {
@@ -28,7 +28,7 @@ func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *tes
 				{Network: "tcp", Address: netip.MustParseAddrPort("192.168.50.7:8443")},
 				{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")},
 			}
-			if protocol := c.fixture.policy.Metadata().Protocol; protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg" {
+			if kind := c.fixture.policy.Metadata().RootType; kind == "hysteria2" || kind == "wireguard" || kind == "routervpn-amneziawg" {
 				wantPrivate = wantPrivate[1:]
 			}
 			switch selected {

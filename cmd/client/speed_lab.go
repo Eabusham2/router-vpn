@@ -113,8 +113,8 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.command == command && launch.profileID == st.RouterID && launch.external != nil {
-			current["exit_id"] = launch.profileID
+		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.command == command && launch.policyProfileID == st.RouterID && launch.external != nil {
+			current["exit_id"] = launch.policyProfileID
 			if !launch.external.direct {
 				current["entry_id"] = launch.external.entry.ID
 			}

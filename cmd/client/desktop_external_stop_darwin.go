@@ -152,7 +152,7 @@ func (h *desktopMacOSExternalHost) closeWithIntent(ctx context.Context, hold boo
 		}
 		// Only this session's private config is ours. A replacement can publish
 		// its own DNS/graph after the app lock is released; never erase it.
-		activeDNSRuntimeIdentities.CompareAndDelete(a, activeDNSRuntimeIdentity{ProfileID: h.launch.profileID,
+		activeDNSRuntimeIdentities.CompareAndDelete(a, activeDNSRuntimeIdentity{ProfileID: h.launch.policyProfileID,
 			RuntimeID: h.launch.mode, Config: filepath.Join(h.launch.directory, "sing-box.json")})
 	}
 	h.closed = true
@@ -228,7 +228,7 @@ func (c *desktopMacOSExternalStopCapture) current() error {
 	defer a.mu.Unlock()
 	value, found := desktopExternalRetainedLaunches.Load(a)
 	if !found || value != h.launch || a.connectionContext != c.operation || a.cmd != c.command || c.command != h.launch.command ||
-		a.state.RouterID != h.launch.profileID || a.state.RuntimeMode != h.launch.mode {
+		a.state.RouterID != h.launch.policyProfileID || a.state.RuntimeMode != h.launch.mode {
 		return errors.New("macOS Stop belongs to another captured operation or child")
 	}
 	return nil
@@ -265,7 +265,7 @@ func prepareDesktopPlatformMTUStop(ctx context.Context, a *app, command *exec.Cm
 		actual, present := mtuLiveOwners.Load(a)
 		selected, exists := desktopExternalRetainedLaunches.Load(a)
 		if ctx.Err() != nil || !present || actual != outer || !exists || selected != launch || a.cmd != command || a.connectionContext != operation ||
-			a.closing != terminal || a.localController != h.parent.controller || a.state.RouterID != launch.profileID || a.state.RuntimeMode != launch.mode {
+			a.closing != terminal || a.localController != h.parent.controller || a.state.RouterID != launch.policyProfileID || a.state.RuntimeMode != launch.mode {
 			return errors.New("macOS MTU stop belongs to a replaced captured operation")
 		}
 		return nil

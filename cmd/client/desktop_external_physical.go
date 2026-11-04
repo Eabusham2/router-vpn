@@ -31,7 +31,8 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if owner.physical != nil {
 		return errors.New("ordinary physical preparation cannot replace a captured owner")
 	}
-	if targetOS != "windows" && targetOS != "linux" && targetOS != "darwin" || !owner.direct || owner.predecessor != "" {
+	entry := targetOS == "darwin" && desktopExternalWireGuardEntryOwner(owner)
+	if targetOS != "windows" && targetOS != "linux" && targetOS != "darwin" || !owner.direct && !entry || owner.predecessor != "" {
 		return nil
 	}
 	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
@@ -47,7 +48,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	}
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
 		capture.Protocol != "wireguard" && capture.Protocol != "amneziawg" && capture.Protocol != "openvpn" ||
-		capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
+		!entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
 		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) || capture.EntryStartLayer != "" || capture.KillSwitchPolicy == "off" {
 		return nil
 	}
@@ -81,7 +82,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 		return nil, nil
 	}
 	physical := owner.physical
-	if physical.Validate() != nil || !owner.direct || owner.predecessor != "" {
+	if physical.Validate() != nil || !owner.direct && !(physical.Metadata().TargetOS == "darwin" && desktopExternalWireGuardEntryOwner(owner)) || owner.predecessor != "" {
 		return nil, errors.New("ordinary physical capture lost its exact native policy")
 	}
 	meta := physical.Metadata()

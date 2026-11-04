@@ -540,7 +540,7 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 		}
 		if raw, exists := lookupDesktopNativeLaunch(a); exists {
 			launch, ok := raw.(*desktopNodeLaunch)
-			if !ok || launch == nil || launch.command != snapshot.Runtime || launch.profileID != st.RouterID {
+			if !ok || launch == nil || launch.command != snapshot.Runtime || desktopExternalPathProfileID(launch) != st.RouterID {
 				return plan, errors.New("previous external connection has another native owner")
 			}
 			if launch.tor != nil {

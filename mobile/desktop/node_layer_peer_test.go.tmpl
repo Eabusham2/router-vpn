@@ -1772,7 +1772,23 @@ type desktopExternalInstalledLayerPeer struct {
 
 var desktopExternalInstalledHysteriaLayer func(*testing.T, context.Context, netip.AddrPort, desktopExternalInstalledLayerRequest) desktopExternalInstalledLayerPeer
 
+type desktopExternalInstalledWGEntryReceipt struct {
+	Address       string `json:"address"`
+	PhysicalUDP   int64  `json:"physical_udp"`
+	Streams       int64  `json:"streams"`
+	Packets       int64  `json:"packets"`
+	PublicReplies uint32 `json:"public_replies"`
+}
+type desktopExternalInstalledWGEntryPeer struct {
+	address string
+	stats   func() desktopExternalInstalledWGEntryReceipt
+	close   func()
+}
+
+var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest, tls.Certificate, string) desktopExternalInstalledWGEntryPeer
+
 type desktopExternalInstalledPeerRequest struct {
+	WireGuardEntry       *desktopExternalInstalledWGRequest    `json:"wireguard_entry,omitempty"`
 	OpenVPNClientAddress string                                `json:"openvpn_client_address,omitempty"`
 	Layer                *desktopExternalInstalledLayerRequest `json:"layer,omitempty"`
 	Schema               int                                   `json:"schema"`
@@ -1800,6 +1816,7 @@ type desktopExternalInstalledOpenVPNPeer struct {
 var desktopExternalInstalledOpenVPN func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
 
 type desktopExternalInstalledPeerReply struct {
+	WireGuardEntry          *desktopExternalInstalledWGEntryReceipt `json:"wireguard_entry,omitempty"`
 	OpenVPNUsername         string                                  `json:"openvpn_username,omitempty"`
 	OpenVPNPassword         string                                  `json:"openvpn_password,omitempty"`
 	OpenVPNFallbackAttempts int64                                   `json:"openvpn_fallback_attempts,omitempty"`
@@ -2318,6 +2335,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			t.Fatal("installed external reference lost its captured credential")
 		}
 	}
+	if request.WireGuardEntry != nil && (request.Protocol != "shadowsocks" || request.Layer != nil || desktopExternalInstalledWireGuardEntry == nil || !latency) {
+		t.Fatal("unrequested or unsupported encrypted entry graph")
+	}
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
 	var benchmark *desktopExternalInstalledLatencyPeer
 	if latency {
@@ -2403,6 +2423,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	address := ""
 	closeTransport := func() {}
 	var wgPeer desktopExternalInstalledWGPeer
+	var entryPeer desktopExternalInstalledWGEntryPeer
 	var openvpnProfile string
 	var openvpnPeer desktopExternalInstalledOpenVPNPeer
 	var socksPeer *desktopExternalInstalledSOCKSPeer
@@ -2456,7 +2477,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			request.Layer.Password = ""
 		}
 	} else {
-		listener, err = net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+		listenHost := request.Address
+		if request.WireGuardEntry != nil {
+			listenHost = "127.0.0.1"
+		}
+		listener, err = net.Listen("tcp4", net.JoinHostPort(listenHost, "0"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2522,6 +2547,13 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			}
 		}()
 	}
+	if request.WireGuardEntry != nil {
+		entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address)
+		if entryPeer.address == "" || entryPeer.close == nil || entryPeer.stats == nil {
+			t.Fatal("entry peer omitted actual original device")
+		}
+		address = "198.51.100.240:8388"
+	}
 	t.Cleanup(func() {
 		server.mu.Lock()
 		server.closing = true
@@ -2533,6 +2565,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		cancel()
 		if listener != nil {
 			_ = listener.Close()
+		}
+		if entryPeer.close != nil {
+			entryPeer.close()
 		}
 		closeTransport()
 		for _, connection := range connections {
@@ -2547,6 +2582,10 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
 			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Packets: server.plainUDP.Load(),
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
+		if entryPeer.stats != nil {
+			value := entryPeer.stats()
+			reply.WireGuardEntry = &value
+		}
 		if benchmark != nil {
 			reply.Latency = benchmark.receipt()
 		}

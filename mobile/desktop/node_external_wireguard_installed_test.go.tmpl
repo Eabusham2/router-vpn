@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/sagernet/sing-box/adapter"
@@ -21,6 +23,7 @@ import (
 	wgdevice "github.com/sagernet/wireguard-go/device"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -42,6 +45,24 @@ func startDesktopDarwinInstalledPacket(t *testing.T, server *desktopNodeLayerSer
 	if !physical.Is4() || !physical.IsGlobalUnicast() {
 		t.Fatal("external packet reference lost its exact cryptographic backend")
 	}
+	rules := make(map[string]desktopReferenceRule)
+	for _, wanted := range []struct{ network, destination string }{{"udp", "203.0.113.53:5353"}, {"tcp", "1.1.1.1:443"}, {"tcp", "203.0.113.54:443"}} {
+		route, ok := server.route(wanted.network, wanted.destination)
+		address, addressErr := netip.ParseAddrPort(wanted.destination)
+		physical, physicalErr := netip.ParseAddrPort(route)
+		if !ok || addressErr != nil || physicalErr != nil || !physical.Addr().IsLoopback() || physical.Port() == 0 {
+			t.Fatal("external WireGuard reference lost its owned DNS/public responders")
+		}
+		rules[wanted.network+"/"+wanted.destination] = desktopReferenceRule{Network: wanted.network, Address: address.Addr().String(), Port: int(address.Port()), Target: route}
+	}
+	return startDesktopDarwinInstalledPacketRules(t, server, request, physical, parameters, create, rules)
+}
+
+func startDesktopDarwinInstalledPacketRules(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), rules map[string]desktopReferenceRule) desktopExternalInstalledWGPeer {
+	t.Helper()
+	if !physical.Is4() || !physical.IsGlobalUnicast() || physical.IsLoopback() || len(rules) < 1 {
+		t.Fatal("packet peer lost its original physical address or fixed inner routes")
+	}
 	var values [3][]byte
 	defer func() {
 		for _, value := range values {
@@ -59,16 +80,6 @@ func startDesktopDarwinInstalledPacket(t *testing.T, server *desktopNodeLayerSer
 	private, err := ecdh.X25519().NewPrivateKey(values[0])
 	if err != nil || bytes.Equal(private.PublicKey().Bytes(), values[1]) || bytes.Equal(values[0], values[2]) || bytes.Equal(values[1], values[2]) {
 		t.Fatal("external WireGuard reference requires independent peer keys and PSK")
-	}
-	rules := make(map[string]desktopReferenceRule)
-	for _, wanted := range []struct{ network, destination string }{{"udp", "203.0.113.53:5353"}, {"tcp", "1.1.1.1:443"}, {"tcp", "203.0.113.54:443"}} {
-		route, ok := server.route(wanted.network, wanted.destination)
-		address, addressErr := netip.ParseAddrPort(wanted.destination)
-		physical, physicalErr := netip.ParseAddrPort(route)
-		if !ok || addressErr != nil || physicalErr != nil || !physical.Addr().IsLoopback() || physical.Port() == 0 {
-			t.Fatal("external WireGuard reference lost its owned DNS/public responders")
-		}
-		rules[wanted.network+"/"+wanted.destination] = desktopReferenceRule{Network: wanted.network, Address: address.Addr().String(), Port: int(address.Port()), Target: route}
 	}
 	ctx, cancel := context.WithCancel(server.ctx)
 	handler := &desktopDarwinWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
@@ -424,4 +435,45 @@ func desktopDarwinInstalledPacketReference(t *testing.T, mode string) {
 			}
 		})
 	}
+}
+
+// The second encrypted peer is deliberately loopback-only. Its virtual address
+// can be reached solely through the first peer's fixed decrypted routing table.
+func startDesktopDarwinInstalledWGEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress string) desktopExternalInstalledWGEntryPeer {
+	t.Helper()
+	target, err := netip.ParseAddrPort(exitAddress)
+	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 {
+		t.Fatal("entry lost its actual loopback-only encrypted exit")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proofs atomic.Uint32
+	proof := &http.Server{ReadHeaderTimeout: 3 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		nonce, e := hex.DecodeString(q.URL.Query().Get("routervpn_proof"))
+		if q.Method != http.MethodGet || q.Host != "1.1.1.1" || q.URL.Path != "/cdn-cgi/trace" || len(q.URL.Query()) != 1 || e != nil || len(nonce) != 16 || q.Header.Get("Authorization") != "" {
+			http.Error(w, "unowned entry proof", http.StatusForbidden)
+			return
+		}
+		proofs.Add(1)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "ip=203.0.113.77\n")
+	})}
+	done := make(chan error, 1)
+	go func() {
+		done <- proof.Serve(tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}))
+	}()
+	var closeProof sync.Once
+	shutdown := func() { closeProof.Do(func() { _ = proof.Close(); _ = listener.Close(); <-done }) }
+	t.Cleanup(shutdown)
+	rules := map[string]desktopReferenceRule{
+		"tcp/1.1.1.1:443":         {Network: "tcp", Address: "1.1.1.1", Port: 443, Target: listener.Addr().String()},
+		"tcp/198.51.100.240:8388": {Network: "tcp", Address: "198.51.100.240", Port: 8388, Target: exitAddress},
+	}
+	peer := startDesktopDarwinInstalledPacketRules(t, parent, request, physical, "", startDesktopDarwinWGDevice, rules)
+	return desktopExternalInstalledWGEntryPeer{address: peer.address, close: func() { peer.close(); shutdown() }, stats: func() desktopExternalInstalledWGEntryReceipt {
+		raw, streams, packets := peer.stats()
+		return desktopExternalInstalledWGEntryReceipt{Address: peer.address, PhysicalUDP: raw, Streams: streams, Packets: packets, PublicReplies: proofs.Load()}
+	}}
 }

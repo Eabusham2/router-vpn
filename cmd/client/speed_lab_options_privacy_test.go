@@ -21,14 +21,15 @@ func TestSpeedLabOptionsBindCurrentExternalHopToRuntimeOwner(t *testing.T) {
 			a.cmd = &exec.Cmd{}
 			a.state = state{Connected: true, Phase: "connected", Mode: "external-node", RouterID: "external"}
 			entry, _ := a.profileByIDLocked("entry")
-			launch := &desktopNodeLaunch{command: a.cmd, profileID: "external", external: &desktopExternalRuntime{entry: entry}}
+			launch := &desktopNodeLaunch{command: a.cmd, profileID: "entry", policyProfileID: "external", external: &desktopExternalRuntime{entry: entry}}
 			switch variant {
 			case "direct":
 				launch.external.direct = true
+				launch.profileID = "external"
 			case "different-command":
 				launch.command = &exec.Cmd{}
 			case "different-node":
-				launch.profileID = "exit"
+				launch.policyProfileID = "exit"
 			case "disconnected":
 				a.state.Connected = false
 			case "router-mode":

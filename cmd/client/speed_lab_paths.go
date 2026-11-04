@@ -167,7 +167,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 	} else if st.Mode == "external-node" {
 		if raw, exists := lookupDesktopNativeLaunch(a); exists {
 			launch, ok := raw.(*desktopNodeLaunch)
-			if !ok || launch == nil || launch.command != command || launch.profileID != profile.ID {
+			if !ok || launch == nil || launch.command != command || desktopExternalPathProfileID(launch) != profile.ID {
 				return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab runtime owner changed")
 			}
 			if launch.tor != nil {

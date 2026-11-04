@@ -38,6 +38,7 @@ type macOSExternalLayerReceipt struct {
 }
 
 type macOSExternalPeerReply struct {
+	WireGuardEntry          *macOSExternalWGEntryReceipt `json:"wireguard_entry,omitempty"`
 	OpenVPNNetwork          string                       `json:"openvpn_network,omitempty"`
 	OpenVPNProfile          string                       `json:"openvpn_profile,omitempty"`
 	OpenVPNUsername         string                       `json:"openvpn_username,omitempty"`
@@ -65,6 +66,8 @@ type macOSExternalPeerReply struct {
 }
 
 type macOSExternalNativePeer struct {
+	wgEntry                                                          bool
+	entryAddress                                                     netip.AddrPort
 	openvpnNetwork, openvpnProfile, openvpnUsername, openvpnPassword string
 	openvpnClient                                                    netip.Addr
 	openvpnFallback                                                  bool
@@ -143,8 +146,12 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 		t.Fatal("native peer lost its bounded original response", err)
 	}
 	address, err := netip.ParseAddrPort(reply.Address)
+	expectedAddress := p.physical
+	if p.wgEntry {
+		expectedAddress = netip.MustParseAddr("198.51.100.240")
+	}
 	pool := x509.NewCertPool()
-	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.address.IsValid() && p.address != address || len(reply.CA) > 8192 || !pool.AppendCertsFromPEM([]byte(reply.CA)) || p.ca != "" && p.ca != reply.CA {
+	if err != nil || address.Addr() != expectedAddress || address.Port() == 0 || p.address.IsValid() && p.address != address || len(reply.CA) > 8192 || !pool.AppendCertsFromPEM([]byte(reply.CA)) || p.ca != "" && p.ca != reply.CA {
 		t.Fatal("native peer changed its captured address or TLS identity", err)
 	}
 	if reply.Connections < 0 || reply.Streams < 0 || reply.PhysicalUDP < 0 || reply.Packets < 0 {
@@ -156,6 +163,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 	if p.protocol != "amneziawg" && reply.ParametersSHA256 != "" {
 		t.Fatal("ordinary peer acquired an unrequested AWG parameter identity")
 	}
+	macOSExternalNativeWGEntryRead(t, p, reply)
 	macOSExternalNativeOpenVPNRead(t, p, reply, address)
 	p.address, p.ca = address, reply.CA
 	if p.layer == "" {
@@ -196,6 +204,10 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
+	p.wgEntry = strings.HasPrefix(scenario, "wg-entry-ss")
+	if p.wgEntry && strings.HasSuffix(scenario, "-always") {
+		p.policy = "always"
+	}
 	if scenario == "wireguard-always" || scenario == "socks5-always" || strings.HasPrefix(scenario, "amneziawg-") && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
 	}
@@ -281,7 +293,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof") {
 		request["socks_fault"] = fault
 	}
-	if protocol == "wireguard" || protocol == "amneziawg" {
+	if protocol == "wireguard" || protocol == "amneziawg" || p.wgEntry {
 		provider, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatal(err)
@@ -292,10 +304,21 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		}
 		p.clientKey = base64.StdEncoding.EncodeToString(consumer.Bytes())
 		p.peerKey = base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes())
-		p.psk, p.password = p.password, ""
-		request["password"] = ""
+		if p.wgEntry {
+			var key [32]byte
+			if _, err := rand.Read(key[:]); err != nil {
+				t.Fatal(err)
+			}
+			p.psk = base64.StdEncoding.EncodeToString(key[:])
+			clear(key[:])
+		} else {
+			p.psk, p.password = p.password, ""
+			request["password"] = ""
+		}
 		keys := map[string]any{"private_key": base64.StdEncoding.EncodeToString(provider.Bytes()), "client_public_key": base64.StdEncoding.EncodeToString(consumer.PublicKey().Bytes()), "preshared_key": p.psk}
-		if protocol == "amneziawg" {
+		if p.wgEntry {
+			request["wireguard_entry"] = keys
+		} else if protocol == "amneziawg" {
 			keys["parameters"] = macOSExternalNativeAmneziaParameters(t, p.variant)
 			request["amneziawg"] = keys
 		} else {
@@ -313,7 +336,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal(err)
 	}
 	initial := p.read(t)
-	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
+	if initial.WireGuardEntry != nil && (initial.WireGuardEntry.PhysicalUDP != 0 || initial.WireGuardEntry.Streams != 0 || initial.WireGuardEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
 		t.Fatal("native peer claimed traffic before its captured runtime")
 	}
 	return p
@@ -379,7 +402,7 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 			profile.External.WireGuard = nil
 		}
 	case "shadowsocks":
-		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: p.physical.String(), Port: int(p.address.Port()), Method: "2022-blake3-aes-256-gcm", Password: p.password}
+		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: p.address.Addr().String(), Port: int(p.address.Port()), Method: "2022-blake3-aes-256-gcm", Password: p.password}
 	case "http-connect":
 		profile.External.HTTPConnect = connect
 	case "https-connect":
@@ -410,10 +433,14 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 	default:
 		t.Fatal("native fixture refused another protocol")
 	}
+	entry := macOSExternalNativeWGEntryProfile(t, p, &profile)
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		t.Fatal("Darwin fixture profile rejected before native execution", err)
 	}
 	store := common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}
+	if entry != nil {
+		store.Profiles = append(store.Profiles, *entry)
+	}
 	raw, err := json.Marshal(store)
 	if err != nil {
 		t.Fatal(err)
@@ -574,6 +601,17 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if strings.HasPrefix(scenario, "wg-entry-ss") {
+		if scenario == "wg-entry-ss" || scenario == "wg-entry-ss-always" {
+			return "shadowsocks", "", ""
+		}
+		for _, fault := range []string{"wrong-entry-key", "wrong-entry-public", "wrong-exit-key", "wrong-dns", "wrong-trust", "wrong-exit"} {
+			if scenario == "wg-entry-ss-"+fault {
+				return "shadowsocks", "", fault
+			}
+		}
+		t.Fatal("unknown captured WG entry scenario")
+	}
 	if strings.HasPrefix(scenario, "openvpn-") {
 		for _, base := range []string{"openvpn-tcp", "openvpn-udp", "openvpn-tcp-fallback", "openvpn-mixed-fallback"} {
 			if scenario == base || scenario == base+"-always" {

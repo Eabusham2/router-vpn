@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/macosprocess"
 	"router-vpn/internal/mobilemultihop"
@@ -21,6 +22,8 @@ import (
 // private workspace, native child and durable PF baseline as one operation.
 // A registry entry is an observation handle, never replacement authority.
 type desktopMacOSExternalHost struct {
+	entryRevision                                                      string
+	entryOptions                                                       [3]bool
 	parent                                                             *desktopMacOSSessionCapture
 	launch                                                             *desktopNodeLaunch
 	policy                                                             *mobilemultihop.DesktopExternalPolicy
@@ -45,6 +48,9 @@ type desktopMacOSExternalHost struct {
 }
 
 func desktopMacOSExternalEligible(launch *desktopNodeLaunch) bool {
+	if launch != nil && launch.ownedNode == nil && launch.tor == nil && desktopExternalWireGuardEntryOwner(launch.external) {
+		return launch.profileID == launch.external.entry.ID && launch.policyProfileID == launch.external.profile.ID
+	}
 	if !desktopWindowsExternalEligible(launch) {
 		return false
 	}
@@ -83,20 +89,28 @@ func prepareDesktopRetainedExternal(a *app, launch *desktopNodeLaunch) (desktopE
 	meta := policy.Metadata()
 	launch.configSHA256 = meta.ConfigSHA256
 	a.mu.Lock()
-	profile, exists := a.profileByIDLocked(launch.profileID)
+	profile, exists := a.profileByIDLocked(launch.policyProfileID)
+	entry := common.RouterProfile{}
+	if !launch.external.direct {
+		entry, _ = a.profileByIDLocked(launch.profileID)
+	}
 	h := &desktopMacOSExternalHost{parent: parent, launch: launch, policy: policy, operation: operation,
-		revision: desktopOwnedNodeProfileToken(profile), options: [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks},
+		revision: desktopOwnedNodeProfileToken(profile), entryRevision: desktopOwnedNodeProfileToken(entry),
+		entryOptions: [3]bool{entry.DAITAEnabled, entry.JumboTUN, entry.SocksEnabled}, options: [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks},
 		savedOptions: [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}, beforeCommand: a.cmd,
 		beforeState: a.state, beforeSelected: a.profiles.SelectedID, gate: make(chan struct{}, 1), verify: verifyBundledNativeContext, baselineRun: runDesktopMacOSExternalBaseline,
 		selection: desktopMacOSExternalSelection{Schema: 1, ProfileID: launch.profileID, Protocol: meta.Protocol, Session: meta.SessionID,
 			Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
 	a.mu.Unlock()
-	if !exists || validateDesktopWindowsExternalSource(profile, launch) != nil || !h.selection.valid() {
+	if !exists || validateDesktopMacOSExternalSources(profile, entry, launch) != nil || !h.selection.valid() {
 		return nil, errors.New("macOS external preparation changed its saved source")
 	}
 	persisted := cloneRouterProfile(profile)
 	persisted.MultihopEnabled, persisted.MultihopEntryID, persisted.MultihopExitID = false, "", ""
 	persisted.MultihopExecution, persisted.MultihopEntryMode = "local", ""
+	if !launch.external.direct {
+		persisted.MultihopEnabled, persisted.MultihopEntryID, persisted.MultihopExitID = true, entry.ID, profile.ID
+	}
 	h.persistedRevision = desktopOwnedNodeProfileToken(persisted)
 	launch.external.retained = h
 	h.gate <- struct{}{}
@@ -156,16 +170,22 @@ func (h *desktopMacOSExternalHost) current(ctx context.Context, running bool) er
 	}
 	a := h.parent.app
 	a.mu.Lock()
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
+	profile, exists := a.profileByIDLocked(h.launch.policyProfileID)
+	entry := common.RouterProfile{}
+	if !h.launch.external.direct {
+		entry, _ = a.profileByIDLocked(h.launch.profileID)
+	}
 	revision := desktopOwnedNodeProfileToken(profile)
 	valid := exists && !a.closing && (revision == h.revision || h.activated && revision == h.persistedRevision) &&
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == h.savedOptions &&
-		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == h.options && validateDesktopWindowsExternalSource(profile, h.launch) == nil
+		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == h.options && validateDesktopMacOSExternalSources(profile, entry, h.launch) == nil &&
+		desktopOwnedNodeProfileToken(entry) == h.entryRevision &&
+		[3]bool{entry.DAITAEnabled, entry.JumboTUN, entry.SocksEnabled} == h.entryOptions
 	if !h.activated {
 		valid = valid && h.operation.Err() == nil && a.checkCapturedConnectionOperationLocked(h.operation) == nil && a.connectionCancelIntent != h.operation
 	}
 	if h.published {
-		valid = valid && a.cmd == h.launch.command && a.state.RouterID == h.launch.profileID && a.state.RuntimeMode == h.launch.mode
+		valid = valid && a.cmd == h.launch.command && a.state.RouterID == h.launch.policyProfileID && a.state.RuntimeMode == h.launch.mode
 	}
 	a.mu.Unlock()
 	if !valid {
@@ -268,7 +288,7 @@ func (h *desktopMacOSExternalHost) Start(ctx context.Context) error {
 	h.entered, h.published = true, true
 	h.parent.session.external = h
 	desktopExternalRetainedLaunches.Store(a, h.launch)
-	a.state.Mode, a.state.RuntimeMode, a.state.RouterID = "external-node", h.launch.mode, h.launch.profileID
+	a.state.Mode, a.state.RuntimeMode, a.state.RouterID = "external-node", h.launch.mode, h.launch.policyProfileID
 	a.state.Connected, a.state.Phase = false, "starting"
 	a.mu.Unlock()
 	p.gate <- struct{}{}
@@ -310,7 +330,8 @@ func (h *desktopMacOSExternalHost) proofCurrent(ctx context.Context, proof deskt
 		return err
 	}
 	meta := h.policy.Metadata()
-	if !proof.Healthy || !proof.DNSProven || proof.EntryProven || proof.EntryID != "" || proof.Execution != "local" ||
+	expected := h.launch.external.expected
+	if !proof.Healthy || !proof.DNSProven || proof.EntryProven != expected.EntryProven || proof.EntryID != expected.EntryID || proof.EntryNodeID != expected.EntryNodeID || proof.ExitID != expected.ExitID || proof.Execution != "local" ||
 		proof.SessionID != meta.SessionID || proof.SourceSHA256 != meta.OriginalSourceSHA256 || proof.ConfigSHA256 != meta.OriginalConfigSHA256 ||
 		!desktopExternalPhysicalReceipt(h.launch.external, proof.Physical) || h.proof != nil && *h.proof != proof.ExternalProofResult {
 		return errors.New("macOS external proof changed its original DNS or exit path")
@@ -413,7 +434,7 @@ func (h *desktopMacOSExternalHost) Monitor(ctx context.Context) error {
 				message += "; " + err.Error()
 			}
 			a.mu.Lock()
-			if a.cmd == launch.command || a.cmd == nil && a.state.RouterID == launch.profileID {
+			if a.cmd == launch.command || a.cmd == nil && a.state.RouterID == launch.policyProfileID {
 				a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", message
 			}
 			a.mu.Unlock()
