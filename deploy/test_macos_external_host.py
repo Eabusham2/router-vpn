@@ -9,6 +9,7 @@ peer root in the native system keychain and removes it after all clients join.
 It must never be selected implicitly by an ordinary developer bundle build.
 """
 from pathlib import Path
+from collections import Counter
 import argparse
 import hashlib
 import importlib.util
@@ -94,24 +95,32 @@ def check_verdict(output):
     if not isinstance(output, str) or re.search(
             r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise ValueError('Native Darwin host output contains failure/skip/race/incomplete evidence')
+    # Count only exact anchored native lines once. Re-scanning the complete
+    # output per required case made the exhaustive mutation gate exceed its
+    # original bounded runner budget as the native inventory grew.
+    verdicts, receipts = Counter(), Counter()
+    for line in output.split('\n'):
+        verdict = re.fullmatch(r'(    )?--- PASS: (.+) \([0-9]+(?:\.[0-9]+)?s\)', line)
+        if verdict:
+            verdicts[(verdict[1] or '', verdict[2])] += 1
+        receipt = re.fullmatch(r'\s+desktop_external_darwin_native_test.go:\d+: (.*)', line)
+        if receipt:
+            receipts[receipt[1]] += 1
     for name in (TEST, *POLICY_TESTS, *(TEST+'/'+case for case in CASES)):
         indent = '    ' if '/' in name else ''
-        pattern = '^'+indent+'--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$'
-        if len(re.findall(pattern, output, re.MULTILINE)) != 1:
+        if verdicts[(indent, name)] != 1:
             raise ValueError('Missing or duplicated exact native Darwin verdict: '+name)
     for case in POSITIVE_CASES:
-        receipt = success_receipt(case)
-        if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
+        if receipts[success_receipt(case)] != 1:
             raise ValueError('Native Darwin protocol has no exact ownership receipt: '+case)
     for case in POSITIVE_CASES:
         receipt = 'actual sealed Darwin latency accepted '+case+': held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained'
-        if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
+        if receipts[receipt] != 1:
             raise ValueError('Native Darwin protocol has no exact retained measurement receipt: '+case)
     for case in NEGATIVE_CASES:
-        receipt = refusal_receipt(case)
-        if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(receipt)+'$', output, re.MULTILINE)) != 1:
+        if receipts[refusal_receipt(case)] != 1:
             raise ValueError('Native Darwin layer has no exact refusal and cleanup receipt: '+case)
-    if len(re.findall(r'^\s+desktop_external_darwin_native_test.go:\d+: '+re.escape(MTU_RECEIPT)+'$', output, re.MULTILINE)) != 1:
+    if receipts[MTU_RECEIPT] != 1:
         raise ValueError('Native WireGuard MTU omitted original actual transfer/rollback receipt')
     if output.splitlines().count('PASS') != 1 or not output.rstrip().endswith('\nPASS'):
         raise ValueError('Native Darwin host did not finish one complete execution')
