@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"testing/synctest"
-
-	"router-vpn/internal/mobilemultihop"
 )
 
 func TestDesktopNodeALLKeepsCompleteTLSFirstOrder(t *testing.T) {
@@ -30,18 +30,17 @@ func TestDesktopNodeALLKeepsCompleteTLSFirstOrder(t *testing.T) {
 	}
 }
 
-// This is a deliberate closed-capability assertion. Positive complete-MAX
-// application activation is a later unit with its own mandatory native proof.
-// Dispatching ALL must already preserve a proved owner when all candidate
-// preparations refuse, without invoking the legacy shell or its result file.
-func TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner(t *testing.T) {
+// The shipping predicate admits complete MAX, but admission cannot invent its
+// original private assets. Refusing all four missing source graphs must retain
+// the proved predecessor without invoking a legacy shell or result file.
+func TestDesktopNodePublicALLMissingGraphsKeepOriginalOwner(t *testing.T) {
 	for _, policy := range []string{"always", "on-connect"} {
 		t.Run(policy, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := logicalBasePublicFixture(t, policy)
 				for _, candidate := range desktopNodeALLCandidates("wg") {
-					if mobilemultihop.DesktopNodePhysicalGraphSupported(candidate.RuntimeID, "off") {
-						t.Fatal("closed ALL fixture requires the separate complete-MAX admission unit")
+					if _, err := os.Lstat(filepath.Join(f.data, "generated", f.profile.ID, candidate.RuntimeID)); !os.IsNotExist(err) {
+						t.Fatal("missing ALL source fixture unexpectedly contains a candidate", candidate.RuntimeID, err)
 					}
 				}
 				operation, finish, err := f.a.beginConnectionOperation()

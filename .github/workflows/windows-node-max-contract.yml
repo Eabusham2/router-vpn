@@ -140,8 +140,9 @@ jobs:
           # reached 150 minutes during its compiled controls. Keep every case
           # and every individual native startup/query/retirement deadline.
           # Actual CGO/WFP is scoped to this executable; only TUN is modeled.
-          # Public complete-MAX admission remains closed in this prerequisite.
-          python deploy/test_windows_node_max.py --standalone --prospective --sha $env:GITHUB_SHA --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-max-${{ matrix.suite }}-receipt.json') --suite '${{ matrix.suite }}'
+          # Execute the shipping admission predicate; the compiled closed-family
+          # control and every ownership/credential negative remain required.
+          python deploy/test_windows_node_max.py --standalone --sha $env:GITHUB_SHA --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-max-${{ matrix.suite }}-receipt.json') --suite '${{ matrix.suite }}'
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows complete MAX/WFP composition failed' }
       - uses: actions/upload-artifact@v4
         with:

@@ -47,8 +47,8 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`3e0f06e73329a3f237b3486367e0787a8f95597f`](https://github.com/Eabusham2/router-vpn/commit/3e0f06e73329a3f237b3486367e0787a8f95597f),
-tree `97ccac97b5c1f81f4d38c7a1c5fc03bb197db7f9`. The separate native retirement
+[`0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7`](https://github.com/Eabusham2/router-vpn/commit/0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7),
+tree `fff965448cc6f77db05189ab58c57bc0b47d810a`. The Windows admission
 source accompanying this record is described below; it does not inherit this
 cutoff's CI results.
 
@@ -111,9 +111,10 @@ cutoff's CI results.
 | [`e35f1972`](https://github.com/Eabusham2/router-vpn/commit/e35f1972019dfabfe95100bd7587b8fd97c10943) | Restores cleanup of Windows read-only Git pack files after the original command tree joins. The disposable root and complete path chain must remain original; reparse paths, replacements, special files and read-only foreign hard links are refused. Only observed regular-file read-only attributes change before one recursive deletion. Root 58 executed checks pass in 5.658s; disabling normalization fails the intended old-behavior assertion. | Two actual Windows-only checks, including a real WinError5 index-unlink witness, remain mandatory. WinError5/32 failures are not suppressed or retried. Complete corrected native MAX jobs remain required before admission. |
 | [`93720c2a`](https://github.com/Eabusham2/router-vpn/commit/93720c2af7a4f2c1f4dbf73603902b33807069cc) | Captures each Windows workspace child's full no-follow file identity; cached directory enumeration leaves inode/device/link fields zero and caused a false replacement refusal. The new real-directory regression models only that documented metadata boundary; the exact old helper fails it. Root 59 of 61 runner checks pass in 6.581s. | Replacement, reparse, foreign hard-link, unjoined-owner and cleanup-error checks remain. Actual successful Windows cleanup and bounded MAX jobs are recorded below; the whole release is separate. |
 | [`3e0f06e7`](https://github.com/Eabusham2/router-vpn/commit/3e0f06e73329a3f237b3486367e0787a8f95597f) | Adds one original-monitor synchronization at the temporary Speed Lab restoration fixture boundary. All 24 existing directions pass race tests in 76.769s. Controlled actual monitor ownership reproduces the old HTTP409-before-trial error on TCP/UDP/mixed OpenVPN; the fixed cases pass in 17.118s and root's independent three-branch run in 14.985s. | Only physical network inventory is modeled locally. No production lock, proof, cancellation, restoration or timeout is changed. Both complete application source gates subsequently pass on this exact SHA without the local inventory model, as recorded below. |
+| [`0df6174d`](https://github.com/Eabusham2/router-vpn/commit/0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7) | Retains the original Linux TUN, continuous routing stream, acknowledged calls, resolver connection and native service child through bounded shutdown retries. The inherited cleanup protocol authenticates original requests/results and requires independent complete routing absence before protection release. Root combined races pass 134 service, 110 startup and 54 portable resolver/D-Bus verdicts; exact preparation inputs and native projection agree. | Real namespace/TUN/service acceptance remains mandatory. The original-child fixture now directly joins its creation-pidfd owner. Older available-bus compatibility, active MTU, cross-adapter transfer, active Always upgrades and same-boot crash continuation remain unfinished. |
 
 
-## Native retirement source accompanying this record
+## Native retirement source at 0df6174d
 
 The combined Linux source now retains the native constructor's original TUN,
 continuous routing-event socket, successful-call ledger, dependency owners and
@@ -157,6 +158,32 @@ no tests selected. The seven real TUN/routing cases remain required in CI.
 required native gates, older available-bus compatibility boundary and Linux's
 lack of an atomic creator-generation comparison for rule deletion. Those
 limitations remain requirements; rejecting them does not complete them.
+
+## Windows complete MAX source accompanying this record
+
+The Windows retained Router host now admits `max-quic-wg`, `max-quic-awg`,
+`max-tls-wg` and `max-tls-awg`. Its admission bytes exactly match the candidate
+executed by all ten native MAX/WFP prerequisite partitions at `93720c2a`.
+Root independently checked the ten downloaded ZIPs, actual receipt bytes and
+logged upload digests, 1,736 common source records, 32 positive suite predicate
+records and all 46 compiled negatives. The LF predicate SHA256 is
+`40c4d1a2a608dfe73718d618424ff9399dc768665c9b4ec05d4a4dca7d78456d`;
+Windows CRLF is `59ac520e8581f23888acd94d6ebca10bcbbe9c2b0e895048444cdc31d7ec2154`.
+
+The MAX workflow now executes shipping admission and retains its separately
+compiled closed-family control. ALL's 26 cases, eight compiled negatives and
+four restoration leaves per architecture likewise use shipping admission
+without a capability overlay. The original missing-private-graph test still
+requires every candidate to refuse before disturbing its proved predecessor.
+Graph credentials, WFP/socket ownership, selected DNS, MTU, Start Layers and
+lifecycle guards are unchanged. The Linux-specific admission stays closed for
+these four families.
+
+Root's integrated admission race passes in 1.019s and all 23 controller-runner
+checks in 17.941s. Required MAX and ALL workflows still precede release
+aggregation and exact-SHA publication. The prerequisite native tests model TUN;
+these results do not establish physical-device or installed-package acceptance.
+The newly admitted shipping source must receive its own native/release results.
 
 ## Native and release evidence
 
@@ -529,12 +556,12 @@ There is no complete exact-current-SHA published release claim in this record.
 - The exact current source still needs complete native/package/image/compose
   gates and publication. Latest-attempt jobs/logs decide current blockers;
   historical errors cannot automatically be carried forward.
-- Protected Windows complete-MAX admission remains closed pending its matching
-  native MAX prerequisites and shipping activation. Both unified prospective
-  ALL architecture gates passed, and both are now required by release; those
-  specific gaps are no longer open. The Windows command-retirement and
-  read-only workspace regressions now have actual native confirmation.
-  Complete corrected MAX inventory and shipping admission remain open.
+- Protected Windows complete-MAX admission is now source-enabled after the
+  complete matching native prerequisites; both ALL architecture gates remain
+  required by release. The Windows command-retirement and read-only workspace
+  regressions have actual native confirmation. The admitted shipping source
+  still requires its own complete MAX/ALL, package and release verification;
+  prospective prerequisite receipts do not substitute for those results.
 - All original applicable product, map/UI, measurement, profile, Methods,
   onboarding/admin, native-runtime and lifecycle requirements remain accountable
   under the full ledger. This continuation did not independently close every

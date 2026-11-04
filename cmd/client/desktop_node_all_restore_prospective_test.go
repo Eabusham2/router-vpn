@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// The complete-MAX capability is the same explicit compiled test overlay as
-// the ALL fallback suite. Actual native dataplane admission remains separate.
+// The complete-MAX capability is the unchanged shipping predicate used by
+// the ALL fallback suite. Actual native dataplane acceptance remains separate.
 // The public Speed Lab transaction must restore the captured third candidate
 // even after earlier candidates become usable and its generated input changes.
 func TestDesktopNodeProspectiveALLTemporaryRestoreKeepsExactWinner(t *testing.T) {

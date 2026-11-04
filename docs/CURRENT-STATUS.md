@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — verified through 3e0f06e7
+## Latest implementation continuation — verified through 0df6174d
 
 The verified source cutoff is
-[`3e0f06e7`](https://github.com/Eabusham2/router-vpn/commit/3e0f06e73329a3f237b3486367e0787a8f95597f),
-tree `97ccac97b5c1f81f4d38c7a1c5fc03bb197db7f9`.
+[`0df6174d`](https://github.com/Eabusham2/router-vpn/commit/0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7),
+tree `fff965448cc6f77db05189ab58c57bc0b47d810a`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -135,18 +135,23 @@ validation limits. Changes and test counts are not a requirements denominator.
   result repeats at `b1caad7c` and `637edc8d`. The jobs were cancelled later during other
   contracts; complete Xcode/IPA and current-head release acceptance remain
   separate. Every negative, all 50 samples and the original deadlines remain.
-- Current Windows native admission already includes WG-PQ and AWG-PQ. The four
-  complete-MAX families remain closed on the protected Windows Router path;
-  ALL's ordered selection, captured proof and restoration logic already exist.
+- Windows native admission includes WG-PQ, AWG-PQ and, in the source
+  accompanying this record, the four complete-MAX families: TLS/QUIC with
+  WG/AWG. The exact candidate predicate passed all ten native prerequisites at
+  `93720c2a`; both ALL gates also passed. The shipping MAX workflow and all
+  26 ALL cases/eight controls now use that predicate without an admission
+  overlay. Linux admission remains separate. ALL keeps its ordered selection,
+  captured proof and exact restoration; absent private graphs preserve the
+  original proved owner.
   At `799480e2`, both AMD64 and ARM64 execute all 26 prospective ALL verdicts,
   eight compiled rejection controls and four temporary-restoration leaves with
   the same 1,592-file source closure and unified prospective predicate. These
   controller tests explicitly model native child/BFE/transport boundaries.
   The authoritative release now requires the same complete ALL gate on both
   native architectures before aggregation/publication. Prospective MAX/WFP or
-  ALL tests do not enable those shipping admission cases; corrected-source MAX
-  completion is now established at `93720c2a`, while the shipping admission
-  change remains outstanding. At
+  ALL tests alone did not enable shipping admission. The subsequent source
+  change follows the complete `93720c2a` native prerequisites and retains all
+  current-SHA native/release dependencies. At
   `6327ed02`, both required ALL jobs again pass all 26 verdicts, eight compiled
   controls and four restoration leaves, with identical 1,597-file source
   receipts. The full source-contract job also passes at that SHA, including

@@ -130,7 +130,7 @@ SHARED_TESTS = (
     "TestLogicalBaseRollbackPreservesDurablePredecessorAndCancellation",
     "TestLogicalBaseRollbackWriteFailureRetainsSavedStagedValue",
     "TestDesktopNodeALLKeepsCompleteTLSFirstOrder",
-    "TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner",
+    "TestDesktopNodePublicALLMissingGraphsKeepOriginalOwner",
     "TestDesktopNodePublicALLCancellationKeepsCapturedOperation",
     "TestSpeedLabFallbackReleaseRequiresCapturedTransaction",
     "TestDesktopWindowsExternalPublicConnectAndDisconnect",
@@ -204,7 +204,7 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             *("TestLogicalBaseRollbackRejectsChangedOrUnjoinedOwners/" + case
               for case in ("operation", "selection", "profile", "command", "workspace", "new-unknown-slot", "replaced-slot", "lost-slot",
                            "active", "retiring", "off", "journal-close", "new-target", "revision")),
-            *("TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner/" + policy for policy in ("always", "on-connect")),
+            *("TestDesktopNodePublicALLMissingGraphsKeepOriginalOwner/" + policy for policy in ("always", "on-connect")),
             *("TestDesktopNodePublicALLCancellationKeepsCapturedOperation/" + case for case in ("cancel", "replacement")),
             *("TestSpeedLabFallbackReleaseRequiresCapturedTransaction/" + case for case in
               ("live", "test-cancelled", "intent-cancelled", "operation", "runtime", "not-mutated", "restored", "invalid-owner")),
@@ -281,13 +281,11 @@ ALL_CAPABILITY_FILE = "internal/mobilemultihop/desktop_node_admission.go"
 
 def all_capability_source():
     original = (ROOT / ALL_CAPABILITY_FILE).read_text(encoding="utf-8")
-    modes = ("max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg")
-    if any('"' + mode + '"' in original for mode in modes):
-        raise ValueError("Prospective ALL requires its unchanged closed shipping capability")
-    # Match the complete-MAX native gate's exact prospective source, including
-    # family order and insertion point. Shipping admission remains unchanged.
-    return NATIVE.replace_once(original, "\tswitch mode {\n",
-        '\tswitch mode {\n\tcase "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg":\n\t\treturn true\n')
+    modes = ("max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg")
+    admitted = '\tcase "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg":\n\t\treturn true\n'
+    if original.count(admitted) != 1 or any(original.count('"' + mode + '"') != 1 for mode in modes):
+        raise ValueError("ALL requires its exact four-family shipping capability")
+    return original
 
 
 def check_all_composition(status, output):
@@ -334,16 +332,16 @@ def all_mutants():
 
 
 def execute_all_composition(build, captured, workspace):
-    # Only this test binary admits complete MAX. Native application selection,
-    # source compilation, proof and retirement remain the actual shipping code.
-    # This prospective controller result never substitutes for native WFP/PQ.
+    # Use the shipping capability without an admission overlay. The historical
+    # selector/tag names retain all original cases and eight negative controls.
+    # Controller composition never substitutes for actual native WFP/PQ.
     source = workspace / "all-capability.go"
     source.write_text(all_capability_source(), encoding="utf-8")
     capability_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     compiled = ["-tags=" + TAG + ",routervpn_node_all_prospective" if value == "-tags=" + TAG else value for value in build]
     cases = [(None, "node-all", None, None, None), *all_mutants()]
     for filename, label, test, witness, replacement in cases:
-        mapping = {str(ROOT / ALL_CAPABILITY_FILE): str(source)}
+        mapping = {}
         if filename is not None:
             changed = workspace / (label + ".go")
             changed.write_text(replacement, encoding="utf-8")
@@ -737,7 +735,7 @@ def execute(go="go", *, env=None, suite="complete"):
                           "prospective_all_markers": len(ALL_EXPECTED) if run_all else 0,
                           "prospective_all_controls": len(all_mutants()) if run_all else 0,
                           "prospective_all_capability_sha256": all_capability_digest,
-                          "prospective_all_scope": "controller composition only; shipping MAX admission and actual WFP/PQ remain separate",
+                          "prospective_all_scope": "unchanged shipping admission and controller composition; actual WFP/PQ remains a separate mandatory gate",
                           "source_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
                           "authenticated_package_launch": "separate-required-composition-gate",
                           "sing_box_dataplane": "separate-required-composition-gate"}, sort_keys=True))

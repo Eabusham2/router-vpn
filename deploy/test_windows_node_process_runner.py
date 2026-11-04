@@ -184,12 +184,12 @@ class NodeProcessRunner(unittest.TestCase):
             with self.assertRaises(ValueError):
                 GATE.check_all_composition(status, output)
 
-    def test_all_controls_keep_the_shipping_capability_closed_and_source_unchanged(self):
+    def test_all_controls_keep_the_shipping_capability_and_source_unchanged(self):
         names = (GATE.ALL_CAPABILITY_FILE, "cmd/client/logical_modes.go", "cmd/client/desktop_node_all.go",
                  "cmd/client/connection_cancellation.go", "cmd/client/speed_lab_fallback.go")
         before = {name: (ROOT / name).read_bytes() for name in names}
         prospective = GATE.all_capability_source()
-        self.assertNotEqual(prospective.encode(), before[GATE.ALL_CAPABILITY_FILE])
+        self.assertEqual(prospective.encode(), before[GATE.ALL_CAPABILITY_FILE])
         self.assertIn('case "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg":', prospective)
         controls = GATE.all_mutants()
         self.assertEqual(len(controls), 8)
@@ -202,13 +202,15 @@ class NodeProcessRunner(unittest.TestCase):
         for name, body in before.items():
             self.assertEqual((ROOT / name).read_bytes(), body)
 
-    def test_all_compiles_the_exact_native_max_prospective_predicate(self):
+    def test_all_uses_the_exact_shipping_native_max_predicate(self):
         spec = importlib.util.spec_from_file_location("all_matching_native_max", ROOT / "deploy/test_windows_node_max.py")
         native_max = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(native_max)
         before = (ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes()
         prospective = GATE.all_capability_source()
-        self.assertEqual(prospective, native_max.prospective_predicate(before.decode()))
+        closed = native_max.closed_predicate(before.decode())
+        self.assertNotEqual(closed, before.decode())
+        self.assertEqual(prospective, native_max.prospective_predicate(closed))
         self.assertEqual((ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes(), before)
         self.assertEqual(len(GATE.ALL_EXPECTED), 26)
         self.assertEqual(len(GATE.all_mutants()), 8)
@@ -248,6 +250,44 @@ class NodeProcessRunner(unittest.TestCase):
         self.assertEqual(receipt['host'], 'windows/arm64')
         self.assertEqual(receipt['prospective_all_markers'], 26)
         self.assertEqual(receipt['prospective_all_controls'], 8)
+
+    def test_all_refuses_closed_partial_or_duplicate_shipping_admission(self):
+        original = (ROOT / GATE.ALL_CAPABILITY_FILE).read_text()
+        case = '\tcase "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg":\n\t\treturn true\n'
+        with tempfile.TemporaryDirectory(prefix="shipping-all-admission-") as directory:
+            root = Path(directory)
+            source = root / GATE.ALL_CAPABILITY_FILE
+            source.parent.mkdir(parents=True)
+            for changed in (original.replace(case, ""), original.replace(case, case.replace('"max-tls-awg"', '"foreign"')),
+                            original.replace(case, case + case), original.replace(case, case.replace('true', 'false'))):
+                source.write_text(changed)
+                with patch.object(GATE, "ROOT", root), self.assertRaisesRegex(ValueError, "exact four-family shipping capability"):
+                    GATE.all_capability_source()
+
+    def test_all_positive_and_eight_controls_never_overlay_shipping_admission(self):
+        controls = {label: (test, witness) for _, label, test, witness, _ in GATE.all_mutants()}
+        compiled = []
+        def run(command, *, cwd, env, timeout):
+            if "-o" in command:
+                overlay = Path(next(str(arg).removeprefix("-overlay=") for arg in command if str(arg).startswith("-overlay=")))
+                mapping = json.loads(overlay.read_text())["Replace"]
+                self.assertNotIn(str(ROOT / GATE.ALL_CAPABILITY_FILE), mapping)
+                binary = Path(command[command.index("-o") + 1])
+                label = binary.name.removesuffix(".test.exe")
+                self.assertEqual(len(mapping), 0 if label == "node-all" else 1)
+                compiled.append(label)
+                binary.write_bytes(b"original modeled compiled controller")
+                return 0, ""
+            label = Path(command[0]).name.removesuffix(".test.exe")
+            if label == "node-all":
+                return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.ALL_EXPECTED)
+            test, witness = controls[label]
+            return 1, "--- FAIL: " + test + " (0.01s)\n    source_test.go:1: " + witness + "\n"
+        with tempfile.TemporaryDirectory(prefix="shipping-all-controller-") as directory, \
+             patch.object(GATE.NATIVE, "run", side_effect=run), patch("sys.stdout", new_callable=io.StringIO):
+            digest = GATE.execute_all_composition(["go", "test", "-c", "-tags=" + GATE.TAG], {}, Path(directory))
+        self.assertEqual(digest, hashlib.sha256((ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes()).hexdigest())
+        self.assertEqual(compiled, ["node-all", *controls])
 
     def test_expanded_baseline_keeps_individual_control_deadlines(self):
         controls = {name: (test, witness) for _, name, test, witness, _ in (*GATE.mutants(), *GATE.all_mutants())}

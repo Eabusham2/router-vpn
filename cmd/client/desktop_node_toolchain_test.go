@@ -6,7 +6,7 @@ import "testing"
 // An older CI toolchain or an omitted test file must fail the test build.
 var (
 	_ func(*testing.T) = TestDesktopNodeALLKeepsCompleteTLSFirstOrder
-	_ func(*testing.T) = TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner
+	_ func(*testing.T) = TestDesktopNodePublicALLMissingGraphsKeepOriginalOwner
 	_ func(*testing.T) = TestDesktopNodePublicALLCancellationKeepsCapturedOperation
 	_ func(*testing.T) = TestDesktopNodePublicConnectUsesCapturedOwnedHost
 	_ func(*testing.T) = TestDesktopNodeOwnedPQPlatformBoundary

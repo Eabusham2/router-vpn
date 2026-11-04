@@ -16,9 +16,9 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// This explicit prospective application test requires a compiled capability
-// overlay. The shipping predicate stays closed until the independent actual
-// native MAX gate passes. Only the fixture's existing process/firewall and
+// The historical prospective selector now exercises unchanged shipping MAX
+// admission. Actual native MAX gates remain independently required. Only the
+// fixture's existing process/firewall and
 // HTTP transport boundaries are modeled; selection, compilation, ownership,
 // proof parsing and retirement are the shipping implementations.
 func desktopNodeALLProspectiveFixture(t *testing.T, policy, layer string) *desktopNodeConnectionFixture {
@@ -28,7 +28,7 @@ func desktopNodeALLProspectiveFixture(t *testing.T, policy, layer string) *deskt
 	f.a.cfg.StateFile = filepath.Join(f.data, "state.json")
 	for _, candidate := range desktopNodeALLCandidates("wg") {
 		if !mobilemultihop.DesktopNodePhysicalGraphSupported(candidate.RuntimeID, layer) {
-			t.Fatal("prospective ALL requires its explicit compiled complete-MAX capability")
+			t.Fatal("ALL requires its unchanged shipping complete-MAX capability")
 		}
 		f.writeAssets(t, candidate.RuntimeID, nativeEntryMAXAssets(t, f.profile, candidate.RuntimeID))
 	}
