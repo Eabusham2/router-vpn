@@ -332,14 +332,14 @@ func (p *DesktopDarwinSocketPolicy) Grant(ctx context.Context, g DesktopSocketGr
 func (p *DesktopDarwinSocketPolicy) grantSocketAdmitted(ctx context.Context, g DesktopSocketGrant) (DesktopSocketReceipt, error) {
 	ctx, release, err := p.admitControl(ctx)
 	if err != nil {
-		return DesktopSocketReceipt{}, err
+		return DesktopSocketReceipt{}, desktopSocketUnsubmittedGrant(g, err)
 	}
 	defer release()
 	if err := ctx.Err(); err != nil {
-		return DesktopSocketReceipt{}, err
+		return DesktopSocketReceipt{}, desktopSocketUnsubmittedGrant(g, err)
 	}
 	if !p.Current(g.Capture, g.Binding.Owner) || !p.options.permits(g.Network, g.Remote) {
-		return DesktopSocketReceipt{}, net.ErrClosed
+		return DesktopSocketReceipt{}, desktopSocketUnsubmittedGrant(g, net.ErrClosed)
 	}
 	reply, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "grant", Capture: p.capture, Grant: g}, nil, true)
 	if file != nil {
@@ -566,10 +566,15 @@ func (p *DesktopDarwinSocketPolicy) admitControl(ctx context.Context) (context.C
 // the same channel and sequence for both foreground requests and probes.
 func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desktopDarwinRequest, file *os.File, requireCurrent bool) (desktopDarwinReply, *os.File, error) {
 	if ctx.Err() != nil || requireCurrent && !p.Current(p.capture, p.owner) {
-		return desktopDarwinReply{}, nil, net.ErrClosed
+		failure := error(net.ErrClosed)
+		if ctx.Err() != nil {
+			failure = ctx.Err()
+		}
+		if request.Operation == "grant" {
+			failure = desktopSocketUnsubmittedGrant(request.Grant, failure)
+		}
+		return desktopDarwinReply{}, nil, failure
 	}
-	p.sequence++
-	request.Sequence = p.sequence
 	budget := 3 * time.Second
 	if request.Operation == "prepare" {
 		budget = 25 * time.Second
@@ -579,8 +584,13 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 		deadline = d
 	}
 	if err := p.channel.SetDeadline(deadline); err != nil {
+		if request.Operation == "grant" {
+			err = desktopSocketUnsubmittedGrant(request.Grant, err)
+		}
 		return desktopDarwinReply{}, nil, err
 	}
+	p.sequence++
+	request.Sequence = p.sequence
 	if err := desktopDarwinSend(p.channel, request, file); err != nil {
 		p.lose("control-send-"+request.Operation, err)
 		return desktopDarwinReply{}, nil, err

@@ -2605,9 +2605,77 @@ func TestDesktopDarwinGuardianKernelSOCKSAssociations(t *testing.T) {
 				peer = firstUDP.peers[firstUDP.remote]
 				firstUDP.mu.Unlock()
 				udpReceipt, _ := peer.snapshot()
-				if err := controls[0].Close(); err != nil {
+				// Retire while an actual renewal is queued on the original native
+				// control. No wire request can be sent before cancellation; the
+				// old acknowledged sequence must remain the revoke identity.
+				first.mu.Lock()
+				originalPeer := first.peers[first.remote]
+				first.mu.Unlock()
+				originalPeer.op.Lock()
+				policy.mu.Lock()
+				locked := true
+				defer func() {
+					if locked {
+						policy.mu.Unlock()
+					}
+				}()
+				originalPeer.mu.Lock()
+				originalRequest := originalPeer.request
+				originalPeer.mu.Unlock()
+				type renewalCallerKey struct{}
+				caller := new(int)
+				renewalContext := context.WithValue(first.ctx, renewalCallerKey{}, caller)
+				if err := first.beginIO(); err != nil {
+					originalPeer.op.Unlock()
 					t.Fatal(err)
 				}
+				renewed := make(chan error, 1)
+				go func() {
+					defer first.io.Done()
+					defer originalPeer.op.Unlock()
+					renewed <- first.apply(renewalContext, originalPeer)
+				}()
+				until := time.Now().Add(time.Second)
+				for {
+					policy.mu.mu.Lock()
+					queued := false
+					for _, waiter := range policy.mu.waiters {
+						queued = queued || waiter.caller.Value(renewalCallerKey{}) == caller
+					}
+					policy.mu.mu.Unlock()
+					if queued {
+						break
+					}
+					if time.Now().After(until) {
+						t.Fatal("original SOCKS renewal did not enter native admission")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				closed := make(chan error, 1)
+				go func() { closed <- controls[0].Close() }()
+				if err := desktopSocketAwait(t, renewed); !errors.Is(err, context.Canceled) {
+					t.Fatal("queued native renewal lost its original cancellation", err)
+				}
+				originalPeer.mu.Lock()
+				retirementRequest := originalPeer.request
+				originalPeer.mu.Unlock()
+				if retirementRequest != originalRequest {
+					t.Fatal("unsent native renewal changed original retirement identity")
+				}
+				policy.mu.Unlock()
+				locked = false
+				select {
+				case err := <-closed:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					first.mu.Lock()
+					failure := first.lastFailure
+					first.mu.Unlock()
+					t.Fatal("native SOCKS close did not join its original retirement", ctx.Err(), failure)
+				}
+
 				if _, err := relays[0].Write([]byte("retired association")); err == nil {
 					t.Fatal("SOCKS UDP survived its joined original TCP close")
 				}

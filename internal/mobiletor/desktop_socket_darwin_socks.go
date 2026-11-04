@@ -82,11 +82,14 @@ func (a *desktopDarwinSOCKSRelayPolicy) Grant(ctx context.Context, g DesktopSock
 func (a *desktopDarwinSOCKSRelayPolicy) grantSocketAdmitted(ctx context.Context, g DesktopSocketGrant) (DesktopSocketReceipt, error) {
 	ctx, release, err := a.owner.admitControl(ctx)
 	if err != nil {
-		return DesktopSocketReceipt{}, err
+		return DesktopSocketReceipt{}, desktopSocketUnsubmittedGrant(g, err)
 	}
 	defer release()
-	if ctx == nil || ctx.Err() != nil || !a.matches(g) || !a.Current(g.Capture, g.Binding.Owner) {
-		return DesktopSocketReceipt{}, net.ErrClosed
+	if err := ctx.Err(); err != nil {
+		return DesktopSocketReceipt{}, desktopSocketUnsubmittedGrant(g, err)
+	}
+	if !a.matches(g) || !a.Current(g.Capture, g.Binding.Owner) {
+		return DesktopSocketReceipt{}, desktopSocketUnsubmittedGrant(g, net.ErrClosed)
 	}
 	reply, file, err := a.owner.callLocked(ctx, desktopDarwinRequest{Operation: "grant", Capture: g.Capture, Grant: g}, nil, true)
 	if file != nil {

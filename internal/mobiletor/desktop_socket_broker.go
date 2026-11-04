@@ -603,6 +603,7 @@ func (s *desktopSocket) apply(ctx context.Context, peer *desktopSocketPeer) erro
 		return net.ErrClosed
 	}
 	peer.mu.Lock()
+	previous := peer.request
 	peer.request.Sequence++
 	request := peer.request
 	peer.applying = true
@@ -610,6 +611,14 @@ func (s *desktopSocket) apply(ctx context.Context, peer *desktopSocketPeer) erro
 	receipt, err := desktopSocketGrantControlled(ctx, s.policy(), request)
 	if err != nil || ctx.Err() != nil || !s.live() || !validDesktopSocketReceipt(receipt, request, time.Now()) {
 		peer.mu.Lock()
+		// A cancellation while queued for native control never submitted the
+		// attempted sequence. Keep the original revoke identity in that exact
+		// case; uncertain writes retain the attempted identity for cleanup.
+		var unsubmitted *desktopSocketGrantNotSubmitted
+		if errors.As(err, &unsubmitted) && unsubmitted.request == request &&
+			receipt == (DesktopSocketReceipt{}) && peer.request == request {
+			peer.request = previous
+		}
 		peer.valid, peer.applying = false, false
 		peer.mu.Unlock()
 		s.stop()
