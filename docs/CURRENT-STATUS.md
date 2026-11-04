@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through df262aea
+## Latest implementation continuation — through 07136379
 
 The verified source cutoff is
-[`df262aea`](https://github.com/Eabusham2/router-vpn/commit/df262aeaec353734021f3113691e322199b93244),
-tree `1db520ac32622da2d45aa280089e996fe545119a`.
+[`07136379`](https://github.com/Eabusham2/router-vpn/commit/07136379c2dc32dc4c757c030365bf618a39fe0d),
+tree `7473f552d87a8b550d58aa4e100a6a329878c89c`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -22,14 +22,18 @@ validation limits. Changes and test counts are not a requirements denominator.
 - Retained macOS direct Local SOCKS5, AWG Fast/Strong and bounded OpenVPN are
   integrated with their captured credentials, selected policy and original
   native cleanup. The Local ordinary WG/AWG-entry host also admits SS, HTTP CONNECT,
-  HTTPS CONNECT and unlayered Hysteria2 exits while retaining both private sources
-  and separate proofs. The final node owns publication, Stop, measurements and
-  exact Local restoration; only the entry receives physical egress. CONNECT
+  HTTPS CONNECT, unlayered Hysteria2 and authenticated SOCKS5 exits while retaining
+  both private sources and separate proofs. The final node owns publication, Stop,
+  measurements and exact Local restoration; only the entry receives physical egress. CONNECT
   retains independent proxy credentials/TLS settings, and HY2 retains its final
-  QUIC/TLS/password peer and selected UDP DNS. The native gate requires its full
-  117-case inventory. Focused source/race/build checks pass; actual encrypted
-  peers, PF/utun, physical transitions and broader graph
-  families retain their distinct acceptance and implementation obligations.
+  QUIC/TLS/password peer and selected UDP DNS. SOCKS5 control and each negotiated
+  numeric UDP relay remain inside the original entry endpoint; neither receives
+  a physical grant. Speed Lab now seals the complete original source/profiles and
+  proved execution before interruption, rejecting altered saved layer/API inputs
+  before restoration. Server/Compare retain fresh leases for the already proved
+  winner. The native gate requires all 138 cases and 22 policy tests. Focused
+  source/race/build checks pass; actual encrypted peers, PF/utun, physical transitions
+  and broader graph families retain their distinct acceptance and implementation obligations.
 - Linux legacy direct stock engines retain their original sealed image,
   configuration, creation pidfd, native protection creator, state-file capability
   and exact teardown. Off, On-connect and Always share the original ownership
@@ -49,8 +53,11 @@ validation limits. Changes and test counts are not a requirements denominator.
   readiness, one retained native event observer now gates a second uncached DNS
   proof and later runtime/proof observations. Away-and-back changes remain invalid; native
   dump reads are bounded and exact, and cleanup joins only the original observer.
-  Initial preparation/startup and owned MTU event continuity, cross-adapter
-  protected transfer, active Always upgrades and same-boot service-crash recovery
+  A separate sealed-child prerequisite authenticates the original sealed executable
+  without relaxing generic process identity; seventeen actual process/pidfd
+  leaves pass under race instrumentation. It does not switch the installed engine
+  or close startup continuity. Initial preparation/startup and owned MTU event
+  continuity, cross-adapter protected transfer, active Always upgrades and same-boot service-crash recovery
   remain unfinished; see the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 - All legacy standard preparations use the shared captured device policy and
   bounded transport-host bootstrap. Invalid policy is rejected before lookup;
@@ -59,17 +66,43 @@ validation limits. Changes and test counts are not a requirements denominator.
   ARM64 runner executes the same eight cleanup cases without unsupported race
   instrumentation; supported platforms retain race checks. All five actual
   ARM64 MAX/WFP partitions pass at `ce746e87`. A distinct AMD64 foreign-admission
-  fixture now rejects its forbidden candidate before an unrelated handshake;
-  native acceptance of that repair remains pending. The iOS runner compiles
+  fixture now rejects its forbidden candidate before an unrelated handshake.
+  All five AMD64 MAX/WFP partitions pass at `c6b5fe62`, including both corrected
+  foreign-admission controls. That standalone run has a distinct ARM64 succession
+  fixture non-alias failure; it is not a whole workflow or current release pass.
+  The TLS reference now rejects reserved graph-port allocations before retaining
+  its original front listener. Real forced-collision and original-owner regressions
+  pass; all eight new native leaves and unchanged full MAX suites still require
+  a native rerun. The iOS runner compiles
   isolated controls alongside the full baseline within the original budget.
   Its original compiler supervisor remains live until acknowledged group
   termination and join. At `84c49e9a`, actual macOS passes all seven fixture and
   ownership runner tests, the complete 259-check Swift baseline, all six mutation controls,
   the full-profile actor negative and real iOS SDK positive/negative checks
-  within the unchanged 150-second budget. The job was cancelled later during
-  other contracts; complete Xcode/IPA and current-head release acceptance remain
+  within the unchanged 150-second budget. The complete candidate/mutation/actor/SDK
+  result repeats at `b1caad7c` and `637edc8d`. The jobs were cancelled later during other
+  contracts; complete Xcode/IPA and current-head release acceptance remain
   separate. Every negative, all 50 samples and the original deadlines remain.
+- Current Windows native admission already includes WG-PQ and AWG-PQ. The four
+  complete-MAX families remain closed on the protected Windows Router path;
+  ALL's ordered selection, captured proof and restoration logic already exist.
+  Prospective MAX/WFP tests do not enable those shipping admission cases.
+  Linux retained-host and macOS protected complete-MAX integration have distinct
+  source boundaries; mobile ALL selectors already exist. Historical staged-PQ
+  statements below describe their dated source, not the current predicate.
+- Fresh `b1caad7c` source gates exposed one stale controller-EOF fixture: it
+  installed a controller without supplying the now-required service protection
+  observation. `637edc8d` adds that explicit test boundary; actual HTTP/operation
+  draining and all production guards remain. Six refusal cases and the merged
+  focused race suite pass (1.394s). The old exact test reproduces its rejection;
+  complete current-head source/native gates remain required. A later cancelled
+  job at `3f8904a1` completed the full client/common package command successfully;
+  that bounded package result does not make the whole job a pass.
 - Actual macOS controller cleanup passes both architectures at `4550b091`.
+  The newer preserved ARM result at `df262aea` fails an ancestor ACL-capture
+  cleanup proof, and the macOS AWG-return result at `0c1969eb` fails an original
+  TCP-tuple rebind fixture. Both unchanged source areas remain under investigation;
+  the earlier passes do not close these newer failures.
   Actual generated Linux Router-node TUN checks pass both architectures at
   `71fc8139`, including protection, MTU rollback, bad DNS and bad key cases.
   Native guardian namespace/timeout/isolation controls also pass both Linux
