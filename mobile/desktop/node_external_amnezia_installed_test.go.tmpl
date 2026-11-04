@@ -5,6 +5,7 @@ package routervpnamnezia
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
@@ -24,35 +25,46 @@ import (
 // It shares only the fixed destinations and captured UDP bind with the WG peer.
 func startDesktopDarwinInstalledAmnezia(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest, physical netip.Addr) desktopExternalInstalledWGPeer {
 	t.Helper()
+	parameters, backend := desktopDarwinAmneziaBackend(t, request)
+	return startDesktopDarwinInstalledPacket(t, server, request.desktopExternalInstalledWGRequest, physical, parameters, backend)
+}
+
+func startDesktopDarwinInstalledAmneziaEntry(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress string) desktopExternalInstalledPacketEntryPeer {
+	t.Helper()
+	parameters, backend := desktopDarwinAmneziaBackend(t, request)
+	return startDesktopDarwinInstalledPacketEntry(t, server, request.desktopExternalInstalledWGRequest, physical, cert, exitAddress, "amneziawg", parameters, backend)
+}
+
+func desktopDarwinAmneziaBackend(t *testing.T, request desktopExternalInstalledAWGRequest) (string, func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error)) {
+	t.Helper()
 	parameters, err := awgpolicy.ParametersUAPI(request.Parameters)
 	expected, digestErr := desktopNodeAWGParameterDigest(request.Parameters)
 	padding, paddingErr := strconv.Atoi(request.Parameters["s4"])
 	if err != nil || digestErr != nil || paddingErr != nil || len(request.Parameters) != 11 {
 		t.Fatal("Darwin AWG reference lost its complete eleven captured parameters")
 	}
-	return startDesktopDarwinInstalledPacket(t, server, request.desktopExternalInstalledWGRequest, physical, parameters,
-		func(_ context.Context, stack wg.Device, bind *desktopDarwinWGBind, ipc string) (desktopDarwinWGDevice, error) {
-			wrapped := wrapTun(stack)
-			device := awg.NewDevice(wrapped, &desktopDarwinAWGBind{bind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
-			err := device.IpcSet(ipc)
-			if err == nil {
-				err = wrapped.configuredPadding(padding)
-			}
-			if err == nil {
-				_, err = desktopNodeAWGParameterReadback(device, expected)
-			}
-			if err == nil {
-				err = stack.Start()
-			}
-			if err == nil {
-				err = device.Up()
-			}
-			if err != nil {
-				device.Close()
-				return desktopDarwinWGDevice{}, err
-			}
-			return desktopDarwinWGDevice{close: device.Close, readback: func() (string, error) { return desktopNodeAWGParameterReadback(device, expected) }}, nil
-		})
+	return parameters, func(_ context.Context, stack wg.Device, bind *desktopDarwinWGBind, ipc string) (desktopDarwinWGDevice, error) {
+		wrapped := wrapTun(stack)
+		device := awg.NewDevice(wrapped, &desktopDarwinAWGBind{bind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+		err := device.IpcSet(ipc)
+		if err == nil {
+			err = wrapped.configuredPadding(padding)
+		}
+		if err == nil {
+			_, err = desktopNodeAWGParameterReadback(device, expected)
+		}
+		if err == nil {
+			err = stack.Start()
+		}
+		if err == nil {
+			err = device.Up()
+		}
+		if err != nil {
+			device.Close()
+			return desktopDarwinWGDevice{}, err
+		}
+		return desktopDarwinWGDevice{close: device.Close, readback: func() (string, error) { return desktopNodeAWGParameterReadback(device, expected) }}, nil
+	}
 }
 
 type desktopDarwinAWGBind struct{ *desktopDarwinWGBind }

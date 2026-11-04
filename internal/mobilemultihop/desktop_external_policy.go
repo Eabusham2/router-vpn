@@ -56,7 +56,7 @@ type DesktopExternalPolicy struct {
 var desktopExternalPolicyError = errors.New("desktop external lower path requires its complete captured native policy")
 
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
-// Darwin additionally admits the exact Local external WG entry -> SS exit graph.
+// Darwin additionally admits the exact Local external WG/AWG entry -> SS exit graph.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -67,7 +67,11 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		return nil, desktopExternalPolicyError
 	}
 	capture, err := original.DesktopCapture()
-	entry := err == nil && targetOS == "darwin" && desktopExternalWireGuardEntry(original, capture)
+	entryKind := ""
+	if err == nil && targetOS == "darwin" {
+		entryKind = desktopExternalPacketEntryKind(original, capture)
+	}
+	entry := entryKind != ""
 	if err != nil || !entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" ||
 		capture.Execution != "" || capture.EntryStartLayer != "" ||
 		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
@@ -108,7 +112,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	root := capture.PhysicalRoots[0]
 	rootTag, rootKind, rowCount := ExternalFinalTag, kind, 1
 	if entry {
-		family, rootTag, rootKind = "endpoints", capture.EntryTag, "wireguard"
+		family, rootTag, rootKind = "endpoints", capture.EntryTag, entryKind
 	}
 	if layered {
 		rootTag, rootKind, rowCount = multihoprelay.ExitStartLayerTag, "shadowsocks", 2
@@ -280,15 +284,24 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 // The original compiler validates the full credentials and graph before this
 // bounded admission. The actual first root must still match its exact digest;
 // an entry descriptor cannot turn an unrelated transport into physical egress.
-func desktopExternalWireGuardEntry(original *ExternalPolicy, capture ExternalDesktopCapture) bool {
+func desktopExternalPacketEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture) string {
 	if original == nil || capture.EntryID == "" || capture.EntryTag != "external-entry" ||
 		capture.EntryNodeID != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
 		capture.Protocol != "shadowsocks" || capture.StartLayer != "" || capture.EntryStartLayer != "" {
-		return false
+		return ""
 	}
 	entry := original.capture.Entry
 	external, ok := entry["external"].(map[string]any)
-	return ok && entry["id"] == capture.EntryID && entry["node_kind"] == "external" && external["protocol"] == "wireguard"
+	if !ok || entry["id"] != capture.EntryID || entry["node_kind"] != "external" {
+		return ""
+	}
+	switch external["protocol"] {
+	case "wireguard":
+		return "wireguard"
+	case "amneziawg":
+		return AmneziaType
+	}
+	return ""
 }
 
 func desktopExternalObjectDigest(value any) string {

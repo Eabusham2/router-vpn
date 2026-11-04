@@ -3,14 +3,28 @@ package main
 import (
 	"context"
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
+	"strconv"
+	"strings"
 	"testing"
 )
 
-func desktopExternalWGEntryFixture(t *testing.T, kill string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
+func desktopExternalPacketEntryFixture(t *testing.T, kill, variant string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
 	t.Helper()
 	profile, exit := desktopExternalNativeFixture(t, "shadowsocks")
 	entry, _ := desktopExternalNativeFixture(t, "wireguard")
 	entry.ID = "captured-wg-entry"
+	if variant != "wireguard" {
+		entry.ID = "captured-awg-entry"
+		parameters := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+		if variant == "fast" {
+			parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+		} else if variant != "strong" {
+			t.Fatal("unknown entry import")
+		}
+		entry.External.Protocol, entry.External.AmneziaWG = "amneziawg", &common.ExternalAmneziaWGConfig{ExternalWireGuardConfig: *entry.External.WireGuard, Parameters: parameters}
+		entry.External.WireGuard = nil
+	}
 	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
 	launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
@@ -20,8 +34,16 @@ func desktopExternalWGEntryFixture(t *testing.T, kill string) (common.RouterProf
 	return profile, entry, launch
 }
 func TestDesktopExternalWireGuardEntryRetainsBothSourcesAndMeasurementOwner(t *testing.T) {
+	desktopExternalPacketEntryRetainsSources(t, "wireguard")
+}
+func TestDesktopExternalAmneziaEntryRetainsBothSourcesAndMeasurementOwner(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryRetainsSources(t, variant) })
+	}
+}
+func desktopExternalPacketEntryRetainsSources(t *testing.T, variant string) {
 	for _, kill := range []string{"on-connect", "always"} {
-		profile, entry, launch := desktopExternalWGEntryFixture(t, kill)
+		profile, entry, launch := desktopExternalPacketEntryFixture(t, kill, variant)
 		if err := prepareDesktopExternalPhysicalCaptured(launch, "darwin"); err != nil || launch.external.physical == nil {
 			t.Fatal(err)
 		}
@@ -29,7 +51,11 @@ func TestDesktopExternalWireGuardEntryRetainsBothSourcesAndMeasurementOwner(t *t
 			t.Fatal(err)
 		}
 		meta, err := capturedDesktopExternalPhysical(launch.external)
-		if err != nil || meta == nil || meta.RootType != "wireguard" || meta.Protocol != "shadowsocks" {
+		rootType := "wireguard"
+		if variant != "wireguard" {
+			rootType = mobilemultihop.AmneziaType
+		}
+		if err != nil || meta == nil || meta.RootType != rootType || meta.Protocol != "shadowsocks" {
 			t.Fatal("lost captured first root", err)
 		}
 		measure, err := capturedDesktopMeasurementRuntime(launch)
@@ -40,14 +66,30 @@ func TestDesktopExternalWireGuardEntryRetainsBothSourcesAndMeasurementOwner(t *t
 		if err != nil || resolver.node != profile.ID || resolver.source != meta.SourceSHA256 {
 			t.Fatal("DNS mailbox borrowed entry identity", err)
 		}
-		for _, fault := range []string{"entry-key", "entry-psk", "entry-address", "entry-public", "entry-option", "exit-key", "exit-public", "dns", "mtu", "lan", "ipv6"} {
+		faults := []string{"entry-key", "entry-peer-key", "entry-psk", "entry-id", "entry-address", "entry-public", "entry-option", "exit-id", "exit-key", "exit-public", "dns", "mtu", "lan", "ipv6"}
+		if variant != "wireguard" {
+			for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+				faults = append(faults, "parameter/"+key)
+			}
+		}
+		for _, fault := range faults {
 			t.Run(kill+"/"+fault, func(t *testing.T) {
 				p, e := cloneRouterProfile(profile), cloneRouterProfile(entry)
+				wireguard := e.External.WireGuard
+				if e.External.AmneziaWG != nil {
+					wireguard = &e.External.AmneziaWG.ExternalWireGuardConfig
+				}
 				switch fault {
 				case "entry-key":
-					e.External.WireGuard.PrivateKey = profile.External.Shadowsocks.Password
+					wireguard.PrivateKey = profile.External.Shadowsocks.Password
+				case "entry-peer-key":
+					wireguard.PeerPublicKey = testWGKey('z')
+				case "entry-id":
+					e.ID += "changed"
+				case "exit-id":
+					p.ID += "changed"
 				case "entry-psk":
-					e.External.WireGuard.PresharedKey = profile.External.Shadowsocks.Password
+					wireguard.PresharedKey = profile.External.Shadowsocks.Password
 				case "entry-address":
 					e.Endpoint = "192.0.2.222"
 				case "entry-public":
@@ -66,6 +108,8 @@ func TestDesktopExternalWireGuardEntryRetainsBothSourcesAndMeasurementOwner(t *t
 					p.HomeLANAccess = !p.HomeLANAccess
 				case "ipv6":
 					p.IPv6Mode = "on"
+				default:
+					mutateDesktopExternalEntryParameter(t, e.External.AmneziaWG.Parameters, strings.TrimPrefix(fault, "parameter/"))
 				}
 				if err := validateDesktopMacOSExternalSources(p, e, launch); err == nil {
 					t.Fatal("replaced source accepted", fault)
@@ -79,8 +123,16 @@ func TestDesktopExternalWireGuardEntryRetainsBothSourcesAndMeasurementOwner(t *t
 }
 
 func TestDesktopExternalWireGuardEntryRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	desktopExternalPacketEntryRestore(t, "wireguard")
+}
+func TestDesktopExternalAmneziaEntryRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryRestore(t, variant) })
+	}
+}
+func desktopExternalPacketEntryRestore(t *testing.T, variant string) {
 	for _, kill := range []string{"on-connect", "always"} {
-		_, _, initial := desktopExternalWGEntryFixture(t, kill)
+		_, _, initial := desktopExternalPacketEntryFixture(t, kill, variant)
 		exit, err := standardExitFromExternalProfile(initial.external.profile)
 		if err != nil {
 			t.Fatal(err)
@@ -99,23 +151,35 @@ func TestDesktopExternalWireGuardEntryRestoreKeepsCompleteSourceAndNewSession(t 
 		if restored.external.mtu == nil || restored.external.mtu.restoreMTU != 1360 {
 			t.Fatal("restore discarded original selected MTU")
 		}
-		for _, fault := range []string{"entry-key", "entry-ip", "final-key", "source", "server"} {
+		faults := []string{"entry-key", "entry-ip", "final-key", "source", "server"}
+		if variant != "wireguard" {
+			for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+				faults = append(faults, "parameter/"+key)
+			}
+		}
+		for _, fault := range faults {
 			t.Run(kill+"/restore-"+fault, func(t *testing.T) {
 				copy := *saved
 				copy.profile = cloneRouterProfile(saved.profile)
 				copy.entry = cloneRouterProfile(saved.entry)
 				copy.source = append([]byte(nil), saved.source...)
+				wireguard := copy.entry.External.WireGuard
+				if copy.entry.External.AmneziaWG != nil {
+					wireguard = &copy.entry.External.AmneziaWG.ExternalWireGuardConfig
+				}
 				switch fault {
 				case "entry-key":
-					copy.entry.External.WireGuard.PrivateKey = testWGKey('z')
+					wireguard.PrivateKey = testWGKey('z')
 				case "entry-ip":
-					copy.entry.External.WireGuard.Endpoint = "192.0.2.21:51820"
+					wireguard.Endpoint = "192.0.2.21:51820"
 				case "final-key":
 					copy.profile.External.Shadowsocks.Password = testWGKey('z')
 				case "source":
 					copy.source = []byte(`{}`)
 				case "server":
 					copy.execution = "server"
+				default:
+					mutateDesktopExternalEntryParameter(t, copy.entry.External.AmneziaWG.Parameters, strings.TrimPrefix(fault, "parameter/"))
 				}
 				if next, err := compileSpeedLabExternalRestore(&copy, exit); err == nil || next != nil {
 					t.Fatal("changed restore source acquired another runtime", fault)
@@ -123,4 +187,17 @@ func TestDesktopExternalWireGuardEntryRestoreKeepsCompleteSourceAndNewSession(t 
 			})
 		}
 	}
+}
+
+func mutateDesktopExternalEntryParameter(t *testing.T, parameters map[string]string, key string) {
+	t.Helper()
+	if strings.HasPrefix(key, "h") {
+		parameters[key] = "50000000-59999999"
+		return
+	}
+	n, err := strconv.Atoi(parameters[key])
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters[key] = strconv.Itoa(n + 1)
 }

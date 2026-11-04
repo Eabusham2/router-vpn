@@ -44,9 +44,12 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	t.Helper()
 	// The labels select independent imported test profiles. The saved native
 	// protocol remains amneziawg; no preset alias is added to its schema.
-	entrySelected := protocol == "wg-entry-ss"
-	if entrySelected {
+	entrySelected := protocol == "wg-entry-ss" || strings.HasPrefix(protocol, "awg-entry-ss-")
+	if protocol == "wg-entry-ss" {
 		protocol = "wireguard"
+	}
+	if suffix, ok := strings.CutPrefix(protocol, "awg-entry-ss-"); ok {
+		protocol = "amneziawg-" + suffix
 	}
 	variant := ""
 	if selected, ok := strings.CutPrefix(protocol, "amneziawg-"); ok {
@@ -314,7 +317,7 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 		protocols = append(protocols, "hysteria2")
 	}
 	if runtime.GOOS == "darwin" {
-		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong", "wg-entry-ss")
+		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong")
 	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong")
@@ -343,7 +346,7 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 				t.Fatal(err)
 			}
 			network := "tcp"
-			if protocol == "hysteria2" || protocol == "wireguard" || protocol == "wg-entry-ss" || strings.HasPrefix(protocol, "amneziawg-") || protocol == "openvpn-udp" {
+			if protocol == "hysteria2" || protocol == "wireguard" || protocol == "wg-entry-ss" || strings.HasPrefix(protocol, "awg-entry-ss-") || strings.HasPrefix(protocol, "amneziawg-") || protocol == "openvpn-udp" {
 				network = "udp"
 			}
 			peer := M.ParseSocksaddr(net.JoinHostPort(host, "8443"))
@@ -356,7 +359,7 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 			if err := f.network.Start(adapter.StartStateInitialize); err != nil || calls.Load() != 1 {
 				t.Fatal("exact Initialize failed", err)
 			}
-			eager := protocol == "wireguard" || protocol == "wg-entry-ss" || strings.HasPrefix(protocol, "amneziawg-") || strings.HasPrefix(protocol, "openvpn-")
+			eager := protocol == "wireguard" || protocol == "wg-entry-ss" || strings.HasPrefix(protocol, "awg-entry-ss-") || strings.HasPrefix(protocol, "amneziawg-") || strings.HasPrefix(protocol, "openvpn-")
 			if f.network.SocketCurrent() != eager || f.network.Current() {
 				t.Fatal("ordinary transport changed its separate startup socket/readiness phase")
 			}

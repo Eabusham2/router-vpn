@@ -8,12 +8,12 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// This shape selects only the captured Local ordinary WG entry -> SS exit.
+// This shape selects only the captured Local ordinary WG/AWG entry -> SS exit.
 // It supplies no source, socket or native admission authority by itself.
-func desktopExternalWireGuardEntryOwner(owner *desktopExternalRuntime) bool {
+func desktopExternalPacketEntryOwner(owner *desktopExternalRuntime) bool {
 	if owner == nil || owner.direct || owner.predecessor != "" || owner.selection != "local" ||
 		owner.profile.NodeKind != "external" || owner.profile.External == nil || owner.profile.External.Protocol != "shadowsocks" ||
-		owner.entry.NodeKind != "external" || owner.entry.External == nil || owner.entry.External.Protocol != "wireguard" ||
+		owner.entry.NodeKind != "external" || owner.entry.External == nil || (owner.entry.External.Protocol != "wireguard" && owner.entry.External.Protocol != "amneziawg") ||
 		owner.entry.ID == "" || owner.entry.ID == owner.profile.ID ||
 		owner.profile.StartLayer != "" && owner.profile.StartLayer != "off" || owner.entry.StartLayer != "" && owner.entry.StartLayer != "off" ||
 		owner.profile.MultihopExecution != "" && owner.profile.MultihopExecution != "local" || owner.profile.MultihopEntryMode != "" {
@@ -31,7 +31,7 @@ func validateDesktopMacOSExternalSources(profile, entry common.RouterProfile, la
 		return validateDesktopWindowsExternalSource(profile, launch)
 	}
 	owner := launch.external
-	if !desktopExternalWireGuardEntryOwner(owner) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID ||
+	if !desktopExternalPacketEntryOwner(owner) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID ||
 		profile.ID != owner.profile.ID || entry.ID != owner.entry.ID {
 		return errors.New("macOS entry source lost its two original saved profiles")
 	}

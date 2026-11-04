@@ -31,7 +31,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if owner.physical != nil {
 		return errors.New("ordinary physical preparation cannot replace a captured owner")
 	}
-	entry := targetOS == "darwin" && desktopExternalWireGuardEntryOwner(owner)
+	entry := targetOS == "darwin" && desktopExternalPacketEntryOwner(owner)
 	if targetOS != "windows" && targetOS != "linux" && targetOS != "darwin" || !owner.direct && !entry || owner.predecessor != "" {
 		return nil
 	}
@@ -82,7 +82,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 		return nil, nil
 	}
 	physical := owner.physical
-	if physical.Validate() != nil || !owner.direct && !(physical.Metadata().TargetOS == "darwin" && desktopExternalWireGuardEntryOwner(owner)) || owner.predecessor != "" {
+	if physical.Validate() != nil || !owner.direct && !(physical.Metadata().TargetOS == "darwin" && desktopExternalPacketEntryOwner(owner)) || owner.predecessor != "" {
 		return nil, errors.New("ordinary physical capture lost its exact native policy")
 	}
 	meta := physical.Metadata()

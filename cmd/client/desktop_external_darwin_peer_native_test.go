@@ -38,35 +38,36 @@ type macOSExternalLayerReceipt struct {
 }
 
 type macOSExternalPeerReply struct {
-	WireGuardEntry          *macOSExternalWGEntryReceipt `json:"wireguard_entry,omitempty"`
-	OpenVPNNetwork          string                       `json:"openvpn_network,omitempty"`
-	OpenVPNProfile          string                       `json:"openvpn_profile,omitempty"`
-	OpenVPNUsername         string                       `json:"openvpn_username,omitempty"`
-	OpenVPNPassword         string                       `json:"openvpn_password,omitempty"`
-	OpenVPNFallbackAttempts int64                        `json:"openvpn_fallback_attempts,omitempty"`
-	OpenVPNFirstSequence    uint64                       `json:"openvpn_first_sequence,omitempty"`
-	OpenVPNFinalSequence    uint64                       `json:"openvpn_final_sequence,omitempty"`
-	ParametersSHA256        string                       `json:"parameters_sha256,omitempty"`
-	SOCKSRelays             []string                     `json:"socks_relays,omitempty"`
-	SOCKSRejectedReplies    uint32                       `json:"socks_rejected_replies,omitempty"`
-	Layer                   *macOSExternalLayerReceipt   `json:"layer,omitempty"`
-	Latency                 *macOSExternalLatencyReceipt `json:"latency,omitempty"`
-	Schema                  int                          `json:"schema"`
-	Protocol                string                       `json:"protocol"`
-	Address                 string                       `json:"address"`
-	CA                      string                       `json:"ca"`
-	Connections             int64                        `json:"connections"`
-	Streams                 int64                        `json:"streams"`
-	PhysicalUDP             int64                        `json:"physical_udp"`
-	Packets                 int64                        `json:"packets"`
-	DNSQueries              uint32                       `json:"dns_queries"`
-	PublicAttempts          uint32                       `json:"public_attempts"`
-	PublicReplies           uint32                       `json:"public_replies"`
-	AuthFailures            uint32                       `json:"auth_failures"`
+	PacketEntry             *macOSExternalPacketEntryReceipt `json:"packet_entry,omitempty"`
+	OpenVPNNetwork          string                           `json:"openvpn_network,omitempty"`
+	OpenVPNProfile          string                           `json:"openvpn_profile,omitempty"`
+	OpenVPNUsername         string                           `json:"openvpn_username,omitempty"`
+	OpenVPNPassword         string                           `json:"openvpn_password,omitempty"`
+	OpenVPNFallbackAttempts int64                            `json:"openvpn_fallback_attempts,omitempty"`
+	OpenVPNFirstSequence    uint64                           `json:"openvpn_first_sequence,omitempty"`
+	OpenVPNFinalSequence    uint64                           `json:"openvpn_final_sequence,omitempty"`
+	ParametersSHA256        string                           `json:"parameters_sha256,omitempty"`
+	SOCKSRelays             []string                         `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies    uint32                           `json:"socks_rejected_replies,omitempty"`
+	Layer                   *macOSExternalLayerReceipt       `json:"layer,omitempty"`
+	Latency                 *macOSExternalLatencyReceipt     `json:"latency,omitempty"`
+	Schema                  int                              `json:"schema"`
+	Protocol                string                           `json:"protocol"`
+	Address                 string                           `json:"address"`
+	CA                      string                           `json:"ca"`
+	Connections             int64                            `json:"connections"`
+	Streams                 int64                            `json:"streams"`
+	PhysicalUDP             int64                            `json:"physical_udp"`
+	Packets                 int64                            `json:"packets"`
+	DNSQueries              uint32                           `json:"dns_queries"`
+	PublicAttempts          uint32                           `json:"public_attempts"`
+	PublicReplies           uint32                           `json:"public_replies"`
+	AuthFailures            uint32                           `json:"auth_failures"`
 }
 
 type macOSExternalNativePeer struct {
-	wgEntry                                                          bool
+	packetEntry                                                      bool
+	entryProtocol, entryVariant                                      string
 	entryAddress                                                     netip.AddrPort
 	openvpnNetwork, openvpnProfile, openvpnUsername, openvpnPassword string
 	openvpnClient                                                    netip.Addr
@@ -147,7 +148,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 	}
 	address, err := netip.ParseAddrPort(reply.Address)
 	expectedAddress := p.physical
-	if p.wgEntry {
+	if p.packetEntry {
 		expectedAddress = netip.MustParseAddr("198.51.100.240")
 	}
 	pool := x509.NewCertPool()
@@ -163,7 +164,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 	if p.protocol != "amneziawg" && reply.ParametersSHA256 != "" {
 		t.Fatal("ordinary peer acquired an unrequested AWG parameter identity")
 	}
-	macOSExternalNativeWGEntryRead(t, p, reply)
+	macOSExternalNativePacketEntryRead(t, p, reply)
 	macOSExternalNativeOpenVPNRead(t, p, reply, address)
 	p.address, p.ca = address, reply.CA
 	if p.layer == "" {
@@ -204,8 +205,18 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
-	p.wgEntry = strings.HasPrefix(scenario, "wg-entry-ss")
-	if p.wgEntry && strings.HasSuffix(scenario, "-always") {
+	p.packetEntry = strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	if p.packetEntry {
+		p.entryProtocol = "wireguard"
+		if strings.HasPrefix(scenario, "awg-entry-ss-") {
+			p.entryProtocol = "amneziawg"
+			p.entryVariant = "strong"
+			if strings.HasPrefix(scenario, "awg-entry-ss-fast") {
+				p.entryVariant = "fast"
+			}
+		}
+	}
+	if p.packetEntry && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
 	}
 	if scenario == "wireguard-always" || scenario == "socks5-always" || strings.HasPrefix(scenario, "amneziawg-") && strings.HasSuffix(scenario, "-always") {
@@ -293,7 +304,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof") {
 		request["socks_fault"] = fault
 	}
-	if protocol == "wireguard" || protocol == "amneziawg" || p.wgEntry {
+	if protocol == "wireguard" || protocol == "amneziawg" || p.packetEntry {
 		provider, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatal(err)
@@ -304,7 +315,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		}
 		p.clientKey = base64.StdEncoding.EncodeToString(consumer.Bytes())
 		p.peerKey = base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes())
-		if p.wgEntry {
+		if p.packetEntry {
 			var key [32]byte
 			if _, err := rand.Read(key[:]); err != nil {
 				t.Fatal(err)
@@ -316,8 +327,13 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 			request["password"] = ""
 		}
 		keys := map[string]any{"private_key": base64.StdEncoding.EncodeToString(provider.Bytes()), "client_public_key": base64.StdEncoding.EncodeToString(consumer.PublicKey().Bytes()), "preshared_key": p.psk}
-		if p.wgEntry {
-			request["wireguard_entry"] = keys
+		if p.packetEntry {
+			if p.entryProtocol == "amneziawg" {
+				keys["parameters"] = macOSExternalNativeAmneziaParameters(t, p.entryVariant)
+				request["amnezia_entry"] = keys
+			} else {
+				request["wireguard_entry"] = keys
+			}
 		} else if protocol == "amneziawg" {
 			keys["parameters"] = macOSExternalNativeAmneziaParameters(t, p.variant)
 			request["amneziawg"] = keys
@@ -336,7 +352,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal(err)
 	}
 	initial := p.read(t)
-	if initial.WireGuardEntry != nil && (initial.WireGuardEntry.PhysicalUDP != 0 || initial.WireGuardEntry.Streams != 0 || initial.WireGuardEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
+	if initial.PacketEntry != nil && (initial.PacketEntry.PhysicalUDP != 0 || initial.PacketEntry.Streams != 0 || initial.PacketEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
 		t.Fatal("native peer claimed traffic before its captured runtime")
 	}
 	return p
@@ -433,7 +449,7 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 	default:
 		t.Fatal("native fixture refused another protocol")
 	}
-	entry := macOSExternalNativeWGEntryProfile(t, p, &profile)
+	entry := macOSExternalNativePacketEntryProfile(t, p, &profile)
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		t.Fatal("Darwin fixture profile rejected before native execution", err)
 	}
@@ -601,6 +617,20 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if strings.HasPrefix(scenario, "awg-entry-ss-") {
+		for _, variant := range []string{"fast", "strong"} {
+			base := "awg-entry-ss-" + variant
+			if scenario == base || scenario == base+"-always" {
+				return "shadowsocks", "", ""
+			}
+			for _, fault := range []string{"wrong-entry-key", "wrong-entry-psk", "wrong-entry-parameters", "wrong-entry-public", "wrong-exit-key", "wrong-dns", "wrong-trust", "wrong-exit"} {
+				if scenario == base+"-"+fault {
+					return "shadowsocks", "", fault
+				}
+			}
+		}
+		t.Fatal("unknown captured AWG entry scenario")
+	}
 	if strings.HasPrefix(scenario, "wg-entry-ss") {
 		if scenario == "wg-entry-ss" || scenario == "wg-entry-ss-always" {
 			return "shadowsocks", "", ""

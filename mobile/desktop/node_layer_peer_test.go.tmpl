@@ -1772,22 +1772,26 @@ type desktopExternalInstalledLayerPeer struct {
 
 var desktopExternalInstalledHysteriaLayer func(*testing.T, context.Context, netip.AddrPort, desktopExternalInstalledLayerRequest) desktopExternalInstalledLayerPeer
 
-type desktopExternalInstalledWGEntryReceipt struct {
-	Address       string `json:"address"`
-	PhysicalUDP   int64  `json:"physical_udp"`
-	Streams       int64  `json:"streams"`
-	Packets       int64  `json:"packets"`
-	PublicReplies uint32 `json:"public_replies"`
+type desktopExternalInstalledPacketEntryReceipt struct {
+	Protocol         string `json:"protocol"`
+	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
+	Address          string `json:"address"`
+	PhysicalUDP      int64  `json:"physical_udp"`
+	Streams          int64  `json:"streams"`
+	Packets          int64  `json:"packets"`
+	PublicReplies    uint32 `json:"public_replies"`
 }
-type desktopExternalInstalledWGEntryPeer struct {
+type desktopExternalInstalledPacketEntryPeer struct {
 	address string
-	stats   func() desktopExternalInstalledWGEntryReceipt
+	stats   func() desktopExternalInstalledPacketEntryReceipt
 	close   func()
 }
 
-var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest, tls.Certificate, string) desktopExternalInstalledWGEntryPeer
+var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest, tls.Certificate, string) desktopExternalInstalledPacketEntryPeer
+var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string) desktopExternalInstalledPacketEntryPeer
 
 type desktopExternalInstalledPeerRequest struct {
+	AmneziaEntry         *desktopExternalInstalledAWGRequest   `json:"amnezia_entry,omitempty"`
 	WireGuardEntry       *desktopExternalInstalledWGRequest    `json:"wireguard_entry,omitempty"`
 	OpenVPNClientAddress string                                `json:"openvpn_client_address,omitempty"`
 	Layer                *desktopExternalInstalledLayerRequest `json:"layer,omitempty"`
@@ -1816,31 +1820,31 @@ type desktopExternalInstalledOpenVPNPeer struct {
 var desktopExternalInstalledOpenVPN func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
 
 type desktopExternalInstalledPeerReply struct {
-	WireGuardEntry          *desktopExternalInstalledWGEntryReceipt `json:"wireguard_entry,omitempty"`
-	OpenVPNUsername         string                                  `json:"openvpn_username,omitempty"`
-	OpenVPNPassword         string                                  `json:"openvpn_password,omitempty"`
-	OpenVPNFallbackAttempts int64                                   `json:"openvpn_fallback_attempts,omitempty"`
-	OpenVPNFirstSequence    uint64                                  `json:"openvpn_first_sequence,omitempty"`
-	OpenVPNFinalSequence    uint64                                  `json:"openvpn_final_sequence,omitempty"`
-	Layer                   *desktopExternalInstalledLayerReceipt   `json:"layer,omitempty"`
-	Latency                 *desktopExternalInstalledLatencyReceipt `json:"latency,omitempty"`
-	Schema                  int                                     `json:"schema"`
-	Protocol                string                                  `json:"protocol"`
-	Address                 string                                  `json:"address"`
-	CA                      string                                  `json:"ca"`
-	Connections             int64                                   `json:"connections"`
-	Streams                 int64                                   `json:"streams"`
-	PhysicalUDP             int64                                   `json:"physical_udp"`
-	Packets                 int64                                   `json:"packets"`
-	DNSQueries              uint32                                  `json:"dns_queries"`
-	PublicAttempts          uint32                                  `json:"public_attempts"`
-	PublicReplies           uint32                                  `json:"public_replies"`
-	AuthFailures            uint32                                  `json:"auth_failures"`
-	ParametersSHA256        string                                  `json:"parameters_sha256,omitempty"`
-	OpenVPNNetwork          string                                  `json:"openvpn_network,omitempty"`
-	OpenVPNProfile          string                                  `json:"openvpn_profile,omitempty"`
-	SOCKSRelays             []string                                `json:"socks_relays,omitempty"`
-	SOCKSRejectedReplies    uint32                                  `json:"socks_rejected_replies,omitempty"`
+	PacketEntry             *desktopExternalInstalledPacketEntryReceipt `json:"packet_entry,omitempty"`
+	OpenVPNUsername         string                                      `json:"openvpn_username,omitempty"`
+	OpenVPNPassword         string                                      `json:"openvpn_password,omitempty"`
+	OpenVPNFallbackAttempts int64                                       `json:"openvpn_fallback_attempts,omitempty"`
+	OpenVPNFirstSequence    uint64                                      `json:"openvpn_first_sequence,omitempty"`
+	OpenVPNFinalSequence    uint64                                      `json:"openvpn_final_sequence,omitempty"`
+	Layer                   *desktopExternalInstalledLayerReceipt       `json:"layer,omitempty"`
+	Latency                 *desktopExternalInstalledLatencyReceipt     `json:"latency,omitempty"`
+	Schema                  int                                         `json:"schema"`
+	Protocol                string                                      `json:"protocol"`
+	Address                 string                                      `json:"address"`
+	CA                      string                                      `json:"ca"`
+	Connections             int64                                       `json:"connections"`
+	Streams                 int64                                       `json:"streams"`
+	PhysicalUDP             int64                                       `json:"physical_udp"`
+	Packets                 int64                                       `json:"packets"`
+	DNSQueries              uint32                                      `json:"dns_queries"`
+	PublicAttempts          uint32                                      `json:"public_attempts"`
+	PublicReplies           uint32                                      `json:"public_replies"`
+	AuthFailures            uint32                                      `json:"auth_failures"`
+	ParametersSHA256        string                                      `json:"parameters_sha256,omitempty"`
+	OpenVPNNetwork          string                                      `json:"openvpn_network,omitempty"`
+	OpenVPNProfile          string                                      `json:"openvpn_profile,omitempty"`
+	SOCKSRelays             []string                                    `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies    uint32                                      `json:"socks_rejected_replies,omitempty"`
 }
 
 // This actual SOCKS provider has one retained listener per authenticated UDP
@@ -2335,7 +2339,10 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			t.Fatal("installed external reference lost its captured credential")
 		}
 	}
-	if request.WireGuardEntry != nil && (request.Protocol != "shadowsocks" || request.Layer != nil || desktopExternalInstalledWireGuardEntry == nil || !latency) {
+	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
+	if entryRequested && (request.Protocol != "shadowsocks" || request.Layer != nil || !latency ||
+		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
+		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
 		t.Fatal("unrequested or unsupported encrypted entry graph")
 	}
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
@@ -2423,7 +2430,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	address := ""
 	closeTransport := func() {}
 	var wgPeer desktopExternalInstalledWGPeer
-	var entryPeer desktopExternalInstalledWGEntryPeer
+	var entryPeer desktopExternalInstalledPacketEntryPeer
 	var openvpnProfile string
 	var openvpnPeer desktopExternalInstalledOpenVPNPeer
 	var socksPeer *desktopExternalInstalledSOCKSPeer
@@ -2478,7 +2485,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	} else {
 		listenHost := request.Address
-		if request.WireGuardEntry != nil {
+		if entryRequested {
 			listenHost = "127.0.0.1"
 		}
 		listener, err = net.Listen("tcp4", net.JoinHostPort(listenHost, "0"))
@@ -2547,8 +2554,12 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			}
 		}()
 	}
-	if request.WireGuardEntry != nil {
-		entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address)
+	if entryRequested {
+		if request.AmneziaEntry != nil {
+			entryPeer = desktopExternalInstalledAmneziaEntry(t, server, *request.AmneziaEntry, cert, address)
+		} else {
+			entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address)
+		}
 		if entryPeer.address == "" || entryPeer.close == nil || entryPeer.stats == nil {
 			t.Fatal("entry peer omitted actual original device")
 		}
@@ -2584,7 +2595,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
 		if entryPeer.stats != nil {
 			value := entryPeer.stats()
-			reply.WireGuardEntry = &value
+			reply.PacketEntry = &value
 		}
 		if benchmark != nil {
 			reply.Latency = benchmark.receipt()
