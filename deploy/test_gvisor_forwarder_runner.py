@@ -30,10 +30,10 @@ def encoded(rows):
 
 
 class VerdictControls(unittest.TestCase):
-    def test_complete_seven_roots_and_thirteen_children_are_required(self):
-        self.assertEqual(len(GATE.GROUPS), 7)
+    def test_complete_eight_roots_and_thirteen_children_are_required(self):
+        self.assertEqual(len(GATE.GROUPS), 8)
         self.assertEqual(len(GATE.SUBCASES), 13)
-        self.assertEqual(len(GATE.REQUIRED), 20)
+        self.assertEqual(len(GATE.REQUIRED), 21)
         GATE.check_verdicts(encoded(verdicts()))
         for name in GATE.REQUIRED:
             for action in ('run', 'pass'):

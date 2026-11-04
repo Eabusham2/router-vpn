@@ -39,6 +39,11 @@ type routerVPNForwarderPair struct {
 	heldRequest                chan *ForwarderRequest
 	holdACK                    atomic.Bool
 	heldACK                    chan []byte
+	closeACKSequence           atomic.Uint64
+	heldCloseACK               chan []byte
+	releaseCloseACK            chan struct{}
+	beforeClientClose          func(*Endpoint)
+	retirementRead             func(bool)
 	bridges, handlers          sync.WaitGroup
 	wireMu                     sync.Mutex
 	clientWire, peerWire       [][]byte
@@ -61,7 +66,7 @@ func routerVPNForwarderStack(t *testing.T, address tcpip.Address) (*stack.Stack,
 func newRouterVPNForwarderPair(t *testing.T) *routerVPNForwarderPair {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	f := &routerVPNForwarderPair{ctx: ctx, cancel: cancel, accepted: make(chan *Endpoint, 8), errors: make(chan error, 8), heldSYN: make(chan []byte, 8), heldRequest: make(chan *ForwarderRequest, 8), heldACK: make(chan []byte, 8),
+	f := &routerVPNForwarderPair{ctx: ctx, cancel: cancel, accepted: make(chan *Endpoint, 8), errors: make(chan error, 8), heldSYN: make(chan []byte, 8), heldRequest: make(chan *ForwarderRequest, 8), heldACK: make(chan []byte, 8), heldCloseACK: make(chan []byte, 1), releaseCloseACK: make(chan struct{}),
 		clientAddress: tcpip.AddrFrom4([4]byte{192, 0, 2, 2}), peerAddress: tcpip.AddrFrom4([4]byte{192, 0, 2, 1})}
 	f.client, f.clientLink = routerVPNForwarderStack(t, f.clientAddress)
 	f.peer, f.peerLink = routerVPNForwarderStack(t, f.peerAddress)
@@ -117,6 +122,21 @@ func newRouterVPNForwarderPair(t *testing.T) *routerVPNForwarderPair {
 				f.peerWire = append(f.peerWire, append([]byte(nil), data...))
 			}
 			f.wireMu.Unlock()
+			if sequence := f.closeACKSequence.Load(); !client && sequence != 0 && routerVPNForwarderFlags(data) == header.TCPFlagAck {
+				ip := header.IPv4(data)
+				if header.TCP(data[ip.HeaderLength():]).AckNumber() == uint32(sequence-1) {
+					select {
+					case f.heldCloseACK <- append([]byte(nil), data...):
+					case <-ctx.Done():
+						return
+					}
+					select {
+					case <-f.releaseCloseACK:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
 			if client && f.holdSYN.Load() && routerVPNForwarderFlags(data)&(header.TCPFlagSyn|header.TCPFlagAck) == header.TCPFlagSyn {
 				select {
 				case f.heldSYN <- data:
@@ -298,8 +318,24 @@ func (f *routerVPNForwarderPair) timeWait(t *testing.T) (*Endpoint, *Endpoint) {
 	routerVPNForwarderBytes(t, peer, client, "first complete response")
 	peer.Close()
 	routerVPNForwarderWait(t, "peer active close", func() bool { return EndpointState(client.State()) == StateCloseWait })
+	if f.beforeClientClose != nil {
+		f.beforeClientClose(client)
+	}
 	client.Close()
-	routerVPNForwarderWait(t, "original peer TIME-WAIT", func() bool { return EndpointState(peer.State()) == StateTimeWait })
+	routerVPNForwarderWait(t, "original peer TIME-WAIT and acknowledged client tuple retirement", func() bool {
+		// The peer enters TIME-WAIT before its final ACK is processed by the
+		// original client. That client's LAST-ACK owner still reserves the
+		// tuple; do not race its cleanup by immediately binding a successor.
+		client.mu.Lock()
+		retired := client.closed && client.EndpointState() == StateClose && !client.isPortReserved && !client.isRegistered
+		client.mu.Unlock()
+		peerTimeWait := EndpointState(peer.State()) == StateTimeWait
+		ready := peerTimeWait && retired
+		if peerTimeWait && f.retirementRead != nil {
+			f.retirementRead(ready)
+		}
+		return ready
+	})
 	if f.requests.Load() != 1 {
 		t.Fatal("first real flow changed admission count")
 	}
@@ -319,6 +355,88 @@ func TestRouterVPNForwarderTimeWaitRealTupleReopens(t *testing.T) {
 	if EndpointState(first.State()) != StateClose {
 		t.Fatal("old TIME-WAIT endpoint was not retired before replacement")
 	}
+	client.Close()
+	second.Close()
+}
+
+func TestRouterVPNForwarderTimeWaitRequiresOriginalClientACK(t *testing.T) {
+	f := newRouterVPNForwarderPair(t)
+	observed := make(chan bool, 1)
+	readReleased := make(chan struct{})
+	var readOnce atomic.Bool
+	var release sync.Once
+	releaseOriginal := func() {
+		release.Do(func() {
+			f.closeACKSequence.Store(0)
+			close(readReleased)
+			close(f.releaseCloseACK)
+		})
+	}
+	defer releaseOriginal()
+	var original *Endpoint
+	f.beforeClientClose = func(client *Endpoint) {
+		original = client
+		client.mu.Lock()
+		// Capture the exact ACK of the original final FIN, including wrap.
+		sequence := uint32(client.snd.SndNxt + 1)
+		client.mu.Unlock()
+		f.closeACKSequence.Store(uint64(sequence) + 1)
+	}
+	f.retirementRead = func(ready bool) {
+		if readOnce.CompareAndSwap(false, true) {
+			observed <- ready
+			<-readReleased
+		}
+	}
+	finished := make(chan *Endpoint, 1)
+	joined := make(chan struct{})
+	go func() { defer close(joined); _, peer := f.timeWait(t); finished <- peer }()
+	defer func() {
+		releaseOriginal()
+		select {
+		case <-joined:
+		case <-time.After(3 * time.Second):
+			t.Error("original client retirement witness did not join")
+		}
+	}()
+	select {
+	case <-f.heldCloseACK:
+	case <-time.After(3 * time.Second):
+		t.Fatal("original client final ACK never reached its controlled link")
+	}
+	select {
+	case ready := <-observed:
+		if ready {
+			t.Fatal("peer TIME-WAIT authorized tuple reuse before the original client ACK")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("original client retirement was not read at peer TIME-WAIT")
+	}
+	original.mu.Lock()
+	pending := original.EndpointState() == StateLastAck && original.isPortReserved && original.isRegistered
+	original.mu.Unlock()
+	if !pending {
+		t.Fatal("withheld final ACK did not retain the original client tuple")
+	}
+	select {
+	case <-finished:
+		t.Fatal("original tuple was published while its client still owned the port")
+	default:
+	}
+	releaseOriginal()
+	var first *Endpoint
+	select {
+	case first = <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("original ACK did not join client tuple retirement")
+	}
+	client := f.connect(t)
+	second := f.accept(t)
+	if first == second || f.requests.Load() != 2 || EndpointState(first.State()) != StateClose {
+		t.Fatal("acknowledged original tuple did not enter its distinct forwarder successor")
+	}
+	routerVPNForwarderBytes(t, client, second, "request after exact original final ACK")
+	routerVPNForwarderBytes(t, second, client, "response through retained successor")
 	client.Close()
 	second.Close()
 }

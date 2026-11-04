@@ -21,6 +21,7 @@ GROUPS = (
     'TestRouterVPNForwarderTimeWaitRegisteredListenerPrecedesForwarder',
     'TestRouterVPNForwarderRetainedRequestCannotEnterClosedStack',
     'TestRouterVPNForwarderCloseJoinsHandshakeBeforePeerACK',
+    'TestRouterVPNForwarderTimeWaitRequiresOriginalClientACK',
     'TestRouterVPNForwarderTimeWaitQueuedEligibility',
 )
 SUBCASES = ('newer', 'stale', 'equal', 'syn-ack', 'syn-rst', 'syn-fin', 'checksum',
@@ -90,7 +91,7 @@ def run(vendor, go='go', env=None):
     POLICY.verify(vendor, go, env=captured)
     if source_inputs() != before:
         raise ValueError('Pinned forwarder source changed during actual execution')
-    print('Verified all seven native forwarder groups and thirteen packet controls with unchanged pinned source.', flush=True)
+    print('Verified all eight native forwarder groups and thirteen packet controls with unchanged pinned source.', flush=True)
 
 
 if __name__ == '__main__':
