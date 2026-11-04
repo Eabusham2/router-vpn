@@ -154,6 +154,37 @@ def check_node_process_aggregate(job: str) -> None:
         raise AssertionError("Windows Node aggregate became conditional or nonblocking")
 
 
+def check_node_all_arm64(job: str) -> None:
+    header = job.split("    steps:", 1)[0]
+    expected = {
+        r"(?m)^    runs-on: (.*)$": ["windows-11-arm"],
+        r"(?m)^    timeout-minutes: (\d+)$": ["25"],
+        r"(?m)^      GOOS: (.*)$": ["windows"],
+        r"(?m)^      GOARCH: (.*)$": ["arm64"],
+        r"(?m)^      CGO_ENABLED: (.*)$": ["'0'"],
+    }
+    if any(re.findall(pattern, header) != values for pattern, values in expected.items()):
+        raise AssertionError("ALL omitted its matching native ARM64 host or original bound")
+    if ("group: windows-node-all-arm64-${{ github.ref }}" not in header or
+            "      cancel-in-progress: false\n" not in header or
+            re.search(r"(?m)^    (?:if|continue-on-error):", header)):
+        raise AssertionError("Native ARM64 ALL became conditional or lost its original run")
+    for required in ("go-version: '1.26.3'", "python-version: '3.12'",
+                     "python deploy/test_windows_node_process_runner.py", "python deploy/test_windows_release_gates.py"):
+        if job.count(required) != 1:
+            raise AssertionError("Native ARM64 ALL omitted its pinned compiler or required source gates")
+    marker = "      - name: Execute required native ARM64 ALL and restoration\n"
+    if job.count(marker) != 1:
+        raise AssertionError("Native ARM64 ALL execution is missing or duplicated")
+    gate = job.split(marker, 1)[1].split("      - ", 1)[0]
+    if (re.findall(r"(?m)^        timeout-minutes: (\d+)$", gate) != ["20"] or
+            re.findall(r"(?m)^          python deploy/test_windows_node_process\.py(.*)$", gate) != [" --suite prospective-all"] or
+            "shell: pwsh" not in gate or
+            "if ($LASTEXITCODE -ne 0) { throw 'Actual Windows ARM64 ALL and restoration gate failed' }" not in gate or
+            re.search(r"(?m)^        (?:if|continue-on-error):", gate)):
+        raise AssertionError("Native ARM64 ALL omitted complete blocking execution or its original bound")
+
+
 def check_owned_process_gate(job: str, packaged: bool, tor_wrapper: bool = False) -> None:
     if tor_wrapper:
         name = "Execute packaged Tor wrapper lifecycle" if packaged else "Tor wrapper ownership and prelaunch failure witnesses"
@@ -418,6 +449,35 @@ class WindowsReleaseGateTests(unittest.TestCase):
             self.assertEqual(job.count(before), 1, "native aggregate mutation anchor changed")
             with self.subTest(mutation=after), self.assertRaises(AssertionError):
                 check_node_process_aggregate(job.replace(before, after, 1))
+
+    def test_native_arm64_all_is_required_with_unchanged_deadlines(self):
+        workflow = (REPOSITORY / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
+        job = workflow_job(workflow, "node-all-arm64")
+        check_node_all_arm64(job)
+        check_node_process_aggregate(workflow_job(workflow, "node-process"))
+        with self.assertRaisesRegex(AssertionError, "missing authoritative job"):
+            workflow_job(workflow.replace("  node-all-arm64:\n", "  omitted-arm64-all:\n", 1), "node-all-arm64")
+        for before, after in (
+            ("runs-on: windows-11-arm", "runs-on: windows-latest"),
+            ("GOARCH: arm64", "GOARCH: amd64"),
+            ("GOOS: windows", "GOOS: linux"),
+            ("CGO_ENABLED: '0'", "CGO_ENABLED: '1'"),
+            ("    timeout-minutes: 25\n", "    timeout-minutes: 50\n"),
+            ("        timeout-minutes: 20\n", "        timeout-minutes: 40\n"),
+            ("    timeout-minutes: 25\n", "    if: false\n    timeout-minutes: 25\n"),
+            ("    timeout-minutes: 25\n", "    continue-on-error: true\n    timeout-minutes: 25\n"),
+            ("        timeout-minutes: 20\n", "        if: false\n        timeout-minutes: 20\n"),
+            ("        timeout-minutes: 20\n", "        continue-on-error: true\n        timeout-minutes: 20\n"),
+            ("cancel-in-progress: false", "cancel-in-progress: true"),
+            (" --suite prospective-all", " --suite baseline"),
+            ("throw 'Actual Windows ARM64 ALL and restoration gate failed'", "Write-Host 'ignored native failure'"),
+            ("go-version: '1.26.3'", "go-version: '1.25.0'"),
+        ):
+            self.assertEqual(job.count(before), 1)
+            with self.subTest(mutation=after), self.assertRaises(AssertionError):
+                check_node_all_arm64(job.replace(before, after, 1))
+        for dependency in ("internal/mobilemultihop/desktop_node_admission.go", "deploy/test_windows_node_max.py", "deploy/test_windows_release_gates.py"):
+            self.assertEqual(workflow.count("      - '" + dependency + "'\n"), 2)
 
     def test_owned_process_gates_use_both_real_shells_and_the_captured_package(self):
         for filename, job_name, packaged in (("windows-native-contract.yml", "native-windows", False), ("release-candidate.yml", "windows-native-smoke", True)):

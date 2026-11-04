@@ -190,7 +190,7 @@ class NodeProcessRunner(unittest.TestCase):
         before = {name: (ROOT / name).read_bytes() for name in names}
         prospective = GATE.all_capability_source()
         self.assertNotEqual(prospective.encode(), before[GATE.ALL_CAPABILITY_FILE])
-        self.assertIn('case "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg":', prospective)
+        self.assertIn('case "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg":', prospective)
         controls = GATE.all_mutants()
         self.assertEqual(len(controls), 8)
         self.assertEqual(len({item[1] for item in controls}), 8)
@@ -202,12 +202,61 @@ class NodeProcessRunner(unittest.TestCase):
         for name, body in before.items():
             self.assertEqual((ROOT / name).read_bytes(), body)
 
+    def test_all_compiles_the_exact_native_max_prospective_predicate(self):
+        spec = importlib.util.spec_from_file_location("all_matching_native_max", ROOT / "deploy/test_windows_node_max.py")
+        native_max = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native_max)
+        before = (ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes()
+        prospective = GATE.all_capability_source()
+        self.assertEqual(prospective, native_max.prospective_predicate(before.decode()))
+        self.assertEqual((ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes(), before)
+        self.assertEqual(len(GATE.ALL_EXPECTED), 26)
+        self.assertEqual(len(GATE.all_mutants()), 8)
+
+    def test_native_arm64_all_keeps_every_case_and_only_omits_unsupported_race(self):
+        controls = {label: (test, witness) for _, label, test, witness, _ in GATE.all_mutants()}
+        compiled, executed = [], []
+        def run(command, *, cwd, env, timeout):
+            self.assertEqual(env['GOOS'], 'windows')
+            self.assertEqual(env['GOARCH'], 'arm64')
+            self.assertEqual(env['CGO_ENABLED'], '0')
+            if '-o' in command:
+                self.assertNotIn('-race', command)
+                self.assertEqual(timeout, 240)
+                binary = Path(command[command.index('-o') + 1])
+                compiled.append(binary.name.removesuffix('.test.exe'))
+                binary.write_bytes(b'original modeled ARM64 executable')
+                return 0, ''
+            label = Path(command[0]).name.removesuffix('.test.exe')
+            executed.append(label)
+            self.assertEqual(timeout, 255 if label == 'node-all' else 75)
+            if label == 'node-all':
+                self.assertIn('-test.timeout=240s', command)
+                return 0, '\n'.join('--- PASS: '+case+' (0.01s)' for case in GATE.ALL_EXPECTED)
+            self.assertIn('-test.timeout=60s', command)
+            test, witness = controls[label]
+            return 1, '--- FAIL: '+test+' (0.01s)\n    source_test.go:1: '+witness+'\n'
+        native = SimpleNamespace(shell32=SimpleNamespace(IsUserAnAdmin=lambda: True))
+        with patch.object(GATE.platform, 'system', return_value='Windows'), \
+             patch.object(GATE.ctypes, 'windll', native, create=True), \
+             patch.object(GATE.NATIVE, 'selected_compiler', return_value=('go', {'GOOS':'windows','GOARCH':'arm64'}, 'arm64')), \
+             patch.object(GATE.NATIVE, 'run', side_effect=run), patch('sys.stdout', new_callable=io.StringIO) as output:
+            GATE.execute(suite='prospective-all')
+        receipt = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(compiled, ['node-all', *controls])
+        self.assertEqual(executed, compiled)
+        self.assertEqual(receipt['host'], 'windows/arm64')
+        self.assertEqual(receipt['prospective_all_markers'], 26)
+        self.assertEqual(receipt['prospective_all_controls'], 8)
+
     def test_expanded_baseline_keeps_individual_control_deadlines(self):
         controls = {name: (test, witness) for _, name, test, witness, _ in (*GATE.mutants(), *GATE.all_mutants())}
         executions = []
 
         def run(command, *, cwd, env, timeout):
             if "-o" in command:
+                self.assertIn("-race", command)
+                self.assertEqual(env["CGO_ENABLED"], "1")
                 Path(command[command.index("-o") + 1]).write_bytes(b"retained compiled fixture")
                 return 0, ""
             executions.append((command, timeout))

@@ -261,6 +261,7 @@ REQUIRED_SOURCES = (
     "internal/windowscontroller/launch_windows.go",
     "go.mod", "deploy/test_desktop_windows_identity.py",
     "deploy/test_windows_node_process.py", "deploy/test_windows_node_process_runner.py",
+    "deploy/test_windows_node_max.py", "deploy/test_windows_release_gates.py",
     ".github/workflows/windows-controller-contract.yml",
 )
 
@@ -282,8 +283,10 @@ def all_capability_source():
     modes = ("max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg")
     if any('"' + mode + '"' in original for mode in modes):
         raise ValueError("Prospective ALL requires its unchanged closed shipping capability")
-    return NATIVE.replace_once(original, "\tdefault:\n\t\treturn false",
-        '\tcase "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg":\n\t\treturn true\n\tdefault:\n\t\treturn false')
+    # Match the complete-MAX native gate's exact prospective source, including
+    # family order and insertion point. Shipping admission remains unchanged.
+    return NATIVE.replace_once(original, "\tswitch mode {\n",
+        '\tswitch mode {\n\tcase "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg":\n\t\treturn true\n')
 
 
 def check_all_composition(status, output):
