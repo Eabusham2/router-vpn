@@ -70,6 +70,37 @@ class NativePQScope(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertNotIn('--prospective', [node.value for node in ast.walk(calls[0].args[0]) if isinstance(node, ast.Constant)])
 
+    def test_pq_and_max_reopen_independent_controls_in_exact_shipping_order(self):
+        maximum = GATE.load('pq_max_roundtrip_control', 'test_windows_node_max.py')
+        shipping = (ROOT / 'internal/mobilemultihop/desktop_node_admission.go').read_text()
+        without_pq = GATE.closed_predicate(shipping)
+        without_max = maximum.closed_predicate(shipping)
+        neither = GATE.closed_predicate(without_max)
+        self.assertEqual(neither, maximum.closed_predicate(without_pq))
+        self.assertEqual(GATE.prospective_predicate(without_pq), shipping)
+        self.assertEqual(maximum.prospective_predicate(without_max), shipping)
+        self.assertEqual(GATE.prospective_predicate(maximum.prospective_predicate(neither)), shipping)
+        self.assertEqual(maximum.prospective_predicate(GATE.prospective_predicate(neither)), shipping)
+        before, after = GATE.prospective_edit(without_pq)
+        own = GATE.PROSPECTIVE_AFTER[len(GATE.PROSPECTIVE_BEFORE):]
+        self.assertEqual(after, before + own)
+        self.assertEqual(without_pq.replace(before, after, 1), shipping)
+        self.assertEqual(GATE.prospective_edit(neither), (GATE.PROSPECTIVE_BEFORE, GATE.PROSPECTIVE_AFTER))
+
+    def test_pq_reopen_refuses_malformed_or_reordered_max_anchor(self):
+        shipping = (ROOT / 'internal/mobilemultihop/desktop_node_admission.go').read_text()
+        closed = GATE.closed_predicate(shipping)
+        other = '\tcase ' + ', '.join(json.dumps(mode) for mode in GATE.MAX_MODES) + ':\n\t\treturn true\n'
+        without = GATE.closed_admission(closed, GATE.MAX_MODES)
+        for bad in (closed + '\n' + other, closed + '\n// "max-tls-wg"\n',
+                    closed.replace('"max-tls-awg"', '"unknown-max"'),
+                    closed.replace(other, other.replace('return true', 'return false')),
+                    without + '\n' + other,
+                    closed.replace(other, '', 1).replace('\tdefault:', other + '\tdefault:', 1)):
+            with self.subTest(source=bad[-100:]):
+                with self.assertRaises(ValueError):
+                    GATE.prospective_predicate(bad)
+
     def assert_scope(self, path):
         mapping = json.loads(path.read_text())['Replace']
         old = Path(mapping[str(self.source / 'routervpn/mobiletor/desktop_socket_windows_policy.go')]).read_text()
@@ -87,7 +118,7 @@ class NativePQScope(unittest.TestCase):
         self.assertEqual(len(opened), len(closed) + 1)
         raw = self.original[GATE.PREDICATE].decode()
         actual = Path(opened[str(self.source / GATE.PREDICATE)]).read_text()
-        self.assertEqual(actual, raw.replace(GATE.PROSPECTIVE_BEFORE, GATE.PROSPECTIVE_AFTER, 1))
+        self.assertEqual(actual, (ROOT / 'internal/mobilemultihop/desktop_node_admission.go').read_text())
         self.assertEqual(actual.count('case "wg-pq", "awg2-pq":'), 1)
         self.assertIn('startLayer != "aes-256-gcm+xor-whitening"', actual)
         self.assertIn('default:\n\t\treturn false', actual)
@@ -470,6 +501,11 @@ class NativePQScope(unittest.TestCase):
             result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache',
                                   prospective=True, receipt_path=receipt)
         self.assertEqual(json.loads(receipt.read_text()), json.loads(json.dumps(result)))
+        edit = result['prospective_predicate']
+        self.assertEqual(set(edit), {'before', 'after'})
+        shipping = (ROOT / 'internal/mobilemultihop/desktop_node_admission.go').read_text()
+        self.assertEqual(self.original[GATE.PREDICATE].decode().replace(edit['before'], edit['after'], 1), shipping)
+        self.assertEqual(state['compiled_overlays']['native-composition'][GATE.PREDICATE], shipping)
         state['timer_verifier'].assert_called_once_with(self.source, Path('go'), env=state['dependency_env'])
         self.assertEqual(state['dependency_events'], ['checksum', 'plan', 'selection', 'tree'])
         self.assertEqual(len(result['compiled_negative_controls']), 6)

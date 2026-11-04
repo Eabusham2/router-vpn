@@ -49,6 +49,7 @@ FOREIGN = 'TestRouterVPNDesktopNodeWindowsPQForeignPredecessor'
 FOREIGN_BUDGET = 160
 PROSPECTIVE_BEFORE = '\tswitch mode {\n'
 PROSPECTIVE_AFTER = PROSPECTIVE_BEFORE + '\tcase "wg-pq", "awg2-pq":\n\t\treturn true\n'
+MAX_MODES = ('max-quic-wg', 'max-quic-awg', 'max-tls-wg', 'max-tls-awg')
 CLEANUP_DIAGNOSTICS = (
     'owned PQ reference did not join', 'PQ reference ignored its owned input EOF',
     'retained PQ reference executable changed', 'unacknowledged PQ state has no exact cleanup owner',
@@ -79,13 +80,26 @@ def checked_sources(source):
     return source, records
 
 
-def prospective_predicate(raw):
-    # Only the exact current two-mode addition is permitted. A predicate which
-    # already mentions either PQ name must be exercised without this overlay.
-    if ('func DesktopNodePhysicalGraphSupported(mode, startLayer string) bool {' not in raw or
-            '"wg-pq"' in raw or '"awg2-pq"' in raw):
+def prospective_edit(raw):
+    # Preserve the exact shipping case order. Once MAX is admitted first,
+    # reopening the independent PQ family must leave that original case first.
+    signature = 'func DesktopNodePhysicalGraphSupported(mode, startLayer string) bool {\n'
+    if (raw.count(signature) != 1 or '"wg-pq"' in raw or '"awg2-pq"' in raw):
         raise ValueError('Prospective PQ admission lost its exact closed source')
-    return WFP.BOOT.IDENTITY.replace_once(raw, PROSPECTIVE_BEFORE, PROSPECTIVE_AFTER)
+    before, after = PROSPECTIVE_BEFORE, PROSPECTIVE_AFTER
+    if any(json.dumps(mode) in raw for mode in MAX_MODES):
+        closed_admission(raw, MAX_MODES)  # Validate the exact other family without changing it.
+        other = '\tcase ' + ', '.join(json.dumps(mode) for mode in MAX_MODES) + ':\n\t\treturn true\n'
+        before += other
+        after = before + PROSPECTIVE_AFTER[len(PROSPECTIVE_BEFORE):]
+    if raw.count(before) != 1:
+        raise ValueError('Prospective PQ admission lost its exact shipping case order')
+    return before, after
+
+
+def prospective_predicate(raw):
+    # An already-open PQ predicate must be exercised without this overlay.
+    return WFP.BOOT.IDENTITY.replace_once(raw, *prospective_edit(raw))
 
 
 def closed_admission(raw, modes):
@@ -334,7 +348,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             raise ValueError('Windows PQ native archive or prepared source changed')
         result = {'schema': 1, 'target': target, 'source': before, 'native_pq': native,
                   'test_binary_sha256': digest, 'relay_sha256': relay_digest, 'prospective': prospective,
-                  'prospective_predicate': {'before': PROSPECTIVE_BEFORE, 'after': PROSPECTIVE_AFTER} if prospective else None,
+                  'prospective_predicate': dict(zip(('before', 'after'), prospective_edit(predicate))) if prospective else None,
                   'current_closed_admission_proved': prospective, 'closed_admission_control': closed_control,
                   'closed_admission_source': 'unmodified' if prospective else 'exact-family-removed',
                   'native_firewall': 'actual-appid-scoped-wfp',
