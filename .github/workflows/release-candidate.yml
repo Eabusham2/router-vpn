@@ -20,6 +20,10 @@ jobs:
     name: Actual complete MAX ownership on both Windows architectures
     uses: ./.github/workflows/windows-node-max-contract.yml
 
+  windows-all-controller:
+    name: Actual ALL controller and restoration on both Windows architectures
+    uses: ./.github/workflows/windows-node-all-contract.yml
+
   native-runtimes:
     name: Build and verify complete native runtimes
     uses: ./.github/workflows/desktop-native-runtime.yml
@@ -589,7 +593,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, android, ios, macos, linux]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

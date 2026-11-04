@@ -185,6 +185,41 @@ def check_node_all_arm64(job: str) -> None:
         raise AssertionError("Native ARM64 ALL omitted complete blocking execution or its original bound")
 
 
+def check_authoritative_all_workflow(workflow: str) -> None:
+    if re.findall(r"(?m)^  workflow_call:$", workflow) != ["  workflow_call:"]:
+        raise AssertionError("Windows ALL is not callable by the authoritative release")
+    job = workflow_job(workflow, "native-all")
+    header = job.split("    steps:", 1)[0]
+    if re.findall(r"(?m)^          - \{arch: (\w+), runner: ([\w-]+), cgo: '([01])'\}$", header) != [
+            ("amd64", "windows-latest", "1"), ("arm64", "windows-11-arm", "0")]:
+        raise AssertionError("Authoritative ALL lost its two actual native Windows hosts")
+    for marker in ("    runs-on: ${{ matrix.runner }}\n", "    timeout-minutes: 25\n",
+                   "      fail-fast: false\n", "      GOOS: windows\n",
+                   "      GOARCH: ${{ matrix.arch }}\n", "      CGO_ENABLED: ${{ matrix.cgo }}\n",
+                   "group: windows-release-all-${{ github.workflow }}-${{ github.ref }}-${{ matrix.arch }}\n",
+                   "      cancel-in-progress: false\n"):
+        if header.count(marker) != 1:
+            raise AssertionError("Authoritative ALL lost its native target, lifetime or bound")
+    if re.search(r"(?m)^    (?:if|continue-on-error):", header):
+        raise AssertionError("Authoritative ALL became conditional or nonblocking")
+    for marker in ("go-version: '1.26.3'", "python-version: '3.12'",
+                   "python deploy/test_windows_node_process_runner.py", "python deploy/test_windows_release_gates.py",
+                   "        if: matrix.arch == 'amd64'\n", "python deploy/install-desktop-windows-toolchain.py",
+                   "x86_64-w64-mingw32-clang.exe", '"CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV'):
+        if job.count(marker) != 1:
+            raise AssertionError("Authoritative ALL lost its pinned compiler or source gates")
+    marker = "      - name: Execute complete native ALL and restoration\n"
+    if job.count(marker) != 1:
+        raise AssertionError("Authoritative ALL execution is missing or duplicated")
+    execution = job.split(marker, 1)[1].split("      - ", 1)[0]
+    if (re.findall(r"(?m)^        timeout-minutes: (\d+)$", execution) != ["20"] or
+            re.findall(r"(?m)^          python deploy/test_windows_node_process\.py(.*)$", execution) != [" --suite prospective-all"] or
+            "        shell: pwsh\n" not in execution or
+            "if ($LASTEXITCODE -ne 0) { throw 'Actual Windows ALL and restoration failed' }" not in execution or
+            re.search(r"(?m)^        (?:if|continue-on-error):", execution)):
+        raise AssertionError("Authoritative ALL lost complete blocking native execution")
+
+
 def check_owned_process_gate(job: str, packaged: bool, tor_wrapper: bool = False) -> None:
     if tor_wrapper:
         name = "Execute packaged Tor wrapper lifecycle" if packaged else "Tor wrapper ownership and prelaunch failure witnesses"
@@ -272,12 +307,17 @@ def check_workflow(candidate: str, build_all: str) -> None:
     if "    uses: ./.github/workflows/windows-node-max-contract.yml\n" not in complete_max or re.search(
             r"(?m)^    (?:if|continue-on-error):", complete_max):
         raise AssertionError("authoritative release lost its blocking native complete MAX workflow")
+    all_controller = workflow_job(candidate, "windows-all-controller")
+    if "    uses: ./.github/workflows/windows-node-all-contract.yml\n" not in all_controller or re.search(
+            r"(?m)^    (?:if|continue-on-error):", all_controller):
+        raise AssertionError("authoritative release lost its blocking native ALL controller workflow")
     check_workspace_gate(windows)
     check_owned_process_gate(windows, True)
     check_owned_process_gate(windows, True, True)
     check_wfp_gate(windows, True)
     source = workflow_job(candidate, "source-audit")
-    for command in ("run: go test ./...", "python3 deploy/test_desktop_tor_unix_wrapper.py", "python3 modes/test_cleanup_private_runtime.py"):
+    for command in ("run: go test ./...", "python3 deploy/test_desktop_tor_unix_wrapper.py", "python3 modes/test_cleanup_private_runtime.py",
+                    "python3 deploy/test_windows_release_gates.py"):
         if command not in source:
             raise AssertionError("authoritative source gate omitted controller or Unix ownership coverage: " + command)
     if "    needs: generic-builds\n" not in windows:
@@ -307,7 +347,7 @@ def check_workflow(candidate: str, build_all: str) -> None:
         raise AssertionError("Windows release policy gate omitted executable negatives or live fixtures")
     aggregate = workflow_job(candidate, "aggregate")
     needs = re.search(r"(?m)^    needs: \[([^\]]+)\]$", aggregate)
-    if needs is None or not {"windows-native-smoke", "windows-complete-max"}.issubset(
+    if needs is None or not {"windows-native-smoke", "windows-complete-max", "windows-all-controller"}.issubset(
             value.strip() for value in needs.group(1).split(",")):
         raise AssertionError("release aggregation bypassed Windows native gates")
     release = workflow_job(build_all, "release-candidate")
@@ -479,6 +519,29 @@ class WindowsReleaseGateTests(unittest.TestCase):
         for dependency in ("internal/mobilemultihop/desktop_node_admission.go", "deploy/test_windows_node_max.py", "deploy/test_windows_release_gates.py"):
             self.assertEqual(workflow.count("      - '" + dependency + "'\n"), 2)
 
+    def test_authoritative_all_requires_both_native_hosts_and_every_control(self):
+        workflow = (REPOSITORY / ".github/workflows/windows-node-all-contract.yml").read_text(encoding="utf-8")
+        check_authoritative_all_workflow(workflow)
+        for old, new in (
+            ("  workflow_call:\n", ""),
+            ("          - {arch: arm64, runner: windows-11-arm, cgo: '0'}\n", ""),
+            ("runner: windows-11-arm", "runner: windows-latest"),
+            ("cgo: '0'", "cgo: '1'"),
+            ("GOARCH: ${{ matrix.arch }}", "GOARCH: amd64"),
+            ("    timeout-minutes: 25\n", "    timeout-minutes: 50\n"),
+            ("        timeout-minutes: 20\n", "        timeout-minutes: 40\n"),
+            ("    timeout-minutes: 25\n", "    if: false\n    timeout-minutes: 25\n"),
+            ("        timeout-minutes: 20\n", "        continue-on-error: true\n        timeout-minutes: 20\n"),
+            ("cancel-in-progress: false", "cancel-in-progress: true"),
+            ("if: matrix.arch == 'amd64'", "if: matrix.arch == 'arm64'"),
+            ("go-version: '1.26.3'", "go-version: '1.25.0'"),
+            (" --suite prospective-all", " --suite baseline"),
+            ("throw 'Actual Windows ALL and restoration failed'", "Write-Host 'ignored ALL failure'"),
+        ):
+            self.assertEqual(workflow.count(old), 1)
+            with self.subTest(mutation=new), self.assertRaises(AssertionError):
+                check_authoritative_all_workflow(workflow.replace(old, new, 1))
+
     def test_owned_process_gates_use_both_real_shells_and_the_captured_package(self):
         for filename, job_name, packaged in (("windows-native-contract.yml", "native-windows", False), ("release-candidate.yml", "windows-native-smoke", True)):
             workflow = (REPOSITORY / ".github/workflows" / filename).read_text(encoding="utf-8")
@@ -542,8 +605,13 @@ class WindowsReleaseGateTests(unittest.TestCase):
             ("source", "--package-root $roots[0].FullName", "--package-root $env:GITHUB_WORKSPACE"),
             ("mutants", "--shell $shell", "--shell $shell --shipping-only"),
             ("blocking", "      - name: Execute packaged device and DNS ownership gates\n", "      - name: Execute packaged device and DNS ownership gates\n        continue-on-error: true\n"),
-            ("aggregate", "generic-builds, windows-native-smoke, windows-complete-max, android", "generic-builds, windows-complete-max, android"),
-            ("max-aggregate", "windows-native-smoke, windows-complete-max, android", "windows-native-smoke, android"),
+            ("aggregate", "generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android", "generic-builds, windows-complete-max, windows-all-controller, android"),
+            ("max-aggregate", "windows-native-smoke, windows-complete-max, windows-all-controller, android", "windows-native-smoke, windows-all-controller, android"),
+            ("all-aggregate", "windows-complete-max, windows-all-controller, android", "windows-complete-max, android"),
+            ("all-workflow", "uses: ./.github/workflows/windows-node-all-contract.yml", "uses: ./.github/workflows/windows-node-max-contract.yml"),
+            ("all-conditional", "  windows-all-controller:\n", "  windows-all-controller:\n    if: false\n"),
+            ("all-nonblocking", "  windows-all-controller:\n", "  windows-all-controller:\n    continue-on-error: true\n"),
+            ("all-source-audit", "          python3 deploy/test_windows_release_gates.py\n", ""),
             ("max-workflow", "uses: ./.github/workflows/windows-node-max-contract.yml", "uses: ./.github/workflows/windows-node-pq-contract.yml"),
             ("max-conditional", "  windows-complete-max:\n", "  windows-complete-max:\n    if: false\n"),
             ("max-nonblocking", "  windows-complete-max:\n", "  windows-complete-max:\n    continue-on-error: true\n"),

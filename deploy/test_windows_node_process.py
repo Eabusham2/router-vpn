@@ -263,6 +263,7 @@ REQUIRED_SOURCES = (
     "deploy/test_windows_node_process.py", "deploy/test_windows_node_process_runner.py",
     "deploy/test_windows_node_max.py", "deploy/test_windows_release_gates.py",
     ".github/workflows/windows-controller-contract.yml",
+    ".github/workflows/windows-node-all-contract.yml",
 )
 
 ALL_GROUPS = ("TestDesktopNodeProspectiveALLProvesOrderedFallback",

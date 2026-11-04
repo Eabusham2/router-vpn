@@ -385,9 +385,11 @@ for request, spec in policy.DIRECT_ARTIFACTS.items():
 
 # Keep the one-SHA aggregate exhaustive rather than silently dropping a platform.
 require(rc, rc_rel,
-        "needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, android, ios, macos, linux]",
+        "needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux]",
         "windows-complete-max:",
         "uses: ./.github/workflows/windows-node-max-contract.yml",
+        "windows-all-controller:",
+        "uses: ./.github/workflows/windows-node-all-contract.yml",
         "paired-openvpn:",
         "python3 deploy/test_external_openvpn_native.py --core",
         "pattern: '*-release-candidate'",
