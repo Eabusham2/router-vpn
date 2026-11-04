@@ -39,11 +39,20 @@ func startDesktopDarwinInstalledWireGuard(t *testing.T, server *desktopNodeLayer
 	return startDesktopDarwinInstalledPacket(t, server, request, physical, "", startDesktopDarwinWGDevice)
 }
 
+// This second cryptographic endpoint is reachable only from the captured entry's
+// fixed decrypted UDP forwarding rule. It never receives a physical capability.
+func startDesktopDarwinInstalledWireGuardFinal(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer {
+	return startDesktopDarwinInstalledPacketAt(t, server, request, netip.MustParseAddr("127.0.0.1"), "", startDesktopDarwinWGDevice, true)
+}
+
 // Both ciphers retain the same sole physical bind and fixed inner responders.
 // The backend must configure its actual device before the listener is published.
 func startDesktopDarwinInstalledPacket(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error)) desktopExternalInstalledWGPeer {
+	return startDesktopDarwinInstalledPacketAt(t, server, request, physical, parameters, create, false)
+}
+func startDesktopDarwinInstalledPacketAt(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), final bool) desktopExternalInstalledWGPeer {
 	t.Helper()
-	if !physical.Is4() || !physical.IsGlobalUnicast() {
+	if !desktopDarwinPacketReferenceAddress(physical, final) {
 		t.Fatal("external packet reference lost its exact cryptographic backend")
 	}
 	rules := make(map[string]desktopReferenceRule)
@@ -56,12 +65,21 @@ func startDesktopDarwinInstalledPacket(t *testing.T, server *desktopNodeLayerSer
 		}
 		rules[wanted.network+"/"+wanted.destination] = desktopReferenceRule{Network: wanted.network, Address: address.Addr().String(), Port: int(address.Port()), Target: route}
 	}
-	return startDesktopDarwinInstalledPacketRules(t, server, request, physical, parameters, create, rules)
+	return startDesktopDarwinInstalledPacketRulesAt(t, server, request, physical, parameters, create, rules, final)
 }
 
 func startDesktopDarwinInstalledPacketRules(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), rules map[string]desktopReferenceRule) desktopExternalInstalledWGPeer {
+	return startDesktopDarwinInstalledPacketRulesAt(t, server, request, physical, parameters, create, rules, false)
+}
+func desktopDarwinPacketReferenceAddress(address netip.Addr, final bool) bool {
+	if final {
+		return address == netip.MustParseAddr("127.0.0.1")
+	}
+	return address.Is4() && address.IsGlobalUnicast() && !address.IsLoopback()
+}
+func startDesktopDarwinInstalledPacketRulesAt(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), rules map[string]desktopReferenceRule, final bool) desktopExternalInstalledWGPeer {
 	t.Helper()
-	if !physical.Is4() || !physical.IsGlobalUnicast() || physical.IsLoopback() || len(rules) < 1 {
+	if !desktopDarwinPacketReferenceAddress(physical, final) || final && parameters != "" || len(rules) < 1 {
 		t.Fatal("packet peer lost its original physical address or fixed inner routes")
 	}
 	var values [3][]byte
@@ -84,15 +102,21 @@ func startDesktopDarwinInstalledPacketRules(t *testing.T, server *desktopNodeLay
 	}
 	ctx, cancel := context.WithCancel(server.ctx)
 	handler := &desktopDarwinWGHandler{relays: make(map[string]*desktopReferenceHandler), desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
+	addresses := []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}
+	allowed := "allowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n"
+	if final {
+		addresses = []netip.Prefix{netip.MustParsePrefix("10.79.0.1/32"), netip.MustParsePrefix("fd79:79::1/128")}
+		allowed = "allowed_ip=10.79.0.2/32\nallowed_ip=fd79:79::2/128\n"
+	}
 	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler,
 		UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: 1420,
-		Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+		Address: addresses})
 	if err != nil {
 		handler.close()
 		t.Fatal("external WireGuard reference failed to create its native stack", err)
 	}
 	bind := &desktopDarwinWGBind{local: physical, remote: physical}
-	ipc := fmt.Sprintf("private_key=%x\n%spublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], parameters, values[1], values[2])
+	ipc := fmt.Sprintf("private_key=%x\n%spublic_key=%x\npreshared_key=%x\n%s", values[0], parameters, values[1], values[2], allowed)
 	device, err := create(ctx, stack, bind, ipc)
 	ipc = ""
 	if err != nil {
@@ -570,4 +594,184 @@ func startDesktopDarwinInstalledPacketEntry(t *testing.T, parent *desktopNodeLay
 		}
 		return desktopExternalInstalledPacketEntryReceipt{Protocol: protocol, ParametersSHA256: digest, Address: peer.address, PhysicalUDP: raw, Streams: streams, Packets: packets, PublicReplies: proofs.Load()}
 	}}
+}
+
+// This executes the actual second WireGuard device and its fixed TCP/UDP routes
+// on loopback. The first physical entry, native PF and utun remain separate gates.
+func TestRouterVPNDesktopInstalledWireGuardFinalReference(t *testing.T) {
+	for _, fault := range []string{"success", "client-key", "peer-key", "psk", "destination"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+			defer cancel()
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			served := make(chan struct{})
+			go func() {
+				defer close(served)
+				c, err := listener.Accept()
+				if err == nil {
+					defer c.Close()
+					_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+					_, _ = io.Copy(c, c)
+				}
+			}()
+			defer func() { _ = listener.Close(); <-served }()
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			packetDone := make(chan struct{})
+			go func() {
+				defer close(packetDone)
+				data := make([]byte, 2048)
+				for {
+					n, from, err := packet.ReadFrom(data)
+					if err != nil {
+						return
+					}
+					if _, err = packet.WriteTo(data[:n], from); err != nil {
+						return
+					}
+				}
+			}()
+			defer func() { _ = packet.Close(); <-packetDone }()
+			provider, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumer, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var secret [32]byte
+			if _, err := rand.Read(secret[:]); err != nil {
+				t.Fatal(err)
+			}
+			defer clear(secret[:])
+			encode := base64.StdEncoding.EncodeToString
+			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, routes: []desktopNodeLayerRoute{
+				{Network: "udp", Destination: "203.0.113.53:5353", Physical: packet.LocalAddr().String()},
+				{Network: "tcp", Destination: "1.1.1.1:443", Physical: listener.Addr().String()},
+				{Network: "tcp", Destination: "203.0.113.54:443", Physical: listener.Addr().String()},
+			}}
+			request := desktopExternalInstalledWGRequest{PrivateKey: encode(provider.Bytes()), ClientPublicKey: encode(consumer.PublicKey().Bytes()), PresharedKey: encode(secret[:])}
+			peer := startDesktopDarwinInstalledWireGuardFinal(t, server, request)
+			defer peer.close()
+			address, err := netip.ParseAddrPort(peer.address)
+			if err != nil || address.Addr() != netip.MustParseAddr("127.0.0.1") || address.Port() == 0 {
+				t.Fatal("final reference escaped its captured loopback listener")
+			}
+			public := provider.PublicKey()
+			if fault == "client-key" {
+				consumer, err = ecdh.X25519().GenerateKey(rand.Reader)
+			}
+			if fault == "peer-key" {
+				var other *ecdh.PrivateKey
+				other, err = ecdh.X25519().GenerateKey(rand.Reader)
+				if err == nil {
+					public = other.PublicKey()
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fault == "psk" {
+				secret[0] ^= 1
+			}
+			client, err := wg.NewEndpoint(wg.EndpointOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Dialer: desktopDarwinWGReferenceDialer{peer.address}, MTU: 1360, Address: []netip.Prefix{netip.MustParsePrefix("10.79.0.2/32")}, PrivateKey: encode(consumer.Bytes()), Peers: []wg.PeerOptions{{Endpoint: M.ParseSocksaddr(peer.address), PublicKey: encode(public.Bytes()), PreSharedKey: encode(secret[:]), AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			if err := client.Start(false); err != nil {
+				t.Fatal(err)
+			}
+			bounded, stop := context.WithTimeout(ctx, 2*time.Second)
+			defer stop()
+			target := "203.0.113.54:443"
+			if fault == "destination" {
+				target = "203.0.113.55:443"
+			}
+			connection, err := client.DialContext(bounded, "tcp", M.ParseSocksaddr(target))
+			if fault != "success" {
+				if connection != nil {
+					_ = connection.Close()
+				}
+				if err == nil {
+					t.Fatal("wrong final credential/destination acquired plaintext")
+				}
+				raw, streams, packets := peer.stats()
+				if raw < 1 || streams != 0 || packets != 0 {
+					t.Fatal("final refusal missed its encrypted boundary", raw, streams, packets)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+			const body = "independent final encrypted payload"
+			if _, err := io.WriteString(connection, body); err != nil {
+				t.Fatal(err)
+			}
+			reply := make([]byte, len(body))
+			if _, err := io.ReadFull(connection, reply); err != nil || string(reply) != body {
+				t.Fatal("final TCP payload changed", err)
+			}
+			udp, err := client.DialContext(bounded, "udp", M.ParseSocksaddr("203.0.113.53:5353"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer udp.Close()
+			_ = udp.SetDeadline(time.Now().Add(2 * time.Second))
+			if _, err := io.WriteString(udp, body); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := udp.Read(reply); err != nil || n != len(body) || string(reply) != body {
+				t.Fatal("final UDP payload changed", err)
+			}
+			raw, streams, packets := peer.stats()
+			if raw < 1 || streams != 1 || packets != 1 {
+				t.Fatal("final crypto omitted original TCP/UDP route witnesses", raw, streams, packets)
+			}
+			// Closing this original device cannot affect the independent responder.
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+			peer.close()
+			probe, err := net.Dial("udp4", packet.LocalAddr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer probe.Close()
+			_ = probe.SetDeadline(time.Now().Add(time.Second))
+			if _, err := io.WriteString(probe, body); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := probe.Read(reply); err != nil || n != len(body) {
+				t.Fatal("final retirement disturbed an independently owned socket", err)
+			}
+		})
+	}
+	t.Run("role-and-independent-keys", func(t *testing.T) {
+		if desktopDarwinPacketReferenceAddress(netip.MustParseAddr("127.0.0.1"), false) || desktopDarwinPacketReferenceAddress(netip.MustParseAddr("192.0.2.1"), true) {
+			t.Fatal("loopback final role widened physical entry admission")
+		}
+		a := desktopExternalInstalledWGRequest{"one", "two", "three"}
+		b := desktopExternalInstalledWGRequest{"four", "five", "six"}
+		if !desktopExternalIndependentPacketKeys(&a, &b) {
+			t.Fatal("independent final owner refused")
+		}
+		for _, field := range []*string{&b.PrivateKey, &b.ClientPublicKey, &b.PresharedKey} {
+			old := *field
+			*field = a.PresharedKey
+			if desktopExternalIndependentPacketKeys(&a, &b) {
+				t.Fatal("final reused an entry secret")
+			}
+			*field = old
+		}
+	})
 }

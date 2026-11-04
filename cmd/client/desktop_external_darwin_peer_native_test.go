@@ -66,6 +66,7 @@ type macOSExternalPeerReply struct {
 }
 
 type macOSExternalNativePeer struct {
+	finalClientKey, finalPeerKey, finalPSK                           string
 	packetEntry                                                      bool
 	entryProtocol, entryVariant                                      string
 	entryAddress                                                     netip.AddrPort
@@ -208,8 +209,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
 	hysteriaVariant, _, hysteriaEntry := macOSExternalHysteriaEntryScenario(scenario)
 	socksVariant, _, socksEntry := macOSExternalSOCKSEntryScenario(scenario)
+	wgVariant, _, wgFinal := macOSExternalWireGuardFinalScenario(scenario)
 	layerVariant, _, _, layerEntry := macOSExternalHysteriaLayerEntryScenario(scenario)
-	p.packetEntry = layerEntry || socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	p.packetEntry = wgFinal || layerEntry || socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
 	if p.packetEntry {
 		p.entryProtocol = "wireguard"
 		if strings.HasPrefix(scenario, "awg-entry-ss-") {
@@ -231,6 +233,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	if socksEntry && socksVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", socksVariant
+	}
+	if wgFinal && wgVariant != "wireguard" {
+		p.entryProtocol, p.entryVariant = "amneziawg", wgVariant
 	}
 	if p.packetEntry && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
@@ -357,6 +362,25 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 			request["wireguard"] = keys
 		}
 	}
+	if wgFinal {
+		provider, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		consumer, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var key [32]byte
+		if _, err := rand.Read(key[:]); err != nil {
+			t.Fatal(err)
+		}
+		p.finalClientKey, p.finalPeerKey, p.finalPSK = base64.StdEncoding.EncodeToString(consumer.Bytes()), base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes()), base64.StdEncoding.EncodeToString(key[:])
+		clear(key[:])
+		p.password = ""
+		request["password"] = ""
+		request["wireguard"] = map[string]any{"private_key": base64.StdEncoding.EncodeToString(provider.Bytes()), "client_public_key": base64.StdEncoding.EncodeToString(consumer.PublicKey().Bytes()), "preshared_key": p.finalPSK}
+	}
 	if layer != "" {
 		layerRequest := map[string]any{"mode": layer, "password": p.layerPassword}
 		if fault == "wrong-whitening" {
@@ -408,6 +432,11 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 	case "wireguard", "amneziawg":
 		profile.DNSProtocol = "udp"
 		profile.External.WireGuard = &common.ExternalWireGuardConfig{PrivateKey: p.clientKey, PeerPublicKey: p.peerKey, PresharedKey: p.psk, Endpoint: p.address.String(), Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1420, PersistentKeepalive: 25}
+		if p.packetEntry {
+			profile.ManualMTU = 1360
+			profile.External.WireGuard.PrivateKey, profile.External.WireGuard.PeerPublicKey, profile.External.WireGuard.PresharedKey = p.finalClientKey, p.finalPeerKey, p.finalPSK
+			profile.External.WireGuard.Addresses = []string{"10.79.0.2/32", "fd79:79::2/128"}
+		}
 		switch p.fault {
 		case "wrong-client-key":
 			other, err := ecdh.X25519().GenerateKey(rand.Reader)
@@ -633,6 +662,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if _, fault, ok := macOSExternalWireGuardFinalScenario(scenario); ok {
+		return "wireguard", "", fault
+	}
 	if _, layer, fault, ok := macOSExternalHysteriaLayerEntryScenario(scenario); ok {
 		return "hysteria2", layer, fault
 	}

@@ -112,6 +112,11 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 				if actual.EntryID != "saved-entry" || actual.EntryTag != "external-entry" || len(actual.PhysicalRoots) != 1 || actual.PhysicalRoots[0].Tag != "external-entry" || meta.RootTag != "external-entry" || meta.RootType != rootType || meta.Protocol != protocol || meta.SOCKSUDPAssociationRequired != (protocol == "socks5") || meta.SOCKSUDPAssociationTunneled != (protocol == "socks5") || actual.PhysicalRoots[0].DynamicSOCKSUDP || entry["detour"] != DesktopExternalPhysicalTag || actual.StartLayer != layer || exit["detour"] != finalDetour || !reflect.DeepEqual(exit, externalTestFind(t, source, ExternalFinalTag)) || actual.SelectedDNS.Detour != ExternalFinalTag || actual.SelectedDNS.Physical || actual.ConfiguredMTU != 1360 || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan {
 					t.Fatal("entry lost exact root, final graph or device policy")
 				}
+				if protocol == "wireguard" {
+					if len(derived["endpoints"].([]any)) != 2 || len(derived["outbounds"].([]any)) != 1 || exit["type"] != "wireguard" {
+						t.Fatal("packet final lost its two distinct endpoints or acquired another physical outbound")
+					}
+				}
 				if layer != "" {
 					outer := externalTestFind(t, derived, multihoprelay.ExitStartLayerTag)
 					if !reflect.DeepEqual(outer, externalTestFind(t, source, multihoprelay.ExitStartLayerTag)) || outer["detour"] != "external-entry" || exit["server"] != "10.93.0.1" || len(derived["outbounds"].([]any)) != 3 {
@@ -145,12 +150,18 @@ func TestDesktopExternalDarwinWireGuardEntryPreservesOtherGraphBoundaries(t *tes
 			t.Fatal("unimplemented first root admitted", entry)
 		}
 	}
-	for _, protocol := range []string{"wireguard"} {
-		graph, capture := externalTestFixture(t, protocol, "wireguard")
+	for _, protocol := range []string{"amneziawg"} {
+		graph, capture := desktopExternalInputFixture(t, protocol, "wireguard", "strong")
 		capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 		original := externalDesktopCompile(t, graph, capture)
 		if plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "darwin"); err == nil || plan != nil {
 			t.Fatal("unimplemented final graph admitted", protocol)
 		}
+	}
+}
+
+func TestDesktopExternalDarwinPacketEntryWireGuardRetainsCompletePolicy(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitOwnsPolicy(t, variant, "wireguard") })
 	}
 }

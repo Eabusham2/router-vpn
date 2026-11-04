@@ -28,6 +28,10 @@ func desktopExternalPacketEntryLayerExitFixture(t *testing.T, kill, variant, pro
 	}
 	entry, _ := desktopExternalNativeFixture(t, "wireguard")
 	entry.ID = "captured-wg-entry"
+	if protocol == "wireguard" {
+		entry.External.WireGuard.MTU = 1420
+		entry.External.WireGuard.PrivateKey, entry.External.WireGuard.PeerPublicKey, entry.External.WireGuard.PresharedKey = testWGKey('i'), testWGKey('j'), testWGKey('k')
+	}
 	if variant != "wireguard" {
 		entry.ID = "captured-awg-entry"
 		parameters := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
@@ -41,7 +45,7 @@ func desktopExternalPacketEntryLayerExitFixture(t *testing.T, kill, variant, pro
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
-	if protocol == "hysteria2" || protocol == "socks5" {
+	if protocol == "hysteria2" || protocol == "socks5" || protocol == "wireguard" {
 		profile.DNSProtocol = "udp"
 	}
 	launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
@@ -117,6 +121,9 @@ func desktopExternalPacketEntryLayerExitRetainsSources(t *testing.T, variant, pr
 		if layer != "" {
 			faults = append(faults, "layer-key", "layer-mode", "layer-private", "layer-host", "layer-port")
 		}
+		if protocol == "wireguard" {
+			faults = append(faults, "exit-peer-key", "exit-psk", "exit-address", "exit-client-address", "exit-allowed-ips", "exit-mtu")
+		}
 		if protocol == "hysteria2" {
 			faults = append(faults, "exit-tls")
 		}
@@ -159,6 +166,12 @@ func desktopExternalPacketEntryLayerExitRetainsSources(t *testing.T, variant, pr
 					mutateDesktopExternalEntryLayer(&p, fault)
 				case "exit-key":
 					mutateDesktopExternalEntryExit(t, &p, "password")
+				case "exit-address", "exit-client-address", "exit-allowed-ips", "exit-mtu":
+					mutateDesktopExternalEntryExit(t, &p, strings.TrimPrefix(fault, "exit-"))
+				case "exit-peer-key":
+					mutateDesktopExternalEntryExit(t, &p, "peer-key")
+				case "exit-psk":
+					mutateDesktopExternalEntryExit(t, &p, "psk")
 				case "exit-username":
 					mutateDesktopExternalEntryExit(t, &p, "username")
 				case "exit-tls":
@@ -253,6 +266,9 @@ func desktopExternalPacketEntryLayerExitRestore(t *testing.T, variant, protocol,
 		if layer != "" {
 			faults = append(faults, "layer-key", "layer-mode", "layer-private", "layer-host", "layer-port")
 		}
+		if protocol == "wireguard" {
+			faults = append(faults, "final-peer-key", "final-psk", "final-address", "final-client-address", "final-allowed-ips", "final-mtu")
+		}
 		if protocol == "hysteria2" {
 			faults = append(faults, "final-tls")
 		}
@@ -286,6 +302,12 @@ func desktopExternalPacketEntryLayerExitRestore(t *testing.T, variant, protocol,
 					mutateDesktopExternalEntryLayer(&copy.profile, fault)
 				case "final-key":
 					mutateDesktopExternalEntryExit(t, &copy.profile, "password")
+				case "final-address", "final-client-address", "final-allowed-ips", "final-mtu":
+					mutateDesktopExternalEntryExit(t, &copy.profile, strings.TrimPrefix(fault, "final-"))
+				case "final-peer-key":
+					mutateDesktopExternalEntryExit(t, &copy.profile, "peer-key")
+				case "final-psk":
+					mutateDesktopExternalEntryExit(t, &copy.profile, "psk")
 				case "final-username":
 					mutateDesktopExternalEntryExit(t, &copy.profile, "username")
 				case "final-tls":
@@ -321,6 +343,24 @@ func mutateDesktopExternalEntryParameter(t *testing.T, parameters map[string]str
 func mutateDesktopExternalEntryExit(t *testing.T, profile *common.RouterProfile, field string) {
 	t.Helper()
 	switch profile.External.Protocol {
+	case "wireguard":
+		switch field {
+		case "address":
+			profile.External.WireGuard.Endpoint = "198.51.100.241:51821"
+			profile.Endpoint = "198.51.100.241"
+		case "client-address":
+			profile.External.WireGuard.Addresses = []string{"10.81.0.2/32", "fd81::2/128"}
+		case "allowed-ips":
+			profile.External.WireGuard.AllowedIPs = []string{"0.0.0.0/0"}
+		case "mtu":
+			profile.External.WireGuard.MTU++
+		case "peer-key":
+			profile.External.WireGuard.PeerPublicKey = testWGKey('z')
+		case "psk":
+			profile.External.WireGuard.PresharedKey = testWGKey('y')
+		default:
+			profile.External.WireGuard.PrivateKey = testWGKey('z')
+		}
 	case "shadowsocks":
 		profile.External.Shadowsocks.Password += "changed"
 	case "socks5":
@@ -390,5 +430,53 @@ func TestDesktopExternalPacketEntryHysteriaLayersPreserveUnsupportedGraphs(t *te
 				t.Fatal("unsupported layer composition acquired retained entry owner", fault)
 			}
 		})
+	}
+}
+
+func TestDesktopExternalPacketEntryWireGuardRetainsBothSourcesAndMeasurementOwner(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRetainsSources(t, variant, "wireguard") })
+	}
+}
+func TestDesktopExternalPacketEntryWireGuardRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRestore(t, variant, "wireguard") })
+	}
+}
+
+func TestDesktopExternalPacketEntryWireGuardPreservesUnsupportedGraphs(t *testing.T) {
+	for _, fault := range []string{"entry-layer", "final-layer", "server", "auto", "predecessor", "amnezia-final", "same-id", "off"} {
+		t.Run(fault, func(t *testing.T) {
+			_, _, launch := desktopExternalPacketEntryExitFixture(t, "always", "strong", "wireguard")
+			switch fault {
+			case "entry-layer":
+				launch.external.entry.StartLayer = common.StartLayerAES256GCM
+			case "final-layer":
+				launch.external.profile.StartLayer = common.StartLayerAES256GCM
+			case "server", "auto":
+				launch.external.selection = fault
+			case "predecessor":
+				launch.external.predecessor = strings.Repeat("a", 64)
+			case "amnezia-final":
+				launch.external.profile.External.Protocol = "amneziawg"
+			case "same-id":
+				launch.external.entry.ID = launch.external.profile.ID
+			case "off":
+				launch.external.profile.KillSwitchPolicy = "off"
+			}
+			if desktopExternalPacketEntryOwner(launch.external) {
+				t.Fatal("packet final expanded an unimplemented ownership boundary", fault)
+			}
+		})
+	}
+	// The full captured compiler still enforces the nested packet envelope.
+	profile, entry, _ := desktopExternalPacketEntryExitFixture(t, "always", "wireguard", "wireguard")
+	profile.ManualMTU = 1376
+	exit, err := standardExitFromExternalProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil); err == nil || launch != nil {
+		t.Fatal("oversized final MTU bypassed captured entry capacity")
 	}
 }

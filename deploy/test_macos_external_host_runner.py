@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -27,6 +28,23 @@ class NativeHostVerdicts(unittest.TestCase):
             lines += ['    desktop_external_darwin_native_test.go:99: '+G.refusal_receipt(case)]
         lines += ['    desktop_external_darwin_native_test.go:87: '+G.MTU_RECEIPT]
         return '\n'.join([*lines, 'PASS'])+'\n'
+
+    def test_required_case_inventory_is_actual_compiled_native_inventory(self):
+        main = (ROOT/'cmd/client/desktop_external_darwin_native_test.go').read_text()
+        body = re.search(r'func TestMacOSRetainedExternalNativeSealedProtocols[\s\S]*?\[\]string\{([^}]+)\}', main)
+        self.assertIsNotNone(body)
+        actual = re.findall(r'"([a-z0-9-]+)"', body.group(1))
+        final = None
+        for source in (ROOT/'cmd/client').glob('*darwin_native_test.go'):
+            for name, body in re.findall(r'var (macOSExternal\w+Cases) = \[\]string\{([^}]+)\}', source.read_text()):
+                cases = re.findall(r'"([a-z0-9-]+)"', body)
+                actual.extend(cases)
+                if name == 'macOSExternalWireGuardFinalCases':
+                    final = cases
+        self.assertCountEqual(G.CASES, actual)
+        self.assertIsNotNone(final)
+        self.assertEqual(tuple(final[:6]), tuple(case for case in G.POSITIVE_CASES if '-entry-wireguard' in case))
+        self.assertEqual(tuple(final[6:]), tuple(case for case in G.NEGATIVE_CASES if '-entry-wireguard' in case))
 
     def test_complete_unique_native_execution(self):
         G.check_verdict(self.completed())

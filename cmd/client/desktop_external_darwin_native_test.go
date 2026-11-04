@@ -176,6 +176,13 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 		result.PhysicalNetwork, result.PhysicalAddress = destination.Network, net.JoinHostPort(destination.Host, strconv.Itoa(destination.Port))
 	}
 	var graph struct {
+		Endpoints []struct {
+			Tag, Type, Detour string
+			Peers             []struct {
+				Address string
+				Port    int
+			}
+		}
 		Outbounds []struct {
 			Tag, Type, Server, Detour string
 			Port                      int `json:"server_port"`
@@ -190,6 +197,22 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 		}
 		if outbound.Tag == mobilemultihop.ExternalFinalTag {
 			result.InnerHost, result.InnerDetour = outbound.Server, outbound.Detour
+		}
+	}
+	if capture.EntryID != "" && capture.Protocol == "wireguard" {
+		found := false
+		for _, endpoint := range graph.Endpoints {
+			if endpoint.Tag != mobilemultihop.ExternalFinalTag {
+				continue
+			}
+			if found || endpoint.Type != "wireguard" || len(endpoint.Peers) != 1 || endpoint.Peers[0].Port == 0 || endpoint.Detour != capture.EntryTag {
+				return result, errors.New("packet final observation lost its exact endpoint")
+			}
+			found = true
+			result.InnerHost, result.InnerDetour = endpoint.Peers[0].Address, endpoint.Detour
+		}
+		if !found {
+			return result, errors.New("packet final observation omitted its endpoint")
 		}
 	}
 	result.Session, result.Source, result.Config, result.Protocol = h.selection.Session, h.selection.Source, h.selection.Config, h.selection.Protocol
@@ -263,7 +286,7 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
 	for _, protocol := range append(append(append(append([]string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
 		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
-		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), macOSExternalHysteriaLayerEntryCases...) {
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), append(macOSExternalHysteriaLayerEntryCases, macOSExternalWireGuardFinalCases...)...) {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
@@ -275,6 +298,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	peer := macOSExternalNativePeerStart(t, scenario)
 	protocol := peer.protocol
 	configuredMTU := 1376
+	if _, _, found := macOSExternalWireGuardFinalScenario(scenario); found {
+		configuredMTU = 1360
+	}
 	if scenario == "wireguard-auto" {
 		configuredMTU = 1280
 	}
@@ -386,7 +412,7 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		t.Fatalf("actual Darwin external ownership/readiness receipt failed: status=%d error=%v response=%s", status, err, raw)
 	}
 	macOSExternalNativeLayerAuthority(t, peer, live)
-	if protocol == "wireguard" || protocol == "amneziawg" {
+	if (protocol == "wireguard" || protocol == "amneziawg") && !peer.packetEntry {
 		expectedIPv6 := "off"
 		if peer.policy == "always" {
 			expectedIPv6 = "on"

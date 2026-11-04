@@ -57,7 +57,7 @@ type DesktopExternalPolicy struct {
 var desktopExternalPolicyError = errors.New("desktop external lower path requires its complete captured native policy")
 
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
-// Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer) or SOCKS5 graph.
+// Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer), SOCKS5 or WireGuard graph.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -73,6 +73,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		entryKind = desktopExternalPacketEntryKind(original, capture)
 	}
 	entry := entryKind != ""
+	packetFinal := entry && capture.Protocol == "wireguard"
 	if err != nil || !entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" ||
 		capture.Execution != "" || capture.EntryStartLayer != "" ||
 		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
@@ -114,6 +115,9 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	rootTag, rootKind, rowCount := ExternalFinalTag, kind, 1
 	if entry {
 		family, rootTag, rootKind = "endpoints", capture.EntryTag, entryKind
+		if packetFinal {
+			rowCount = 2
+		}
 	}
 	if layered && !entry {
 		rootTag, rootKind, rowCount = multihoprelay.ExitStartLayerTag, "shadowsocks", 2
@@ -154,7 +158,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			}
 			physical = object
 		case ExternalFinalTag:
-			if !layered || innerFound || object["type"] != kind || object["detour"] != root.Tag {
+			if !(layered && !entry || packetFinal) || innerFound || object["type"] != kind || object["detour"] != root.Tag {
 				return nil, desktopExternalPolicyError
 			}
 			innerFound = true
@@ -162,7 +166,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			return nil, desktopExternalPolicyError
 		}
 	}
-	if physical == nil || innerFound != (layered && !entry) || physical["type"] != root.Type || physical["detour"] != nil ||
+	if physical == nil || innerFound != (layered && !entry || packetFinal) || physical["type"] != root.Type || physical["detour"] != nil ||
 		desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
 		return nil, desktopExternalPolicyError
 	}
@@ -249,11 +253,11 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	if value, exists := graph["outbounds"]; exists {
 		var ok bool
 		outbounds, ok = value.([]any)
-		if !ok || family == "endpoints" && !entry && len(outbounds) != 0 {
+		if !ok || family == "endpoints" && (!entry || packetFinal) && len(outbounds) != 0 {
 			return nil, desktopExternalPolicyError
 		}
 	}
-	if entry {
+	if entry && !packetFinal {
 		count, finalDetour := 1, capture.EntryTag
 		if layered {
 			count, finalDetour = 2, multihoprelay.ExitStartLayerTag
@@ -329,7 +333,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 // bounded admission. The actual first root must still match its exact digest;
 // an entry descriptor cannot turn an unrelated transport into physical egress.
 func desktopExternalPacketEntryExit(protocol string) bool {
-	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
+	return protocol == "wireguard" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
 }
 
 func desktopExternalPacketEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture) string {

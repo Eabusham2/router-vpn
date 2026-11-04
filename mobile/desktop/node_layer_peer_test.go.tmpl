@@ -1747,6 +1747,8 @@ type desktopExternalInstalledWGPeer struct {
 
 // The actual WG device/bind is supplied only by the Linux reference template.
 // An absent backend is a fixture failure, never a skipped acceptance case.
+var desktopExternalInstalledWireGuardFinal func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer
+
 var desktopExternalInstalledWireGuard func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer
 var desktopExternalInstalledAmnezia func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer
 
@@ -2368,10 +2370,19 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
+	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
 		t.Fatal("unrequested or unsupported encrypted entry graph")
+	}
+	if entryRequested && request.Protocol == "wireguard" {
+		entryKeys := request.WireGuardEntry
+		if request.AmneziaEntry != nil {
+			entryKeys = &request.AmneziaEntry.desktopExternalInstalledWGRequest
+		}
+		if desktopExternalInstalledWireGuardFinal == nil || !desktopExternalIndependentPacketKeys(entryKeys, request.WireGuard) {
+			t.Fatal("packet final lost its separate original cryptographic owner")
+		}
 	}
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
 	var benchmark *desktopExternalInstalledLatencyPeer
@@ -2471,7 +2482,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 				t.Fatal("installed external AWG reference omitted actual parameter readback")
 			}
 		} else {
-			wgPeer = desktopExternalInstalledWireGuard(t, server, *request.WireGuard)
+			if entryRequested {
+				wgPeer = desktopExternalInstalledWireGuardFinal(t, server, *request.WireGuard)
+			} else {
+				wgPeer = desktopExternalInstalledWireGuard(t, server, *request.WireGuard)
+			}
 		}
 		if wgPeer.address == "" || wgPeer.stats == nil || wgPeer.close == nil {
 			t.Fatal("installed external WireGuard backend omitted its original owned device")
@@ -2592,7 +2607,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if request.Layer != nil && request.Layer.Mode == "aes-256-gcm+xor-whitening" {
 			exitPort = 8389
 		}
-		if request.Protocol == "hysteria2" {
+		if request.Protocol == "hysteria2" || request.Protocol == "wireguard" {
 			exitNetwork = "udp"
 		}
 		if request.AmneziaEntry != nil {
@@ -2709,4 +2724,18 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 		respond()
 	}
+}
+
+func desktopExternalIndependentPacketKeys(entry, final *desktopExternalInstalledWGRequest) bool {
+	if entry == nil || final == nil {
+		return false
+	}
+	seen := make(map[string]bool)
+	for _, key := range []string{entry.PrivateKey, entry.ClientPublicKey, entry.PresharedKey, final.PrivateKey, final.ClientPublicKey, final.PresharedKey} {
+		if key == "" || seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }

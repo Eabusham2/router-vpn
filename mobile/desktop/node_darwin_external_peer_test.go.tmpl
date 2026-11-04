@@ -51,6 +51,7 @@ func TestRouterVPNDesktopDarwinExternalReferenceProcess(t *testing.T) {
 	if found != 1 {
 		t.Fatal("Darwin reference address is not one current physical interface")
 	}
+	desktopExternalInstalledWireGuardFinal = startDesktopDarwinInstalledWireGuardFinal
 	desktopExternalInstalledWireGuard = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer {
 		return startDesktopDarwinInstalledWireGuard(t, server, request, address)
 	}

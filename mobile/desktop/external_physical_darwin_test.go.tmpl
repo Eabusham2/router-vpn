@@ -13,7 +13,7 @@ import (
 )
 
 func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *testing.T) {
-	for _, selected := range []string{"shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong", "wg-entry-socks5", "awg-entry-socks5-fast", "awg-entry-socks5-strong", "wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor", "awg-entry-hysteria2-fast-aes", "awg-entry-hysteria2-fast-aes-xor", "awg-entry-hysteria2-strong-aes", "awg-entry-hysteria2-strong-aes-xor"} {
+	for _, selected := range []string{"wg-entry-wireguard", "awg-entry-wireguard-fast", "awg-entry-wireguard-strong", "shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong", "wg-entry-socks5", "awg-entry-socks5-fast", "awg-entry-socks5-strong", "wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor", "awg-entry-hysteria2-fast-aes", "awg-entry-hysteria2-fast-aes-xor", "awg-entry-hysteria2-strong-aes", "awg-entry-hysteria2-strong-aes-xor"} {
 		runExternalPhysicalFactoryProtocolCases(t, []string{selected}, func(t *testing.T, c *externalPhysicalFactoryCase) error {
 			wantInterfaces, err := desktopDarwinPhysicalInterfaces(c.selected, c.ipv6 != "off")
 			if err != nil {
@@ -77,6 +77,31 @@ func TestRouterVPNExternalPhysicalLayeredEntryRejectsFinalPhysicalAuthority(t *t
 			f.network.Cancel()
 			if _, err := f.physical.current(ctx, "udp", M.ParseSocksaddr("192.168.50.7:8443")); err == nil {
 				t.Fatal("cancelled original entry retained physical authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalPhysicalPacketFinalRejectsFinalPhysicalAuthority(t *testing.T) {
+	for _, kind := range []string{"wg-entry-wireguard", "awg-entry-wireguard-fast", "awg-entry-wireguard-strong"} {
+		t.Run(kind, func(t *testing.T) {
+			policy := externalPhysicalDeviceFixture(t, kind, "192.168.50.7", 8443, false, "darwin", "off", "always")
+			f := newExternalPhysicalFixture(t, policy)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			ctx := f.start(t, source)
+			if _, err := f.physical.current(ctx, "udp", M.ParseSocksaddr("192.168.50.7:8443")); err != nil {
+				t.Fatal("original entry lost its only physical tuple", err)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, destination := range []string{"198.51.100.240:8388", "198.51.100.241:8388", "10.79.0.1:8388", "127.0.0.1:8388"} {
+					if _, err := f.physical.current(ctx, network, M.ParseSocksaddr(destination)); err == nil {
+						t.Fatal("final WireGuard acquired physical egress", network, destination)
+					}
+				}
+			}
+			f.network.Cancel()
+			if _, err := f.physical.current(ctx, "udp", M.ParseSocksaddr("192.168.50.7:8443")); err == nil {
+				t.Fatal("retired entry retained its original tuple")
 			}
 		})
 	}
