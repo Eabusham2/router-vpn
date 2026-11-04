@@ -6,6 +6,7 @@ the real iOS SDK acceptance remain mandatory in test_ios_via_entry_candidates.py
 """
 from pathlib import Path
 import contextlib
+import errno
 import importlib.util
 import io
 import select
@@ -129,6 +130,50 @@ class ViaEntrySourceBoundary(unittest.TestCase):
 
 
 class OriginalCompilerLifetime(unittest.TestCase):
+    def test_completed_compiler_keeps_a_live_original_group_and_its_exact_exit_status(self):
+        # Darwin rejects killpg when the retained group has only zombies. Make
+        # that kernel behavior explicit on Linux too, without reaping the
+        # original handle before the production cleanup has signalled it.
+        spawn, signal_group = subprocess.Popen, GATE.os.killpg
+        for exit_status in (0, 7):
+            with self.subTest(exit_status=exit_status):
+                compiler = GATE.OwnedCandidateCompiler(time.monotonic() + 5)
+                handles, acknowledged = [], []
+                def capture_original(*arguments, **options):
+                    original = spawn(*arguments, **options)
+                    handles.append(original)
+                    return original
+                def signal_live_original(group, sig):
+                    self.assertEqual(group, handles[0].pid)
+                    self.assertIsNone(handles[0].returncode)
+                    if sys.platform.startswith('linux'):
+                        exited = GATE.os.waitid(GATE.os.P_PID, group,
+                                               GATE.os.WEXITED | GATE.os.WNOHANG | GATE.os.WNOWAIT)
+                        if exited is not None and exited.si_pid == group:
+                            raise PermissionError(errno.EPERM, 'Darwin refuses a zombie-only process group')
+                    signal_group(group, sig)
+                    acknowledged.append(group)
+                command = [sys.executable, '-c', f'raise SystemExit({exit_status})']
+                try:
+                    with patch.object(GATE.subprocess, 'Popen', side_effect=capture_original), \
+                         patch.object(GATE.os, 'killpg', side_effect=signal_live_original):
+                        if exit_status:
+                            with self.assertRaises(subprocess.CalledProcessError) as rejected:
+                                compiler.run(command, check=True, timeout=5)
+                            self.assertEqual(rejected.exception.returncode, exit_status)
+                            self.assertEqual(rejected.exception.cmd, command)
+                        else:
+                            compiler.run(command, check=True, timeout=5)
+                    self.assertEqual(len(handles), 1)
+                    self.assertEqual(acknowledged, [handles[0].pid])
+                    self.assertIsNotNone(handles[0].returncode, 'original group leader was not joined')
+                    self.assertIsNone(compiler.process)
+                finally:
+                    # The causal old-driver regression leaves its already
+                    # exited original child unreaped. Join only that handle.
+                    for original in handles:
+                        original.wait(timeout=2)
+
     def test_cancellation_drains_original_compiler_descendants_without_signalling_foreign_child(self):
         compiler = GATE.OwnedCandidateCompiler(time.monotonic() + 10)
         result = []
@@ -166,7 +211,7 @@ class OriginalCompilerLifetime(unittest.TestCase):
                 compiler.cancel()
                 worker.join(2)
                 self.assertFalse(worker.is_alive(), 'cancelled compiler was not joined')
-                self.assertIsNotNone(original.returncode, 'compiler handle was cleared before its child joined')
+                self.assertIsNotNone(original.returncode, f'compiler handle was cleared before its child joined: {result!r}')
                 self.assertTrue(select.select([original.stdout], [], [], 2)[0], 'original compiler descendant retained its inherited pipe')
                 self.assertEqual(original.stdout.read(), b'', 'original compiler descendant was not drained')
                 self.assertIsNone(foreign.poll(), 'compiler cancellation signalled another child')

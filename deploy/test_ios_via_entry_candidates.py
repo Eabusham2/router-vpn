@@ -10,6 +10,8 @@ import importlib.util
 import json
 import os
 import signal
+import struct
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -22,68 +24,95 @@ spec = importlib.util.spec_from_file_location('speed_path_fixture', ROOT / 'depl
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 
 
+# Keep the original session leader alive until the parent has signalled its
+# complete compiler group. A finished swiftc driver may leave only a zombie;
+# Darwin refuses killpg on that group with EPERM, which is not absence proof.
+COMPILER_OWNER = r"""
+import os, signal, struct, subprocess, sys
+channel = int(sys.argv[1])
+try:
+    result = subprocess.run(sys.argv[2:], close_fds=True).returncode
+except BaseException:
+    result = 125
+os.write(channel, struct.pack("!i", result))
+os.close(channel)
+while True:
+    signal.pause()
+"""
+
+
 class OwnedCandidateCompiler:
-    """One original compiler child, joined before the fixture scope exits."""
+    """One original live session leader and its private compiler exit receipt."""
 
     def __init__(self, deadline):
         self.deadline = deadline
         self.lock = threading.Lock()
         self.process = None
+        self.signalled = None
         self.cancelled = False
         self.wake = threading.Event()
 
     def terminate_original_group(self, process):
-        # The original child has not been reaped: its creation-time PID still
-        # pins the session/group established by start_new_session. Never poll
-        # or rediscover a process number before signalling this retained group.
-        if self.process is process and process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        # No poll, PID lookup, or reap precedes this signal. The retained live
+        # supervisor pins its creation-time session until this acknowledged kill.
+        if self.process is process and process.returncode is None and self.signalled is not process:
+            os.killpg(process.pid, signal.SIGKILL)
+            self.signalled = process
 
     def run(self, command, *, check, timeout):
         assert check
-        with self.lock:
-            if self.cancelled:
-                raise RuntimeError('Candidate compilation was cancelled')
-            remaining = self.deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired(command, timeout)
-            if os.name != 'posix' or not hasattr(os, 'waitid') or not hasattr(os, 'WNOWAIT'):
-                raise RuntimeError('Candidate compiler requires original unreaped POSIX child ownership')
-            if self.process is not None:
-                raise RuntimeError('Candidate compiler already owns an unjoined child')
-            process = subprocess.Popen(command, start_new_session=True)
-            self.process = process
-        deadline = min(self.deadline, time.monotonic() + timeout)
+        reader, writer = os.pipe()
+        process = None
         try:
+            os.set_blocking(reader, False)
+            with self.lock:
+                if self.cancelled:
+                    raise RuntimeError('Candidate compilation was cancelled')
+                if self.deadline <= time.monotonic():
+                    raise subprocess.TimeoutExpired(command, timeout)
+                if os.name != 'posix':
+                    raise RuntimeError('Candidate compiler requires original POSIX session ownership')
+                if self.process is not None:
+                    raise RuntimeError('Candidate compiler already owns an unjoined child')
+                process = subprocess.Popen([sys.executable, '-c', COMPILER_OWNER, str(writer), *command],
+                                           start_new_session=True, pass_fds=(writer,))
+                self.process, self.signalled = process, None
+            os.close(writer)
+            writer = None
+            deadline = min(self.deadline, time.monotonic() + timeout)
+            receipt = b''
             while True:
-                # WNOWAIT observes completion without releasing the original
-                # child identity before its frontend/linker group is drained.
-                exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-                if exited is not None:
-                    if exited.si_pid != process.pid:
-                        raise RuntimeError('Candidate compiler observed another child')
-                    # Darwin can report stopped children even with WEXITED.
-                    if exited.si_code in (os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED):
-                        break
+                if self.cancelled:
+                    raise subprocess.CalledProcessError(-signal.SIGKILL, command)
+                try:
+                    block = os.read(reader, 5 - len(receipt))
+                except BlockingIOError:
+                    block = None
+                if block == b'':
+                    if len(receipt) != 4:
+                        raise RuntimeError('Original compiler owner omitted its exact exit receipt')
+                    result, = struct.unpack('!i', receipt)
+                    if not -127 <= result <= 255:
+                        raise RuntimeError('Original compiler owner returned an invalid exit status')
+                    break
+                if block:
+                    receipt += block
+                    if len(receipt) > 4:
+                        raise RuntimeError('Original compiler owner exceeded its exit receipt')
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
                 self.wake.wait(min(.01, remaining))
-            with self.lock:
-                self.terminate_original_group(process)
-                result = process.wait()
-        except BaseException:
-            with self.lock:
-                self.terminate_original_group(process)
-                process.wait()
-            raise
         finally:
-            with self.lock:
-                if self.process is process:
-                    self.process = None
+            if writer is not None:
+                os.close(writer)
+            os.close(reader)
+            if process is not None:
+                with self.lock:
+                    self.terminate_original_group(process)
+                    process.wait()
+                    if self.process is process:
+                        self.process = None
         if result:
             raise subprocess.CalledProcessError(result, command)
 
