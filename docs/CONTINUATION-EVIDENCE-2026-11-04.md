@@ -219,7 +219,26 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## macOS SS2022 entry and final source accompanying this record
+## Ordinary AWG OpenVPN helper projection accompanying this record
+
+The actual Linux AWG job at `c336566d` failed to compile its patched OpenVPN
+client because `routerVPNOpenVPNOriginalTransport` was undefined. Ordinary
+AWG preparation installed the remote-client transformation but omitted the
+existing close/transport helper, which only the fuller native preparer emitted.
+The shared base preparer now invokes that same guarded helper preparation
+before the remote transformation. The later native verification remains
+idempotent; pinned source, foreign-helper refusal and cleanup policy are
+unchanged.
+
+Root verified the exact two-file correction. All sixteen preparation,
+remote-policy and close-policy tests pass, including the existing close matrix
+and both negative controls. The old base omission fails the intended missing
+helper assertion. Independently verified actual pinned client/server/helper
+outputs compile and pass five OpenVPN parent tests and 32 leaves with no
+skip/failure. This is the source dependency repair; the complete AWG runtime
+must still pass on each actual native host.
+
+## macOS SS2022 entry and final source published at db2b9ae8
 
 The retained Local host now admits exactly an ordinary SS2022 entry and
 independent SS2022 final. Each profile independently selects AES-128-GCM,

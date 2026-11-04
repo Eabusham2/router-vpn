@@ -35,6 +35,47 @@ class NativeRelayBuild(unittest.TestCase):
                 self.assertEqual(run.call_count,2)
                 self.assertIn('github.com/xtls/xray-core='+str(xray),run.call_args_list[1].args[0][-1])
             self.assertEqual((core/'routervpn-xray-LICENSE.txt').read_bytes(),(xray/'LICENSE').read_bytes())
+    def test_ordinary_awg_preparation_emits_original_openvpn_transport_owner(self):
+        remote=M.OPENVPN_REMOTE;close=M.OPENVPN_CLOSE
+        original='package fixture\n'+close.OLD+'\n'+''.join(before*count for before,after,count in remote.CHANGES)
+        server='package fixture\nfunc closeServer() {\n'+close.SERVER_OLD+'\n}\n'
+        # Model only the pinned upstream fixture identity and unrelated module
+        # preparation. Execute the actual ordinary AWG entrypoint and both
+        # shipping OpenVPN transformations, helper projection and verification.
+        with tempfile.TemporaryDirectory() as tmp:
+            core=Path(tmp).resolve();directory=core/'protocol/openvpn';directory.mkdir(parents=True)
+            (core/'cmd/sing-box').mkdir(parents=True)
+            (core/'go.mod').write_bytes(b'module github.com/sagernet/sing-box\n')
+            client=directory/'client.go';client.write_bytes(original.encode())
+            (directory/'server.go').write_bytes(server.encode())
+            def captured_identity(command,**kwargs):
+                self.assertEqual(command,['git','-C',str(core),'rev-parse','HEAD'])
+                self.assertEqual(kwargs,{'text':True})
+                return M.CORE+'\n'
+            with mock.patch.object(M.subprocess,'check_output',side_effect=captured_identity), \
+                    mock.patch.object(M.AMNEZIA,'prepare'), \
+                    mock.patch.object(remote.MODULE,'prepare'),mock.patch.object(remote.LAYERS,'prepare'), \
+                    mock.patch.object(remote.STACK,'prepare'), \
+                    mock.patch.object(remote,'SOURCE_SHA',close.blobsha(original.encode())), \
+                    mock.patch.object(close,'SOURCE_SHA',close.blobsha(original.encode())), \
+                    mock.patch.object(close.REMOTE,'SOURCE_SHA',close.blobsha(original.encode())), \
+                    mock.patch.object(close,'SERVER_SOURCE_SHA',close.blobsha(server.encode())):
+                for attempt in range(2):
+                    M.prepare(core)
+                    helper=directory/'routervpn_close_policy.go'
+                    self.assertTrue(helper.is_file(),'ordinary AWG preparation omitted original OpenVPN transport owner')
+                    self.assertEqual(helper.read_bytes(),(ROOT/'mobile/openvpn/close_policy.go.tmpl').read_bytes())
+                    self.assertEqual(client.read_bytes(),remote.patch(close.patch(original)).encode())
+                    self.assertEqual((directory/'server.go').read_bytes(),close.patch_server(server).encode())
+                    self.assertEqual(set(close.verify(core)),{'protocol/openvpn/client.go','protocol/openvpn/server.go','protocol/openvpn/routervpn_close_policy.go'})
+                # A pre-existing foreign helper remains an error; preparation
+                # cannot overwrite it to make the newly required dependency fit.
+                before=client.read_bytes();helper.write_bytes(helper.read_bytes()+b'foreign owner\n')
+                with self.assertRaisesRegex(ValueError,'helper differs'):
+                    M.prepare(core)
+                self.assertEqual(client.read_bytes(),before)
+                self.assertTrue(helper.read_bytes().endswith(b'foreign owner\n'))
+
     def test_cli_requires_both_pinned_checkouts_and_digest_covers_sources(self):
         source=(ROOT/'deploy/prepare-relay-core.py').read_text()
         self.assertIn('args.vendor and args.xray',source)

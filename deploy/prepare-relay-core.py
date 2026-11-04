@@ -87,6 +87,10 @@ def prepare(vendor):
             if target.is_symlink(): raise ValueError('Refusing a linked relay source destination')
             target.write_bytes(content)
     AMNEZIA.prepare(vendor)
+    # The ordinary AWG bundle also compiles the remote transport wrapper.
+    # Its original-close owner must exist before that shared client patch;
+    # prepare_native performs its later full-composition verification too.
+    OPENVPN_CLOSE.prepare(vendor)
     OPENVPN_REMOTE.prepare(vendor)
     for source in (ROOT/'mobile/relay').glob('*.tmpl'):
         target = vendor/'cmd/sing-box'/('routervpn_relay_'+source.name.removesuffix('.tmpl'))
