@@ -11,6 +11,12 @@ from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 
+_native_spec = importlib.util.spec_from_file_location(
+    "routervpn_native_multihop_audit", Path(__file__).with_name("native_multihop_audit.py"))
+_native_module = importlib.util.module_from_spec(_native_spec)
+_native_spec.loader.exec_module(_native_module)
+native_multihop_shipping_chain = _native_module.native_multihop_shipping_chain
+
 
 def body(rel: str) -> str:
     p = ROOT / rel
@@ -144,8 +150,8 @@ def retained_native_multihop_platform(platform: str) -> bool:
         all_markers("cmd/client/multihop_native_routes.go", "nativeMultihopPlatformSupported",
                     "/api/multihop/status", "/api/multihop/connect", "switch runtime.GOOS",
                     f'case "{platform}":\n\t\treturn {command}(a, sel)',
-                    "bindNativeMultihopRuntime(a, native, sel, network)",
-                    "a.proveNativeMultihop(sel, cmd)")
+                    "bindNativeMultihopRuntime(a, native, sel, network)")
+        and native_multihop_shipping_chain(body("cmd/client/multihop_native_routes.go"))
         and all_markers(wrapper, f"func {command}(a *app, sel multihopSelection)",
                         "return prepareOwnedNativeMultihopCommand(a, sel, nil)")
         and all_markers("cmd/client/multihop_native_capture.go", "mobilemultihop.NodeMultihopConfig",

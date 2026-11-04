@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 import re
 import shlex
@@ -10,6 +11,9 @@ import types
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+_NATIVE_SPEC = importlib.util.spec_from_file_location("native_multihop_source_guard", ROOT / "deploy/native_multihop_audit.py")
+_NATIVE = importlib.util.module_from_spec(_NATIVE_SPEC)
+_NATIVE_SPEC.loader.exec_module(_NATIVE)
 
 
 class NativeShippingAuditTests(unittest.TestCase):
@@ -19,7 +23,8 @@ class NativeShippingAuditTests(unittest.TestCase):
         functions = [node for node in weighted.body if isinstance(node, ast.FunctionDef)
                      and node.name in ("windows_owned_package", "retained_native_multihop_platform")]
         self.assertEqual(len(functions), 2)
-        self.scope = {"all_markers": self.has, "none_markers": self.no}
+        self.scope = {"all_markers": self.has, "none_markers": self.no,
+                      "body": self.body, "native_multihop_shipping_chain": _NATIVE.native_multihop_shipping_chain}
         exec(compile(ast.Module(body=functions, type_ignores=[]), "native-shipping-predicates", "exec"), self.scope)
         self.legacy = {}
         for node in ast.walk(weighted):
@@ -54,6 +59,120 @@ class NativeShippingAuditTests(unittest.TestCase):
         original = self.body(path)
         self.assertIn(before, original)
         self.changes[path] = original.replace(before, after)
+
+    def assert_multihop_chain(self, expected):
+        for platform in ("windows", "darwin"):
+            self.assertEqual(self.scope["retained_native_multihop_platform"](platform), expected)
+            self.assertEqual(self.recovered["controller_multihop_platform"](platform), expected)
+        for gate in self.legacy.values():
+            self.assertEqual(gate(), expected)
+        # Exercise the actual backend audit hook, including its read/error path.
+        backend = ast.parse((ROOT / "deploy/backend-session-transaction-audit.py").read_text())
+        functions = [node for node in backend.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "require_native_multihop_shipping_chain"]
+        self.assertEqual(len(functions), 1)
+        invocations = [node for node in backend.body if isinstance(node, ast.Expr)
+                       and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                       and node.value.func.id == "require_native_multihop_shipping_chain"]
+        self.assertEqual(len(invocations), 1, "backend audit must execute its shipping-chain guard")
+        scope = {"read": self.body, "errors": [],
+                 "native_multihop_shipping_chain": _NATIVE.native_multihop_shipping_chain}
+        exec(compile(ast.Module(body=functions + invocations, type_ignores=[]), "backend-native-closure", "exec"), scope)
+        self.assertEqual(not scope["errors"], expected)
+
+    def test_exact_public_adapters_are_required_by_every_consumer(self):
+        path = "cmd/client/multihop_native_routes.go"
+        adapters = (
+            ("capture", "captureNativeMultihopForApp"),
+            ("preflight", "preflightOwnedNativeMultihopCommand"),
+            ("stage", "stageOwnedNativeMultihopCommand"),
+            ("proof", "(*app).proveNativeMultihop"),
+        )
+        for index, (field, adapter) in enumerate(adapters):
+            original = f"{field}: {adapter},"
+            for replacement in ("", f"{field}: nil,", f"{field}: {adapters[(index + 1) % 4][1]},"):
+                with self.subTest(field=field, replacement=replacement):
+                    self.changes.clear()
+                    self.replace(path, original, replacement)
+                    self.changes[path] += f"\n// {original}\n"
+                    self.assert_multihop_chain(False)
+
+    def test_owned_driver_and_runtime_calls_cannot_move_to_comments_or_other_functions(self):
+        path = "cmd/client/multihop_native_routes.go"
+        calls = (
+            "sel, err = driver.capture(a, sel, []string{sel.ExitMode})",
+            "native, err := driver.preflight(a, sel, nil)",
+            "err = driver.stage(a, sel, native)",
+            "cmd := native.command",
+            "err = cmd.Start()",
+            "err = bindNativeMultihopRuntime(a, native, sel, network)",
+            "proofErr := driver.proof(a, sel, cmd)",
+        )
+        for call in calls:
+            with self.subTest(call=call):
+                self.changes.clear()
+                self.replace(path, call, "unrelatedCall() /* " + call + " */")
+                self.changes[path] += "\nfunc unrelatedSourceWitness() { " + call + " }\n"
+                self.assert_multihop_chain(False)
+
+    def test_public_route_wrapper_and_captured_arguments_cannot_be_retargeted(self):
+        path = "cmd/client/multihop_native_routes.go"
+        changes = (
+            ('h.HandleFunc("/api/multihop/connect", a.nativeMultihopConnect)',
+             'h.HandleFunc("/api/multihop/connect", a.otherConnect)'),
+            ("a.nativeMultihopConnectOwned(w, r, nativeMultihopConnectRuntime{",
+             "a.otherConnectOwned(w, r, nativeMultihopConnectRuntime{"),
+            ("driver.capture(a, sel, []string{sel.ExitMode})", "driver.capture(a, sel, []string{ModeBasic})"),
+            ("driver.preflight(a, sel, nil)", "driver.preflight(a, other, nil)"),
+            ("driver.stage(a, sel, native)", "driver.stage(a, sel, other)"),
+            ("driver.proof(a, sel, cmd)", "driver.proof(a, sel, other)"),
+            ("proofErr := driver.proof(a, sel, cmd)", "driver.proof = unrelatedProof\nproofErr := driver.proof(a, sel, cmd)"),
+        )
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_multihop_chain(False)
+
+    def test_duplicate_public_or_owned_definition_cannot_supply_missing_calls(self):
+        path = "cmd/client/multihop_native_routes.go"
+        for declaration in (
+            "func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request)",
+            "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)",
+        ):
+            with self.subTest(declaration=declaration):
+                self.changes.clear()
+                self.changes[path] = self.body(path) + "\n" + declaration + " {}\n"
+                self.assert_multihop_chain(False)
+
+    def test_owned_calls_must_be_unique_and_in_launch_order(self):
+        path = "cmd/client/multihop_native_routes.go"
+        capture = "sel, err = driver.capture(a, sel, []string{sel.ExitMode})"
+        preflight = "native, err := driver.preflight(a, sel, nil)"
+        self.replace(path, capture, "temporaryCaptureMarker")
+        self.replace(path, preflight, capture)
+        self.replace(path, "temporaryCaptureMarker", preflight)
+        self.assert_multihop_chain(False)
+        self.changes.clear()
+        self.replace(path, capture, capture + "\n" + capture)
+        self.assert_multihop_chain(False)
+
+    def test_source_guard_accepts_formatting_but_not_string_only_calls(self):
+        path = "cmd/client/multihop_native_routes.go"
+        self.replace(path, "capture: captureNativeMultihopForApp,", "capture: /* actual adapter */\n captureNativeMultihopForApp,")
+        self.assert_multihop_chain(True)
+        call = "proofErr := driver.proof(a, sel, cmd)"
+        self.replace(path, call, 'proofErr := errors.New("' + call + '")')
+        self.assert_multihop_chain(False)
+
+    def test_shared_source_guard_retriggers_both_backend_consumers(self):
+        for workflow in ("recovered-native-ui-gate.yml", "recovered-map-first-ui-gate.yml"):
+            text = (ROOT / ".github/workflows" / workflow).read_text()
+            for event in ("push", "pull_request"):
+                section = re.search(r"^  " + event + r":\n(.*?)(?=^  [a-z_]+:|^permissions:)", text, re.M | re.S)
+                self.assertIsNotNone(section, (workflow, event))
+                self.assertIn('"deploy/native_multihop_audit.py"', section.group(1))
 
     def test_current_shipping_chain_passes_both_scorers(self):
         self.assertTrue(self.scope["windows_owned_package"]())
@@ -118,7 +237,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("cmd/client/multihop_native_launch.go", "registerNativeMultihopDNSRuntime(a, sel, launch.command)", "registerUnrelatedDNS()"),
             ("cmd/client/multihop_native_launch.go", "!a.ownsConnectionRuntime(launch.command)", "false"),
             ("cmd/client/desktop_node_native.go", "receipt.ConfigSHA256 != configSHA256", "false"),
-            ("cmd/client/multihop_native_routes.go", "a.proveNativeMultihop(sel, cmd)", "proveUnrelatedPath()"),
+            ("cmd/client/multihop_native_routes.go", "driver.proof(a, sel, cmd)", "proveUnrelatedPath()"),
         )
         for path, before, after in mutations:
             with self.subTest(path=path, removed=before):

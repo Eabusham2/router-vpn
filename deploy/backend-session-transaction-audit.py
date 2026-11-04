@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Release-lock backend session mutation and durable-state transaction safety."""
+import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+_native_spec = importlib.util.spec_from_file_location(
+    "routervpn_native_multihop_audit", Path(__file__).with_name("native_multihop_audit.py"))
+_native_module = importlib.util.module_from_spec(_native_spec)
+_native_spec.loader.exec_module(_native_module)
+native_multihop_shipping_chain = _native_module.native_multihop_shipping_chain
 errors: list[str] = []
 
 
@@ -28,6 +35,14 @@ def function_block(body: str, signature: str) -> str:
         return ""
     end = body.find("\nfunc ", start + len(signature))
     return body[start:] if end < 0 else body[start:end]
+
+
+def require_native_multihop_shipping_chain() -> None:
+    if not native_multihop_shipping_chain(read("cmd/client/multihop_native_routes.go")):
+        errors.append("native multihop public shipping adapters or owned capture/preflight/stage/proof chain are incomplete")
+
+
+require_native_multihop_shipping_chain()
 
 
 guard = require(
@@ -118,8 +133,7 @@ for rel, markers in {
     ),
     "cmd/client/multihop_native_routes.go": (
         "beginConnectionOperation()", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
-        "a.rollbackProfilesLocked(previousStore)", "captureNativeMultihopForApp(a, sel, []string{sel.ExitMode})",
-        "proofErr := a.proveNativeMultihop(sel, cmd)", "http.StatusConflict",
+        "a.rollbackProfilesLocked(previousStore)", "http.StatusConflict",
     ),
     "cmd/client/multihop_native_capture.go": (
         "func (a *app) proveNativeMultihop", "connectionOperationContextOrBackground()",
