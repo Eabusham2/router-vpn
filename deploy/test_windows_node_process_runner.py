@@ -265,13 +265,16 @@ class NodeProcessRunner(unittest.TestCase):
                     GATE.all_capability_source()
 
     def test_all_positive_and_eight_controls_never_overlay_shipping_admission(self):
+        original = (ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes().replace(b"\r\n", b"\n")
         controls = {label: (test, witness) for _, label, test, witness, _ in GATE.all_mutants()}
         compiled = []
+        raw, changed_source = None, False
         def run(command, *, cwd, env, timeout):
             if "-o" in command:
                 overlay = Path(next(str(arg).removeprefix("-overlay=") for arg in command if str(arg).startswith("-overlay=")))
                 mapping = json.loads(overlay.read_text())["Replace"]
-                self.assertNotIn(str(ROOT / GATE.ALL_CAPABILITY_FILE), mapping)
+                self.assertNotIn(str(GATE.ROOT / GATE.ALL_CAPABILITY_FILE), mapping)
+                self.assertEqual((GATE.ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes(), raw)
                 binary = Path(command[command.index("-o") + 1])
                 label = binary.name.removesuffix(".test.exe")
                 self.assertEqual(len(mapping), 0 if label == "node-all" else 1)
@@ -280,14 +283,46 @@ class NodeProcessRunner(unittest.TestCase):
                 return 0, ""
             label = Path(command[0]).name.removesuffix(".test.exe")
             if label == "node-all":
+                if changed_source:
+                    (GATE.ROOT / GATE.ALL_CAPABILITY_FILE).write_bytes(raw + b"\n// replaced compiled source\n")
                 return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.ALL_EXPECTED)
             test, witness = controls[label]
             return 1, "--- FAIL: " + test + " (0.01s)\n    source_test.go:1: " + witness + "\n"
-        with tempfile.TemporaryDirectory(prefix="shipping-all-controller-") as directory, \
-             patch.object(GATE.NATIVE, "run", side_effect=run), patch("sys.stdout", new_callable=io.StringIO):
-            digest = GATE.execute_all_composition(["go", "test", "-c", "-tags=" + GATE.TAG], {}, Path(directory))
-        self.assertEqual(digest, hashlib.sha256((ROOT / GATE.ALL_CAPABILITY_FILE).read_bytes()).hexdigest())
-        self.assertEqual(compiled, ["node-all", *controls])
+
+        write_text = Path.write_text
+        def windows_write_text(path, data, *args, **kwargs):
+            if kwargs.get("newline") is None:
+                kwargs["newline"] = "\r\n"
+            return write_text(path, data, *args, **kwargs)
+
+        # Both checkout encodings must identify the actual compiled bytes under
+        # Windows text I/O; the capability file is never an overlay candidate.
+        for newline in (b"\n", b"\r\n"):
+            for changed_source in (False, True):
+                with self.subTest(newline=newline, replaced=changed_source), \
+                     tempfile.TemporaryDirectory(prefix="shipping-all-controller-") as directory:
+                    root, workspace = Path(directory) / "source", Path(directory) / "build"
+                    workspace.mkdir()
+                    for relative in (GATE.ALL_CAPABILITY_FILE, "cmd/client/logical_modes.go", "cmd/client/desktop_node_all.go",
+                                     "cmd/client/connection_cancellation.go", "cmd/client/speed_lab_fallback.go"):
+                        target = root / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes((ROOT / relative).read_bytes())
+                    raw = original.replace(b"\n", newline)
+                    (root / GATE.ALL_CAPABILITY_FILE).write_bytes(raw)
+                    compiled.clear()
+                    with patch.object(GATE, "ROOT", root), patch.object(Path, "write_text", windows_write_text), \
+                         patch.object(GATE.NATIVE, "run", side_effect=run), patch("sys.stdout", new_callable=io.StringIO):
+                        if changed_source:
+                            with self.assertRaisesRegex(ValueError, "changed its retained binary or compiled capability"):
+                                GATE.execute_all_composition(["go", "test", "-c", "-tags=" + GATE.TAG], {}, workspace)
+                            self.assertEqual(compiled, ["node-all"])
+                        else:
+                            digest = GATE.execute_all_composition(["go", "test", "-c", "-tags=" + GATE.TAG], {}, workspace)
+                            self.assertEqual(digest, hashlib.sha256(raw).hexdigest())
+                            self.assertEqual((workspace / "all-capability.go").read_bytes(), raw)
+                            self.assertEqual((root / GATE.ALL_CAPABILITY_FILE).read_bytes(), raw)
+                            self.assertEqual(compiled, ["node-all", *controls])
 
     def test_expanded_baseline_keeps_individual_control_deadlines(self):
         controls = {name: (test, witness) for _, name, test, witness, _ in (*GATE.mutants(), *GATE.all_mutants())}

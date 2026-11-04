@@ -280,10 +280,13 @@ ALL_CAPABILITY_FILE = "internal/mobilemultihop/desktop_node_admission.go"
 
 
 def all_capability_source():
-    original = (ROOT / ALL_CAPABILITY_FILE).read_text(encoding="utf-8")
+    # Preserve the exact file compiled without an overlay, including its native
+    # checkout newline bytes. Normalize only the admission syntax comparison.
+    original = (ROOT / ALL_CAPABILITY_FILE).read_bytes().decode("utf-8")
+    syntax = original.replace("\r\n", "\n")
     modes = ("max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg")
     admitted = '\tcase "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg":\n\t\treturn true\n'
-    if original.count(admitted) != 1 or any(original.count('"' + mode + '"') != 1 for mode in modes):
+    if syntax.count(admitted) != 1 or any(syntax.count('"' + mode + '"') != 1 for mode in modes):
         raise ValueError("ALL requires its exact four-family shipping capability")
     return original
 
@@ -336,7 +339,7 @@ def execute_all_composition(build, captured, workspace):
     # selector/tag names retain all original cases and eight negative controls.
     # Controller composition never substitutes for actual native WFP/PQ.
     source = workspace / "all-capability.go"
-    source.write_text(all_capability_source(), encoding="utf-8")
+    source.write_bytes(all_capability_source().encode("utf-8"))
     capability_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     compiled = ["-tags=" + TAG + ",routervpn_node_all_prospective" if value == "-tags=" + TAG else value for value in build]
     cases = [(None, "node-all", None, None, None), *all_mutants()]
@@ -364,7 +367,9 @@ def execute_all_composition(build, captured, workspace):
         else:
             check_rejection(label, test, witness, status, output)
             print("Prospective ALL control rejected: " + label, flush=True)
-        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest or hashlib.sha256(source.read_bytes()).hexdigest() != capability_digest:
+        if (hashlib.sha256(binary.read_bytes()).hexdigest() != digest or
+                hashlib.sha256(source.read_bytes()).hexdigest() != capability_digest or
+                hashlib.sha256((ROOT / ALL_CAPABILITY_FILE).read_bytes()).hexdigest() != capability_digest):
             raise ValueError("Prospective ALL changed its retained binary or compiled capability")
         binary.unlink()
     return capability_digest
