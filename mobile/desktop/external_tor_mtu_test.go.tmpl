@@ -100,6 +100,28 @@ func desktopTorWaitMTUProof(t *testing.T, files *routerVPNTorFileFixture, matche
 	}
 }
 
+func desktopTorWaitMTUTerminal(t *testing.T, files *routerVPNTorFileFixture, request routerVPNDesktopMTURequest) routerVPNDesktopMTURecord {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var record routerVPNDesktopMTURecord
+		raw, err := os.ReadFile(filepath.Join(files.directory, "mtu-status.json"))
+		if err == nil && json.Unmarshal(raw, &record) == nil && record.Schema == request.Schema &&
+			record.Session == request.Session && record.SourceSHA256 == request.SourceSHA256 && record.ConfigSHA256 == request.ConfigSHA256 &&
+			record.Generation == request.Generation && record.Status.Request == request.Request && record.Status.Complete && !record.Status.Running {
+			return record
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("Tor command did not publish its captured terminal MTU status", record, err)
+		case <-tick.C:
+		}
+	}
+}
+
 func TestRouterVPNDesktopTorMTUCommandPublishesExactRollbackAndFreshPath(t *testing.T) {
 	f := desktopTorAutoFiles(t)
 	owner, lease := desktopTorMeasuredCommand(t, f)
@@ -155,8 +177,11 @@ func TestRouterVPNDesktopTorMTUCommandPublishesExactRollbackAndFreshPath(t *test
 	restored := desktopTorWaitMTUProof(t, f, func(p mobiletor.DesktopBridgeProof) bool {
 		return p.MTUReadback != nil && p.MTUReadback.Revision == 2
 	})
-	var terminal routerVPNDesktopMTURecord
-	if json.Unmarshal(desktopExternalWaitFile(t, f.directory, "mtu-status.json"), &terminal) != nil || terminal.MTUReadback == nil ||
+	// Heartbeat readback can observe rollback after the current maintenance
+	// tick captured its still-running status. Await this request's terminal
+	// publication before comparing the two independently written records.
+	terminal := desktopTorWaitMTUTerminal(t, f, request)
+	if terminal.MTUReadback == nil ||
 		*terminal.MTUReadback != *restored.MTUReadback || !terminal.Status.Complete || terminal.Status.Running || terminal.Status.Measured || !terminal.Status.Restored {
 		t.Fatal("Tor rollback status and heartbeat did not agree", terminal, restored)
 	}
