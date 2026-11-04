@@ -690,6 +690,9 @@ func TestDesktopWindowsExternalStagesBeforeStoppingPrevious(t *testing.T) {
 		if _, err := waitForSpeedLabConnectedIdentity(f.base.a, time.Second); err != nil {
 			t.Fatal(err)
 		}
+		// The connected identity does not join a runnable proof monitor.
+		// Let its original transaction finish before claiming this test operation.
+		synctest.Wait()
 		_, _, finish, err := f.base.a.beginSpeedLabTemporaryOperation()
 		if err != nil {
 			t.Fatal(err)
@@ -891,6 +894,9 @@ func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
 				if _, err := waitForSpeedLabConnectedIdentity(f.base.a, time.Second); err != nil {
 					t.Fatal(err)
 				}
+				// The connected identity does not join a runnable proof monitor.
+				// Let its original transaction finish before claiming this test operation.
+				synctest.Wait()
 				_, _, finish, err := f.base.a.beginSpeedLabTemporaryOperation()
 				if err != nil {
 					t.Fatal(err)
