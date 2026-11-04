@@ -18,6 +18,7 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -134,13 +135,66 @@ class MAXCommandOwner:
     @contextmanager
     def workspace(self, prefix):
         directory = Path(tempfile.mkdtemp(prefix=prefix))
+        original = directory.lstat()
         try:
             yield directory
         finally:
             # A failed native join is not authority to delete files that an
             # original descendant may still use. No automatic finalizer retries.
             if self.retired:
+                prepare_workspace_retirement(directory, original)
                 shutil.rmtree(directory)
+
+
+def prepare_workspace_retirement(directory, original):
+    """Normalize owned read-only files before the single destructive cleanup.
+
+    Git marks its Windows pack/index files read-only. Unlike TemporaryDirectory,
+    plain rmtree does not clear that attribute. This runs only after the original
+    command tree joined; it neither retries unlink nor tolerates a sharing error.
+    Refuse replacements and reparse paths before changing any file attribute.
+    """
+    def current(path, captured):
+        actual = path.lstat()
+        if not os.path.samestat(actual, captured):
+            raise RuntimeError('Windows MAX workspace entry was replaced before retirement')
+        if stat.S_ISLNK(actual.st_mode) or getattr(actual, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise RuntimeError('Windows MAX workspace retirement refuses reparse paths')
+        if not (stat.S_ISREG(actual.st_mode) or stat.S_ISDIR(actual.st_mode)):
+            raise RuntimeError('Windows MAX workspace retirement refuses special files')
+        return actual
+
+    entries = []
+    def capture(path, captured):
+        actual = current(path, captured)
+        entries.append((path, actual))
+        if stat.S_ISDIR(actual.st_mode):
+            with os.scandir(path) as children:
+                for child in children:
+                    capture(Path(child.path), child.stat(follow_symlinks=False))
+            current(path, actual)
+        elif getattr(actual, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_READONLY and actual.st_nlink != 1:
+            raise RuntimeError('Windows MAX read-only workspace file has a foreign hard link')
+
+    capture(directory, original)
+    captured_paths = dict(entries)
+    def current_path(path):
+        parent = directory
+        actual = current(parent, original)
+        for name in path.relative_to(directory).parts:
+            parent = parent / name
+            actual = current(parent, captured_paths[parent])
+        return actual
+
+    for path, captured in entries:
+        actual = current_path(path)
+        if stat.S_ISREG(actual.st_mode) and getattr(actual, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_READONLY:
+            # Windows chmod only changes READONLY. Preserve all other mode bits,
+            # and leave directories and already writable files unchanged.
+            path.chmod(actual.st_mode | stat.S_IWRITE)
+            current_path(path)
+    for path, _ in entries:
+        current_path(path)
 
 
 def observation_contract(compiler, source, captured, race, files, parent, cases):

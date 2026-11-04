@@ -14,7 +14,9 @@ import os
 import tempfile
 import subprocess
 import shutil
+import stat
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -547,6 +549,139 @@ time.sleep(120)
                 try:foreign.communicate(timeout=10)
                 except subprocess.TimeoutExpired:
                     foreign.kill();foreign.communicate(timeout=10)
+
+
+class MAXWorkspaceRetirement(unittest.TestCase):
+    @contextmanager
+    def modeled_readonly(self, paths, events):
+        # Model only Windows file attributes; use real directories and the
+        # shipping owner/cleanup. Actual Windows unlink is tested separately.
+        readonly = set(paths)
+        original_stat, original_chmod = Path.lstat, Path.chmod
+        def inspect(path):
+            actual = original_stat(path)
+            values = {name: getattr(actual, name) for name in ('st_mode', 'st_dev', 'st_ino', 'st_nlink')}
+            values['st_file_attributes'] = stat.FILE_ATTRIBUTE_READONLY if path in readonly else 0
+            return SimpleNamespace(**values)
+        def writable(path, mode, **kwargs):
+            self.assertIn(path, readonly)
+            self.assertTrue(mode & stat.S_IWRITE)
+            events.append(('writable', path))
+            readonly.remove(path)
+            return original_chmod(path, mode, **kwargs)
+        with patch.object(Path, 'lstat', inspect), patch.object(Path, 'chmod', writable):
+            yield readonly
+
+    def test_readonly_git_pack_is_normalized_after_join_before_single_delete(self):
+        owner, events = GATE.MAXCommandOwner(), []
+        original_delete = shutil.rmtree
+        def remove(path):
+            self.assertTrue(owner.retired)
+            self.assertNotIn(index, readonly, 'Windows read-only index reached unlink unchanged')
+            events.append(('delete', path))
+            return original_delete(path)
+        with ExitStack() as checks:
+            with owner.workspace('max-readonly-pack-') as workspace:
+                index = workspace/'core'/'.git'/'objects'/'pack'/'original.idx'
+                index.parent.mkdir(parents=True); index.write_bytes(b'original Git pack index')
+                ordinary = workspace/'ordinary'; ordinary.write_bytes(b'writable')
+                readonly = checks.enter_context(self.modeled_readonly((index,), events))
+                checks.enter_context(patch.object(GATE.shutil, 'rmtree', side_effect=remove))
+        self.assertEqual(events, [('writable', index), ('delete', workspace)])
+        self.assertFalse(workspace.exists())
+
+    def test_unjoined_original_does_not_change_readonly_attributes(self):
+        owner, events = GATE.MAXCommandOwner(), []
+        try:
+            with ExitStack() as checks:
+                with owner.workspace('max-unjoined-readonly-') as workspace:
+                    index = workspace/'original.idx'; index.write_bytes(b'original')
+                    checks.enter_context(self.modeled_readonly((index,), events))
+                    owner.retired = False
+            self.assertEqual(events, [])
+            self.assertEqual(index.read_bytes(), b'original')
+        finally:
+            shutil.rmtree(workspace)
+
+    def test_replaced_workspace_is_retained_without_deletion(self):
+        owner = GATE.MAXCommandOwner()
+        with tempfile.TemporaryDirectory(prefix='max-replacement-parent-') as parent:
+            original = Path(parent)/'original'
+            with self.assertRaisesRegex(RuntimeError, 'replaced'):
+                with owner.workspace('max-replaced-source-') as workspace:
+                    (workspace/'owned').write_bytes(b'original')
+                    workspace.rename(original)
+                    workspace.mkdir(); (workspace/'foreign').write_bytes(b'foreign')
+            self.assertEqual((original/'owned').read_bytes(), b'original')
+            self.assertEqual((workspace/'foreign').read_bytes(), b'foreign')
+            shutil.rmtree(workspace)
+
+    def test_reparse_directory_refused_before_any_attribute_changes(self):
+        owner, events = GATE.MAXCommandOwner(), []
+        actual_stat = Path.lstat
+        try:
+            with ExitStack() as checks, self.assertRaisesRegex(RuntimeError, 'reparse'):
+                with owner.workspace('max-reparse-source-') as workspace:
+                    (workspace/'first.idx').write_bytes(b'original')
+                    foreign = workspace/'foreign'; foreign.mkdir()
+                    def reparse(path):
+                        actual = actual_stat(path)
+                        values = {name: getattr(actual, name) for name in ('st_mode', 'st_dev', 'st_ino', 'st_nlink')}
+                        values['st_file_attributes'] = stat.FILE_ATTRIBUTE_REPARSE_POINT if path == foreign else stat.FILE_ATTRIBUTE_READONLY
+                        return SimpleNamespace(**values)
+                    checks.enter_context(patch.object(Path, 'lstat', reparse))
+                    checks.enter_context(patch.object(Path, 'chmod', side_effect=lambda *args, **kwargs: events.append(args)))
+            self.assertEqual(events, [])
+            self.assertTrue(foreign.is_dir())
+        finally:
+            if workspace.exists(): shutil.rmtree(workspace)
+
+    def test_readonly_hardlink_is_not_changed_through_owned_name(self):
+        owner, events = GATE.MAXCommandOwner(), []
+        with tempfile.TemporaryDirectory(prefix='max-foreign-hardlink-') as parent:
+            foreign = Path(parent)/'foreign.idx'; foreign.write_bytes(b'foreign')
+            try:
+                with ExitStack() as checks, self.assertRaisesRegex(RuntimeError, 'foreign hard link'):
+                    with owner.workspace('max-hardlink-source-') as workspace:
+                        alias = workspace/'alias.idx'; os.link(foreign, alias)
+                        checks.enter_context(self.modeled_readonly((alias,), events))
+                self.assertEqual(events, [])
+                self.assertEqual(foreign.read_bytes(), b'foreign')
+            finally:
+                if workspace.exists(): shutil.rmtree(workspace)
+
+    def test_cleanup_errors_propagate_without_retry(self):
+        for code in (5, 32):
+            error = PermissionError('original cleanup denied'); error.winerror = code
+            owner = GATE.MAXCommandOwner()
+            try:
+                with patch.object(GATE.shutil, 'rmtree', side_effect=error) as remove:
+                    with self.assertRaises(PermissionError) as caught:
+                        with owner.workspace('max-cleanup-denied-') as workspace:
+                            (workspace/'original').write_bytes(b'original')
+                self.assertIs(caught.exception, error)
+                remove.assert_called_once_with(workspace)
+                self.assertEqual((workspace/'original').read_bytes(), b'original')
+            finally:
+                shutil.rmtree(workspace)
+
+    @unittest.skipUnless(os.name == 'nt', 'actual Windows read-only attributes and deletion required')
+    def test_actual_readonly_git_index_is_cause_and_original_workspace_retires(self):
+        owner = GATE.MAXCommandOwner()
+        with owner.workspace('max-native-readonly-git-') as workspace:
+            index = workspace/'core'/'.git'/'objects'/'pack'/'original.idx'
+            index.parent.mkdir(parents=True); index.write_bytes(b'original Git pack index')
+            index.chmod(stat.S_IREAD)
+            self.assertTrue(index.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+            with self.assertRaises(PermissionError) as caught:
+                index.unlink()
+            self.assertEqual(caught.exception.winerror, 5)
+            status, output = owner.run([sys.executable, '-I', '-S', '-c', 'print("original command complete")'],
+                                      cwd=workspace, env=dict(os.environ), timeout=15)
+            self.assertEqual(status, 0, output)
+            self.assertTrue(owner.retired)
+        self.assertFalse(workspace.exists())
+        print('Actual Windows read-only Git index denied unlink with WinError5; original joined workspace normalized and removed', flush=True)
 
 
 class MAXObservationCompilation(unittest.TestCase):
