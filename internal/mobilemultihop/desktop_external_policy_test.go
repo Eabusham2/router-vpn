@@ -305,8 +305,10 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 	for _, protocol := range []string{"wireguard", "amneziawg"} {
 		original := desktopExternalPolicyFixture(t, protocol, "always", "on", true)
 		for _, target := range []string{"windows", "darwin"} {
-			if target == "windows" {
-				continue // This exact direct UDP owner is independently exercised above.
+			if target == "windows" || protocol == "wireguard" {
+				// Windows packet endpoints and Darwin WireGuard each retain their
+				// exact captured policy in the dedicated positive cases below.
+				continue
 			}
 			if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
 				t.Fatal("unintegrated outer transport acquired a claimed native physical implementation", protocol, target)
