@@ -327,6 +327,19 @@ func TestLinuxNodeControlNativeWorker(t *testing.T) {
 	if scenario == "cancelled-current-child" {
 		checkNodeControlEnteredCancellation(t, ctx, control)
 	}
+	if scenario == "delayed-original-retirement" {
+		// A bounded original cleanup phase can exceed a single channel
+		// exchange. Keep the admitted native source live until that phase
+		// finishes; only its subsequent actual Close/ObserveJoinedSource
+		// may produce the authenticated retirement record.
+		timer := time.NewTimer(6 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatal(ctx.Err())
+		case <-timer.C:
+		}
+	}
 	if err := source.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +395,7 @@ func TestLinuxNodeControlNativeWorker(t *testing.T) {
 func TestDesktopLinuxGuardianKernelNodeControl(t *testing.T) {
 	for _, scenario := range []string{"admitted", "refuse-creation", "refuse-admission", "before-baseline", "before-admission",
 		"foreign-selection", "foreign-sequence", "foreign-engine", "foreign-network", "terminal-payload", "wrong-retirement-ack",
-		"cancelled-current-parent", "cancelled-current-child", "current-original-closed"} {
+		"cancelled-current-parent", "cancelled-current-child", "current-original-closed", "delayed-original-retirement"} {
 		t.Run(scenario, func(t *testing.T) {
 			owner, selection := startNodeControlChild(t, scenario)
 			ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)

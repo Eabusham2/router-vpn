@@ -219,7 +219,37 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Native Linux receipt operation correction accompanying this record
+## Original Linux Node retirement message phase accompanying this record
+
+The exact `cf863300` generated Node AMD64 run reached successful readiness and
+traffic but timed out receiving retirement. Its parent began a five-second
+channel receive while the original child still had its existing fifteen-second
+cleanup phase. The captured log does not establish why that cleanup took longer
+than five seconds, so full native acceptance remains required.
+
+Only `NodeControl.ReceiveRetirement` now waits for readiness on the original
+socket under the existing caller deadline before entering the unchanged
+five-second authenticated receive. The nonblocking readiness probe consumes
+neither payload nor transferred descriptors. Original process, socket, sender,
+frame, source, readback, acknowledgment and join checks remain mandatory.
+Ordinary exchanges and all existing deadlines remain unchanged.
+
+Root verified the exact seven frozen files. Fourteen actual root-owned
+socket/process/Bootstrap leaves pass under race in 12.125s, including a delayed
+original child retained through its creation pidfd, early cancellation, original
+close, foreign sender, descriptor, malformed frame and EOF cases. The portable
+process/protection packages pass under race in 1.044s/1.297s; the two affected
+runner suites pass all six cases. Reverting to the old immediate receive fails
+the actual delayed-child case at five seconds. The new mandatory native
+`delayed-original-retirement` case retains a real admitted source before its
+original cleanup; its compilation is verified, but namespace execution remains
+CI work. This is not proof that the complete native Node Stop gate now passes.
+
+An additional local broad runner attempt reported unrelated missing-Go setup
+and an outdated installed-bundle fixture. Its failed result is retained; it is
+not counted as a broad pass. The fixture is tracked as separate follow-on work.
+
+## Native Linux receipt operation correction published at 2f31dfda
 
 The explicit receipt path previously used the later operation for its original
 descriptor/event fences but reused the constructor's context inside ordinary

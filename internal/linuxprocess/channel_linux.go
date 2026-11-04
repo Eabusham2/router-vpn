@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 const MessageLimit = 16384
@@ -218,7 +219,11 @@ func (c *Channel) enter(ctx context.Context) error {
 	}
 }
 
-func (c *Channel) operation(ctx context.Context, operation func() error) (failure error) {
+func (c *Channel) operation(ctx context.Context, operation func() error) error {
+	return c.operationUntil(ctx, time.Time{}, operation)
+}
+
+func (c *Channel) operationUntil(ctx context.Context, deadline time.Time, operation func() error) (failure error) {
 	if err := c.enter(ctx); err != nil {
 		return err
 	}
@@ -226,7 +231,9 @@ func (c *Channel) operation(ctx context.Context, operation func() error) (failur
 	if ctx.Err() != nil || c.stopping.Load() || c.conn == nil {
 		return errors.Join(ctx.Err(), errors.New("Linux child channel is incomplete or retired"))
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	if deadline.IsZero() {
+		deadline = time.Now().Add(5 * time.Second)
+	}
 	if earlier, ok := ctx.Deadline(); ok && earlier.Before(deadline) {
 		deadline = earlier
 	}
@@ -265,6 +272,66 @@ func (c *Channel) operation(ctx context.Context, operation func() error) (failur
 		}
 	}()
 	return operation()
+}
+
+// awaitMessage waits for readiness of the original captured socket without
+// reading a frame, peeking at SCM_RIGHTS, or accepting any retirement evidence.
+// Native child cleanup precedes its final message and uses the caller's existing
+// retirement deadline. The subsequent authenticated receive retains its separate
+// five-second exchange bound. A caller without a deadline cannot enter this phase.
+func (c *Channel) awaitMessage(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("Linux child message readiness requires its original bounded context")
+	}
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		return errors.New("Linux child message readiness requires its original retirement deadline")
+	}
+	return c.operationUntil(ctx, deadline, func() error {
+		if err := c.receiveIdentity(); err != nil {
+			return err
+		}
+		raw, err := c.conn.SyscallConn()
+		if err != nil {
+			return err
+		}
+		var nativeErr error
+		err = raw.Read(func(fd uintptr) bool {
+			// RawConn pins the existing duplicate while this nonblocking poll
+			// inspects readiness. Returning false lets Go's poller wait under
+			// the same deadline; no numeric descriptor is reopened or closed.
+			type pollDescriptor struct {
+				FD      int32
+				Events  int16
+				Revents int16
+			}
+			poll := pollDescriptor{FD: int32(fd), Events: 1} // POLLIN
+			zero := syscall.Timespec{}
+			for attempt := 0; attempt < 3; attempt++ {
+				ready, _, errno := syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(&poll)), 1,
+					uintptr(unsafe.Pointer(&zero)), 0, 0, 0)
+				if errno == syscall.EINTR {
+					continue
+				}
+				if errno != 0 {
+					nativeErr = errno
+					return true
+				}
+				if ready == 0 && poll.Revents == 0 {
+					return false
+				}
+				// HUP/ERR are readiness only. The unchanged receive must still
+				// distinguish authenticated data from EOF or a failed transport.
+				if ready != 1 || poll.Revents == 0 || poll.Revents & ^int16(1|8|16) != 0 {
+					nativeErr = errors.New("Linux child readiness lost its original native socket")
+				}
+				return true
+			}
+			nativeErr = errors.New("Linux child readiness was repeatedly interrupted")
+			return true
+		})
+		return errors.Join(err, nativeErr, c.receiveIdentity())
+	})
 }
 
 func (c *Channel) Send(ctx context.Context, body []byte, file *os.File) error {

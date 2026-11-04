@@ -35,6 +35,15 @@ cleanup object; an initial self-cleanup attempt has a four-second ceiling.
 Neither a timer nor a late result creates a fresh request budget. Completed
 receipts remain idempotent.
 
+The Node parent waits for readiness on its original inherited channel under
+that existing bounded retirement operation. Readiness consumes no message or
+descriptor and supplies no cleanup evidence. Once ready, the unchanged
+five-second authenticated receive checks the exact original child and frame.
+Ordinary channel exchanges keep their original five-second bound. The parent
+still requires the typed retirement record, original source closure, independent
+network readback, final acknowledgment and actual child join. A failed or
+canceled channel remains a refusal; this phase is not a replacement channel.
+
 If cleanup times out, the original owner and protection remain retained. An
 explicit later Stop or command signal can request another attempt. The parent
 does not substitute a killed process for a successful native cleanup result.

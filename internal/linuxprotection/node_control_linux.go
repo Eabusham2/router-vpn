@@ -123,10 +123,20 @@ func (c *NodeControl) send(ctx context.Context, message NodeControlMessage) erro
 }
 
 func (c *NodeControl) receive(ctx context.Context) (NodeControlMessage, error) {
+	return c.receiveMessage(ctx, false)
+}
+
+func (c *NodeControl) receiveMessage(ctx context.Context, awaitCleanup bool) (NodeControlMessage, error) {
 	if err := c.current(ctx); err != nil {
 		return NodeControlMessage{}, err
 	}
-	body, err := c.bootstrap.Receive(ctx)
+	var body []byte
+	var err error
+	if awaitCleanup {
+		body, err = c.bootstrap.ReceiveAfterReady(ctx)
+	} else {
+		body, err = c.bootstrap.Receive(ctx)
+	}
 	if err != nil {
 		return NodeControlMessage{}, c.fail(err)
 	}
@@ -344,7 +354,10 @@ func (c *NodeControl) ReceiveRetirement(ctx context.Context) (NodeRetirementReco
 	if c.retired != nil {
 		return c.retired.Clone(), c.uncertain
 	}
-	message, err := c.receive(ctx)
+	// Joining the original engine dependencies precedes the child's message;
+	// it is not a five-second channel exchange. Keep the caller's existing
+	// retirement deadline, then authenticate the unchanged exact final frame.
+	message, err := c.receiveMessage(ctx, true)
 	if err != nil {
 		return NodeRetirementRecord{}, err
 	}

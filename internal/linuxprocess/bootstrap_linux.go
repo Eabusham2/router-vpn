@@ -406,12 +406,32 @@ func (b *Bootstrap) Send(ctx context.Context, body []byte) error {
 }
 
 func (b *Bootstrap) Receive(ctx context.Context) ([]byte, error) {
+	return b.receive(ctx, false)
+}
+
+// ReceiveAfterReady keeps original process and socket ownership around the
+// caller-bounded cleanup phase before receiving one unchanged authenticated
+// frame. Readiness is never a source-join, process-exit or retirement receipt.
+func (b *Bootstrap) ReceiveAfterReady(ctx context.Context) ([]byte, error) {
+	return b.receive(ctx, true)
+}
+
+func (b *Bootstrap) receive(ctx context.Context, await bool) ([]byte, error) {
 	if err := b.enter(ctx); err != nil {
 		return nil, err
 	}
 	defer func() { b.gate <- struct{}{} }()
 	if err := b.current(ctx); err != nil {
 		return nil, err
+	}
+	if await {
+		if err := b.channel.awaitMessage(ctx); err != nil {
+			b.revoked = true
+			return nil, err
+		}
+		if err := b.current(ctx); err != nil {
+			return nil, err
+		}
 	}
 	var err error
 	b.pending, err = b.channel.Receive(ctx, b.peerPID, false)

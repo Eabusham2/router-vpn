@@ -24,7 +24,7 @@ SPEC.loader.exec_module(GUARD)
 CASES = ("admitted", "refuse-creation", "refuse-admission", "before-baseline", "before-admission",
          "foreign-selection", "foreign-sequence", "foreign-engine", "foreign-network",
          "terminal-payload", "wrong-retirement-ack", "cancelled-current-parent", "cancelled-current-child",
-         "current-original-closed")
+         "current-original-closed", "delayed-original-retirement")
 RUNNERS = ("test_linux_node_control.py", "test_linux_node_control_runner.py", "test_desktop_linux_guardian.py",
            "test_desktop_socket_uid.py", "prepare-desktop-external.py")
 

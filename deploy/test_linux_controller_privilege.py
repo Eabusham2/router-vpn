@@ -68,7 +68,7 @@ EMPTY_RECOVERY_UNITS = {
 PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
                  'PreservesBorrowedParent', 'ChannelBoundsAndCancellation', 'InheritedCloseOnExec',
-                 'ChannelPeerClosed', 'AcknowledgedPeerClose', 'SealedImageAdmission', 'SealedBootstrap')
+                 'ChannelPeerClosed', 'RetirementReadiness', 'AcknowledgedPeerClose', 'SealedImageAdmission', 'SealedBootstrap')
 
 
 PROCESS_SEALED_GROUPS = {
@@ -205,6 +205,7 @@ def execute(go='go', runtime_bundle=None):
                 'internal/linuxprocess/process_linux_native_test.go',
                 'internal/linuxprocess/close_on_exec_linux_test.go', 'internal/linuxprocess/close_on_exec_linux_native_test.go',
                 'internal/linuxprocess/channel_eof_linux_native_test.go',
+                'internal/linuxprocess/channel_readiness_linux_native_test.go',
                 'cmd/client/desktop_node_process_linux.go', 'cmd/client/desktop_node_process_linux_native_test.go',
                 'cmd/client/desktop_node_process_finish_linux.go', 'cmd/client/desktop_node_process_finish_linux_native_test.go',
                 'internal/linuxprotection/command_capture.go', 'internal/linuxprotection/command_capture_test.go',
@@ -291,6 +292,9 @@ def execute(go='go', runtime_bundle=None):
             'RejectsRetiredAndReexecutedTask': ('retired-task-directory', 'reexecuted-image'),
             'ChannelBoundsAndCancellation': ('wrong-sender', 'extra-descriptor', 'oversize', 'cancelled-receive', 'close-joins-receive'),
             'InheritedCloseOnExec': ('channel', 'directory', 'image', 'still-authenticated'),
+            'RetirementReadiness': ('delayed-original-child', 'receive-still-five-seconds', 'deadline', 'cancelled',
+                                    'local-close', 'empty', 'oversize', 'foreign-sender', 'unexpected-descriptor',
+                                    'peer-eof', 'original-replaced', 'connection-replaced', 'missing-deadline', 'rights-unconsumed'),
             'ChannelPeerClosed': ('original-peer-eof', 'write-half-close', 'empty-credential-frame', 'empty-rights-frame',
                                   'disabled-credentials', 'replaced-original', 'replaced-connection', 'changed-creator',
                                   'cancelled-receive', 'local-close', 'receive-timeout', 'cancelled-completion', 'retired-completion'),
