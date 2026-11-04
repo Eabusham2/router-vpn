@@ -115,6 +115,7 @@ import platform
 import subprocess
 import sys
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_provenance_order.py')], check=True, timeout=30)
+subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_runner.py')], check=True, timeout=30)
 if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_startup_policy.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_quick_protection.py')], check=True, timeout=180)

@@ -327,6 +327,7 @@ def main():
     # Preserve the shipping source-file boundaries. Concatenating Models with
     # the caller masks Swift's non-Sendable cross-file actor diagnostics.
     code = {name: (APP / name).read_text().replace('import Combine\n', '') for name in source_names}
+    shipping_tcp = code['IOSViaEntryTCP.swift']
     # The Network double controls callback delivery. Make its inversion values
     # deterministic without changing shipping probe queues, timers or ownership.
     # Real elapsed reads remain in use for every non-inversion fixture case.
@@ -352,18 +353,21 @@ def main():
                 path = folder / name; path.write_text(source); paths.append(str(path))
             return paths
         def execute(contents, mutation=None, expected=None):
+            label = mutation or 'shipping baseline'
+            print(f'Apple candidate stage: compile {label}', flush=True)
             paths = write_sources(contents)
             subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
                 '-Xlinker', '-rpath', '-Xlinker', str(folder)] + paths + ['-o', str(binary)], check=True, timeout=150)
+            print(f'Apple candidate stage: execute {label}', flush=True)
             result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=120)
             if mutation:
                 assert result.returncode != 0 and 'FAIL:' in result.stderr, f'Negative control escaped: {mutation}\n{result.stdout}\n{result.stderr}'
                 if expected:
                     assert 'FAIL: '+expected in result.stderr, f'{mutation} failed at an unrelated witness: {result.stdout}{result.stderr}'
-                print(f'Apple candidate negative control rejected: {mutation}')
+                print(f'Apple candidate negative control rejected: {mutation}', flush=True)
             else:
                 assert result.returncode == 0, result.stdout + result.stderr
-                print(result.stdout.strip())
+                print(result.stdout.strip(), flush=True)
         execute(code)
         mutations = {
             'fifty candidate samples': ('for _ in 0..<50 {', 'for _ in 0..<5 {'),
@@ -410,6 +414,7 @@ extension IOSViaEntryTCP {
         unsafe['Fixture.swift'] = unsafe['Fixture.swift'].replace('IOSViaEntryTCPTarget(id:p.id,name:p.name,endpoint:p.endpoint)', 'p')
         # Region-isolation diagnostics are emitted during SIL/code generation;
         # a typecheck-only invocation can accept the historical broken call.
+        print('Apple candidate stage: reject full-profile actor crossing', flush=True)
         rejected = subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
             '-Xlinker', '-rpath', '-Xlinker', str(folder)] + write_sources(unsafe) + ['-o', str(binary)],
             text=True, capture_output=True, timeout=150)
@@ -449,16 +454,24 @@ extension IOSViaEntryTCP {
 }
 '''.replace('// SHIPPING_SCALAR_CAPTURE', crossing)
             actor.write_text(actor_code)
-            helper = folder / 'ActualTCP.swift'; helper.write_text(code['IOSViaEntryTCP.swift'])
+            # The synthetic measurement clock belongs only to the executable
+            # Network double. Real-SDK evidence must compile the shipping helper
+            # without importing that test-only API into Apple's Network module.
+            helper = folder / 'ActualTCP.swift'; helper.write_text(shipping_tcp)
             sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
             sdk_sources = [APP / 'Models.swift', actual, helper, actor]
             output_map = folder / 'sdk-output-map.json'
             output_map.write_text(json.dumps({str(path): {'object': str(folder / (path.stem + '.o'))} for path in sdk_sources}))
             sdk_args = [swift, '-swift-version', '6', '-parse-as-library', '-c', '-sdk', sdk, '-target', 'arm64-apple-ios17.0',
                         '-module-cache-path', str(folder / 'sdk-modules'), '-output-file-map', str(output_map)] + [str(path) for path in sdk_sources]
+            print('Apple candidate stage: compile shipping helper against real iOS SDK', flush=True)
             subprocess.run(sdk_args, check=True, timeout=120)
-            helper.write_text(unsafe['IOSViaEntryTCP.swift'])
+            unsafe_sdk = unsafe['IOSViaEntryTCP.swift']
+            assert unsafe_sdk.count('NWTest.shared.measurementNow()') == 2
+            unsafe_sdk = unsafe_sdk.replace('NWTest.shared.measurementNow()', elapsed)
+            helper.write_text(unsafe_sdk)
             actor.write_text(actor_code.replace('IOSViaEntryTCP.measure(target,', 'IOSViaEntryTCP.measure(candidate,'))
+            print('Apple candidate stage: reject full-profile crossing against real iOS SDK', flush=True)
             rejected = subprocess.run(sdk_args, text=True, capture_output=True, timeout=120)
             assert rejected.returncode != 0 and "sending 'candidate' risks causing data races" in rejected.stderr, (
                 'Real iOS SDK failed to reject the full-profile actor crossing:\n' + rejected.stdout + rejected.stderr)
