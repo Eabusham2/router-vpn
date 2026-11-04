@@ -42,6 +42,9 @@ func desktopOpenVPNPhysicalInputs(t *testing.T, network, kill string) (map[strin
 func TestDesktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t *testing.T) {
 	desktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t, "linux")
 }
+func TestDesktopExternalDarwinOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t *testing.T) {
+	desktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t, "darwin")
+}
 func TestDesktopExternalWindowsOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t *testing.T) {
 	desktopExternalOpenVPNPolicyKeepsOrderedRemotesAndCompleteSource(t, "windows")
 }
@@ -119,7 +122,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 			t.Fatal("unsupported OpenVPN capture acquired a retained owner", target)
 		}
 	}
-	for _, target := range []string{"darwin", "android"} {
+	for _, target := range []string{"android"} {
 		t.Run(target, func(t *testing.T) {
 			graph, capture, _ := desktopOpenVPNPhysicalInputs(t, "mixed", "always")
 			reject(t, externalDesktopCompile(t, graph, capture), target)
@@ -129,6 +132,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 		graph, capture, _ := desktopOpenVPNPhysicalInputs(t, "mixed", "off")
 		reject(t, externalDesktopCompile(t, graph, capture), "linux")
 		reject(t, externalDesktopCompile(t, graph, capture), "windows")
+		reject(t, externalDesktopCompile(t, graph, capture), "darwin")
 	})
 	for _, entry := range []string{"router-wg", "socks5", "shadowsocks", "hysteria2"} {
 		t.Run("predecessor/"+entry, func(t *testing.T) {
@@ -137,6 +141,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 			capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 			reject(t, externalDesktopCompile(t, graph, capture), "linux")
 			reject(t, externalDesktopCompile(t, graph, capture), "windows")
+			reject(t, externalDesktopCompile(t, graph, capture), "darwin")
 		})
 	}
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
@@ -164,6 +169,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 			}
 			reject(t, original, "linux")
 			reject(t, original, "windows")
+			reject(t, original, "darwin")
 		})
 	}
 	for _, choice := range []string{"server", "auto"} {
@@ -181,6 +187,7 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 			}
 			reject(t, original, "linux")
 			reject(t, original, "windows")
+			reject(t, original, "darwin")
 		})
 	}
 }

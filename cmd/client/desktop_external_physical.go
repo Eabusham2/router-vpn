@@ -98,7 +98,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 }
 
 func desktopExternalDarwinProtocol(protocol string) bool {
-	return protocol == "socks5" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg"
+	return protocol == "socks5" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg" || protocol == "openvpn"
 }
 
 func desktopExternalPhysicalReceipt(owner *desktopExternalRuntime, received *mobilemultihop.DesktopExternalMetadata) bool {

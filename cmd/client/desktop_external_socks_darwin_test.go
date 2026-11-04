@@ -49,7 +49,7 @@ func TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary(t *testing.T) {
 			}
 		})
 	}
-	for _, fault := range []string{"server", "auto", "off", "entry", "predecessor", "layer", "openvpn"} {
+	for _, fault := range []string{"server", "auto", "off", "entry", "predecessor", "layer"} {
 		t.Run(fault, func(t *testing.T) {
 			_, launch := desktopRetainedSOCKSFixture(t, "always")
 			switch fault {
@@ -64,8 +64,6 @@ func TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary(t *testing.T) {
 				launch.external.predecessor = "captured predecessor"
 			case "layer":
 				launch.external.profile.StartLayer = "aes-256-gcm"
-			case "openvpn":
-				launch.external.profile.External.Protocol = "openvpn"
 			}
 			if desktopMacOSExternalEligible(launch) {
 				t.Fatal("SOCKS5 integration widened an unsupported native graph", fault)

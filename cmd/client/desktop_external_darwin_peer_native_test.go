@@ -38,38 +38,48 @@ type macOSExternalLayerReceipt struct {
 }
 
 type macOSExternalPeerReply struct {
-	ParametersSHA256     string                       `json:"parameters_sha256,omitempty"`
-	SOCKSRelays          []string                     `json:"socks_relays,omitempty"`
-	SOCKSRejectedReplies uint32                       `json:"socks_rejected_replies,omitempty"`
-	Layer                *macOSExternalLayerReceipt   `json:"layer,omitempty"`
-	Latency              *macOSExternalLatencyReceipt `json:"latency,omitempty"`
-	Schema               int                          `json:"schema"`
-	Protocol             string                       `json:"protocol"`
-	Address              string                       `json:"address"`
-	CA                   string                       `json:"ca"`
-	Connections          int64                        `json:"connections"`
-	Streams              int64                        `json:"streams"`
-	PhysicalUDP          int64                        `json:"physical_udp"`
-	Packets              int64                        `json:"packets"`
-	DNSQueries           uint32                       `json:"dns_queries"`
-	PublicAttempts       uint32                       `json:"public_attempts"`
-	PublicReplies        uint32                       `json:"public_replies"`
-	AuthFailures         uint32                       `json:"auth_failures"`
+	OpenVPNNetwork          string                       `json:"openvpn_network,omitempty"`
+	OpenVPNProfile          string                       `json:"openvpn_profile,omitempty"`
+	OpenVPNUsername         string                       `json:"openvpn_username,omitempty"`
+	OpenVPNPassword         string                       `json:"openvpn_password,omitempty"`
+	OpenVPNFallbackAttempts int64                        `json:"openvpn_fallback_attempts,omitempty"`
+	OpenVPNFirstSequence    uint64                       `json:"openvpn_first_sequence,omitempty"`
+	OpenVPNFinalSequence    uint64                       `json:"openvpn_final_sequence,omitempty"`
+	ParametersSHA256        string                       `json:"parameters_sha256,omitempty"`
+	SOCKSRelays             []string                     `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies    uint32                       `json:"socks_rejected_replies,omitempty"`
+	Layer                   *macOSExternalLayerReceipt   `json:"layer,omitempty"`
+	Latency                 *macOSExternalLatencyReceipt `json:"latency,omitempty"`
+	Schema                  int                          `json:"schema"`
+	Protocol                string                       `json:"protocol"`
+	Address                 string                       `json:"address"`
+	CA                      string                       `json:"ca"`
+	Connections             int64                        `json:"connections"`
+	Streams                 int64                        `json:"streams"`
+	PhysicalUDP             int64                        `json:"physical_udp"`
+	Packets                 int64                        `json:"packets"`
+	DNSQueries              uint32                       `json:"dns_queries"`
+	PublicAttempts          uint32                       `json:"public_attempts"`
+	PublicReplies           uint32                       `json:"public_replies"`
+	AuthFailures            uint32                       `json:"auth_failures"`
 }
 
 type macOSExternalNativePeer struct {
-	command                                  *exec.Cmd
-	input                                    io.WriteCloser
-	output                                   *os.File
-	reader                                   *bufio.Reader
-	joined                                   chan struct{}
-	failure                                  error
-	protocol, password, ca                   string
-	name, layer, layerPassword, fault        string
-	variant, policy, clientKey, peerKey, psk string
-	inner                                    netip.AddrPort
-	address                                  netip.AddrPort
-	physical                                 netip.Addr
+	openvpnNetwork, openvpnProfile, openvpnUsername, openvpnPassword string
+	openvpnClient                                                    netip.Addr
+	openvpnFallback                                                  bool
+	command                                                          *exec.Cmd
+	input                                                            io.WriteCloser
+	output                                                           *os.File
+	reader                                                           *bufio.Reader
+	joined                                                           chan struct{}
+	failure                                                          error
+	protocol, password, ca                                           string
+	name, layer, layerPassword, fault                                string
+	variant, policy, clientKey, peerKey, psk                         string
+	inner                                                            netip.AddrPort
+	address                                                          netip.AddrPort
+	physical                                                         netip.Addr
 }
 
 func macOSExternalNativeCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -146,6 +156,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 	if p.protocol != "amneziawg" && reply.ParametersSHA256 != "" {
 		t.Fatal("ordinary peer acquired an unrequested AWG parameter identity")
 	}
+	macOSExternalNativeOpenVPNRead(t, p, reply, address)
 	p.address, p.ca = address, reply.CA
 	if p.layer == "" {
 		if reply.Layer != nil {
@@ -188,6 +199,18 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if scenario == "wireguard-always" || scenario == "socks5-always" || strings.HasPrefix(scenario, "amneziawg-") && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
 	}
+	if protocol == "openvpn" {
+		p.openvpnClient = p.physical
+		p.physical = macOSExternalNativeOpenVPNAddress(t, p.physical)
+		p.openvpnNetwork = "tcp"
+		if strings.HasPrefix(scenario, "openvpn-udp") || strings.HasPrefix(scenario, "openvpn-mixed-fallback") {
+			p.openvpnNetwork = "udp"
+		}
+		p.openvpnFallback = strings.Contains(scenario, "-fallback")
+		if strings.HasSuffix(scenario, "-always") {
+			p.policy = "always"
+		}
+	}
 	if protocol == "amneziawg" {
 		if strings.HasPrefix(scenario, "amneziawg-fast") {
 			p.variant = "fast"
@@ -209,6 +232,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	clear(key)
 	p.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopDarwinExternalReferenceProcess$", "-test.count=1", "-test.timeout=300s")
 	p.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_CHILD=1", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_ADDRESS=" + p.physical.String()}
+	if protocol == "openvpn" {
+		p.command.Env = append(p.command.Env, "ROUTERVPN_DARWIN_EXTERNAL_CLIENT_ADDRESS="+p.openvpnClient.String())
+	}
 	if layer != "" {
 		p.command.Env = append(p.command.Env, "ROUTERVPN_DARWIN_EXTERNAL_LAYER=1")
 	}
@@ -248,6 +274,10 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		p.output.Close()
 	})
 	request := map[string]any{"schema": 1, "protocol": protocol, "address": p.physical.String(), "password": p.password, "hold": false}
+	if protocol == "openvpn" {
+		request["password"], request["openvpn_network"], request["openvpn_fallback"] = "", p.openvpnNetwork, p.openvpnFallback
+		request["openvpn_client_address"] = p.openvpnClient.String()
+	}
 	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof") {
 		request["socks_fault"] = fault
 	}
@@ -305,6 +335,12 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		profile.MTUPolicy, profile.ManualMTU, profile.EffectiveMTU = "auto", 0, 0
 	}
 	switch p.protocol {
+	case "openvpn":
+		profile.DNSProtocol = "udp"
+		profile.External.OpenVPN = macOSExternalNativeOpenVPNProfile(t, p)
+		if p.fault == "wrong-exit" {
+			profile.External.ExpectedPublicIP = "203.0.113.89"
+		}
 	case "socks5":
 		profile.DNSProtocol = "udp"
 		profile.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: p.physical.String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
@@ -538,6 +574,21 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if strings.HasPrefix(scenario, "openvpn-") {
+		for _, base := range []string{"openvpn-tcp", "openvpn-udp", "openvpn-tcp-fallback", "openvpn-mixed-fallback"} {
+			if scenario == base || scenario == base+"-always" {
+				return "openvpn", "", ""
+			}
+		}
+		for _, network := range []string{"tcp", "udp"} {
+			for _, fault := range []string{"wrong-control", "wrong-provider-trust", "wrong-password", "wrong-username", "wrong-dns", "wrong-trust", "wrong-exit"} {
+				if scenario == "openvpn-"+network+"-"+fault {
+					return "openvpn", "", fault
+				}
+			}
+		}
+		t.Fatal("unknown native OpenVPN captured scenario")
+	}
 	if strings.HasPrefix(scenario, "amneziawg-") {
 		for _, variant := range []string{"fast", "strong"} {
 			base := "amneziawg-" + variant

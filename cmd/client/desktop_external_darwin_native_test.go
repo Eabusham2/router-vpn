@@ -23,6 +23,7 @@ import (
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 const macOSExternalNativeMarker = "fixture-external-host"
@@ -130,6 +131,8 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 }
 
 type macOSExternalNativeResult struct {
+	OpenVPNRemotes                                                                       []nativeopenvpn.Remote
+	PhysicalDestinations                                                                 []mobilemultihop.PhysicalEgress
 	IPv6, DNSProtocol, DNSHost                                                           string
 	DNSPort                                                                              int
 	HomeLAN                                                                              bool
@@ -157,6 +160,11 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 	}
 	result.IPv6, result.HomeLAN = capture.IPv6Mode, capture.HomeLANAccess
 	result.DNSProtocol, result.DNSHost, result.DNSPort = capture.SelectedDNS.Type, capture.SelectedDNS.Host, capture.SelectedDNS.Port
+	if capture.Protocol == "openvpn" {
+		if err := macOSExternalNativeOpenVPNObservation(h, &result); err != nil {
+			return result, err
+		}
+	}
 	root := capture.PhysicalRoots[0]
 	result.Layer, result.OuterTag, result.OuterType = capture.StartLayer, root.Tag, root.Type
 	if capture.StartLayer != "" || capture.Protocol == "wireguard" || capture.Protocol == "amneziawg" || capture.Protocol == "socks5" {
@@ -248,7 +256,7 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
 	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
 		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
-		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit"} {
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit"} {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
@@ -311,7 +319,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	beforeTunnels := macOSExternalNativeTunnels(t)
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/external-profile/connect", `{"profile_id":"installed-macos-external","direct":true,"execution":"local"}`)
 	if peer.fault != "" {
-		if protocol == "amneziawg" {
+		if protocol == "openvpn" {
+			macOSExternalNativeOpenVPNRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+		} else if protocol == "amneziawg" {
 			macOSExternalNativeAmneziaRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
 		} else if protocol == "socks5" {
 			macOSExternalNativeSOCKSRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
@@ -328,7 +338,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		if receipt.ExitCode != 0 {
 			t.Fatal("rejected layer controller did not join original cleanup", receipt.ExitCode)
 		}
-		if protocol == "amneziawg" {
+		if protocol == "openvpn" {
+			t.Logf("actual sealed Darwin OpenVPN refused %s: actual native encrypted provider reached, expected authentication or proof boundary rejected, original ordered PF tuples and utun retired, controller joined", scenario)
+		} else if protocol == "amneziawg" {
 			t.Logf("actual sealed Darwin AmneziaWG refused %s: actual encrypted peer and eleven-parameter readback reached, expected proof boundary rejected, original UDP PF and utun retired, controller joined", scenario)
 		} else if protocol == "socks5" {
 			t.Logf("actual sealed Darwin SOCKS refused %s: actual peer reached, expected association or proof boundary rejected, original control UDP PF and utun retired, controller joined", scenario)
@@ -369,10 +381,13 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		}
 	}
 	observed := peer.stats(t)
+	if protocol == "openvpn" {
+		macOSExternalNativeOpenVPNProved(t, peer, live, observed)
+	}
 	if protocol == "socks5" {
 		macOSExternalNativeSOCKSProved(t, peer, live, observed)
 	}
-	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || (protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg") && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && protocol != "wireguard" && protocol != "amneziawg" && observed.Connections < 1 {
+	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || (protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg") && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && protocol != "wireguard" && protocol != "amneziawg" && protocol != "openvpn" && observed.Connections < 1 {
 		t.Fatal("independent peer did not observe the selected native transport, DNS and actual exit proof", observed)
 	}
 	if peer.layer != "" && (observed.Layer == nil || observed.Layer.Authenticated < 1 || observed.Layer.Forwarded < 1 || observed.Layer.Rejected != 0) {

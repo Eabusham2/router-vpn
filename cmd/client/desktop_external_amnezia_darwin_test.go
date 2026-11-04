@@ -74,7 +74,7 @@ func TestDesktopMacOSAmneziaRetainsCapturedSourceAndGraphBoundary(t *testing.T) 
 			})
 		}
 	}
-	for _, fault := range []string{"server", "auto", "off", "entry", "predecessor", "layer", "openvpn"} {
+	for _, fault := range []string{"server", "auto", "off", "entry", "predecessor", "layer"} {
 		t.Run(fault, func(t *testing.T) {
 			launch := desktopExternalPhysicalLaunchVariant(t, "amneziawg", "always", "on", false, "strong")
 			switch fault {
@@ -89,8 +89,6 @@ func TestDesktopMacOSAmneziaRetainsCapturedSourceAndGraphBoundary(t *testing.T) 
 				launch.external.predecessor = "captured predecessor"
 			case "layer":
 				launch.external.profile.StartLayer = "aes-256-gcm"
-			case "openvpn":
-				launch.external.profile.External.Protocol = "openvpn"
 			}
 			if desktopMacOSExternalEligible(launch) {
 				t.Fatal("AmneziaWG integration widened an unsupported native graph", fault)

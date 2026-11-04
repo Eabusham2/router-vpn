@@ -46,7 +46,7 @@ func desktopRetainedOpenVPNFixture(t *testing.T, network, kill string) (common.R
 }
 
 func TestDesktopExternalPhysicalOpenVPNKeepsOriginalProfileAndDerivedMailboxes(t *testing.T) {
-	for _, target := range []string{"linux", "windows"} {
+	for _, target := range []string{"linux", "windows", "darwin"} {
 		for _, network := range []string{"tcp", "udp", "mixed"} {
 			for _, kill := range []string{"on-connect", "always"} {
 				t.Run(target+"/"+network+"/"+kill, func(t *testing.T) {
@@ -113,7 +113,7 @@ func TestDesktopExternalPhysicalOpenVPNKeepsOriginalProfileAndDerivedMailboxes(t
 }
 
 func TestDesktopExternalPhysicalOpenVPNKeepsUnsupportedTargetAndCaptureGuards(t *testing.T) {
-	for _, target := range []string{"darwin", "android", "unknown", ""} {
+	for _, target := range []string{"android", "unknown", ""} {
 		t.Run(target, func(t *testing.T) {
 			_, launch := desktopRetainedOpenVPNFixture(t, "mixed", "always")
 			config, metadata := bytes.Clone(launch.config), bytes.Clone(launch.metadata)
@@ -122,7 +122,7 @@ func TestDesktopExternalPhysicalOpenVPNKeepsUnsupportedTargetAndCaptureGuards(t 
 			}
 		})
 	}
-	for _, target := range []string{"linux", "windows"} {
+	for _, target := range []string{"linux", "windows", "darwin"} {
 		for _, fault := range []string{"off", "predecessor", "not-direct", "graph", "metadata", "source", "session", "proof-source", "proof-config"} {
 			t.Run(target+"/"+fault, func(t *testing.T) {
 				kill := "always"

@@ -1,0 +1,319 @@
+//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/subtle"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	stackvpn "github.com/sagernet/sing-box/transport/openvpn"
+	ovpn "github.com/sagernet/sing-openvpn"
+	"github.com/sagernet/sing/common/buf"
+)
+
+// The independent provider uses the pinned TLS/data-channel implementation and
+// a userspace stack. Only its actual captured TCP/UDP listeners can receive an
+// encrypted session; decrypted traffic is restricted to the fixed responders.
+func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string) desktopExternalInstalledOpenVPNPeer {
+	t.Helper()
+	physical, err := netip.ParseAddr(request.Address)
+	if err != nil || !physical.Is4() || !physical.IsGlobalUnicast() || physical.IsLoopback() || (request.OpenVPNNetwork != "tcp" && request.OpenVPNNetwork != "udp") {
+		t.Fatal("OpenVPN reference lost its captured physical transport")
+	}
+	clientAddress, err := netip.ParseAddr(request.OpenVPNClientAddress)
+	if err != nil || !clientAddress.Is4() || !clientAddress.IsGlobalUnicast() || clientAddress.IsLoopback() {
+		t.Fatal("OpenVPN provider lost its captured original client address")
+	}
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	root := &x509.Certificate{SerialNumber: big.NewInt(75001), Subject: pkix.Name{CommonName: "captured OpenVPN provider root"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	rootDER, err := x509.CreateCertificate(rand.Reader, root, root, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
+	issue := func(serial int64, name string, usage x509.ExtKeyUsage) (string, string) {
+		key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if e != nil {
+			t.Fatal(e)
+		}
+		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: root.NotBefore, NotAfter: root.NotAfter, DNSNames: []string{name}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}}
+		der, e := x509.CreateCertificate(rand.Reader, leaf, root, &key.PublicKey, rootKey)
+		if e != nil {
+			t.Fatal(e)
+		}
+		private, e := x509.MarshalPKCS8PrivateKey(key)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	}
+	certificate, key := issue(75002, "provider.routervpn.test", x509.ExtKeyUsageServerAuth)
+	client, clientKey := issue(75003, "captured-client.routervpn.test", x509.ExtKeyUsageClientAuth)
+	secret := make([]byte, 32)
+	if _, err = rand.Read(secret); err != nil {
+		t.Fatal(err)
+	}
+	username, password := "captured-openvpn-user", base64.StdEncoding.EncodeToString(secret)
+	clear(secret)
+	controlKey := "-----BEGIN OpenVPN Static key V1-----\n" + strings.Repeat(strings.Repeat("a", 32)+"\n", 16) + "-----END OpenVPN Static key V1-----\n"
+	ctx, cancel := context.WithCancel(parent.ctx)
+	rules := make(map[string]desktopReferenceRule)
+	services := []struct{ network, destination, target string }{{"udp", "203.0.113.53:5353", dnsAddress}, {"tcp", "1.1.1.1:443", publicAddress}}
+	if latency, ok := parent.route("tcp", "203.0.113.54:443"); ok {
+		services = append(services, struct{ network, destination, target string }{"tcp", "203.0.113.54:443", latency})
+	}
+	for _, route := range services {
+		destination, e := netip.ParseAddrPort(route.destination)
+		target, targetErr := netip.ParseAddrPort(route.target)
+		if e != nil || targetErr != nil || !target.Addr().IsLoopback() || target.Port() == 0 {
+			cancel()
+			t.Fatal("OpenVPN provider lost its fixed owned service")
+		}
+		rules[route.network+"/"+route.destination] = desktopReferenceRule{Network: route.network, Address: destination.Addr().String(), Port: int(destination.Port()), Target: route.target}
+	}
+	handler := &desktopDarwinWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
+	var rawTCP, rawUDP, authFailures, fallbackAttempts atomic.Int64
+	var order, firstSequence, finalSequence atomic.Uint64
+	var listener net.Listener
+	var packet net.PacketConn
+	var refusal net.Listener
+	var refusalDone, readDone chan struct{}
+	var device stackvpn.Device
+	var server *ovpn.Server
+	var once sync.Once
+	closePeer := func() {
+		once.Do(func() {
+			cancel()
+			if refusal != nil {
+				_ = refusal.Close()
+			}
+			if refusalDone != nil {
+				<-refusalDone
+			}
+			var failure error
+			if server != nil {
+				failure = server.Close()
+			}
+			if readDone != nil {
+				<-readDone
+			}
+			handler.close()
+			if device != nil {
+				failure = errors.Join(failure, device.Close())
+			}
+			if listener != nil {
+				_ = listener.Close()
+			}
+			if packet != nil {
+				_ = packet.Close()
+			}
+			if failure != nil {
+				t.Error("independent OpenVPN provider did not join original native cleanup", failure)
+			}
+		})
+	}
+	t.Cleanup(closePeer)
+	unavailable := ""
+	if request.OpenVPNFallback {
+		refusal, err = net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		unavailable = refusal.Addr().String()
+		refusalDone = make(chan struct{})
+		go func() {
+			defer close(refusalDone)
+			for {
+				connection, e := refusal.Accept()
+				if e != nil {
+					return
+				}
+				remote, parseErr := netip.ParseAddrPort(connection.RemoteAddr().String())
+				if parseErr == nil && (remote.Addr() == physical || remote.Addr() == clientAddress) {
+					fallbackAttempts.Add(1)
+					firstSequence.CompareAndSwap(0, order.Add(1))
+				}
+				_ = connection.Close()
+			}
+		}()
+	}
+	transport := ovpn.ServerTransportOptions{Protocol: request.OpenVPNNetwork}
+	received := func() { finalSequence.CompareAndSwap(0, order.Add(1)) }
+	address := ""
+	if request.OpenVPNNetwork == "tcp" {
+		listener, err = net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		address = listener.Addr().String()
+		transport.Listener = &desktopDarwinOpenVPNListener{Listener: listener, physical: physical, client: clientAddress, count: &rawTCP, received: received}
+	} else {
+		packet, err = net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		address = packet.LocalAddr().String()
+		transport.PacketConn = &desktopDarwinOpenVPNPacket{PacketConn: packet, physical: physical, client: clientAddress, count: &rawUDP, received: received}
+	}
+	transport.ListenAddress = address
+	options := ovpn.ServerOptions{Context: ctx, Mode: ovpn.ModeTLS, Transport: transport, Resources: ovpn.ServerResourceOptions{MaxClients: 1}, Logger: log.NewNOPFactory().Logger(),
+		DataChannel: ovpn.ServerDataChannelOptions{MTU: 1400, Ciphers: []string{"AES-256-GCM", "AES-128-GCM"}, PacketHeadroom: stackvpn.PacketHeadroom},
+		Tunnel:      ovpn.ServerTunnelOptions{AddressPools: []netip.Prefix{netip.MustParsePrefix("10.211.18.1/24"), netip.MustParsePrefix("fd78:211::1/64")}, Topology: "subnet"},
+		TLS:         ovpn.ServerTLSOptions{CertificateAuthority: ovpn.Material{Content: []byte(ca)}, Certificate: ovpn.Material{Content: []byte(certificate)}, Key: ovpn.Material{Content: []byte(key)}, VerifyClientCertificate: "require", RemoteCertificateTLS: "client"},
+		Authentication: ovpn.ServerAuthenticationOptions{Authenticator: func(_ context.Context, user, pass string) error {
+			if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(password)) != 1 {
+				authFailures.Add(1)
+				return errors.New("captured OpenVPN credential refused")
+			}
+			return nil
+		}},
+	}
+	control := "tls-auth"
+	if request.OpenVPNNetwork == "tcp" {
+		options.KeyDirection = 0
+		options.TLS.Auth = ovpn.Material{Content: []byte(controlKey)}
+	} else {
+		control = "tls-crypt"
+		options.KeyDirection = -1
+		options.TLS.Crypt = ovpn.Material{Content: []byte(controlKey)}
+	}
+	device, err = stackvpn.NewDevice(stackvpn.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), System: false, Handler: handler, MTU: 1400, UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, Configuration: stackvpn.Configuration{MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.211.18.1/24"), netip.MustParsePrefix("fd78:211::1/64")}, Topology: "subnet"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err = ovpn.NewServer(options)
+	if err != nil {
+		t.Fatal("actual pinned OpenVPN server configuration", err)
+	}
+	device.SetPacketWriter(func(packets []*buf.Buffer) error {
+		misses, e := server.WriteDataPacketBuffersByDestination(packets)
+		if len(misses) > 0 {
+			return errors.Join(e, errors.New("OpenVPN provider lost its authenticated inner return route"))
+		}
+		return e
+	})
+	if err = device.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Start(); err != nil {
+		t.Fatal("actual pinned OpenVPN server start", err)
+	}
+	readDone = make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			packets, e := server.ReadDataPackets(ctx)
+			if e != nil {
+				if ctx.Err() == nil {
+					t.Error("native provider read failed", e)
+				}
+				return
+			}
+			buffers := make([]*buf.Buffer, len(packets))
+			for i, p := range packets {
+				buffers[i] = p.Buffer
+			}
+			e = device.WriteInboundBuffers(buffers)
+			buf.ReleaseMulti(buffers)
+			if e != nil {
+				if ctx.Err() == nil {
+					t.Error("native provider stack failed", e)
+				}
+				return
+			}
+		}
+	}()
+	config := "# exact captured native OpenVPN import\r\nclient\ndev tun\nauth-user-pass\n"
+	if unavailable != "" {
+		remote := netip.MustParseAddrPort(unavailable)
+		config += fmt.Sprintf("remote %s %d tcp\n", remote.Addr(), remote.Port())
+	}
+	remote := netip.MustParseAddrPort(address)
+	config += fmt.Sprintf("remote %s %d %s\n", remote.Addr(), remote.Port(), request.OpenVPNNetwork)
+	config += "verify-x509-name provider.routervpn.test name\nremote-cert-tls server\ndata-ciphers AES-256-GCM:AES-128-GCM\ntun-mtu 1400\nhand-window 3\ntls-timeout 1\n<ca>\n" + ca + "</ca>\n<cert>\n" + client + "</cert>\n<key>\n" + clientKey + "</key>\n<" + control + ">\n" + controlKey + "</" + control + ">\n"
+	if control == "tls-auth" {
+		config += "key-direction 1\n"
+	}
+	if len(config) > 12<<10 {
+		t.Fatal("OpenVPN provider exceeded bounded imported source")
+	}
+	if _, err = nativeopenvpn.CompileProfile(nativeopenvpn.Profile{Config: config, Username: username, Password: password}, "custom-exit", ""); err != nil {
+		t.Fatal(err)
+	}
+	return desktopExternalInstalledOpenVPNPeer{address: address, profile: config, username: username, password: password, close: closePeer, stats: func() desktopExternalInstalledOpenVPNStats {
+		return desktopExternalInstalledOpenVPNStats{connections: rawTCP.Load(), physicalUDP: rawUDP.Load(), streams: handler.tcp.Load(), packets: handler.udp.Load(), authFailures: authFailures.Load(), fallbackAttempts: fallbackAttempts.Load(), firstSequence: firstSequence.Load(), finalSequence: finalSequence.Load()}
+	}}
+}
+
+type desktopDarwinOpenVPNListener struct {
+	net.Listener
+	physical netip.Addr
+	client   netip.Addr
+	count    *atomic.Int64
+	received func()
+}
+
+func (l *desktopDarwinOpenVPNListener) Accept() (net.Conn, error) {
+	for {
+		c, e := l.Listener.Accept()
+		if e != nil {
+			return nil, e
+		}
+		remote, e := netip.ParseAddrPort(c.RemoteAddr().String())
+		if e != nil || remote.Addr() != l.physical && remote.Addr() != l.client {
+			_ = c.Close()
+			continue
+		}
+		l.count.Add(1)
+		l.received()
+		return c, nil
+	}
+}
+
+type desktopDarwinOpenVPNPacket struct {
+	net.PacketConn
+	physical netip.Addr
+	client   netip.Addr
+	count    *atomic.Int64
+	received func()
+}
+
+func (p *desktopDarwinOpenVPNPacket) ReadFrom(b []byte) (int, net.Addr, error) {
+	for {
+		n, a, e := p.PacketConn.ReadFrom(b)
+		if e != nil {
+			return n, a, e
+		}
+		remote, e := netip.ParseAddrPort(a.String())
+		if e != nil || remote.Addr() != p.physical && remote.Addr() != p.client {
+			continue
+		}
+		p.count.Add(1)
+		p.received()
+		return n, a, nil
+	}
+}
