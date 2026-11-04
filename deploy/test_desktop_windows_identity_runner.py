@@ -155,7 +155,8 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
             for name, relative in prep.PEER_TEMPLATES.items():
                 self.assertEqual((vendor / relative).read_bytes(),
                                  (ROOT / 'mobile/desktop' / name).read_bytes())
-            for name in ("desktop_socket_pf_inventory_test.go", "desktop_socket_darwin_frame_test.go"):
+            for name in ("desktop_socket_pf_inventory_test.go", "desktop_socket_darwin_frame_test.go",
+                         "desktop_socket_grant_admission_test.go", "desktop_socket_identity_readback_test.go"):
                 with self.subTest(name=name):
                     missing = target / name
                     expected = missing.read_bytes()
