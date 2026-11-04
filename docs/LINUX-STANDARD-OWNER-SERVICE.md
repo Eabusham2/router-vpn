@@ -24,10 +24,13 @@ Channel loss cancels the actual request, and the reader joins before response.
 
 The service uses the existing original creator and conditional retirement
 contract. It never adopts or deletes a table because its name or saved receipt
-matches. Stop joins the original engine and preserves Always; On-connect
-retirement releases only the captured original protection. Controller death or
-invalid runtime observation triggers bounded original cleanup and retains a
-queryable failure if cleanup cannot complete. The controller's post-activation
+matches. Authenticated explicit Stop joins the original engine and preserves
+Always; a requested On-connect release removes only the captured original
+protection. Engine failure, controller death, invalid runtime observation or a
+lost Start channel joins the original engine while retaining its guard. A new
+authenticated connection creates its successor before retiring that retained
+creator; otherwise explicit Disconnect or Off owns release. Automatic cleanup
+retains a queryable failure if it cannot complete. The controller's post-activation
 monitor has its own lifetime, clears only the original Connected state, and
 cannot stop or overwrite a replacement launch.
 
@@ -83,7 +86,9 @@ creator. Partial native boot failures keep the service alive without READY.
 The required Linux packaging runner inventories every service source and exact
 test verdict. Privileged namespace cases exercise actual installed images,
 named sockets, peer pidfds, nft creation/readback, original service retirement,
-and boot Always to explicit UI Off followed by idle upgrade. Separate native
+and boot Always to explicit UI Off followed by idle upgrade. An unexpected
+actual engine exit must retain the original On-connect creator and saved inode
+until authenticated explicit Stop, followed by proved-idle upgrade. Separate native
 scope cases reject foreign standard/shared tables while preserving the
 independent Node table family. Missing, renamed, skipped or duplicate required
 verdicts fail the runner.

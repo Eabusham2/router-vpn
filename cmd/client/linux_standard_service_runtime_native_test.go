@@ -179,6 +179,49 @@ func TestLinuxStandardServiceStopRejectsDelayedStart(t *testing.T) {
 	}
 }
 
+func TestLinuxStandardServiceDeadControllerKeepsOnConnectUntilSuccessorCreated(t *testing.T) {
+	s, f, m := linuxStandardServiceRuntimeFixture(t, "on-connect")
+	firstPeer, _, firstExit := linuxStandardPeerFixture(t)
+	first, directory := linuxStandardServiceRequestFixture(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := s.handle(ctx, firstPeer, first, []*os.File{directory}); err != nil {
+		t.Fatal(err)
+	}
+	waitLegacyOffEngine(t, f)
+	original := s.session.owner
+	firstExit()
+	secondPeer, _, _ := linuxStandardPeerFixture(t)
+	second, nextDirectory := linuxStandardServiceRequestFixture(t, f)
+	if err := s.handle(ctx, secondPeer, second, []*os.File{nextDirectory}); err != nil {
+		t.Fatal("authenticated successor did not join the dead controller's original engine", err)
+	}
+	current := s.session.owner
+	assertLegacyOffJoined(t, original)
+	if current == original || !original.protection.removed || !original.protection.closed || current.protection.removed {
+		t.Fatal("successor did not retain the actual predecessor creator until replacement")
+	}
+	m.mu.Lock()
+	events := strings.Join(m.events, "\n")
+	count := len(m.tables)
+	m.mu.Unlock()
+	created := strings.Index(events, "create:"+current.session)
+	superseded := strings.Index(events, "supersede:"+original.session+":"+current.session)
+	if count != 1 || created < 0 || superseded <= created || strings.Contains(events, "delete:"+original.session) {
+		t.Fatal("dead controller cleanup opened protection before the successor creator", events)
+	}
+	if err := current.currentProtection(ctx); err != nil {
+		t.Fatal("replacement guard lost its original native or saved identity", err)
+	}
+	if err := s.handle(ctx, secondPeer, linuxStandardServiceTestAction(second, "stop", true), nil); err != nil {
+		t.Fatal("explicit successor Stop failed", err)
+	}
+	assertLegacyOffJoined(t, current)
+	if !current.protection.removed || !current.protection.stateRemoved {
+		t.Fatal("explicit successor Stop retained original On-connect protection")
+	}
+}
+
 func TestLinuxStandardServiceJoinedHoldReleasesOnlyOriginalOnConnect(t *testing.T) {
 	s, f, m := linuxStandardServiceRuntimeFixture(t, "on-connect")
 	peer, _, _ := linuxStandardPeerFixture(t)
@@ -253,13 +296,26 @@ func TestLinuxStandardServiceObservesActualEngineExitAfterRequest(t *testing.T) 
 				t.Fatal("joined original engine stayed observable")
 			}
 			m.mu.Lock()
-			defer m.mu.Unlock()
+			count := len(m.tables)
+			m.mu.Unlock()
+			if count != 1 || original.protection.removed || !original.protection.detached {
+				t.Fatal("unexpected engine exit discarded the original guard", policy)
+			}
+			if err := original.currentProtection(ctx); err != nil {
+				t.Fatal("engine failure lost the original saved/native protection identity", err)
+			}
+			if err := s.handle(ctx, peer, linuxStandardServiceTestAction(request, "stop", true), nil); err != nil {
+				t.Fatal("authenticated explicit Stop could not finish original retirement", err)
+			}
+			m.mu.Lock()
+			count = len(m.tables)
+			m.mu.Unlock()
 			if policy == "always" {
-				if len(m.tables) != 1 || original.protection.removed || !original.protection.detached {
-					t.Fatal("actual engine exit discarded original Always")
+				if count != 1 || original.protection.removed || !original.protection.detached {
+					t.Fatal("explicit Disconnect discarded original Always")
 				}
-			} else if len(m.tables) != 0 {
-				t.Fatal("actual engine exit retained original On-connect")
+			} else if count != 0 || !original.protection.removed || !original.protection.stateRemoved {
+				t.Fatal("explicit Disconnect did not release its held original On-connect")
 			}
 		})
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -100,9 +101,9 @@ func linuxStandardChannelFixture(t *testing.T) (*net.UnixConn, *net.UnixConn, []
 }
 
 func TestLinuxStandardServiceOriginalChannelCancellationJoinsStartAndDNS(t *testing.T) {
-	for _, action := range []string{"start", "prove-dns"} {
+	for _, action := range []string{"start", "start-held", "prove-dns"} {
 		t.Run(action, func(t *testing.T) {
-			s, f, _ := linuxStandardServiceRuntimeFixture(t, "on-connect")
+			s, f, m := linuxStandardServiceRuntimeFixture(t, "on-connect")
 			transport, channel, args := linuxStandardChannelFixture(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
@@ -113,12 +114,29 @@ func TestLinuxStandardServiceOriginalChannelCancellationJoinsStartAndDNS(t *test
 			defer peer.Close()
 			request, directory := linuxStandardServiceRequestFixture(t, f)
 			entered := make(chan struct{})
-			if action == "start" {
+			if action == "start" || action == "start-held" {
 				prepare := s.prepare
 				s.prepare = func(a *app, cmd *exec.Cmd, mode, base, id string) (legacyStandardExitLaunch, error) {
 					owner, err := prepare(a, cmd, mode, base, id)
 					if err != nil {
 						return owner, err
+					}
+					if action == "start-held" {
+						original := owner.(*linuxLegacyStandardExitOwner)
+						operation := a.connectionOperationContextOrBackground()
+						network := original.dns.network
+						var enteredOnce sync.Once
+						original.dns.network = func() string {
+							// Stop precisely after the real guard and saved inode
+							// have been published, before child creation. The lost
+							// original channel must cancel this original operation.
+							if original.protection != nil && original.protection.persisted {
+								enteredOnce.Do(func() { close(entered) })
+								<-operation.Done()
+							}
+							return network()
+						}
+						return owner, nil
 					}
 					owner.(*linuxLegacyStandardExitOwner).protectionFactory = func(ctx context.Context, _ string, _ string, _ []netip.Addr, _ bool, _ *os.File) (legacyExitKernelProtection, error) {
 						close(entered)
@@ -182,12 +200,30 @@ func TestLinuxStandardServiceOriginalChannelCancellationJoinsStartAndDNS(t *test
 			if s.session == nil {
 				t.Fatal("service forgot original attempted owner")
 			}
-			if action == "start" {
+			if action == "start" || action == "start-held" {
 				if !s.session.joined {
 					t.Fatal("cancelled Start did not retire original preparation", s.session.cleanupError)
 				}
 				if _, err = os.Stat(filepath.Join(f.root, "engine-started")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("late engine executed after channel cancellation")
+				}
+				if action == "start-held" {
+					original := s.session.owner
+					m.mu.Lock()
+					count := len(m.tables)
+					m.mu.Unlock()
+					if count != 1 || original.protection == nil || original.protection.removed || !original.protection.detached {
+						t.Fatal("lost Start channel released the acknowledged original On-connect guard")
+					}
+					if err = original.currentProtection(ctx); err != nil {
+						t.Fatal("lost Start channel discarded original saved/native guard identity", err)
+					}
+					if err = s.handle(ctx, peer, linuxStandardServiceTestAction(request, "stop", true), nil); err != nil {
+						t.Fatal("explicit Stop could not release the held original preparation", err)
+					}
+					if !original.protection.removed || !original.protection.stateRemoved {
+						t.Fatal("explicit Stop left its original On-connect guard behind")
+					}
 				}
 			} else {
 				s.session.owner.dns.mu.Lock()

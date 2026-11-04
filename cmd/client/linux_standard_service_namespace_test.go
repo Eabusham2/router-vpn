@@ -48,17 +48,21 @@ func init() {
 // named Unix listeners, kernel peer pidfds, actual installed service/helper
 // processes, readiness and process join. Missing capabilities fail the gate.
 func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *testing.T) {
-	for _, scenario := range []string{"off", "on-connect", "always-off", "always"} {
+	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "always-off", "always"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy := scenario
 			if scenario == "always-off" {
 				policy = "always"
 			}
+			if scenario == "on-connect-failure" {
+				policy = "on-connect"
+			}
 			executable := linuxControllerNamespaceInstall(t)
 			if err := os.RemoveAll(linuxStandardServiceDirectory); err != nil {
 				t.Fatal(err)
 			}
-			profile := common.RouterProfile{ID: "control", Name: "Control", KillSwitch: policy == "always", KillSwitchPolicy: policy, Endpoint: "203.0.113.77"}
+			profile := common.RouterProfile{ID: "control", Name: "Control", KillSwitch: policy != "off", KillSwitchPolicy: policy, Endpoint: "203.0.113.77",
+				DNSMode: "custom", DNSProtocol: "udp", DNSHost: "1.1.1.1", DNSPort: 53}
 			applyProfileDefaults(&profile)
 			body, _ := json.Marshal(common.RouterProfileStore{SchemaVersion: 4, SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
 			if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), body, 0600); err != nil {
@@ -70,6 +74,20 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 			linuxStandardServicePreviousBootState(t, linuxOwnedControllerRoot, profile.ID, profile.Endpoint)
 			if policy == "on-connect" {
 				legacyStopBoundaryFiles(t, linuxOwnedControllerRoot)
+				if scenario == "on-connect-failure" {
+					// Only this private generated engine cooperatively exits. The
+					// service still creates, observes and joins its actual child.
+					enginePath := filepath.Join(linuxOwnedControllerRoot, "bin", "sing-box")
+					engine, err := os.ReadFile(enginePath)
+					if err != nil || bytes.Count(engine, []byte("while True:time.sleep(.02)")) != 1 {
+						t.Fatal("original generated engine loop changed", err)
+					}
+					exitLoop := "while True:\n if (root/'run/standard-service-fixture-exit').exists():done()\n time.sleep(.02)"
+					engine = bytes.Replace(engine, []byte("while True:time.sleep(.02)"), []byte(exitLoop), 1)
+					if err = os.WriteFile(enginePath, engine, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
 				catalog, _ := json.Marshal(legacyStopShippingCatalog(t))
 				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "modes.json"), catalog, 0600); err != nil {
 					t.Fatal(err)
@@ -112,6 +130,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				action := "1"
 				if scenario == "always-off" {
 					action = "off"
+				}
+				if scenario == "on-connect-failure" {
+					action = "failure"
 				}
 				controller.Env = append(controller.Env, "ROUTERVPN_CONTROLLER_STANDARD_SERVICE_FIXTURE="+action)
 				var output bytes.Buffer

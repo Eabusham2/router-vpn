@@ -190,7 +190,9 @@ func (s *linuxStandardService) previous(ctx context.Context, peer *linuxStandard
 		if !dead {
 			return errors.New("standard service still owns another live controller's engine")
 		}
-		if err = s.retire(ctx, true); err != nil {
+		// Losing the original controller is not an explicit Disconnect. Hold
+		// its protection until the successor creator has been established.
+		if err = s.retire(ctx, false); err != nil {
 			return err
 		}
 	}
@@ -481,6 +483,8 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 		// its completion. Use only the original remaining request deadline for
 		// this immediate retirement. An incomplete cleanup remains retained and
 		// queryable; a later service retry is a separate bounded operation.
+		// A lost or failed Start response supplies no authority to release the
+		// original guard. Only an authenticated explicit Stop may do that.
 		cleanup, stopCleanup := context.WithDeadline(context.Background(), deadline)
 		select {
 		case <-cleanup.Done():
@@ -488,7 +492,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 			if s.session != nil && s.session.request.Session == request.Session && s.session.peer.record == peer.record {
 				s.session.cleanupPending = true
 				s.session.cleanupError = err.Error()
-				err = errors.Join(err, s.retire(cleanup, true))
+				err = errors.Join(err, s.retire(cleanup, false))
 			}
 			s.gate <- struct{}{}
 		}
@@ -577,7 +581,10 @@ func (s *linuxStandardService) watch(ctx context.Context) {
 			if s.session.cleanupPending || err == nil && dead {
 				retirement, cancel := context.WithTimeout(ctx, 30*time.Second)
 				runtime.LockOSThread()
-				_ = s.retire(retirement, true) // retained and exposed in session.cleanupError
+				// Engine, source, network or controller loss must fail closed.
+				// Keep the original protection for an explicit Stop/Off or a
+				// proved successor; retain any cleanup error for the next retry.
+				_ = s.retire(retirement, false)
 				runtime.UnlockOSThread()
 				cancel()
 			}

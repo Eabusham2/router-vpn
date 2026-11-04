@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"router-vpn/internal/common"
+	"time"
 )
 
 // The namespace caller installed a real executable fixture for engine
@@ -56,7 +58,7 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		fmt.Fprintln(os.Stdout, "standard-service-route-joined")
 		return nil
 	}
-	if action != "1" {
+	if action != "1" && action != "failure" {
 		return errors.New("unknown native service fixture action")
 	}
 	body, err = os.ReadFile(filepath.Join(root, "modes.json"))
@@ -91,6 +93,11 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	if !exists || !ok || owner.Command().Process != nil || !a.state.Connected {
 		return errors.New("shipping controller did not retain actual remote engine ownership")
 	}
+	if action == "failure" {
+		if err = linuxStandardServiceControllerFailureFixture(a, owner); err != nil {
+			return err
+		}
+	}
 	if err = a.stopMode(); err != nil {
 		return fmt.Errorf("shipping service Stop failed: %w", err)
 	}
@@ -100,6 +107,107 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	if _, err = os.Stat(filepath.Join(root, "run", "kill-switch.json")); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("shipping On-connect Stop retained its state after acknowledged service release")
 	}
+	if action == "failure" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		view := a.captureLinuxStandardServiceProtection(ctx)
+		if view == nil || !view.Available || view.Failure != nil || view.Owned || view.Active || !view.AbsenceProved {
+			return errors.New("explicit Stop did not prove original service protection absence")
+		}
+	}
 	fmt.Fprintln(os.Stdout, "standard-service-route-joined")
+	return nil
+}
+
+// The controller monitor is joined before the cooperative child exit, so only
+// the original service watcher can perform this automatic retirement. The
+// protection-view RPC validates the service's live creator, not saved metadata.
+func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardServiceLaunch) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	raw, exists := linuxStandardServiceMonitors.Load(owner)
+	monitor, ok := raw.(*linuxStandardServiceMonitor)
+	if !exists || !ok || monitor.owner != owner {
+		return errors.New("service failure fixture lost original controller monitor")
+	}
+	if err := owner.stopMonitor(ctx); err != nil {
+		return err
+	}
+	select {
+	case <-monitor.finished:
+	case <-ctx.Done():
+		return errors.New("original controller monitor did not join before engine exit")
+	}
+	owner.mu.Lock()
+	joined := owner.joined
+	owner.mu.Unlock()
+	if joined {
+		return errors.New("controller cleanup substituted for service-side retirement")
+	}
+	original := a.captureLinuxStandardServiceProtection(ctx)
+	if original == nil || !original.Available || original.Failure != nil || !original.Owned || !original.Active || original.Pending || original.Removed || original.Policy != "on-connect" {
+		return errors.New("actual service had no original active On-connect creator")
+	}
+	owner.mu.Lock()
+	sameService := original.client != nil && original.client.peer != nil && owner.peer != nil && original.client.peer.record == owner.peer.record
+	owner.mu.Unlock()
+	if !sameService {
+		return errors.New("protection observation replaced the original engine service peer")
+	}
+	statePath := filepath.Join(linuxOwnedControllerRoot, "run", "kill-switch.json")
+	saved, err := os.Open(statePath)
+	if err != nil {
+		return err
+	}
+	defer saved.Close()
+	info, err := saved.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
+		return errors.New("original native saved protection was not bounded and regular")
+	}
+	body, err := io.ReadAll(io.LimitReader(saved, (64<<10)+1))
+	var state legacyExitProtectionState
+	if err != nil || json.Unmarshal(body, &state) != nil || state.Policy != "on-connect" || state.Owner.Receipt.Session != owner.request.Session || state.Owner.Receipt.ConfigSHA256 != owner.request.ConfigSHA256 || state.Owner.Receipt.TableHandle == 0 {
+		return errors.New("original service saved protection lost its acknowledged creation")
+	}
+	sentinel, err := os.OpenFile(filepath.Join(linuxOwnedControllerRoot, "run", "standard-service-fixture-exit"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if err = sentinel.Close(); err != nil {
+		return err
+	}
+	for {
+		view := a.captureLinuxStandardServiceProtection(ctx)
+		if !original.same(view) || !view.Owned || view.Pending || view.Removed || view.AbsenceProved {
+			return errors.New("automatic service retirement released or replaced original On-connect creator")
+		}
+		if !view.Active {
+			break // The service reports this only after its original retirement joined.
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("service did not join the original cooperatively retired engine")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	named, err := os.Lstat(statePath)
+	after, readErr := os.ReadFile(statePath)
+	if err != nil || readErr != nil || !os.SameFile(info, named) || !bytes.Equal(body, after) {
+		return errors.New("automatic retirement lost the exact original saved protection inode or body")
+	}
+	stopped, err := os.ReadFile(filepath.Join(linuxOwnedControllerRoot, "engine-stopped"))
+	if err != nil || string(stopped) != "closed" {
+		return errors.New("service retirement missed actual cooperative fixture exit")
+	}
+	if _, err = os.Lstat(owner.request.Directory); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("service claimed joined engine before original workspace retirement")
+	}
+	owner.mu.Lock()
+	err = owner.call(ctx, linuxStandardServiceRequest{Schema: 1, Action: "current", Session: owner.request.Session}, nil)
+	joined = owner.joined
+	owner.mu.Unlock()
+	if err == nil || joined {
+		return errors.New("retired service engine stayed current or controller cleanup substituted for service watch")
+	}
 	return nil
 }

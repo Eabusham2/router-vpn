@@ -8,9 +8,10 @@ CORE = {
     'RetainedPeerRejectsSameImageRoleReexec': (),
     'RetainsActualEngineAndAlwaysAcrossController': (),
     'StopRejectsDelayedStart': (),
+    'DeadControllerKeepsOnConnectUntilSuccessorCreated': (),
     'JoinedHoldReleasesOnlyOriginalOnConnect': (),
     'ObservesActualEngineExitAfterRequest': ('on-connect', 'always'),
-    'OriginalChannelCancellationJoinsStartAndDNS': ('start', 'prove-dns'),
+    'OriginalChannelCancellationJoinsStartAndDNS': ('start', 'start-held', 'prove-dns'),
     'ShippingOwnershipGuardKeepsCallerLock': (),
     'StaleStopCannotCancelCurrentMonitor': (),
     'BootKeepsOriginalPartialCreator': (),
@@ -44,7 +45,7 @@ CORE = {
     'MonitorRejectsUnprovedOrRepeatedActivation': ('dns', 'joined', 'unattempted', 'wrong-operation', 'foreign-runtime', 'foreign-tracker'),
     'MonitorShippingActivationOrderAndRefusal': ('active', 'monitor-refused', 'persistence-failed'),
 }
-NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'always-off', 'always')}
+NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-failure', 'always-off', 'always')}
 GROUPS = {'core': CORE, 'native': NATIVE}
 SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'peer_linux.go', 'protocol_linux.go', 'runtime_linux.go', 'client_linux.go', 'dns_linux.go',
