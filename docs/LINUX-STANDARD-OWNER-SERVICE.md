@@ -14,6 +14,16 @@ the same original-child lifecycle. OpenVPN, custom engines/Start Layer and
 hopped graphs keep their existing adapters. Uninstalled development execution
 keeps the existing in-process owner.
 
+The installed path uses the checksum-verified bundled generated native engine,
+not a PATH stock executable. It captures the original catalog, executable and
+Cronet descriptors before verification, checks those same objects afterward,
+and seals the captured configuration and payloads. The original creation pidfd
+and inherited authenticated channel bind the fixed `routervpn-standard`
+command to its creating service. Missing or invalid installed assets cannot
+fall back to an unrelated engine. The controller prepares only the private
+request graph and workspace; it does not start a second configuration-check
+child from PATH.
+
 The installed controller authenticates the fixed service through a Unix
 seqpacket channel and original `SO_PEERPIDFD`, root peer credentials, installed
 image, original process directory, namespace and captured argv. The service
@@ -38,22 +48,30 @@ Selected-DNS proof executes in the service against the actual engine's
 original listener and captured configuration. Controller reconnect does not
 refresh the original physical-network snapshot or substitute ambient DNS.
 
-After the first real selected-DNS exchange establishes original child/listener
-readiness, the service arms one native event tracker in its captured namespace.
-That readiness result is not returned as activation success. A second uncached
-exchange must pass under the same tracker, and later public-proof adoption,
-DNS observations and runtime monitoring check that same retained epoch. Every
-link, address, route or rule notification invalidates the epoch permanently,
-including an away-and-back change whose final topology is identical. Startup
-loss, truncated/overflowed notifications, read errors and cancelled observation
-barriers cannot become valid results or reopen the observer.
+The installed service opens its original native event tracker before version
+or configuration-check children and initial TUN inspection. It begins the
+transition before creating the engine. That exact child returns its actual
+successful-call routing ledger through the authenticated channel. The service
+checks the original child, capture, sources and TUN policy, then records and
+ends the transition on the same tracker before DNS and public proof. A matching
+TUN name or final topology cannot manufacture a startup receipt.
 
-The tracker includes the current TUN in its observed inventory and grants no
-interface-name or synthetic-receipt exemptions. Its lifetime is independent of
-the request that armed it. Original Stop closes and joins that exact observer
-before engine teardown; a failed native close retains the original engine and
-cleanup retry. This post-readiness boundary does not prove event continuity
-between initial preparation and the first readiness exchange.
+Original child/listener readiness and a second uncached selected-DNS exchange
+must pass under that retained tracker before activation. Later public proof,
+DNS observations and monitoring retain the same epoch. Unexpected link,
+address, route or rule changes invalidate it permanently, including an
+away-and-back change. Lost or truncated events, errors and cancelled barriers
+cannot reopen the observer. The explicit uninstalled stock path retains its
+separate post-readiness observer behavior.
+
+The tracker grants no interface-name or synthetic-receipt exemptions. Its
+lifetime is independent of the request that armed it. Original Stop closes and
+joins the exact observer before engine teardown; failed cleanup retains its
+original owner for retry. If controller request preparation fails and cleanup
+cannot finish, a separate registry retains that exact unstarted private capture.
+The existing Stop budget drains it before active runtime/protection cleanup;
+an adopted or replacement owner cannot be put through this private cleanup.
+The controller's earlier pre-RPC event continuity remains separate work.
 
 ## Explicit Off and owner composition
 
@@ -101,9 +119,14 @@ creator. Partial native boot failures keep the service alive without READY.
 ## Validation and remaining requirements
 
 The required Linux packaging runner inventories every service source and exact
-test verdict. Privileged namespace cases exercise actual installed images,
-named sockets, peer pidfds, nft creation/readback, original service retirement,
-and boot Always to explicit UI Off followed by idle upgrade. An unexpected
+test verdict. It runs after the actual verified native bundle is staged and
+before provenance/archive publication. All eighteen app-generated combinations
+of the six stock protocols and three device policies must parse in the actual
+built engine. Privileged namespace cases exercise actual installed images,
+the generated engine and native TUN, a real private SOCKS/DNS peer, named
+sockets, peer pidfds, nft creation/readback, original service retirement,
+and boot Always to explicit UI Off followed by idle upgrade. Public-Internet
+proof remains an explicit fixture model. An unexpected
 actual engine exit must retain the original On-connect creator and saved inode
 until authenticated explicit Stop, followed by proved-idle upgrade. Separate native
 scope cases reject foreign standard/shared tables while preserving the
@@ -125,13 +148,15 @@ unit's refusals:
   handoff. This unit completes the proved-idle/Off upgrade path.
 - Same-boot service crash continuation for orphaned protection. A replacement
   service cannot recover the lost original creator from metadata.
-- Native event continuity from initial preparation through engine startup and
-  owned MTU/interface transitions. The post-readiness epoch now rejects ABA,
-  but cannot exempt startup/teardown effects without an original engine-issued
-  routing receipt. The stock executable does not emit the existing generated
-  native TUN ledger; adding that authenticated original-child receipt to its
-  pinned build is the next required boundary. A readback snapshot or matching
-  TUN name must not manufacture it.
+- Controller-side event continuity from initial private preparation through the
+  Start RPC, and active owned MTU/interface transitions. The installed service's
+  authenticated original-child startup ledger is now implemented; this does
+  not establish those separate controller and MTU boundaries.
+- Exact successful-call route/rule retirement through native startup, reset,
+  error unwind and Close. The pinned Linux implementation still has priority
+  range cleanup; an original TUN index alone does not authorize deleting a
+  foreign rule in that range. Native cleanup failure must also remain visible
+  through the service's original Stop path.
 
 These boundaries remain truthful errors or retained pending states; they must
 not be represented as successful Off, connected readiness or completed handoff.
