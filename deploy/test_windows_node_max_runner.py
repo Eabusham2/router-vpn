@@ -27,6 +27,120 @@ def failure(parent, case, witness):
     return witness + '\n--- FAIL: ' + parent + ' (0.01s)\n    --- FAIL: ' + parent + '/' + case + ' (0.01s)\nFAIL\n'
 
 
+EXCHANGE_DIAGNOSTIC_HARNESS = r'''package routervpnamnezia
+import("bytes";"context";"errors";"fmt";"io";"net";"strings";"syscall";"testing";"time")
+var _,_,_ = fmt.Sprintf, syscall.Errno(0), io.EOF
+var M = struct{ParseSocksaddr func(string)string}{func(s string)string{return s}}
+type desktopNodePeerFixture struct{box *diagBox}
+type diagBox struct{manager *diagManager}
+func(b *diagBox)Outbound()*diagManager{return b.manager}
+type diagManager struct{outbound *diagOutbound;found bool}
+func(m *diagManager)Outbound(string)(*diagOutbound,bool){return m.outbound,m.found}
+type diagOutbound struct{dial func(context.Context)(net.Conn,error)}
+func(d *diagOutbound)DialContext(ctx context.Context,network,destination string)(net.Conn,error){return d.dial(ctx)}
+type diagConn struct{writeErr,readErr error;reply []byte;closed bool;deadline bool;different bool}
+func(c *diagConn)Write(p []byte)(int,error){if c.writeErr!=nil{return 0,c.writeErr};c.reply=append([]byte(nil),p...);if c.different{c.reply[0]^=1};return len(p),nil}
+func(c *diagConn)Read(p []byte)(int,error){if c.readErr!=nil{return 0,c.readErr};return copy(p,c.reply),nil}
+func(c *diagConn)Close()error{c.closed=true;return nil}
+func(c *diagConn)LocalAddr()net.Addr{return &net.TCPAddr{}}
+func(c *diagConn)RemoteAddr()net.Addr{return &net.TCPAddr{}}
+func(c *diagConn)SetDeadline(time.Time)error{c.deadline=true;return nil}
+func(c *diagConn)SetReadDeadline(time.Time)error{return nil}
+func(c *diagConn)SetWriteDeadline(time.Time)error{return nil}
+func fixture(c *diagConn,err error)*desktopNodePeerFixture{return &desktopNodePeerFixture{&diagBox{&diagManager{&diagOutbound{func(ctx context.Context)(net.Conn,error){if _,ok:=ctx.Deadline();!ok{panic("lost original request deadline")};return c,err}},true}}}}
+func TestShippingExchangeDiagnosticStages(t *testing.T){
+ secret:=errors.New("password=private-secret config=private-configuration private_key=private-material")
+ for _,phase:=range []string{"dial","write","read"}{t.Run(phase,func(t *testing.T){
+  conn:=&diagConn{};var dialErr error
+  switch phase{case "dial":dialErr=secret;case "write":conn.writeErr=secret;case "read":conn.readErr=secret}
+  err:=fixture(conn,dialErr).exchange("tcp")
+  if err==nil||!strings.Contains(err.Error(),"phase="+phase){t.Fatal("original exchange cause lacks its bounded stage")}
+  if !errors.Is(err,secret){t.Fatal("diagnostic lost original error identity")}
+  for _,value:=range []string{"private-secret","private-configuration","private-material"}{if strings.Contains(err.Error(),value){t.Fatal("diagnostic exposed private input")}}
+  if phase!="dial"&&(!conn.closed||!conn.deadline){t.Fatal("diagnostic bypassed original deadline or cleanup")}
+ })}
+}
+func TestShippingExchangeDiagnosticCauseClassification(t *testing.T){
+ for _,tc:=range []struct{cause error;want string}{{context.DeadlineExceeded,"deadline=true"},{context.Canceled,"canceled=true"},{io.EOF,"eof=true"},{&net.OpError{Op:"private-operation",Net:"private-network",Err:syscall.Errno(10022)},"native_errno=10022"}}{
+  err:=fixture(&diagConn{},fmt.Errorf("password=private-secret: %w",tc.cause)).exchange("tcp")
+  if err==nil||!strings.Contains(err.Error(),tc.want)||!errors.Is(err,tc.cause){t.Fatal("diagnostic lost original typed cause",tc.want)}
+  if strings.Contains(err.Error(),"private-"){t.Fatal("typed cause leaked raw provider text")}
+ }
+}
+func TestShippingExchangeDiagnosticSuccessAndPayload(t *testing.T){
+ conn:=&diagConn{};if err:=fixture(conn,nil).exchange("tcp");err!=nil||!conn.closed||!conn.deadline{t.Fatal("diagnostics changed successful exchange lifecycle")}
+ conn=&diagConn{different:true};err:=fixture(conn,nil).exchange("tcp");if err==nil||!strings.Contains(err.Error(),"phase=payload")||!conn.closed{t.Fatal("payload mismatch lost its stage or close")}
+}
+'''
+
+
+class NativeFailureDiagnostics(unittest.TestCase):
+    def test_long_native_failure_retains_early_cause_and_late_stack_with_byte_bound(self):
+        output = 'EARLY_ORIGINAL_TEST_FAILURE\n' + ('middle goroutine evidence Ω\n' * 3000) + 'LATE_NATIVE_STACK\n'
+        self.assertNotIn('EARLY_ORIGINAL_TEST_FAILURE', output[-16384:])
+        actual = GATE.bounded_failure_output(output)
+        self.assertIn('EARLY_ORIGINAL_TEST_FAILURE', actual)
+        self.assertIn('LATE_NATIVE_STACK', actual)
+        self.assertIn('[middle native diagnostic omitted]', actual)
+        self.assertLessEqual(len(actual.encode('utf-8')), 16384)
+        self.assertEqual(GATE.bounded_failure_output('short native error\n'), 'short native error\n')
+
+    def test_native_diagnostics_remove_private_records_before_truncation(self):
+        secrets = ('proxy-password-value', 'private-key-value', 'private-config-value', 'private-token-value', 'pem-private-value', 'url-password-value')
+        output = ('EARLY_FAILURE\npassword=' + secrets[0] + '\nprivate_key=' + secrets[1] +
+                  '\nProtocolFiles: ' + secrets[2] + '\n{"token":"' + secrets[3] + '"}\n' +
+                  '-----BEGIN PRIVATE KEY-----\n' + secrets[4] + '\n-----END PRIVATE KEY-----\n' +
+                  'dial https://user:' + secrets[5] + '@peer.invalid:443\n' + 'stack\n'*5000 + 'LATE_STACK\n')
+        for limit in (128, 16384, 65536):
+            actual = GATE.bounded_failure_output(output, limit)
+            for secret in secrets:
+                self.assertNotIn(secret, actual)
+            self.assertIn('EARLY_FAILURE', actual)
+            self.assertIn('LATE_STACK', actual)
+            self.assertLessEqual(len(actual.encode()), limit)
+
+    def test_diagnostic_formatting_never_changes_negative_verdict_or_deadline(self):
+        parent, case, witness = 'TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor', 'max-tls-wg', 'foreign MAX predecessor reached actual native encrypted startup'
+        raw = failure(parent, case, witness)
+        GATE.rejected_output(1, raw, parent, case, witness)
+        for invalid in (raw.replace('FAIL\n', ''), raw + '\npanic: test timed out after 90s\n', raw + '\nDATA RACE\n'):
+            GATE.bounded_failure_output(invalid)
+            with self.assertRaises(ValueError):
+                GATE.rejected_output(1, invalid, parent, case, witness)
+        source = (ROOT / 'deploy/test_windows_node_max.py').read_text()
+        self.assertIn("'-test.timeout=90s'", source)
+        self.assertIn('timeout=105)', source)
+        self.assertIn("bounded_failure_output(output)) from error", source)
+
+    def test_exact_shipping_exchange_retains_safe_typed_cause_and_owned_cleanup(self):
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'The shipping exchange diagnostic regression requires Go')
+        template = (ROOT / 'mobile/desktop/node_peer_test.go.tmpl').read_text()
+        start = template.index('// desktopNodeExchangeDiagnostics')
+        end = template.index('func TestRouterVPNDesktopNodeEncryptedPreReadyHandshake(', start)
+        helper = template[start:end]
+        self.assertIn('return f.exchangeWithin(2*time.Second, 2*time.Second, network, hosts...)', helper)
+        consumer = (ROOT / 'mobile/desktop/node_layer_peer_windows_test.go.tmpl').read_text()
+        consumer = consumer[consumer.index('func desktopNodeWFPLayerWrongCredential('):]
+        self.assertIn('exchangeErr := f.exchange(network)', consumer)
+        self.assertIn('t.Log("rejected encrypted exchange", exchangeErr', consumer)
+        self.assertNotIn('native path", observed)', consumer)
+        for original in ('observed.RawTCP == 0', 'observed.ProtocolTCP != 0', 'observed.ProtocolUDP != 0',
+                         'fault != "aes-key" && observed.ProtocolRawTCP == 0', 'f.network.Current()'):
+            self.assertIn(original, consumer)
+        with tempfile.TemporaryDirectory(prefix='shipping-exchange-diagnostics-') as temporary:
+            path = Path(temporary) / 'exchange_test.go'
+            path.write_text(EXCHANGE_DIAGNOSTIC_HARNESS + '\n' + helper)
+            env = dict(os.environ, GOTOOLCHAIN='local')
+            result = subprocess.run([go, 'test', '-count=1', '-timeout=15s', '-v', str(path)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for case in ('Stages', 'CauseClassification', 'SuccessAndPayload'):
+            self.assertIn('--- PASS: TestShippingExchangeDiagnostic' + case + ' (', result.stdout)
+        self.assertNotIn('--- SKIP:', result.stdout)
+        self.assertNotIn('private-secret', result.stdout)
+
+
 class MAXObservationCompilation(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='max-observation-driver-')

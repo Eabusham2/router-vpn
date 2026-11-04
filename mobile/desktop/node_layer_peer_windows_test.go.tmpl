@@ -247,16 +247,23 @@ func desktopNodeWFPLayerWrongCredential(t *testing.T, mode, layer, fault string)
 	if desktopNodeXrayMode(mode) || desktopNodeNaiveMode(mode) {
 		network = "tcp"
 	}
-	if err := f.exchange(network); err == nil {
+	started := time.Now()
+	exchangeErr := f.exchange(network)
+	if exchangeErr == nil {
 		t.Fatal("wrong captured layer or protocol credential delivered an actual WFP encrypted payload")
 	}
+	// Keep the original typed cause before any secondary peer observation fails.
+	// Its Error method intentionally excludes provider text and private inputs.
+	t.Log("rejected encrypted exchange", exchangeErr, "elapsed", time.Since(started))
 	observed := peer.observe(t, "stats")
 	tcpOuter := desktopNodeXrayMode(mode) || mode == "naive-h2"
 	if !tcpOuter && observed.RawUDP == 0 || mode == "shadowsocks" && observed.PlainUDP != 0 || f.network.Current() ||
 		mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0) ||
 		tcpOuter && (observed.RawTCP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || fault != "aes-key" && observed.ProtocolRawTCP == 0) ||
 		mode == "naive-h3" && (observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || fault != "aes-key" && observed.ProtocolRawUDP == 0) {
-		t.Fatal("wrong layered credential missed its actual encrypted native path", observed)
+		t.Fatalf("wrong layered credential missed its actual encrypted native path: outer_tcp=%d outer_udp=%d plain_udp=%d protocol_raw_tcp=%d protocol_raw_udp=%d protocol_tcp=%d protocol_udp=%d application_current=%t",
+			observed.RawTCP, observed.RawUDP, observed.PlainUDP, observed.ProtocolRawTCP, observed.ProtocolRawUDP,
+			observed.ProtocolTCP, observed.ProtocolUDP, f.network.Current())
 	}
 	retained = desktopNodeWFPDrain(t, f)
 	desktopNodeWFPLayerBlocked(t, peer)

@@ -542,6 +542,27 @@ def overlay_source_hashes(source, overlay_path):
     return records
 
 
+def bounded_failure_output(output, limit=16384):
+    """Keep initial failure and terminal stacks; never use this as verdict input."""
+    if not isinstance(output, str) or not isinstance(limit, int) or limit < 128:
+        raise ValueError('Invalid bounded native diagnostic')
+    # Redact complete sensitive records before slicing; a long configuration or
+    # a wrapped private PEM must not expose a suffix after a truncation boundary.
+    output = re.sub(r'-----BEGIN[^\n]*PRIVATE KEY-----.*?-----END[^\n]*PRIVATE KEY-----',
+                    '[private key omitted]', output, flags=re.DOTALL)
+    sensitive = re.compile(r'password|private[_ -]?key|api[_ -]?token|authorization|protocol[_ ]?files|sing-box\.json|cert\.pem|["\'](?:config|secret|token)["\']\s*[:=]', re.IGNORECASE)
+    output = ''.join('[private native diagnostic record omitted]\n' if sensitive.search(line) else
+                     re.sub(r'([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s@]+@', r'\1[credentials omitted]@', line)
+                     for line in output.splitlines(keepends=True))
+    raw = output.encode('utf-8')
+    if len(raw) <= limit:
+        return output
+    marker = b'\n... [middle native diagnostic omitted] ...\n'
+    head = (limit - len(marker)) // 2
+    tail = limit - len(marker) - head
+    return raw[:head].decode('utf-8', errors='ignore') + marker.decode() + raw[-tail:].decode('utf-8', errors='ignore')
+
+
 def rejected_output(status, output, parent, case, witness):
     output = output.replace('\r\n', '\n')
     if INVALID_ORDINARY in output:
@@ -705,7 +726,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 try:
                     rejected_output(status, output, parent, case, witness)
                 except ValueError as error:
-                    raise ValueError(str(error) + ': ' + name + '\n' + output[-16384:]) from error
+                    raise ValueError(str(error) + ': ' + name + '\n' + bounded_failure_output(output)) from error
                 if MAX.regular_digest(negative) != negative_digest:
                     raise ValueError('Windows MAX control executable changed')
                 if overlay_source_hashes(source, negative.parent / 'overlay.json') != compiled_overlays[name]:

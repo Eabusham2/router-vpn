@@ -641,6 +641,30 @@ func newDesktopNodePeerFixtureWithReference(t *testing.T, mode string, wrongKey,
 	return f
 }
 
+// desktopNodeExchangeDiagnostics retain the original cause without logging
+// provider error text, which may contain proxy credentials or private config.
+type desktopNodeExchangeFailure struct {
+	phase string
+	cause error
+}
+
+func (e *desktopNodeExchangeFailure) Error() string {
+	phase := e.phase
+	switch phase {
+	case "outbound", "destination", "dial", "write", "read", "payload":
+	default:
+		phase = "unknown"
+	}
+	var network net.Error
+	var errno syscall.Errno
+	_ = errors.As(e.cause, &errno)
+	return fmt.Sprintf("node exchange phase=%s cause_type=%T deadline=%t canceled=%t timeout=%t eof=%t native_errno=%d",
+		phase, e.cause, errors.Is(e.cause, context.DeadlineExceeded), errors.Is(e.cause, context.Canceled),
+		errors.As(e.cause, &network) && network.Timeout(), errors.Is(e.cause, io.EOF), uint64(errno))
+}
+
+func (e *desktopNodeExchangeFailure) Unwrap() error { return e.cause }
+
 func (f *desktopNodePeerFixture) exchange(network string, hosts ...string) error {
 	return f.exchangeWithin(2*time.Second, 2*time.Second, network, hosts...)
 }
@@ -648,7 +672,7 @@ func (f *desktopNodePeerFixture) exchange(network string, hosts ...string) error
 func (f *desktopNodePeerFixture) exchangeWithin(contextTimeout, ioTimeout time.Duration, network string, hosts ...string) error {
 	outer, found := f.box.Outbound().Outbound("proxy")
 	if !found {
-		return errors.New("actual encrypted endpoint is missing")
+		return &desktopNodeExchangeFailure{"outbound", errors.New("actual encrypted endpoint is missing")}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), contextTimeout)
 	defer cancel()
@@ -656,24 +680,24 @@ func (f *desktopNodePeerFixture) exchangeWithin(contextTimeout, ioTimeout time.D
 	if len(hosts) == 1 {
 		host = hosts[0]
 	} else if len(hosts) != 0 {
-		return errors.New("unexpected peer destination count")
+		return &desktopNodeExchangeFailure{"destination", errors.New("unexpected peer destination count")}
 	}
 	connection, err := outer.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
 	if err != nil {
-		return err
+		return &desktopNodeExchangeFailure{"dial", err}
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(ioTimeout))
 	message := bytes.Repeat([]byte("retained-native-node-"), 32)
 	if _, err = connection.Write(message); err != nil {
-		return err
+		return &desktopNodeExchangeFailure{"write", err}
 	}
 	response := make([]byte, len(message))
 	if _, err = io.ReadFull(connection, response); err != nil {
-		return err
+		return &desktopNodeExchangeFailure{"read", err}
 	}
 	if !bytes.Equal(message, response) {
-		return errors.New("encrypted peer returned different payload")
+		return &desktopNodeExchangeFailure{"payload", errors.New("encrypted peer returned different payload")}
 	}
 	return nil
 }
