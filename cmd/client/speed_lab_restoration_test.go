@@ -367,6 +367,9 @@ func TestSpeedLabCapturedExternalRestoreRetainsWinnerAndRenewsLeaseKeys(t *testi
 	for _, chosen := range []string{"local", "server"} {
 		t.Run(chosen, func(t *testing.T) {
 			saved := &speedLabExternalRestore{source: append([]byte(nil), initial.external.source...), profile: cloneRouterProfile(initial.external.profile), entry: cloneRouterProfile(entry), execution: chosen, root: t.TempDir(), network: "captured-network"}
+			if err := captureSpeedLabExternalRestoreSeal(saved, initial.external); err != nil {
+				t.Fatal(err)
+			}
 			restored, err := compileSpeedLabExternalRestore(saved, exit)
 			if err != nil {
 				t.Fatal(err)
@@ -393,6 +396,9 @@ func TestSpeedLabCapturedExternalRestoreRetainsWinnerAndRenewsLeaseKeys(t *testi
 	for _, changed := range []string{"missing-proof", "explicit-choice", "other-exit", "malformed-source"} {
 		t.Run(changed, func(t *testing.T) {
 			saved := &speedLabExternalRestore{source: append([]byte(nil), initial.external.source...), profile: cloneRouterProfile(initial.external.profile), entry: cloneRouterProfile(entry), execution: "server"}
+			if err := captureSpeedLabExternalRestoreSeal(saved, initial.external); err != nil {
+				t.Fatal(err)
+			}
 			switch changed {
 			case "missing-proof":
 				saved.execution = "auto"
@@ -437,6 +443,9 @@ func TestSpeedLabLocalExternalRestoreDoesNotInventRelayCredentials(t *testing.T)
 				t.Fatal(err)
 			}
 			saved := &speedLabExternalRestore{source: append([]byte(nil), original.external.source...), profile: cloneRouterProfile(original.external.profile), direct: true, execution: "local", network: "original-network"}
+			if err := captureSpeedLabExternalRestoreSeal(saved, original.external); err != nil {
+				t.Fatal(err)
+			}
 			restored, err := compileSpeedLabExternalRestore(saved, exit)
 			if err != nil {
 				t.Fatal(err)

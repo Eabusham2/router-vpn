@@ -197,6 +197,9 @@ func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol strin
 			t.Fatal(err)
 		}
 		saved := &speedLabExternalRestore{source: append([]byte(nil), initial.external.source...), profile: cloneRouterProfile(initial.external.profile), entry: cloneRouterProfile(initial.external.entry), direct: false, execution: "local", root: "captured-root", network: "captured-physical-network", mtu: 1360}
+		if err := captureSpeedLabExternalRestoreSeal(saved, initial.external); err != nil {
+			t.Fatal(err)
+		}
 		restored, err := compileSpeedLabExternalRestore(saved, exit)
 		if err != nil {
 			t.Fatal(err)

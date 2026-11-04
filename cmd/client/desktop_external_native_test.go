@@ -198,6 +198,9 @@ func TestDesktopExternalFullRouterPredecessorAndRestoredChoice(t *testing.T) {
 							chosen = "server"
 						}
 						saved := &speedLabExternalRestore{source: original.external.source, predecessor: original.external.predecessor, profile: original.external.profile, entry: original.external.entry, execution: chosen, network: "captured-network"}
+						if err := captureSpeedLabExternalRestoreSeal(saved, original.external); err != nil {
+							t.Fatal(err)
+						}
 						restored, err := compileSpeedLabExternalRestore(saved, exit)
 						if err != nil {
 							t.Fatal(err)

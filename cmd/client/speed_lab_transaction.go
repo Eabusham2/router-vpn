@@ -198,6 +198,7 @@ func (a *app) restoreSpeedLabTorMTU(plan speedLabRestorePlan) error {
 }
 
 type speedLabExternalRestore struct {
+	seal        *speedLabExternalRestoreSeal
 	windowsHost *desktopWindowsExternalHost
 	mtu         int
 	source      []byte
@@ -331,7 +332,7 @@ func clearSpeedLabRestorePlan(plan speedLabRestorePlan) {
 }
 
 func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standardExit) (*desktopNodeLaunch, error) {
-	if saved == nil || saved.execution != "local" && saved.execution != "server" || saved.profile.ID != exit.ID || saved.profile.External == nil || saved.profile.External.Protocol != exit.Protocol {
+	if saved == nil || saved.seal == nil || saved.seal.current(saved) != nil || saved.execution != "local" && saved.execution != "server" || saved.profile.ID != exit.ID || saved.profile.External == nil || saved.profile.External.Protocol != exit.Protocol {
 		return nil, errors.New("previous external connection has no exact proved restore selection")
 	}
 	var err error
@@ -358,6 +359,12 @@ func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standar
 	launch, err := compileDesktopExternalGraphWithPredecessor(graph, saved.profile, saved.entry, exit, saved.direct, retained, saved.predecessor)
 	if err != nil {
 		return nil, err
+	}
+	// Local capture has no per-session relay lease in its compiled graph.
+	// Server/Compare intentionally renews those credentials from the sealed
+	// source while retaining the already proved execution selection.
+	if (saved.profile.MultihopExecution == "" || saved.profile.MultihopExecution == "local") && launch.external.expected.ConfigSHA256 != saved.seal.configSHA256 {
+		return nil, errors.New("restored external configuration differs from its original proved configuration")
 	}
 	launch.root, launch.external.network, launch.external.selection = saved.root, saved.network, saved.execution
 	if saved.windowsHost != nil {
@@ -566,7 +573,11 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 				captured := launch.external
 				captured.mu.Lock()
 				plan.external = &speedLabExternalRestore{source: append([]byte(nil), captured.source...), predecessor: captured.predecessor, profile: cloneRouterProfile(captured.profile), entry: cloneRouterProfile(captured.entry), direct: captured.direct, execution: proof.Execution, root: launch.root, network: captured.network, windowsHost: captured.windowsHost}
+				err = captureSpeedLabExternalRestoreSeal(plan.external, captured)
 				captured.mu.Unlock()
+				if err != nil {
+					return plan, err
+				}
 				plan.external.mtu, err = captureDesktopMTURestore(launch)
 				if err != nil {
 					return plan, err

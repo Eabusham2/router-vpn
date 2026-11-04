@@ -670,7 +670,11 @@ func TestDesktopOpenVPNRetainsPairedExecutionAndRestoredWinner(t *testing.T) {
 				if execution != "local" {
 					chosen = "server"
 				}
-				restored, err := compileSpeedLabExternalRestore(&speedLabExternalRestore{source: launch.external.source, predecessor: launch.external.predecessor, profile: launch.external.profile, entry: launch.external.entry, execution: chosen, network: "captured-network"}, exit)
+				saved := &speedLabExternalRestore{source: launch.external.source, predecessor: launch.external.predecessor, profile: launch.external.profile, entry: launch.external.entry, execution: chosen, network: "captured-network"}
+				if err := captureSpeedLabExternalRestoreSeal(saved, launch.external); err != nil {
+					t.Fatal(err)
+				}
+				restored, err := compileSpeedLabExternalRestore(saved, exit)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -732,6 +736,9 @@ func TestDesktopOpenVPNMappedLayersRestoreCapturedPathAndWinner(t *testing.T) {
 						}
 						for _, winner := range chosen {
 							saved := &speedLabExternalRestore{source: append([]byte(nil), original.external.source...), predecessor: original.external.predecessor, profile: cloneRouterProfile(original.external.profile), entry: cloneRouterProfile(original.external.entry), execution: winner, network: "captured-network", mtu: 1340}
+							if err := captureSpeedLabExternalRestoreSeal(saved, original.external); err != nil {
+								t.Fatal(err)
+							}
 							restored, err := compileSpeedLabExternalRestore(saved, exit)
 							if err != nil {
 								t.Fatal(err)
