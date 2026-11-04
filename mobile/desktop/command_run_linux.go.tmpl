@@ -215,8 +215,8 @@ func routerVPNRunLinuxCommand() error {
 }
 
 // Source-empty legacy Node commands have no authenticated parent mailbox.
-// Their initial shutdown still has the established 15s bound; a failed attempt
-// retains the original native graph until an actual signal requests retry.
+// Their initial shutdown retries settled partial cleanup within its established
+// 15s bound; expiry retains the original graph until an actual signal retries.
 func routerVPNRetireLegacyNode(native *routerVPNExternalNative) error {
 	if native == nil {
 		return E.New("legacy Node cleanup lost its original native owner")
@@ -224,6 +224,8 @@ func routerVPNRetireLegacyNode(native *routerVPNExternalNative) error {
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(signals)
-	_, err := routerVPNRetireOriginalCommand(signals, os.Interrupt, 15*time.Second, native.CloseContext, routerVPNCommandCleanupIncomplete)
+	_, err := routerVPNRetireOriginalCommand(signals, os.Interrupt, 15*time.Second, func(ctx context.Context) error {
+		return routerVPNRetireLegacyAttempt(ctx, native.CloseContext)
+	}, routerVPNCommandCleanupIncomplete)
 	return err
 }

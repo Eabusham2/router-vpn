@@ -125,6 +125,14 @@ func TestRouterVPNTunTransactionPreservesFailedConstructionAndRetry(t *testing.T
 	if len(m.routervpnMTUPending) != 0 || len(m.routervpnRetired) != 0 || original.closed != 0 || transaction.Evidence()[1].Retirement != "retired:partial-constructor" {
 		t.Fatal("retry did not settle only original partial adapter")
 	}
+	original.retireFailure = true
+	if err := m.RouterVPNCloseNativeTunContext(ctx); err == nil || original.closed != 0 || !original.alive {
+		t.Fatal("native pre-retirement skipped or discarded its original failed reader", err)
+	}
+	original.retireFailure = false
+	if err := m.RouterVPNCloseNativeTunContext(ctx); err != nil || original.closed != 1 || !original.retired {
+		t.Fatal("native pre-retirement did not settle its original reader", err, original.closed)
+	}
 }
 func TestRouterVPNTunTransactionBoundsHistoryBeforeAcquisition(t *testing.T) {
 	ctx, m, original, makeReader := mtuEvidenceFixture(t)

@@ -141,4 +141,12 @@ func TestRouterVPNTunBorrowedPlatformKeepsCapturedRollback(t *testing.T) {
 	if current := <-done; current != rollback || !rollback.alive || candidate.alive {
 		t.Fatal("borrowed platform lost its existing captured rollback semantics")
 	}
+	cleanup, cancelCleanup := context.WithTimeout(context.Background(), time.Second)
+	defer cancelCleanup()
+	if err := m.RouterVPNCloseNativeTunContext(cleanup); err != nil || rollback.closed != 0 || !rollback.alive {
+		t.Fatal("native pre-retirement consumed a borrowed or generic reader", err, rollback.closed)
+	}
+	if err := m.Close(); err != nil || rollback.closed != 1 || rollback.alive {
+		t.Fatal("ordinary manager did not close its exact borrowed reader once", err, rollback.closed)
+	}
 }

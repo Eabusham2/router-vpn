@@ -18,6 +18,9 @@ SPEC = importlib.util.spec_from_file_location('command_retirement_projection', R
 PROJECTION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PROJECTION)
 CASES = (
+    'TestRouterVPNCommandRetirementLegacyAttemptKeepsOriginalBudget',
+    *('TestRouterVPNCommandRetirementLegacyAttemptKeepsOriginalBudget/'+name for name in (
+        'settled-retry', 'cancelled-owner', 'unbounded-owner', 'expired-owner')),
     'TestRouterVPNCommandRetirementRejectsUnboundedAndCancelledRequests',
     'TestRouterVPNCommandRetirementJoinsOriginalLateCallback',
     'TestRouterVPNCommandRetirementRejectsSuccessAfterCancellation',

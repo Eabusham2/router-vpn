@@ -9,7 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 MANAGER = 'adapter/inbound/manager.go'
 # Exact previous published preparation, accepted only for this bounded upgrade.
-PREVIOUS_TEMPLATES = {'routervpn_mtu.go': '79603bccd07497e8d01cc99b87e61bce7b45c3c0f9c89c1725c697e0f4878669', 'routervpn_mtu_test.go': '67979009bbb57a8c6e4287dd0a502f35745878f7c86e3216a7585356d91f8be3'}
+PREVIOUS_TEMPLATES = {
+    'routervpn_mtu_native_linux_test.go': ('c357330566e837ebab6e084db5072f21c896d5c08248163d31ec226d2711c7c7',),
+    'routervpn_mtu.go': (
+        '79603bccd07497e8d01cc99b87e61bce7b45c3c0f9c89c1725c697e0f4878669',
+        '7241c2a70cc00f8ff8eeeaf4ad2f95312fb19fd4cede8512a4b9e4ff09762830',
+    ),
+    'routervpn_mtu_test.go': (
+        '67979009bbb57a8c6e4287dd0a502f35745878f7c86e3216a7585356d91f8be3',
+        'c2cbfd26a5cb5b150beb43f5ffc65852c31ee543284aa60860d7e4deb1f5d405',
+    ),
+}
 
 
 def patch_manager(source):
@@ -102,7 +112,7 @@ def prepare(vendor):
     for target, content in outputs.items():
         if target.is_symlink() or not target.parent.resolve().is_relative_to(vendor):
             raise ValueError('Unsafe native source destination.')
-        if target != manager and target.exists() and target.read_text() != content and hashlib.sha256(target.read_bytes()).hexdigest() != PREVIOUS_TEMPLATES.get(target.name):
+        if target != manager and target.exists() and target.read_text() != content and hashlib.sha256(target.read_bytes()).hexdigest() not in PREVIOUS_TEMPLATES.get(target.name, ()):
             raise ValueError('Refusing to replace an unrelated native extension.')
     # Extension receipts compare canonical bytes on every host. Windows text
     # writes would otherwise translate these exact LF templates to CRLF.

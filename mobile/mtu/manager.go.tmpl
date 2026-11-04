@@ -316,7 +316,10 @@ func (m *Manager) RouterVPNRetryTunTransaction(ctx context.Context, t *RouterVPN
 }
 
 // Only original manager-held instances are visited, including failed MTU
-// readers retained for retry. This never resolves an interface or tag by name.
+// readers retained for retry. Only directly owned native Linux readers need
+// this pre-dependency retirement. Generic and borrowed readers remain owned by
+// the ordinary manager Close stage, which must visit them exactly once.
+// This never resolves an interface or tag by name.
 func (m *Manager) RouterVPNCloseNativeTunContext(ctx context.Context) error {
 	m.routervpnLifecycle.Lock()
 	defer m.routervpnLifecycle.Unlock()
@@ -324,7 +327,7 @@ func (m *Manager) RouterVPNCloseNativeTunContext(ctx context.Context) error {
 	originals := append(append([]adapter.Inbound(nil), m.inbounds...), m.routervpnRetired...)
 	m.access.Unlock()
 	for _, original := range originals {
-		if original.Type() == "tun" {
+		if original.Type() == "tun" && routervpnBoundedMTU(original) {
 			if err := routervpnCloseTunContext(ctx, original); err != nil {
 				return err
 			}

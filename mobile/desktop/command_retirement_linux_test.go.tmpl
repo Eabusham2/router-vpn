@@ -158,3 +158,56 @@ func TestRouterVPNCommandRetirementInvalidRequestCannotEnterOwner(t *testing.T) 
 		t.Fatal("invalid cleanup request reached native owner")
 	}
 }
+
+func TestRouterVPNCommandRetirementLegacyAttemptKeepsOriginalBudget(t *testing.T) {
+	t.Run("settled-retry", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		deadline, _ := ctx.Deadline()
+		calls := 0
+		err := routerVPNRetireLegacyAttempt(ctx, func(actual context.Context) error {
+			calls++
+			bound, ok := actual.Deadline()
+			if actual != ctx || !ok || bound != deadline {
+				t.Fatal("settled native retry renewed or replaced its original request")
+			}
+			if calls < 3 {
+				return errors.New("original partial manager retains cleanup")
+			}
+			return nil
+		})
+		if err != nil || calls != 3 {
+			t.Fatal("settled original cleanup was not retried", err, calls)
+		}
+	})
+	t.Run("cancelled-owner", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		calls := 0
+		err := routerVPNRetireLegacyAttempt(ctx, func(actual context.Context) error {
+			calls++
+			if actual != ctx {
+				t.Fatal("cleanup replaced its original context")
+			}
+			cancel()
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatal("cancelled original cleanup accepted success or a renewed callback", err, calls)
+		}
+	})
+	t.Run("unbounded-owner", func(t *testing.T) {
+		called := false
+		if err := routerVPNRetireLegacyAttempt(context.Background(), func(context.Context) error { called = true; return nil }); err == nil || called {
+			t.Fatal("unbounded legacy cleanup entered a native owner", err, called)
+		}
+	})
+	t.Run("expired-owner", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		called := false
+		if err := routerVPNRetireLegacyAttempt(ctx, func(context.Context) error { called = true; return nil }); !errors.Is(err, context.DeadlineExceeded) || called {
+			t.Fatal("expired legacy cleanup acquired another callback", err, called)
+		}
+	})
+}

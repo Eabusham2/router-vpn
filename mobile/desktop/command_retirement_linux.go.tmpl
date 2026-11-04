@@ -117,3 +117,35 @@ func routerVPNRetireOriginalCommand(signals <-chan os.Signal, first os.Signal, l
 		}
 	}
 }
+
+// A legacy Node's already accepted shutdown may retry settled partial cleanup
+// within that same request. It must neither overlap callbacks nor renew their
+// deadline. Expiry returns to the signal-owned coordinator, which retains the
+// exact owner until another explicit request authorizes an attempt.
+func routerVPNRetireLegacyAttempt(ctx context.Context, retire func(context.Context) error) error {
+	if ctx == nil || retire == nil {
+		return errors.New("legacy Node cleanup lost its original request")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("legacy Node cleanup requires its original deadline")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := retire(ctx)
+		if expired := ctx.Err(); expired != nil {
+			return errors.Join(err, expired)
+		}
+		if err == nil {
+			return nil
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}

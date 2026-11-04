@@ -219,7 +219,41 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Ordinary AWG OpenVPN helper projection accompanying this record
+## Linux retained partial cleanup accompanying this record
+
+The original legacy Node shutdown performed one settled partial-cleanup call
+and then waited for another process signal even though its accepted fifteen-second
+Stop still had time. It now retries settled calls at the existing 100ms cadence
+within that same captured context and deadline. An in-flight callback remains
+joined; expiry returns to the original explicit-signal retry coordinator. No
+new cleanup budget or raw-command retry policy is introduced.
+
+The manager pre-dependency pass now visits only directly owned native Linux
+TUN readers with the existing bounded capability. Previously it also invoked
+generic adapters, which ordinary Box close then visited again. Generic and
+borrowed adapters now remain in their ordinary single-close stage. Failed native
+retirement still retains its exact reader and dependencies for bounded retry.
+Only exact previously published template hashes qualify for preparation upgrade;
+unrelated source bytes remain refused.
+
+Root verified all eight frozen files on current main and all 1,297 composition
+inputs, including the later receipt-context and SS graph changes. All 37 unique
+manager/command race verdicts pass, with package durations 1.029s and 1.845s.
+The coordinator gate passes five preparation checks and all fourteen required
+parent/leaf verdicts under race in 1.249s. Four complete preparation and foreign
+source refusal tests pass in 1.457s. An initial preparation attempt omitted
+Go from PATH and failed before that corrected rerun; its output is retained.
+Three independently verified source controls reject generic double-close,
+skipping original native retirement, and renewing the callback budget.
+
+The full startup cancellation fixture cannot reach its real TUN locally because
+native netlink creation is unavailable here. Existing native stop-file and
+parent-cancellation assertions still require exactly one close and a joined
+stopped acknowledgment. Fresh complete native execution remains required.
+This correction does not complete public service MTU Retest/Cancel or ordinary
+routing-projection caller propagation.
+
+## Ordinary AWG OpenVPN helper projection published at 12e8abc0
 
 The actual Linux AWG job at `c336566d` failed to compile its patched OpenVPN
 client because `routerVPNOpenVPNOriginalTransport` was undefined. Ordinary
@@ -307,6 +341,13 @@ the actual delayed-child case at five seconds. The new mandatory native
 `delayed-original-retirement` case retains a real admitted source before its
 original cleanup; its compilation is verified, but namespace execution remains
 CI work. This is not proof that the complete native Node Stop gate now passes.
+
+Both generated-command/TUN jobs subsequently pass at exact `0829ef23` in
+[run 41829037896](https://github.com/Eabusham2/router-vpn/actions/runs/41829037896):
+AMD64 `126571127552` and ARM64 `126571127673`. Root read both exact-source job
+identities and all six case verdicts, including original-TUN retirement; parent
+durations are 21.14s and 23.97s. The separate delayed installed-service case and
+full native release remain distinct acceptance requirements.
 
 An additional local broad runner attempt reported missing-Go setup and the
 outdated installed-bundle fixture. Its failed result is retained. The separate
