@@ -30,6 +30,15 @@ func linuxProtectionModel(t *testing.T) (*app, *desktopLinuxNodeSession, *deskto
 	parent.gate <- struct{}{}
 	controller.nodeParent = parent
 	a.localController = controller
+	// This fixture models only the retained desktop-parent comparison path.
+	// Its explicit service boundary reports no service-owned creator; it does
+	// not replace the production native absent-service proof.
+	client := &linuxStandardServiceProtectionClient{app: a, controller: controller}
+	client.exchange = func(context.Context, linuxStandardServiceRequest) (*linuxStandardServiceProtectionData, error) {
+		return &linuxStandardServiceProtectionData{AbsenceProved: true}, nil
+	}
+	linuxStandardServiceProtectionClients.Store(a, client)
+	t.Cleanup(func() { linuxStandardServiceProtectionClients.Delete(a) })
 	captured := &desktopLinuxNodeParentCapture{app: a, controller: controller, parent: parent, lifetime: parent.ctx}
 	session := &desktopLinuxNodeSession{parent: captured, gate: make(chan struct{}, 1)}
 	session.gate <- struct{}{}

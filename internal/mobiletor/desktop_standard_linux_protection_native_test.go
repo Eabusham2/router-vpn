@@ -48,6 +48,9 @@ func TestDesktopLinuxGuardianKernelStandardProtectionCreator(t *testing.T) {
 	if err := ReadDesktopLinuxProtectionAbsence(ctx); err == nil {
 		t.Fatal("standard policy was invisible to global absence")
 	}
+	if err := ReadDesktopLinuxStandardAndLegacyProtectionAbsence(ctx); err == nil {
+		t.Fatal("standard policy was invisible to scoped absence")
+	}
 	receipt, err := old.Receipt(ctx)
 	if err != nil || receipt.CreationGeneration == 0 || receipt.TableHandle == 0 || receipt.NamespaceInode == 0 {
 		t.Fatal("native creation lost handles/generation/namespace", err)
@@ -91,6 +94,34 @@ func TestDesktopLinuxGuardianKernelStandardProtectionCreator(t *testing.T) {
 	}
 	if err := next.Release(ctx, lease); err != nil {
 		t.Fatal("original acknowledged deletion was not idempotent", err)
+	}
+}
+
+func TestDesktopLinuxGuardianKernelStandardScopedAbsence(t *testing.T) {
+	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 {
+		t.Fatal("scoped native absence requires isolated privileged namespace")
+	}
+	ctx := context.Background()
+	for _, name := range []string{"router_vpn_node_scope_fixture", "router_vpn_standard_foreign", desktopLinuxNFTTable} {
+		if _, err := desktopLinuxNFTCommand(ctx, []string{"add", "table", "inet", name}, ""); err != nil {
+			t.Fatal(err)
+		}
+		scoped := ReadDesktopLinuxStandardAndLegacyProtectionAbsence(ctx)
+		full := ReadDesktopLinuxProtectionAbsence(ctx)
+		_, deletion := desktopLinuxNFTCommand(ctx, []string{"delete", "table", "inet", name}, "")
+		if deletion != nil {
+			t.Fatal(deletion)
+		}
+		if name == "router_vpn_node_scope_fixture" {
+			if scoped != nil || full == nil {
+				t.Fatal("scoped observer claimed node-family absence", scoped, full)
+			}
+		} else if scoped == nil || full == nil {
+			t.Fatal("scoped observer hid actual foreign standard/shared table", name, scoped, full)
+		}
+	}
+	if err := ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 func TestDesktopLinuxGuardianKernelStandardReplacementCannotBeDeleted(t *testing.T) {

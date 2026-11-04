@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Install the native Linux application with fixed, root-owned launch authority.
 
-The installed controller shares the adjacent flock for its entire lifetime.
+The installed controller and protection service share the adjacent source
+flock for their entire lifetimes. An authenticated idle service can retire
+before promotion; an owner retaining Always protection cannot be replaced.
 All new files are staged under a private root directory before promotion; an
 old user-owned inode or open write handle cannot modify newly trusted code.
 """
@@ -33,21 +35,27 @@ REQUIRED_FILES = {
     'router-vpn-update', 'router-vpn-app', 'modes.json', 'logical-modes.json',
     'router-vpn.png', 'router-vpn.desktop', 'ROUTER-VPN-SOURCE.json',
 }
-EARLY_NAME = 'router-vpn-killswitch-early.service'
+LEGACY_EARLY_NAME = 'router-vpn-killswitch-early.service'
+EARLY_NAME = 'router-vpn-standard-owner.service'
 NETWORK_UNITS = ('NetworkManager.service', 'systemd-networkd.service',
                  'networking.service', 'connman.service', 'wicked.service')
-EARLY_UNIT = '''# Router VPN owned early protection; no HTTP controller runs at boot.
+UPGRADE_ARGUMENT = '--linux-standard-owner-upgrade'
+SERVICE_ARGUMENT = '--linux-standard-owner-service'
+EARLY_UNIT = '''# Router VPN retained original protection owner; no HTTP controller runs at boot.
 [Unit]
 Description=Router VPN persistent always kill switch
 DefaultDependencies=no
 After=local-fs.target
 Before=network-pre.target
 Wants=network-pre.target
+RefuseManualStop=yes
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOMEVPN_ROOT=/opt/router-vpn-client /usr/bin/python3 -Es /opt/router-vpn-client/modes/kill-switch.py reassert
+Type=notify
+NotifyAccess=main
+Restart=no
+TimeoutStartSec=infinity
+ExecStart=/opt/router-vpn-client/router-vpn-client --linux-standard-owner-service
 
 [Install]
 WantedBy=multi-user.target
@@ -55,8 +63,8 @@ RequiredBy=network-pre.target
 '''
 NETWORK_DROPIN = '''# Router VPN owned: a failed Always reassertion blocks network startup.
 [Unit]
-Requires=router-vpn-killswitch-early.service
-After=router-vpn-killswitch-early.service
+Requires=router-vpn-standard-owner.service
+After=router-vpn-standard-owner.service
 '''
 LAUNCHER = '''#!/bin/sh
 if [ -x /opt/router-vpn-client/router-vpn-update ]; then
@@ -105,6 +113,39 @@ def installation_lock(root: Path):
         yield descriptor
     finally:
         os.close(descriptor)
+
+
+@contextmanager
+def installation_transaction(root: Path):
+    # Source EX cannot remain held while a new service takes its lifetime SH.
+    # Independent transaction/controller locks exclude another installer and
+    # any new GUI controller across promotion, service readiness and rollback.
+    ordinary(root.parent, directory=True, trusted=True)
+    descriptors = []
+    try:
+        for suffix in ('.install.transaction.lock', '.controller.lock'):
+            path = root.with_name(root.name + suffix)
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+            descriptors.append(descriptor)
+            actual, named = os.fstat(descriptor), ordinary(path, trusted=True)
+            if (actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino) or actual.st_mode & 0o077:
+                raise ValueError('The native installation transaction lock is unsafe')
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise RuntimeError('Close Router VPN and wait for its original cleanup or other installation before upgrading.') from error
+        yield
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def reject_retained_protection(root: Path):
+    # A saved table name/handle is never authority to upgrade beneath an old
+    # creator. Existing protection must be released by its live original owner.
+    state = root / 'run' / 'kill-switch.json'
+    if state.exists() or state.is_symlink():
+        raise RuntimeError('Original Router VPN protection is retained; select Off and complete its owned cleanup before upgrading.')
 
 
 def reject_running_previous(root: Path, proc=Path('/proc')):
@@ -239,11 +280,38 @@ class SystemIntegration:
         self.previous = []
         self.was_enabled = False
         self.legacy_enabled = False
+        self.legacy_early_enabled = False
         self.enable_attempted = False
         self.changed = False
 
     def path(self, name):
         return self.filesystem / name.lstrip('/')
+
+    def retire_idle(self, root: Path):
+        service = self.path('/etc/systemd/system/' + EARLY_NAME)
+        if not service.exists() and not service.is_symlink():
+            return
+        ordinary(service, trusted=True)
+        # This identifies which installed protocol to call; it grants no
+        # native cleanup authority. The helper authenticates the actual peer,
+        # checks native absence and observes its original pidfd retirement.
+        if SERVICE_ARGUMENT not in service.read_text():
+            return
+        ordinary(root / 'router-vpn-client', trusted=True)
+        self.run(['/usr/bin/env', '-i', 'PATH=' + SYSTEM_PATH,
+                  root / 'router-vpn-client', UPGRADE_ARGUMENT])
+        return True
+
+    def activate(self, root: Path):
+        # systemd waits for the new original process's READY notification.
+        # The installer runner is bounded; a degraded creator is retained by
+        # the service even if this request times out without READY.
+        self.run(['/usr/bin/systemctl', 'start', EARLY_NAME])
+        # An old oneshot may remain active/exited. Its different unit name
+        # cannot fake this new process's READY; disable only its future boot
+        # activation after the retained owner is ready, without stopping it.
+        if self.legacy_early_enabled:
+            self.run(['/usr/bin/systemctl', 'disable', LEGACY_EARLY_NAME])
 
     def write(self, name, data, mode=0o644):
         target = self.path(name)
@@ -292,6 +360,10 @@ class SystemIntegration:
         if result.returncode not in (0, 1, 3, 4):
             raise RuntimeError('Cannot read the existing early-protection service state')
         self.was_enabled = result.returncode == 0
+        previous_early = self.run(['/usr/bin/systemctl', 'is-enabled', LEGACY_EARLY_NAME], check=False)
+        if previous_early.returncode not in (0, 1, 3, 4):
+            raise RuntimeError('Cannot read the previous early-protection service enablement state')
+        self.legacy_early_enabled = previous_early.returncode == 0
         self.changed = True
         if self.legacy_enabled:
             self.run(['/usr/bin/systemctl', 'disable', 'router-vpn-client.service'])
@@ -307,14 +379,8 @@ class SystemIntegration:
         self.run(['/usr/bin/systemctl', 'daemon-reload'])
         self.enable_attempted = True
         self.run(['/usr/bin/systemctl', 'enable', EARLY_NAME])
-        # Reassert directly without stopping a service required by an already
-        # running network manager. Restarting that dependency can stop normal
-        # networking even when Always is Off. Start activates an inactive unit
-        # and leaves an already-active, successfully reasserted unit running.
-        self.run(['/usr/bin/env', '-i', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin',
-                  'HOMEVPN_ROOT=' + str(root), '/usr/bin/python3', '-Es',
-                  root / 'modes/kill-switch.py', 'reassert'])
-        self.run(['/usr/bin/systemctl', 'start', EARLY_NAME])
+        # Activation occurs only after the source EX lock is released. Never
+        # invoke a second Python reassert owner or stop/restart networking.
 
     def rollback(self):
         if not self.changed:
@@ -338,42 +404,64 @@ def install(source: Path, root=ROOT, *, integration=None, verifier=verify_runtim
     if os.geteuid() != 0:
         raise PermissionError('Run the native installer with sudo.')
     integration = integration if integration is not None else SystemIntegration()
-    with installation_lock(root):
+    with installation_transaction(root):
         prefix = '.' + root.name + '.install-'
         pending = list(root.parent.glob(prefix + '*'))
         if pending:
             raise RuntimeError('An interrupted native installation needs recovery; retained files: ' + ', '.join(map(str, pending)))
-        reject_running_previous(root, proc)
-        temporary = Path(tempfile.mkdtemp(prefix=prefix, dir=root.parent))
-        stage, previous = temporary / 'new', temporary / 'previous'
-        stage.mkdir(mode=0o700)
-        os.chown(stage, 0, 0)
-        promoted = False
+        retired_service = integration.retire_idle(root)
         try:
-            stage_application(source, root, stage)
-            verifier(stage)
-            # An old application cannot acquire the shared launch lock while
-            # staged state is captured. Recheck legacy executables as well.
-            reject_running_previous(root, proc)
-            if root.exists():
-                os.rename(root, previous)
-            os.rename(stage, root)
-            promoted = True
-            root.chmod(0o755)
-            integration.install(root)
-        except BaseException:
-            if promoted:
+            with installation_lock(root):
+                reject_running_previous(root, proc)
+                reject_retained_protection(root)
+                temporary = Path(tempfile.mkdtemp(prefix=prefix, dir=root.parent))
+                stage, previous = temporary / 'new', temporary / 'previous'
+                stage.mkdir(mode=0o700)
+                os.chown(stage, 0, 0)
+                promoted = False
                 try:
-                    integration.rollback()
-                    os.rename(root, stage)
-                    if previous.exists():
+                    stage_application(source, root, stage)
+                    verifier(stage)
+                    # An old application cannot acquire the shared launch lock
+                    # while staged state is captured. Recheck legacy executables.
+                    reject_running_previous(root, proc)
+                    reject_retained_protection(root)
+                    if root.exists():
+                        os.rename(root, previous)
+                    os.rename(stage, root)
+                    promoted = True
+                    root.chmod(0o755)
+                    integration.install(root)
+                except BaseException:
+                    if promoted:
+                        try:
+                            integration.rollback()
+                            os.rename(root, stage)
+                            if previous.exists():
+                                os.rename(previous, root)
+                        except BaseException as rollback_error:
+                            raise RuntimeError('Installation rollback needs recovery; previous bytes retained at ' + str(temporary)) from rollback_error
+                    elif previous.exists():
                         os.rename(previous, root)
-                except BaseException as rollback_error:
-                    raise RuntimeError('Installation rollback needs recovery; previous bytes retained at ' + str(temporary)) from rollback_error
-            elif previous.exists():
-                os.rename(previous, root)
-            shutil.rmtree(temporary)
+                    shutil.rmtree(temporary)
+                    raise
+        except BaseException as preparation_error:
+            # The old idle owner may already have joined. Once rollback has
+            # restored its exact source tree and EX has closed, restart that
+            # original installation through its fresh absence-checked owner.
+            if retired_service and not list(root.parent.glob(prefix + '*')):
+                try:
+                    integration.activate(root)
+                except BaseException as restart_error:
+                    raise RuntimeError('Previous installation was restored but its original idle service readiness was not proved: ' + str(restart_error)) from preparation_error
             raise
+        try:
+            integration.activate(root)
+        except BaseException as activation_error:
+            # The new service may already own an actual partial native creator.
+            # A failed/lost READY response cannot authorize stopping it, moving
+            # its source/state inodes or deleting its previous installation.
+            raise RuntimeError('New protection owner activation did not complete; current and previous installation bytes retained for owned recovery at ' + str(temporary)) from activation_error
         shutil.rmtree(temporary)
 
 

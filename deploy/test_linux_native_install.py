@@ -125,16 +125,18 @@ def runtime_digests(root):
 
 class SystemBoundary:
     """Strict process double; never dispatches a host command."""
-    def __init__(self, installer, root, *, early_enabled=False, legacy_enabled=False,
+    def __init__(self, installer, root, *, early_enabled=False, legacy_enabled=False, legacy_early_enabled=False,
                  legacy_active=False, fail=None, query_codes=None):
         self.installer, self.root = installer, root
         self.enabled = {installer.EARLY_NAME: early_enabled,
+                        installer.LEGACY_EARLY_NAME: legacy_early_enabled,
                         'router-vpn-client.service': legacy_enabled}
         self.legacy_active = legacy_active
         self.fail = fail
         self.failed = False
         self.calls = []
         self.query_codes = query_codes or {}
+        self.idle_service_lock = None
 
     def __call__(self, arguments, *, check=True):
         args = tuple(map(str, arguments))
@@ -152,6 +154,8 @@ class SystemBoundary:
             key = (operation, unit)
             if key == self.fail and not self.failed:
                 self.failed = True
+                if operation == 'enable':
+                    self.enabled[unit] = True  # failure may follow partial enablement
                 raise subprocess.CalledProcessError(19, args, stderr='injected system boundary failure')
             code = self.query_codes.get(key, 0)
             if operation == 'is-active':
@@ -162,19 +166,43 @@ class SystemBoundary:
                 self.enabled[unit] = True
             elif operation == 'disable' and code == 0:
                 self.enabled[unit] = False
+            if operation == 'start':
+                # Exercise the actual flock arrangement at the point where
+                # the new persistent service must acquire its lifetime SH.
+                descriptor = os.open(self.root.with_name(self.root.name + '.install.lock'), os.O_RDWR)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                finally:
+                    os.close(descriptor)
+                for suffix in ('.install.transaction.lock', '.controller.lock'):
+                    lock = self.root.with_name(self.root.name + suffix)
+                    if not lock.is_file():
+                        raise AssertionError('Service readiness lost installation/controller exclusion: ' + suffix)
+                    descriptor = os.open(lock, os.O_RDWR)
+                    try:
+                        try:
+                            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            pass
+                        else:
+                            raise AssertionError('Service readiness lost installation/controller exclusion: ' + suffix)
+                    finally:
+                        os.close(descriptor)
             if check and code:
                 raise subprocess.CalledProcessError(code, args)
             return subprocess.CompletedProcess(args, code, stdout='', stderr='')
-        expected = ('/usr/bin/env', '-i', 'PATH=/usr/sbin:/usr/bin:/sbin:/bin',
-                    'HOMEVPN_ROOT=' + str(self.root), '/usr/bin/python3', '-Es',
-                    str(self.root / 'modes/kill-switch.py'), 'reassert')
+        expected = ('/usr/bin/env', '-i', 'PATH=' + self.installer.SYSTEM_PATH,
+                    str(self.root / 'router-vpn-client'), self.installer.UPGRADE_ARGUMENT)
         if args != expected:
             raise AssertionError('Unbounded installer process invocation: ' + repr(args))
-        if self.fail == ('reassert', '') and not self.failed:
+        if self.fail == ('retire-idle', '') and not self.failed:
             self.failed = True
-            raise subprocess.CalledProcessError(21, args, stderr='injected protection failure')
-        if not (self.root / 'modes/kill-switch.py').is_file():
-            raise AssertionError('Reassert did not use the promoted installation')
+            raise subprocess.CalledProcessError(21, args, stderr='original protection is retained')
+        if not (self.root / 'router-vpn-client').is_file():
+            raise AssertionError('Upgrade helper did not use the original installation')
+        if self.idle_service_lock is not None:
+            os.close(self.idle_service_lock)
+            self.idle_service_lock = None
         return subprocess.CompletedProcess(args, 0, stdout='', stderr='')
 
 
@@ -295,7 +323,9 @@ class InstallerTransactions(unittest.TestCase):
             self.install()
         self.assertEqual(snapshot(self.root, metadata=True), application)
         self.assertEqual(snapshot(self.system, metadata=True), system)
-        self.assertEqual(self.boundary.calls, [])
+        self.assertEqual([call[0][-1] for call in self.boundary.calls],
+                         [self.installer.UPGRADE_ARGUMENT, self.installer.EARLY_NAME])
+        self.assertEqual(self.boundary.calls[-1][0][:2], ('/usr/bin/systemctl', 'start'))
         self.assert_no_staging()
 
     def test_fixed_adjacent_lock_blocks_controller_and_parallel_installer(self):
@@ -318,6 +348,116 @@ class InstallerTransactions(unittest.TestCase):
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
         self.assertEqual(self.installer.ROOT, Path('/opt/router-vpn-client'))
+
+    def test_idle_service_retires_before_original_source_promotion(self):
+        self.install()
+        original_image = (self.root / 'router-vpn-client').stat().st_ino
+        self.new_integration(early_enabled=True)
+        descriptor = os.open(self.root.with_name(self.root.name + '.install.lock'), os.O_RDWR)
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        self.boundary.idle_service_lock = descriptor
+        observed = []
+
+        def verify(stage):
+            self.assertIsNone(self.boundary.idle_service_lock)
+            self.assertEqual((self.root / 'router-vpn-client').stat().st_ino, original_image)
+            self.assertEqual(self.boundary.calls[0][0][-1], self.installer.UPGRADE_ARGUMENT)
+            observed.append(True)
+            self.installer.verify_runtimes(stage)
+
+        try:
+            try:
+                self.install(verifier=verify)
+            except RuntimeError as error:
+                self.fail('Original idle service was not joined before exclusive promotion: ' + str(error))
+        finally:
+            if self.boundary.idle_service_lock is not None:
+                os.close(self.boundary.idle_service_lock)
+        self.assertTrue(observed)
+        self.assertNotEqual((self.root / 'router-vpn-client').stat().st_ino, original_image)
+        self.assert_no_staging()
+
+    def test_live_controller_blocks_upgrade_before_retiring_idle_service(self):
+        self.install()
+        baseline = snapshot(self.root, metadata=True)
+        self.new_integration(early_enabled=True)
+        descriptor = os.open(self.root.with_name(self.root.name + '.controller.lock'), os.O_RDWR)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(RuntimeError, 'Close Router VPN'):
+                self.install()
+        finally:
+            os.close(descriptor)
+        self.assertEqual(self.boundary.calls, [])
+        self.assertEqual(snapshot(self.root, metadata=True), baseline)
+        self.assert_no_staging()
+
+    def test_retained_service_refusal_preserves_original_application(self):
+        self.install()
+        baseline = snapshot(self.root, metadata=True)
+        self.new_integration(early_enabled=True, fail=('retire-idle', ''))
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.install()
+        self.assertEqual(snapshot(self.root, metadata=True), baseline)
+        self.assertEqual(len(self.boundary.calls), 1)
+        self.assert_no_staging()
+
+    def test_persisted_protection_never_authorizes_promotion(self):
+        self.install()
+        write(self.root / 'run/kill-switch.json', '{"table":"an-old-name","handle":9}', 0o600)
+        baseline = snapshot(self.root, metadata=True)
+        self.new_integration(early_enabled=True)
+        with self.assertRaisesRegex(RuntimeError, 'Original Router VPN protection is retained'):
+            self.install()
+        self.assertEqual(snapshot(self.root, metadata=True), baseline)
+        self.assert_no_staging()
+
+    def test_failed_new_service_readiness_retains_both_original_installations(self):
+        self.install()
+        self.seed_private()
+        baseline = snapshot(self.root, metadata=True)
+        source = package_fixture(self.base / 'new-package', version='two')
+        self.new_integration(early_enabled=True, fail=('start', self.installer.EARLY_NAME))
+        with mock.patch.object(self.integration, 'rollback', side_effect=AssertionError('cannot roll back a possible native creator')):
+            with self.assertRaisesRegex(RuntimeError, 'activation did not complete') as caught:
+                self.install(source=source)
+        pending = list(self.base.glob('.' + self.root.name + '.install-*'))
+        self.assertEqual(len(pending), 1)
+        self.assertIn(str(pending[0]), str(caught.exception))
+        self.assertEqual(snapshot(pending[0] / 'previous', metadata=True), baseline)
+        self.assertIn('package two', (self.root / 'MODES.md').read_text())
+        current = snapshot(self.root, metadata=True)
+        self.new_integration()
+        with self.assertRaisesRegex(RuntimeError, 'interrupted native installation'):
+            self.install()
+        self.assertEqual(snapshot(self.root, metadata=True), current)
+        self.assertEqual(self.boundary.calls, [])
+
+    def test_active_exited_legacy_unit_cannot_supply_new_service_readiness(self):
+        old = self.system / 'etc/systemd/system' / self.installer.LEGACY_EARLY_NAME
+        legacy_bytes = '[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/old/reassert\n'
+        write(old, legacy_bytes)
+        self.new_integration(legacy_early_enabled=True)
+        self.install()
+        self.assertNotEqual(self.installer.LEGACY_EARLY_NAME, self.installer.EARLY_NAME)
+        self.assertEqual(old.read_text(), legacy_bytes)
+        actions = [args for args, _ in self.boundary.calls]
+        ready = actions.index(('/usr/bin/systemctl', 'start', self.installer.EARLY_NAME))
+        retired_boot = actions.index(('/usr/bin/systemctl', 'disable', self.installer.LEGACY_EARLY_NAME))
+        self.assertLess(ready, retired_boot)
+        self.assertFalse(self.boundary.enabled[self.installer.LEGACY_EARLY_NAME])
+        self.assertTrue(self.boundary.enabled[self.installer.EARLY_NAME])
+        self.assertFalse(any('stop' in command or 'restart' in command for command in actions))
+
+    def test_legacy_boot_enablement_survives_failed_new_readiness(self):
+        self.new_integration(legacy_early_enabled=True, fail=('start', self.installer.EARLY_NAME))
+        with self.assertRaisesRegex(RuntimeError, 'activation did not complete'):
+            self.install()
+        self.assertTrue(self.boundary.enabled[self.installer.LEGACY_EARLY_NAME])
+        actions = [args for args, _ in self.boundary.calls]
+        self.assertNotIn(('/usr/bin/systemctl', 'disable', self.installer.LEGACY_EARLY_NAME), actions)
+        self.assertTrue(self.root.exists())
+        self.assertEqual(len(list(self.base.glob('.' + self.root.name + '.install-*'))), 1)
 
     def test_unsafe_locks_and_parent_are_rejected(self):
         lock = self.root.with_name(self.root.name + '.install.lock')
@@ -557,7 +697,9 @@ class InstallerTransactions(unittest.TestCase):
                 self.install()
         self.assertTrue(fired)
         self.assertEqual(snapshot(self.root, metadata=True), baseline)
-        self.assertEqual(self.boundary.calls, [])
+        self.assertEqual([call[0][-1] for call in self.boundary.calls],
+                         [self.installer.UPGRADE_ARGUMENT, self.installer.EARLY_NAME])
+        self.assertEqual(self.boundary.calls[-1][0][:2], ('/usr/bin/systemctl', 'start'))
         self.assert_no_staging()
 
     def test_system_failure_rolls_back_application_files_and_service_enablement(self):
@@ -567,8 +709,7 @@ class InstallerTransactions(unittest.TestCase):
         write(self.system / 'etc/systemd/system/unrelated.service', '[Service]\nExecStart=/bin/true\n')
         application, system = snapshot(self.root, metadata=True), file_bytes(self.system)
         before_modes = {name: stat.S_IMODE((self.system / name).stat().st_mode) for name in system}
-        for failure in (('daemon-reload', ''), ('enable', self.installer.EARLY_NAME),
-                        ('reassert', ''), ('start', self.installer.EARLY_NAME)):
+        for failure in (('daemon-reload', ''), ('enable', self.installer.EARLY_NAME)):
             with self.subTest(failure=failure):
                 self.new_integration(legacy_enabled=True, fail=failure)
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -581,7 +722,7 @@ class InstallerTransactions(unittest.TestCase):
                 self.assert_no_staging()
 
     def test_first_install_system_failure_removes_new_application_and_owned_files(self):
-        self.new_integration(fail=('reassert', ''))
+        self.new_integration(fail=('enable', self.installer.EARLY_NAME))
         with self.assertRaises(subprocess.CalledProcessError):
             self.install()
         self.assertFalse(self.root.exists())
@@ -651,10 +792,12 @@ class InstallerTransactions(unittest.TestCase):
         self.install()
         self.seed_private()
         baseline = snapshot(self.root, metadata=True)
-        self.new_integration(fail=('reassert', ''),
+        self.new_integration(fail=('enable', self.installer.EARLY_NAME),
                              query_codes={('disable', self.installer.EARLY_NAME): 5})
-        with self.assertRaisesRegex(RuntimeError, 'rollback needs recovery'):
+        with self.assertRaises(Exception) as failed:
             self.install()
+        self.assertIsInstance(failed.exception, RuntimeError)
+        self.assertIn('rollback needs recovery', str(failed.exception))
         pending = list(self.base.glob('.' + self.root.name + '.install-*'))
         self.assertEqual(len(pending), 1)
         self.assertEqual(snapshot(pending[0] / 'previous', metadata=True), baseline)
@@ -664,7 +807,7 @@ class InstallerTransactions(unittest.TestCase):
         self.install()
         self.seed_private()
         baseline = snapshot(self.root, metadata=True)
-        self.new_integration(fail=('reassert', ''))
+        self.new_integration(fail=('enable', self.installer.EARLY_NAME))
         with mock.patch.object(self.integration, 'rollback', side_effect=OSError('rollback unavailable')):
             with self.assertRaisesRegex(RuntimeError, 'previous bytes retained at') as caught:
                 self.install()
@@ -685,20 +828,22 @@ class InstallerTransactions(unittest.TestCase):
         self.assertEqual(parser['Unit']['DefaultDependencies'], 'no')
         self.assertEqual(parser['Unit']['After'], 'local-fs.target')
         self.assertEqual(parser['Install']['RequiredBy'], 'network-pre.target')
-        self.assertEqual(parser['Service']['Type'], 'oneshot')
-        self.assertEqual(parser['Service']['RemainAfterExit'], 'yes')
-        self.assertEqual(parser['Service']['ExecStart'], '/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOMEVPN_ROOT=/opt/router-vpn-client /usr/bin/python3 -Es /opt/router-vpn-client/modes/kill-switch.py reassert')
-        self.assertNotIn('router-vpn-client --', service.read_text())
+        self.assertEqual(parser['Service']['Type'], 'notify')
+        self.assertEqual(parser['Service']['NotifyAccess'], 'main')
+        self.assertEqual(parser['Service']['Restart'], 'no')
+        self.assertEqual(parser['Service']['TimeoutStartSec'], 'infinity')
+        self.assertEqual(parser['Unit']['RefuseManualStop'], 'yes')
+        self.assertEqual(parser['Service']['ExecStart'], '/opt/router-vpn-client/router-vpn-client --linux-standard-owner-service')
         for name in ('NetworkManager.service', 'systemd-networkd.service', 'networking.service', 'connman.service', 'wicked.service'):
             parser.read_string((self.system / 'etc/systemd/system' / (name + '.d/50-router-vpn-protection.conf')).read_text())
-            self.assertEqual(parser['Unit']['Requires'], self.installer.EARLY_NAME, name)
-            self.assertEqual(parser['Unit']['After'], self.installer.EARLY_NAME, name)
+            self.assertEqual(parser['Unit'].get('Requires'), self.installer.EARLY_NAME, name)
+            self.assertEqual(parser['Unit'].get('After'), self.installer.EARLY_NAME, name)
         self.assertTrue(self.boundary.enabled[self.installer.EARLY_NAME])
         self.assertFalse(self.boundary.enabled['router-vpn-client.service'])
         actions = [arguments for arguments, _ in self.boundary.calls]
-        reassert = next(index for index, command in enumerate(actions) if command[-1] == 'reassert')
         start = actions.index(('/usr/bin/systemctl', 'start', self.installer.EARLY_NAME))
-        self.assertLess(reassert, start)
+        self.assertLess(actions.index(('/usr/bin/systemctl', 'enable', self.installer.EARLY_NAME)), start)
+        self.assertFalse(any(command[-1] == 'reassert' for command in actions))
         self.assertFalse(any('restart' in command or 'stop' in command or 'force-off' in command for command in actions))
         self.assertIn('exec /opt/router-vpn-client/router-vpn-app "$@"', (self.system / 'usr/local/bin/router-vpn').read_text())
         recovery = (self.system / 'usr/local/sbin/router-vpn-killswitch-recovery').read_text()
@@ -780,8 +925,8 @@ def negative_controls():
          'test_upgrade_preserves_private_state_with_fresh_root_owned_inodes'),
         ('skip system-file rollback', '                    integration.rollback()', '                    pass',
          'test_system_failure_rolls_back_application_files_and_service_enablement'),
-        ('weaken the network protection dependency', 'Requires=router-vpn-killswitch-early.service',
-         'Wants=router-vpn-killswitch-early.service',
+        ('weaken the network protection dependency', 'Requires=router-vpn-standard-owner.service',
+         'Wants=router-vpn-standard-owner.service',
          'test_always_service_and_network_dependencies_are_installed_without_restart'),
         ('stop dependent networking during installation', "self.run(['/usr/bin/systemctl', 'start', EARLY_NAME])",
          "self.run(['/usr/bin/systemctl', 'restart', EARLY_NAME])",
@@ -791,6 +936,14 @@ def negative_controls():
          'test_rollback_service_failure_keeps_recovery_material'),
         ('overwrite an interrupted recovery transaction', '        if pending:', '        if False:',
          'test_interrupted_backup_blocks_install_without_touching_recoverable_state'),
+        ('skip original idle service retirement', '        retired_service = integration.retire_idle(root)',
+         '        retired_service = False', 'test_idle_service_retires_before_original_source_promotion'),
+        ('ignore retained protection state', '    if state.exists() or state.is_symlink():',
+         '    if False:', 'test_persisted_protection_never_authorizes_promotion'),
+        ('admit controller during service readiness', "('.install.transaction.lock', '.controller.lock')",
+         "('.install.transaction.lock',)", 'test_always_service_and_network_dependencies_are_installed_without_restart'),
+        ('reuse active exited oneshot as readiness', "EARLY_NAME = 'router-vpn-standard-owner.service'",
+         "EARLY_NAME = 'router-vpn-killswitch-early.service'", 'test_active_exited_legacy_unit_cannot_supply_new_service_readiness'),
     ]
     for label, before, after, test in mutations:
         if before not in source:

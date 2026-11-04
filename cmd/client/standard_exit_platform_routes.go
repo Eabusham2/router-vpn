@@ -376,6 +376,23 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
+	if monitor, ok := retained.(interface{ ActivateMonitor(context.Context) error }); ok {
+		if err := monitor.ActivateMonitor(operation); err != nil {
+			message, _ := a.standardExitStopFailure(cmd, "standard exit monitoring failed: "+err.Error())
+			a.mu.Lock()
+			owned := a.connectionContext == operation && (a.cmd == cmd && legacyStandardExitFailureOwned(a, retained, false) || a.cmd == nil && legacyStandardExitFailureOwned(a, retained, true))
+			if owned {
+				a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", message
+			}
+			a.mu.Unlock()
+			if !owned || !markOwnedFailure(message) {
+				http.Error(w, "standard exit monitor cleanup lost original ownership; replacement retained", http.StatusConflict)
+				return
+			}
+			http.Error(w, message, http.StatusInternalServerError)
+			return
+		}
+	}
 	route := "client TUN -> direct external " + exit.Protocol + " exit -> Internet"
 	entryID, entryName := "", ""
 	if !q.Direct {

@@ -80,7 +80,20 @@ func legacyExitTUNAbsent() error {
 }
 
 func prepareLegacyStandardExitOwner(a *app, original *exec.Cmd, runtimeMode, base, routerID string) (legacyStandardExitLaunch, error) {
-	return prepareLegacyStandardExitOwnerWithTUN(a, original, runtimeMode, base, routerID, legacyExitTUNAbsent)
+	prepared, err := prepareLegacyStandardExitOwnerWithTUN(a, original, runtimeMode, base, routerID, legacyExitTUNAbsent)
+	if err != nil || prepared == nil || a.localController == nil {
+		return prepared, err
+	}
+	local, ok := prepared.(*linuxLegacyStandardExitOwner)
+	if !ok {
+		_ = prepared.Discard()
+		return nil, errors.New("standard service preparation lost its local source capture")
+	}
+	remote, err := prepareLinuxStandardServiceLaunch(a, local)
+	if err != nil {
+		_ = local.Discard()
+	}
+	return remote, err
 }
 
 func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error) (legacyStandardExitLaunch, error) {
@@ -447,6 +460,9 @@ type linuxLegacyStandardExitStop struct {
 }
 
 func captureLegacyStandardExitStop(a *app) (desktopRetainedStopCapture, error) {
+	if retained, err := captureLinuxStandardServiceStop(a); retained != nil || err != nil {
+		return retained, err
+	}
 	value, exists := legacyStandardExitOwners.Load(a)
 	if !exists {
 		return captureLegacyExitDetachedProtectionStop(a)
@@ -490,7 +506,17 @@ func legacyExitPIDFDState(file *os.File) (bool, error) {
 		}
 		p := pollFD{FD: int32(fd), Events: 1}
 		zero := syscall.Timespec{}
-		ready, _, errno := syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(&p)), 1, uintptr(unsafe.Pointer(&zero)), 0, 0, 0)
+		var ready uintptr
+		var errno syscall.Errno
+		for interrupted := 0; interrupted < 16; interrupted++ {
+			ready, _, errno = syscall.Syscall6(syscall.SYS_PPOLL, uintptr(unsafe.Pointer(&p)), 1, uintptr(unsafe.Pointer(&zero)), 0, 0, 0)
+			if errno != syscall.EINTR {
+				break
+			}
+			// Go preemption or an ordinary caught signal can interrupt even
+			// this nonblocking query. Retry only the same retained descriptor
+			// and zero timeout; never reopen a PID or renew an owner deadline.
+		}
 		if errno != 0 {
 			result = errno
 			return
@@ -747,6 +773,9 @@ func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.
 
 // Called with the app lock held during terminal history/state adoption.
 func legacyStandardExitFailureOwned(a *app, expected legacyStandardExitLaunch, retired bool) bool {
+	if owned, handled := linuxStandardServiceFailureOwned(a, expected, retired); handled {
+		return owned
+	}
 	current, exists := legacyStandardExitOwners.Load(a)
 	if retired {
 		return !exists

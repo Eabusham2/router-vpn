@@ -12,6 +12,19 @@ import (
 // state file, an nft command error, a closed source or a decoded empty record
 // cannot establish initial absence. This function mutates no native policy.
 func ReadDesktopLinuxProtectionAbsence(ctx context.Context) error {
+	return readDesktopLinuxProtectionScopeAbsence(ctx, true)
+}
+
+// ReadDesktopLinuxStandardAndLegacyProtectionAbsence observes only the shared
+// legacy table and every reserved standard-service table. It deliberately says
+// nothing about the independent Node table family and grants no deletion or
+// adoption authority. A caller may use it beside an original authenticated Node
+// parent; the parent's final release still requires complete native absence.
+func ReadDesktopLinuxStandardAndLegacyProtectionAbsence(ctx context.Context) error {
+	return readDesktopLinuxProtectionScopeAbsence(ctx, false)
+}
+
+func readDesktopLinuxProtectionScopeAbsence(ctx context.Context, includeNodes bool) error {
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("Linux protection absence requires a live native readback")
 	}
@@ -23,12 +36,16 @@ func ReadDesktopLinuxProtectionAbsence(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := desktopLinuxTableListAbsent(rows, func(name string) bool {
-		return name == desktopLinuxNFTTable || strings.HasPrefix(name, desktopLinuxNodeTablePrefix) || strings.HasPrefix(name, desktopLinuxStandardTablePrefix)
-	}); err != nil {
+	if err := desktopLinuxProtectionScopeAbsent(rows, includeNodes); err != nil {
 		return err
 	}
 	return ctx.Err()
+}
+
+func desktopLinuxProtectionScopeAbsent(rows []map[string]any, includeNodes bool) error {
+	return desktopLinuxTableListAbsent(rows, func(name string) bool {
+		return name == desktopLinuxNFTTable || strings.HasPrefix(name, desktopLinuxStandardTablePrefix) || includeNodes && strings.HasPrefix(name, desktopLinuxNodeTablePrefix)
+	})
 }
 
 // A malformed or unknown reserved table cannot be converted into absence.

@@ -30,6 +30,9 @@ CONTROL_SPEC.loader.exec_module(CONTROL)
 TRANSACTION_SPEC = importlib.util.spec_from_file_location('controller_node_transaction', ROOT/'deploy/test_linux_node_transaction.py')
 TRANSACTION = importlib.util.module_from_spec(TRANSACTION_SPEC)
 TRANSACTION_SPEC.loader.exec_module(TRANSACTION)
+SERVICE_SPEC = importlib.util.spec_from_file_location('standard_service_gate', ROOT/'deploy/linux_standard_service_gate.py')
+SERVICE = importlib.util.module_from_spec(SERVICE_SPEC)
+SERVICE_SPEC.loader.exec_module(SERVICE)
 CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
          'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart',
@@ -77,9 +80,9 @@ def check_empty_recovery_verdict(output, *, native=False):
 
 
 def source_identity():
-    names = sorted([ROOT/'go.mod', ROOT/'go.sum', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
+    names = sorted([ROOT/'go.mod', ROOT/'go.sum', ROOT/'modes/kill-switch.py', ROOT/'modes/profile_id.py', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
                     *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, *TRANSACTION.RUNNERS, 'test_linux_controller_privilege.py',
-                                                     'test_linux_empty_recovery_runner.py'))])
+                                                     'test_linux_empty_recovery_runner.py', *SERVICE.RUNNERS))])
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in names if path.is_file() and not path.is_symlink()}
 
@@ -160,6 +163,7 @@ def execute(go='go'):
     if platform.system() != 'Linux':
         raise ValueError('The controller privilege gate requires a matching Linux host')
     before = source_identity()
+    SERVICE.validate_inventory(ROOT)
     required = {'cmd/client/controller_local_auth.go', 'cmd/client/controller_local_auth_test.go',
                 'cmd/client/controller_privilege_linux.go', 'cmd/client/controller_privilege_linux_test.go',
                 'cmd/client/controller_privilege_linux_namespace_test.go', 'cmd/client/desktop_node_linux_parent.go',
@@ -195,6 +199,7 @@ def execute(go='go'):
     check_empty_recovery_verdict(recovery_units)
     print(recovery_units, end='' if recovery_units.endswith('\n') else '\n')
     UID.run([sys.executable, ROOT/'deploy/test_linux_empty_recovery_runner.py'], cwd=ROOT, env=env)
+    UID.run([sys.executable, ROOT/'deploy/test_linux_standard_service_runner.py'], cwd=ROOT, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_control_runner.py'], cwd=ROOT, env=env)
     CONTROL.execute(compiler, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_transaction_runner.py'], cwd=ROOT, env=env)
@@ -202,6 +207,25 @@ def execute(go='go'):
     if source_identity() != before:
         raise ValueError('Original Node control/transaction source changed during its required native gates')
     with tempfile.TemporaryDirectory(prefix='routervpn-controller-privilege-') as temporary:
+        service_binary = Path(temporary)/'standard-owner-service.test'
+        UID.run([compiler, 'test', '-race', '-c', '-mod=readonly',
+                 '-tags=routervpn_controller_privileged,routervpn_standard_service_native',
+                 '-o', service_binary, './cmd/client'], cwd=ROOT, env=env)
+        service_info = service_binary.lstat()
+        if not stat.S_ISREG(service_info.st_mode) or service_info.st_nlink != 1 or service_info.st_mode & 0o022 or service_info.st_size == 0:
+            raise ValueError('Standard service compiler did not produce its protected executable')
+        service_digest = hashlib.sha256(service_binary.read_bytes()).hexdigest()
+        for group in SERVICE.GROUPS:
+            service_command = [sys.executable, str(Path(__file__).resolve()), '--namespace-service-binary', str(service_binary),
+                               '--namespace-service-group', group, '--namespace-service-sha256', service_digest]
+            if sudo is not None:
+                service_command = [sudo, '-n', '--', *service_command]
+            service_output = UID.run(service_command, cwd=ROOT, timeout=150, sudo=sudo)
+            SERVICE.check_verdict(service_output, group)
+            print(service_output, end='' if service_output.endswith('\n') else '\n')
+        service_after = service_binary.stat()
+        if (service_after.st_dev, service_after.st_ino, service_after.st_size) != (service_info.st_dev, service_info.st_ino, service_info.st_size) or hashlib.sha256(service_binary.read_bytes()).hexdigest() != service_digest or source_identity() != before:
+            raise ValueError('Standard service source or native executable changed during its required gates')
         process_binary = Path(temporary)/'native-process.test'
         UID.run([compiler, 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
                  '-o', process_binary, './internal/linuxprocess'], cwd=ROOT, env=env)
@@ -289,11 +313,18 @@ if __name__ == '__main__':
     parser.add_argument('--namespace-test-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-process-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-process-sha256', help=argparse.SUPPRESS)
+    parser.add_argument('--namespace-service-binary', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--namespace-service-group', choices=tuple(SERVICE.GROUPS), help=argparse.SUPPRESS)
+    parser.add_argument('--namespace-service-sha256', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.namespace_test_binary is not None:
         raise SystemExit(namespace_test(args.namespace_test_binary))
     if args.namespace_process_binary is not None:
         raise SystemExit(namespace_test(args.namespace_process_binary, '^TestLinuxProcessNamespace', args.namespace_process_sha256))
+    if args.namespace_service_binary is not None:
+        if args.namespace_service_group is None or not re.fullmatch(r'[0-9a-f]{64}', args.namespace_service_sha256 or ''):
+            raise ValueError('Standard service requires its exact native test group')
+        raise SystemExit(namespace_test(args.namespace_service_binary, SERVICE.pattern(args.namespace_service_group), args.namespace_service_sha256))
     try:
         execute(args.go)
     except subprocess.CalledProcessError as error:

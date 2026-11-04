@@ -76,6 +76,22 @@ class MutationLockTests(unittest.TestCase):
         self.assertEqual(saved['policy'], 'always')
         self.assertNotIn('linux_standard_owner', saved)
 
+    def test_service_legacy_dispatch_rejects_standard_marker_appearing_before_child_lease(self):
+        path = self.save_standard_state(self.standard_state('00000000-0000-0000-0000-000000000001'))
+        original = path.read_bytes()
+        with mock.patch.dict(os.environ, {'HOMEVPN_LEGACY_BOOT_ONLY': '1'}), mock.patch.object(mod, 'run_nft', side_effect=AssertionError('native mutation must not start')):
+            with self.assertRaisesRegex(RuntimeError, 'legacy boot dispatch cannot replace'):
+                mod.reassert()
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_service_legacy_dispatch_preserves_unmarked_existing_policy(self):
+        with mock.patch.dict(os.environ, {'HOMEVPN_LEGACY_BOOT_ONLY': '1'}):
+            self.assertEqual(mod.reassert(), 0)
+        saved = mod.read_state(self.root)
+        self.assertEqual(saved['policy'], 'always')
+        self.assertEqual(saved['endpoint'], '203.0.113.9')
+        self.assertNotIn('linux_standard_owner', saved)
+
     def test_cold_state_cannot_adopt_a_new_native_table(self):
         state = self.standard_state('00000000-0000-0000-0000-000000000001')
         path = self.save_standard_state(state); original = path.read_bytes()

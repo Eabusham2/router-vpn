@@ -73,6 +73,7 @@ func linuxControllerFixtureCreatePipe() error {
 
 func linuxControllerFixtureBootstrap() error {
 	held := os.Getenv("ROUTERVPN_CONTROLLER_FIXTURE_HELD") == "1"
+	standardService := os.Getenv("ROUTERVPN_CONTROLLER_STANDARD_SERVICE_FIXTURE")
 	nodeParentCase := os.Getenv("ROUTERVPN_CONTROLLER_NODE_PARENT_CASE")
 	owned, err := prepareLinuxOwnedController(os.Args[1:])
 	if err != nil {
@@ -112,6 +113,9 @@ func linuxControllerFixtureBootstrap() error {
 	}
 	if nodeParentCase != "" {
 		return linuxNodeParentFixture(owned, nodeParentCase)
+	}
+	if standardService != "" {
+		return linuxStandardServiceControllerRouteFixture(owned, standardService)
 	}
 	if !held {
 		fmt.Fprintln(os.Stdout, "prepared")

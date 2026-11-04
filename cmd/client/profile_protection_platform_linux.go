@@ -22,6 +22,8 @@ import (
 // token compares a UI request; only the original native transaction can remove
 // protection. Failed capture is represented as pending, never as absence.
 type desktopPlatformProtectionCapture struct {
+	standard                                             *linuxStandardServiceProtectionCapture
+	standardProfilePath                                  string
 	controller                                           *ownedDesktopController
 	parent                                               *desktopLinuxNodeParent
 	session                                              *desktopLinuxNodeSession
@@ -37,7 +39,7 @@ type desktopPlatformProtectionCapture struct {
 	originalRevision, resultRevision, pendingToken       string
 }
 
-func (a *app) capturePlatformProfileProtection() *desktopPlatformProtectionCapture {
+func (a *app) captureDesktopParentProfileProtection() *desktopPlatformProtectionCapture {
 	a.mu.Lock()
 	controller := a.localController
 	a.mu.Unlock()
@@ -121,6 +123,9 @@ func (a *app) capturePlatformProfileProtection() *desktopPlatformProtectionCaptu
 }
 
 func (c *desktopPlatformProtectionCapture) token(revision string) string {
+	if c.standard != nil {
+		return c.standardToken(revision)
+	}
 	if c.off != nil && c.pendingToken != "" && (revision == c.originalRevision || revision == c.resultRevision) {
 		return c.pendingToken
 	}
@@ -139,6 +144,9 @@ func (c *desktopPlatformProtectionCapture) token(revision string) string {
 }
 
 func (c *desktopPlatformProtectionCapture) settings(value profileProtectionSettings) profileProtectionSettings {
+	if c.standard != nil {
+		return c.standardSettings(value)
+	}
 	value.ProtectionProfileID = c.profileID
 	switch {
 	case c.failure != nil:
@@ -173,6 +181,9 @@ func (c *desktopPlatformProtectionCapture) settings(value profileProtectionSetti
 // The common handler holds app.mu here, after the platform's gated comparison
 // and before persistence. operationMu prevents a legitimate session succession.
 func (c *desktopPlatformProtectionCapture) currentAppLocked(a *app) bool {
+	if c != nil && c.standard != nil {
+		return c.failure == nil && c.standardProfilePath == a.cfg.ProfilesFile && c.standard.currentAppLocked(a)
+	}
 	return c == nil || c.failure == nil && c.controller != nil && a.localController == c.controller &&
 		c.controller.nodeParent == c.parent && c.session != nil && c.session.parent.currentAppLocked(false) == nil && a.nodeProtection == nil
 }
@@ -180,6 +191,9 @@ func (c *desktopPlatformProtectionCapture) currentAppLocked(a *app) bool {
 func samePlatformProtectionCapture(a, b *desktopPlatformProtectionCapture) bool {
 	if a == nil || b == nil {
 		return a == b
+	}
+	if a.standard != nil || b.standard != nil {
+		return a.failure == nil && b.failure == nil && a.standard != nil && b.standard != nil && a.standardProfilePath == b.standardProfilePath && a.standard.same(b.standard)
 	}
 	return a.failure == nil && b.failure == nil && a.controller == b.controller && a.parent == b.parent && a.session == b.session &&
 		a.active == b.active && a.predecessor == b.predecessor && a.journal == b.journal && a.off == b.off &&
@@ -197,6 +211,9 @@ func (a *app) handlePlatformProfileProtection(w http.ResponseWriter, r *http.Req
 	}
 	if current == nil {
 		return false
+	}
+	if current.standard != nil {
+		return a.handleStandardServiceProfileProtection(w, r, profile, capture, current, policy)
 	}
 	if current.off != nil && policy != "off" || current.active != nil || current.profileID != profile.ID {
 		http.Error(w, "select the retained disconnected node and finish its pending Off change before changing protection", http.StatusConflict)
@@ -232,6 +249,12 @@ func (a *app) handlePlatformProfileProtection(w http.ResponseWriter, r *http.Req
 
 func (a *app) guardPlatformProtectionOffPending() error {
 	capture := a.capturePlatformProfileProtection()
+	if capture != nil && capture.standard != nil {
+		if capture.failure != nil || capture.standard.Failure != nil || capture.standard.Pending || capture.standard.Active {
+			return errors.New("finish the pending original standard-service protection change before another operation")
+		}
+		return nil
+	}
 	if capture != nil && (capture.off != nil || capture.failure != nil) {
 		return errors.New("finish the pending Linux Kill Switch Off change or original protection cleanup before another operation")
 	}

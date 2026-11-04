@@ -34,11 +34,11 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
-STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted')
-STANDARD_PARSER_CASES = ('CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority')
+STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence')
+STANDARD_PARSER_CASES = ('CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority', 'ScopedAbsenceNeverClaimsNodeOrMalformedAbsence')
 STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_protection.go',
                                   'desktop_standard_linux_protection_test.go',
-                                  'desktop_standard_linux_protection_native_test.go'})
+                                  'desktop_standard_linux_protection_native_test.go', 'desktop_standard_linux_absence_test.go'})
 KERNEL_CASES += STANDARD_KERNEL_CASES
 KERNEL_GROUPS = (('sockets', KERNEL_CASES[:15]),
                  ('retained', KERNEL_CASES[15:KERNEL_CASES.index('SOCKSAssociation')]),

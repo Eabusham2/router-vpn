@@ -70,6 +70,20 @@ func main() {
 		os.Exit(1)
 	}
 	defer ownedController.close()
+	if handled, err := linuxStandardServiceUpgradeUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := linuxStandardServiceUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := mtuOwnerUtility(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

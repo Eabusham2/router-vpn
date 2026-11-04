@@ -604,6 +604,8 @@ def _standard_mutation_guard(root: Path, *, corrupt_recovery=False):
             raise
         saved = {}
     marker = _standard_owner(saved)
+    if marker is not None and os.environ.get('HOMEVPN_LEGACY_BOOT_ONLY') == '1':
+        raise RuntimeError('legacy boot dispatch cannot replace a standard policy marker selected after dispatch')
     if marker is not None:
         if marker['boot_id'] == _standard_boot_id():
             raise RuntimeError('standard protection requires its original live controller; helper mutation cannot adopt or release its table')

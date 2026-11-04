@@ -183,6 +183,9 @@ func proveLegacyStandardDNS(ctx context.Context, a *app, observed observedConnec
 	if a == nil {
 		return result, false
 	}
+	if remote, owned := proveLinuxServiceStandardDNS(ctx, a, observed, runtimeID, selected); owned {
+		return remote, true
+	}
 	raw, exists := legacyStandardExitOwners.Load(a)
 	if !exists {
 		return result, false
