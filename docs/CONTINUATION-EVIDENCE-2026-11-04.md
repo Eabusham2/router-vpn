@@ -219,7 +219,23 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Original Linux Node retirement message phase accompanying this record
+## Linux installed-bundle gate fixture accompanying this record
+
+The installed-host ordering fixture predated the required stock-DNS gate. It
+mocked the completed bundle but then attempted a real DNS gate against that
+fictional path, failing both target subcases. The fixture now expects exact
+bundle verification, stock-DNS verification, runner verification and native host
+execution in that order, with the same target/environment. An unverified bundle
+cannot enter DNS or host execution; failed DNS cannot enter host execution.
+Unsupported targets invoke none of those operations.
+
+All 95 Linux runner tests pass in 13.088s with the pinned Go environment.
+Removing or moving the actual builder's DNS gate after host execution produces
+the intended assertion failures on both target cases. This is an orchestration
+fixture correction; production DNS, bundle validation and native gates are
+unchanged. It does not establish actual installed-device DNS acceptance.
+
+## Original Linux Node retirement message phase published at 0829ef23
 
 The exact `cf863300` generated Node AMD64 run reached successful readiness and
 traffic but timed out receiving retirement. Its parent began a five-second
@@ -245,9 +261,9 @@ the actual delayed-child case at five seconds. The new mandatory native
 original cleanup; its compilation is verified, but namespace execution remains
 CI work. This is not proof that the complete native Node Stop gate now passes.
 
-An additional local broad runner attempt reported unrelated missing-Go setup
-and an outdated installed-bundle fixture. Its failed result is retained; it is
-not counted as a broad pass. The fixture is tracked as separate follow-on work.
+An additional local broad runner attempt reported missing-Go setup and the
+outdated installed-bundle fixture. Its failed result is retained. The separate
+correction above and its complete rerun supersede those local failures.
 
 ## Native Linux receipt operation correction published at 2f31dfda
 

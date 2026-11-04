@@ -466,21 +466,35 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                 calls = []
                 def reuse(directory, selected, env=None):
                     calls.append(('reuse', directory, selected, env))
+                def stock_dns(directory, selected, captured_env):
+                    calls.append(('stock-dns', directory, selected, captured_env))
                 def run(arguments, **kwargs):
                     calls.append(('run', [str(value) for value in arguments], kwargs))
-                with patch.object(G.BUILD, 'reuse', side_effect=reuse), patch.object(G.BUILD, 'run', side_effect=run):
+                # This fixture checks builder ordering. The actual stock-DNS
+                # gate has its own exact built-image/host and verdict tests.
+                with patch.object(G.BUILD, 'reuse', side_effect=reuse), patch.object(G.BUILD, 'verify_linux_stock_dns', side_effect=stock_dns), patch.object(G.BUILD, 'run', side_effect=run):
                     G.BUILD.verify_installed_linux_host(source, bundle, target, env)
+                self.assertEqual(len(calls), 4)
                 self.assertEqual(calls[0], ('reuse', bundle, target, env))
-                self.assertEqual(calls[1][1][1:], [str(ROOT / 'deploy/test_linux_node_host_tun_runner.py')])
-                self.assertEqual(calls[2][1][1:], [str(ROOT / 'deploy/test_linux_node_host_tun.py'), str(source), '--bundle', str(bundle)])
-                self.assertEqual(calls[1][2]['env'], env)
+                self.assertEqual(calls[1], ('stock-dns', bundle, target, env))
+                self.assertEqual(calls[2][1][1:], [str(ROOT / 'deploy/test_linux_node_host_tun_runner.py')])
+                self.assertEqual(calls[3][1][1:], [str(ROOT / 'deploy/test_linux_node_host_tun.py'), str(source), '--bundle', str(bundle)])
                 self.assertEqual(calls[2][2]['env'], env)
-                with patch.object(G.BUILD, 'reuse', side_effect=ValueError('unverified stage')), patch.object(G.BUILD, 'run') as run, self.assertRaisesRegex(ValueError, 'unverified stage'):
+                self.assertEqual(calls[3][2]['env'], env)
+                with patch.object(G.BUILD, 'reuse', side_effect=ValueError('unverified stage')), patch.object(G.BUILD, 'verify_linux_stock_dns') as dns, patch.object(G.BUILD, 'run') as run, self.assertRaisesRegex(ValueError, 'unverified stage'):
                     G.BUILD.verify_installed_linux_host(source, bundle, target, env)
+                dns.assert_not_called()
+                run.assert_not_called()
+                with patch.object(G.BUILD, 'reuse') as reuse, patch.object(G.BUILD, 'verify_linux_stock_dns', side_effect=ValueError('unproved stock DNS')) as dns, patch.object(G.BUILD, 'run') as run, self.assertRaisesRegex(ValueError, 'unproved stock DNS'):
+                    G.BUILD.verify_installed_linux_host(source, bundle, target, env)
+                reuse.assert_called_once_with(bundle, target, env=env)
+                dns.assert_called_once_with(bundle, target, env)
                 run.assert_not_called()
         for target, env in (('windows/amd64', {'GOOS': 'windows', 'GOARCH': 'amd64'}), ('linux/amd64', {'GOOS': 'linux', 'GOARCH': 'arm64'})):
-            with patch.object(G.BUILD, 'run') as run, self.assertRaises(ValueError):
+            with patch.object(G.BUILD, 'reuse') as reuse, patch.object(G.BUILD, 'verify_linux_stock_dns') as dns, patch.object(G.BUILD, 'run') as run, self.assertRaises(ValueError):
                 G.BUILD.verify_installed_linux_host(Path('/core'), Path('/bundle'), target, env)
+            reuse.assert_not_called()
+            dns.assert_not_called()
             run.assert_not_called()
 
     def test_missing_binding_requires_the_actual_targeted_native_failure(self):
