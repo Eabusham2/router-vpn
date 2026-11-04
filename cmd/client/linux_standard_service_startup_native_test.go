@@ -451,7 +451,9 @@ func TestLinuxStandardServiceStartupInstalledRequestHasNoStockChild(t *testing.T
 			if requestOnly {
 				f.a.localController = &linuxOwnedController{}
 			}
-			captured, err := prepareLegacyStandardExitOwnerMode(f.a, command, "standard-"+f.exit.Protocol, "external", "standard:"+f.exit.ID, func() error { return nil }, func() string { return "captured-test-network" }, false, requestOnly)
+			captured, err := prepareLegacyStandardExitOwnerWithRequestObserver(f.a, command, "standard-"+f.exit.Protocol, "external", "standard:"+f.exit.ID, func() error { return nil }, func() string { return "captured-test-network" }, false, requestOnly, func(context.Context, context.Context) (linuxStandardStartupObserver, error) {
+				return &linuxStandardStartupObserverFixture{}, nil
+			})
 			if !requestOnly {
 				if err == nil || !strings.Contains(err.Error(), "stock standard engine is unavailable") {
 					t.Fatal("noninstalled stock path silently changed selection", err)
@@ -463,8 +465,8 @@ func TestLinuxStandardServiceStartupInstalledRequestHasNoStockChild(t *testing.T
 			}
 			owner := captured.(*linuxLegacyStandardExitOwner)
 			defer owner.Discard()
-			if owner.command != command || command.Process != nil || owner.image != nil || owner.sourceImage != nil || owner.native != nil || owner.config == nil || owner.sourceConfig == nil || owner.directory == nil || owner.dns == nil {
-				t.Fatal("controller source capture created an engine or observer instead of its exact request")
+			if owner.command != command || command.Process != nil || owner.image != nil || owner.sourceImage != nil || owner.native != nil || owner.requestEpoch == nil || !owner.requestEpoch.bound || owner.config == nil || owner.sourceConfig == nil || owner.directory == nil || owner.dns == nil {
+				t.Fatal("controller source capture lost its exact request epoch or created an engine")
 			}
 			raw, err := standardengine.ReadSealed(owner.config, standardengine.MaxConfig)
 			if err != nil || standardengine.SHA256(raw) != owner.digest || desktopExternalDirectoryCurrent(owner.launch) != nil {
@@ -483,7 +485,9 @@ func TestLinuxStandardServiceStartupPreparationFailureKeepsRetry(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.a.localController = &linuxOwnedController{}
-			prepared, err := prepareLegacyStandardExitOwnerMode(f.a, command, "standard-"+f.exit.Protocol, "external", "standard:"+f.exit.ID, func() error { return nil }, func() string { return "captured-test-network" }, false, true)
+			prepared, err := prepareLegacyStandardExitOwnerWithRequestObserver(f.a, command, "standard-"+f.exit.Protocol, "external", "standard:"+f.exit.ID, func() error { return nil }, func() string { return "captured-test-network" }, false, true, func(context.Context, context.Context) (linuxStandardStartupObserver, error) {
+				return &linuxStandardStartupObserverFixture{}, nil
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

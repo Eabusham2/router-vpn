@@ -40,12 +40,15 @@ type linuxStandardServiceRequest struct {
 }
 
 type linuxStandardServiceResponse struct {
-	Schema     int                                 `json:"schema"`
-	Session    string                              `json:"session"`
-	Action     string                              `json:"action"`
-	Complete   bool                                `json:"complete"`
-	Error      string                              `json:"error,omitempty"`
-	Protection *linuxStandardServiceProtectionData `json:"protection,omitempty"`
+	Startup             *linuxStandardServiceStartup        `json:"startup,omitempty"`
+	authenticatedPeer   *linuxStandardServicePeer           // local original witness; never decoded
+	transmittedDeadline int64                               // local RPC bound; never decoded from service data
+	Schema              int                                 `json:"schema"`
+	Session             string                              `json:"session"`
+	Action              string                              `json:"action"`
+	Complete            bool                                `json:"complete"`
+	Error               string                              `json:"error,omitempty"`
+	Protection          *linuxStandardServiceProtectionData `json:"protection,omitempty"`
 }
 
 func linuxStandardServiceDecode(body []byte, target any) error {

@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"router-vpn/internal/common"
+	"router-vpn/internal/standardengine"
+	"strings"
 	"time"
 )
 
@@ -60,7 +62,7 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		fmt.Fprintln(os.Stdout, "standard-service-route-joined")
 		return nil
 	}
-	if action != "1" && action != "failure" && action != "network-failure" {
+	if action != "1" && action != "failure" && action != "network-failure" && action != "pre-rpc-network-failure" {
 		return errors.New("unknown native service fixture action")
 	}
 	body, err = os.ReadFile(filepath.Join(root, "modes.json"))
@@ -73,8 +75,36 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	exit := validTestStandardExit("socks5")
 	request, _ := json.Marshal(standardExitConnectRequest{StandardExitID: exit.ID, Direct: true})
 	response := httptest.NewRecorder()
+	var capturedController *linuxStandardServiceLaunch
+	prepare := func(a *app, command *exec.Cmd, mode, base, id string) (legacyStandardExitLaunch, error) {
+		captured, err := prepareLegacyStandardExitOwner(a, command, mode, base, id)
+		if err != nil {
+			return captured, err
+		}
+		capturedController, _ = captured.(*linuxStandardServiceLaunch)
+		if action == "pre-rpc-network-failure" {
+			if capturedController == nil || capturedController.prepared.requestEpoch == nil {
+				return captured, errors.New("native pre-RPC fixture omitted original controller epoch")
+			}
+			operation := a.connectionOperationContextOrBackground()
+			before, err := exec.CommandContext(operation, "/usr/sbin/ip", "-j", "link", "show", "dev", "rvphysical").CombinedOutput()
+			if err != nil {
+				return captured, err
+			}
+			for _, mtu := range []string{"1400", "1500"} {
+				if output, err := exec.CommandContext(operation, "/usr/sbin/ip", "link", "set", "dev", "rvphysical", "mtu", mtu).CombinedOutput(); err != nil {
+					return captured, fmt.Errorf("actual pre-RPC physical event: %w %s", err, output)
+				}
+			}
+			after, err := exec.CommandContext(operation, "/usr/sbin/ip", "-j", "link", "show", "dev", "rvphysical").CombinedOutput()
+			if err != nil || !bytes.Equal(before, after) {
+				return captured, errors.New("pre-RPC native fixture did not restore identical topology")
+			}
+		}
+		return captured, nil
+	}
 	a.platformStandardExitConnectOwned(response, httptest.NewRequest(http.MethodPost, "/api/standard-exit/connect", bytes.NewReader(request)), platformStandardExitRuntime{
-		prepareLegacy: prepareLegacyStandardExitOwner,
+		prepareLegacy: prepare,
 		prove:         func(*app, string) error { return nil },
 		proveDNS: func(ctx context.Context, captured legacyStandardExitLaunch) error {
 			// Exercise the shipping service proof and observer installation.
@@ -84,6 +114,13 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		},
 		current: func(owner legacyStandardExitLaunch, ctx context.Context) error { return owner.Current(ctx) },
 	})
+	if action == "pre-rpc-network-failure" {
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "network") || capturedController == nil || capturedController.attempted || !capturedController.joined || !capturedController.copiesClosed || !capturedController.prepared.requestEpoch.closed || a.cmd != nil || a.state.Connected {
+			return fmt.Errorf("pre-RPC native ABA did not reject and join original preparation: %d %s", response.Code, response.Body.String())
+		}
+		fmt.Fprintln(os.Stdout, "standard-service-route-joined")
+		return nil
+	}
 	if response.Code != http.StatusOK {
 		return fmt.Errorf("shipping service Connect failed: %d %s", response.Code, response.Body.String())
 	}
@@ -91,6 +128,17 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	owner, ok := raw.(*linuxStandardServiceLaunch)
 	if !exists || !ok || owner.Command().Process != nil || !a.state.Connected {
 		return errors.New("shipping controller did not retain actual remote engine ownership")
+	}
+	epoch := owner.prepared.requestEpoch
+	if epoch == nil || !epoch.ready || epoch.closed || epoch.startup == nil {
+		return errors.New("installed controller omitted original child routing ledger adoption")
+	}
+	capture, err := standardengine.DecodeCapture(epoch.startup.Capture, standardengine.SHA256(epoch.startup.Capture))
+	if err != nil || capture.Session != owner.request.Session || capture.ConfigSHA256 != owner.request.ConfigSHA256 {
+		return errors.New("installed controller adopted another source/session ledger")
+	}
+	if _, err := standardengine.DecodeReady(epoch.startup.Ready, standardengine.SHA256(epoch.startup.Capture)); err != nil {
+		return err
 	}
 	if action == "failure" || action == "network-failure" {
 		if err = linuxStandardServiceControllerFailureFixture(a, owner, action); err != nil {

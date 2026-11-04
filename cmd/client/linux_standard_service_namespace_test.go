@@ -58,13 +58,13 @@ func init() {
 // named Unix listeners, kernel peer pidfds, actual installed service/helper
 // processes, readiness and process join. Missing capabilities fail the gate.
 func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *testing.T) {
-	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "on-connect-network-failure", "always-off", "always"} {
+	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "on-connect-network-failure", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy := scenario
 			if scenario == "always-off" {
 				policy = "always"
 			}
-			if scenario == "on-connect-network-failure" || scenario == "on-connect-failure" {
+			if scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
 				policy = "on-connect"
 			}
 			executable := linuxControllerNamespaceInstall(t)
@@ -149,6 +149,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				if scenario == "on-connect-failure" {
 					action = "failure"
 				}
+				if scenario == "on-connect-pre-rpc-network-failure" {
+					action = "pre-rpc-network-failure"
+				}
 				controller.Env = append(controller.Env, "ROUTERVPN_CONTROLLER_STANDARD_SERVICE_FIXTURE="+action)
 				var output bytes.Buffer
 				controller.Stdout = &output
@@ -162,7 +165,10 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				if err = controller.Wait(); err != nil || !strings.Contains(output.String(), "standard-service-route-joined") {
 					t.Fatal("actual controller service route did not complete", err, output.String())
 				}
-				if nativeQueries != nil && nativeQueries.Load() < 1 {
+				if scenario == "on-connect-pre-rpc-network-failure" && nativeQueries != nil && nativeQueries.Load() != 0 {
+					t.Fatal("rejected pre-RPC epoch still executed selected DNS")
+				}
+				if scenario != "on-connect-pre-rpc-network-failure" && nativeQueries != nil && nativeQueries.Load() < 1 {
 					t.Fatal("actual standard engine did not route uncached selected DNS through the original SOCKS peer")
 				}
 				_ = writer.Close()

@@ -30,6 +30,7 @@ type linuxStandardStartupObserver interface {
 }
 
 type linuxStandardEngine struct {
+	readyBody                                                                             []byte
 	imageCapability                                                                       *linuxprocess.SealedImage
 	owner                                                                                 *linuxLegacyStandardExitOwner
 	imagePath, manifestPath, manifestSHA                                                  string
@@ -328,8 +329,12 @@ func (n *linuxStandardEngine) finishStart(ctx context.Context) error {
 	if err := n.bootstrap.Current(ctx); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	n.readyBody = append([]byte(nil), body...)
 	n.ready = true
-	return ctx.Err()
+	return nil
 }
 
 func (n *linuxStandardEngine) current(ctx context.Context) error {

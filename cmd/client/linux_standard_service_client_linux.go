@@ -16,6 +16,7 @@ import (
 var linuxStandardServiceOwners sync.Map // map[*app]*linuxStandardServiceLaunch
 
 type linuxStandardServiceLaunch struct {
+	exchange                                    func(context.Context, linuxStandardServiceRequest, *os.File, func()) (linuxStandardServiceResponse, error) // explicit native test channel; nil uses fixed installed RPC
 	mu                                          sync.Mutex
 	app                                         *app
 	prepared                                    *linuxLegacyStandardExitOwner
@@ -41,7 +42,7 @@ func prepareLinuxStandardServiceLaunch(a *app, local *linuxLegacyStandardExitOwn
 	profile, ok := a.profileByIDLocked(local.protectionProfileID)
 	a.mu.Unlock()
 	digest, err := linuxStandardProfileDigest(profile)
-	if err != nil || !ok {
+	if err != nil || !ok || local.requestEpoch == nil || digest != local.requestEpoch.profileDigest {
 		return nil, errors.Join(err, errors.New("standard service lost the original selected profile"))
 	}
 	request := linuxStandardServiceRequest{Schema: 1, Action: "start", Session: local.session,
@@ -66,7 +67,18 @@ func (o *linuxStandardServiceLaunch) currentIntent(operation context.Context, co
 }
 
 func (o *linuxStandardServiceLaunch) call(ctx context.Context, request linuxStandardServiceRequest, directory *os.File) error {
-	response, err := linuxStandardServiceRPC(ctx, o.image, o.prepared.namespaceInfo, &o.peer, request, directory, func() {
+	if request.Action != "start" && request.Action != "stop" {
+		if err := o.prepared.requestEpoch.current(ctx, true); err != nil {
+			return err
+		}
+	}
+	exchange := o.exchange
+	if exchange == nil {
+		exchange = func(ctx context.Context, request linuxStandardServiceRequest, directory *os.File, beforeWrite func()) (linuxStandardServiceResponse, error) {
+			return linuxStandardServiceRPC(ctx, o.image, o.prepared.namespaceInfo, &o.peer, request, directory, beforeWrite)
+		}
+	}
+	response, err := exchange(ctx, request, directory, func() {
 		if request.Action == "start" {
 			o.attempted = true
 		}
@@ -74,8 +86,29 @@ func (o *linuxStandardServiceLaunch) call(ctx context.Context, request linuxStan
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if response.authenticatedPeer == nil || response.authenticatedPeer != o.peer {
+		return errors.New("standard service completion lost its original authenticated peer")
+	}
+	if err := o.peer.Current(ctx); err != nil {
+		return err
+	}
 	if response.Protection != nil {
 		return errors.New("standard runtime response supplied unrelated protection view")
+	}
+	if request.Action == "start" {
+		if err := o.currentIntent(ctx, o.Command()); err != nil {
+			return err
+		}
+		if err := o.prepared.requestEpoch.admit(ctx, response.Startup, response.transmittedDeadline); err != nil {
+			return err
+		}
+		return o.peer.Current(ctx)
+	}
+	if request.Action != "stop" {
+		return o.prepared.requestEpoch.current(ctx, true)
 	}
 	return nil
 }
@@ -110,12 +143,18 @@ func linuxStandardServiceRPC(ctx context.Context, image, namespace os.FileInfo, 
 	if !ok {
 		return response, errors.New("standard service did not return its native Unix channel")
 	}
+	return linuxStandardServiceExchange(ctx, channel, image, namespace, originalPeer, request, directory, []string{filepath.Join(linuxOwnedControllerRoot, "router-vpn-client"), linuxStandardServiceArgument}, beforeWrite)
+}
+
+// Production always supplies its fixed service role. Native tests can exercise
+// this same framed exchange with original inherited channels and exact peer args.
+func linuxStandardServiceExchange(ctx context.Context, channel *net.UnixConn, image, namespace os.FileInfo, originalPeer **linuxStandardServicePeer, request linuxStandardServiceRequest, directory *os.File, arguments []string, beforeWrite func()) (response linuxStandardServiceResponse, failure error) {
 	finish, err := linuxStandardServiceDeadline(ctx, channel)
 	if err != nil {
 		return response, err
 	}
 	defer finish()
-	peer, err := captureLinuxStandardServicePeer(ctx, channel, image, []string{filepath.Join(linuxOwnedControllerRoot, "router-vpn-client"), linuxStandardServiceArgument}, namespace)
+	peer, err := captureLinuxStandardServicePeer(ctx, channel, image, arguments, namespace)
 	if err != nil {
 		return response, err
 	}
@@ -155,6 +194,11 @@ func linuxStandardServiceRPC(ctx context.Context, image, namespace os.FileInfo, 
 	if err = (*originalPeer).Current(ctx); err != nil {
 		return response, err
 	}
+	if response.Startup != nil && (request.Action != "start" || !response.Complete) || response.Complete && request.Action == "start" && response.Startup == nil {
+		return response, errors.New("standard service response changed original startup ledger scope")
+	}
+	response.transmittedDeadline = request.DeadlineNS
+	response.authenticatedPeer = *originalPeer
 	if !response.Complete {
 		return response, errors.New(response.Error)
 	}
@@ -200,6 +244,9 @@ func (o *linuxStandardServiceLaunch) Start(ctx context.Context) error {
 		o.peer, prior.peer = prior.peer, nil
 		prior.mu.Unlock()
 	}
+	if err := o.prepared.requestEpoch.begin(ctx); err != nil {
+		return err
+	}
 	if err := o.call(ctx, o.request, o.prepared.directory); err != nil {
 		return err
 	}
@@ -237,6 +284,9 @@ func (o *linuxStandardServiceLaunch) Current(ctx context.Context) error {
 func (o *linuxStandardServiceLaunch) closeCopies() error {
 	if o.copiesClosed {
 		return nil
+	}
+	if o.prepared.requestEpoch != nil && !o.prepared.requestEpoch.closed {
+		return errors.New("standard controller copies retain an unjoined original observer")
 	}
 	if o.prepared.closedFiles == nil {
 		o.prepared.closedFiles = make(map[*os.File]bool)
@@ -309,13 +359,16 @@ func (s *linuxStandardServiceStop) Retire(ctx context.Context, command *exec.Cmd
 	if err := o.currentIntent(s.operation, s.command); err != nil {
 		return err
 	}
+	if err := o.prepared.requestEpoch.close(ctx); err != nil {
+		return err
+	}
 	if o.attempted {
 		request := linuxStandardServiceRequest{Schema: 1, Action: "stop", Session: o.request.Session, Release: release}
 		if err := o.call(ctx, request, nil); err != nil {
 			return err
 		}
 	} else {
-		if err := o.prepared.Discard(); err != nil {
+		if err := o.prepared.discardContext(ctx); err != nil {
 			return err
 		}
 		o.copiesClosed = true

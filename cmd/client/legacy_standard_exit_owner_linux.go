@@ -27,6 +27,7 @@ import (
 var legacyStandardExitOwners sync.Map // map[*app]*linuxLegacyStandardExitOwner
 
 type linuxLegacyStandardExitOwner struct {
+	requestEpoch                                                              *linuxStandardRequestEpoch
 	native                                                                    *linuxStandardEngine
 	dns                                                                       *legacyStandardDNS
 	protectionPolicy, protectionRoot, protectionProfileID, protectionEndpoint string
@@ -135,6 +136,10 @@ func prepareLegacyStandardExitOwnerWithEngine(a *app, original *exec.Cmd, runtim
 }
 
 func prepareLegacyStandardExitOwnerMode(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error, network func() string, native, requestOnly bool) (result legacyStandardExitLaunch, failure error) {
+	return prepareLegacyStandardExitOwnerWithRequestObserver(a, original, runtimeMode, base, routerID, tunAbsent, network, native, requestOnly, openLinuxStandardRequestObserver)
+}
+
+func prepareLegacyStandardExitOwnerWithRequestObserver(a *app, original *exec.Cmd, runtimeMode, base, routerID string, tunAbsent func() error, network func() string, native, requestOnly bool, open func(context.Context, context.Context) (linuxStandardStartupObserver, error)) (result legacyStandardExitLaunch, failure error) {
 	if requestOnly && (native || a.localController == nil) {
 		return nil, errors.New("standard source-only request has no original installed controller")
 	}
@@ -174,8 +179,10 @@ func prepareLegacyStandardExitOwnerMode(a *app, original *exec.Cmd, runtimeMode,
 		return nil, errors.New("standard exit has an invalid captured kill-switch policy")
 	}
 	launch := &desktopNodeLaunch{}
-	if err := captureDesktopRuntimeDirectory(launch, original.Args[3]); err != nil {
-		return nil, err
+	if !requestOnly {
+		if err := captureDesktopRuntimeDirectory(launch, original.Args[3]); err != nil {
+			return nil, err
+		}
 	}
 	owner := &linuxLegacyStandardExitOwner{protectionPolicy: policy, protectionRoot: original.Dir, protectionProfileID: control.ID, protectionEndpoint: original.Args[4], protectionLAN: control.HomeLANAccess, protectionFactory: createLegacyExitNativeProtection, protectionAbsence: mobiletor.ReadDesktopLinuxProtectionAbsence, tunAbsent: tunAbsent, app: a, launch: launch, pidfd: -1, runtimeMode: runtimeMode, base: base, routerID: routerID}
 	preparation := a.connectionOperationContextOrBackground()
@@ -201,12 +208,20 @@ func prepareLegacyStandardExitOwnerMode(a *app, original *exec.Cmd, runtimeMode,
 	if err == nil && native {
 		err = owner.prepareNativeEngine(preparation)
 	}
+	if err == nil && requestOnly {
+		err = owner.openRequestEpoch(preparation, open)
+	}
 	if err == nil {
 		err = owner.tunAbsentInNamespace()
 	}
 	runtime.UnlockOSThread()
 	if err != nil {
 		return nil, err
+	}
+	if requestOnly {
+		if err := captureDesktopRuntimeDirectory(launch, original.Args[3]); err != nil {
+			return nil, err
+		}
 	}
 	capturedRoot, expectedNamespace := original.Dir, owner.namespaceInfo
 	owner.offProtectionCheck = func(ctx context.Context) error {
@@ -268,6 +283,13 @@ func prepareLegacyStandardExitOwnerMode(a *app, original *exec.Cmd, runtimeMode,
 		owner.command = original
 		launch.command = original
 		if err := owner.legacyDNSNetworkCurrent(); err != nil {
+			return nil, err
+		}
+		profileDigest, err := linuxStandardProfileDigest(control)
+		if err != nil {
+			return nil, err
+		}
+		if err := owner.requestEpoch.bind(preparation, profileDigest); err != nil {
 			return nil, err
 		}
 		failed = false
@@ -535,6 +557,9 @@ func (o *linuxLegacyStandardExitOwner) discardLocked(ctx context.Context) error 
 		return err
 	}
 	var failures []error
+	if err := o.requestEpoch.close(ctx); err != nil {
+		return err
+	}
 	if o.native != nil {
 		if err := o.native.close(ctx); err != nil {
 			return err

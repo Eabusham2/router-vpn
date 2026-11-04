@@ -330,6 +330,10 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 }
 
 func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File) (failure error) {
+	return s.handleWithStartup(ctx, peer, request, files, nil)
+}
+
+func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File, startup **linuxStandardServiceStartup) (failure error) {
 	if request.ProfileRevision != "" || request.ResultRevision != "" {
 		return errors.New("runtime request supplied unrelated protection source")
 	}
@@ -364,7 +368,15 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 		if len(files) != 1 {
 			return errors.New("standard service Start requires its original workspace descriptor")
 		}
-		return s.start(ctx, peer, request, files[0])
+		if err := s.start(ctx, peer, request, files[0]); err != nil {
+			return err
+		}
+		if startup != nil {
+			var err error
+			*startup, err = s.startupResponse(ctx, peer, request)
+			return err
+		}
+		return nil
 	}
 	if len(files) != 0 {
 		return errors.New("standard service action supplied unexpected native authority")
@@ -485,22 +497,24 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	if linuxStandardServiceDecode(body, &request) != nil || request.BudgetMS < 1 || request.BudgetMS > 120000 {
 		return
 	}
-	remaining := time.Until(time.Unix(0, request.DeadlineNS))
-	if maximum := time.Duration(request.BudgetMS) * time.Millisecond; remaining > maximum {
-		remaining = maximum
+	deadline := time.Unix(0, request.DeadlineNS)
+	if maximum := time.Now().Add(time.Duration(request.BudgetMS) * time.Millisecond); maximum.Before(deadline) {
+		deadline = maximum
 	}
-	if remaining <= 0 {
+	if !time.Now().Before(deadline) {
 		return
 	}
-	operation, stop := context.WithTimeout(context.Background(), remaining)
+	// Keep the transmitted absolute bound. Recomputing WithTimeout from a
+	// previous time.Until would silently add elapsed admission time.
+	operation, stop := context.WithDeadline(context.Background(), deadline)
 	defer stop()
-	deadline, _ := operation.Deadline()
 	if connection.SetDeadline(deadline) != nil {
 		return
 	}
 	live, join := linuxStandardServiceChannelLifetime(operation, connection)
 	shutdownAccepted := false
 	var protection *linuxStandardServiceProtectionData
+	var startup *linuxStandardServiceStartup
 	if upgrade {
 		err = s.handleIdleUpgrade(live, peer, request, files)
 		shutdownAccepted = err == nil
@@ -511,7 +525,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 			protection, err = s.protectionRequest(live, peer, request)
 		}
 	} else {
-		err = s.handle(live, peer, request, files)
+		err = s.handleWithStartup(live, peer, request, files, &startup)
 	}
 	err = errors.Join(err, live.Err(), join(), operation.Err())
 	if err != nil && request.Action == "start" {
@@ -534,7 +548,10 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 		}
 		stopCleanup()
 	}
-	response := linuxStandardServiceResponse{Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
+	if err != nil {
+		startup = nil
+	}
+	response := linuxStandardServiceResponse{Startup: startup, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
 	if err != nil {
 		response.Error = err.Error()
 		if len(response.Error) > 2048 {
