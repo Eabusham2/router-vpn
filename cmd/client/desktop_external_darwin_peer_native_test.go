@@ -205,7 +205,8 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
-	p.packetEntry = strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
+	p.packetEntry = connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
 	if p.packetEntry {
 		p.entryProtocol = "wireguard"
 		if strings.HasPrefix(scenario, "awg-entry-ss-") {
@@ -215,6 +216,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 				p.entryVariant = "fast"
 			}
 		}
+	}
+	if connectEntry && connectVariant != "wireguard" {
+		p.entryProtocol, p.entryVariant = "amneziawg", connectVariant
 	}
 	if p.packetEntry && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
@@ -364,7 +368,7 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		DNSMode: "custom", DNSProtocol: "tcp", DNSHost: "203.0.113.53", DNSPort: 5353, IPv6Mode: "off", StartLayer: common.StartLayerOff,
 		MTUPolicy: "manual", ManualMTU: 1376, EffectiveMTU: 9000, KillSwitch: true, KillSwitchPolicy: "on-connect", MultihopExecution: "auto",
 		External: &common.ExternalNodeConfig{Protocol: p.protocol, ExpectedPublicIP: "203.0.113.88"}}
-	connect := &common.ExternalHTTPConnectConfig{Host: p.physical.String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
+	connect := &common.ExternalHTTPConnectConfig{Host: p.address.Addr().String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
 	profile.KillSwitchPolicy = p.policy
 	if p.policy == "always" {
 		profile.IPv6Mode = "on"
@@ -617,6 +621,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if protocol, _, fault, ok := macOSExternalConnectEntryScenario(scenario); ok {
+		return protocol, "", fault
+	}
 	if strings.HasPrefix(scenario, "awg-entry-ss-") {
 		for _, variant := range []string{"fast", "strong"} {
 			base := "awg-entry-ss-" + variant

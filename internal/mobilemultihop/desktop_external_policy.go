@@ -56,7 +56,7 @@ type DesktopExternalPolicy struct {
 var desktopExternalPolicyError = errors.New("desktop external lower path requires its complete captured native policy")
 
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
-// Darwin additionally admits the exact Local external WG/AWG entry -> SS exit graph.
+// Darwin additionally admits the exact Local external WG/AWG entry -> SS or HTTP(S) CONNECT graph.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -256,7 +256,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			return nil, desktopExternalPolicyError
 		}
 		exit, ok := outbounds[0].(map[string]any)
-		if !ok || exit["tag"] != ExternalFinalTag || exit["type"] != "shadowsocks" || exit["detour"] != capture.EntryTag {
+		if !ok || exit["tag"] != ExternalFinalTag || exit["type"] != kind || exit["detour"] != capture.EntryTag {
 			return nil, desktopExternalPolicyError
 		}
 	}
@@ -284,10 +284,14 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 // The original compiler validates the full credentials and graph before this
 // bounded admission. The actual first root must still match its exact digest;
 // an entry descriptor cannot turn an unrelated transport into physical egress.
+func desktopExternalPacketEntryExit(protocol string) bool {
+	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect"
+}
+
 func desktopExternalPacketEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture) string {
 	if original == nil || capture.EntryID == "" || capture.EntryTag != "external-entry" ||
 		capture.EntryNodeID != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
-		capture.Protocol != "shadowsocks" || capture.StartLayer != "" || capture.EntryStartLayer != "" {
+		!desktopExternalPacketEntryExit(capture.Protocol) || capture.StartLayer != "" || capture.EntryStartLayer != "" {
 		return ""
 	}
 	entry := original.capture.Entry

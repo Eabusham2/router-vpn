@@ -15,10 +15,20 @@ func TestDesktopExternalDarwinAmneziaEntryOwnsFirstRootAndCompletePolicy(t *test
 	}
 }
 func desktopExternalPacketEntryOwnsPolicy(t *testing.T, variant string) {
+	desktopExternalPacketEntryExitOwnsPolicy(t, variant, "shadowsocks")
+}
+func TestDesktopExternalDarwinPacketEntryCONNECTRetainsCompletePolicy(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, protocol := range []string{"http-connect", "https-connect"} {
+			t.Run(variant+"/"+protocol, func(t *testing.T) { desktopExternalPacketEntryExitOwnsPolicy(t, variant, protocol) })
+		}
+	}
+}
+func desktopExternalPacketEntryExitOwnsPolicy(t *testing.T, variant, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		for _, ipv6 := range []string{"on", "off"} {
 			for _, lan := range []bool{false, true} {
-				graph, capture := externalTestFixture(t, "shadowsocks", "wireguard")
+				graph, capture := externalTestFixture(t, protocol, "wireguard")
 				rootType := "wireguard"
 				if variant != "wireguard" {
 					rootType = AmneziaType
@@ -56,7 +66,7 @@ func desktopExternalPacketEntryOwnsPolicy(t *testing.T, variant string) {
 				if !reflect.DeepEqual(retained, externalTestFind(t, source, "external-entry")) {
 					t.Fatal("entry changed its exact keys, all eleven AWG parameters or MTU")
 				}
-				if actual.EntryID != "saved-entry" || actual.EntryTag != "external-entry" || len(actual.PhysicalRoots) != 1 || actual.PhysicalRoots[0].Tag != "external-entry" || meta.RootTag != "external-entry" || meta.RootType != rootType || meta.Protocol != "shadowsocks" || meta.SOCKSUDPAssociationRequired || entry["detour"] != DesktopExternalPhysicalTag || exit["detour"] != "external-entry" || !reflect.DeepEqual(exit, externalTestFind(t, source, ExternalFinalTag)) || actual.SelectedDNS.Detour != ExternalFinalTag || actual.SelectedDNS.Physical || actual.ConfiguredMTU != 1360 || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan {
+				if actual.EntryID != "saved-entry" || actual.EntryTag != "external-entry" || len(actual.PhysicalRoots) != 1 || actual.PhysicalRoots[0].Tag != "external-entry" || meta.RootTag != "external-entry" || meta.RootType != rootType || meta.Protocol != protocol || meta.SOCKSUDPAssociationRequired || entry["detour"] != DesktopExternalPhysicalTag || exit["detour"] != "external-entry" || !reflect.DeepEqual(exit, externalTestFind(t, source, ExternalFinalTag)) || actual.SelectedDNS.Detour != ExternalFinalTag || actual.SelectedDNS.Physical || actual.ConfiguredMTU != 1360 || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan {
 					t.Fatal("entry lost exact root, final graph or device policy")
 				}
 				for _, tuple := range actual.PhysicalRoots[0].Destinations {
@@ -86,7 +96,7 @@ func TestDesktopExternalDarwinWireGuardEntryPreservesOtherGraphBoundaries(t *tes
 			t.Fatal("unimplemented first root admitted", entry)
 		}
 	}
-	for _, protocol := range []string{"wireguard", "socks5", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range []string{"wireguard", "socks5", "hysteria2"} {
 		graph, capture := externalTestFixture(t, protocol, "wireguard")
 		capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 		original := externalDesktopCompile(t, graph, capture)

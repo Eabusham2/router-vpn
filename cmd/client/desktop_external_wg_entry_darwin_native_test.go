@@ -38,7 +38,7 @@ func macOSExternalNativePacketEntryRead(t *testing.T, p *macOSExternalNativePeer
 		expectedParameters = macOSExternalNativeAmneziaDigest(t, p.entryVariant)
 	}
 	if value == nil || value.Protocol != p.entryProtocol || value.ParametersSHA256 != expectedParameters || reply.Address != "198.51.100.240:8388" {
-		t.Fatal("WG entry lost its only tunneled SS destination")
+		t.Fatal("packet entry lost its only captured tunneled stream exit")
 	}
 	address, err := netip.ParseAddrPort(value.Address)
 	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && address != p.entryAddress || value.PhysicalUDP < 0 || value.Streams < 0 || value.Packets != 0 {
@@ -83,8 +83,27 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 		if _, err := rand.Read(key[:]); err != nil {
 			t.Fatal(err)
 		}
-		exit.External.Shadowsocks.Password = base64.StdEncoding.EncodeToString(key[:])
+		switch p.protocol {
+		case "shadowsocks":
+			exit.External.Shadowsocks.Password = base64.StdEncoding.EncodeToString(key[:])
+		case "http-connect":
+			exit.External.HTTPConnect.Password = base64.StdEncoding.EncodeToString(key[:])
+		case "https-connect":
+			exit.External.HTTPSConnect.Password = base64.StdEncoding.EncodeToString(key[:])
+		default:
+			t.Fatal("unowned final credential negative")
+		}
 		clear(key[:])
+	case "wrong-exit-username":
+		if exit.External.HTTPConnect == nil {
+			t.Fatal("username negative requires captured CONNECT")
+		}
+		exit.External.HTTPConnect.Username += "-different"
+	case "wrong-exit-server-name":
+		if exit.External.HTTPSConnect == nil {
+			t.Fatal("TLS name negative requires captured HTTPS CONNECT")
+		}
+		exit.External.HTTPSConnect.TLSServerName = "untrusted-exit.example"
 	case "wrong-exit":
 		exit.External.ExpectedPublicIP = "203.0.113.89"
 	}
@@ -101,7 +120,7 @@ func macOSExternalNativePacketEntryProved(t *testing.T, p *macOSExternalNativePe
 		ipv6 = "on"
 	}
 	if entry == nil || entry.PhysicalUDP < 1 || entry.Streams < 2 || entry.PublicReplies < 1 || observed.Connections < 1 || observed.Streams < 2 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.OuterTag != "external-entry" || live.OuterType != macOSExternalNativeEntryType(p) || live.PhysicalNetwork != "udp" || live.PhysicalAddress != p.entryAddress.String() || live.InnerHost != "198.51.100.240" || live.InnerDetour != "external-entry" || live.DNSProtocol != "tcp" || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.Network.MTU != 1376 || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") {
-		t.Fatal("WG-entry/SS-exit lost its actual two encrypted paths, independent entry proof or captured policy")
+		t.Fatal("packet-entry/stream-exit lost its actual separate authenticated paths, independent entry proof or captured policy")
 	}
 }
 func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, client *http.Client, p *macOSExternalNativePeer, status int, raw []byte, failure error, controllerPID int, before map[int]macOSExternalTunnelIdentity) {
@@ -127,9 +146,16 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 		if entry.PublicReplies < 1 || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
 			t.Fatal("entry mismatch acquired final-path proof")
 		}
-	case "wrong-exit-key":
+	case "wrong-exit-key", "wrong-exit-username":
 		if entry.PublicReplies < 1 || observed.Connections < 1 || observed.Streams != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
-			t.Fatal("second encrypted peer credential negative missed actual SS boundary")
+			t.Fatal("second peer credential negative missed actual captured authentication boundary")
+		}
+		if p.protocol != "shadowsocks" && observed.AuthFailures < 1 {
+			t.Fatal("CONNECT negative never reached actual independent credentials")
+		}
+	case "wrong-exit-server-name":
+		if entry.PublicReplies < 1 || observed.Connections < 1 || observed.Streams != 0 || observed.AuthFailures != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
+			t.Fatal("HTTPS CONNECT name negative missed original exit TLS boundary")
 		}
 	case "wrong-dns":
 		if entry.PublicReplies < 1 || observed.Connections < 1 || observed.DNSQueries < 1 || observed.PublicReplies != 0 {

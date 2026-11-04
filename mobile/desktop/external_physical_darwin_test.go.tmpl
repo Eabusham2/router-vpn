@@ -12,7 +12,7 @@ import (
 )
 
 func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *testing.T) {
-	for _, selected := range []string{"shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong"} {
+	for _, selected := range []string{"shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong"} {
 		runExternalPhysicalFactoryProtocolCases(t, []string{selected}, func(t *testing.T, c *externalPhysicalFactoryCase) error {
 			wantInterfaces, err := desktopDarwinPhysicalInterfaces(c.selected, c.ipv6 != "off")
 			if err != nil {

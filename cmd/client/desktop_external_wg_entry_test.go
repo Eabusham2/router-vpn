@@ -10,8 +10,11 @@ import (
 )
 
 func desktopExternalPacketEntryFixture(t *testing.T, kill, variant string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
+	return desktopExternalPacketEntryExitFixture(t, kill, variant, "shadowsocks")
+}
+func desktopExternalPacketEntryExitFixture(t *testing.T, kill, variant, protocol string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
 	t.Helper()
-	profile, exit := desktopExternalNativeFixture(t, "shadowsocks")
+	profile, exit := desktopExternalNativeFixture(t, protocol)
 	entry, _ := desktopExternalNativeFixture(t, "wireguard")
 	entry.ID = "captured-wg-entry"
 	if variant != "wireguard" {
@@ -42,8 +45,18 @@ func TestDesktopExternalAmneziaEntryRetainsBothSourcesAndMeasurementOwner(t *tes
 	}
 }
 func desktopExternalPacketEntryRetainsSources(t *testing.T, variant string) {
+	desktopExternalPacketEntryExitRetainsSources(t, variant, "shadowsocks")
+}
+func TestDesktopExternalPacketEntryCONNECTRetainsBothSourcesAndMeasurementOwner(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, protocol := range []string{"http-connect", "https-connect"} {
+			t.Run(variant+"/"+protocol, func(t *testing.T) { desktopExternalPacketEntryExitRetainsSources(t, variant, protocol) })
+		}
+	}
+}
+func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
-		profile, entry, launch := desktopExternalPacketEntryFixture(t, kill, variant)
+		profile, entry, launch := desktopExternalPacketEntryExitFixture(t, kill, variant, protocol)
 		if err := prepareDesktopExternalPhysicalCaptured(launch, "darwin"); err != nil || launch.external.physical == nil {
 			t.Fatal(err)
 		}
@@ -55,7 +68,7 @@ func desktopExternalPacketEntryRetainsSources(t *testing.T, variant string) {
 		if variant != "wireguard" {
 			rootType = mobilemultihop.AmneziaType
 		}
-		if err != nil || meta == nil || meta.RootType != rootType || meta.Protocol != "shadowsocks" {
+		if err != nil || meta == nil || meta.RootType != rootType || meta.Protocol != protocol {
 			t.Fatal("lost captured first root", err)
 		}
 		measure, err := capturedDesktopMeasurementRuntime(launch)
@@ -67,6 +80,12 @@ func desktopExternalPacketEntryRetainsSources(t *testing.T, variant string) {
 			t.Fatal("DNS mailbox borrowed entry identity", err)
 		}
 		faults := []string{"entry-key", "entry-peer-key", "entry-psk", "entry-id", "entry-address", "entry-public", "entry-option", "exit-id", "exit-key", "exit-public", "dns", "mtu", "lan", "ipv6"}
+		if protocol != "shadowsocks" {
+			faults = append(faults, "exit-username")
+			if protocol == "https-connect" {
+				faults = append(faults, "exit-tls")
+			}
+		}
 		if variant != "wireguard" {
 			for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
 				faults = append(faults, "parameter/"+key)
@@ -81,7 +100,7 @@ func desktopExternalPacketEntryRetainsSources(t *testing.T, variant string) {
 				}
 				switch fault {
 				case "entry-key":
-					wireguard.PrivateKey = profile.External.Shadowsocks.Password
+					wireguard.PrivateKey = testWGKey('y')
 				case "entry-peer-key":
 					wireguard.PeerPublicKey = testWGKey('z')
 				case "entry-id":
@@ -89,7 +108,7 @@ func desktopExternalPacketEntryRetainsSources(t *testing.T, variant string) {
 				case "exit-id":
 					p.ID += "changed"
 				case "entry-psk":
-					wireguard.PresharedKey = profile.External.Shadowsocks.Password
+					wireguard.PresharedKey = testWGKey('y')
 				case "entry-address":
 					e.Endpoint = "192.0.2.222"
 				case "entry-public":
@@ -97,7 +116,11 @@ func desktopExternalPacketEntryRetainsSources(t *testing.T, variant string) {
 				case "entry-option":
 					e.DAITAEnabled = !e.DAITAEnabled
 				case "exit-key":
-					p.External.Shadowsocks.Password += "different"
+					mutateDesktopExternalEntryExit(t, &p, "password")
+				case "exit-username":
+					mutateDesktopExternalEntryExit(t, &p, "username")
+				case "exit-tls":
+					mutateDesktopExternalEntryExit(t, &p, "tls")
 				case "exit-public":
 					p.External.ExpectedPublicIP = "198.51.100.22"
 				case "dns":
@@ -131,8 +154,18 @@ func TestDesktopExternalAmneziaEntryRestoreKeepsCompleteSourceAndNewSession(t *t
 	}
 }
 func desktopExternalPacketEntryRestore(t *testing.T, variant string) {
+	desktopExternalPacketEntryExitRestore(t, variant, "shadowsocks")
+}
+func TestDesktopExternalPacketEntryCONNECTRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, protocol := range []string{"http-connect", "https-connect"} {
+			t.Run(variant+"/"+protocol, func(t *testing.T) { desktopExternalPacketEntryExitRestore(t, variant, protocol) })
+		}
+	}
+}
+func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
-		_, _, initial := desktopExternalPacketEntryFixture(t, kill, variant)
+		_, _, initial := desktopExternalPacketEntryExitFixture(t, kill, variant, protocol)
 		exit, err := standardExitFromExternalProfile(initial.external.profile)
 		if err != nil {
 			t.Fatal(err)
@@ -152,6 +185,12 @@ func desktopExternalPacketEntryRestore(t *testing.T, variant string) {
 			t.Fatal("restore discarded original selected MTU")
 		}
 		faults := []string{"entry-key", "entry-ip", "final-key", "source", "server"}
+		if protocol != "shadowsocks" {
+			faults = append(faults, "final-username")
+			if protocol == "https-connect" {
+				faults = append(faults, "final-tls")
+			}
+		}
 		if variant != "wireguard" {
 			for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
 				faults = append(faults, "parameter/"+key)
@@ -173,7 +212,11 @@ func desktopExternalPacketEntryRestore(t *testing.T, variant string) {
 				case "entry-ip":
 					wireguard.Endpoint = "192.0.2.21:51820"
 				case "final-key":
-					copy.profile.External.Shadowsocks.Password = testWGKey('z')
+					mutateDesktopExternalEntryExit(t, &copy.profile, "password")
+				case "final-username":
+					mutateDesktopExternalEntryExit(t, &copy.profile, "username")
+				case "final-tls":
+					mutateDesktopExternalEntryExit(t, &copy.profile, "tls")
 				case "source":
 					copy.source = []byte(`{}`)
 				case "server":
@@ -200,4 +243,27 @@ func mutateDesktopExternalEntryParameter(t *testing.T, parameters map[string]str
 		t.Fatal(err)
 	}
 	parameters[key] = strconv.Itoa(n + 1)
+}
+
+func mutateDesktopExternalEntryExit(t *testing.T, profile *common.RouterProfile, field string) {
+	t.Helper()
+	switch profile.External.Protocol {
+	case "shadowsocks":
+		profile.External.Shadowsocks.Password += "changed"
+	case "http-connect", "https-connect":
+		proxy := profile.External.HTTPConnect
+		if profile.External.Protocol == "https-connect" {
+			proxy = profile.External.HTTPSConnect
+		}
+		switch field {
+		case "username":
+			proxy.Username += "changed"
+		case "tls":
+			proxy.TLSServerName = "different.example"
+		default:
+			proxy.Password += "changed"
+		}
+	default:
+		t.Fatal("unknown captured stream exit")
+	}
 }

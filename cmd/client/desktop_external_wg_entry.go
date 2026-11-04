@@ -8,11 +8,15 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// This shape selects only the captured Local ordinary WG/AWG entry -> SS exit.
+// This shape selects only the captured Local ordinary WG/AWG entry -> SS or HTTP(S) CONNECT exit.
 // It supplies no source, socket or native admission authority by itself.
+func desktopExternalPacketEntryExitProtocol(protocol string) bool {
+	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect"
+}
+
 func desktopExternalPacketEntryOwner(owner *desktopExternalRuntime) bool {
 	if owner == nil || owner.direct || owner.predecessor != "" || owner.selection != "local" ||
-		owner.profile.NodeKind != "external" || owner.profile.External == nil || owner.profile.External.Protocol != "shadowsocks" ||
+		owner.profile.NodeKind != "external" || owner.profile.External == nil || !desktopExternalPacketEntryExitProtocol(owner.profile.External.Protocol) ||
 		owner.entry.NodeKind != "external" || owner.entry.External == nil || (owner.entry.External.Protocol != "wireguard" && owner.entry.External.Protocol != "amneziawg") ||
 		owner.entry.ID == "" || owner.entry.ID == owner.profile.ID ||
 		owner.profile.StartLayer != "" && owner.profile.StartLayer != "off" || owner.entry.StartLayer != "" && owner.entry.StartLayer != "off" ||
