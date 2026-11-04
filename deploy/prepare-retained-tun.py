@@ -2,16 +2,19 @@
 """Prepare the ownership-checked TUN reader transaction in a pinned core."""
 from pathlib import Path
 import argparse
+import hashlib
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 MANAGER = 'adapter/inbound/manager.go'
+# Exact previous published preparation, accepted only for this bounded upgrade.
+PREVIOUS_TEMPLATES = {'routervpn_mtu.go': '79603bccd07497e8d01cc99b87e61bce7b45c3c0f9c89c1725c697e0f4878669', 'routervpn_mtu_test.go': '67979009bbb57a8c6e4287dd0a502f35745878f7c86e3216a7585356d91f8be3'}
 
 
 def patch_manager(source):
     changes = [
-        ('\taccess       sync.Mutex', '\troutervpnLifecycle sync.Mutex\n\troutervpnRetired []adapter.Inbound\n\taccess       sync.Mutex'),
+        ('\taccess       sync.Mutex', '\troutervpnLifecycle sync.Mutex\n\troutervpnRetired []adapter.Inbound\n\troutervpnMTUPending []*RouterVPNTunTransaction\n\taccess       sync.Mutex'),
         ('\treturn m.inbounds\n', '\treturn append([]adapter.Inbound(nil), m.inbounds...)\n'),
         ('\tinbounds := m.inbounds\n\tm.inbounds = nil', '\tinbounds := append(append([]adapter.Inbound(nil), m.inbounds...), m.routervpnRetired...)\n\tm.routervpnRetired = nil\n\tm.inbounds = nil'),
     ]
@@ -47,6 +50,29 @@ def checked_close(source):
     return source[:start] + close[:-len(tail)] + '\treturn err\n}' + source[end:]
 
 
+def verify(vendor):
+    """Read-only equality against the complete pinned lifecycle projection."""
+    vendor = Path(vendor).resolve()
+    if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True, timeout=30).strip() != PIN:
+        raise ValueError('The exact pinned native core is required.')
+    original = subprocess.check_output(['git', '-C', str(vendor), 'show', PIN + ':' + MANAGER], text=True, timeout=30)
+    expected = patch_manager(original)
+    records = {}
+    manager = vendor / MANAGER
+    if manager.is_symlink() or not manager.is_file() or manager.read_text() not in (expected, checked_close(expected)):
+        raise ValueError('Native manager lost its complete retained lifecycle projection.')
+    records[MANAGER] = hashlib.sha256(manager.read_bytes()).hexdigest()
+    for source, target in (('manager.go.tmpl', 'routervpn_mtu.go'), ('manager_test.go.tmpl', 'routervpn_mtu_test.go'), ('manager_native_linux_test.go.tmpl', 'routervpn_mtu_native_linux_test.go')):
+        template = ROOT / 'mobile/mtu' / source
+        path = manager.parent / target
+        if template.is_symlink() or path.is_symlink() or not path.is_file() or path.read_bytes() != template.read_bytes():
+            raise ValueError('Native manager lost its captured transaction source: ' + target)
+        records[path.relative_to(vendor).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        records['gate/' + template.relative_to(ROOT).as_posix()] = hashlib.sha256(template.read_bytes()).hexdigest()
+    records['gate/deploy/prepare-retained-tun.py'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    return records
+
+
 def prepare(vendor):
     vendor = vendor.resolve()
     head = subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip()
@@ -55,27 +81,32 @@ def prepare(vendor):
     expected = patch_manager(original)
     original_checked = checked_close(original)
     expected_checked = checked_close(expected)
+    prior = expected.replace("\troutervpnMTUPending []*RouterVPNTunTransaction\n", "")
+    prior_checked = checked_close(prior)
     manager = vendor / MANAGER
     if manager.is_symlink():
         raise ValueError('Refusing to overwrite a changed native manager.')
     current = manager.read_text()
-    if current not in (original, expected, original_checked, expected_checked):
+    if current not in (original, expected, original_checked, expected_checked, prior, prior_checked):
         raise ValueError('Refusing to overwrite a changed native manager.')
     # Re-running the full native preparation must never discard the checked
     # teardown proof installed after this TUN transaction in the first run.
-    if current in (original_checked, expected_checked):
+    if current in (original_checked, expected_checked, prior_checked):
         expected = expected_checked
     outputs = {
         manager: expected,
         manager.parent / 'routervpn_mtu.go': (ROOT / 'mobile/mtu/manager.go.tmpl').read_text(),
         manager.parent / 'routervpn_mtu_test.go': (ROOT / 'mobile/mtu/manager_test.go.tmpl').read_text(),
+        manager.parent / 'routervpn_mtu_native_linux_test.go': (ROOT / 'mobile/mtu/manager_native_linux_test.go.tmpl').read_text(),
     }
     for target, content in outputs.items():
         if target.is_symlink() or not target.parent.resolve().is_relative_to(vendor):
             raise ValueError('Unsafe native source destination.')
-        if target != manager and target.exists() and target.read_text() != content:
+        if target != manager and target.exists() and target.read_text() != content and hashlib.sha256(target.read_bytes()).hexdigest() != PREVIOUS_TEMPLATES.get(target.name):
             raise ValueError('Refusing to replace an unrelated native extension.')
-    for target, content in outputs.items():target.write_text(content)
+    # Extension receipts compare canonical bytes on every host. Windows text
+    # writes would otherwise translate these exact LF templates to CRLF.
+    for target, content in outputs.items():target.write_bytes(content.encode('utf-8'))
     print('Prepared retained-TUN manager transaction; no application or service started.')
 
 

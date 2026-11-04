@@ -57,6 +57,10 @@ HYSTERIA2_SUITES = (
      "^TestRouterVPNDesktopNodeHysteria2(LayerCover|OuterCannotBypassFinal)$",
      ("TestRouterVPNDesktopNodeHysteria2LayerCover", "TestRouterVPNDesktopNodeHysteria2OuterCannotBypassFinal")),
 )
+NATIVE_MTU_TEST = "TestRouterVPNNativeLinuxMTUTransactionNamespace"
+NATIVE_MTU_CASES = ("full-search-and-winner", "failed-candidate-and-original-restore", "cancelled-work-and-fresh-stop")
+NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("ReplacementAndRollback", "FailureDoesNotStartAnOverlappingReader", "InvalidationAndStaleCapture", "MutationIsSerialized", "TransactionRetainsOriginalAndPartialCandidateEvidence", "TransactionPreservesFailedConstructionAndRetry", "TransactionBoundsHistoryBeforeAcquisition", "TransactionCancelledAcquisitionAndNativeClose", "BorrowedPlatformKeepsCapturedRollback", "FullSearchRetainsEveryOriginalAttempt"))
+
 NATIVE_RESOLVER_TESTS = tuple("TestRouterVPNNativeLinuxResolver" + name for name in (
     "DaemonCapability", "CredentialRefusals", "MutationNeedsOriginalReply", "LateReplyRetry",
     "RejectsReplacedCapability", "OriginalWireSerial", "RetireRequiresBound", "StartupBound",
@@ -123,7 +127,11 @@ def layer_reference_sources():
 
 def checked_sources(source):
     source = PREP.checked_vendor(Path(source))
-    records = {}
+    records = PREP.MTU.RETAINED.verify(source)
+    inbound = source / "protocol/tun/inbound.go"
+    if inbound.is_symlink() or not inbound.is_file() or PREP.DESKTOP_MTU.inbound_retirement_patch(inbound.read_bytes()) != inbound.read_bytes():
+        raise ValueError("Native MTU inbound lost its complete captured lifecycle/context projection")
+    records["protocol/tun/inbound.go"] = hashlib.sha256(inbound.read_bytes()).hexdigest()
     projection = ROOT / "deploy/test_desktop_tun_retirement_projection.py"
     if projection.is_symlink() or not projection.is_file():
         raise ValueError("Native retirement projection regression lost its original source")
@@ -143,6 +151,8 @@ def checked_sources(source):
     PREP.preflight_pt_files(source, copies)
     for name, relative in PREP.PEER_TEMPLATES.items():
         copies[relative] = (ROOT / "mobile/desktop" / name).read_bytes()
+    for name, relative in (("manager.go", "adapter/inbound/routervpn_mtu.go"), ("manager_test.go", "adapter/inbound/routervpn_mtu_test.go"), ("manager_native_linux_test.go", "adapter/inbound/routervpn_mtu_native_linux_test.go"), ("box.go", "routervpn_mtu.go"), ("box_test.go", "routervpn_mtu_test.go"), ("tun.go", "protocol/tun/routervpn_mtu.go"), ("tun_native_linux_test.go", "protocol/tun/routervpn_mtu_native_linux_test.go"), ("desktop_transaction_native_linux_test.go", "routervpn_mtu_transaction_native_linux_test.go")):
+        copies[relative] = (ROOT / "mobile/mtu" / (name + ".tmpl")).read_bytes()
     for path in sorted((ROOT / "mobile/desktop").glob("*.go.tmpl")):
         if path.name.startswith(("node", "mtu", "external")) and path.name not in PREP.PT_TEMPLATES and path.name not in PREP.BOX_TEMPLATES and path.name not in PREP.PEER_TEMPLATES:
             copies["cmd/sing-box/routervpn_" + path.name.removesuffix(".tmpl")] = path.read_bytes()
@@ -336,7 +346,7 @@ def routing_fixture_image(binary):
 
 
 def linux_routing_receipt_test(binary, *, cwd, env, duration, selector="^TestRouterVPNNativeLinuxRouting"):
-    if selector not in ("^TestRouterVPNNativeLinuxRouting", "^TestRouterVPNNativeLinuxResolver"):
+    if selector not in ("^TestRouterVPNNativeLinuxRouting", "^TestRouterVPNNativeLinuxResolver", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$"):
         raise ValueError("Native privilege cannot execute another fixture selector")
     if platform.system() != "Linux" or env.get("GOOS") != "linux":
         raise ValueError("The native routing receipt fixture requires native Linux")
@@ -347,7 +357,7 @@ def linux_routing_receipt_test(binary, *, cwd, env, duration, selector="^TestRou
     runner = namespace_runner()
     sudo = runner.privilege_tool()
     captured = dict(env)
-    for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER", "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE", "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE"):
+    for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER", "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE", "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE", "ROUTERVPN_NATIVE_MTU_TRANSACTION_CASE"):
         captured.pop(name, None)
     with routing_fixture_image(binary) as staged:
         command = [str(staged), "-test.run=" + selector, "-test.count=1",
@@ -478,14 +488,14 @@ class BaselineBinaries:
         return self.verify(package)
 
     def execute(self, name, package, selector, duration):
-        privileged = {"native-routing-receipt": "^TestRouterVPNNativeLinuxRouting", "native-resolver-lifetime": "^TestRouterVPNNativeLinuxResolver"}
-        if name in privileged and (package != "github.com/sagernet/sing-tun" or selector != privileged[name]):
+        privileged = {"native-routing-receipt": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting"), "native-resolver-lifetime": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver"), "native-mtu-transaction": (".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$")}
+        if name in privileged and (package, selector) != privileged[name]:
             raise ValueError("Node routing privilege cannot execute another package or selector")
         binary = self.binary(package)
         with stage("execute baseline " + name):
             if name == "native-routing-receipt":
                 status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration)
-            elif name == "native-resolver-lifetime":
+            elif name in ("native-resolver-lifetime", "native-mtu-transaction"):
                 status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration, selector=selector)
             else:
                 status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
@@ -864,6 +874,13 @@ def execute_baseline_suite(baselines, suite):
             full = "TestRouterVPNNativeLinuxRoutingRetirementNamespace/" + case
             if len(re.findall(r"(?m)^\s*--- PASS: " + re.escape(full) + r" \([^\n]*\)$", output)) != 1:
                 raise ValueError("Node routing gate omitted or duplicated an actual original-TUN retirement leaf: " + case)
+    if name == "mtu-startup-budget":
+        require_native_verdicts(output, ["TestRouterVPNMTUStartupReceiptKeepsOriginalOperation"], "MTU startup budget")
+    if name == "native-mtu-transaction":
+        require_native_verdicts(output, [NATIVE_MTU_TEST] + [NATIVE_MTU_TEST + "/" + case for case in NATIVE_MTU_CASES], "MTU transaction")
+    if name == "mtu-transaction-model":
+        names = list(NATIVE_MTU_MODEL_TESTS) + ["TestRouterVPNTunTransactionRetainsOriginalAndPartialCandidateEvidence/" + case for case in ("candidate", "rollback")] + ["TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt/" + case for case in ("full-search-and-winner", "failed-candidate-and-original-restore", "cancel-after-provisional-winner")]
+        require_native_verdicts(output, names, "MTU manager")
     if name == "native-resolver-lifetime":
         names = list(NATIVE_RESOLVER_TESTS) + ["TestRouterVPNNativeLinuxResolver" + root + "/" + leaf
                 for root, leaves in NATIVE_RESOLVER_LEAVES.items() for leaf in leaves]
@@ -944,6 +961,9 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestNativePerformance" + suffix for suffix in ("NoIOUntilExplicitActivation", "StopsOnReplacementAndNetworkChange", "CannotUsePlaintextOrWrongNode", "DestinationCannotBeReplaced", "CapturedOptionsAndCancelledActivation", "CannotAdmitCompositeByTypeName"))),
     ]
     if platform.system() == "Linux":
+        suites.append(("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NATIVE_MTU_TEST,)))
+        suites.append(("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NATIVE_MTU_MODEL_TESTS))
+        suites.append(("mtu-startup-budget", "./protocol/tun", "^TestRouterVPNMTUStartupReceiptKeepsOriginalOperation$", ("TestRouterVPNMTUStartupReceiptKeepsOriginalOperation",)))
         suites.append(("native-resolver-lifetime", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver", NATIVE_RESOLVER_TESTS))
         suites.append(("native-dbus-rights", "github.com/godbus/dbus/v5", "^TestRouterVPNDBus", NATIVE_DBUS_TESTS))
         suites.append(("native-routing-receipt", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting",
@@ -952,7 +972,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                         "TestRouterVPNNativeLinuxRoutingConcurrentAddressOwnerFences", "TestRouterVPNNativeLinuxRoutingConcurrentAddressAtomicLedger",
                         "TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics", "TestRouterVPNNativeLinuxRoutingBoundedInventory",
                         "TestRouterVPNNativeLinuxRoutingInventoryFraming", "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary",
-"TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors","TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes","TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire","TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext","TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones","TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard","TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange","TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt","TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal","TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst","TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed","TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability","TestRouterVPNNativeLinuxRoutingRetirementSocket","TestRouterVPNNativeLinuxRoutingRetirementNamespace")))
+"TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors","TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes","TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire","TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext","TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones","TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard","TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange","TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt","TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal","TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst","TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed","TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability","TestRouterVPNNativeLinuxRoutingRetirementSocket","TestRouterVPNNativeLinuxRoutingRetirementNamespace", "TestRouterVPNNativeLinuxRoutingReceiptKeepsOriginalLifetimeAndCallerBudget")))
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
                        tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in

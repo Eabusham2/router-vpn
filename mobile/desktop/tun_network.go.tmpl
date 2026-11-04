@@ -134,11 +134,26 @@ func (t *Inbound) RouterVPNDesktopNetworkStartupReceipt(ctx context.Context, gua
 		t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration || guard == nil || !guard() {
 		return "", errors.New("native startup receipt lost its original ready inbound")
 	}
-	reader, ok := t.tunIf.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
-	if !ok {
-		return "", errors.New("original native inbound has no successful-call ledger")
+	var raw string
+	var err error
+	if runtime.GOOS == "linux" {
+		if _, bounded := ctx.Deadline(); !bounded {
+			return "", errors.New("native startup receipt requires its original deadline")
+		}
+		reader, ok := t.tunIf.(interface {
+			RouterVPNDesktopNetworkReceiptContext(context.Context) (string, error)
+		})
+		if !ok {
+			return "", errors.New("original native inbound has no bounded successful-call ledger")
+		}
+		raw, err = reader.RouterVPNDesktopNetworkReceiptContext(ctx)
+	} else {
+		reader, ok := t.tunIf.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
+		if !ok {
+			return "", errors.New("original native inbound has no successful-call ledger")
+		}
+		raw, err = reader.RouterVPNDesktopNetworkReceipt()
 	}
-	raw, err := reader.RouterVPNDesktopNetworkReceipt()
 	if err != nil {
 		return "", err
 	}
@@ -147,4 +162,61 @@ func (t *Inbound) RouterVPNDesktopNetworkStartupReceipt(ctx context.Context, gua
 		return "", errors.New("native startup ledger differs from its original inbound or caller")
 	}
 	return raw, nil
+}
+
+// The manager calls this only on its newly constructed, still unstarted MTU
+// adapters. It does not replace their Box/session lifetime or source policy.
+func (t *Inbound) RouterVPNDesktopMTUStartupContext(ctx context.Context) error {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if ctx == nil || ctx.Err() != nil || t.routervpnReady || t.tunIf != nil || t.tunStack != nil || t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration {
+		return errors.New("MTU construction lost its original unstarted native adapter")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("MTU construction requires its original operation deadline")
+	}
+	t.tunOptions.RouterVPNNetworkContext = ctx
+	return nil
+}
+
+// A completed retirement remains distinct from a live Ready receipt. Partial
+// construction supplies no fabricated Ready; its original owner stays retained
+// until actual native retirement succeeds and yields its complete call history.
+func (t *Inbound) RouterVPNDesktopMTUReceiptContext(ctx context.Context) (ready, retired string, failure error) {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if ctx == nil || ctx.Err() != nil {
+		return "", "", errors.New("MTU evidence lost its operation caller")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return "", "", errors.New("MTU evidence requires its original deadline")
+	}
+	if t.routervpnRetirementReceipt != "" {
+		return "", t.routervpnRetirementReceipt, nil
+	}
+	if !t.routervpnReady || t.tunIf == nil {
+		return "", "", nil
+	}
+	name, index, mtu, err := t.routervpnDesktopInterface()
+	if err != nil {
+		return "", "", err
+	}
+	reader, ok := t.tunIf.(interface {
+		RouterVPNDesktopNetworkReceiptContext(context.Context) (string, error)
+	})
+	if !ok {
+		return "", "", errors.New("MTU native adapter omitted its original routing ledger")
+	}
+	raw, err := reader.RouterVPNDesktopNetworkReceiptContext(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
+	if err != nil || receipt.Name != name || receipt.Index != uint32(index) || receipt.MTU != mtu {
+		return "", "", errors.New("MTU receipt changed its original native interface")
+	}
+	if _, _, _, err = t.routervpnDesktopInterface(); err != nil {
+		return "", "", err
+	}
+	return raw, "", ctx.Err()
 }

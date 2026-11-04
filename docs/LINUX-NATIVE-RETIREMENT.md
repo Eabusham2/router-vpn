@@ -94,8 +94,39 @@ Two ownership limits remain explicit:
   cannot provide original process authority remains unfinished; packet DNS
   interception alone is not evidence that this integration is redundant.
 
-Active owned MTU changes, protected transfers between adapters, active Always
-upgrades, and same-boot service-crash continuation remain separate requirements
+## MTU replacement transactions
+
+The Box MTU API now admits a replacement before constructing its adapters. The
+original manager retains the predecessor, candidate and rollback, including
+partial constructors and failed closes. A directly owned Linux transaction
+reserves space within its 32-owner pending limit before acquisition. Copied
+evidence distinguishes a live Ready receipt from completed native retirement;
+neither fact substitutes for the other. A retry reaches only the same retained
+manager and transaction and cannot close an adapter adopted by another caller.
+
+Construction, retirement and rollback consume the original bounded operation.
+Cancellation cannot start a fresh rollback with a renewed budget. The native
+TUN keeps its original Box lifetime separately so that ending an MTU operation
+does not invalidate the adopted reader. Startup receipt capture still forwards
+the exact startup operation, and explicit later receipt reads require their
+own existing deadline. Borrowed/mobile readers and other operating systems
+preserve their previous rollback and lifetime behavior.
+
+Ordinary no-context projection callers still read under the Box lifetime. That
+does not supply a per-request bound and can delay Stop while a native read owns
+the retirement mutex. Threading their original caller operation through those
+projection paths remains required; the explicit transaction and startup reads
+above do not establish that behavior for every existing caller.
+
+This is a native transaction prerequisite. Installed service Auto/Retest/Cancel
+still needs the authenticated child exchange, coordinated service/controller
+Trackers, actual selected-path measurement and restoration, and acknowledgment
+of completed history. Partial construction must remain owned without inventing
+a Ready receipt. Repeated Retests cannot append unbounded history to the
+unchanged 48KiB cleanup message or discard unacknowledged owners.
+
+Active service MTU integration, protected transfers between adapters, active
+Always upgrades, and same-boot service-crash continuation remain requirements
 in [the standard service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 
 ## Verification boundaries
@@ -115,6 +146,14 @@ descriptors and the child's creation pidfd remain retained through join; a
 wrapper's exit is not substituted for original-child retirement. The method
 server in these tests is explicit and does not certify actual systemd service
 compatibility.
+
+Three additional mandatory native MTU cases cover the complete candidate search
+and winner, a failed candidate followed by original-state restoration, and
+canceled work followed by fresh owned Stop. They retain the directly created
+child and creation pidfd, actual Box/TUN transactions, original namespace
+capabilities, Tracker transitions, outbound identity and final retirement.
+Their receipt-size assertions cover that no-auto-route fixture only. They do
+not establish full-route service history sizes or public Retest integration.
 
 Local tests use real processes, process descriptors, inherited memory objects,
 files and cancellation, with explicit models where kernel routing is

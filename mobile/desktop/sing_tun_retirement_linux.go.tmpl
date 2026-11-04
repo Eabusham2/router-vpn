@@ -896,13 +896,33 @@ func (t *NativeTun) routervpnLinuxClose() error {
 }
 
 func (t *NativeTun) routervpnLinuxAttestedReceipt() (string, error) {
+	ctx := t.options.RouterVPNNetworkLifetime
+	if ctx == nil {
+		ctx = t.options.RouterVPNNetworkContext
+	}
+	return t.routervpnLinuxReceiptContext(ctx)
+}
+
+// A later read consumes its supplied operation budget while retaining the same
+// original TUN descriptor and notification stream; startup authority is never
+// refreshed or substituted.
+func (t *NativeTun) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("native receipt lost its original caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return "", errors.New("native receipt requires its operation deadline")
+	}
+	return t.routervpnLinuxReceiptContext(ctx)
+}
+
+func (t *NativeTun) routervpnLinuxReceiptContext(ctx context.Context) (string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	s := &t.routervpnRetirement
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ctx := t.options.RouterVPNNetworkContext
-	if ctx == nil || ctx.Err() != nil || s.closed || s.receipt != "" {
+	if ctx == nil || ctx.Err() != nil || s.closed || s.receipt != "" || t.options.RouterVPNNetworkLifetime != nil && t.options.RouterVPNNetworkLifetime.Err() != nil {
 		return "", errors.New("native ready receipt lost its original active constructor")
 	}
 	if err := t.routervpnLinuxOriginal(ctx); err != nil {

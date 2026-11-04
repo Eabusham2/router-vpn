@@ -1,0 +1,79 @@
+//go:build linux && !android
+
+package tun
+
+import (
+	"context"
+	"errors"
+	native "github.com/sagernet/sing-tun"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type mtuStartupNativeFixture struct {
+	*native.NativeTun
+	read      func(context.Context) (string, error)
+	unbounded atomic.Int32
+}
+
+func (f *mtuStartupNativeFixture) RouterVPNDesktopNetworkReceipt() (string, error) {
+	f.unbounded.Add(1)
+	return "", errors.New("startup used a lifetime-only native read")
+}
+func (f *mtuStartupNativeFixture) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	return f.read(ctx)
+}
+
+// Exercise the actual shipping inbound method. The native read seam waits on
+// the supplied caller, so a lifetime substitution cannot satisfy cancellation.
+func TestRouterVPNMTUStartupReceiptKeepsOriginalOperation(t *testing.T) {
+	lifetime, stopLifetime := context.WithCancel(context.Background())
+	defer stopLifetime()
+	startup, cancel := context.WithTimeout(lifetime, time.Second)
+	defer cancel()
+	sentinel := errors.New("original bounded native reader reached")
+	calls := 0
+	f := &mtuStartupNativeFixture{}
+	f.read = func(ctx context.Context) (string, error) {
+		calls++
+		if ctx != startup {
+			return "", errors.New("native startup caller was replaced")
+		}
+		return "", sentinel
+	}
+	owner := &Inbound{ctx: lifetime, routervpnReady: true, tunIf: f, tunOptions: native.Options{Name: "rvpn-mtu", MTU: 1280, RouterVPNNetworkContext: startup, RouterVPNNetworkLifetime: lifetime}}
+	if _, err := owner.RouterVPNDesktopNetworkStartupReceipt(startup, func() bool { return true }); !errors.Is(err, sentinel) || calls != 1 || f.unbounded.Load() != 0 {
+		t.Fatal("startup escaped its exact original operation", err, calls, f.unbounded.Load())
+	}
+	owner.tunOptions.RouterVPNNetworkContext = lifetime
+	if _, err := owner.RouterVPNDesktopNetworkStartupReceipt(lifetime, func() bool { return true }); err == nil || calls != 1 || f.unbounded.Load() != 0 {
+		t.Fatal("unbounded startup reached a native read", err)
+	}
+	owner.tunOptions.RouterVPNNetworkContext = startup
+	entered := make(chan struct{})
+	f.read = func(ctx context.Context) (string, error) { close(entered); <-ctx.Done(); return "", ctx.Err() }
+	done := make(chan error, 1)
+	go func() {
+		_, err := owner.RouterVPNDesktopNetworkStartupReceipt(startup, func() bool { return true })
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("original native reader never entered")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("native caller did not observe original cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startup native reader outlived its canceled original caller")
+	}
+	f.read = func(context.Context) (string, error) { t.Fatal("canceled startup reopened its reader"); return "", nil }
+	if _, err := owner.RouterVPNDesktopNetworkStartupReceipt(startup, func() bool { return true }); err == nil || f.unbounded.Load() != 0 {
+		t.Fatal("canceled startup acquired native read", err)
+	}
+}

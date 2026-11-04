@@ -198,7 +198,7 @@ def darwin_owned_source(raw):
 INBOUND_MTU_SHA256 = '8a51e5061754b388919ad5366a6b88694267f43e9c47ed37a88f82fdb0b5b01a'
 INBOUND_CONTEXT_EDIT = (
     b'tunOptions: tun.Options{',
-    b'tunOptions: tun.Options{\n\t\t\tRouterVPNNetworkContext: ctx,',
+    b'tunOptions: tun.Options{\n\t\t\tRouterVPNNetworkContext: ctx,\n\t\t\tRouterVPNNetworkLifetime: ctx,',
 )
 INBOUND_RETIREMENT_EDITS = (
     (b'type Inbound struct {',
@@ -228,6 +228,12 @@ def inbound_retirement_patch(raw):
                 raise ValueError('Incomplete or duplicated native inbound retirement projection')
             raw = raw.replace(after, before, 1)
     before, after = INBOUND_CONTEXT_EDIT
+    previous_context = b"tunOptions: tun.Options{\n\t\t\tRouterVPNNetworkContext: ctx,"
+    upgrading_context = after not in raw and previous_context in raw
+    if upgrading_context:
+        if raw.count(previous_context) != 1:
+            raise ValueError("Duplicated prior bounded native context")
+        raw = raw.replace(previous_context, before, 1)
     if after in raw:
         if raw.count(after) != 1:
             raise ValueError('Duplicated native inbound startup context')
@@ -238,7 +244,7 @@ def inbound_retirement_patch(raw):
         if raw.count(before) != 1:
             raise ValueError('Pinned native inbound retirement boundary changed')
         raw = raw.replace(before, after, 1)
-    if marked and original != raw:
+    if marked and original != raw and not upgrading_context:
         raise ValueError('Modified completed native inbound retirement projection')
     return raw
 
@@ -275,7 +281,7 @@ def prepare(vendor):
                     raise ValueError('Pinned IPv4 unusable-DNS error boundary changed')
                 raw = raw.replace(before, after, 1)
                 for before, after in [(b'import (', b'import (\n\t"context"'),
-                                      (b'type Options struct {', b'type Options struct {\n\tRouterVPNNetworkContext context.Context')]:
+                                      (b'type Options struct {', b'type Options struct {\n\tRouterVPNNetworkContext context.Context\n\tRouterVPNNetworkLifetime context.Context')]:
                     if raw.count(before) != 1:
                         raise ValueError('Pinned native network context boundary changed')
                     raw = raw.replace(before, after, 1)

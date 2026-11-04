@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — verified through cf863300
+## Latest implementation continuation — verified through c336566d
 
 The verified source cutoff is
-[`cf863300`](https://github.com/Eabusham2/router-vpn/commit/cf86330014216fb66923fcea3969e5709cc2d04b),
-tree `93ed7e858ec23c37c7c59905bd7182c12f889e71`.
+[`c336566d`](https://github.com/Eabusham2/router-vpn/commit/c336566d952812a99cba7d81d37d6cbe7eb224b4),
+tree `fcb3ba212dc99355996b8dc50dc6b2805fd8f11f`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -95,7 +95,12 @@ validation limits. Changes and test counts are not a requirements denominator.
   stream, TUN and pending resolver operations across failed Stop attempts;
   [the native retirement contract](LINUX-NATIVE-RETIREMENT.md) records its
   kernel race, older-bus compatibility and actual-host acceptance boundaries.
-  Active owned MTU event continuity, cross-adapter protected transfer, active
+  The native MTU transaction prerequisite now retains each original, candidate
+  and rollback adapter, partial constructors, failed retirement and separate
+  lifetime/operation budgets. Four focused pinned packages pass under race;
+  actual preparation and 31 routing-runner checks pass. Three new native
+  transaction cases remain mandatory in CI. Installed service Retest/Cancel,
+  coordinated transition history, cross-adapter protected transfer, active
   Always upgrades and same-boot service-crash recovery remain unfinished; see
   the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 - All legacy standard preparations use the shared captured device policy and

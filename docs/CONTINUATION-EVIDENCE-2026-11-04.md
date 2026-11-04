@@ -47,10 +47,10 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`2d040b67e092e82f2793c1074a9eeda609b9b5c2`](https://github.com/Eabusham2/router-vpn/commit/2d040b67e092e82f2793c1074a9eeda609b9b5c2),
-tree `4bd24cd385c7f2e031a3a6e384d71c7d0a21e295`. The macOS AWG-final
-source accompanying this record is described below; it does not inherit this
-cutoff's CI results.
+[`c336566d952812a99cba7d81d37d6cbe7eb224b4`](https://github.com/Eabusham2/router-vpn/commit/c336566d952812a99cba7d81d37d6cbe7eb224b4),
+tree `fcb3ba212dc99355996b8dc50dc6b2805fd8f11f`. The native Linux MTU
+transaction prerequisite accompanying this record is described below; it does
+not inherit this cutoff's CI results.
 
 | Published commit | Concrete change and focused evidence | Remaining boundary |
 |---|---|---|
@@ -219,7 +219,46 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## macOS OpenVPN-final source accompanying this record
+## Native Linux MTU transaction prerequisite accompanying this record
+
+The existing Box MTU call now uses the same factory-owned transaction as the
+new receipt-bearing API. Admission and directly owned Linux history capacity
+are checked before constructing readers. The original manager retains all
+three roles, partial constructor outputs and failed closes; evidence separates
+live Ready from completed retirement. Exact retained retries cannot retire a
+reader adopted by another caller. Operation cancellation cannot manufacture a
+fresh Linux rollback budget. Box lifetime remains separate from operation
+deadlines, and startup receipt capture explicitly preserves its original caller.
+Borrowed/mobile and non-Linux rollback behavior remains unchanged.
+
+Ordinary no-context Node/Box projection callers still use the live Box lifetime
+rather than a per-request bound. The final review identified their potential
+to hold the native retirement mutex across a long read. Original-caller
+propagation through those paths remains open and is not claimed by the new
+explicit transaction/startup checks.
+
+Root applied the exact sixteen-file frozen source, independently verified
+1,295 overlay-input hashes and ran the four relevant pinned packages under race:
+inbound manager 1.031s, TUN 1.016s, native sing-tun 1.026s and Box 1.079s.
+Actual preparation/reverification passes four tests in 1.339s; all 31 routing
+runner tests pass in 0.094s. Independent causal controls reject removing the
+pending-history bound, dropping a partial owner, changing borrowed rollback,
+and replacing startup's caller with Box lifetime.
+
+The mandatory native gate adds full-search/winner, failed-candidate/original
+restoration and canceled-work/fresh-Stop cases. Their directly created child,
+creation pidfd, namespace capabilities, actual Box/TUN, Tracker transitions and
+original outbound remain bound. The unchanged 48KiB cleanup limit is asserted
+for that no-auto-route fixture. Those privileged cases cannot execute in this
+workspace and remain required in native CI. Prior six-case Node acceptance at
+`aefcb959` does not prove these new transactions.
+
+This prerequisite does not close installed service Auto/Retest/Cancel. The
+authenticated child exchange, both Tracker histories, partial-transition
+evidence, acknowledgment of settled history, actual path measurements and
+restoration remain follow-on work. See [the native retirement contract](LINUX-NATIVE-RETIREMENT.md).
+
+## macOS OpenVPN-final source published at c336566d
 
 The retained Local macOS host now admits WG, AWG Fast or AWG Strong entry to
 the bounded imported OpenVPN final. The final endpoint retains the original

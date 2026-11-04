@@ -650,3 +650,38 @@ func TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes(t *testin
 		}
 	}
 }
+
+func TestRouterVPNNativeLinuxRoutingReceiptKeepsOriginalLifetimeAndCallerBudget(t *testing.T) {
+	native, _, _ := retirementFixture(t)
+	startup, endStartup := context.WithCancel(context.Background())
+	endStartup()
+	lifetime, endLifetime := context.WithCancel(context.Background())
+	defer endLifetime()
+	native.options.RouterVPNNetworkContext = startup
+	native.options.RouterVPNNetworkLifetime = lifetime
+	entered := 0
+	sentinel := errors.New("original native capability reached")
+	want := context.Context(lifetime)
+	native.routervpnRetirement.original = func(ctx context.Context) error {
+		entered++
+		if ctx != want {
+			t.Fatal("receipt changed its original read lifetime or explicit caller")
+		}
+		return sentinel
+	}
+	if _, err := native.RouterVPNDesktopNetworkReceipt(); !errors.Is(err, sentinel) || entered != 1 {
+		t.Fatal("completed construction deadline incorrectly retired the original live reader", err)
+	}
+	if _, err := native.RouterVPNDesktopNetworkReceiptContext(context.Background()); err == nil || entered != 1 {
+		t.Fatal("explicit native receipt accepted an unbounded caller")
+	}
+	bounded := retirementStop(t)
+	want = bounded
+	if _, err := native.RouterVPNDesktopNetworkReceiptContext(bounded); !errors.Is(err, sentinel) || entered != 2 {
+		t.Fatal("explicit native receipt did not use its exact remaining operation", err)
+	}
+	endLifetime()
+	if _, err := native.RouterVPNDesktopNetworkReceiptContext(bounded); err == nil || entered != 2 {
+		t.Fatal("fresh operation resurrected the retired original read lifetime")
+	}
+}

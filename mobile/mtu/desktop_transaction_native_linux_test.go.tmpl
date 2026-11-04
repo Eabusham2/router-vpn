@@ -1,0 +1,358 @@
+//go:build linux && !android
+
+package box_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/netlink"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	ntun "github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	SJ "github.com/sagernet/sing/common/json"
+	"golang.org/x/sys/unix"
+)
+
+// The actual shipping Box transaction runs in an original direct child network
+// namespace. No public transfer or system resolver is used by this native-only
+// prerequisite. The service/client Retest path has separate acceptance gates.
+func TestRouterVPNNativeLinuxMTUTransactionNamespace(t *testing.T) {
+	const marker = "ROUTERVPN_NATIVE_MTU_TRANSACTION_CASE"
+	cases := []string{"full-search-and-winner", "failed-candidate-and-original-restore", "cancelled-work-and-fresh-stop"}
+	selected := os.Getenv(marker)
+	if selected == "" {
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		originals := make([]*os.File, 0, 2)
+		for _, name := range []string{"net", "user"} {
+			file, err := os.Open("/proc/thread-self/ns/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			originals = append(originals, file)
+		}
+		for _, name := range cases {
+			t.Run(name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+				defer cancel()
+				command := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNNativeLinuxMTUTransactionNamespace$", "-test.v", "-test.timeout=10s")
+				command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", marker + "=" + name}
+				command.ExtraFiles = originals
+				pidfd := -1
+				command.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET, UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}, GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}, GidMappingsEnableSetgroups: false, PidFD: &pidfd}
+				output, err := command.CombinedOutput()
+				if pidfd >= 0 {
+					defer unix.Close(pidfd)
+				}
+				if err != nil {
+					t.Fatalf("original native MTU child failed: %v\n%s", err, output)
+				}
+				polls := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+				if pidfd < 0 || command.ProcessState == nil || !command.ProcessState.Success() {
+					t.Fatal("native MTU child omitted its original joined process")
+				}
+				if _, err := unix.Poll(polls, 0); err != nil || polls[0].Revents&unix.POLLIN == 0 {
+					t.Fatal("native MTU original creation pidfd not retired", err)
+				}
+				run := "=== RUN   TestRouterVPNNativeLinuxMTUTransactionNamespace/" + name + "\n"
+				pass := "--- PASS: TestRouterVPNNativeLinuxMTUTransactionNamespace/" + name + " "
+				witness := "NATIVE-MTU-ORIGINAL-JOIN " + name + "\n"
+				if strings.Count(string(output), run) != 1 || strings.Count(string(output), pass) != 1 || strings.Count(string(output), witness) != 1 || strings.Contains(string(output), "--- FAIL:") || strings.Contains(string(output), "--- SKIP:") || strings.Contains(string(output), "DATA RACE") {
+					t.Fatal("native MTU child did not execute its exact required case")
+				}
+				if name != "cancelled-work-and-fresh-stop" {
+					matches := regexp.MustCompile("actual native "+regexp.QuoteMeta(name)+" receipt bytes: ([0-9]+)").FindAllStringSubmatch(string(output), -1)
+					if len(matches) != 1 {
+						t.Fatal("native child omitted its measured receipt size")
+					}
+					size, err := strconv.Atoi(matches[0][1])
+					if err != nil || size <= 0 || size > 48<<10 {
+						t.Fatal("native receipt size changed its bounded witness", err)
+					}
+					t.Logf("actual native %s receipt bytes: %d", name, size)
+				}
+				t.Log("original native MTU child and its exact case joined:", name)
+			})
+		}
+		return
+	}
+	valid := false
+	for _, name := range cases {
+		valid = valid || selected == name
+	}
+	if !valid {
+		t.Fatal("unknown native MTU case")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	for i, name := range []string{"net", "user"} {
+		original := os.NewFile(uintptr(3+i), "original-parent-"+name)
+		defer original.Close()
+		before, e := original.Stat()
+		after, a := os.Stat("/proc/thread-self/ns/" + name)
+		var fs syscall.Statfs_t
+		if e != nil || a != nil || syscall.Fstatfs(int(original.Fd()), &fs) != nil || fs.Type != 0x6e736673 || os.SameFile(before, after) {
+			t.Fatal("native MTU did not retain distinct original namespaces")
+		}
+	}
+	t.Run(selected, func(t *testing.T) {
+		loopback, err := netlink.LinkByName("lo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = netlink.LinkSetUp(loopback); err != nil {
+			t.Fatal(err)
+		}
+		life, stopLife := context.WithCancel(context.Background())
+		defer stopLife()
+		ctx, cancel := context.WithTimeout(life, 8*time.Second)
+		defer cancel()
+		tracker, err := desktopnetwork.OpenWithLifetime(ctx, life, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tracker.Close()
+		if err = tracker.Begin(ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+		registry := box.Context(life, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+		options, err := SJ.UnmarshalExtendedContext[option.Options](registry, []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"captured-tun","interface_name":"rvpn-mtu-test","address":["172.29.199.1/30"],"mtu":1360,"auto_route":false,"dns_mode":"disabled","stack":"system"}],"outbounds":[{"type":"direct","tag":"retained-direct"}],"route":{"final":"retained-direct"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine, err := box.New(box.Options{Context: registry, Options: options})
+		if err != nil {
+			t.Fatal(err)
+		}
+		closed := false
+		t.Cleanup(func() {
+			if !closed {
+				cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = engine.RouterVPNCloseNativeTunContext(cleanup)
+				_ = engine.Close()
+			}
+		})
+		first, ok := engine.Inbound().Get("captured-tun")
+		if !ok {
+			t.Fatal("actual original TUN missing")
+		}
+		initial := first.(*ntun.Inbound)
+		if err = initial.RouterVPNDesktopMTUStartupContext(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err = engine.Start(); err != nil {
+			t.Fatal("actual Box startup", err)
+		}
+		var reject atomic.Bool
+		var cancelOnGap atomic.Bool
+		work, stopWork := context.WithCancel(ctx)
+		defer stopWork()
+		guard := func() bool {
+			iface, err := net.InterfaceByName("rvpn-mtu-test")
+			if cancelOnGap.Load() && err != nil {
+				stopWork()
+				return true
+			}
+			return !(err == nil && iface.MTU == 1500 && reject.CompareAndSwap(true, false))
+		}
+		if _, _, mtu, err := initial.RouterVPNDesktopMTU(guard); err != nil || mtu != 1360 {
+			t.Fatal("actual original MTU capture", err)
+		}
+		receipt := func(reader adapter.Inbound) desktopnetwork.DesktopNetworkReceipt {
+			raw, retired, err := reader.(*ntun.Inbound).RouterVPNDesktopMTUReceiptContext(ctx)
+			if err != nil || retired != "" {
+				t.Fatal("actual live native receipt", err)
+			}
+			value, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return value
+		}
+		before := receipt(first)
+		if err = tracker.Record(before); err != nil {
+			t.Fatal(err)
+		}
+		if err = tracker.End(ctx, &before); err != nil {
+			t.Fatal(err)
+		}
+		endpoint, _ := engine.Outbound().Outbound("retained-direct")
+		if err = tracker.Begin(ctx, &before); err != nil {
+			t.Fatal(err)
+		}
+		if selected == "cancelled-work-and-fresh-stop" {
+			cancelOnGap.Store(true)
+			transaction, changeErr := engine.RouterVPNChangeMTUTransaction(work, first, 1400)
+			if changeErr == nil || transaction == nil || transaction.Current() != nil {
+				t.Fatal("canceled acquisition supplied an adopted reader", changeErr)
+			}
+			if err = engine.RouterVPNRetryMTUTransaction(ctx, transaction); err != nil {
+				t.Fatal("fresh original Stop retry", err)
+			}
+			for _, item := range transaction.Evidence() {
+				if item.Inbound == nil {
+					continue
+				}
+				retired, err := desktopnetwork.ParseDesktopNetworkRetirementReceipt(item.Retirement)
+				if err != nil || !item.Retired || item.Pending {
+					t.Fatal("original canceled owner omitted joined native retirement", item.Role, err)
+				}
+				if item.Role == "original" && !retired.Created {
+					t.Fatal("original native interface creation disappeared from history")
+				}
+			}
+			if err = tracker.End(ctx, nil); err != nil {
+				t.Fatal("canceled original effects not retired", err)
+			}
+		} else {
+			// The full candidate budget comes from the shared Auto/Retest planner.
+			// This native-only graph proves replacement ownership, not public path
+			// throughput or DNS. Those remain the service/client acceptance task.
+			plan := mobilemtu.Plan{Original: 1360, Ceiling: 1500}
+			candidates := plan.Candidates(1420)
+			if len(candidates) != 5 {
+				t.Fatal("shared candidate sequence changed", candidates)
+			}
+			sequence := append(append([]int(nil), candidates...), 1420)
+			if selected == "failed-candidate-and-original-restore" {
+				sequence = append(append([]int(nil), candidates[:3]...), plan.Original)
+			}
+			current := first
+			currentReceipt := before
+			initialRaw, err := desktopnetwork.CanonicalDesktopNetworkReceipt(before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			bytes := len(initialRaw)
+			for attempt, mtu := range sequence {
+				if attempt > 0 {
+					if err = tracker.Begin(ctx, &currentReceipt); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if attempt == 0 {
+					// Existing shipping callers execute this same transaction, even
+					// when the first candidate equals the captured original MTU.
+					next, e := engine.RouterVPNChangeMTU(ctx, current, mtu)
+					if e != nil || next == current {
+						t.Fatal("shipping native mutation", e)
+					}
+					_, retired, e := initial.RouterVPNDesktopMTUReceiptContext(ctx)
+					if e != nil {
+						t.Fatal("shipping wrapper lost original retirement", e)
+					}
+					if _, e = desktopnetwork.ParseDesktopNetworkRetirementReceipt(retired); e != nil {
+						t.Fatal(e)
+					}
+					bytes += len(retired)
+					current = next
+				} else {
+					failed := selected == "failed-candidate-and-original-restore" && attempt == 2
+					reject.Store(failed)
+					transaction, e := engine.RouterVPNChangeMTUTransaction(ctx, current, mtu)
+					if transaction == nil || transaction.Current() == nil || transaction.Current() == current || (e != nil) != failed {
+						t.Fatal("actual candidate/rollback lost its exact owner", attempt, e)
+					}
+					for _, item := range transaction.Evidence() {
+						bytes += len(item.Ready) + len(item.Retirement)
+						if item.Pending {
+							t.Fatal("full search left an unsettled native resource", attempt, item.Role)
+						}
+						if item.Ready != "" {
+							record, e := desktopnetwork.ParseDesktopNetworkReceipt(item.Ready)
+							if e != nil {
+								t.Fatal(e)
+							}
+							if e = tracker.Record(record); e != nil {
+								t.Fatal(e)
+							}
+						}
+						if item.Retired {
+							if _, e = desktopnetwork.ParseDesktopNetworkRetirementReceipt(item.Retirement); e != nil {
+								t.Fatal("missing actual retirement", item.Role, e)
+							}
+						}
+						if failed && item.Role == "candidate" && (!item.StartAttempted || item.Started || item.Ready == "" || item.Retirement == "") {
+							t.Fatal("failed actual candidate lost its native history")
+						}
+					}
+					current = transaction.Current()
+				}
+				nextReceipt := receipt(current)
+				want := mtu
+				if selected == "failed-candidate-and-original-restore" && attempt == 2 {
+					want = currentReceipt.MTU
+				}
+				if nextReceipt.MTU != want || nextReceipt.Incarnation == currentReceipt.Incarnation {
+					t.Fatal("native successor/rollback changed its original receipt", attempt)
+				}
+				if err = tracker.Record(nextReceipt); err != nil {
+					t.Fatal(err)
+				}
+				if err = tracker.End(ctx, &nextReceipt); err != nil {
+					t.Fatal("owned search events", attempt, err)
+				}
+				currentReceipt = nextReceipt
+				actual, _ := engine.Outbound().Outbound("retained-direct")
+				if actual != endpoint {
+					t.Fatal("MTU transaction replaced outbound ownership")
+				}
+			}
+			// Measured fixture size only: the fixed FD10 limit is not increased.
+			// The service must separately settle acknowledged complete transitions;
+			// it cannot concatenate unbounded Retest history into one final result.
+			if bytes <= 0 || bytes > 48<<10 {
+				t.Fatal("native search fixture exceeds existing cleanup envelope", bytes)
+			}
+			t.Logf("actual native %s receipt bytes: %d", selected, bytes)
+			if stale, e := engine.RouterVPNChangeMTU(ctx, first, 1500); e == nil || stale != first {
+				t.Fatal("retired native pointer adopted current reader")
+			}
+			if err = tracker.Begin(ctx, &currentReceipt); err != nil {
+				t.Fatal(err)
+			}
+			if err = engine.RouterVPNCloseNativeTunContext(ctx); err != nil {
+				t.Fatal("original native Stop", err)
+			}
+			if err = tracker.End(ctx, nil); err != nil {
+				t.Fatal("original final TUN effects remain", err)
+			}
+
+		}
+		if err = tracker.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err = engine.RouterVPNCloseNativeTunContext(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err = engine.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			t.Fatal(err)
+		}
+		closed = true
+		if _, err = net.InterfaceByName("rvpn-mtu-test"); err == nil {
+			t.Fatal("original native interface remained after joined cleanup")
+		}
+		fmt.Println("NATIVE-MTU-ORIGINAL-JOIN", selected)
+	})
+}

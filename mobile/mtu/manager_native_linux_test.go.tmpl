@@ -1,0 +1,253 @@
+//go:build linux && !android
+
+package inbound
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"testing"
+	"time"
+)
+
+// These are explicit native-call models around the actual shipping manager.
+// Real kernel receipts and Box calls are covered by the separate namespace gate.
+type mtuEvidenceInbound struct {
+	*mtuTestInbound
+	label               string
+	deadline            time.Time
+	retireFailure       bool
+	readyReads, retires int
+	retired             bool
+}
+
+func (e *mtuEvidenceInbound) RouterVPNDesktopMTUReceiptContext(ctx context.Context) (string, string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil {
+		return "", "", context.Canceled
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || !deadline.Equal(e.deadline) {
+		return "", "", errors.New("model received renewed native budget")
+	}
+	if e.retired {
+		return "", "retired:" + e.label, nil
+	}
+	if e.alive {
+		e.readyReads++
+		return "ready:" + e.label, "", nil
+	}
+	return "", "", nil
+}
+func (e *mtuEvidenceInbound) RouterVPNDesktopTunCloseContext(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil {
+		return context.Canceled
+	}
+	e.retires++
+	if e.retireFailure {
+		return errors.New("modeled original native close failed")
+	}
+	e.alive = false
+	e.retired = true
+	e.closed++
+	return nil
+}
+func mtuEvidenceFixture(t *testing.T) (context.Context, *Manager, *mtuEvidenceInbound, func(string) *mtuEvidenceInbound) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	deadline, _ := ctx.Deadline()
+	makeReader := func(label string) *mtuEvidenceInbound {
+		return &mtuEvidenceInbound{mtuTestInbound: &mtuTestInbound{tag: "tun", kind: "tun"}, label: label, deadline: deadline}
+	}
+	original := makeReader("original")
+	original.alive = true
+	m := &Manager{started: true, stage: adapter.StartStateStarted, inbounds: []adapter.Inbound{original}, inboundByTag: map[string]adapter.Inbound{"tun": original}}
+	return ctx, m, original, makeReader
+}
+func TestRouterVPNTunTransactionRetainsOriginalAndPartialCandidateEvidence(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "candidate", true: "rollback"}[failure], func(t *testing.T) {
+			ctx, m, original, makeReader := mtuEvidenceFixture(t)
+			candidate, rollback := makeReader("candidate"), makeReader("rollback")
+			candidate.fail = failure
+			candidate.failure = adapter.StartStatePostStart
+			transaction, err := m.RouterVPNReplaceTunOwned(ctx, original, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+			if transaction == nil || failure != (err != nil) {
+				t.Fatal("transaction outcome lost actual native operation", err)
+			}
+			evidence := transaction.Evidence()
+			if len(evidence) != 3 || evidence[0].Inbound != original || evidence[0].Ready != "ready:original" || evidence[0].Retirement != "retired:original" || !evidence[0].Retired {
+				t.Fatal("original ready and retirement evidence lost", evidence)
+			}
+			if failure {
+				if transaction.Current() != rollback || evidence[1].Inbound != candidate || !evidence[1].StartAttempted || evidence[1].Started || !evidence[1].Retired || evidence[1].Retirement != "retired:candidate" || evidence[2].Ready != "ready:rollback" {
+					t.Fatal("partial candidate history or exact rollback lost", evidence)
+				}
+			} else if transaction.Current() != candidate || evidence[1].Ready != "ready:candidate" || evidence[2].Retirement != "retired:rollback" {
+				t.Fatal("successful candidate lost unused native owner", evidence)
+			}
+			// Returned slices cannot mutate the original retained record.
+			evidence[0].Ready = "foreign"
+			if transaction.Evidence()[0].Ready != "ready:original" {
+				t.Fatal("caller rewrote original transaction history")
+			}
+		})
+	}
+}
+func TestRouterVPNTunTransactionPreservesFailedConstructionAndRetry(t *testing.T) {
+	ctx, m, original, makeReader := mtuEvidenceFixture(t)
+	candidate := makeReader("partial-constructor")
+	candidate.retireFailure = true
+	transaction, err := m.RouterVPNReplaceTunOwned(ctx, original, func() (adapter.Inbound, adapter.Inbound, error) {
+		return candidate, nil, errors.New("constructor failed")
+	})
+	if err == nil || transaction.Current() != original || original.closed != 0 || len(m.routervpnMTUPending) != 1 || len(m.routervpnRetired) != 1 {
+		t.Fatal("partial constructor ownership dropped", err)
+	}
+	evidence := transaction.Evidence()
+	if !evidence[1].Pending || evidence[1].Inbound != candidate || evidence[1].Ready != "" {
+		t.Fatal("partial adapter fabricated Ready", evidence)
+	}
+	foreign, _, _, _ := mtuEvidenceFixture(t)
+	if err := (&Manager{}).RouterVPNRetryTunTransaction(foreign, transaction); err == nil {
+		t.Fatal("foreign manager retired original partial adapter")
+	}
+	candidate.retireFailure = false
+	if err := m.RouterVPNRetryTunTransaction(ctx, transaction); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.routervpnMTUPending) != 0 || len(m.routervpnRetired) != 0 || original.closed != 0 || transaction.Evidence()[1].Retirement != "retired:partial-constructor" {
+		t.Fatal("retry did not settle only original partial adapter")
+	}
+}
+func TestRouterVPNTunTransactionBoundsHistoryBeforeAcquisition(t *testing.T) {
+	ctx, m, original, makeReader := mtuEvidenceFixture(t)
+	current := adapter.Inbound(original)
+	var pending []*RouterVPNTunTransaction
+	var abandoned []*mtuEvidenceInbound
+	factories := 0
+	for i := 0; i < routerVPNMTUPendingLimit; i++ {
+		candidate, rollback := makeReader("candidate"), makeReader("pending-unused")
+		rollback.retireFailure = true
+		transaction, err := m.RouterVPNReplaceTunOwned(ctx, current, func() (adapter.Inbound, adapter.Inbound, error) { factories++; return candidate, rollback, nil })
+		if err == nil || transaction == nil || transaction.Current() != candidate {
+			t.Fatal("unsettled unused reader was not retained", err)
+		}
+		pending = append(pending, transaction)
+		abandoned = append(abandoned, rollback)
+		current = candidate
+	}
+	_, err := m.RouterVPNReplaceTunOwned(ctx, current, func() (adapter.Inbound, adapter.Inbound, error) {
+		factories++
+		return makeReader("forbidden"), makeReader("forbidden"), nil
+	})
+	if err == nil || factories != routerVPNMTUPendingLimit {
+		t.Fatal("history capacity checked after new native acquisition")
+	}
+	for i, transaction := range pending {
+		abandoned[i].retireFailure = false
+		if err := m.RouterVPNRetryTunTransaction(ctx, transaction); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(m.routervpnMTUPending) != 0 || len(m.routervpnRetired) != 0 {
+		t.Fatal("settled histories still block original manager")
+	}
+	_, err = m.RouterVPNReplaceTunOwned(ctx, current, func() (adapter.Inbound, adapter.Inbound, error) {
+		factories++
+		return makeReader("next"), makeReader("backup"), nil
+	})
+	if err != nil || factories != routerVPNMTUPendingLimit+1 {
+		t.Fatal("original manager did not recover after exact cleanup", err)
+	}
+}
+func TestRouterVPNTunTransactionCancelledAcquisitionAndNativeClose(t *testing.T) {
+	ctx, m, original, makeReader := mtuEvidenceFixture(t)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	called := false
+	if _, err := m.RouterVPNReplaceTunOwned(canceled, original, func() (adapter.Inbound, adapter.Inbound, error) {
+		called = true
+		return makeReader("forbidden"), makeReader("forbidden"), nil
+	}); err == nil || called || original.closed != 0 {
+		t.Fatal("cancelled operation acquired a native reader")
+	}
+	work, stop := context.WithCancel(ctx)
+	candidate, rollback := makeReader("candidate"), makeReader("rollback")
+	candidate.gate = make(chan struct{})
+	candidate.entered = make(chan struct{})
+	done := make(chan *RouterVPNTunTransaction, 1)
+	go func() {
+		transaction, _ := m.RouterVPNReplaceTunOwned(work, original, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+		done <- transaction
+	}()
+	<-candidate.entered
+	stop()
+	close(candidate.gate)
+	transaction := <-done
+	if transaction == nil || transaction.Current() != nil || len(m.routervpnMTUPending) != 1 || rollback.started != 0 {
+		t.Fatal("cancelled native work restarted or lost original owners")
+	}
+	// A later explicit bounded cleanup retries retained originals; no new factory.
+	if err := m.RouterVPNRetryTunTransaction(ctx, transaction); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.alive || rollback.alive || transaction.Evidence()[1].Retirement != "retired:candidate" || transaction.Evidence()[2].Retirement != "retired:rollback" {
+		t.Fatal("canceled candidate cleanup was inferred instead of joined")
+	}
+}
+
+func (e *mtuEvidenceInbound) RouterVPNDesktopMTUBoundedTransaction() bool { return true }
+
+func TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt(t *testing.T) {
+	for _, mode := range []string{"full-search-and-winner", "failed-candidate-and-original-restore", "cancel-after-provisional-winner"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, m, original, makeReader := mtuEvidenceFixture(t)
+			current := adapter.Inbound(original)
+			plan := mobilemtu.Plan{Original: 1360, Ceiling: 1500}
+			candidates := plan.Candidates(1420)
+			if len(candidates) != 5 {
+				t.Fatal("actual planner candidate budget changed", candidates)
+			}
+			sequence := append(append([]int(nil), candidates...), 1420)
+			failure := -1
+			if mode == "failed-candidate-and-original-restore" {
+				sequence = append(append([]int(nil), candidates[:3]...), plan.Original)
+				failure = 2
+			}
+			if mode == "cancel-after-provisional-winner" {
+				sequence = append(sequence, plan.Original)
+			}
+			history := make([]*RouterVPNTunTransaction, 0, len(sequence))
+			for i, mtu := range sequence {
+				candidate, rollback := makeReader(fmt.Sprintf("candidate-%d-mtu-%d", i, mtu)), makeReader(fmt.Sprintf("rollback-%d", i))
+				candidate.fail = i == failure
+				candidate.failure = adapter.StartStatePostStart
+				transaction, err := m.RouterVPNReplaceTunOwned(ctx, current, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+				if transaction == nil || transaction.Current() == nil || (i == failure) != (err != nil) {
+					t.Fatal("actual candidate sequence lost its owner", i, err)
+				}
+				history = append(history, transaction)
+				current = transaction.Current()
+			}
+			if len(m.routervpnMTUPending) != 0 || len(m.routervpnRetired) != 0 {
+				t.Fatal("settled search retained unjoined native resources")
+			}
+			for i, transaction := range history {
+				evidence := transaction.Evidence()
+				if len(evidence) != 3 || evidence[0].Ready == "" || evidence[0].Retirement == "" || !evidence[0].Retired {
+					t.Fatal("full search discarded predecessor evidence", i)
+				}
+				if i == failure && (!evidence[1].Retired || evidence[1].Retirement == "" || evidence[1].Started) {
+					t.Fatal("full search discarded failed native candidate", i)
+				}
+			}
+		})
+	}
+}

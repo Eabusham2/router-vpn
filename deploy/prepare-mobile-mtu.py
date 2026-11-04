@@ -106,6 +106,9 @@ def prepare(vendor, *, mobile=True):
             text=text.replace(old,new)
         writes[path]=text.encode()
     targets={'tun.go':'protocol/tun/routervpn_mtu.go','box.go':'routervpn_mtu.go','box_test.go':'routervpn_mtu_test.go'}
+    if not mobile:
+        targets['desktop_transaction_native_linux_test.go']='routervpn_mtu_transaction_native_linux_test.go'
+        targets['tun_native_linux_test.go']='protocol/tun/routervpn_mtu_native_linux_test.go'
     if mobile:
         targets['pprof_maps_test.go']='experimental/libbox/internal/oomprofile/routervpn_maps_test.go'
         for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test']:

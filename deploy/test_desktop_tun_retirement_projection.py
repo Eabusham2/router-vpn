@@ -15,10 +15,45 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('native_retirement_projection', ROOT/'deploy/prepare-desktop-mtu.py')
 PREP = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PREP)
+retained_spec = importlib.util.spec_from_file_location("native_mtu_transaction_projection", ROOT/"deploy/prepare-retained-tun.py")
+RETAINED = importlib.util.module_from_spec(retained_spec)
+retained_spec.loader.exec_module(RETAINED)
 SOURCE = None
 
 
 class NativeRetirementProjection(unittest.TestCase):
+    def test_actual_mtu_transaction_preparation_preserves_complete_source(self):
+        with tempfile.TemporaryDirectory(prefix="native-mtu-manager-reprepare-") as directory:
+            vendor = Path(directory)
+            # These git operations are read-only source reads. The projected
+            # files live solely in this fixture; the supplied core is untouched.
+            gitdir = subprocess.check_output(["git", "rev-parse", "--absolute-git-dir"], cwd=SOURCE, text=True).strip()
+            (vendor/".git").symlink_to(gitdir, target_is_directory=True)
+            manager = vendor/RETAINED.MANAGER
+            manager.parent.mkdir(parents=True)
+            manager.write_bytes(subprocess.check_output(["git", "show", RETAINED.PIN + ":" + RETAINED.MANAGER], cwd=SOURCE))
+            RETAINED.prepare(vendor)
+            expected = {path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}
+            verified = RETAINED.verify(vendor)
+            self.assertIn(RETAINED.MANAGER, verified)
+            self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
+            RETAINED.prepare(vendor)
+            self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
+            self.assertEqual(manager.read_text().count("routervpnMTUPending []*RouterVPNTunTransaction"), 1)
+            for target in (manager, manager.parent/"routervpn_mtu.go", manager.parent/"routervpn_mtu_test.go", manager.parent/"routervpn_mtu_native_linux_test.go"):
+                original = target.read_bytes()
+                mutant = original + b"\n// unowned source replacement\n"
+                target.write_bytes(mutant)
+                with self.assertRaises(ValueError):
+                    RETAINED.verify(vendor)
+                self.assertEqual(target.read_bytes(), mutant)
+                with self.assertRaises(ValueError):
+                    RETAINED.prepare(vendor)
+                self.assertEqual(target.read_bytes(), mutant)
+                target.write_bytes(original)
+            RETAINED.prepare(vendor)
+            self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
+
     def test_actual_reprepare_and_incomplete_refusal(self):
         with tempfile.TemporaryDirectory(prefix='native-retirement-reprepare-') as directory:
             vendor = Path(directory)

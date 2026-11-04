@@ -39,6 +39,34 @@ class NativeRetirementVerdicts(unittest.TestCase):
                             NODE.execute_baseline_suite(baseline, suite)
 
 
+class NativeMTUVerdicts(unittest.TestCase):
+    def test_owned_transaction_and_every_native_leaf_are_mandatory(self):
+        suites = (("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NODE.NATIVE_MTU_TEST,)),
+                  ("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NODE.NATIVE_MTU_MODEL_TESTS),
+                  ("mtu-startup-budget", "./protocol/tun", "^TestRouterVPNMTUStartupReceiptKeepsOriginalOperation$", ("TestRouterVPNMTUStartupReceiptKeepsOriginalOperation",)))
+        for suite in suites:
+            if suite[0] == "mtu-startup-budget":
+                names = ["TestRouterVPNMTUStartupReceiptKeepsOriginalOperation"]
+            elif suite[0] == "native-mtu-transaction":
+                names = [NODE.NATIVE_MTU_TEST] + [NODE.NATIVE_MTU_TEST + "/" + case for case in NODE.NATIVE_MTU_CASES]
+            else:
+                names = list(NODE.NATIVE_MTU_MODEL_TESTS) + ["TestRouterVPNTunTransactionRetainsOriginalAndPartialCandidateEvidence/" + case for case in ("candidate", "rollback")] + ["TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt/" + case for case in ("full-search-and-winner", "failed-candidate-and-original-restore", "cancel-after-provisional-winner")]
+            lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+            baseline = Mock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                baseline.execute.return_value = (0, "".join(lines))
+                NODE.execute_baseline_suite(baseline, suite)
+                baseline.execute.assert_called_once_with(*suite[:3], 90)
+                for line in lines:
+                    for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line, "".join(lines).replace(line, line.replace(" (", "-unselected ("), 1)):
+                        if changed == "".join(lines):
+                            continue
+                        with self.subTest(suite=suite[0], line=line, changed=changed):
+                            baseline.execute.return_value = (0, changed)
+                            with self.assertRaisesRegex(ValueError, "omitted"):
+                                NODE.execute_baseline_suite(baseline, suite)
+
+
 class NativeResolverVerdicts(unittest.TestCase):
     def test_every_original_resolver_verdict_is_required_exactly_once(self):
         suite = ("native-resolver-lifetime", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver", NODE.NATIVE_RESOLVER_TESTS)
@@ -97,6 +125,7 @@ class RoutingNamespaceLauncher(unittest.TestCase):
                     "ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD": "1",
                     "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE": "foreign-case",
                     "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE": "foreign-endpoint",
+                    "ROUTERVPN_NATIVE_MTU_TRANSACTION_CASE": "foreign-mtu",
                     "ROUTERVPN_ROUTING_PARENT_NET": "foreign-network",
                     "ROUTERVPN_ROUTING_PARENT_USER": "foreign-user"}
         self.native = Mock()
@@ -147,6 +176,17 @@ class RoutingNamespaceLauncher(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "another fixture selector"):
             NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env, duration=90,
                                            selector="^TestRouterVPNNativeLinuxResolver|Other")
+        self.native.run.assert_not_called()
+
+    def test_mtu_executes_only_its_exact_original_native_selector(self):
+        selector = "^TestRouterVPNNativeLinuxMTUTransactionNamespace$"
+        self.assertEqual(NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env, duration=90, selector=selector), (0, "actual native fixture output\n"))
+        args, options = self.native.run.call_args
+        self.assertIn("-test.run=" + selector, args[0])
+        self.assertNotIn("ROUTERVPN_NATIVE_MTU_TRANSACTION_CASE", options["env"])
+        self.native.run.reset_mock()
+        with self.assertRaisesRegex(ValueError, "another fixture selector"):
+            NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env, duration=90, selector=selector + "|Other")
         self.native.run.assert_not_called()
 
     def test_root_keeps_the_same_fixture_and_owned_timeout_without_sudo(self):

@@ -1,22 +1,38 @@
 package box
 
 import (
- "context"
- "errors"
- "github.com/sagernet/sing-box/adapter"
- "github.com/sagernet/sing-box/protocol/tun"
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/protocol/tun"
 )
 
-// RouterVPNChangeMTU never reloads the Box, selectors, keys or DNS policy.
+// RouterVPNChangeMTU uses the same receipt-bearing transaction as retained
+// service owners. It never reloads the Box, selectors, keys or DNS policy.
 func (s *Box) RouterVPNChangeMTU(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
- select { case <-s.done: return nil, errors.New("MTU service is closed"); default: }
- original, ok := expected.(*tun.Inbound)
- if !ok { return nil, errors.New("captured inbound is not the native TUN") }
- current, exists := s.inbound.Get(expected.Tag())
- // A different live reader is not a result of this transaction. Returning it
- // would let a stale MTU owner adopt another operation's interface on error.
- if !exists || current != expected || ctx.Err() != nil { return expected, errors.New("MTU inbound ownership changed") }
- candidate, rollback, err := original.RouterVPNMTUReaders(mtu)
- if err != nil { return expected, err }
- return s.inbound.RouterVPNReplaceTun(ctx, expected, candidate, rollback)
+	transaction, err := s.RouterVPNChangeMTUTransaction(ctx, expected, mtu)
+	if transaction == nil {
+		return expected, err
+	}
+	return transaction.Current(), err
+}
+func (s *Box) RouterVPNChangeMTUTransaction(ctx context.Context, expected adapter.Inbound, mtu int) (*inbound.RouterVPNTunTransaction, error) {
+	select {
+	case <-s.done:
+		return nil, errors.New("MTU service is closed")
+	default:
+	}
+	original, ok := expected.(*tun.Inbound)
+	if !ok {
+		return nil, errors.New("captured inbound is not the native TUN")
+	}
+	current, exists := s.inbound.Get(expected.Tag())
+	if !exists || current != expected || ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("MTU inbound ownership changed")
+	}
+	return s.inbound.RouterVPNReplaceTunOwned(ctx, expected, func() (adapter.Inbound, adapter.Inbound, error) { return original.RouterVPNMTUReadersContext(ctx, mtu) })
+}
+func (s *Box) RouterVPNRetryMTUTransaction(ctx context.Context, transaction *inbound.RouterVPNTunTransaction) error {
+	return s.inbound.RouterVPNRetryTunTransaction(ctx, transaction)
 }
