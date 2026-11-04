@@ -65,7 +65,25 @@ EMPTY_RECOVERY_UNITS = {
 PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
                  'PreservesBorrowedParent', 'ChannelBoundsAndCancellation', 'InheritedCloseOnExec',
-                 'ChannelPeerClosed', 'AcknowledgedPeerClose')
+                 'ChannelPeerClosed', 'AcknowledgedPeerClose', 'SealedImageAdmission', 'SealedBootstrap')
+
+
+PROCESS_SEALED_GROUPS = {
+    'SealedImageAdmission': ('original', 'unsealed', 'writable', 'non-executable', 'ordinary-file', 'closed', 'replaced', 'nil'),
+    'SealedBootstrap': ('complete', 'generic-refused', 'foreign-image', 'foreign-pidfd', 'nil-image',
+                        'closed-before-bind', 'closed-after-bind', 'replaced-after-bind', 'reexecuted'),
+}
+
+
+def check_sealed_process_verdict(output):
+    if '--- SKIP:' in output or '--- FAIL:' in output:
+        raise ValueError('Linux sealed process gate skipped or failed an original capability boundary')
+    passed = re.findall(r'(?m)^\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)$', output)
+    for group, leaves in PROCESS_SEALED_GROUPS.items():
+        for suffix in (group, *(group+'/'+leaf for leaf in leaves)):
+            name = 'TestLinuxProcessNamespace'+suffix
+            if passed.count(name) != 1:
+                raise ValueError('Linux sealed process gate omitted or duplicated its exact original boundary: '+name)
 
 
 def check_empty_recovery_verdict(output, *, native=False):
@@ -82,7 +100,7 @@ def check_empty_recovery_verdict(output, *, native=False):
 def source_identity():
     names = sorted([ROOT/'go.mod', ROOT/'go.sum', ROOT/'modes/kill-switch.py', ROOT/'modes/profile_id.py', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
                     *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, *TRANSACTION.RUNNERS, 'test_linux_controller_privilege.py',
-                                                     'test_linux_empty_recovery_runner.py', *SERVICE.RUNNERS))])
+                                                     'test_linux_empty_recovery_runner.py', 'test_linux_sealed_process_runner.py', *SERVICE.RUNNERS))])
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in names if path.is_file() and not path.is_symlink()}
 
@@ -242,6 +260,7 @@ def execute(go='go'):
         process_output = UID.run(process_command, cwd=ROOT, timeout=150, sudo=sudo)
         if any('--- PASS: TestLinuxProcessNamespace'+name+' (' not in process_output for name in PROCESS_CASES) or '--- SKIP:' in process_output:
             raise ValueError('Native process gate omitted a required actual creation, authentication or retirement case')
+        check_sealed_process_verdict(process_output)
         process_leaves = {
             'Witness': ('original', 'wrong-pid', 'foreign-directory', 'closed-image', 'closed-directory'),
             'RejectsForeignBootstrap': ('wrong-capture', 'wrong-pid', 'wrong-image', 'wrong-channel', 'reopened-channel', 'parent-directory', 'cancelled'),

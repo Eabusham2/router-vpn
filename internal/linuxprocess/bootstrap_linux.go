@@ -93,10 +93,33 @@ func decodeBootstrap(body []byte) (bootstrapMessage, error) {
 // executable. No decoded message supplies these native creation constraints.
 func BindCreatedChild(ctx context.Context, channel *Channel, parent *Witness, clonePIDFD *os.File,
 	childPID int, image Object, captureSHA256 string) (*Bootstrap, error) {
+	return bindCreatedChild(ctx, channel, parent, clonePIDFD, childPID, image, captureSHA256, nil)
+}
+
+// BindCreatedSealedChild authenticates only the exact anonymous executable
+// borrowed from this creator. Generic directory-backed child checks remain
+// unchanged. Channel and clonePIDFD are consumed on every outcome.
+func BindCreatedSealedChild(ctx context.Context, channel *Channel, parent *Witness, clonePIDFD *os.File,
+	childPID int, image *SealedImage, captureSHA256 string) (*Bootstrap, error) {
+	if image == nil {
+		b := &Bootstrap{gate: readyGate(), channel: channel, parent: parent, borrowParent: true,
+			pidfd: clonePIDFD, peerPID: childPID, captureSHA256: captureSHA256}
+		return b, errors.New("sealed child bootstrap omitted its original executable")
+	}
+	return bindCreatedChild(ctx, channel, parent, clonePIDFD, childPID, image.identity, captureSHA256, image)
+}
+
+func bindCreatedChild(ctx context.Context, channel *Channel, parent *Witness, clonePIDFD *os.File,
+	childPID int, image Object, captureSHA256 string, sealed *SealedImage) (*Bootstrap, error) {
 	b := &Bootstrap{gate: readyGate(), channel: channel, parent: parent, borrowParent: true,
 		pidfd: clonePIDFD, peerPID: childPID, captureSHA256: captureSHA256}
 	if ctx == nil || ctx.Err() != nil || channel == nil || !channel.createdPair || parent == nil || clonePIDFD == nil || childPID < 1 || !digest(captureSHA256) {
 		return b, errors.New("Linux child bootstrap requires its complete original launch")
+	}
+	if sealed != nil {
+		if err := sealed.Current(); err != nil {
+			return b, err
+		}
 	}
 	var err error
 	b.parentRecord, err = parent.Current(ctx)
@@ -133,7 +156,7 @@ func BindCreatedChild(ctx context.Context, channel *Channel, parent *Witness, cl
 		return b, err
 	}
 	// CaptureDirectory consumes the transferred descriptor even on error.
-	task, taskErr := CaptureDirectory(ctx, directory, childPID)
+	task, taskErr := captureDirectory(ctx, directory, childPID, sealed)
 	// CaptureCreated likewise retains both partial owners. Never discard one
 	// because construction or the following comparison failed.
 	b.child, err = CaptureCreated(ctx, b.pidfd, task, b.parent, image)
@@ -174,6 +197,22 @@ func BindCreatedChild(ctx context.Context, channel *Channel, parent *Witness, cl
 // inputs. The parent PID is read from the pair's native creator, then checked
 // against that retained directory and each message's SCM credentials.
 func BindInheritedParent(ctx context.Context, channel *Channel, parentDirectory *os.File, captureSHA256 string) (*Bootstrap, error) {
+	return bindInheritedParent(ctx, channel, parentDirectory, captureSHA256, nil)
+}
+
+// BindInheritedSealedParent binds the running child to its exact inherited
+// immutable executable, while the original service parent keeps the ordinary
+// protected installed-image witness.
+func BindInheritedSealedParent(ctx context.Context, channel *Channel, parentDirectory *os.File,
+	captureSHA256 string, image *SealedImage) (*Bootstrap, error) {
+	if image == nil {
+		b := &Bootstrap{gate: readyGate(), channel: channel, file: parentDirectory, captureSHA256: captureSHA256}
+		return b, errors.New("sealed child bootstrap omitted its original executable")
+	}
+	return bindInheritedParent(ctx, channel, parentDirectory, captureSHA256, image)
+}
+
+func bindInheritedParent(ctx context.Context, channel *Channel, parentDirectory *os.File, captureSHA256 string, sealed *SealedImage) (*Bootstrap, error) {
 	b := &Bootstrap{gate: readyGate(), channel: channel, file: parentDirectory, captureSHA256: captureSHA256}
 	if ctx == nil || ctx.Err() != nil || channel == nil || parentDirectory == nil || !digest(captureSHA256) {
 		return b, errors.New("Linux child requires its original inherited parent capture")
@@ -189,7 +228,11 @@ func BindInheritedParent(ctx context.Context, channel *Channel, parentDirectory 
 	if err != nil {
 		return b, err
 	}
-	b.self, err = CaptureSelf(ctx)
+	if sealed != nil {
+		b.self, err = captureSealedSelf(ctx, sealed)
+	} else {
+		b.self, err = CaptureSelf(ctx)
+	}
 	if err != nil {
 		return b, err
 	}

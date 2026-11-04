@@ -20,6 +20,7 @@ const procFilesystem = 0x9fa0
 // The witness observes identity only; its caller retains launch, wait, journal
 // and native-protection authority independently.
 type Witness struct {
+	sealedImage               *SealedImage
 	gate                      chan struct{}
 	directory                 *os.File
 	directoryIdentity         Object
@@ -78,7 +79,11 @@ func CaptureSelf(ctx context.Context) (*Witness, error) {
 // expectedPID is supplied by actual creation/SCM credentials in the receiver's
 // PID namespace, not by a decoded message's claimed sender.
 func CaptureDirectory(ctx context.Context, directory *os.File, expectedPID int) (*Witness, error) {
-	w := &Witness{directory: directory, gate: make(chan struct{}, 1)}
+	return captureDirectory(ctx, directory, expectedPID, nil)
+}
+
+func captureDirectory(ctx context.Context, directory *os.File, expectedPID int, sealed *SealedImage) (*Witness, error) {
+	w := &Witness{directory: directory, gate: make(chan struct{}, 1), sealedImage: sealed}
 	defer func() { w.gate <- struct{}{} }()
 	if directory != nil {
 		if err := SetCloseOnExec(directory); err != nil {
@@ -87,6 +92,11 @@ func CaptureDirectory(ctx context.Context, directory *os.File, expectedPID int) 
 	}
 	if ctx == nil || ctx.Err() != nil || directory == nil || expectedPID < 1 || uint64(expectedPID) > 1<<31-1 {
 		return w, errors.New("Linux process capture requires its actual retained directory and caller")
+	}
+	if sealed != nil {
+		if err := sealed.Current(); err != nil {
+			return w, err
+		}
 	}
 	info, err := directory.Stat()
 	if err != nil || !info.IsDir() {
@@ -333,7 +343,11 @@ func (w *Witness) read(processID int) (Observation, error) {
 		}
 		if native.name == "exe" {
 			st, ok := original.Sys().(*syscall.Stat_t)
-			if !ok || st.Nlink != 1 {
+			if w.sealedImage != nil {
+				if err := w.sealedImage.Current(); err != nil || !ok || st.Nlink != 0 || *native.out != w.sealedImage.identity || original.Size() != w.sealedImage.size {
+					return Observation{}, errors.Join(err, errors.New("Linux child executable differs from its original sealed image"))
+				}
+			} else if !ok || st.Nlink != 1 {
 				return Observation{}, errors.New("Linux process executable lost its sole protected directory entry")
 			}
 		}
