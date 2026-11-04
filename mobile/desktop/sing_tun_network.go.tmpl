@@ -46,6 +46,15 @@ func (t *NativeTun) routervpnNetworkAdded(object DesktopNetworkObject) {
 }
 
 func (t *NativeTun) RouterVPNDesktopNetworkReceipt() (string, error) {
+	if native, ok := any(t).(interface{ routervpnLinuxAttestedReceipt() (string, error) }); ok {
+		return native.routervpnLinuxAttestedReceipt()
+	}
+	return t.routervpnObserveNetworkReceipt()
+}
+
+// The observational kernel shape alone grants no creator capability. Linux's
+// public method also requires its original descriptor and notification stream.
+func (t *NativeTun) routervpnObserveNetworkReceipt() (string, error) {
 	if t.options.FileDescriptor != 0 || t.options.NetNs != "" || t.options.EXP_ExternalConfiguration {
 		return "", errors.New("network receipt requires the original native TUN constructor")
 	}

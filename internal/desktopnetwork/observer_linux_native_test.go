@@ -186,6 +186,57 @@ func TestLinuxNativeNetworkCohortEvents(t *testing.T) {
 	t.Run("ipv6-rule-away-and-back", func(t *testing.T) {
 		networkNativeIPv6RuleObserver(t, ctx)
 	})
+	t.Run("joined-original-routing-absence", func(t *testing.T) {
+		o, native := networkNativeOwner(t, ctx)
+		if err := o.Begin(ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+		index := networkNativeLink(t, "rvpn-retire", "10.10.0.2/24", 1376)
+		networkNativeIP(t, "route", "add", "table", "2022", "default", "dev", "rvpn-retire")
+		networkNativeIP(t, "rule", "add", "priority", "11000", "lookup", "2022")
+		created := networkNativeFixtureReceipt(t, ctx, native, index)
+		if err := o.End(ctx, &created); err != nil {
+			t.Fatal(err)
+		}
+		retired := DesktopNetworkRetirementReceipt{Schema: 1, TargetOS: "linux", Created: true, Incarnation: created.Incarnation, Name: created.Name, Index: created.Index, Objects: created.Objects}
+		if err := o.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := o.RoutingAbsent(ctx, &retired); err == nil {
+			t.Fatal("original native interface fabricated cleanup absence")
+		}
+		networkNativeIP(t, "link", "delete", "dev", "rvpn-retire")
+		if err := o.RoutingAbsent(ctx, &retired); err == nil {
+			t.Fatal("original native rule survived joined-interface absence")
+		}
+		networkNativeIP(t, "rule", "delete", "priority", "11000", "lookup", "2022")
+		if err := o.RoutingAbsent(ctx, &retired); err != nil {
+			t.Fatal("actual original route/rule cleanup", err)
+		}
+		networkNativeIP(t, "route", "add", "203.0.113.0/24", "via", "192.0.2.1", "dev", "rvpn-physical")
+		if err := o.RoutingAbsent(ctx, &retired); err != nil {
+			t.Fatal("disjoint foreign route stranded original native cleanup", err)
+		}
+		foreign, err := native.Snapshot(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, object := range foreign.Objects {
+			found = found || object.Kind == "route" && object.Destination == "203.0.113.0/24"
+		}
+		if !found {
+			t.Fatal("retirement altered a disjoint foreign route")
+		}
+		networkNativeIP(t, "route", "delete", "203.0.113.0/24", "via", "192.0.2.1", "dev", "rvpn-physical")
+		if err := o.RoutingAbsent(ctx, &retired); err != nil {
+			t.Fatal("original inventory was not restored", err)
+		}
+		if err := o.Current(); err == nil {
+			t.Fatal("retirement readback restarted original epoch")
+		}
+	})
+
 	t.Run("unchanged-physical-owner", func(t *testing.T) {
 		o, _ := networkNativeOwner(t, ctx)
 		if err := o.Current(); err != nil {

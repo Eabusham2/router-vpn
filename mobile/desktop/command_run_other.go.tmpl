@@ -1,0 +1,10 @@
+//go:build !linux
+
+package main
+
+func routerVPNRunOwnedCommand() (bool, error) { return false, nil }
+
+// Only the Linux branch in the legacy Node defer enters this function.
+func routerVPNRetireLegacyNode(native *routerVPNExternalNative) error {
+	return routerVPNExternalFailure
+}

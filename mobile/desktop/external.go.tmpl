@@ -390,7 +390,26 @@ func (n *routerVPNExternalNative) ProgressJSON() string {
 	}
 	return n.proof.ProgressJSON()
 }
-func (n *routerVPNExternalNative) Close() error {
+
+// Complete native retirement before closing any partial dependency. In
+// particular a failed inbound must keep its original network namespace manager
+// alive; remembering only that inbound cannot reconstruct the dependency.
+func routerVPNClosePartialNativeContext(ctx context.Context, partials []io.Closer) error {
+	if ctx == nil {
+		return nil
+	}
+	for _, partial := range partials {
+		if closer, ok := partial.(interface{ RouterVPNCloseNativeTunContext(context.Context) error }); ok {
+			if err := closer.RouterVPNCloseNativeTunContext(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return ctx.Err()
+}
+
+func (n *routerVPNExternalNative) Close() error { return n.CloseContext(nil) }
+func (n *routerVPNExternalNative) CloseContext(ctx context.Context) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.latency != nil {
@@ -410,6 +429,9 @@ func (n *routerVPNExternalNative) Close() error {
 	}
 	if n.box == nil {
 		n.cancel()
+		if err := routerVPNClosePartialNativeContext(ctx, n.partial); err != nil {
+			return err
+		}
 		pending := n.partial[:0]
 		for _, partial := range n.partial {
 			if partial.Close() != nil {
@@ -431,6 +453,13 @@ func (n *routerVPNExternalNative) Close() error {
 		}
 	}
 	if !n.boxClosed {
+		if ctx != nil {
+			if closer, ok := any(n.box).(interface{ RouterVPNCloseNativeTunContext(context.Context) error }); ok {
+				if err := closer.RouterVPNCloseNativeTunContext(ctx); err != nil {
+					return err
+				}
+			}
+		}
 		n.cancel()
 		n.boxCloseFail = n.box.Close()
 		n.boxClosed = true

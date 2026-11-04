@@ -26,6 +26,18 @@ class StandardServiceGateTests(unittest.TestCase):
                 for mutation in (output.replace(line,'',1),output.replace(line,line.replace('TestLinux','TestOther'),1),output+'\n'+line,output.replace(line,line.replace('PASS','SKIP'),1),output.replace(line,line.replace('PASS','FAIL'),1)):
                     with self.assertRaises(ValueError):gate.check_verdict(mutation,group)
 
+    def test_cleanup_required_verdicts(self):
+        output='\n'.join('--- PASS: '+name+' (0.01s)' for parent,children in gate.CLEANUP.items()
+                         for name in (parent,*(parent+'/'+child for child in children)))
+        gate.check_cleanup_verdict(output)
+        for line in output.splitlines():
+            for mutation in (output.replace(line,'',1),output.replace(line,line.replace('TestCleanup','TestOther'),1),output+'\n'+line,output.replace(line,line.replace('PASS','SKIP'),1),output.replace(line,line.replace('PASS','FAIL'),1)):
+                with self.assertRaises(ValueError):gate.check_cleanup_verdict(mutation)
+        runner=(ROOT/'deploy/test_linux_controller_privilege.py').read_text()
+        self.assertIn("'./internal/standardengine'",runner)
+        self.assertIn('SERVICE.check_cleanup_verdict(cleanup_output)',runner)
+        self.assertIn("namespace_test(args.namespace_cleanup_binary, '^TestCleanup', digest)",runner)
+
     def test_renamed_or_omitted_source_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             copy=Path(temporary)

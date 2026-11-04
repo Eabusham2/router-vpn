@@ -61,12 +61,17 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(darwin_route_failure=failure)
 
+    def test_failed_or_timed_out_command_retirement_cannot_reach_later_gates_or_compilation(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(command_retirement_failure=failure)
+
     def test_failed_timed_out_or_missing_native_phase_receipt_cannot_reach_package(self):
         for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(physical_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None):
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -75,6 +80,8 @@ class NativeSocketUIDGate(unittest.TestCase):
             targets = tuple(target for target in targets if target.startswith('windows/'))
         if darwin_route_failure is not None:
             targets = tuple(target for target in targets if target.startswith('darwin/'))
+        if command_retirement_failure is not None:
+            targets = tuple(target for target in targets if target.startswith('linux/'))
         for target in targets:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -88,6 +95,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 openvpn_errors = []
                 darwin_route_errors = []
                 physical_errors = []
+                command_retirement_errors = []
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
@@ -115,6 +123,20 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 600)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_command_retirement.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], ['--native-core', str(source.resolve()), '--tags='+','.join(N.tags(target))])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['timeout'], 180)
+                        if command_retirement_failure is not None:
+                            error = (command_retirement_failure(39, args) if command_retirement_failure is subprocess.CalledProcessError
+                                     else command_retirement_failure(args, kwargs['timeout']))
+                            command_retirement_errors.append(error)
+                            raise error
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py'):
                         self.assertEqual(system, 'linux')
@@ -381,7 +403,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    expected_error = physical_failure or darwin_route_failure or forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
@@ -392,6 +414,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertFalse(any(len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq.py') for args in calls))
                     if physical_errors:
                         self.assertIs(caught.exception, physical_errors[0])
+                    continue
+                if command_retirement_errors:
+                    self.assertEqual(len(command_retirement_errors), 1)
+                    self.assertIs(caught.exception, command_retirement_errors[0])
+                    self.assertEqual(calls[-1][1], str(ROOT/'deploy/test_desktop_command_retirement.py'))
+                    self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
                     continue
                 timers = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_amnezia_timers_pinned.py')]
                 self.assertEqual(len(timers), 1, 'Native build omitted the actual pinned AWG timer gate')
@@ -535,6 +563,11 @@ class NativeSocketUIDGate(unittest.TestCase):
                 self.assertIn(ROOT/'deploy/test_windows_physical_tunnel_runner.py', N.inputs())
                 guardian = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py')]
                 self.assertEqual(len(guardian), 1 if system == 'linux' else 0)
+                command_retirement = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_command_retirement.py')]
+                self.assertEqual(len(command_retirement), len(guardian))
+                if guardian:
+                    self.assertEqual(calls.index(guardian[0]), calls.index(command_retirement[0])+1)
+                self.assertIn(ROOT/'deploy/test_desktop_command_retirement.py', N.inputs())
                 self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())
                 child_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_child_control_runner.py')]
                 child = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_child_control.py')]

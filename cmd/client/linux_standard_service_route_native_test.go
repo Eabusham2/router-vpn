@@ -62,7 +62,7 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		fmt.Fprintln(os.Stdout, "standard-service-route-joined")
 		return nil
 	}
-	if action != "1" && action != "failure" && action != "network-failure" && action != "pre-rpc-network-failure" {
+	if action != "1" && action != "failure" && action != "network-failure" && action != "route-change" && action != "pre-rpc-network-failure" {
 		return errors.New("unknown native service fixture action")
 	}
 	body, err = os.ReadFile(filepath.Join(root, "modes.json"))
@@ -140,13 +140,30 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	if _, err := standardengine.DecodeReady(epoch.startup.Ready, standardengine.SHA256(epoch.startup.Capture)); err != nil {
 		return err
 	}
-	if action == "failure" || action == "network-failure" {
+	if action == "failure" || action == "network-failure" || action == "route-change" {
 		if err = linuxStandardServiceControllerFailureFixture(a, owner, action); err != nil {
+			return err
+		}
+	}
+	var foreignBefore []byte
+	if action == "route-change" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		foreignBefore, err = linuxStandardForeignRouteCurrent(ctx)
+		cancel()
+		if err != nil {
 			return err
 		}
 	}
 	if err = a.stopMode(); err != nil {
 		return fmt.Errorf("shipping service Stop failed: %w", err)
+	}
+	if action == "route-change" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		after, readErr := linuxStandardForeignRouteCurrent(ctx)
+		cancel()
+		if readErr != nil || !bytes.Equal(foreignBefore, after) {
+			return errors.New("explicit Stop removed or changed disjoint foreign routing")
+		}
 	}
 	if a.state.Connected || a.cmd != nil || !owner.joined {
 		return errors.New("shipping original remote cleanup did not join before Off")
@@ -154,7 +171,7 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	if _, err = os.Stat(filepath.Join(root, "run", "kill-switch.json")); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("shipping On-connect Stop retained its state after acknowledged service release")
 	}
-	if action == "failure" || action == "network-failure" {
+	if action == "failure" || action == "network-failure" || action == "route-change" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		view := a.captureLinuxStandardServiceProtection(ctx)
@@ -216,6 +233,7 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 	if err != nil || json.Unmarshal(body, &state) != nil || state.Policy != "on-connect" || state.Owner.Receipt.Session != owner.request.Session || state.Owner.Receipt.ConfigSHA256 != owner.request.ConfigSHA256 || state.Owner.Receipt.TableHandle == 0 {
 		return errors.New("original service saved protection lost its acknowledged creation")
 	}
+	var foreignBefore []byte
 	if action == "failure" {
 		trigger := filepath.Join(linuxOwnedControllerRoot, "run", "standard-service-fixture-exit")
 		file, err := os.OpenFile(trigger, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
@@ -224,6 +242,14 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 		}
 		_, writeErr := file.WriteString(owner.request.Session)
 		if err := errors.Join(writeErr, file.Close()); err != nil {
+			return err
+		}
+	} else if action == "route-change" {
+		if output, err := exec.CommandContext(ctx, "ip", "route", "add", "198.18.77.0/24", "via", "203.0.113.1", "dev", "rvphysical").CombinedOutput(); err != nil {
+			return fmt.Errorf("actual disjoint foreign route: %w %s", err, output)
+		}
+		foreignBefore, err = linuxStandardForeignRouteCurrent(ctx)
+		if err != nil {
 			return err
 		}
 	} else {
@@ -246,6 +272,12 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 		case <-ctx.Done():
 			return errors.New("service did not join the original network-invalidated original engine")
 		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if action == "route-change" {
+		after, err := linuxStandardForeignRouteCurrent(ctx)
+		if err != nil || !bytes.Equal(foreignBefore, after) {
+			return errors.New("original engine retirement changed disjoint foreign routing")
 		}
 	}
 	named, err := os.Lstat(statePath)
@@ -271,4 +303,17 @@ func linuxStandardServiceControllerFailureFixture(a *app, owner *linuxStandardSe
 		return errors.New("retired service engine stayed current or controller cleanup substituted for service watch")
 	}
 	return nil
+}
+
+func linuxStandardForeignRouteCurrent(ctx context.Context) ([]byte, error) {
+	raw, err := exec.CommandContext(ctx, "ip", "-j", "route", "show", "exact", "198.18.77.0/24").CombinedOutput()
+	var rows []struct {
+		Destination string `json:"dst"`
+		Gateway     string `json:"gateway"`
+		Device      string `json:"dev"`
+	}
+	if err != nil || json.Unmarshal(raw, &rows) != nil || len(rows) != 1 || rows[0].Destination != "198.18.77.0/24" || rows[0].Gateway != "203.0.113.1" || rows[0].Device != "rvphysical" {
+		return nil, errors.New("actual disjoint foreign route is no longer present")
+	}
+	return raw, ctx.Err()
 }

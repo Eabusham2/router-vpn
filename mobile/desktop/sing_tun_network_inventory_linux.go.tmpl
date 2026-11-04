@@ -47,7 +47,11 @@ func routervpnLinuxAttributes(raw []byte) (map[uint16][]byte, error) {
 }
 
 func (t *NativeTun) routervpnLinuxInterface() (*net.Interface, error) {
-	rows, err := linuxDump(t.routervpnNetworkContext(), syscall.RTM_GETLINK, syscall.RTM_NEWLINK)
+	return t.routervpnLinuxInterfaceContext(t.routervpnNetworkContext())
+}
+
+func (t *NativeTun) routervpnLinuxInterfaceContext(ctx context.Context) (*net.Interface, error) {
+	rows, err := linuxDump(ctx, syscall.RTM_GETLINK, syscall.RTM_NEWLINK)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +87,7 @@ func (t *NativeTun) routervpnLinuxInterface() (*net.Interface, error) {
 	if result == nil {
 		return nil, errors.New("native TUN interface disappeared")
 	}
-	return result, t.routervpnNetworkContext().Err()
+	return result, ctx.Err()
 }
 
 func (t *NativeTun) routervpnLinuxAddresses(index int) ([]netlink.Addr, error) {

@@ -1,0 +1,160 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func commandRetirementResult(t *testing.T, result <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(3 * time.Second):
+		t.Fatal("captured retirement did not return within the test bound")
+		return nil
+	}
+}
+
+func TestRouterVPNCommandRetirementRejectsUnboundedAndCancelledRequests(t *testing.T) {
+	var calls atomic.Int32
+	owner := routerVPNCommandRetirement{retire: func(context.Context) error { calls.Add(1); return nil }}
+	if err := owner.attempt(context.Background()); err == nil {
+		t.Fatal("unbounded cleanup reached the original callback")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	cancel()
+	if err := owner.attempt(ctx); !errors.Is(err, context.Canceled) || calls.Load() != 0 || owner.pending != nil {
+		t.Fatalf("cancelled request mutated owner: %v, calls=%d", err, calls.Load())
+	}
+}
+
+func TestRouterVPNCommandRetirementJoinsOriginalLateCallback(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	var active atomic.Int32
+	var overlap atomic.Bool
+	owner := routerVPNCommandRetirement{retire: func(ctx context.Context) error {
+		if active.Add(1) != 1 {
+			overlap.Store(true)
+		}
+		defer active.Add(-1)
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return nil // deliberately late success cannot prove the next request
+		}
+		return ctx.Err()
+	}}
+	first, cancelFirst := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelFirst()
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- owner.attempt(first) }()
+	<-entered
+	cancelFirst() // explicit event, not a scheduling-dependent timeout assumption
+	if err := commandRetirementResult(t, firstResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled first attempt accepted late cleanup: %v", err)
+	}
+	second, cancelSecond := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	if err := owner.attempt(second); !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 1 || overlap.Load() {
+		t.Fatalf("retry overlapped original callback: err=%v calls=%d overlap=%v", err, calls.Load(), overlap.Load())
+	}
+	cancelSecond()
+	close(release)
+	third, cancelThird := context.WithTimeout(context.Background(), time.Second)
+	defer cancelThird()
+	if err := owner.attempt(third); err != nil || calls.Load() != 2 || active.Load() != 0 || overlap.Load() || owner.pending != nil {
+		t.Fatalf("original callback was not joined and rechecked: %v calls=%d", err, calls.Load())
+	}
+}
+
+func TestRouterVPNCommandRetirementRejectsSuccessAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	owner := routerVPNCommandRetirement{retire: func(context.Context) error {
+		cancel()
+		return nil
+	}}
+	if err := owner.attempt(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expired callback result became cleanup success: %v", err)
+	}
+}
+
+func TestRouterVPNCommandRetirementRequiresExplicitRetry(t *testing.T) {
+	signals := make(chan os.Signal, 4)
+	failed := make(chan error, 1)
+	result := make(chan error, 1)
+	var calls atomic.Int32
+	refusal := errors.New("original native retirement refused")
+	go func() {
+		last, err := routerVPNRetireOriginalCommand(signals, syscall.SIGHUP, time.Second, func(context.Context) error {
+			if calls.Add(1) == 1 {
+				return refusal
+			}
+			return nil
+		}, func(err error) { failed <- err })
+		if last != syscall.SIGTERM {
+			err = errors.Join(err, errors.New("shutdown request was replaced by reload"))
+		}
+		result <- err
+	}()
+	if err := commandRetirementResult(t, failed); !errors.Is(err, refusal) {
+		t.Fatalf("native refusal not retained: %v", err)
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("failure discarded original owner before retry: %v", err)
+	default:
+	}
+	if calls.Load() != 1 {
+		t.Fatal("failure automatically renewed the cleanup attempt")
+	}
+	signals <- syscall.SIGTERM
+	if err := commandRetirementResult(t, result); err != nil || calls.Load() != 2 {
+		t.Fatalf("explicit retry did not retire same owner: %v calls=%d", err, calls.Load())
+	}
+}
+
+func TestRouterVPNCommandRetirementShutdownDominatesReload(t *testing.T) {
+	for _, first := range []os.Signal{syscall.SIGHUP, os.Interrupt, syscall.SIGTERM} {
+		t.Run(first.String(), func(t *testing.T) {
+			signals := make(chan os.Signal, 3)
+			signals <- syscall.SIGTERM
+			signals <- syscall.SIGHUP
+			last, err := routerVPNRetireOriginalCommand(signals, first, time.Second, func(context.Context) error { return nil }, nil)
+			if err != nil || last == syscall.SIGHUP || last == nil {
+				t.Fatalf("queued reload resurrected a stopped command: %v, %v", last, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNCommandRetirementInvalidRequestCannotEnterOwner(t *testing.T) {
+	var calls int
+	callback := func(context.Context) error { calls++; return nil }
+	signals := make(chan os.Signal, 1)
+	for _, request := range []struct {
+		signals <-chan os.Signal
+		first   os.Signal
+		limit   time.Duration
+	}{
+		{nil, os.Interrupt, time.Second},
+		{signals, nil, time.Second},
+		{signals, syscall.SIGUSR1, time.Second},
+		{signals, os.Interrupt, 0},
+	} {
+		if _, err := routerVPNRetireOriginalCommand(request.signals, request.first, request.limit, callback, nil); err == nil {
+			t.Fatal("invalid cleanup request accepted")
+		}
+	}
+	if calls != 0 {
+		t.Fatal("invalid cleanup request reached native owner")
+	}
+}

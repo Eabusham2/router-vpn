@@ -134,6 +134,7 @@ def inputs():
                              *sorted((ROOT/'deploy/fixtures/windows-physical-bootstrap').glob('*.go')),
                              *sorted((ROOT/'deploy/fixtures/windows-node-physical').glob('*.go')),
                              ROOT/'deploy/test_desktop_linux_guardian.py',
+                             ROOT/'deploy/test_desktop_command_retirement.py',
                              ROOT/'deploy/test_linux_node_child_control.py',
                              ROOT/'deploy/test_linux_node_child_control_runner.py',
                              ROOT/'deploy/test_linux_external_lifecycle.py',
@@ -795,6 +796,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_windows_physical_tunnel.py', source],
                     env=env, timeout=1200)
             if target.startswith('linux/'):
+                run([sys.executable, ROOT/'deploy/test_desktop_command_retirement.py',
+                     '--native-core', source, '--tags='+','.join(tags(target))],
+                    cwd=ROOT, env=env, timeout=180)
                 run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
                     env=env, timeout=300)
                 run([sys.executable, ROOT/'deploy/test_linux_node_child_control_runner.py'],

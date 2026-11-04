@@ -1,68 +1,128 @@
 package inbound
 
 import (
- "context"
- "errors"
- "fmt"
- "github.com/sagernet/sing-box/adapter"
+	"context"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"runtime"
 )
 
 // Lifecycle serialization prevents readers overlapping with replacement,
 // removal or shutdown. Routing Get remains available during the transaction.
 func (m *Manager) RouterVPNReplaceTun(ctx context.Context, expected, candidate, rollback adapter.Inbound) (adapter.Inbound, error) {
- m.routervpnLifecycle.Lock()
- defer m.routervpnLifecycle.Unlock()
- if expected == nil || candidate == nil || rollback == nil || expected == candidate || expected == rollback || candidate == rollback {
-  return nil, errors.New("distinct TUN transaction objects required")
- }
- tag := expected.Tag()
- if tag == "" || expected.Type() != "tun" || candidate.Type() != "tun" || rollback.Type() != "tun" || candidate.Tag()!=tag || rollback.Tag()!=tag {
-  return nil, errors.New("TUN transaction cannot replace another inbound family")
- }
- m.access.Lock()
- index := -1
- for i, owned := range m.inbounds { if owned == expected { index = i; break } }
- current := m.started && m.stage == adapter.StartStateStarted && m.inboundByTag[tag] == expected && index >= 0
- m.access.Unlock()
- retire := func(value adapter.Inbound) { m.access.Lock(); m.routervpnRetired=append(m.routervpnRetired,value); m.access.Unlock() }
- closeUnused := func(value adapter.Inbound) { if err:=value.Close();err!=nil{retire(value)} }
- if !current || ctx.Err()!=nil {
-  closeUnused(candidate);closeUnused(rollback)
-  return expected, errors.New("TUN transaction belongs to a stale or stopped inbound")
- }
- publish := func(value adapter.Inbound) {
-  m.access.Lock(); defer m.access.Unlock()
-  if value == nil {
-   delete(m.inboundByTag,tag)
-   m.inbounds=append(m.inbounds[:index],m.inbounds[index+1:]...)
-  } else { m.inbounds[index]=value; m.inboundByTag[tag]=value }
- }
- start := func(value adapter.Inbound, contextCheck bool) error {
-  for _, stage := range adapter.ListStartStages {
-   if contextCheck && ctx.Err()!=nil { return ctx.Err() }
-   if err:=adapter.LegacyStart(value,stage);err!=nil{return err}
-  }
-  if contextCheck { return ctx.Err() }; return nil
- }
- // The platform retains the OS TUN handle while its reader duplicate closes.
- if err:=expected.Close();err!=nil {
-  retire(expected);closeUnused(candidate);closeUnused(rollback);publish(nil)
-  return nil,fmt.Errorf("old TUN teardown is unverified: %w",err)
- }
- if err:=start(candidate,true);err!=nil {
-  if closeErr:=candidate.Close();closeErr!=nil {
-   retire(candidate);closeUnused(rollback);publish(nil)
-   return nil,fmt.Errorf("failed candidate could not be stopped: %w",closeErr)
-  }
-  // The platform independently refuses rollback after Stop or path changes.
-  if restoreErr:=start(rollback,false);restoreErr!=nil {
-   closeUnused(rollback);publish(nil)
-   return nil,fmt.Errorf("TUN rollback failed after candidate rejection: %w",restoreErr)
-  }
-  publish(rollback)
-  return rollback,fmt.Errorf("TUN candidate rejected; prior reader restored: %w",err)
- }
- closeUnused(rollback)
- publish(candidate)
- return candidate,nil
+	m.routervpnLifecycle.Lock()
+	defer m.routervpnLifecycle.Unlock()
+	if expected == nil || candidate == nil || rollback == nil || expected == candidate || expected == rollback || candidate == rollback {
+		return nil, errors.New("distinct TUN transaction objects required")
+	}
+	tag := expected.Tag()
+	if tag == "" || expected.Type() != "tun" || candidate.Type() != "tun" || rollback.Type() != "tun" || candidate.Tag() != tag || rollback.Tag() != tag {
+		return nil, errors.New("TUN transaction cannot replace another inbound family")
+	}
+	m.access.Lock()
+	index := -1
+	for i, owned := range m.inbounds {
+		if owned == expected {
+			index = i
+			break
+		}
+	}
+	current := m.started && m.stage == adapter.StartStateStarted && m.inboundByTag[tag] == expected && index >= 0
+	m.access.Unlock()
+	retire := func(value adapter.Inbound) {
+		m.access.Lock()
+		m.routervpnRetired = append(m.routervpnRetired, value)
+		m.access.Unlock()
+	}
+	closeUnused := func(value adapter.Inbound) {
+		if err := routervpnCloseTunContext(ctx, value); err != nil {
+			retire(value)
+		}
+	}
+	if !current || ctx.Err() != nil {
+		closeUnused(candidate)
+		closeUnused(rollback)
+		return expected, errors.New("TUN transaction belongs to a stale or stopped inbound")
+	}
+	publish := func(value adapter.Inbound) {
+		m.access.Lock()
+		defer m.access.Unlock()
+		if value == nil {
+			delete(m.inboundByTag, tag)
+			m.inbounds = append(m.inbounds[:index], m.inbounds[index+1:]...)
+		} else {
+			m.inbounds[index] = value
+			m.inboundByTag[tag] = value
+		}
+	}
+	start := func(value adapter.Inbound, contextCheck bool) error {
+		for _, stage := range adapter.ListStartStages {
+			if contextCheck && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err := adapter.LegacyStart(value, stage); err != nil {
+				return err
+			}
+		}
+		if contextCheck {
+			return ctx.Err()
+		}
+		return nil
+	}
+	// The platform retains the OS TUN handle while its reader duplicate closes.
+	if err := routervpnCloseTunContext(ctx, expected); err != nil {
+		retire(expected)
+		closeUnused(candidate)
+		closeUnused(rollback)
+		publish(nil)
+		return nil, fmt.Errorf("old TUN teardown is unverified: %w", err)
+	}
+	if err := start(candidate, true); err != nil {
+		if closeErr := routervpnCloseTunContext(ctx, candidate); closeErr != nil {
+			retire(candidate)
+			closeUnused(rollback)
+			publish(nil)
+			return nil, fmt.Errorf("failed candidate could not be stopped: %w", closeErr)
+		}
+		// The platform independently refuses rollback after Stop or path changes.
+		if restoreErr := start(rollback, false); restoreErr != nil {
+			closeUnused(rollback)
+			publish(nil)
+			return nil, fmt.Errorf("TUN rollback failed after candidate rejection: %w", restoreErr)
+		}
+		publish(rollback)
+		return rollback, fmt.Errorf("TUN candidate rejected; prior reader restored: %w", err)
+	}
+	closeUnused(rollback)
+	publish(candidate)
+	return candidate, nil
+}
+
+// Only original manager-held instances are visited, including failed MTU
+// readers retained for retry. This never resolves an interface or tag by name.
+func (m *Manager) RouterVPNCloseNativeTunContext(ctx context.Context) error {
+	m.routervpnLifecycle.Lock()
+	defer m.routervpnLifecycle.Unlock()
+	m.access.Lock()
+	originals := append(append([]adapter.Inbound(nil), m.inbounds...), m.routervpnRetired...)
+	m.access.Unlock()
+	for _, original := range originals {
+		if original.Type() != "tun" {
+			continue
+		}
+		if err := routervpnCloseTunContext(ctx, original); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func routervpnCloseTunContext(ctx context.Context, original adapter.Inbound) error {
+	if runtime.GOOS == "linux" {
+		if closer, ok := original.(interface{ RouterVPNDesktopTunCloseContext(context.Context) error }); ok {
+			return closer.RouterVPNDesktopTunCloseContext(ctx)
+		}
+	}
+	return original.Close()
 }

@@ -1,0 +1,229 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"io"
+	"os"
+	"os/signal"
+	runtimeDebug "runtime/debug"
+	"syscall"
+	"time"
+
+	"github.com/sagernet/sing-box"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/service"
+)
+
+type routerVPNRawCommand struct {
+	native   *routerVPNExternalNative
+	cancel   context.CancelFunc
+	started  chan struct{}
+	startErr error // published only by closing started
+}
+
+// These lower-level variants do not yet provide the retained native TUN
+// capability used by this command. Refuse them before any construction; never
+// start a graph whose first Stop would discover that it cannot be retired.
+// A system packet stack is supported and is distinct from a system endpoint.
+func routerVPNRawCommandOptions(options option.Options) error {
+	for _, inbound := range options.Inbounds {
+		if inbound.Type != C.TypeTun {
+			continue
+		}
+		tun, ok := inbound.Options.(*option.TunInboundOptions)
+		if !ok || tun == nil {
+			return E.New("native command requires concrete captured TUN options")
+		}
+		if tun.NetNs != "" || tun.AutoRedirect || tun.Platform != nil {
+			return E.New("owned native retirement is unavailable for per-inbound netns, auto_redirect or platform TUN configuration")
+		}
+	}
+	for _, outbound := range options.Outbounds {
+		if outbound.Type == C.TypeBridge {
+			return E.New("owned native retirement is unavailable for bridge outbounds")
+		}
+	}
+	for _, endpoint := range options.Endpoints {
+		unsupported := false
+		switch endpoint.Type {
+		case C.TypeWireGuard:
+			value, ok := endpoint.Options.(*option.WireGuardEndpointOptions)
+			unsupported = !ok || value == nil || value.System
+		case C.TypeOpenVPNClient:
+			value, ok := endpoint.Options.(*option.OpenVPNClientEndpointOptions)
+			unsupported = !ok || value == nil || value.System
+		case C.TypeOpenVPNServer:
+			value, ok := endpoint.Options.(*option.OpenVPNServerEndpointOptions)
+			unsupported = !ok || value == nil || value.System
+		case C.TypeOpenConnect:
+			value, ok := endpoint.Options.(*option.OpenConnectEndpointOptions)
+			unsupported = !ok || value == nil || value.System
+		case C.TypeTailscale:
+			value, ok := endpoint.Options.(*option.TailscaleEndpointOptions)
+			unsupported = !ok || value == nil || value.SystemInterface
+		}
+		if unsupported {
+			return E.New("native command requires a captured userspace endpoint with owned retirement")
+		}
+	}
+	return nil
+}
+
+func routerVPNCreateRawCommand(options option.Options) (*routerVPNRawCommand, error) {
+	if err := routerVPNRawCommandOptions(options); err != nil {
+		return nil, err
+	}
+	if disableColor {
+		if options.Log == nil {
+			options.Log = &option.LogOptions{}
+		}
+		options.Log.DisableColor = true
+	}
+	ctx, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
+	for _, previous := range routerVPNExternalConstructed(ctx) {
+		if previous != nil {
+			cancel()
+			return nil, E.New("command context already owns a service")
+		}
+	}
+	owner := &routerVPNRawCommand{native: &routerVPNExternalNative{cancel: cancel}, cancel: cancel, started: make(chan struct{})}
+	go func() {
+		defer close(owner.started)
+		instance, err := box.New(box.Options{
+			Context: ctx, Options: options,
+			NetworkNamespaceHolderArgs: []string{"/proc/self/exe", commandNetnsHolder.Use},
+		})
+		owner.native.box = instance
+		if err != nil {
+			if instance == nil {
+				for _, partial := range routerVPNExternalConstructed(ctx) {
+					if closer, ok := partial.(io.Closer); ok {
+						owner.native.partial = append(owner.native.partial, closer)
+					}
+				}
+			}
+			owner.startErr = E.Cause(err, "create service")
+			return
+		}
+		// The pinned public Start closes a failed Box before its caller can
+		// retry native retirement. This existing scoped entry runs those same
+		// startup stages and success log while retaining the failed owner.
+		if err := instance.RouterVPNStrategyStart(); err != nil {
+			owner.startErr = E.Cause(err, "start service")
+		}
+	}()
+	return owner, nil
+}
+
+func (o *routerVPNRawCommand) retire(ctx context.Context) error {
+	if o == nil || o.cancel == nil || o.native == nil || o.started == nil || ctx == nil || ctx.Err() != nil {
+		return E.New("command retirement lost its captured service")
+	}
+	o.cancel()
+	select {
+	case <-o.started:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	// This is the same native owner even after partial construction, failed
+	// startup or a timed-out close. Never find a replacement by TUN name.
+	return o.native.CloseContext(ctx)
+}
+
+func routerVPNCommandCleanupIncomplete(error) {
+	log.Error("native cleanup is incomplete; original service retained; send SIGINT, SIGTERM or SIGHUP to retry")
+}
+
+func routerVPNRunOwnedCommand() (bool, error) {
+	return true, routerVPNRunLinuxCommand()
+}
+
+func routerVPNRunLinuxCommand() error {
+	optionsList, err := readConfig()
+	if err != nil {
+		return err
+	}
+	options, err := mergeOptionsList(optionsList)
+	if err != nil {
+		return err
+	}
+	if err = routerVPNRawCommandOptions(options); err != nil {
+		return err
+	}
+	if err = runInUserNamespaceIfNeeded(options, optionsList); err != nil {
+		return err
+	}
+	signals := make(chan os.Signal, 4)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	for {
+		if next := routerVPNPendingCommandSignal(signals, nil); next == os.Interrupt || next == syscall.SIGTERM {
+			return nil
+		}
+		owner, createErr := routerVPNCreateRawCommand(options)
+		if createErr != nil {
+			return createErr
+		}
+		var requested os.Signal
+		select {
+		case <-owner.started:
+			if owner.startErr != nil {
+				_, closeErr := routerVPNRetireOriginalCommand(signals, os.Interrupt, C.FatalStopTimeout, owner.retire, routerVPNCommandCleanupIncomplete)
+				return E.Errors(owner.startErr, closeErr)
+			}
+			runtimeDebug.FreeOSMemory()
+			for requested == nil {
+				candidate := <-signals
+				if routerVPNCommandSignal(nil, candidate) == nil {
+					continue
+				}
+				if candidate == syscall.SIGHUP {
+					reloadOptions, checkErr := readConfigAndMerge()
+					if checkErr == nil {
+						checkErr = routerVPNRawCommandOptions(reloadOptions)
+					}
+					if checkErr != nil {
+						log.Error(E.Cause(checkErr, "reload service"))
+						continue
+					}
+					if checkErr := check(); checkErr != nil {
+						log.Error(E.Cause(checkErr, "reload service"))
+						continue
+					}
+				}
+				requested = candidate
+			}
+		case requested = <-signals:
+		}
+		last, closeErr := routerVPNRetireOriginalCommand(signals, requested, C.FatalStopTimeout, owner.retire, routerVPNCommandCleanupIncomplete)
+		if closeErr != nil {
+			return closeErr
+		}
+		if last != syscall.SIGHUP {
+			return nil
+		}
+		options, err = readConfigAndMerge()
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// Source-empty legacy Node commands have no authenticated parent mailbox.
+// Their initial shutdown still has the established 15s bound; a failed attempt
+// retains the original native graph until an actual signal requests retry.
+func routerVPNRetireLegacyNode(native *routerVPNExternalNative) error {
+	if native == nil {
+		return E.New("legacy Node cleanup lost its original native owner")
+	}
+	signals := make(chan os.Signal, 4)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	_, err := routerVPNRetireOriginalCommand(signals, os.Interrupt, 15*time.Second, native.CloseContext, routerVPNCommandCleanupIncomplete)
+	return err
+}

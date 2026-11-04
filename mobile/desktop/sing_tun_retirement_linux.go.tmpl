@@ -1,0 +1,972 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"os"
+	"runtime"
+	"sync"
+	"syscall"
+
+	"github.com/sagernet/netlink"
+	"golang.org/x/sys/unix"
+)
+
+type routerVPNLinuxRetirementObserver interface {
+	current() error
+	drain(context.Context) ([]routerVPNLinuxRoutingEvent, error)
+	remove(context.Context, DesktopNetworkObject) (*routerVPNLinuxRoutingCommand, error)
+	await(context.Context, *routerVPNLinuxRoutingCommand) error
+	close(context.Context) error
+}
+
+type routerVPNLinuxRoutingCall struct {
+	kind                                   string
+	route                                  *netlink.Route
+	rule                                   *netlink.Rule
+	object                                 DesktopNetworkObject
+	acknowledged, bound, deleted, rejected bool
+	remove                                 *routerVPNLinuxRoutingCommand
+	removeObserved                         bool
+}
+
+type routerVPNLinuxRetirement struct {
+	mu                                                         sync.Mutex
+	watch                                                      routerVPNLinuxRetirementObserver
+	port                                                       uint32
+	created, configured, closed, watchClosed, readbackComplete bool
+	fileInfo                                                   os.FileInfo
+	file                                                       *os.File
+	guard                                                      *os.File
+	fileClosed, guardClosed                                    bool
+	calls                                                      []*routerVPNLinuxRoutingCall
+	history                                                    map[string]DesktopNetworkObject
+	events                                                     []routerVPNLinuxRoutingEvent
+	failure                                                    error
+	receipt                                                    string
+	// Explicit native-observer models are supplied only by focused tests.
+	original func(context.Context) error
+	snapshot func(context.Context, string) ([]DesktopNetworkObject, error)
+	absent   func(context.Context) error
+}
+
+func routervpnNewLinuxNative(options Options) (Tun, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	ctx := options.RouterVPNNetworkContext
+	if ctx == nil {
+		return nil, errors.New("native Linux creation requires its original caller")
+	}
+	watch, err := routervpnOpenLinuxRoutingWatch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t := &NativeTun{options: options, tunFd: -1}
+	t.routervpnRetirement.watch, t.routervpnRetirement.port = watch, watch.port
+	var nonce [16]byte
+	if _, err = rand.Read(nonce[:]); err != nil {
+		return t, err
+	}
+	t.routervpnNetwork.nonce = hex.EncodeToString(nonce[:])
+	t.tunFd, err = open(options.Name, options.GSO)
+	openErr := err
+	if t.tunFd < 0 {
+		return t, err
+	}
+	t.routervpnRetirement.created = true
+	t.tunFile = os.NewFile(uintptr(t.tunFd), "router-vpn-original-tun")
+	t.routervpnRetirement.file = t.tunFile
+	t.routervpnRetirement.fileInfo, err = t.tunFile.Stat()
+	if err != nil {
+		return t, errors.Join(openErr, err)
+	}
+	guardFD, duplicateErr := unix.FcntlInt(uintptr(t.tunFd), unix.F_DUPFD_CLOEXEC, 0)
+	if duplicateErr != nil {
+		return t, duplicateErr
+	}
+	t.routervpnRetirement.guard = os.NewFile(uintptr(guardFD), "router-vpn-original-tun-capability")
+	if openErr != nil {
+		return t, openErr
+	}
+	link, err := netlink.LinkByName(options.Name)
+	if err != nil {
+		return t, err
+	}
+	t.routervpnOwnedIndex = link.Attrs().Index
+	if err = t.routervpnLinuxOriginal(ctx); err != nil {
+		return t, err
+	}
+	// From this point an unindexed retirement is never valid, even if the
+	// very first configuration syscall fails.
+	t.routervpnRetirement.configured = true
+	err = t.configure(link)
+	return t, err
+}
+
+func (t *NativeTun) routervpnLinuxOriginal(ctx context.Context) error {
+	s := &t.routervpnRetirement
+	if s.original != nil {
+		return s.original(ctx)
+	}
+	if err := s.watch.current(); err != nil {
+		return err
+	}
+	if !s.created || s.closed || t.tunFile == nil || t.tunFile != s.file {
+		return errors.New("native retirement lost its original TUN file object")
+	}
+	if !s.fileClosed {
+		info, err := s.file.Stat()
+		if err != nil || s.fileInfo != nil && !os.SameFile(info, s.fileInfo) {
+			return errors.New("native retirement TUN descriptor was replaced")
+		}
+	}
+	unindexed := t.routervpnOwnedIndex == 0 && !s.configured
+	if s.guard == nil && !unindexed {
+		return errors.New("native retirement lost its retained TUN capability")
+	}
+	wantedFlags := uint16(unix.IFF_TUN | unix.IFF_NO_PI)
+	if t.options.GSO {
+		wantedFlags |= unix.IFF_VNET_HDR
+	}
+	for _, file := range []*os.File{s.file, s.guard} {
+		if file == nil || file == s.file && s.fileClosed {
+			continue
+		}
+		request, err := unix.NewIfreq(t.options.Name)
+		if err != nil {
+			return err
+		}
+		if err = unix.IoctlIfreq(int(file.Fd()), unix.TUNGETIFF, request); err != nil || request.Name() != t.options.Name || request.Uint16()&uint16(unix.IFF_TUN|unix.IFF_TAP|unix.IFF_NO_PI|unix.IFF_VNET_HDR|unix.IFF_MULTI_QUEUE|unix.IFF_PERSIST) != wantedFlags {
+			return errors.New("native retirement original TUN capability is no longer attached")
+		}
+	}
+	if unindexed {
+		return ctx.Err()
+	}
+	current, err := t.routervpnLinuxInterfaceContext(ctx)
+	if err != nil || current.Index != t.routervpnOwnedIndex || current.Name != t.options.Name || current.Index < 1 {
+		return errors.New("native retirement lost its original TUN incarnation")
+	}
+	return nil
+}
+
+func routervpnLinuxNativeBody(object DesktopNetworkObject) []byte {
+	body, _ := base64.StdEncoding.Strict().DecodeString(object.Native)
+	return body
+}
+
+func routervpnLinuxNativeAttributes(object DesktopNetworkObject) map[uint16][]byte {
+	body := routervpnLinuxNativeBody(object)
+	attrs := make(map[uint16][]byte)
+	for offset := 12; offset+4 <= len(body); {
+		length := int(binary.LittleEndian.Uint16(body[offset:]))
+		if length < 4 || offset+length > len(body) {
+			return nil
+		}
+		attrs[binary.LittleEndian.Uint16(body[offset+2:])] = body[offset+4 : offset+length]
+		offset += (length + 3) &^ 3
+	}
+	return attrs
+}
+
+func routervpnLinuxRuleMatches(rule *netlink.Rule, object DesktopNetworkObject) bool {
+	if rule == nil || object.Kind != "rule" {
+		return false
+	}
+	body, attrs := routervpnLinuxNativeBody(object), routervpnLinuxNativeAttributes(object)
+	family := 4
+	if rule.Family == unix.AF_INET6 {
+		family = 6
+	}
+	if len(body) < 12 || attrs == nil || object.Family != family || object.Priority != uint32(rule.Priority) {
+		return false
+	}
+	// These are the complete selectors emitted by the pinned native builder.
+	// Unknown constructor fields are refused rather than silently omitted.
+	typeValue := uint8(unix.FR_ACT_NOP)
+	if rule.Type > 0 {
+		typeValue = rule.Type
+	} else if rule.Table >= 0 {
+		typeValue = unix.FR_ACT_TO_TBL
+	} else if rule.Goto >= 0 {
+		typeValue = unix.FR_ACT_GOTO
+	}
+	if body[7] != typeValue || body[3] != byte(rule.Tos) || (object.Flags&2 != 0) != rule.Invert {
+		return false
+	}
+	if rule.Table >= 0 && object.Table != uint32(rule.Table) || rule.Table < 0 && object.Table != 0 {
+		return false
+	}
+	for _, prefix := range []struct {
+		value    []byte
+		bits     byte
+		attr     uint16
+		want     []byte
+		wantBits byte
+	}{
+		{attrs[1], body[1], 1, nil, 0}, {attrs[2], body[2], 2, nil, 0},
+	} {
+		wanted := rule.Dst
+		if prefix.attr == 2 {
+			wanted = rule.Src
+		}
+		if wanted.IsValid() {
+			prefix.want, prefix.wantBits = wanted.Addr().AsSlice(), byte(wanted.Bits())
+		}
+		if prefix.bits != prefix.wantBits || !bytes.Equal(prefix.value, prefix.want) {
+			return false
+		}
+	}
+	if !routervpnLinuxStringAttribute(attrs[3], rule.IifName) || !routervpnLinuxStringAttribute(attrs[17], rule.OifName) {
+		return false
+	}
+	for _, row := range []struct {
+		id      uint16
+		value   int64
+		present bool
+	}{
+		{4, int64(rule.Goto), rule.Goto >= 0}, {10, int64(rule.Mark), rule.MarkSet}, {16, int64(rule.Mask), rule.Mask >= 0},
+		{11, int64(rule.Flow), rule.Flow >= 0},
+		{13, int64(rule.SuppressIfgroup), rule.Table >= 0 && rule.SuppressIfgroup >= 0}, {14, int64(rule.SuppressPrefixlen), rule.Table >= 0 && rule.SuppressPrefixlen >= 0},
+	} {
+		value := attrs[row.id]
+		if row.present {
+			if len(value) != 4 || binary.LittleEndian.Uint32(value) != uint32(row.value) {
+				return false
+			}
+		} else if len(value) != 0 {
+			defaultValue := uint32(0)
+			if row.id == 13 || row.id == 14 || row.id == 16 && rule.Mark != 0 {
+				defaultValue = ^uint32(0)
+			}
+			if len(value) != 4 || binary.LittleEndian.Uint32(value) != defaultValue {
+				return false
+			}
+		}
+	}
+	tunID := attrs[12]
+	if rule.TunID == 0 {
+		if len(tunID) != 0 {
+			return false
+		}
+	} else if len(tunID) != 8 || binary.BigEndian.Uint64(tunID) != uint64(rule.TunID) {
+		return false
+	}
+	ipProto := attrs[22]
+	if rule.IPProto == 0 {
+		if len(ipProto) != 0 {
+			return false
+		}
+	} else if len(ipProto) != 1 || ipProto[0] != byte(rule.IPProto) {
+		return false
+	}
+	for _, row := range []struct {
+		id    uint16
+		ports *netlink.RulePortRange
+	}{{23, rule.Sport}, {24, rule.Dport}} {
+		value := attrs[row.id]
+		if row.ports == nil {
+			if len(value) != 0 {
+				return false
+			}
+		} else if len(value) != 4 || binary.LittleEndian.Uint16(value) != row.ports.Start || binary.LittleEndian.Uint16(value[2:]) != row.ports.End {
+			return false
+		}
+	}
+	uid := attrs[20]
+	if rule.UIDRange == nil {
+		if len(uid) != 0 {
+			return false
+		}
+	} else if len(uid) != 8 || binary.LittleEndian.Uint32(uid) != rule.UIDRange.Start || binary.LittleEndian.Uint32(uid[4:]) != rule.UIDRange.End {
+		return false
+	}
+	return true
+}
+
+func routervpnLinuxStringAttribute(value []byte, wanted string) bool {
+	if wanted == "" {
+		return len(value) == 0
+	}
+	return bytes.Equal(value, []byte(wanted+"\x00"))
+}
+
+func (c *routerVPNLinuxRoutingCall) matches(object DesktopNetworkObject) bool {
+	if c.kind == "rule" {
+		return routervpnLinuxRuleMatches(c.rule, object)
+	}
+	if c.route == nil || object.Kind != "route" || object.Index != uint32(c.route.LinkIndex) || object.Table != uint32(c.route.Table) {
+		return false
+	}
+	prefix, ok := routervpnLinuxIPPrefix(c.route.Dst)
+	if !ok || prefix.Masked().String() != object.Destination {
+		return false
+	}
+	return (len(c.route.Gw) == 0 && object.Gateway == "") || c.route.Gw.String() == object.Gateway
+}
+
+func (s *routerVPNLinuxRetirement) remember(object DesktopNetworkObject) {
+	if s.history == nil {
+		s.history = make(map[string]DesktopNetworkObject)
+	}
+	s.history[object.Key()] = object
+}
+
+func (t *NativeTun) routervpnLinuxEvents(ctx context.Context, expected *routerVPNLinuxRoutingCall, deleting bool) error {
+	s := &t.routervpnRetirement
+	if s.failure != nil {
+		return s.failure
+	}
+	events, err := s.watch.drain(ctx)
+	if err != nil {
+		return err
+	}
+	s.events = append(s.events, events...)
+	matched := 0
+	for _, event := range s.events {
+		object := event.object
+		if expected != nil && !deleting && !event.delete && expected.matches(object) {
+			matched++
+			expected.object, expected.bound = object, true
+			s.remember(object)
+			continue
+		}
+		if expected != nil && deleting && event.delete && object == expected.object && expected.remove != nil && event.sequence == expected.remove.sequence && event.port == s.port {
+			matched++
+			continue
+		}
+		body := routervpnLinuxNativeBody(object)
+		if object.Kind == "route" && object.Index == uint32(t.routervpnOwnedIndex) && len(body) >= 12 && body[5] == unix.RTPROT_KERNEL && !event.delete && t.routervpnLinuxImplicitRoute(object) {
+			// Kernel address routes are never explicitly deleted by this owner.
+			// The retained original TUN close retires them. A repeated event is
+			// still an ABA/duplicate, even when a dump looks unchanged.
+			if _, seen := s.history[object.Key()]; !seen {
+				s.remember(object)
+				continue
+			}
+		}
+		disjoint := true
+		for _, original := range s.history {
+			if !routervpnLinuxDeleteDisjoint(original, object) {
+				disjoint = false
+				break
+			}
+		}
+		if expected != nil && expected.matches(object) {
+			disjoint = false
+		}
+		if object.Kind == "route" && object.Index == uint32(t.routervpnOwnedIndex) {
+			disjoint = false
+		}
+		if disjoint {
+			continue
+		}
+		s.failure = errors.New("native routing changed outside its original successful call")
+		return s.failure
+	}
+	if expected != nil && matched != 1 {
+		s.failure = errors.New("native routing call lost its unique original notification")
+		return s.failure
+	}
+	s.events = nil
+	return nil
+}
+
+func (t *NativeTun) routervpnLinuxAddRoute(route netlink.Route) error {
+	// Copy the mutable slices supplied by the pinned constructor.
+	copy := route
+	copy.Gw = append(net.IP(nil), route.Gw...)
+	if route.Dst != nil {
+		copy.Dst = &net.IPNet{IP: append(net.IP(nil), route.Dst.IP...), Mask: append(net.IPMask(nil), route.Dst.Mask...)}
+	}
+	return t.routervpnLinuxAdd(&routerVPNLinuxRoutingCall{kind: "route", route: &copy}, func() error { return netlink.RouteAdd(&copy) })
+}
+
+func (t *NativeTun) routervpnLinuxAddRule(rule *netlink.Rule) error {
+	copy := *rule
+	if rule.Dport != nil {
+		value := *rule.Dport
+		copy.Dport = &value
+	}
+	if rule.Sport != nil {
+		value := *rule.Sport
+		copy.Sport = &value
+	}
+	if rule.UIDRange != nil {
+		value := *rule.UIDRange
+		copy.UIDRange = &value
+	}
+	return t.routervpnLinuxAdd(&routerVPNLinuxRoutingCall{kind: "rule", rule: &copy}, func() error { return netlink.RuleAdd(&copy) })
+}
+
+func (t *NativeTun) routervpnLinuxAdd(call *routerVPNLinuxRoutingCall, add func() error) error {
+	ctx := t.options.RouterVPNNetworkContext
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("native add lost its original startup caller")
+	}
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return err
+	}
+	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+		return err
+	}
+	before := t.routervpnLinuxBefore(call.kind)
+	if before.objects == nil {
+		return errors.New("native add has no complete original inventory")
+	}
+	if len(t.routervpnRetirement.calls) >= 256 {
+		return errors.New("native successful calls exceeded bound")
+	}
+	// The attempt is retained before the write. An ambiguous error cannot be
+	// converted into an empty ledger or a guessed successful mutation.
+	t.routervpnRetirement.calls = append(t.routervpnRetirement.calls, call)
+	if err := add(); err != nil {
+		// These explicit kernel refusals acknowledge that the attempted add
+		// installed nothing. Transport/timeout errors remain owned unknowns.
+		for _, refusal := range []error{syscall.EEXIST, syscall.EINVAL, syscall.EPERM, syscall.EACCES, syscall.ENODEV, syscall.ENETUNREACH, syscall.EAFNOSUPPORT} {
+			if errors.Is(err, refusal) {
+				call.rejected = true
+				break
+			}
+		}
+		return err
+	}
+	call.acknowledged = true
+	if err := t.routervpnLinuxEvents(ctx, call, false); err != nil {
+		return err
+	}
+	t.routervpnLinuxAdded(call.kind, before)
+	t.routervpnNetwork.mu.Lock()
+	failure := t.routervpnNetwork.failure
+	// Adding our NOP resolves our own earlier GOTO flags. Preserve the exact
+	// updated native row only when the existing successful-call proof did so.
+	for _, old := range t.routervpnRetirement.calls {
+		if old.bound && !old.deleted && old.kind == "rule" {
+			for _, object := range t.routervpnNetwork.objects {
+				if old.matches(object) {
+					old.object = object
+					t.routervpnRetirement.remember(object)
+				}
+			}
+		}
+	}
+	t.routervpnNetwork.mu.Unlock()
+	return failure
+}
+
+// The kernel selects rules/routes by fields, not by a creator generation.
+// Refuse any other row not provably disjoint from this complete selector.
+// This is deliberately stricter than accepting an equal priority or a dump.
+func routervpnLinuxDeleteDisjoint(target, other DesktopNetworkObject) bool {
+	if target.Kind != other.Kind || target.Family != other.Family {
+		return true
+	}
+	if target.Kind == "route" {
+		return target.Table != 0 && target.Table != other.Table || target.Destination != other.Destination || target.Priority != 0 && target.Priority != other.Priority
+	}
+	a, b := routervpnLinuxNativeBody(target), routervpnLinuxNativeBody(other)
+	if len(a) < 12 || len(b) < 12 {
+		return false
+	}
+	if a[1] != 0 && a[1] != b[1] || a[2] != 0 && a[2] != b[2] || a[3] != 0 && a[3] != b[3] || a[7] != 0 && a[7] != b[7] || target.Table != 0 && target.Table != other.Table {
+		return true
+	}
+	aa, bb := routervpnLinuxNativeAttributes(target), routervpnLinuxNativeAttributes(other)
+	// rule_find compares priority only when FRA_PRIORITY was transmitted.
+	if len(aa[6]) == 4 && target.Priority != other.Priority {
+		return true
+	}
+	for _, id := range []uint16{1, 2, 3, 10, 12, 13, 14, 16, 17, 20, 21, 22, 23, 24} {
+		value := aa[id]
+		if len(value) == 0 || id == 1 && a[1] == 0 || id == 2 && a[2] == 0 || (id == 3 || id == 17) && value[0] == 0 {
+			continue
+		}
+		if (id == 13 || id == 14) && len(value) == 4 && binary.LittleEndian.Uint32(value) == ^uint32(0) {
+			continue
+		}
+		// Zero mark/mask/protocol fields are wildcards in rule_find.
+		if (id == 10 || id == 12 || id == 16 || id == 21 || id == 22 || id == 23 || id == 24) && bytes.Equal(value, make([]byte, len(value))) {
+			continue
+		}
+		if !bytes.Equal(value, bb[id]) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *NativeTun) routervpnLinuxRetirementSnapshot(ctx context.Context, kind string) ([]DesktopNetworkObject, error) {
+	if model := t.routervpnRetirement.snapshot; model != nil {
+		return model(ctx, kind)
+	}
+	return routervpnLinuxNetworkObjectsContext(ctx, kind)
+}
+
+func (t *NativeTun) routervpnLinuxRetiredLinkAbsent(ctx context.Context) error {
+	if model := t.routervpnRetirement.absent; model != nil {
+		return model(ctx)
+	}
+	rows, err := linuxDump(ctx, syscall.RTM_GETLINK, syscall.RTM_NEWLINK)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if len(row.Data) < 16 {
+			return errors.New("native retired link readback is truncated")
+		}
+		attrs, err := routervpnLinuxAttributes(row.Data[16:])
+		if err != nil {
+			return err
+		}
+		name := attrs[syscall.IFLA_IFNAME]
+		if len(name) < 2 || name[len(name)-1] != 0 {
+			return errors.New("native retired link name is incomplete")
+		}
+		if string(name[:len(name)-1]) == t.options.Name || t.routervpnOwnedIndex > 0 && int(binary.LittleEndian.Uint32(row.Data[4:])) == t.routervpnOwnedIndex {
+			return errors.New("original TUN name or index remains after descriptor retirement")
+		}
+	}
+	return ctx.Err()
+}
+
+func (t *NativeTun) routervpnLinuxRefreshResolvedRules(ctx context.Context) error {
+	s := &t.routervpnRetirement
+	needs := false
+	for _, call := range s.calls {
+		if call.acknowledged && call.bound && !call.deleted && call.kind == "rule" {
+			needs = true
+		}
+	}
+	if !needs {
+		return nil
+	}
+	objects, err := t.routervpnLinuxRetirementSnapshot(ctx, "rule")
+	if err != nil {
+		return err
+	}
+	for _, call := range s.calls {
+		if !call.acknowledged || !call.bound || call.deleted || call.kind != "rule" {
+			continue
+		}
+		if routervpnNetworkHasObject(objects, call.object) {
+			continue
+		}
+		matches := 0
+		var updated DesktopNetworkObject
+		for _, target := range s.calls {
+			if !target.acknowledged || !target.bound || target.deleted || target.kind != "rule" {
+				continue
+			}
+			for _, object := range objects {
+				if DesktopLinuxRuleResolvedBy(call.object, object, target.object) {
+					matches++
+					updated = object
+				}
+			}
+		}
+		if matches != 1 {
+			return errors.New("native rule changed without its original acknowledged GOTO target")
+		}
+		call.object = updated
+		s.remember(updated)
+	}
+	return nil
+}
+
+func (t *NativeTun) routervpnLinuxRetireCalls(ctx context.Context, kind string) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("native routing retirement lost its original caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("native routing retirement has no captured deadline")
+	}
+	s := &t.routervpnRetirement
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return err
+	}
+	for _, call := range s.calls {
+		if call.deleted || call.rejected || kind != "" && call.kind != kind {
+			continue
+		}
+		if !call.acknowledged {
+			return errors.New("native routing attempt has no successful original acknowledgement")
+		}
+		if !call.bound {
+			if err := t.routervpnLinuxEvents(ctx, call, false); err != nil {
+				return err
+			}
+		}
+	}
+	for _, call := range s.calls {
+		if call.remove != nil && !call.deleted {
+			if err := t.routervpnLinuxFinishDelete(ctx, call); err != nil {
+				return err
+			}
+		}
+	}
+	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+		return err
+	}
+	if err := t.routervpnLinuxRefreshResolvedRules(ctx); err != nil {
+		return err
+	}
+	for {
+		remaining, progress := 0, false
+		for _, call := range s.calls {
+			if call.deleted || call.rejected || kind != "" && call.kind != kind {
+				continue
+			}
+			remaining++
+			if call.remove == nil {
+				if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+					return err
+				}
+				objects, err := t.routervpnLinuxRetirementSnapshot(ctx, call.kind)
+				if err != nil {
+					return err
+				}
+				count, ambiguous := 0, false
+				for _, object := range objects {
+					if object == call.object {
+						count++
+						continue
+					}
+					if !routervpnLinuxDeleteDisjoint(call.object, object) {
+						ambiguous = true
+					}
+				}
+				if count != 1 {
+					return errors.New("native routing delete lost its unique original object")
+				}
+				// Delete narrower original selectors before their own wildcard siblings.
+				// A foreign overlapping row is never deleted to make a broad rule fit.
+				if ambiguous {
+					continue
+				}
+				// A NOP target stays until every original GOTO which references it has
+				// retired; otherwise the kernel silently changes their unresolved flag.
+				dependency := false
+				if call.kind == "rule" {
+					for _, prior := range s.calls {
+						if !prior.deleted && !prior.rejected && prior.rule != nil && prior.rule.Goto >= 0 && uint32(prior.rule.Goto) == call.object.Priority && prior.object.Family == call.object.Family {
+							dependency = true
+						}
+					}
+				}
+				if dependency {
+					continue
+				}
+				if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+					return err
+				}
+				if err := t.routervpnLinuxOriginal(ctx); err != nil {
+					return err
+				}
+				call.remove, err = s.watch.remove(ctx, call.object)
+				if err != nil {
+					return err
+				}
+			}
+			if err := t.routervpnLinuxFinishDelete(ctx, call); err != nil {
+				return err
+			}
+			progress = true
+		}
+		if remaining == 0 {
+			return nil
+		}
+		if !progress {
+			return errors.New("native routing delete selector has a foreign or duplicate match")
+		}
+	}
+}
+
+func (t *NativeTun) routervpnLinuxFinishDelete(ctx context.Context, call *routerVPNLinuxRoutingCall) error {
+	s := &t.routervpnRetirement
+	if err := s.watch.await(ctx, call.remove); err != nil {
+		return err
+	}
+	if !call.removeObserved {
+		if err := t.routervpnLinuxEvents(ctx, call, true); err != nil {
+			return err
+		}
+		call.removeObserved = true
+	}
+	objects, err := t.routervpnLinuxRetirementSnapshot(ctx, call.kind)
+	if err != nil {
+		return err
+	}
+	for _, object := range objects {
+		if object == call.object {
+			return errors.New("native routing delete did not retire its original object")
+		}
+	}
+	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+		return err
+	}
+	call.deleted = true
+	t.routervpnNetwork.mu.Lock()
+	delete(t.routervpnNetwork.objects, call.object.Key())
+	t.routervpnNetwork.mu.Unlock()
+	return nil
+}
+
+func (t *NativeTun) RouterVPNDesktopNetworkRetire(ctx context.Context) (string, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	s := &t.routervpnRetirement
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.receipt != "" {
+		return s.receipt, nil
+	}
+	if s.failure != nil {
+		return "", s.failure
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return "", errors.New("native retirement requires the original bounded Stop caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return "", errors.New("native retirement requires its captured Stop deadline")
+	}
+	if s.watch == nil {
+		return "", errors.New("native retirement has no original creation lifetime")
+	}
+	if s.readbackComplete {
+		return t.routervpnLinuxFinishRetirement(ctx)
+	}
+	if t.interfaceCallback != nil {
+		t.options.InterfaceMonitor.UnregisterCallback(t.interfaceCallback)
+		t.interfaceCallback = nil
+	}
+	if !s.created {
+		if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+			return "", err
+		}
+		s.readbackComplete = true
+		return t.routervpnLinuxFinishRetirement(ctx)
+	}
+	if !s.closed {
+		if err := t.routervpnLinuxResolverRetire(ctx); err != nil {
+			return "", err
+		}
+		if err := t.routervpnLinuxRetireCalls(ctx, ""); err != nil {
+			return "", err
+		}
+		if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+			return "", err
+		}
+		if err := t.routervpnLinuxOriginal(ctx); err != nil {
+			return "", err
+		}
+		// Refuse an unreportable original history while the actual TUN
+		// capability is still retained; closure cannot repair this boundary.
+		if _, err := t.routervpnLinuxRetirementReceipt(); err != nil {
+			return "", err
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if !s.fileClosed {
+			if err := s.file.Close(); err != nil {
+				return "", err
+			}
+			s.fileClosed = true
+		}
+		if s.guard != nil && !s.guardClosed {
+			if err := s.guard.Close(); err != nil {
+				return "", err
+			}
+			s.guardClosed = true
+		}
+		s.closed = true
+	}
+	// Closing this exact nonpersistent descriptor removes its native link and
+	// address routes. No by-name address delete or regenerated route is used.
+	events, err := s.watch.drain(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := t.routervpnLinuxClosedEvents(events, true); err != nil {
+		return "", err
+	}
+
+	if err := t.routervpnLinuxRetiredLinkAbsent(ctx); err != nil {
+		return "", err
+	}
+	for _, kind := range []string{"route", "rule"} {
+		objects, err := t.routervpnLinuxRetirementSnapshot(ctx, kind)
+		if err != nil {
+			return "", err
+		}
+		for _, object := range objects {
+			if _, owned := s.history[object.Key()]; owned {
+				return "", errors.New("original routing object remains after native retirement")
+			}
+		}
+	}
+	events, err = s.watch.drain(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err = t.routervpnLinuxClosedEvents(events, false); err != nil {
+		return "", err
+	}
+	s.readbackComplete = true
+	return t.routervpnLinuxFinishRetirement(ctx)
+}
+
+func (t *NativeTun) routervpnLinuxFinishRetirement(ctx context.Context) (string, error) {
+	s := &t.routervpnRetirement
+	if !s.readbackComplete {
+		return "", errors.New("native retirement has no completed original readback")
+	}
+
+	raw, err := t.routervpnLinuxRetirementReceipt()
+	if err != nil {
+		return "", err
+	}
+	if !s.watchClosed {
+		if err := s.watch.close(ctx); err != nil {
+			return "", err
+		}
+		s.watchClosed = true
+	}
+	s.receipt = raw
+	return raw, nil
+}
+
+func (t *NativeTun) routervpnLinuxRetirementReceipt() (string, error) {
+	s := &t.routervpnRetirement
+	objects := make([]DesktopNetworkObject, 0, len(s.history))
+	for _, object := range s.history {
+		objects = append(objects, object)
+	}
+	SortDesktopNetworkObjects(objects)
+	receipt := DesktopNetworkRetirementReceipt{Schema: 1, TargetOS: "linux", Objects: objects}
+	if s.created {
+		receipt.Created = true
+		receipt.Unindexed = t.routervpnOwnedIndex == 0 && !s.configured
+		receipt.Incarnation = t.routervpnNetwork.nonce
+		receipt.Name = t.options.Name
+		receipt.Index = uint32(t.routervpnOwnedIndex)
+	}
+	raw, err := CanonicalDesktopNetworkRetirementReceipt(receipt)
+	if err != nil {
+		return "", fmt.Errorf("native completed retirement ledger: %w", err)
+	}
+	return raw, nil
+}
+
+func (t *NativeTun) routervpnLinuxClose() error {
+	if t.options.FileDescriptor > 0 {
+		if t.tunFile == nil {
+			return nil
+		}
+		return t.tunFile.Close()
+	}
+	_, err := t.RouterVPNDesktopNetworkRetire(t.options.RouterVPNNetworkContext)
+	return err
+}
+
+func (t *NativeTun) routervpnLinuxAttestedReceipt() (string, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	s := &t.routervpnRetirement
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx := t.options.RouterVPNNetworkContext
+	if ctx == nil || ctx.Err() != nil || s.closed || s.receipt != "" {
+		return "", errors.New("native ready receipt lost its original active constructor")
+	}
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return "", err
+	}
+	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+		return "", err
+	}
+	raw, err := t.routervpnObserveNetworkReceipt()
+	if err != nil {
+		return "", err
+	}
+	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+		return "", err
+	}
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return "", err
+	}
+	return raw, ctx.Err()
+}
+
+func (t *NativeTun) routervpnLinuxClosedEvents(events []routerVPNLinuxRoutingEvent, implicit bool) error {
+	s := &t.routervpnRetirement
+	for _, event := range events {
+		_, owned := s.history[event.object.Key()]
+		body := routervpnLinuxNativeBody(event.object)
+		if implicit && owned && event.delete && event.object.Kind == "route" && event.object.Index == uint32(t.routervpnOwnedIndex) && len(body) >= 12 && body[5] == unix.RTPROT_KERNEL {
+			continue
+		}
+		disjoint := true
+		for _, original := range s.history {
+			if !routervpnLinuxDeleteDisjoint(original, event.object) {
+				disjoint = false
+				break
+			}
+		}
+		if disjoint {
+			continue
+		}
+		s.failure = errors.New("original native routing changed during final retirement readback")
+		return s.failure
+	}
+	return nil
+}
+
+// Only the kernel's bounded address-route shapes belong to closing the
+// original TUN descriptor. An arbitrary route with RTPROT_KERNEL is not an
+// implicit address effect, even when it names the same interface.
+func (t *NativeTun) routervpnLinuxImplicitRoute(object DesktopNetworkObject) bool {
+	body := routervpnLinuxNativeBody(object)
+	if len(body) < 12 || body[5] != unix.RTPROT_KERNEL || object.Index != uint32(t.routervpnOwnedIndex) || object.Gateway != "" || object.Flags != 0 || object.MTU != 0 || body[2] != 0 || body[3] != 0 {
+		return false
+	}
+	if object.Table != 254 && object.Table != 255 {
+		return false
+	}
+	if object.Table == 254 && (body[7] != unix.RTN_UNICAST || body[6] != unix.RT_SCOPE_LINK && body[6] != unix.RT_SCOPE_UNIVERSE) {
+		return false
+	}
+	if object.Table == 255 && body[7] != unix.RTN_LOCAL && body[7] != unix.RTN_BROADCAST && body[7] != unix.RTN_MULTICAST {
+		return false
+	}
+	attrs := routervpnLinuxNativeAttributes(object)
+	for id := range attrs {
+		switch id {
+		case 1, 4, 6, 7, 15, 20:
+		default:
+			return false
+		}
+	}
+	receipt := DesktopNetworkReceipt{Index: uint32(t.routervpnOwnedIndex)}
+	for _, prefix := range append(append([]netip.Prefix(nil), t.options.Inet4Address...), t.options.Inet6Address...) {
+		receipt.Addresses = append(receipt.Addresses, prefix.String())
+	}
+	if routervpnNetworkAddressRoute(receipt, object) {
+		return true
+	}
+	// Link-local address routes are created by IPv6 addrconf on our actual
+	// newly created interface. They are never explicitly deleted by selector.
+	prefix, err := netip.ParsePrefix(object.Destination)
+	return err == nil && object.Family == 6 && prefix.Addr().IsLinkLocalUnicast() &&
+		(object.Table == 255 && body[7] == unix.RTN_LOCAL && prefix.Bits() == 128 || object.Table == 254 && body[7] == unix.RTN_UNICAST && prefix.Bits() == 64)
+}

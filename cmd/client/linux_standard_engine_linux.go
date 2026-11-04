@@ -30,6 +30,11 @@ type linuxStandardStartupObserver interface {
 }
 
 type linuxStandardEngine struct {
+	cleanup                                                                               *standardengine.CleanupFile
+	cleanupSequence                                                                       uint64
+	cleanupDeadline                                                                       int64
+	cleanupRequests                                                                       map[uint64]int64
+	routingReceipt                                                                        *desktopnetwork.DesktopNetworkReceipt
 	readyBody                                                                             []byte
 	imageCapability                                                                       *linuxprocess.SealedImage
 	owner                                                                                 *linuxLegacyStandardExitOwner
@@ -230,7 +235,13 @@ func (n *linuxStandardEngine) prepareStart(ctx context.Context) error {
 	if maximum := time.Now().Add(2 * time.Minute); deadline.After(maximum) {
 		deadline = maximum
 	}
-	body, err := (standardengine.Capture{Schema: 1, Session: n.owner.session, ConfigSHA256: n.owner.digest, Mode: n.owner.runtimeMode, DeadlineNS: deadline.UnixNano()}).Canonical()
+	var err error
+	n.cleanup, err = standardengine.NewCleanupFile()
+	if err != nil {
+		return err
+	}
+	device, inode := n.cleanup.Identity()
+	body, err := (standardengine.Capture{Schema: 1, Session: n.owner.session, ConfigSHA256: n.owner.digest, Mode: n.owner.runtimeMode, DeadlineNS: deadline.UnixNano(), CleanupDevice: device, CleanupInode: inode}).Canonical()
 	if err != nil {
 		return err
 	}
@@ -257,7 +268,7 @@ func (n *linuxStandardEngine) prepareStart(ctx context.Context) error {
 	}
 	command := n.owner.command
 	command.Args = []string{n.imagePath, "routervpn-standard", "--capture-sha256", n.captureSHA}
-	command.ExtraFiles = []*os.File{n.owner.image, n.owner.config, n.owner.directory, n.library, n.childChannel, n.parentDirectory, n.capture}
+	command.ExtraFiles = []*os.File{n.owner.image, n.owner.config, n.owner.directory, n.library, n.childChannel, n.parentDirectory, n.capture, n.cleanup.File()}
 	if err := n.tracker.Begin(ctx, nil); err != nil {
 		return err
 	}
@@ -320,6 +331,9 @@ func (n *linuxStandardEngine) finishStart(ctx context.Context) error {
 	if err := n.sourcesCurrent(); err != nil {
 		return err
 	}
+	// Preserve the authenticated original ledger for independent retirement
+	// readback even if the following network-epoch adoption fails.
+	n.retainRoutingReceipt(receipt)
 	if err := n.tracker.Record(receipt); err != nil {
 		return err
 	}
@@ -391,6 +405,11 @@ func (n *linuxStandardEngine) close(ctx context.Context) error {
 	}
 	for _, file := range []*os.File{n.manifest, n.imageSource, n.librarySource, n.library, n.capture, n.parentDirectory, n.childChannel} {
 		if err := n.closeFile(file); err != nil {
+			return err
+		}
+	}
+	if n.cleanup != nil {
+		if err := n.cleanup.Close(); err != nil {
 			return err
 		}
 	}

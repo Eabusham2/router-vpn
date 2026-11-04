@@ -193,7 +193,7 @@ def inputs():
     files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *RELAY.OPENVPN_REMOTE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
-             ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-mobile-tor.py',
+             ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-desktop-command-retirement.py', ROOT/'deploy/prepare-desktop-dbus.py', ROOT/'deploy/test_desktop_tun_retirement_projection.py', ROOT/'deploy/prepare-mobile-tor.py',
              ROOT/'deploy/test_desktop_tor_preparation.py', ROOT/'deploy/darwin-pf-abi.py',
              ROOT/'cmd/client/desktop_tor_comparison_native.go', ROOT/'cmd/client/multihop_exact_json.go',
              ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',

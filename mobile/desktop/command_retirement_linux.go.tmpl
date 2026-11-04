@@ -1,0 +1,119 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"syscall"
+	"time"
+)
+
+// A timeout revokes one attempt, not the original native owner. Keep a late
+// callback joined here before another explicitly requested attempt may enter.
+// In particular, never race a second one-shot Box.Close against the first.
+type routerVPNCommandRetirement struct {
+	retire  func(context.Context) error
+	pending <-chan error
+}
+
+func (r *routerVPNCommandRetirement) attempt(ctx context.Context) error {
+	if r == nil || r.retire == nil || ctx == nil {
+		return errors.New("command retirement lost its original owner")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("command retirement requires its request deadline")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.pending != nil {
+		select {
+		case <-r.pending:
+			// A late result belongs to the previous expired attempt. Join it,
+			// then recheck the same owner within this request's remaining time.
+			r.pending = nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	r.pending = done
+	go func() { done <- r.retire(ctx) }()
+	select {
+	case err := <-done:
+		r.pending = nil
+		if expired := ctx.Err(); expired != nil {
+			return expired
+		}
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func routerVPNCommandSignal(current, next os.Signal) os.Signal {
+	if next != os.Interrupt && next != syscall.SIGTERM && next != syscall.SIGHUP {
+		return current
+	}
+	// Once shutdown is requested, a later HUP cannot resurrect this command.
+	if current == os.Interrupt || current == syscall.SIGTERM {
+		return current
+	}
+	return next
+}
+
+func routerVPNPendingCommandSignal(signals <-chan os.Signal, current os.Signal) os.Signal {
+	for {
+		select {
+		case next, open := <-signals:
+			if !open {
+				return current
+			}
+			current = routerVPNCommandSignal(current, next)
+		default:
+			return current
+		}
+	}
+}
+
+// The caller supplies its existing operation bound (raw run:10s, legacy
+// Node:15s). Failure retains the exact callback and waits for another signal;
+// neither a timer nor a late success grants a new cleanup budget or reload.
+func routerVPNRetireOriginalCommand(signals <-chan os.Signal, first os.Signal, limit time.Duration,
+	retire func(context.Context) error, incomplete func(error)) (os.Signal, error) {
+	if signals == nil || first == nil || routerVPNCommandSignal(nil, first) == nil || limit <= 0 || retire == nil {
+		return first, errors.New("invalid original command retirement request")
+	}
+	owner := routerVPNCommandRetirement{retire: retire}
+	last := first
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), limit)
+		err := owner.attempt(ctx)
+		cancel()
+		if err == nil {
+			return routerVPNPendingCommandSignal(signals, last), nil
+		}
+		if incomplete != nil {
+			incomplete(err)
+		}
+		for {
+			next, open := <-signals
+			if !open {
+				// Production signal channels stay registered until this call
+				// returns. Losing that source cannot authorize discarding the
+				// unproved original owner or spinning on a closed channel.
+				signals = nil
+				continue
+			}
+			if routerVPNCommandSignal(nil, next) != nil {
+				last = routerVPNCommandSignal(last, next)
+				break
+			}
+		}
+	}
+}

@@ -35,7 +35,9 @@ func init() {
 // Real sealed executable, original channel, task witnesses and clone pidfd.
 // Only the child's native routing ledger and kernel observer are modeled here;
 // the installed namespace case requires the actual generated engine/TUN.
-func linuxStandardStartupChildFixture(scenario, expected string) error {
+func linuxStandardStartupChildFixture(scenario, expected string) (failure error) {
+	lifetime, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	raw, err := standardengine.ReadSealed(os.NewFile(9, "capture"), 2048)
 	if err != nil {
 		return err
@@ -44,7 +46,34 @@ func linuxStandardStartupChildFixture(scenario, expected string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, capture.DeadlineNS))
+	result, err := standardengine.CaptureCleanupFile(os.NewFile(standardengine.CleanupFD, "original-fixture-cleanup"), capture.CleanupDevice, capture.CleanupInode)
+	defer result.Close()
+	if err != nil {
+		return err
+	}
+	var retirement = desktopnetwork.DesktopNetworkRetirementReceipt{Schema: 1, TargetOS: "linux", Objects: []desktopnetwork.DesktopNetworkObject{}}
+	defer func() {
+		if scenario == "exit-error" {
+			return
+		}
+		deadline := time.Now().Add(4 * time.Second)
+		if failure != nil && deadline.After(time.Unix(0, capture.DeadlineNS)) {
+			deadline = time.Unix(0, capture.DeadlineNS)
+		}
+		attempts := 0
+		failure = standardengine.RetireOriginal(result, expected, deadline, failure != nil, func(ctx context.Context) (string, error) {
+			attempts++
+			if scenario == "cleanup-retry" && attempts == 1 {
+				<-ctx.Done()
+				return "", ctx.Err()
+			}
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			return desktopnetwork.CanonicalDesktopNetworkRetirementReceipt(retirement)
+		})
+	}()
+	ctx, cancel := context.WithDeadline(lifetime, time.Unix(0, capture.DeadlineNS))
 	defer cancel()
 	channel, err := linuxprocess.CaptureChannel(os.NewFile(7, "channel"))
 	if err != nil {
@@ -80,6 +109,7 @@ func linuxStandardStartupChildFixture(scenario, expected string) error {
 		return ctx.Err()
 	}
 	receipt := desktopnetwork.DesktopNetworkReceipt{Schema: 1, TargetOS: "linux", Incarnation: strings.Repeat("f", 32), Name: shape.Name, Index: 91, MTU: shape.MTU, Addresses: []string{"172.29.0.1/30"}}
+	retirement = desktopnetwork.DesktopNetworkRetirementReceipt{Schema: 1, TargetOS: "linux", Created: true, Incarnation: receipt.Incarnation, Name: receipt.Name, Index: receipt.Index, Objects: []desktopnetwork.DesktopNetworkObject{}}
 	if scenario == "wrong-mtu" {
 		receipt.MTU++
 	}
@@ -90,25 +120,30 @@ func linuxStandardStartupChildFixture(scenario, expected string) error {
 	if scenario == "malformed-ledger" {
 		ledger = "{}"
 	}
+	readyExpected := expected
 	if scenario == "wrong-source" {
-		expected = strings.Repeat("a", 64)
+		readyExpected = strings.Repeat("a", 64)
 	}
-	body, err := (standardengine.Ready{Schema: 1, CaptureSHA256: expected, NetworkReceipt: ledger}).Canonical()
+	body, err := (standardengine.Ready{Schema: 1, CaptureSHA256: readyExpected, NetworkReceipt: ledger}).Canonical()
 	if err != nil {
 		return err
 	}
+
 	if err := peer.Send(ctx, body); err != nil {
 		return err
 	}
-	lifetime, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	<-lifetime.Done()
+	if scenario == "exit-error" {
+		return errors.New("actual original native cleanup failed")
+	}
 	return nil
 }
 
 type linuxStandardStartupObserverFixture struct {
 	began, recorded, ended, closed bool
 	failure, closeFailure          error
+	routingFailure                 error
+	retirementReads                int
 	invalidateAtRecord             bool
 	receipt                        desktopnetwork.DesktopNetworkReceipt
 }
@@ -162,6 +197,18 @@ func (n *linuxStandardStartupObserverFixture) Close() error {
 	}
 	n.closed = true
 	return nil
+}
+
+// Explicit native-absence observation seam, separate from successful child exit.
+func (n *linuxStandardStartupObserverFixture) RoutingAbsent(ctx context.Context, receipt *desktopnetwork.DesktopNetworkRetirementReceipt) error {
+	n.retirementReads++
+	if receipt == nil {
+		return errors.New("no original authenticated model routing ledger")
+	}
+	if !n.closed {
+		return errors.New("original model reader is not joined")
+	}
+	return errors.Join(ctx.Err(), n.routingFailure)
 }
 
 func linuxStandardStartupFixture(t *testing.T, scenario string) (*linuxStandardService, *legacyExitFixture, *linuxStandardStartupObserverFixture) {

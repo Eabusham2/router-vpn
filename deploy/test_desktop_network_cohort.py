@@ -42,8 +42,25 @@ PARENTS = (
     "TestDarwinUnusedInterfaceChangesStayLatched",
     "TestLinuxOwnedGotoRuleTransitions",
 )
+ROUTING_RETIREMENT_CASES = (
+    "empty", "route-remains", "rule-remains", "duplicate-owned", "malformed", "unjoined", "failed-join",
+    "owned-baseline", "incomplete-baseline", "read-failure", "cancelled", "late-cancel", "foreign-reader",
+    "missing-ledger", "owned-baseline-alias", "new-foreign-route", "partial-ledger", "foreign-same-key", "incomplete-dump",
+)
+
+
+def check_routing_retirement_verdict(output):
+    parent="TestLinuxRoutingRetirementRequiresOriginalJoinedInventory"
+    for name in (parent, *(parent+"/"+leaf for leaf in ROUTING_RETIREMENT_CASES)):
+        if output.count("--- PASS: "+name+" (") != 1:
+            raise ValueError("Routing retirement gate omitted or duplicated its original boundary: "+name)
+        if "--- SKIP: "+name+" (" in output or "--- FAIL: "+name+" (" in output:
+            raise ValueError("Routing retirement gate skipped or failed: "+name)
+
+
 NATIVE_CASES = (
     "ipv6-rule-away-and-back",
+    "joined-original-routing-absence",
     "unchanged-physical-owner", "gateway-away-and-back", "address-away-and-back",
     "mtu-away-and-back", "unclaimed-virtual-start-and-stop",
     "owned-interface-route-rule-and-drain", "foreign-rule-without-interface-key",
@@ -130,7 +147,8 @@ def main():
     for parent in PARENTS:
         require_pass(base.stdout, parent)
     if sys.platform == "linux":
-        for parent in ("TestLinuxNetworkDumpCancellationJoinsOriginalSocket", "TestLinuxNetworkDumpStrictOriginalDatagrams"):
+        check_routing_retirement_verdict(base.stdout)
+        for parent in ("TestLinuxNetworkDumpCancellationJoinsOriginalSocket", "TestLinuxNetworkDumpStrictOriginalDatagrams", "TestLinuxRoutingRetirementRequiresOriginalJoinedInventory"):
             require_pass(base.stdout, parent)
     if sys.platform == "darwin":
         for parent in ("TestDarwinNetworkMessageAlignmentAndOwnership",
@@ -161,7 +179,7 @@ def main():
             binary = work / "network-native.test"
             execute([go, "test", "-race", "-c", "-o", str(binary), "./internal/desktopnetwork"], env=env)
             linux_namespace_test(binary, env)
-            print("Nine real isolated Linux link/address/gateway/route/rule and join cases passed.")
+            print("Ten real isolated Linux link/address/gateway/route/rule and join cases passed.")
 
         mutant = work / "mutant"
         mutant.mkdir()

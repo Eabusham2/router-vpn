@@ -1,0 +1,133 @@
+//go:build linux
+
+package dbus
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"net"
+	"os"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func routervpnTestUnixPair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
+	t.Helper()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func(fd int) *net.UnixConn {
+		file := os.NewFile(uintptr(fd), "original-godbus-native-fixture")
+		conn, err := net.FileConn(file)
+		file.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn.(*net.UnixConn)
+	}
+	a, b := open(fds[0]), open(fds[1])
+	a.SetDeadline(time.Now().Add(3 * time.Second))
+	b.SetDeadline(time.Now().Add(3 * time.Second))
+	t.Cleanup(func() { a.Close(); b.Close() })
+	return a, b
+}
+func routervpnTestFDCount(t *testing.T) int {
+	t.Helper()
+	files, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(files)
+}
+func TestRouterVPNDBusReceivedRightsRetireOnError(t *testing.T) {
+	for _, name := range []string{"invalid-index", "advertised-count", "zero-count", "unreferenced", "malformed-body", "invalid-header", "partial-header", "partial-body"} {
+		t.Run(name, func(t *testing.T) {
+			sender, receiver := routervpnTestUnixPair(t)
+			original, err := os.Open("/dev/null")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer original.Close()
+			message := &Message{Type: TypeMethodReply, Headers: map[HeaderField]Variant{FieldReplySerial: MakeVariant(uint32(1)), FieldSender: MakeVariant(":1.77"), FieldUnixFDs: MakeVariant(uint32(1)), FieldSignature: MakeVariant(SignatureOf(UnixFD(original.Fd())))}, Body: []any{UnixFD(original.Fd())}}
+			if name == "advertised-count" || name == "unreferenced" {
+				message.Headers[FieldUnixFDs] = MakeVariant(uint32(2))
+			}
+			if name == "zero-count" {
+				delete(message.Headers, FieldUnixFDs)
+			}
+			var encoded bytes.Buffer
+			rights, err := message.EncodeToWithFDs(&encoded, binary.LittleEndian)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := encoded.Bytes()
+			binary.LittleEndian.PutUint32(body[8:12], 1)
+			offset := 16 + (int(binary.LittleEndian.Uint32(body[12:16]))+7)&^7
+			switch name {
+			case "invalid-index":
+				binary.LittleEndian.PutUint32(body[offset:], 99)
+			case "unreferenced":
+				rights = append(rights, int(original.Fd()))
+			case "malformed-body":
+				binary.LittleEndian.PutUint32(body[4:8], 0)
+				body = body[:offset]
+			case "invalid-header":
+				body[1] = 0
+			case "partial-header":
+				body = body[:8]
+			case "partial-body":
+				body = body[:len(body)-1]
+			}
+			before := routervpnTestFDCount(t)
+			if n, _, err := sender.WriteMsgUnix(body, syscall.UnixRights(rights...), nil); err != nil || n != len(body) {
+				t.Fatal(n, err)
+			}
+			if name == "partial-header" || name == "partial-body" {
+				if err = sender.CloseWrite(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			transport := newUnixTransportFromConn(receiver).(*unixTransport)
+			if msg, err := transport.ReadMessage(); err == nil || msg != nil {
+				t.Fatal("invalid native descriptor frame became a valid message", name, err, msg)
+			}
+			after := routervpnTestFDCount(t)
+			if after != before {
+				t.Fatalf("native descriptors leaked after rejected frame %s: before=%d after=%d", name, before, after)
+			}
+			if _, err = original.Stat(); err != nil {
+				t.Fatal("rejection closed sender's original descriptor", err)
+			}
+		})
+	}
+}
+func TestRouterVPNDBusFDAndOrdinaryContainerTypes(t *testing.T) {
+	for _, fdMode := range []bool{false, true} {
+		var raw bytes.Buffer
+		raw.Write([]byte{4, 0, 0, 0, 0, 0, 0, 0}) // array payload: one index zero
+		descriptors := []int(nil)
+		if fdMode {
+			descriptors = []int{42}
+		}
+		decoded, err := newDecoder(bytes.NewReader(raw.Bytes()), binary.LittleEndian, descriptors).Decode(Signature{"ah"})
+		if err != nil || len(decoded) != 1 {
+			t.Fatal("valid original container omitted", fdMode, err, decoded)
+		}
+		if fdMode {
+			if values, ok := decoded[0].([]UnixFD); !ok || len(values) != 1 || values[0] != 42 {
+				t.Fatal("native FD container type mismatch", decoded)
+			}
+		} else {
+			if values, ok := decoded[0].([]UnixFDIndex); !ok || len(values) != 1 || values[0] != 0 {
+				t.Fatal("ordinary no-FD decoding changed", decoded)
+			}
+		}
+	}
+	// Malformed body is an error, never successful empty data.
+	if values, err := newDecoder(bytes.NewReader(nil), binary.LittleEndian, nil).Decode(Signature{"u"}); err == nil || !errors.As(err, new(FormatError)) {
+		t.Fatal("malformed body became empty success", values, err)
+	}
+}

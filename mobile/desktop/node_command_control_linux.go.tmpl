@@ -216,7 +216,7 @@ func (owner *routerVPNLinuxNodeControl) joinNative(ctx context.Context) error {
 	if owner.joined {
 		return nil
 	}
-	if err := owner.native.Close(); err != nil {
+	if err := owner.native.CloseContext(ctx); err != nil {
 		return err
 	}
 	if owner.preparation != nil {

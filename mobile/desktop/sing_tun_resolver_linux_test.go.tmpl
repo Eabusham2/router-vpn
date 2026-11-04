@@ -1,0 +1,1064 @@
+//go:build linux
+
+package tun
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
+)
+
+func resolverTestNative(t *testing.T) *NativeTun {
+	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
+	native := &NativeTun{routervpnOwnedIndex: 8}
+	r := &native.routervpnResolver
+	var err error
+	r.namespace, err = os.Open("/proc/thread-self/ns/net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.originalNamespace = r.namespace
+	r.namespaceInfo, err = r.namespace.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	native.routervpnRetirement.original = func(ctx context.Context) error { return ctx.Err() }
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := native.routervpnLinuxResolverRetire(ctx); err != nil {
+			t.Errorf("original resolver cleanup retained: %v", err)
+		}
+	})
+	return native
+}
+func resolverTestDaemon(t *testing.T, r *routerVPNLinuxResolver) (*exec.Cmd, <-chan struct{}, *os.File) {
+	t.Helper()
+	pidfd := -1
+	command := exec.Command("/usr/bin/sleep", "0.6")
+	command.Env = []string{"PATH=/usr/bin:/bin"}
+	command.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	original := os.NewFile(uintptr(pidfd), "original-created-resolver-fixture")
+	done := make(chan struct{})
+	go func() { _ = command.Wait(); close(done) }()
+	t.Cleanup(func() { <-done; original.Close() })
+	duplicate, err := unix.FcntlInt(original.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := os.NewFile(uintptr(duplicate), "received-original-resolver-fixture")
+	credentials := map[string]dbus.Variant{"ProcessFD": dbus.MakeVariant(dbus.UnixFD(duplicate)), "ProcessID": dbus.MakeVariant(uint32(command.Process.Pid))}
+	p := &routerVPNResolverCall{call: &dbus.Call{Body: []any{credentials}}, fds: map[int]*os.File{duplicate: received}, adopted: map[int]bool{}}
+	r.unique = ":1.5824"
+	if err = r.captureDaemon(p); err != nil {
+		if r.daemon != received {
+			received.Close()
+		}
+		t.Fatal(err)
+	}
+	if !p.adopted[duplicate] || r.daemon != received {
+		t.Fatal("native daemon capability was not retained")
+	}
+	return command, done, original
+}
+func resolverTestPending(r *routerVPNLinuxResolver, mutate bool) *routerVPNResolverCall {
+	p := &routerVPNResolverCall{destination: r.unique, method: "org.freedesktop.resolve1.Manager.SetLinkDNS", mutate: mutate, sent: make(chan struct{}), result: make(chan *dbus.Call, 1), serial: 17, adopted: map[int]bool{}}
+	p.call = &dbus.Call{Destination: p.destination, Method: p.method}
+	close(p.sent)
+	r.pending = p
+	return p
+}
+func resolverTestReply(r *routerVPNLinuxResolver, p *routerVPNResolverCall, sender string, serial uint32, kind dbus.Type) {
+	r.incoming(&dbus.Message{Type: kind, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(serial), dbus.FieldSender: dbus.MakeVariant(sender)}})
+	if kind == dbus.TypeError {
+		p.call.Err = dbus.NewError("org.freedesktop.DBus.Error.NoReply", nil)
+	}
+	p.result <- p.call
+}
+func TestRouterVPNNativeLinuxResolverDaemonCapability(t *testing.T) {
+	native := resolverTestNative(t)
+	r := &native.routervpnResolver
+	_, done, original := resolverTestDaemon(t, r)
+	if r.pid == 0 || r.daemon == original || r.daemonNamespace == nil || r.daemonImage == nil {
+		t.Fatal("received daemon authority was not captured")
+	}
+	if err := r.daemonCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if err := r.daemonCurrent(); err == nil {
+		t.Fatal("dead original daemon retained current authority")
+	}
+}
+func TestRouterVPNNativeLinuxResolverCredentialRefusals(t *testing.T) {
+	for _, mode := range []string{"missing-processfd", "invalid-processfd", "foreign-namespace", "unreceived-file"} {
+		t.Run(mode, func(t *testing.T) {
+			native := resolverTestNative(t)
+			r := &native.routervpnResolver
+			fd, err := unix.PidfdOpen(os.Getpid(), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := os.NewFile(uintptr(fd), "explicit-current-process-fixture")
+			credentials := map[string]dbus.Variant{"ProcessFD": dbus.MakeVariant(dbus.UnixFD(fd)), "ProcessID": dbus.MakeVariant(uint32(os.Getpid()))}
+			p := &routerVPNResolverCall{call: &dbus.Call{Body: []any{credentials}}, fds: map[int]*os.File{fd: file}, adopted: map[int]bool{}}
+			switch mode {
+			case "missing-processfd":
+				delete(credentials, "ProcessFD")
+			case "invalid-processfd":
+				file.Close()
+				file, err = os.Open("/dev/null")
+				if err != nil {
+					t.Fatal(err)
+				}
+				fd = int(file.Fd())
+				credentials["ProcessFD"] = dbus.MakeVariant(dbus.UnixFD(fd))
+				p.fds = map[int]*os.File{fd: file}
+			case "unreceived-file":
+				p.fds = map[int]*os.File{}
+			case "foreign-namespace":
+				other, err := os.Stat("/proc/thread-self/ns/user")
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.namespaceInfo = other
+			}
+			if err = r.captureDaemon(p); err == nil {
+				t.Fatal("unproved resolver credentials accepted", mode)
+			}
+			if mode == "foreign-namespace" {
+				r.namespaceInfo, _ = r.namespace.Stat()
+			}
+			if !p.adopted[fd] {
+				file.Close()
+			}
+		})
+	}
+}
+func TestRouterVPNNativeLinuxResolverMutationNeedsOriginalReply(t *testing.T) {
+	for _, mode := range []string{"bus-no-reply", "foreign-owner", "wrong-serial", "transport-only"} {
+		t.Run(mode, func(t *testing.T) {
+			native := resolverTestNative(t)
+			r := &native.routervpnResolver
+			_, done, _ := resolverTestDaemon(t, r)
+			p := resolverTestPending(r, true)
+			switch mode {
+			case "bus-no-reply":
+				resolverTestReply(r, p, "org.freedesktop.DBus", p.serial, dbus.TypeError)
+			case "foreign-owner":
+				resolverTestReply(r, p, ":1.999", p.serial, dbus.TypeMethodReply)
+			case "wrong-serial":
+				resolverTestReply(r, p, r.unique, p.serial+1, dbus.TypeMethodReply)
+			case "transport-only":
+				p.call.Err = errors.New("original connection interrupted")
+				p.result <- p.call
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			err := native.routervpnLinuxResolverRetire(ctx)
+			cancel()
+			if err == nil || r.closed || r.pending != p || r.daemon == nil {
+				t.Fatal("unknown daemon mutation became native cleanup", mode, err)
+			}
+			<-done
+			stop, finish := context.WithTimeout(context.Background(), time.Second)
+			defer finish()
+			if err = native.routervpnLinuxResolverRetire(stop); err != nil || !r.closed || r.pending != nil {
+				t.Fatal("original daemon exit failed to settle retained mutation", err)
+			}
+		})
+	}
+}
+func TestRouterVPNNativeLinuxResolverLateReplyRetry(t *testing.T) {
+	for _, kind := range []dbus.Type{dbus.TypeMethodReply, dbus.TypeError} {
+		t.Run(map[dbus.Type]string{dbus.TypeMethodReply: "success", dbus.TypeError: "daemon-error"}[kind], func(t *testing.T) {
+			native := resolverTestNative(t)
+			r := &native.routervpnResolver
+			resolverTestDaemon(t, r)
+			p := resolverTestPending(r, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			err := native.routervpnLinuxResolverRetire(ctx)
+			cancel()
+			if err == nil || r.closed || r.pending != p || r.daemon == nil {
+				t.Fatal("cancelled waiter discarded daemon mutation", err)
+			}
+			resolverTestReply(r, p, r.unique, p.serial, kind)
+			stop, finish := context.WithTimeout(context.Background(), time.Second)
+			defer finish()
+			if err = native.routervpnLinuxResolverRetire(stop); err != nil || !r.closed || r.pending != nil {
+				t.Fatal("same original late reply did not permit native retirement", err)
+			}
+		})
+	}
+}
+func TestRouterVPNNativeLinuxResolverRejectsReplacedCapability(t *testing.T) {
+	for _, mode := range []string{"pidfd-pointer", "pidfd-descriptor", "proc-pointer", "namespace-pointer", "image-pointer"} {
+		t.Run(mode, func(t *testing.T) {
+			native := resolverTestNative(t)
+			r := &native.routervpnResolver
+			resolverTestDaemon(t, r)
+			fd, err := unix.PidfdOpen(os.Getpid(), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign := os.NewFile(uintptr(fd), "explicit-foreign-pidfd-fixture")
+			defer foreign.Close()
+			switch mode {
+			case "pidfd-pointer":
+				old := r.daemon
+				r.daemon = foreign
+				defer func() { r.daemon = old }()
+			case "pidfd-descriptor":
+				saved, err := unix.FcntlInt(r.daemon.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer unix.Close(saved)
+				if err = unix.Dup3(fd, int(r.daemon.Fd()), unix.O_CLOEXEC); err != nil {
+					t.Fatal(err)
+				}
+				defer unix.Dup3(saved, int(r.daemon.Fd()), unix.O_CLOEXEC)
+			case "proc-pointer":
+				old := r.proc
+				r.proc = r.daemonNamespace
+				defer func() { r.proc = old }()
+			case "namespace-pointer":
+				old := r.daemonNamespace
+				r.daemonNamespace = r.namespace
+				defer func() { r.daemonNamespace = old }()
+			case "image-pointer":
+				old := r.daemonImage
+				r.daemonImage = r.proc
+				defer func() { r.daemonImage = old }()
+			}
+			if err = r.daemonCurrent(); err == nil {
+				t.Fatal("replacement daemon capability became current", mode)
+			}
+		})
+	}
+}
+func TestRouterVPNNativeLinuxResolverOriginalWireSerial(t *testing.T) {
+	r := &routerVPNLinuxResolver{unique: ":1.5824"}
+	p := resolverTestPending(r, true)
+	p.serial = 0
+	msg := &dbus.Message{Type: dbus.TypeMethodCall, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldDestination: dbus.MakeVariant(p.destination), dbus.FieldPath: dbus.MakeVariant(dbus.ObjectPath("/org/freedesktop/resolve1")), dbus.FieldInterface: dbus.MakeVariant("org.freedesktop.resolve1.Manager"), dbus.FieldMember: dbus.MakeVariant("SetLinkDNS")}}
+	var raw bytes.Buffer
+	if err := msg.EncodeTo(&raw, binary.LittleEndian); err != nil {
+		t.Fatal(err)
+	}
+	body := raw.Bytes()
+	binary.LittleEndian.PutUint32(body[8:12], 71)
+	actual, err := dbus.DecodeMessage(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.outgoing(actual)
+	if p.serial != 71 || r.wireFailure != nil {
+		t.Fatal("actual outgoing serial was not retained", r.wireFailure)
+	}
+	resolverTestReply(r, p, r.unique, 71, dbus.TypeMethodReply)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if got, err := r.join(ctx); err != nil || got != p {
+		t.Fatal("original sender/serial response rejected", err)
+	}
+	r.incoming(&dbus.Message{Type: dbus.TypeMethodReply, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(uint32(71)), dbus.FieldSender: dbus.MakeVariant(r.unique)}})
+	if r.wireFailure == nil {
+		t.Fatal("duplicate method result did not invalidate transaction")
+	}
+}
+func TestRouterVPNNativeLinuxResolverRetireRequiresBound(t *testing.T) {
+	native := resolverTestNative(t)
+	r := &native.routervpnResolver
+	if err := native.routervpnLinuxResolverRetire(context.Background()); err == nil || r.retiring || r.closed {
+		t.Fatal("unbounded retirement changed original owner", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := native.routervpnLinuxResolverRetire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := native.routervpnLinuxResolverRetire(context.Background()); err != nil {
+		t.Fatal("completed retirement lost idempotence", err)
+	}
+}
+func TestRouterVPNNativeLinuxResolverStartupBound(t *testing.T) {
+	for _, mode := range []string{"native-ten-second-cap", "inherited-earlier-bound", "cancelled-original"} {
+		t.Run(mode, func(t *testing.T) {
+			native := &NativeTun{routervpnOwnedIndex: 8}
+			observed := time.Time{}
+			native.routervpnRetirement.original = func(ctx context.Context) error {
+				var ok bool
+				observed, ok = ctx.Deadline()
+				if !ok {
+					return errors.New("no original bound")
+				}
+				return errors.New("original startup bound observed")
+			}
+			ctx := context.Background()
+			cancel := func() {}
+			if mode == "inherited-earlier-bound" {
+				ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
+			}
+			if mode == "cancelled-original" {
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			defer cancel()
+			before := time.Now()
+			err := native.routervpnLinuxResolverStart(ctx)
+			if mode == "cancelled-original" {
+				if err == nil || !observed.IsZero() {
+					t.Fatal("cancelled startup acquired resolver", err)
+				}
+				return
+			}
+			if err == nil || native.routervpnResolver.connection != nil || native.routervpnResolver.unavailable {
+				t.Fatal("failed native admission was mislabeled as daemon absence", err)
+			}
+			bound := 10 * time.Second
+			if mode == "inherited-earlier-bound" {
+				bound = 2 * time.Second
+			}
+			if observed.IsZero() || observed.After(before.Add(bound+time.Millisecond)) {
+				t.Fatal("original startup allowance renewed", observed)
+			}
+			stop, finish := context.WithTimeout(context.Background(), time.Second)
+			defer finish()
+			if err = native.routervpnLinuxResolverRetire(stop); err != nil {
+				t.Fatal(err)
+			}
+			if err = native.routervpnLinuxResolverStart(stop); err == nil {
+				t.Fatal("retired resolver revived")
+			}
+		})
+	}
+}
+
+// Mandatory native transport gate. It uses a real Unix stream, EXTERNAL
+// authentication, SCM_RIGHTS ProcessFD delivery, and the pinned godbus codec.
+// The small server models the resolver's methods; it does not claim to run the
+// host's systemd-resolved daemon or to change its DNS settings.
+func TestRouterVPNNativeLinuxResolverOriginalUnixConnection(t *testing.T) {
+	native := resolverTestNative(t)
+	r := &native.routervpnResolver
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal("actual private resolver socket", err)
+	}
+	open := func(fd int) *net.UnixConn {
+		file := os.NewFile(uintptr(fd), "original-private-resolver-fixture")
+		conn, err := net.FileConn(file)
+		file.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn.(*net.UnixConn)
+	}
+	client, server := open(pair[0]), open(pair[1])
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = server.SetDeadline(time.Now().Add(5 * time.Second))
+	processFD := -1
+	daemon := exec.Command("/usr/bin/cat")
+	daemonInput, err := daemon.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.Stdout = io.Discard
+	daemon.Env = []string{"PATH=/usr/bin:/bin"}
+	daemon.SysProcAttr = &syscall.SysProcAttr{PidFD: &processFD}
+	if err = daemon.Start(); err != nil {
+		t.Fatal(err)
+	}
+	originalDaemon := os.NewFile(uintptr(processFD), "original-created-modeled-resolver")
+	daemonDone := make(chan struct{})
+	go func() { _ = daemon.Wait(); close(daemonDone) }()
+	defer func() { daemonInput.Close(); <-daemonDone; originalDaemon.Close() }()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- resolverTestBus(server, processFD, "") }()
+	defer func() {
+		server.Close()
+		select {
+		case err := <-serverDone:
+			if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
+				t.Error("original resolver fixture", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("original resolver fixture did not join")
+		}
+	}()
+	if err = r.authenticate(ctx, client); err != nil {
+		t.Fatal("original D-Bus authentication", err)
+	}
+	p, err := r.query(ctx, "NameHasOwner", "org.freedesktop.resolve1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exists bool
+	if err = p.call.Store(&exists); err != nil || !exists {
+		t.Fatal("actual bus reply", exists, err)
+	}
+	if err = r.clear(p); err != nil {
+		t.Fatal(err)
+	}
+	p, err = r.query(ctx, "GetNameOwner", "org.freedesktop.resolve1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = p.call.Store(&r.unique); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.clear(p); err != nil {
+		t.Fatal(err)
+	}
+	p, err = r.query(ctx, "GetConnectionCredentials", r.unique)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.captureDaemon(p); err != nil {
+		t.Fatal("actual SCM_RIGHTS process descriptor", err)
+	}
+	if err = r.clear(p); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.issue(ctx, r.unique, "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager.SetLinkDefaultRoute", true, int32(8), true); err != nil {
+		t.Fatal(err)
+	}
+	p, err = r.join(ctx)
+	if err != nil || p.sender != r.unique || p.serial == 0 {
+		t.Fatal("actual original resolver response", err)
+	}
+	if err = r.clear(p); err != nil {
+		t.Fatal(err)
+	}
+	if err = native.routervpnLinuxResolverRetire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Write([]byte("must-not-send")); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("retired original transport remained writable", err)
+	}
+}
+func resolverTestBus(server *net.UnixConn, processFD int, shape string) error {
+	input := bufio.NewReader(server)
+	first, err := input.ReadByte()
+	if err != nil {
+		return err
+	}
+	if first != 0 {
+		return errors.New("missing EXTERNAL NUL")
+	}
+	line, err := input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "AUTH\r\n" {
+		return fmt.Errorf("unexpected initial auth %q", line)
+	}
+	if _, err = io.WriteString(server, "REJECTED EXTERNAL\r\n"); err != nil {
+		return err
+	}
+	line, err = input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "AUTH EXTERNAL\r\n" {
+		return fmt.Errorf("unexpected EXTERNAL %q", line)
+	}
+	if _, err = io.WriteString(server, "OK 0123456789abcdef0123456789abcdef\r\n"); err != nil {
+		return err
+	}
+	line, err = input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "NEGOTIATE_UNIX_FD\r\n" {
+		return fmt.Errorf("no native FD negotiation %q", line)
+	}
+	if _, err = io.WriteString(server, "AGREE_UNIX_FD\r\n"); err != nil {
+		return err
+	}
+	line, err = input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "BEGIN\r\n" {
+		return fmt.Errorf("no BEGIN %q", line)
+	}
+	serial := uint32(1)
+	for {
+		request, err := dbus.DecodeMessage(input)
+		if err != nil {
+			return err
+		}
+		member, _ := request.Headers[dbus.FieldMember].Value().(string)
+		destination, _ := request.Headers[dbus.FieldDestination].Value().(string)
+		sender := "org.freedesktop.DBus"
+		var body []any
+		switch member {
+		case "Hello":
+			body = []any{":1.42"}
+		case "NameHasOwner":
+			body = []any{true}
+		case "GetNameOwner":
+			body = []any{":1.77"}
+		case "GetConnectionCredentials":
+			body = []any{map[string]dbus.Variant{"ProcessFD": dbus.MakeVariant(dbus.UnixFD(processFD))}}
+			if shape != "" {
+				array := []dbus.UnixFD{dbus.UnixFD(processFD)}
+				var value any = array
+				switch shape {
+				case "variant-array":
+					value = dbus.MakeVariant(array)
+				case "dictionary-array":
+					value = map[string]dbus.Variant{"extra": dbus.MakeVariant(array)}
+				case "dictionary-key":
+					value = map[dbus.UnixFD]string{dbus.UnixFD(processFD): "original"}
+				case "dictionary-value":
+					value = map[string]dbus.UnixFD{"original": dbus.UnixFD(processFD)}
+				case "structure-array":
+					value = struct {
+						Label string
+						Files []dbus.UnixFD
+					}{"extra", array}
+				}
+				body = []any{value}
+			}
+		case "SetLinkDefaultRoute":
+			if destination != ":1.77" || len(request.Body) != 2 || request.Body[0] != int32(8) || request.Body[1] != true {
+				return errors.New("mutation changed original unique owner/interface")
+			}
+			sender = ":1.77"
+		default:
+			return errors.New("unexpected resolver method")
+		}
+		reply := &dbus.Message{Type: dbus.TypeMethodReply, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(request.Serial()), dbus.FieldSender: dbus.MakeVariant(sender), dbus.FieldDestination: dbus.MakeVariant(":1.42")}, Body: body}
+		if len(body) > 0 {
+			reply.Headers[dbus.FieldSignature] = dbus.MakeVariant(dbus.SignatureOf(body...))
+		}
+		fds, err := reply.CountFds()
+		if err != nil {
+			return err
+		}
+		if fds > 0 {
+			reply.Headers[dbus.FieldUnixFDs] = dbus.MakeVariant(uint32(fds))
+		}
+		var encoded bytes.Buffer
+		rights, err := reply.EncodeToWithFDs(&encoded, binary.LittleEndian)
+		if err != nil {
+			return err
+		}
+		data := encoded.Bytes()
+		binary.LittleEndian.PutUint32(data[8:12], serial)
+		serial++
+		var ancillary []byte
+		if len(rights) > 0 {
+			ancillary = unix.UnixRights(rights...)
+		}
+		written, _, err := server.WriteMsgUnix(data, ancillary, nil)
+		if err != nil {
+			return err
+		}
+		if written != len(data) {
+			return io.ErrShortWrite
+		}
+	}
+}
+
+func TestRouterVPNNativeLinuxResolverObservedBusAbsence(t *testing.T) {
+	for _, mode := range []string{"missing", "present-not-socket"} {
+		t.Run(mode, func(t *testing.T) {
+			native := resolverTestNative(t)
+			r := &native.routervpnResolver
+			path := t.TempDir() + "/system_bus_socket"
+			if mode == "present-not-socket" {
+				if err := os.WriteFile(path, []byte("not a daemon"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			found, err := r.captureBusAt(ctx, path)
+			if mode == "missing" {
+				if err != nil || found || r.connection != nil {
+					t.Fatal("actual endpoint absence was not observed", err)
+				}
+			} else {
+				if err == nil || r.connection != nil {
+					t.Fatal("ambiguous endpoint was treated as absent", err)
+				}
+			}
+		})
+	}
+}
+func TestRouterVPNNativeLinuxResolverDefinitelyUnsentRetires(t *testing.T) {
+	native := resolverTestNative(t)
+	r := &native.routervpnResolver
+	p := &routerVPNResolverCall{destination: ":1.77", method: "org.freedesktop.resolve1.Manager.SetLinkDNS", mutate: true, unsent: true, failure: errors.New("original SetWriteDeadline refused before sender creation"), sent: make(chan struct{}), adopted: map[int]bool{}}
+	close(p.sent)
+	r.pending = p
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := native.routervpnLinuxResolverRetire(ctx); err != nil || !r.closed || r.pending != nil {
+		t.Fatal("definitely unsent original call stranded native cleanup", err)
+	}
+}
+
+func TestRouterVPNNativeLinuxResolverClosesDecodedFDArrays(t *testing.T) {
+	for _, shape := range []string{"array", "variant-array", "dictionary-array", "structure-array", "dictionary-key", "dictionary-value"} {
+		for _, matched := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/matched-%t", shape, matched), func(t *testing.T) {
+				original, err := os.Open("/dev/null")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer original.Close()
+				pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				open := func(fd int) *net.UnixConn {
+					file := os.NewFile(uintptr(fd), "original-FD-array-stream")
+					conn, err := net.FileConn(file)
+					file.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					return conn.(*net.UnixConn)
+				}
+				client, server := open(pair[0]), open(pair[1])
+				defer client.Close()
+				defer server.Close()
+				deadline := time.Now().Add(3 * time.Second)
+				client.SetDeadline(deadline)
+				server.SetDeadline(deadline)
+				serverDone := make(chan error, 1)
+				go func() { serverDone <- resolverTestBus(server, int(original.Fd()), shape) }()
+				defer func() {
+					server.Close()
+					select {
+					case err := <-serverDone:
+						if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
+							t.Error(err)
+						}
+					case <-time.After(time.Second):
+						t.Error("original array fixture not joined")
+					}
+				}()
+				conn, err := dbus.DialUnix(client)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				if err = conn.Auth([]dbus.Auth{dbus.AuthExternal("0")}); err != nil {
+					t.Fatal(err)
+				}
+				if err = conn.Hello(); err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithDeadline(context.Background(), deadline)
+				defer cancel()
+				actual := conn.Object("org.freedesktop.DBus", "/org/freedesktop/DBus").CallWithContext(ctx, "org.freedesktop.DBus.GetConnectionCredentials", dbus.FlagNoAutoStart, ":1.77")
+				if actual.Err != nil || len(actual.Body) != 1 {
+					t.Fatal("actual native FD-array decode", actual.Err, actual.Body)
+				}
+				received := map[int]*os.File{}
+				// Snapshot the decoded native descriptor number for the assertion. Close
+				// this observational wrapper before another native allocation can reuse it.
+				if err = resolverMessageFDs(actual.Body, received); err != nil || len(received) != 1 {
+					t.Fatal("actual decoded FD array missing", shape, err, actual.Body)
+				}
+				r := &routerVPNLinuxResolver{unique: ":1.77"}
+				var pending *routerVPNResolverCall
+				if matched {
+					pending = resolverTestPending(r, false)
+				}
+				r.incoming(&dbus.Message{Type: dbus.TypeMethodReply, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(uint32(17)), dbus.FieldSender: dbus.MakeVariant(":1.77")}, Body: actual.Body})
+				if matched {
+					if len(pending.fds) != 1 {
+						t.Fatal("actual decoded FD array omitted retained descriptor", shape)
+					}
+					if err = r.clear(pending); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for fd, file := range received {
+					_, err = unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+					closeErr := file.Close()
+					if !errors.Is(err, unix.EBADF) {
+						t.Fatal("decoded FD array leaked native descriptor", shape, matched, err, closeErr)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Exercise the actual fixed named endpoint through the production O_PATH ->
+// /proc/self/fd -> Unix connect/authentication path. Every mutation is inside
+// fresh original user/network/mount namespaces with a private /run tmpfs.
+func TestRouterVPNNativeLinuxResolverNamedBusNamespace(t *testing.T) {
+	const marker = "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE"
+	cases := []string{"original-authenticated", "replaced-endpoint", "untrusted-ancestor", "cancelled-original-child"}
+	selected := os.Getenv(marker)
+	if selected == "" {
+		if os.Geteuid() != 0 {
+			t.Fatal("named-bus namespace fixture requires its fixed privileged launcher")
+		}
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var originals []*os.File
+		for _, name := range []string{"user", "net", "mnt"} {
+			file, err := os.Open("/proc/thread-self/ns/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originals = append(originals, file)
+			defer file.Close()
+		}
+		run, err := os.Open("/run")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer run.Close()
+		runInfo, err := run.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range cases {
+			t.Run(name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+				defer cancel()
+				pidfd := -1
+				command := exec.CommandContext(ctx, image, "-test.v", "-test.run=^TestRouterVPNNativeLinuxResolverNamedBusNamespace$", "-test.timeout=10s")
+				command.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
+					UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}},
+					GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getegid(), Size: 1}}, GidMappingsEnableSetgroups: false, PidFD: &pidfd}
+				command.ExtraFiles = append([]*os.File(nil), originals...)
+				command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", marker + "=" + name}
+				var readyRead, readyWrite *os.File
+				if name == "cancelled-original-child" {
+					readyRead, readyWrite, err = os.Pipe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer readyRead.Close()
+					defer readyWrite.Close()
+					command.ExtraFiles = append(command.ExtraFiles, readyWrite)
+				}
+				var output bytes.Buffer
+				command.Stdout, command.Stderr = &output, &output
+				if err := command.Start(); err != nil {
+					t.Fatal("original named-bus namespace child failed", err)
+				}
+				if pidfd < 0 {
+					cancel()
+					waitErr := command.Wait()
+					t.Fatal("named child omitted original creation pidfd after join", waitErr)
+				}
+				originalPIDFD := os.NewFile(uintptr(pidfd), "original-created-named-bus-child")
+				defer originalPIDFD.Close()
+				pidfdInfo, captureErr := originalPIDFD.Stat()
+				if captureErr != nil {
+					cancel()
+				}
+				var readyErr error
+				if readyRead != nil {
+					_ = readyWrite.Close()
+					deadline, _ := ctx.Deadline()
+					readyErr = readyRead.SetReadDeadline(deadline)
+					var ack [1]byte
+					if readyErr == nil {
+						_, readyErr = io.ReadFull(readyRead, ack[:])
+						if readyErr == nil && ack[0] != 'R' {
+							readyErr = errors.New("original named child omitted private namespace acknowledgement")
+						}
+					}
+					cancel()
+				}
+				waitErr := command.Wait()
+				if captureErr != nil || readyErr != nil {
+					t.Fatal("original named child capture/readiness failed after join", captureErr, readyErr, waitErr, output.String())
+				}
+				retired, retireErr := resolverPIDFDCurrent(originalPIDFD, originalPIDFD, pidfdInfo)
+				if retireErr != nil || !retired {
+					t.Fatal("original named-bus child was not joined", retired, retireErr)
+				}
+				body := output.String()
+				child := "TestRouterVPNNativeLinuxResolverNamedBusNamespace"
+				witness := "NAMED-RESOLVER original-authentication-and-cleanup=" + name
+				if name == "cancelled-original-child" {
+					status, ok := command.ProcessState.Sys().(syscall.WaitStatus)
+					if waitErr == nil || ctx.Err() == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL || strings.Count(body, "=== RUN   "+child+"/"+name+"\n") != 1 {
+						t.Fatal("original named child cancellation did not join its exact created process", waitErr, body)
+					}
+				} else {
+					if waitErr != nil {
+						t.Fatal("original named-bus namespace child failed", waitErr, body)
+					}
+					if strings.Count(body, witness) != 1 || strings.Count(body, "=== RUN   "+child+"\n") != 1 || strings.Count(body, "=== RUN   "+child+"/"+name+"\n") != 1 ||
+						strings.Count(body, "--- PASS: "+child+" ") != 1 || strings.Count(body, "--- PASS: "+child+"/"+name+" ") != 1 || strings.Contains(body, "--- SKIP:") || strings.Contains(body, "--- FAIL:") || strings.Contains(body, "DATA RACE") || strings.Contains(body, "panic:") {
+						t.Fatal("original named-bus child omitted its actual endpoint verdict", name, body)
+					}
+				}
+				for i, namespace := range []string{"user", "net", "mnt"} {
+					before, e := originals[i].Stat()
+					current, other := os.Stat("/proc/thread-self/ns/" + namespace)
+					if e != nil || other != nil || !os.SameFile(before, current) {
+						t.Fatal("named-bus child changed original parent namespace", namespace, e, other)
+					}
+				}
+				current, err := os.Stat("/run")
+				if err != nil || !os.SameFile(runInfo, current) {
+					t.Fatal("named-bus child changed parent /run", err)
+				}
+				// Never forward nested child RUN/PASS lines to the exact outer gate.
+				t.Log(witness)
+			})
+		}
+		return
+	}
+	known := false
+	for _, name := range cases {
+		known = known || selected == name
+	}
+	if !known {
+		t.Fatal("unknown original named-bus namespace case")
+	}
+	for i, name := range []string{"user", "net", "mnt"} {
+		original := os.NewFile(uintptr(3+i), "original-named-bus-parent-"+name)
+		defer original.Close()
+		before, err := original.Stat()
+		current, other := os.Stat("/proc/thread-self/ns/" + name)
+		var fs syscall.Statfs_t
+		if err != nil || other != nil || syscall.Fstatfs(int(original.Fd()), &fs) != nil || fs.Type != 0x6e736673 || os.SameFile(before, current) {
+			t.Fatal("named-bus fixture did not retain distinct original namespaces", name, err, other)
+		}
+	}
+	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
+		t.Fatal("private original mount propagation", err)
+	}
+	if err := syscall.Mount("tmpfs", "/run", "tmpfs", 0, "mode=0755"); err != nil {
+		t.Fatal("private original resolver run directory", err)
+	}
+	t.Run(selected, func(t *testing.T) {
+		if selected == "cancelled-original-child" {
+			ready := os.NewFile(uintptr(6), "original-named-child-ready")
+			if _, err := ready.Write([]byte{'R'}); err != nil {
+				t.Fatal(err)
+			}
+			if err := ready.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {} // Original parent cancellation must join this exact process.
+		}
+		resolverNamedBusCase(t, selected)
+		t.Log("NAMED-RESOLVER original-authentication-and-cleanup=" + selected)
+	})
+}
+
+func resolverNamedBusCase(t *testing.T, selected string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	native := resolverTestNative(t)
+	r := &native.routervpnResolver
+	if err := os.Mkdir("/run/dbus", 0755); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/run/dbus/system_bus_socket"
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal("actual named Unix bind unavailable", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	deadline, _ := ctx.Deadline()
+	if err = listener.SetDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	originalInfo, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPath := path
+	var replacement *net.UnixListener
+	var replacementInfo os.FileInfo
+	accepted := make(chan *net.UnixConn, 1)
+	served := make(chan error, 1)
+	go func() {
+		connection, err := listener.AcceptUnix()
+		if connection != nil {
+			accepted <- connection
+		}
+		close(accepted)
+		if err == nil {
+			defer connection.Close()
+			if err = connection.SetDeadline(deadline); err == nil {
+				err = resolverTestBus(connection, -1, "")
+			}
+		}
+		served <- err
+	}()
+	cleaned := false
+	cleanup := func() {
+		if cleaned {
+			return
+		}
+		cleanupCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		if err := native.routervpnLinuxResolverRetire(cleanupCtx); err != nil {
+			t.Error("original named-bus resolver did not retire", err)
+		}
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Error(err)
+		}
+		select {
+		case connection := <-accepted:
+			if connection != nil {
+				_ = connection.Close()
+			} else if selected != "untrusted-ancestor" {
+				t.Error("named original endpoint was never accepted")
+			}
+			if connection != nil && selected == "untrusted-ancestor" {
+				t.Error("untrusted named ancestor reached original server")
+			}
+		case <-cleanupCtx.Done():
+			t.Error("original named listener accept was not joined")
+			return
+		}
+		select {
+		case err := <-served:
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+				t.Error("original named-bus server failed", err)
+			}
+		case <-cleanupCtx.Done():
+			t.Error("original named-bus server was not joined")
+			return
+		}
+		if replacement != nil {
+			// Prove original retirement did not close or unlink the newer endpoint.
+			current, err := os.Lstat(path)
+			if err != nil || !os.SameFile(current, replacementInfo) {
+				t.Error("original retirement changed replacement socket", err)
+			} else {
+				client, err := (&net.Dialer{}).DialContext(cleanupCtx, "unix", path)
+				if err != nil {
+					t.Error("original retirement stopped replacement endpoint", err)
+				} else {
+					replacementDeadline, _ := cleanupCtx.Deadline()
+					_ = replacement.SetDeadline(replacementDeadline)
+					peer, err := replacement.AcceptUnix()
+					if err != nil {
+						t.Error(err)
+					} else {
+						_ = peer.Close()
+					}
+					_ = client.Close()
+				}
+			}
+			if err := replacement.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+		for _, item := range []struct {
+			path string
+			info os.FileInfo
+		}{{originalPath, originalInfo}, {path, replacementInfo}} {
+			if item.info == nil {
+				continue
+			}
+			current, err := os.Lstat(item.path)
+			if err != nil || !os.SameFile(current, item.info) {
+				t.Error("fixture refuses replacement socket cleanup", item.path, err)
+				continue
+			}
+			if err := os.Remove(item.path); err != nil {
+				t.Error(err)
+			}
+			if _, err := os.Lstat(item.path); !errors.Is(err, os.ErrNotExist) {
+				t.Error("original fixture socket still present", item.path, err)
+			}
+		}
+		cleaned = true
+	}
+	t.Cleanup(cleanup)
+	if selected == "untrusted-ancestor" {
+		if err := os.Chmod("/run/dbus", 0777); err != nil {
+			t.Fatal(err)
+		}
+		exists, err := r.captureBus(ctx)
+		if err == nil || exists || r.transport != nil {
+			t.Fatal("untrusted original named ancestor was accepted", exists, err)
+		}
+		cleanup()
+		return
+	}
+	exists, err := r.captureBus(ctx)
+	if err != nil || !exists {
+		t.Fatal("actual original named bus was not captured/authenticated", exists, err)
+	}
+	if r.bus == nil || !os.SameFile(r.busInfo, originalInfo) || r.transport == nil || r.connection == nil {
+		t.Fatal("named capture lost original endpoint capability")
+	}
+	if err := r.busCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := r.query(ctx, "NameHasOwner", "org.freedesktop.resolve1")
+	if err != nil {
+		t.Fatal("actual named original authenticated query", err)
+	}
+	var available bool
+	if err := pending.call.Store(&available); err != nil || !available {
+		t.Fatal("named query did not return its original result", err)
+	}
+	if err := r.clear(pending); err != nil {
+		t.Fatal(err)
+	}
+	if selected == "replaced-endpoint" {
+		originalPath = path + ".original"
+		if err := os.Rename(path, originalPath); err != nil {
+			t.Fatal(err)
+		}
+		replacement, err = net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replacement.SetUnlinkOnClose(false)
+		replacementInfo, err = os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if os.SameFile(originalInfo, replacementInfo) {
+			t.Fatal("named replacement reused original socket identity")
+		}
+		if err := r.busCurrent(); err == nil {
+			t.Fatal("replaced original named bus path was accepted")
+		}
+		if _, err := r.captureBus(ctx); err == nil {
+			t.Fatal("replacement named endpoint was recaptured")
+		}
+	}
+	cleanup()
+}

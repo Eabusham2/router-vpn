@@ -49,8 +49,12 @@ CORE = {
     'MonitorRejectsUnprovedOrRepeatedActivation': ('dns', 'joined', 'unattempted', 'wrong-operation', 'foreign-runtime', 'foreign-tracker'),
     'MonitorShippingActivationOrderAndRefusal': ('active', 'monitor-refused', 'persistence-failed'),
 }
-NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
+NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-route-change', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
 STARTUP = {
+    'RetirementRejectsUnboundFinalResult': ('absent', 'foreign-source', 'unknown-attempt', 'changed-deadline', 'foreign-tun', 'no-constructor', 'startup-extension'),
+    'RetirementRetriesOriginalLiveChild': (),
+    'RetirementBoundsOutstandingAttempts': ('unsettled', 'settled-failures', 'complete-retained', 'foreign-failure'),
+    'RetirementRequiresOriginalResultAndRouting': ('complete', 'nonzero', 'signal', 'foreign-completion', 'routing-route', 'routing-rule', 'cancelled'),
     'ControllerEpochUsesOriginalWireAndChild': (),
     'ControllerEpochRejectsChangedStartup': ('pre-rpc-aba', 'during-rpc-aba', 'late-end', 'session', 'configuration', 'mode', 'deadline', 'expired', 'ready-source', 'missing', 'source-replaced', 'profile-replaced', 'operation-replaced', 'peer-replaced', 'cancelled'),
     'ControllerEpochCloseRetryPrecedesStop': (),
@@ -66,13 +70,31 @@ STARTUP = {
     'StartupRetainsRejectedPreparation': ('configuration', 'network', 'workspace-name', 'workspace-descriptor', 'preparation-error'),
     'StartupStockGraphs': tuple(protocol+'/'+policy for protocol in ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2') for policy in ('default', 'fixed', 'ipv6-off')),
 }
+CLEANUP = {
+    'TestCleanupRejectsOverlongSelfBudgetBeforeNativeCall': (),
+    'TestCleanupOriginalDescriptorAndStableFrames': ('complete', 'wrong-source', 'torn', 'foreign-object', 'closed', 'replaced-descriptor', 'missing-result'),
+    'TestCleanupRejectsMutableSizeAndUnsealedFiles': (),
+    'TestCleanupOriginalAttemptsRetainOwnerAndDeadlines': ('expired-startup', 'failed-native', 'expired-request', 'wrong-source', 'torn-request'),
+}
+
+
+def check_cleanup_verdict(output):
+    if '--- SKIP:' in output or '--- FAIL:' in output:
+        raise ValueError('Original cleanup descriptor gate skipped or failed')
+    passed = re.findall(r'^\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)
+    for parent, leaves in CLEANUP.items():
+        for name in (parent, *(parent+'/'+leaf for leaf in leaves)):
+            if passed.count(name) != 1:
+                raise ValueError('Cleanup gate omitted or duplicated exact executable verdict: '+name)
+
+
 GROUPS = {'core': CORE, 'startup': STARTUP, 'native': NATIVE}
 SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'peer_linux.go', 'protocol_linux.go', 'runtime_linux.go', 'client_linux.go', 'dns_linux.go',
     'boot_linux.go', 'other.go', 'upgrade_linux.go', 'peer_native_test.go', 'runtime_native_test.go',
     'channel_native_test.go', 'client_test.go', 'boot_test.go', 'upgrade_native_test.go', 'namespace_test.go', 'route_native_test.go',
-    'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go','startup_native_test.go','startup_config_test.go','startup_namespace_test.go','controller_epoch_linux.go','controller_epoch_native_test.go')}
-SOURCE.update({'cmd/client/linux_standard_engine_linux.go', 'cmd/client/legacy_standard_exit_preparation_linux.go', 'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
+    'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go','startup_native_test.go','startup_config_test.go','startup_namespace_test.go','controller_epoch_linux.go','controller_epoch_native_test.go','retirement_native_test.go')}
+SOURCE.update({'internal/standardengine/cleanup_linux.go', 'internal/standardengine/cleanup_loop_linux.go', 'internal/standardengine/cleanup_linux_test.go', 'internal/standardengine/cleanup_loop_linux_test.go', 'internal/desktopnetwork/desktop_network_retirement.go', 'mobile/desktop/standard_cleanup_linux.go.tmpl', 'cmd/client/linux_standard_engine_linux.go', 'cmd/client/linux_standard_engine_retirement_linux.go', 'cmd/client/legacy_standard_exit_preparation_linux.go', 'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
 RUNNERS = ('linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
 
 

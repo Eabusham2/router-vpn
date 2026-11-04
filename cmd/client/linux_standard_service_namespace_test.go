@@ -58,13 +58,13 @@ func init() {
 // named Unix listeners, kernel peer pidfds, actual installed service/helper
 // processes, readiness and process join. Missing capabilities fail the gate.
 func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *testing.T) {
-	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "on-connect-network-failure", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
+	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "on-connect-network-failure", "on-connect-route-change", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy := scenario
 			if scenario == "always-off" {
 				policy = "always"
 			}
-			if scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
+			if scenario == "on-connect-route-change" || scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
 				policy = "on-connect"
 			}
 			executable := linuxControllerNamespaceInstall(t)
@@ -145,6 +145,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				}
 				if scenario == "on-connect-network-failure" {
 					action = "network-failure"
+				}
+				if scenario == "on-connect-route-change" {
+					action = "route-change"
 				}
 				if scenario == "on-connect-failure" {
 					action = "failure"

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -405,9 +406,16 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 		readyRetired := files.remove("node-ready.json")
 		// Partial construction and Box teardown retain ownership until every
 		// close succeeds. Only then may the parent retire this workspace.
-		for native.Close() != nil {
-			failure = routerVPNExternalFailure
-			time.Sleep(100 * time.Millisecond)
+		if runtime.GOOS == "linux" {
+			if err := routerVPNRetireLegacyNode(native); err != nil {
+				failure = routerVPNExternalFailure
+				return
+			}
+		} else {
+			for native.Close() != nil {
+				failure = routerVPNExternalFailure
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 		// The exact entered handoff callback and its owned receipt must be
 		// retired before the command can acknowledge complete shutdown.

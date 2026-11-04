@@ -123,3 +123,13 @@ func (s *Box) RouterVPNDesktopLinuxNodeActivatePhysical(ctx context.Context, pol
 	}
 	return owner, nil
 }
+
+// Native routing retires under this existing Stop operation before Box's
+// one-shot component close. Failed native retirement leaves all originals in
+// the manager for another bounded request.
+func (s *Box) RouterVPNCloseNativeTunContext(ctx context.Context) error {
+	if s == nil || s.inbound == nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("native cleanup lost its original Box or Stop caller")
+	}
+	return s.inbound.RouterVPNCloseNativeTunContext(ctx)
+}

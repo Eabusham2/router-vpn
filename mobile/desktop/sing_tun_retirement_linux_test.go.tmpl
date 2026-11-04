@@ -1,0 +1,520 @@
+//go:build linux
+
+package tun
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"os"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/netlink"
+	"golang.org/x/sys/unix"
+)
+
+func retirementAttribute(id uint16, value []byte) []byte {
+	result := make([]byte, (4+len(value)+3)&^3)
+	binary.LittleEndian.PutUint16(result, uint16(4+len(value)))
+	binary.LittleEndian.PutUint16(result[2:], id)
+	copy(result[4:], value)
+	return result
+}
+func retirementU32(value uint32) []byte {
+	raw := make([]byte, 4)
+	binary.LittleEndian.PutUint32(raw, value)
+	return raw
+}
+func retirementRule(t *testing.T, priority uint32, extra map[uint16][]byte, header func([]byte)) DesktopNetworkObject {
+	t.Helper()
+	body := make([]byte, 12)
+	body[0], body[4], body[7] = 2, 252, 1
+	attrs := map[uint16][]byte{6: retirementU32(priority), 14: retirementU32(^uint32(0)), 15: retirementU32(2022), 21: {3}}
+	for id, value := range extra {
+		attrs[id] = value
+	}
+	if header != nil {
+		header(body)
+	}
+	for id, value := range attrs {
+		body = append(body, retirementAttribute(id, value)...)
+	}
+	object, err := ParseDesktopLinuxNetworkObject("rule", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return object
+}
+func retirementRoute(t *testing.T, index, table uint32) DesktopNetworkObject {
+	t.Helper()
+	body := make([]byte, 12)
+	body[0], body[4], body[5], body[7] = 2, 252, 3, 1
+	body = append(body, retirementAttribute(4, retirementU32(index))...)
+	body = append(body, retirementAttribute(15, retirementU32(table))...)
+	object, err := ParseDesktopLinuxNetworkObject("route", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return object
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors(t *testing.T) {
+	base := retirementRule(t, 9000, nil, nil)
+	for _, tc := range []struct {
+		name   string
+		extra  map[uint16][]byte
+		header func([]byte)
+	}{
+		{"zero-mark", map[uint16][]byte{10: retirementU32(7), 16: retirementU32(^uint32(0))}, nil},
+		{"zero-ip-protocol", map[uint16][]byte{22: {17}}, nil},
+		{"source-prefix-wildcard", map[uint16][]byte{2: {192, 0, 2, 0}}, func(b []byte) { b[2] = 24 }},
+		{"destination-prefix-wildcard", map[uint16][]byte{1: {192, 0, 2, 0}}, func(b []byte) { b[1] = 24 }},
+		{"zero-tos", nil, func(b []byte) { b[3] = 16 }},
+		{"invert-not-a-delete-selector", nil, func(b []byte) { binary.LittleEndian.PutUint32(b[8:], 2) }},
+		{"flow-feature-not-assumed", map[uint16][]byte{11: retirementU32(123)}, nil},
+		{"goto-not-a-delete-selector", map[uint16][]byte{4: retirementU32(9010)}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			foreign := retirementRule(t, 9000, tc.extra, tc.header)
+			if routervpnLinuxDeleteDisjoint(base, foreign) {
+				t.Fatal("wildcard delete could target a foreign kernel rule")
+			}
+		})
+	}
+	marked := retirementRule(t, 9000, map[uint16][]byte{10: retirementU32(8), 16: retirementU32(^uint32(0))}, nil)
+	foreign := retirementRule(t, 9000, map[uint16][]byte{10: retirementU32(9), 16: retirementU32(^uint32(0))}, nil)
+	if !routervpnLinuxDeleteDisjoint(marked, foreign) {
+		t.Fatal("distinct explicit marks lost their kernel selector")
+	}
+	if !routervpnLinuxDeleteDisjoint(base, retirementRule(t, 9001, nil, nil)) {
+		t.Fatal("different priorities were treated as the same selector")
+	}
+	missingPriority := retirementRule(t, 0, nil, nil)
+	body := routervpnLinuxNativeBody(missingPriority)
+	withoutPriority := append([]byte(nil), body[:12]...)
+	for offset := 12; offset < len(body); {
+		length := int(binary.LittleEndian.Uint16(body[offset:]))
+		aligned := (length + 3) &^ 3
+		if binary.LittleEndian.Uint16(body[offset+2:]) != 6 {
+			withoutPriority = append(withoutPriority, body[offset:offset+aligned]...)
+		}
+		offset += aligned
+	}
+	missingPriority, err := ParseDesktopLinuxNetworkObject("rule", withoutPriority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routervpnLinuxDeleteDisjoint(missingPriority, base) {
+		t.Fatal("omitted priority became an exact delete selector")
+	}
+	zeroProtocol := retirementRule(t, 9000, map[uint16][]byte{21: {0}}, nil)
+	if routervpnLinuxDeleteDisjoint(zeroProtocol, base) {
+		t.Fatal("zero protocol became an exact delete selector")
+	}
+	zeroTable := retirementRule(t, 9000, map[uint16][]byte{15: retirementU32(0)}, func(b []byte) { b[4] = 0 })
+	if routervpnLinuxDeleteDisjoint(zeroTable, base) {
+		t.Fatal("zero table became an exact delete selector")
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire(t *testing.T) {
+	rule := netlink.NewRule()
+	rule.Family = syscall.AF_INET
+	rule.Priority = 9000
+	rule.Table = 2022
+	raw := retirementRule(t, 9000, nil, nil)
+	if !routervpnLinuxRuleMatches(rule, raw) {
+		t.Fatal("kernel default suppress-prefix/protocol did not bind original rule")
+	}
+	rule.IPProto = 17
+	if !routervpnLinuxRuleMatches(rule, retirementRule(t, 9000, map[uint16][]byte{22: {17}}, nil)) {
+		t.Fatal("actual one-byte IP protocol was not bound")
+	}
+	rule.IPProto = 0
+	rule.TunID = 9
+	if !routervpnLinuxRuleMatches(rule, retirementRule(t, 9000, map[uint16][]byte{12: {0, 0, 0, 0, 0, 0, 0, 9}}, nil)) {
+		t.Fatal("actual eight-byte network-order tunnel ID was not bound")
+	}
+	rule.TunID = 0
+	rule.Dport = netlink.NewRulePortRange(53, 53)
+	if !routervpnLinuxRuleMatches(rule, retirementRule(t, 9000, map[uint16][]byte{24: {53, 0, 53, 0}}, nil)) {
+		t.Fatal("actual native-order rule ports were not bound")
+	}
+	if routervpnLinuxRuleMatches(rule, retirementRule(t, 9000, map[uint16][]byte{24: {0, 53, 0, 53}}, nil)) {
+		t.Fatal("wrong rule ports gained original-call authority")
+	}
+}
+
+type retirementModel struct {
+	objects                                                       []DesktopNetworkObject
+	events                                                        []routerVPNLinuxRoutingEvent
+	removes                                                       []DesktopNetworkObject
+	sequence                                                      uint32
+	awaitFailure, snapshotFailure, closeFailure, errorAfterDelete bool
+	closed                                                        bool
+	beforeRemove                                                  func()
+}
+
+func (m *retirementModel) current() error {
+	if m.closed {
+		return errors.New("original model observer closed")
+	}
+	return nil
+}
+func (m *retirementModel) drain(ctx context.Context) ([]routerVPNLinuxRoutingEvent, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	events := m.events
+	m.events = nil
+	return events, nil
+}
+func (m *retirementModel) remove(ctx context.Context, object DesktopNetworkObject) (*routerVPNLinuxRoutingCommand, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if m.beforeRemove != nil {
+		m.beforeRemove()
+		m.beforeRemove = nil
+	}
+	m.removes = append(m.removes, object)
+	m.sequence++
+	for i, current := range m.objects {
+		if current == object {
+			m.objects = append(m.objects[:i], m.objects[i+1:]...)
+			break
+		}
+	}
+	m.events = append(m.events, routerVPNLinuxRoutingEvent{object: object, delete: true, sequence: m.sequence, port: 42})
+	return &routerVPNLinuxRoutingCommand{sequence: m.sequence}, nil
+}
+func (m *retirementModel) await(ctx context.Context, c *routerVPNLinuxRoutingCommand) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if m.awaitFailure {
+		m.awaitFailure = false
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+func (m *retirementModel) close(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if m.closeFailure {
+		m.closeFailure = false
+		return errors.New("original observer join needs retry")
+	}
+	m.closed = true
+	return nil
+}
+func (m *retirementModel) snapshot(ctx context.Context, kind string) ([]DesktopNetworkObject, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if m.snapshotFailure && len(m.removes) > 0 {
+		m.snapshotFailure = false
+		return nil, errors.New("original dump temporarily failed")
+	}
+	var values []DesktopNetworkObject
+	for _, object := range m.objects {
+		if object.Kind == kind {
+			values = append(values, object)
+		}
+	}
+	return values, nil
+}
+func retirementFixture(t *testing.T, objects ...DesktopNetworkObject) (*NativeTun, *retirementModel, *os.File) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "actual-original-descriptor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	model := &retirementModel{objects: append([]DesktopNetworkObject(nil), objects...)}
+	native := &NativeTun{tunFile: file, routervpnOwnedIndex: 8, options: Options{Name: "owned0", DNSMode: DNSModeDisabled, RouterVPNNetworkContext: context.Background()}}
+	native.routervpnNetwork.nonce = strings.Repeat("a", 32)
+	s := &native.routervpnRetirement
+	s.file = file
+	s.watch = model
+	s.port = 42
+	s.created = true
+	s.configured = true
+	s.snapshot = model.snapshot
+	s.original = func(ctx context.Context) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if native.tunFile != file {
+			return errors.New("original descriptor replaced")
+		}
+		_, err := file.Stat()
+		return err
+	}
+	s.absent = func(ctx context.Context) error {
+		if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+			return errors.New("original descriptor remains open")
+		}
+		return ctx.Err()
+	}
+	for _, object := range objects {
+		s.calls = append(s.calls, &routerVPNLinuxRoutingCall{kind: object.Kind, object: object, acknowledged: true, bound: true})
+		s.remember(object)
+	}
+	return native, model, file
+}
+func retirementStop(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func retirementHeld(t *testing.T, n *NativeTun, m *retirementModel, file *os.File) {
+	t.Helper()
+	if _, err := file.Stat(); err != nil || m.closed || n.routervpnRetirement.receipt != "" {
+		t.Fatal("failed native cleanup dropped original authority", err)
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext(t *testing.T) {
+	original := retirementRule(t, 9000, nil, nil)
+	route := retirementRoute(t, 8, 2022)
+	native, model, file := retirementFixture(t, original, route)
+	if _, err := native.RouterVPNDesktopNetworkRetire(context.Background()); err == nil {
+		t.Fatal("unbounded caller gained native retirement authority")
+	}
+	retirementHeld(t, native, model, file)
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	native.options.RouterVPNNetworkContext = cancelled
+	if _, err := native.RouterVPNDesktopNetworkRetire(cancelled); err == nil {
+		t.Fatal("cancelled request retired native owner")
+	}
+	retirementHeld(t, native, model, file)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	raw, err := native.RouterVPNDesktopNetworkRetire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := ParseDesktopNetworkRetirementReceipt(raw)
+	if err != nil || !receipt.Created || receipt.Index != 8 || len(receipt.Objects) != 2 {
+		t.Fatal("complete original successful-call retirement missing", receipt, err)
+	}
+	if len(model.removes) != 2 || !model.closed {
+		t.Fatal("original call ledger or watcher did not join")
+	}
+	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("original TUN descriptor did not close")
+	}
+	if retry, err := native.RouterVPNDesktopNetworkRetire(cancelled); err != nil || retry != raw || len(model.removes) != 2 {
+		t.Fatal("successful retirement was not exact and idempotent", err)
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones(t *testing.T) {
+	for _, phase := range []string{"ack", "readback", "watch-join"} {
+		t.Run(phase, func(t *testing.T) {
+			original := retirementRule(t, 9000, nil, nil)
+			native, model, file := retirementFixture(t, original)
+			switch phase {
+			case "ack":
+				model.awaitFailure = true
+			case "readback":
+				model.snapshotFailure = true
+			case "watch-join":
+				model.closeFailure = true
+			}
+			if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil {
+				t.Fatal("failed phase reported successful retirement")
+			}
+			if phase != "watch-join" {
+				retirementHeld(t, native, model, file)
+			} else if model.closed || native.routervpnRetirement.receipt != "" {
+				t.Fatal("unjoined observer was forgotten")
+			}
+			raw, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t))
+			if err != nil || raw == "" || len(model.removes) != 1 || !model.closed {
+				t.Fatal("same original cleanup could not retry without another delete", err, len(model.removes))
+			}
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard(t *testing.T) {
+	for _, kind := range []string{"duplicate", "marked-wildcard-match", "source-wildcard-match"} {
+		t.Run(kind, func(t *testing.T) {
+			original := retirementRule(t, 9000, nil, nil)
+			native, model, file := retirementFixture(t, original)
+			foreign := original
+			if kind == "marked-wildcard-match" {
+				foreign = retirementRule(t, 9000, map[uint16][]byte{10: retirementU32(9)}, nil)
+			}
+			if kind == "source-wildcard-match" {
+				foreign = retirementRule(t, 9000, map[uint16][]byte{2: {192, 0, 2, 0}}, func(b []byte) { b[2] = 24 })
+			}
+			model.objects = append(model.objects, foreign)
+			if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil {
+				t.Fatal("ambiguous kernel selector was deleted")
+			}
+			if len(model.removes) != 0 || len(model.objects) != 2 {
+				t.Fatal("foreign row was changed")
+			}
+			retirementHeld(t, native, model, file)
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange(t *testing.T) {
+	for _, kind := range []string{"replacement", "away-and-back", "disjoint-foreign-route"} {
+		t.Run(kind, func(t *testing.T) {
+			original := retirementRule(t, 9000, nil, nil)
+			native, model, file := retirementFixture(t, original)
+			if kind == "disjoint-foreign-route" {
+				foreign := retirementRoute(t, 50, 3000)
+				model.objects = append(model.objects, foreign)
+				model.events = append(model.events, routerVPNLinuxRoutingEvent{object: foreign})
+				if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err != nil {
+					t.Fatal("disjoint foreign route prevented original cleanup", err)
+				}
+				if len(model.objects) != 1 || model.objects[0] != foreign {
+					t.Fatal("disjoint foreign route was changed")
+				}
+				return
+			}
+			model.events = append(model.events, routerVPNLinuxRoutingEvent{object: original, delete: true})
+			if kind == "away-and-back" {
+				model.events = append(model.events, routerVPNLinuxRoutingEvent{object: original})
+			}
+			if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil {
+				t.Fatal("snapshot hid original routing replacement")
+			}
+			if len(model.removes) != 0 {
+				t.Fatal("observed replacement was deleted")
+			}
+			retirementHeld(t, native, model, file)
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt(t *testing.T) {
+	original := retirementRule(t, 9000, nil, nil)
+	native, model, file := retirementFixture(t, original)
+	model.beforeRemove = func() {
+		model.events = append(model.events, routerVPNLinuxRoutingEvent{object: original, delete: true}, routerVPNLinuxRoutingEvent{object: original})
+	}
+	if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil {
+		t.Fatal("racing replacement became successful cleanup")
+	}
+	retirementHeld(t, native, model, file)
+	// The kernel has no generation CAS: a racing byte-identical replacement
+	// may already have been selected by delete. This test proves refusal of a
+	// success receipt, not atomic protection from that native kernel race.
+	if len(model.removes) != 1 {
+		t.Fatal("race did not reach actual delete boundary")
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal(t *testing.T) {
+	original := retirementRule(t, 9000, nil, nil)
+	native, model, _ := retirementFixture(t, original)
+	foreign := retirementRule(t, 9100, nil, nil)
+	model.objects = append(model.objects, foreign)
+	native.routervpnRetirement.calls = append(native.routervpnRetirement.calls, &routerVPNLinuxRoutingCall{kind: "rule", rejected: true})
+	if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err != nil {
+		t.Fatal("definite failed add stranded earlier original calls", err)
+	}
+	if len(model.objects) != 1 || model.objects[0] != foreign {
+		t.Fatal("failed-add foreign conflict was touched")
+	}
+	native, model, file := retirementFixture(t, original)
+	native.routervpnRetirement.calls = append(native.routervpnRetirement.calls, &routerVPNLinuxRoutingCall{kind: "rule"})
+	if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil {
+		t.Fatal("unknown write/ACK became no-effect receipt")
+	}
+	retirementHeld(t, native, model, file)
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst(t *testing.T) {
+	wide := retirementRule(t, 9000, nil, nil)
+	narrow := retirementRule(t, 9000, map[uint16][]byte{2: {192, 0, 2, 0}}, func(b []byte) { b[2] = 24 })
+	native, model, _ := retirementFixture(t, wide, narrow)
+	if _, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(model.removes) != 2 || model.removes[0] != narrow || model.removes[1] != wide {
+		t.Fatal("wildcard original rule was deleted before its narrower sibling")
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed(t *testing.T) {
+	for _, created := range []bool{false, true} {
+		native, model, file := retirementFixture(t)
+		native.routervpnRetirement.created = created
+		native.routervpnRetirement.configured = false
+		native.routervpnOwnedIndex = 0
+		raw, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := ParseDesktopNetworkRetirementReceipt(raw)
+		if err != nil || receipt.Created != created || receipt.Unindexed != created || receipt.Index != 0 || len(receipt.Objects) != 0 {
+			t.Fatal("partial native constructor lost exact outcome", receipt, err)
+		}
+		if !model.closed {
+			t.Fatal("original observer did not join")
+		}
+		if created {
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal("unindexed original descriptor leaked")
+			}
+		}
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability(t *testing.T) {
+	native, model, file := retirementFixture(t)
+	for priority := uint32(10000); priority < 10257; priority++ {
+		native.routervpnRetirement.remember(retirementRule(t, priority, nil, nil))
+	}
+	if receipt, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil || receipt != "" {
+		t.Fatal("unreportable original history yielded a retirement receipt")
+	}
+	retirementHeld(t, native, model, file)
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementSocket(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	watcher, err := routervpnOpenLinuxRoutingWatch(ctx)
+	if err != nil {
+		t.Fatal("actual original routing socket unavailable", err)
+	}
+	address, err := syscall.Getsockname(int(watcher.file.Fd()))
+	actual, ok := address.(*syscall.SockaddrNetlink)
+	wanted := uint32(unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE | unix.RTMGRP_IPV6_ROUTE | 1<<(unix.RTNLGRP_IPV6_RULE-1))
+	if err != nil || !ok || actual.Groups != wanted || actual.Pid != watcher.port {
+		_ = watcher.close(ctx)
+		t.Fatal("original native socket did not capture both IP-family rule/route groups", address, err)
+	}
+	events, err := watcher.drain(ctx)
+	if err != nil {
+		_ = watcher.close(ctx)
+		t.Fatal("original routing barrier failed", err)
+	}
+	if len(events) != 0 {
+		_ = watcher.close(ctx)
+		t.Fatal("network changed during read-only socket fixture")
+	}
+	if err = watcher.close(ctx); err != nil {
+		t.Fatal("actual routing socket reader did not join", err)
+	}
+	if err = watcher.close(ctx); err != nil {
+		t.Fatal("original socket close was not idempotent", err)
+	}
+}

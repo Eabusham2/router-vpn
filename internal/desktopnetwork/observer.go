@@ -70,6 +70,7 @@ type Tracker struct {
 	native                                    nativeObserver
 	initializing, transition, closing, closed bool
 	reportedFailure                           bool
+	startedWithoutOwnedReceipt                bool
 	failure                                   error
 	baseline                                  string
 	identity                                  string
@@ -154,6 +155,7 @@ func (t *Tracker) initialize(ctx context.Context) error {
 		return err
 	}
 	t.physical, t.baseline = physical, key
+	t.startedWithoutOwnedReceipt = t.current == nil
 	sum := sha256.Sum256([]byte(key))
 	t.identity = hex.EncodeToString(sum[:])
 	t.initializing = false

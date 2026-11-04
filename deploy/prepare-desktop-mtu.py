@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import hashlib
 import subprocess
+import importlib.util
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = 'github.com/sagernet/sing-tun'
@@ -12,6 +13,7 @@ VERSION = 'v0.9.3'
 # Exact v0.9.3 source, before the existing owned-interface and receipt transforms.
 # An occupied route belongs to its existing owner; an MTU successor is started
 # only after the original TUN has closed, so EEXIST cannot authorize takeover.
+LINUX_SOURCE_SHA256 = '6cbe2a62823471888abaaf7a32d0613d96ea3acb22b01d3e8f4b6142767f9c1b'
 DARWIN_SOURCE_SHA256 = '0676cdec64934d98461e87b625675f5b0d3d2281f3f4126005df5473f19bde61'
 DARWIN_ROUTE_TAKEOVER = b'''				if err != nil {
 					if errors.Is(err, unix.EEXIST) {
@@ -45,28 +47,7 @@ def network_receipt_patch(name, raw):
         return raw
     patches = [(b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnNetwork routerVPNNativeNetworkLedger')]
     if name == 'tun_linux.go':
-        patches += [
-            (b'''\tfor i, route := range routes {
-\t\terr := netlink.RouteAdd(&route)''', b'''\tfor i, route := range routes {
-\t\troutervpnBefore := t.routervpnLinuxBefore("route")
-\t\terr := netlink.RouteAdd(&route)'''),
-            (b'''\t\t\treturn E.Cause(err, "add route ", i)
-\t\t}
-\t}''', b'''\t\t\treturn E.Cause(err, "add route ", i)
-\t\t}
-\t\tt.routervpnLinuxAdded("route", routervpnBefore)
-\t}'''),
-            (b'''\tfor i, rule := range t.rules() {
-\t\terr := netlink.RuleAdd(rule)''', b'''\tfor i, rule := range t.rules() {
-\t\troutervpnBefore := t.routervpnLinuxBefore("rule")
-\t\terr := netlink.RuleAdd(rule)'''),
-            (b'''\t\t\treturn E.Cause(err, "add rule ", i, "/", len(t.rules()))
-\t\t}
-\t}''', b'''\t\t\treturn E.Cause(err, "add rule ", i, "/", len(t.rules()))
-\t\t}
-\t\tt.routervpnLinuxAdded("rule", routervpnBefore)
-\t}'''),
-        ]
+        raw = linux_retirement_patch(raw)
     elif name == 'tun_windows.go':
         if raw.count(b'addRouteList(luid, routeRanges, gateway4, gateway6, 0)') != 2:
             raise ValueError('Pinned Windows route-list callers changed')
@@ -95,6 +76,87 @@ def network_receipt_patch(name, raw):
             raise ValueError('Pinned desktop routing receipt boundary changed: '+name)
         raw = raw.replace(before, after)
     return raw
+
+
+def linux_retirement_patch(raw):
+    if hashlib.sha256(raw).hexdigest() != LINUX_SOURCE_SHA256:
+        raise ValueError('Pinned Linux native lifecycle source changed')
+    def replace(before, after):
+        nonlocal raw
+        if raw.count(before) != 1:
+            raise ValueError('Pinned Linux successful-call retirement boundary changed: '+before[:80].decode())
+        raw = raw.replace(before, after, 1)
+
+    def function(name, body):
+        nonlocal raw
+        start = raw.index(b'func (t *NativeTun) '+name+b'(')
+        end = raw.find(b'\nfunc ', start+1)
+        if end < 0:
+            end = len(raw)
+        raw = raw[:start]+body+raw[end:]
+
+    replace(b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnRetirement routerVPNLinuxRetirement\n\troutervpnResolver routerVPNLinuxResolver\n\troutervpnOwnedIndex int')
+    replace(b'flags := unix.IFF_TUN | unix.IFF_NO_PI', b'flags := unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_TUN_EXCL')
+    replace(b'unix.Open(controlPath, unix.O_RDWR, 0)', b'unix.Open(controlPath, unix.O_RDWR|unix.O_CLOEXEC, 0)')
+    replace(b'\t\tunix.Close(fd)\n\t\treturn 0, E.Cause(err, "set nonblock")', b'\t\treturn fd, E.Cause(err, "set nonblock")')
+    raw = raw.replace(b'return 0, E.Cause(err, "create ifreq")', b'return -1, E.Cause(err, "create ifreq")')
+    raw = raw.replace(b'return 0, E.Cause(err, "TUNSETIFF")', b'return -1, E.Cause(err, "TUNSETIFF")')
+    start = raw.index(b'\t\t\ttunFd, err := open(options.Name, options.GSO)')
+    end = raw.index(b'\n\t\t})', start)
+    raw = raw[:start]+b'\t\t\treturn routervpnNewLinuxNative(options)'+raw[end:]
+    replace(b'\t\terr := netlink.RouteAdd(&route)', b'\t\terr := t.routervpnLinuxAddRoute(route)')
+    replace(b'\tfor i, rule := range t.rules() {\n\t\terr := netlink.RuleAdd(rule)', b'\trules := t.rules()\n\tfor i, rule := range rules {\n\t\terr := t.routervpnLinuxAddRule(rule)')
+    replace(b'len(t.rules())', b'len(rules)')
+    replace(b'\t\t_ = t.unsetRoute0(tunLink)\n', b'')
+    replace(b'\terr = t.unsetRules()\n\tif err != nil {\n\t\treturn E.Cause(err, "cleanup rules")\n\t}\n', b'')
+    replace(b'\t\t_ = t.unsetRules()\n', b'')
+    function(b'Close', b'func (t *NativeTun) Close() error {\n\treturn t.routervpnLinuxClose()\n}\n')
+    function(b'unsetRoute', b'func (t *NativeTun) unsetRoute() error {\n\treturn t.routervpnLinuxRetireCalls(t.options.RouterVPNNetworkContext, "route")\n}\n')
+    function(b'unsetRoute0', b'func (t *NativeTun) unsetRoute0(_ netlink.Link) error {\n\treturn t.unsetRoute()\n}\n')
+    function(b'unsetRules', b'func (t *NativeTun) unsetRules() error {\n\treturn t.routervpnLinuxRetireCalls(t.options.RouterVPNNetworkContext, "rule")\n}\n')
+    function(b'unsetAddresses', b'')
+    replace(b't.setSearchDomainForSystemdResolved()', b't.routervpnLinuxResolverStart(t.options.RouterVPNNetworkContext)')
+    function(b'setSearchDomainForSystemdResolved', b'')
+    function(b'unsetSearchDomainForSystemdResolved', b'')
+    replace(b'\t"os/exec"\n', b'')
+    replace(b'\t"github.com/sagernet/sing/common/shell"\n', b'')
+    replace(b'\tt.unsetRules()\n\treturn t.setRules()', b'\tif err := t.unsetRules(); err != nil { return err }\n\treturn t.setRules()')
+    # All mutating native entry points serialize with explicit Stop retirement.
+    for signature in (b'func (t *NativeTun) Start() error {', b'func (t *NativeTun) UpdateRouteOptions(tunOptions Options) error {', b'func (t *NativeTun) resetRules() error {'):
+        replace(signature, signature+b'\n\truntime.LockOSThread()\n\tdefer runtime.UnlockOSThread()\n\tt.routervpnRetirement.mu.Lock()\n\tdefer t.routervpnRetirement.mu.Unlock()')
+    # No range, regenerated-route, or by-name address deletion remains.
+    for forbidden in (b'netlink.RuleDel(', b'netlink.RouteDel(', b'netlink.AddrDel('):
+        if forbidden in raw:
+            raise ValueError('Unowned Linux native deletion remains: '+forbidden.decode())
+    return raw
+
+
+def dbus_preparer():
+    specification = importlib.util.spec_from_file_location('desktop_dbus', ROOT/'deploy/prepare-desktop-dbus.py')
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def verify_linux_retirement_source(vendor, go='go'):
+    vendor = Path(vendor).resolve()
+    cache = subprocess.check_output([go, 'env', 'GOMODCACHE'], cwd=vendor, text=True, timeout=30).strip()
+    pristine = Path(cache) / (MODULE + '@' + VERSION) / 'tun_linux.go'
+    if pristine.is_symlink() or not pristine.is_file():
+        raise ValueError('Linux retirement gate lost its checksum-pinned native source')
+    expected = network_receipt_patch('tun_linux.go', pristine.read_bytes())
+    native = vendor / 'routervpn-desktop-tun'
+    target = native / 'tun_linux.go'
+    if native.is_symlink() or target.is_symlink() or not target.is_file() or target.read_bytes() != expected:
+        raise ValueError('Linux retirement differs from the complete prepared native lifecycle')
+    records = dbus_preparer().verify(vendor, go=go)
+    for path in sorted(native.rglob('*')):
+        if path.is_symlink():
+            raise ValueError('Linux retirement contains a linked native module input')
+        if path.is_file():
+            records[path.relative_to(vendor).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    records['gate/deploy/prepare-desktop-mtu.py'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    return records
 
 
 def darwin_owned_source(raw):
@@ -130,6 +192,57 @@ def darwin_owned_source(raw):
     return raw
 
 
+# Exact pinned inbound after the declared retained/mobile MTU projection,
+# before either desktop lifecycle projection. Only those complete states are
+# admitted; a partial/duplicate edit must not become a cached-source repair.
+INBOUND_MTU_SHA256 = '8a51e5061754b388919ad5366a6b88694267f43e9c47ed37a88f82fdb0b5b01a'
+INBOUND_CONTEXT_EDIT = (
+    b'tunOptions: tun.Options{',
+    b'tunOptions: tun.Options{\n\t\t\tRouterVPNNetworkContext: ctx,',
+)
+INBOUND_RETIREMENT_EDITS = (
+    (b'type Inbound struct {',
+     b'type Inbound struct {\n\troutervpnStandardStartup bool\n\troutervpnRetirementReceipt string'),
+    (b'\t\tt.tunOptions.Name = tunOptions.Name\n\t\tif err != nil {',
+     b'\t\tt.tunOptions.Name = tunOptions.Name\n'
+     b'\t\tt.tunIf = tunInterface // retain the actual partial constructor before its error\n'
+     b'\t\tif err != nil {'),
+    (b'\t\t\t\tt.tunIf = nil\n',
+     b'\t\t\t\tif closeError == nil { t.tunIf = nil }\n'),
+    (b'\tt.routervpnReady = false\n\treturn common.Close(',
+     b'\tt.routervpnReady = false\n'
+     b'\tif runtime.GOOS == "linux" && (t.routervpnStandardStartup || t.routervpnRetirementReceipt != "") {\n'
+     b'\t\t_, err := t.routervpnDesktopTunRetireLocked(t.tunOptions.RouterVPNNetworkContext)\n'
+     b'\t\treturn err\n\t}\n\treturn common.Close('),
+)
+
+
+
+def inbound_retirement_patch(raw):
+    original = raw
+    marked = any(token in raw for token in (b'routervpnStandardStartup', b'routervpnRetirementReceipt',
+                 b'routervpnDesktopTunRetireLocked', b'retain the actual partial constructor'))
+    if marked:
+        for before, after in reversed(INBOUND_RETIREMENT_EDITS):
+            if raw.count(after) != 1:
+                raise ValueError('Incomplete or duplicated native inbound retirement projection')
+            raw = raw.replace(after, before, 1)
+    before, after = INBOUND_CONTEXT_EDIT
+    if after in raw:
+        if raw.count(after) != 1:
+            raise ValueError('Duplicated native inbound startup context')
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != INBOUND_MTU_SHA256:
+        raise ValueError('Native inbound differs from the complete pinned MTU projection')
+    for before, after in (INBOUND_CONTEXT_EDIT, *INBOUND_RETIREMENT_EDITS):
+        if raw.count(before) != 1:
+            raise ValueError('Pinned native inbound retirement boundary changed')
+        raw = raw.replace(before, after, 1)
+    if marked and original != raw:
+        raise ValueError('Modified completed native inbound retirement projection')
+    return raw
+
+
 def prepare(vendor):
     vendor = vendor.resolve()
     module = json.loads(subprocess.check_output(['go', 'mod', 'download', '-json', MODULE+'@'+VERSION], cwd=vendor, text=True))
@@ -156,36 +269,16 @@ def prepare(vendor):
                 raise ValueError('Linked prepared native TUN source')
             raw = path.read_bytes()
             if relative.as_posix() == 'tun.go':
+                before = b'return nil, E.New("no IPv4 server configured and no usable next address in ", o.Inet6Address[0], " for DNS")'
+                after = b'return nil, E.New("no IPv4 server configured and no usable next address in ", o.Inet4Address[0], " for DNS")'
+                if raw.count(before) != 1:
+                    raise ValueError('Pinned IPv4 unusable-DNS error boundary changed')
+                raw = raw.replace(before, after, 1)
                 for before, after in [(b'import (', b'import (\n\t"context"'),
                                       (b'type Options struct {', b'type Options struct {\n\tRouterVPNNetworkContext context.Context')]:
                     if raw.count(before) != 1:
                         raise ValueError('Pinned native network context boundary changed')
                     raw = raw.replace(before, after, 1)
-            if relative.as_posix() == 'tun_linux.go':
-                patches = [
-                    (b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnOwnedIndex int'),
-                    (b'\t\t\t\ttunFd:   tunFd,', b'\t\t\t\troutervpnOwnedIndex: tunLink.Attrs().Index,\n\t\t\t\ttunFd:   tunFd,'),
-                    (b'flags := unix.IFF_TUN | unix.IFF_NO_PI', b'flags := unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_TUN_EXCL'),
-                    (b'''\tif t.options.EXP_ExternalConfiguration {
-\t\treturn common.Close(common.PtrOrNil(t.tunFile))
-\t}
-\tif t.options.DNSMode != DNSModeDisabled && t.options.NetNs == "" {''', b'''\tif t.options.EXP_ExternalConfiguration {
-\t\treturn common.Close(common.PtrOrNil(t.tunFile))
-\t}
-\tif t.routervpnOwnedIndex != 0 {
-\t\tcurrent, err := net.InterfaceByName(t.options.Name)
-\t\tif err != nil || current.Index != t.routervpnOwnedIndex {
-\t\t\t// Close only the descriptor we created. Never remove a replacement
-\t\t\t// interface's addresses, routes, DNS policy or shared rule priorities.
-\t\t\treturn E.Errors(E.New("native TUN identity retired before cleanup"), common.Close(common.PtrOrNil(t.tunFile)))
-\t\t}
-\t}
-\tif t.options.DNSMode != DNSModeDisabled && t.options.NetNs == "" {'''),
-                ]
-                for before, after in patches:
-                    if raw.count(before) != 1:
-                        raise ValueError('Pinned Linux TUN ownership boundary changed')
-                    raw = raw.replace(before, after)
             if relative.as_posix() == 'tun_darwin.go':
                 raw = darwin_owned_source(raw)
             if relative.as_posix() == 'tun_windows.go':
@@ -224,9 +317,10 @@ def prepare(vendor):
             if target.exists() and not target.stat().st_mode & 0o200:
                 target.chmod(0o644)
             target.write_bytes(network_receipt_patch(relative.as_posix(), raw))
+    subprocess.run(['go', 'mod', 'edit', '-require=github.com/godbus/dbus/v5@v5.2.2'], cwd=destination, check=True)
     # The wire decoder is identical in the parent and native TUN module. It
     # imports only the standard library and never introduces a module cycle.
-    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_dump_linux.go'):
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_dump_linux.go', 'desktop_network_retirement.go'):
         path = ROOT/'internal/desktopnetwork'/name
         raw = path.read_bytes()
         if path.is_symlink() or raw.count(b'package desktopnetwork\n') != 1:
@@ -237,13 +331,10 @@ def prepare(vendor):
         target.write_bytes(raw.replace(b'package desktopnetwork\n', b'package tun\n', 1))
     inbound = vendor/'protocol/tun/inbound.go'
     raw = inbound.read_bytes()
-    anchor = b'tunOptions: tun.Options{'
-    if raw.count(anchor) != 1:
-        raise ValueError('Pinned inbound network context constructor changed')
-    replacement = anchor+b'\n\t\t\tRouterVPNNetworkContext: ctx,'
-    if replacement not in raw:
-        inbound.write_bytes(raw.replace(anchor, replacement, 1))
-    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    prepared = inbound_retirement_patch(raw)
+    if prepared != raw:
+        inbound.write_bytes(prepared)
+    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         path = ROOT/'mobile/desktop'/name
         if path.is_symlink():
             raise ValueError('Linked native network receipt template')
@@ -260,7 +351,12 @@ def prepare(vendor):
         raise ValueError('Linked Darwin native TUN control destination')
     target.write_bytes(raw)
     subprocess.run(['go', 'mod', 'edit', '-replace='+MODULE+'=./routervpn-desktop-tun'], cwd=vendor, check=True)
-    print('Prepared checksum-pinned desktop TUN with exclusive Wintun creation')
+    specification = importlib.util.spec_from_file_location('desktop_command_retirement', ROOT/'deploy/prepare-desktop-command-retirement.py')
+    command_retirement = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(command_retirement)
+    command_retirement.prepare(vendor)
+    dbus_preparer().prepare(vendor)
+    print('Prepared checksum-pinned desktop TUN with original routing retirement')
 
 
 if __name__ == '__main__':

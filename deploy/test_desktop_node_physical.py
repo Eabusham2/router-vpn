@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import signal
 import shutil
 import stat
@@ -56,6 +57,34 @@ HYSTERIA2_SUITES = (
      "^TestRouterVPNDesktopNodeHysteria2(LayerCover|OuterCannotBypassFinal)$",
      ("TestRouterVPNDesktopNodeHysteria2LayerCover", "TestRouterVPNDesktopNodeHysteria2OuterCannotBypassFinal")),
 )
+NATIVE_RESOLVER_TESTS = tuple("TestRouterVPNNativeLinuxResolver" + name for name in (
+    "DaemonCapability", "CredentialRefusals", "MutationNeedsOriginalReply", "LateReplyRetry",
+    "RejectsReplacedCapability", "OriginalWireSerial", "RetireRequiresBound", "StartupBound",
+    "OriginalUnixConnection", "ObservedBusAbsence", "DefinitelyUnsentRetires", "ClosesDecodedFDArrays", "NamedBusNamespace"))
+NATIVE_RESOLVER_LEAVES = {
+    "NamedBusNamespace": ("original-authenticated", "replaced-endpoint", "untrusted-ancestor", "cancelled-original-child"),
+    "CredentialRefusals": ("missing-processfd", "invalid-processfd", "foreign-namespace", "unreceived-file"),
+    "MutationNeedsOriginalReply": ("bus-no-reply", "foreign-owner", "wrong-serial", "transport-only"),
+    "LateReplyRetry": ("success", "daemon-error"),
+    "RejectsReplacedCapability": ("pidfd-pointer", "pidfd-descriptor", "proc-pointer", "namespace-pointer", "image-pointer"),
+    "StartupBound": ("native-ten-second-cap", "inherited-earlier-bound", "cancelled-original"),
+    "ObservedBusAbsence": ("missing", "present-not-socket"),
+    "ClosesDecodedFDArrays": tuple(shape + "/matched-" + matched for shape in
+        ("array", "variant-array", "dictionary-array", "structure-array", "dictionary-key", "dictionary-value")
+        for matched in ("false", "true")),
+}
+
+NATIVE_DBUS_TESTS = ("TestRouterVPNDBusReceivedRightsRetireOnError", "TestRouterVPNDBusFDAndOrdinaryContainerTypes")
+NATIVE_DBUS_CASES = ("invalid-index", "advertised-count", "zero-count", "unreferenced",
+                     "malformed-body", "invalid-header", "partial-header", "partial-body")
+
+NATIVE_DNS_CASES = ("ipv4-host-without-dns", "ipv4-host-with-explicit-dns",
+                    "ipv6-host-without-dns", "ipv6-fallback")
+
+NATIVE_RETIREMENT_CASES = (
+    "complete-original-retirement", "fresh-stop-after-startup-cancel", "definite-add-refusal",
+    "persistent-disjoint-route", "same-selector-aba", "foreign-wildcard-match", "replaced-file-object")
+
 XRAY_MODES = ("reality-vision", "reality-pq-vision", "reality-xhttp")
 XRAY_CASES = tuple(mode + "/" + layer for mode in XRAY_MODES
                    for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
@@ -95,6 +124,12 @@ def layer_reference_sources():
 def checked_sources(source):
     source = PREP.checked_vendor(Path(source))
     records = {}
+    projection = ROOT / "deploy/test_desktop_tun_retirement_projection.py"
+    if projection.is_symlink() or not projection.is_file():
+        raise ValueError("Native retirement projection regression lost its original source")
+    records["gate/deploy/test_desktop_tun_retirement_projection.py"] = hashlib.sha256(projection.read_bytes()).hexdigest()
+    if platform.system() == "Linux":
+        records.update(PREP.DESKTOP_MTU.verify_linux_retirement_source(source))
     # Bind both complete pinned endpoint files and the shared strict error
     # classifier. A compiled baseline may not silently restore an unpatched
     # server or borrow an unrelated helper with a matching filename.
@@ -111,9 +146,9 @@ def checked_sources(source):
     for path in sorted((ROOT / "mobile/desktop").glob("*.go.tmpl")):
         if path.name.startswith(("node", "mtu", "external")) and path.name not in PREP.PT_TEMPLATES and path.name not in PREP.BOX_TEMPLATES and path.name not in PREP.PEER_TEMPLATES:
             copies["cmd/sing-box/routervpn_" + path.name.removesuffix(".tmpl")] = path.read_bytes()
-    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         copies['routervpn-desktop-tun/routervpn_' + name.removesuffix('.tmpl')] = (ROOT / 'mobile/desktop' / name).read_bytes()
-    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go'):
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_retirement.go'):
         copies['routervpn-desktop-tun/routervpn_' + name] = (ROOT / 'internal/desktopnetwork' / name).read_bytes().replace(b'package desktopnetwork\n', b'package tun\n', 1)
     for package in PREP.RELAY.PACKAGES:
         for path in sorted((ROOT / "internal" / package).glob("*.go")):
@@ -300,7 +335,9 @@ def routing_fixture_image(binary):
             verify()
 
 
-def linux_routing_receipt_test(binary, *, cwd, env, duration):
+def linux_routing_receipt_test(binary, *, cwd, env, duration, selector="^TestRouterVPNNativeLinuxRouting"):
+    if selector not in ("^TestRouterVPNNativeLinuxRouting", "^TestRouterVPNNativeLinuxResolver"):
+        raise ValueError("Native privilege cannot execute another fixture selector")
     if platform.system() != "Linux" or env.get("GOOS") != "linux":
         raise ValueError("The native routing receipt fixture requires native Linux")
     # Elevate only this already-compiled fixture. Its unchanged Go parent
@@ -310,10 +347,10 @@ def linux_routing_receipt_test(binary, *, cwd, env, duration):
     runner = namespace_runner()
     sudo = runner.privilege_tool()
     captured = dict(env)
-    for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER"):
+    for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER", "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE", "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE"):
         captured.pop(name, None)
     with routing_fixture_image(binary) as staged:
-        command = [str(staged), "-test.run=^TestRouterVPNNativeLinuxRouting", "-test.count=1",
+        command = [str(staged), "-test.run=" + selector, "-test.count=1",
                    "-test.timeout=" + str(duration) + "s", "-test.v"]
         if sudo is not None:
             command = [sudo, "-n", "--", *command]
@@ -441,13 +478,15 @@ class BaselineBinaries:
         return self.verify(package)
 
     def execute(self, name, package, selector, duration):
-        if name == "native-routing-receipt" and (package != "github.com/sagernet/sing-tun" or
-                selector != "^TestRouterVPNNativeLinuxRouting"):
+        privileged = {"native-routing-receipt": "^TestRouterVPNNativeLinuxRouting", "native-resolver-lifetime": "^TestRouterVPNNativeLinuxResolver"}
+        if name in privileged and (package != "github.com/sagernet/sing-tun" or selector != privileged[name]):
             raise ValueError("Node routing privilege cannot execute another package or selector")
         binary = self.binary(package)
         with stage("execute baseline " + name):
             if name == "native-routing-receipt":
                 status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration)
+            elif name == "native-resolver-lifetime":
+                status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration, selector=selector)
             else:
                 status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
                                      cwd=self.source, env=self.captured, timeout=duration + 15)
@@ -736,7 +775,74 @@ def mutants(source, windows):
                        'native delta changed its original-owner admission', changed(native_ledger,
                        'if captured, ok := t.routervpnNetwork.objects[old.Key()]; !ok || captured != old {',
                        'if captured, ok := t.routervpnNetwork.objects[old.Key()]; false && (!ok || captured != old) {')))
+        partial_owner = 'cmd/sing-box/routervpn_external.go'
+        result.append(('linux-retirement-partial-dependencies', partial_owner, './cmd/sing-box',
+                       'TestRouterVPNRawCommandNativePartialDependenciesRetention', 'external',
+                       'failed original native deletion reported complete cleanup', changed(partial_owner,
+                       'func routerVPNClosePartialNativeContext(ctx context.Context, partials []io.Closer) error {\n\tif ctx == nil {',
+                       'func routerVPNClosePartialNativeContext(ctx context.Context, partials []io.Closer) error {\n\tif ctx == nil || ctx != nil {')))
+        dns_source = 'routervpn-desktop-tun/tun.go'
+        result.append(('linux-dns-ipv4-host-panic', dns_source, 'github.com/sagernet/sing-tun',
+                       'TestRouterVPNNativeLinuxRoutingDNSAddressBoundary', 'ipv4-host-without-dns',
+                       'unusable DNS address panicked instead of preserving native cleanup', changed(dns_source,
+                       'return nil, E.New("no IPv4 server configured and no usable next address in ", o.Inet4Address[0], " for DNS")',
+                       'return nil, E.New("no IPv4 server configured and no usable next address in ", o.Inet6Address[0], " for DNS")')))
+        retirement = 'routervpn-desktop-tun/routervpn_sing_tun_retirement_linux.go'
+        result.extend((
+            ('linux-retirement-wildcard-selector', retirement, 'github.com/sagernet/sing-tun',
+             'TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard', 'marked-wildcard-match',
+             'ambiguous kernel selector was deleted', changed(retirement,
+             'if !routervpnLinuxDeleteDisjoint(call.object, object) {',
+             'if false && !routervpnLinuxDeleteDisjoint(call.object, object) {')),
+            ('linux-retirement-original-stream', retirement, 'github.com/sagernet/sing-tun',
+             'TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange', 'away-and-back',
+             'snapshot hid original routing replacement', changed(retirement,
+             's.events = append(s.events, events...)',
+             'if expected != nil { s.events = append(s.events, events...) }')),
+            ('linux-retirement-failed-close-retention', retirement, 'github.com/sagernet/sing-tun',
+             'TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard', 'duplicate',
+             'failed native cleanup dropped original authority', changed(retirement,
+             'if err := t.routervpnLinuxRetireCalls(ctx, ""); err != nil {\n\t\t\treturn "", err',
+             'if err := t.routervpnLinuxRetireCalls(ctx, ""); err != nil {\n\t\t\t_ = s.file.Close()\n\t\t\treturn "", err')),
+        ))
+        result.extend(native_resolver_mutants(source))
     return result
+
+
+def native_resolver_mutants(source):
+    def changed(relative, before, after, count=1):
+        raw = (source / relative).read_text(encoding="utf-8")
+        if raw.count(before) != count:
+            raise ValueError("Native resolver mutation lost its original source boundary: " + relative)
+        return raw.replace(before, after)
+    resolver = "routervpn-desktop-tun/routervpn_sing_tun_resolver_linux.go"
+    decoder = "routervpn-desktop-dbus/decoder.go"
+    transport = "routervpn-desktop-dbus/transport_unix.go"
+    return [
+        ("linux-resolver-original-reply", resolver, "github.com/sagernet/sing-tun",
+         "TestRouterVPNNativeLinuxResolverMutationNeedsOriginalReply", "bus-no-reply",
+         "unknown daemon mutation became native cleanup", changed(resolver,
+         "p.response && p.sender == p.destination && r.pending == p",
+         "p.response && r.pending == p")),
+        ("linux-dbus-native-fd-container", decoder, "github.com/godbus/dbus/v5",
+         "TestRouterVPNDBusFDAndOrdinaryContainerTypes", "", "valid original container omitted",
+         changed(decoder, "dec.routervpnTypeFor(", "typeFor(", 5)),
+        ("linux-dbus-received-fd-retirement", transport, "github.com/godbus/dbus/v5",
+         "TestRouterVPNDBusReceivedRightsRetireOnError", "invalid-index",
+         "native descriptors leaked after rejected frame", changed(transport,
+         "if !transferred { t.rdr.routervpnCloseRights() }", "if !transferred { }")),
+    ]
+
+
+def require_native_verdicts(output, names, label):
+    # These exact suites use no subprocess Go-test output. Every declared parent
+    # and leaf must start and pass once; no unselected or duplicated verdict can
+    # substitute for original descriptor/lifetime coverage.
+    runs = re.findall(r"(?m)^=== RUN\s+(\S+)\s*$", output)
+    passed = re.findall(r"(?m)^\s*--- PASS: (\S+) \([^\n]*\)$", output)
+    if sorted(runs) != sorted(names) or sorted(passed) != sorted(names) or any(
+            failure in output for failure in ("--- FAIL:", "--- SKIP:", "DATA RACE", "panic:")):
+        raise ValueError("Node " + label + " gate omitted, duplicated or replaced an original lifetime verdict")
 
 
 def execute_baseline_suite(baselines, suite):
@@ -749,6 +855,22 @@ def execute_baseline_suite(baselines, suite):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
         raise ValueError("Node " + name + " omitted a required native boundary")
+    if name == "native-routing-receipt":
+        for case in ("", *NATIVE_DNS_CASES):
+            full = "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary" + ("/" + case if case else "")
+            if len(re.findall(r"(?m)^\s*--- PASS: " + re.escape(full) + r" \([^\n]*\)$", output)) != 1:
+                raise ValueError("Node routing gate omitted or duplicated a captured DNS address verdict: " + full)
+        for case in NATIVE_RETIREMENT_CASES:
+            full = "TestRouterVPNNativeLinuxRoutingRetirementNamespace/" + case
+            if len(re.findall(r"(?m)^\s*--- PASS: " + re.escape(full) + r" \([^\n]*\)$", output)) != 1:
+                raise ValueError("Node routing gate omitted or duplicated an actual original-TUN retirement leaf: " + case)
+    if name == "native-resolver-lifetime":
+        names = list(NATIVE_RESOLVER_TESTS) + ["TestRouterVPNNativeLinuxResolver" + root + "/" + leaf
+                for root, leaves in NATIVE_RESOLVER_LEAVES.items() for leaf in leaves]
+        require_native_verdicts(output, names, "resolver")
+    if name == "native-dbus-rights":
+        names = list(NATIVE_DBUS_TESTS) + [NATIVE_DBUS_TESTS[0] + "/" + case for case in NATIVE_DBUS_CASES]
+        require_native_verdicts(output, names, "D-Bus descriptor")
     if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
         raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
     groups = ()
@@ -770,6 +892,12 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     source, before = checked_sources(source)
     compiler, captured, arch = selected_compiler(go, source, dict(os.environ if env is None else env))
     windows = platform.system() == "Windows"
+    if not windows:
+        with stage("verify complete native retirement preparation"):
+            status, output = run([sys.executable, ROOT / "deploy/test_desktop_tun_retirement_projection.py", "--source", source],
+                                 cwd=ROOT, env=captured, timeout=30)
+            if status:
+                raise ValueError("Native retirement preparation regression failed:\n" + output[-16384:])
     if not windows:
         status, output = run([sys.executable, ROOT / "deploy/test_desktop_node_routing_runner.py"],
                              cwd=ROOT, env=captured, timeout=30)
@@ -816,12 +944,15 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestNativePerformance" + suffix for suffix in ("NoIOUntilExplicitActivation", "StopsOnReplacementAndNetworkChange", "CannotUsePlaintextOrWrongNode", "DestinationCannotBeReplaced", "CapturedOptionsAndCancelledActivation", "CannotAdmitCompositeByTypeName"))),
     ]
     if platform.system() == "Linux":
+        suites.append(("native-resolver-lifetime", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver", NATIVE_RESOLVER_TESTS))
+        suites.append(("native-dbus-rights", "github.com/godbus/dbus/v5", "^TestRouterVPNDBus", NATIVE_DBUS_TESTS))
         suites.append(("native-routing-receipt", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting",
                        ("TestRouterVPNNativeLinuxRoutingResolutionRejectsForeign", "TestRouterVPNNativeLinuxRoutingReceiptNamespace",
                         "TestRouterVPNNativeLinuxRoutingConcurrentAddressProof", "TestRouterVPNNativeLinuxRoutingConcurrentAddressRejectsForeign",
                         "TestRouterVPNNativeLinuxRoutingConcurrentAddressOwnerFences", "TestRouterVPNNativeLinuxRoutingConcurrentAddressAtomicLedger",
                         "TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics", "TestRouterVPNNativeLinuxRoutingBoundedInventory",
-                        "TestRouterVPNNativeLinuxRoutingInventoryFraming")))
+                        "TestRouterVPNNativeLinuxRoutingInventoryFraming", "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary",
+"TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors","TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire","TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext","TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones","TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard","TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange","TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt","TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal","TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst","TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed","TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability","TestRouterVPNNativeLinuxRoutingRetirementSocket","TestRouterVPNNativeLinuxRoutingRetirementNamespace")))
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
                        tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in

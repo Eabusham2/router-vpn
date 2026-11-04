@@ -152,6 +152,14 @@ Explicit fixture observers model nft/TUN where the workspace lacks NET_ADMIN.
 The installed named-socket, nft/TUN and systemd acceptance gates must execute
 on the native CI hosts; compilation alone does not establish those results.
 
+Native cleanup now uses the original inherited cleanup descriptor, authenticated
+absolute request deadlines, original child completion and complete routing
+absence. The native implementation retains its original TUN, event socket and
+successful routing calls through startup failure and explicit Stop retries.
+Resolver calls retain their original connection and pending reply ownership.
+See [LINUX-NATIVE-RETIREMENT.md](LINUX-NATIVE-RETIREMENT.md) for the implementation,
+native gate inventory and the remaining kernel and older-bus boundaries.
+
 The following are still separate unfinished requirements, not closed by this
 unit's refusals:
 
@@ -165,11 +173,12 @@ unit's refusals:
   original-child startup ledger and the controller's preparation-through-Start
   event continuity are source-implemented. Their actual installed namespace
   cases remain mandatory; they do not establish active MTU transition ownership.
-- Exact successful-call route/rule retirement through native startup, reset,
-  error unwind and Close. The pinned Linux implementation still has priority
-  range cleanup; an original TUN index alone does not authorize deleting a
-  foreign rule in that range. Native cleanup failure must also remain visible
-  through the service's original Stop path.
+- Native retirement acceptance on the actual installed hosts and compatible
+  resolver authority on older available system buses. The new exact-selector
+  implementation replaces priority-range deletion, but Linux offers no atomic
+  creator-generation comparison for rule deletion. A privileged replacement
+  between the final barrier and kernel deletion remains a distinct ownership
+  limit; it must not produce a successful cleanup receipt.
 
 These boundaries remain truthful errors or retained pending states; they must
 not be represented as successful Off, connected readiness or completed handoff.

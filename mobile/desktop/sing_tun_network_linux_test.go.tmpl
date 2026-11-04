@@ -496,23 +496,47 @@ func TestRouterVPNNativeLinuxRoutingReceiptNamespace(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitNativeRoutingVeths(t, link, other, n.options.Inet6Address[0])
-			if err := n.setRoute(link); err != nil {
+			// This is the pre-existing veth observation fixture, not a TUN
+			// creator. Exercise real adds and the exact observational ledger;
+			// actual descriptor-retained retirement has its own namespace gate.
+			routes, err := n.routes(link)
+			if err != nil {
 				t.Fatal(err)
 			}
+			var installedRoutes []netlink.Route
 			defer func() {
-				if err := n.unsetRoute0(link); err != nil {
-					t.Error("owned routes failed to drain", err)
+				for _, route := range installedRoutes {
+					if err := netlink.RouteDel(&route); err != nil && !errors.Is(err, syscall.ESRCH) {
+						t.Error(err)
+					}
 				}
 			}()
-			if err := n.setRules(); err != nil {
-				t.Fatal(err)
+			for _, route := range routes {
+				before := n.routervpnLinuxBefore("route")
+				if err := netlink.RouteAdd(&route); err != nil {
+					t.Fatal(err)
+				}
+				installedRoutes = append(installedRoutes, route)
+				n.routervpnLinuxAdded("route", before)
 			}
+			var installedRules []*netlink.Rule
 			defer func() {
-				if err := n.unsetRules(); err != nil {
-					t.Error("owned rules failed to drain", err)
+				for _, rule := range installedRules {
+					if err := netlink.RuleDel(rule); err != nil && !errors.Is(err, syscall.ENOENT) {
+						t.Error(err)
+					}
 				}
 			}()
-			raw, err := n.RouterVPNDesktopNetworkReceipt()
+			for _, rule := range n.rules() {
+				before := n.routervpnLinuxBefore("rule")
+				if err := netlink.RuleAdd(rule); err != nil {
+					t.Fatal(err)
+				}
+				installedRules = append(installedRules, rule)
+				n.routervpnLinuxAdded("rule", before)
+			}
+
+			raw, err := n.routervpnObserveNetworkReceipt()
 			if err != nil {
 				t.Fatal("actual native routing receipt", err)
 			}
@@ -538,7 +562,7 @@ func TestRouterVPNNativeLinuxRoutingReceiptNamespace(t *testing.T) {
 			if targets != 2 {
 				t.Fatal("native fixture did not retire both original NOP targets", targets)
 			}
-			if _, err := n.RouterVPNDesktopNetworkReceipt(); err == nil {
+			if _, err := n.routervpnObserveNetworkReceipt(); err == nil {
 				t.Fatal("missing native target was accepted as a current receipt")
 			}
 			current, err := routervpnLinuxNetworkObjects("rule")
@@ -977,7 +1001,7 @@ func nativeRoutingConcurrentAddressNamespaceMode(t *testing.T, automatic bool) {
 	if !foundLocal {
 		t.Fatal("actual native receipt omitted its original pending address's LOCAL route")
 	}
-	raw, err := n.RouterVPNDesktopNetworkReceipt()
+	raw, err := n.routervpnObserveNetworkReceipt()
 	if err != nil {
 		t.Fatal("actual concurrent routing receipt", err)
 	}
@@ -1007,7 +1031,7 @@ func nativeRoutingConcurrentAddressNamespaceMode(t *testing.T, automatic bool) {
 	if err := netlink.RouteDel(&locals[0]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.RouterVPNDesktopNetworkReceipt(); err == nil {
+	if _, err := n.routervpnObserveNetworkReceipt(); err == nil {
 		t.Fatal("removed recorded kernel route remained accepted")
 	}
 	if err := netlink.RouteAdd(&routes[1]); err != nil {

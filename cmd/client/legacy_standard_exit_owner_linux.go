@@ -29,6 +29,7 @@ var legacyStandardExitOwners sync.Map // map[*app]*linuxLegacyStandardExitOwner
 type linuxLegacyStandardExitOwner struct {
 	requestEpoch                                                              *linuxStandardRequestEpoch
 	native                                                                    *linuxStandardEngine
+	completion                                                                *linuxLegacyExitCompletion
 	dns                                                                       *legacyStandardDNS
 	protectionPolicy, protectionRoot, protectionProfileID, protectionEndpoint string
 	protectionLAN                                                             bool
@@ -56,6 +57,16 @@ type linuxLegacyStandardExitOwner struct {
 	started, registered, workspaceRetired                                     bool
 	done                                                                      chan struct{}
 	receipt                                                                   *linuxLegacyExitReceipt
+}
+
+// Written only by the one creating goroutine before its original done closes.
+// Waiting on that channel publishes this exact command's result; no PID lookup
+// or replacement command can supply successful cleanup.
+type linuxLegacyExitCompletion struct {
+	command *exec.Cmd
+	done    chan struct{}
+	state   *os.ProcessState
+	failure error
 }
 
 type linuxLegacyExitReceipt struct {
@@ -480,13 +491,16 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 	}
 	o.done = make(chan struct{})
 	o.creatorDone = make(chan struct{})
+	command, done, creatorDone := o.command, o.done, o.creatorDone
+	completion := &linuxLegacyExitCompletion{command: command, done: done}
+	o.completion = completion
 	started := make(chan error, 1)
 	// PR_SET_PDEATHSIG follows the creating thread. Keep that original thread
 	// alive until its one child is joined, rather than allowing the Go runtime
 	// to retire/reuse it while the standard engine is running.
 	go func() {
 		runtime.LockOSThread()
-		defer close(o.creatorDone)
+		defer close(creatorDone)
 		defer runtime.UnlockOSThread()
 		err := o.current(o.command)
 		if err == nil {
@@ -503,14 +517,17 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 			err = errors.New("legacy creator admission lost original command")
 		}
 		if err == nil {
-			err = o.command.Start()
+			err = command.Start()
 		}
 		o.app.mu.Unlock()
 		started <- err
 		if err == nil {
-			_ = o.command.Wait()
+			completion.failure = command.Wait()
+			completion.state = command.ProcessState
+		} else {
+			completion.failure = err
 		}
-		close(o.done)
+		close(done)
 	}()
 	if err := <-started; err != nil {
 		<-o.done
@@ -765,6 +782,9 @@ func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.
 	}
 	if o.started && !o.processRetired {
 		if o.originalPIDFD == nil || o.done == nil || o.creatorDone == nil {
+			if o.native != nil {
+				return errors.New("native cleanup retains its original child until retirement capability is restored")
+			}
 			// The original exec.Cmd is still creation authority for emergency join;
 			// missing independent retirement evidence never authorizes release.
 			if o.command.Process != nil {
@@ -789,27 +809,40 @@ func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.
 		select {
 		case <-o.done:
 		default:
+			if o.native != nil {
+				if err := o.native.requestCleanup(ctx); err != nil {
+					return err
+				}
+			}
 			if err := o.command.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				return err
 			}
-			grace := time.NewTimer(3 * time.Second)
-			select {
-			case <-o.done:
-				stopTimerWithoutBlocking(grace)
-			case <-ctx.Done():
-				grace.Stop()
-				return ctx.Err()
-			case <-grace.C:
-				if err := s.current(); err != nil {
-					return err
-				}
-				if err := o.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-					return err
-				}
+			if o.native != nil {
 				select {
 				case <-o.done:
 				case <-ctx.Done():
 					return ctx.Err()
+				}
+			} else {
+				grace := time.NewTimer(3 * time.Second)
+				select {
+				case <-o.done:
+					stopTimerWithoutBlocking(grace)
+				case <-ctx.Done():
+					grace.Stop()
+					return ctx.Err()
+				case <-grace.C:
+					if err := s.current(); err != nil {
+						return err
+					}
+					if err := o.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+						return err
+					}
+					select {
+					case <-o.done:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 			}
 		}
@@ -835,6 +868,11 @@ func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.
 	}
 	if err := o.tunAbsentInNamespace(); err != nil {
 		return err
+	}
+	if o.native != nil && o.started {
+		if err := o.native.routingRetired(ctx); err != nil {
+			return err
+		}
 	}
 	// This is a native creator retirement receipt, not a claimed engine RPC:
 	// the original wait has joined, its creation pidfd is readable, and the

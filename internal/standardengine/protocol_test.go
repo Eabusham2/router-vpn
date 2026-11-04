@@ -6,7 +6,7 @@ import (
 )
 
 func TestCapturedStandardFramesRejectChangedScope(t *testing.T) {
-	c := Capture{1, strings.Repeat("a", 32), strings.Repeat("b", 64), "standard-socks5", 1234}
+	c := Capture{1, strings.Repeat("a", 32), strings.Repeat("b", 64), "standard-socks5", 1234, 1, 2}
 	raw, err := c.Canonical()
 	if err != nil {
 		t.Fatal(err)

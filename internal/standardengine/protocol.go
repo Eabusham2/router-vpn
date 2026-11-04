@@ -21,11 +21,13 @@ const DirectoryFD = 5
 const MaxConfig = 8 << 20
 
 type Capture struct {
-	Schema       int    `json:"schema"`
-	Session      string `json:"session"`
-	ConfigSHA256 string `json:"config_sha256"`
-	Mode         string `json:"mode"`
-	DeadlineNS   int64  `json:"deadline_ns"`
+	Schema        int    `json:"schema"`
+	Session       string `json:"session"`
+	ConfigSHA256  string `json:"config_sha256"`
+	Mode          string `json:"mode"`
+	DeadlineNS    int64  `json:"deadline_ns"`
+	CleanupDevice uint64 `json:"cleanup_device"`
+	CleanupInode  uint64 `json:"cleanup_inode"`
 }
 
 func digest(value string, size int) bool {
@@ -34,7 +36,7 @@ func digest(value string, size int) bool {
 }
 
 func (c Capture) Canonical() ([]byte, error) {
-	if c.Schema != 1 || !digest(c.Session, 16) || !digest(c.ConfigSHA256, 32) || c.DeadlineNS < 1 {
+	if c.Schema != 1 || !digest(c.Session, 16) || !digest(c.ConfigSHA256, 32) || c.DeadlineNS < 1 || c.CleanupDevice == 0 || c.CleanupInode == 0 {
 		return nil, errors.New("standard engine has no exact original bounded capture")
 	}
 	switch c.Mode {

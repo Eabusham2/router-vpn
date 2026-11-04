@@ -1,0 +1,46 @@
+//go:build linux
+
+package tun
+
+import (
+	"net/netip"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNNativeLinuxRoutingDNSAddressBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options Options
+		want    []netip.Addr
+		failure string
+	}{
+		{name: "ipv4-host-without-dns", options: Options{Inet4Address: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}}, failure: "198.18.0.1/32"},
+		{name: "ipv4-host-with-explicit-dns", options: Options{Inet4Address: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}, DNSAddress: []netip.Addr{netip.MustParseAddr("1.1.1.1")}}, want: []netip.Addr{netip.MustParseAddr("1.1.1.1")}},
+		{name: "ipv6-host-without-dns", options: Options{Inet6Address: []netip.Prefix{netip.MustParsePrefix("fd00::1/128")}}, failure: "fd00::1/128"},
+		{name: "ipv6-fallback", options: Options{Inet4Address: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}, Inet6Address: []netip.Prefix{netip.MustParsePrefix("fd00::1/126")}}, want: []netip.Addr{netip.MustParseAddr("fd00::2")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if failure := recover(); failure != nil {
+					t.Fatal("unusable DNS address panicked instead of preserving native cleanup", failure)
+				}
+			}()
+			actual, err := tc.options.DNSServerAddress()
+			if tc.failure != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.failure) {
+					t.Fatal("unusable DNS address lost its captured family/error", actual, err)
+				}
+				return
+			}
+			if err != nil || len(actual) != len(tc.want) {
+				t.Fatal("valid captured DNS was rejected", actual, err)
+			}
+			for i, want := range tc.want {
+				if actual[i] != want {
+					t.Fatal("captured DNS changed", actual, tc.want)
+				}
+			}
+		})
+	}
+}

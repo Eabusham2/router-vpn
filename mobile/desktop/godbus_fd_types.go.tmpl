@@ -1,0 +1,27 @@
+package dbus
+
+import (
+	"reflect"
+	"strings"
+)
+
+// The received native descriptors determine the concrete Go type of an 'h'
+// value. Containers must use that same type before reflective assignment.
+// No-FD decoding preserves upstream UnixFDIndex representation unchanged.
+func (dec *decoder) routervpnTypeFor(signature string) reflect.Type {
+	if len(dec.fds) == 0 {
+		return typeFor(signature)
+	}
+	switch signature[0] {
+	case 'h':
+		return unixFDType
+	case 'a':
+		if signature[1] == '{' {
+			end := strings.LastIndex(signature, "}")
+			return reflect.MapOf(dec.routervpnTypeFor(signature[2:3]), dec.routervpnTypeFor(signature[3:end]))
+		}
+		return reflect.SliceOf(dec.routervpnTypeFor(signature[1:]))
+	default:
+		return typeFor(signature)
+	}
+}

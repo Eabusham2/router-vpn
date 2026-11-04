@@ -1,0 +1,339 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/netlink"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/logger"
+	"golang.org/x/sys/unix"
+)
+
+// This fixture uses the actual exclusive NativeTun.New, its original held
+// descriptor, real kernel rule/route calls and continuous notification socket.
+// Each case owns a fresh child network/user namespace. Negative cases retain
+// their original TUN until that original isolated child exits; no cleanup
+// receipt is fabricated for the deliberately replaced or ambiguous rules.
+func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
+	const marker = "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE"
+	cases := []string{"complete-original-retirement", "fresh-stop-after-startup-cancel", "definite-add-refusal", "persistent-disjoint-route", "same-selector-aba", "foreign-wildcard-match", "replaced-file-object"}
+	selected := os.Getenv(marker)
+	if selected == "" {
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		netFile, err := os.Open("/proc/thread-self/ns/net")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer netFile.Close()
+		userFile, err := os.Open("/proc/thread-self/ns/user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer userFile.Close()
+		for _, name := range cases {
+			t.Run(name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, image, "-test.v", "-test.run=^TestRouterVPNNativeLinuxRoutingRetirementNamespace$", "-test.timeout=10s")
+				cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET,
+					UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}},
+					GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getegid(), Size: 1}}, GidMappingsEnableSetgroups: false}
+				cmd.ExtraFiles = []*os.File{netFile, userFile}
+				cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", marker + "=" + name}
+				output, err := runNativeRetirementFixtureChild(cmd)
+				if err != nil {
+					t.Fatal("actual native retirement namespace failed after original join", err, output)
+				}
+				parent := "TestRouterVPNNativeLinuxRoutingRetirementNamespace"
+				child := parent + "/" + name
+				if strings.Count(output, "=== RUN   "+parent+"\n") != 1 || strings.Count(output, "=== RUN   "+child+"\n") != 1 ||
+					strings.Count(output, "--- PASS: "+parent+" ") != 1 || strings.Count(output, "--- PASS: "+child+" ") != 1 ||
+					strings.Contains(output, "--- SKIP:") || strings.Contains(output, "--- FAIL:") || strings.Contains(output, "DATA RACE") || strings.Contains(output, "panic:") {
+					t.Fatal("native retirement case did not execute exactly once", name, output)
+				}
+				for i, namespace := range []string{"net", "user"} {
+					before, e := cmd.ExtraFiles[i].Stat()
+					current, other := os.Stat("/proc/thread-self/ns/" + namespace)
+					if e != nil || other != nil || !os.SameFile(before, current) {
+						t.Fatal("native retirement child changed original parent namespace", namespace, e, other)
+					}
+				}
+				// Keep nested verdicts private so the outer native inventory stays exact.
+				t.Log("original isolated native retirement child joined:", name)
+			})
+		}
+		return
+	}
+	valid := false
+	for _, name := range cases {
+		if selected == name {
+			valid = true
+		}
+	}
+	if !valid {
+		t.Fatal("unknown native retirement case")
+	}
+	for i, name := range []string{"net", "user"} {
+		original := os.NewFile(uintptr(3+i), "original-parent-"+name)
+		defer original.Close()
+		before, err := original.Stat()
+		current, currentErr := os.Stat("/proc/thread-self/ns/" + name)
+		var fs syscall.Statfs_t
+		if err != nil || currentErr != nil || syscall.Fstatfs(int(original.Fd()), &fs) != nil || fs.Type != 0x6e736673 || os.SameFile(before, current) {
+			t.Fatal("native retirement did not enter distinct namespaces retaining original handles")
+		}
+	}
+	t.Run(selected, func(t *testing.T) {
+		startup, cancelStartup := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelStartup()
+		// Native Start registers its own interface with the actual monitor.
+		// Keep the real monitor/finder pair until this isolated child joins.
+		networkMonitor, err := NewNetworkUpdateMonitor(logger.NOP())
+		if err != nil {
+			t.Fatal("actual native network monitor", err)
+		}
+		if err = networkMonitor.Start(); err != nil {
+			t.Fatal("start actual native network monitor", err)
+		}
+		t.Cleanup(func() {
+			if err := networkMonitor.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		interfaceMonitor, err := NewDefaultInterfaceMonitor(networkMonitor, logger.NOP(), DefaultInterfaceMonitorOptions{InterfaceFinder: control.NewDefaultInterfaceFinder()})
+		if err != nil {
+			t.Fatal("actual native interface monitor", err)
+		}
+		if err = interfaceMonitor.Start(); err != nil {
+			t.Fatal("start actual native interface monitor", err)
+		}
+		t.Cleanup(func() {
+			if err := interfaceMonitor.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		options := Options{RouterVPNNetworkContext: startup, InterfaceMonitor: interfaceMonitor, Name: "rvpn-retire", MTU: 1280, DNSMode: DNSModeDisabled,
+			Inet4Address: []netip.Prefix{netip.MustParsePrefix("172.29.93.1/30")}, Inet6Address: []netip.Prefix{netip.MustParsePrefix("fd29:93::1/126")},
+			AutoRoute: true, StrictRoute: true, IPRoute2TableIndex: 2022, IPRoute2RuleIndex: 9000,
+			Inet4RouteAddress: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, Inet6RouteAddress: []netip.Prefix{netip.MustParsePrefix("::/0")}}
+		created, err := New(options)
+		native, ok := created.(*NativeTun)
+		if err != nil || !ok || native == nil {
+			t.Fatal("actual exclusive native TUN creation unavailable", err)
+		}
+		original := native.tunFile
+		var conflict *netlink.Rule
+		if selected == "definite-add-refusal" {
+			for _, rule := range native.rules() {
+				if rule.Dst.IsValid() {
+					copy := *rule
+					conflict = &copy
+					break
+				}
+			}
+			if conflict == nil {
+				t.Fatal("fixture has no exact original rule candidate")
+			}
+			if err := netlink.RuleAdd(conflict); err != nil {
+				t.Fatal("create fixture-owned conflicting rule", err)
+			}
+		}
+		startErr := native.Start()
+		if selected == "definite-add-refusal" {
+			if startErr == nil {
+				t.Fatal("occupied native rule was adopted")
+			}
+		} else if startErr != nil {
+			t.Fatal("actual native TUN startup", startErr)
+		}
+		var ready DesktopNetworkReceipt
+		if startErr == nil {
+			raw, err := native.RouterVPNDesktopNetworkReceipt()
+			if err != nil {
+				t.Fatal("actual native Ready ledger", err)
+			}
+			ready, err = ParseDesktopNetworkReceipt(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipv6Rules := 0
+			for _, object := range ready.Objects {
+				if object.Kind == "rule" && object.Family == 6 {
+					ipv6Rules++
+				}
+			}
+			if ipv6Rules == 0 {
+				t.Fatal("actual original IPv6 rule notifications were not captured")
+			}
+			if ready.Index != uint32(native.routervpnOwnedIndex) || len(ready.Objects) < 10 {
+				t.Fatal("actual startup lost original complete native ledger")
+			}
+		}
+		var foreignRoute *netlink.Route
+		if selected == "persistent-disjoint-route" {
+			loopback, err := netlink.LinkByName("lo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := netlink.LinkSetUp(loopback); err != nil {
+				t.Fatal(err)
+			}
+			destination, err := netlink.ParseIPNet("203.0.113.0/24")
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreignRoute = &netlink.Route{LinkIndex: loopback.Attrs().Index, Table: 3033, Dst: destination}
+			if err := netlink.RouteAdd(foreignRoute); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var target *routerVPNLinuxRoutingCall
+		for _, call := range native.routervpnRetirement.calls {
+			if call.rule != nil && call.rule.Dst.IsValid() && call.bound {
+				target = call
+				break
+			}
+		}
+		if selected == "same-selector-aba" || selected == "foreign-wildcard-match" {
+			if target == nil {
+				t.Fatal("original target rule missing")
+			}
+			replacement := *target.rule
+			if selected == "same-selector-aba" {
+				if err := netlink.RuleDel(target.rule); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				replacement.MarkSet = true
+				replacement.Mark = 77
+				replacement.Mask = -1
+			}
+			if err := netlink.RuleAdd(&replacement); err != nil {
+				t.Fatal("create independently owned replacement rule", err)
+			}
+		}
+		var replacement *os.File
+		if selected == "replaced-file-object" {
+			replacement, err = os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer replacement.Close()
+			native.tunFile = replacement
+		}
+		if selected == "fresh-stop-after-startup-cancel" {
+			cancelStartup()
+		}
+		cleanup, cancelCleanup := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancelCleanup()
+		raw, retireErr := native.RouterVPNDesktopNetworkRetire(cleanup)
+		negative := selected == "same-selector-aba" || selected == "foreign-wildcard-match" || selected == "replaced-file-object"
+		if negative {
+			if retireErr == nil || raw != "" {
+				t.Fatal("foreign/ambiguous native resource gained cleanup success")
+			}
+			if _, err := original.Stat(); err != nil {
+				t.Fatal("failed retirement discarded original TUN descriptor", err)
+			}
+			request, err := unix.NewIfreq(options.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := unix.IoctlIfreq(int(native.routervpnRetirement.guard.Fd()), unix.TUNGETIFF, request); err != nil || request.Name() != options.Name {
+				t.Fatal("failed retirement discarded actual original TUN capability", err)
+			}
+			return
+		}
+		if retireErr != nil {
+			t.Fatal("actual original native retirement", retireErr)
+		}
+		receipt, err := ParseDesktopNetworkRetirementReceipt(raw)
+		if err != nil || !receipt.Created || receipt.Name != options.Name || receipt.Index != uint32(native.routervpnOwnedIndex) {
+			t.Fatal("native retirement receipt lost actual creation", receipt, err)
+		}
+		for _, object := range ready.Objects {
+			if !routervpnNetworkHasObject(receipt.Objects, object) {
+				t.Fatal("native retirement lost an original Ready object")
+			}
+		}
+		if _, err := original.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatal("actual original TUN was not closed")
+		}
+		if err := native.routervpnLinuxRetiredLinkAbsent(cleanup); err != nil {
+			t.Fatal(err)
+		}
+		if conflict != nil {
+			rules, err := routervpnLinuxNetworkObjectsContext(cleanup, "rule")
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, rule := range rules {
+				if routervpnLinuxRuleMatches(conflict, rule) {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Fatal("definite refusal cleanup deleted foreign conflicting rule", count)
+			}
+		}
+		if foreignRoute != nil {
+			routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{Table: 3033}, netlink.RT_FILTER_TABLE)
+			if err != nil || len(routes) != 1 || routes[0].Dst.String() != "203.0.113.0/24" {
+				t.Fatal("disjoint foreign route did not survive original cleanup", err)
+			}
+		}
+		if again, err := native.RouterVPNDesktopNetworkRetire(cleanup); err != nil || again != raw {
+			t.Fatal("actual completed retirement did not remain idempotent", err)
+		}
+		t.Log(fmt.Sprintf("original native retirement: index=%d objects=%d", receipt.Index, len(receipt.Objects)))
+	})
+}
+
+// The command is the original test image itself, not a forking namespace
+// wrapper. Its original context cancels that exact process; Wait joins it and
+// its output workers before the separately retained creation pidfd is closed.
+func runNativeRetirementFixtureChild(command *exec.Cmd) (string, error) {
+	if command.SysProcAttr == nil || command.Cancel == nil {
+		return "", errors.New("native retirement child omitted original context or creation attributes")
+	}
+	pidfd := -1
+	command.SysProcAttr.PidFD = &pidfd
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		return output.String(), err
+	}
+	if pidfd < 0 {
+		cancelErr := command.Cancel()
+		waitErr := command.Wait()
+		return output.String(), errors.Join(errors.New("native retirement child omitted original creation pidfd after join"), cancelErr, waitErr)
+	}
+	original := os.NewFile(uintptr(pidfd), "original-created-native-retirement-child")
+	defer original.Close()
+	info, captureErr := original.Stat()
+	if captureErr != nil {
+		captureErr = errors.Join(captureErr, command.Cancel())
+	}
+	waitErr := command.Wait()
+	retired, retireErr := resolverPIDFDCurrent(original, original, info)
+	if !retired {
+		retireErr = errors.Join(retireErr, errors.New("native retirement child did not retire its original creation pidfd"))
+	}
+	return output.String(), errors.Join(captureErr, waitErr, retireErr)
+}

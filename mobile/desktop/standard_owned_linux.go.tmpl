@@ -38,6 +38,7 @@ func init() {
 type routerVPNStandardInbound interface {
 	RouterVPNDesktopNetworkStartup(context.Context) error
 	RouterVPNDesktopNetworkStartupReceipt(context.Context, func() bool) (string, error)
+	RouterVPNDesktopNetworkRetire(context.Context) (string, error)
 }
 
 func routerVPNRunStandard(lifetime context.Context, expected string) (failure error) {
@@ -66,6 +67,18 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	if err != nil {
 		return err
 	}
+	result, err := standardengine.CaptureCleanupFile(os.NewFile(standardengine.CleanupFD, "original-standard-cleanup"), capture.CleanupDevice, capture.CleanupInode)
+	defer func() { failure = errors.Join(failure, result.Close()) }()
+	if err != nil { return err }
+	cleanup := &routerVPNStandardCleanup{result: result, capture: expected}
+	defer func() {
+		deadline := time.Now().Add(4*time.Second)
+		startupFailed := failure != nil
+		if startupFailed && deadline.After(time.Unix(0,capture.DeadlineNS)) { deadline = time.Unix(0,capture.DeadlineNS) }
+		// Missing/rejected Ready still fails the parent's startup exchange. A
+		// zero child exit here reports only successful original cleanup.
+		failure = standardengine.RetireOriginal(result, expected, deadline, startupFailed, cleanup.retire)
+	}()
 	remaining := time.Until(time.Unix(0, capture.DeadlineNS))
 	if remaining <= 0 || remaining > 2*time.Minute {
 		return errors.New("standard startup lost its original deadline")
@@ -73,16 +86,8 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	startup, cancel := context.WithDeadline(lifetime, time.Unix(0, capture.DeadlineNS))
 	defer cancel()
 	channel, err := linuxprocess.CaptureChannel(os.NewFile(standardengine.ChannelFD, "original-standard-channel"))
-	defer func() {
-		if channel != nil {
-			cleanup, stop := context.WithTimeout(context.Background(), 4*time.Second)
-			defer stop()
-			failure = errors.Join(failure, channel.Close(cleanup))
-		}
-	}()
-	if err != nil {
-		return err
-	}
+	cleanup.channel = channel
+	if err != nil { return err }
 	imageFile := os.NewFile(3, "original-sealed-executable")
 	defer imageFile.Close()
 	if err := linuxprocess.SetCloseOnExec(imageFile); err != nil {
@@ -93,15 +98,9 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 		return err
 	}
 	peer, err := linuxprocess.BindInheritedSealedParent(startup, channel, parentFile, expected, image)
-	channel, parentFile = nil, nil
-	defer func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 4*time.Second)
-		defer stop()
-		failure = errors.Join(failure, peer.Close(cleanup))
-	}()
-	if err != nil {
-		return err
-	}
+	channel, parentFile, cleanup.channel = nil, nil, nil
+	cleanup.peer = peer
+	if err != nil { return err }
 	raw, err = standardengine.ReadSealed(configFile, standardengine.MaxConfig)
 	if err != nil || standardengine.SHA256(raw) != capture.ConfigSHA256 {
 		return errors.New("standard command lost its original sealed configuration")
@@ -116,17 +115,13 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	}
 	options.Log = &option.LogOptions{Disabled: true}
 	owned, stop := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
-	defer stop()
+	cleanup.cancel = stop
 	instance, err := box.New(box.Options{Context: owned, Options: options})
+	cleanup.instance = instance
 	if err != nil {
-		for _, partial := range routerVPNExternalConstructed(owned) {
-			if closer, ok := partial.(interface{ Close() error }); ok {
-				failure = errors.Join(failure, closer.Close())
-			}
-		}
-		return errors.Join(err, failure)
+		cleanup.partial = routerVPNExternalConstructed(owned)
+		return err
 	}
-	defer func() { failure = errors.Join(failure, instance.Close()) }()
 	inbound, present := instance.Inbound().Get(shape.Tag)
 	reader, valid := inbound.(routerVPNStandardInbound)
 	if !present || !valid {
@@ -135,10 +130,11 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	if err := reader.RouterVPNDesktopNetworkStartup(startup); err != nil {
 		return err
 	}
+	cleanup.reader = reader
 	if err := peer.Current(startup); err != nil {
 		return err
 	}
-	if err := instance.Start(); err != nil {
+	if err := instance.RouterVPNDesktopStandardStart(); err != nil {
 		return err
 	}
 	if err := peer.Current(startup); err != nil {

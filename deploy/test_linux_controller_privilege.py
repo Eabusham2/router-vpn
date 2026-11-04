@@ -234,6 +234,19 @@ def execute(go='go', runtime_bundle=None):
     if source_identity() != before:
         raise ValueError('Original Node control/transaction source changed during its required native gates')
     with tempfile.TemporaryDirectory(prefix='routervpn-controller-privilege-') as temporary:
+        cleanup_binary = Path(temporary)/'standard-cleanup.test'
+        UID.run([compiler, 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
+                 '-o', cleanup_binary, './internal/standardengine'], cwd=ROOT, env=env)
+        cleanup_digest = hashlib.sha256(cleanup_binary.read_bytes()).hexdigest()
+        cleanup_command = [sys.executable, str(Path(__file__).resolve()), '--namespace-cleanup-binary', str(cleanup_binary),
+                           '--namespace-service-sha256', cleanup_digest]
+        if sudo is not None:
+            cleanup_command = [sudo, '-n', '--', *cleanup_command]
+        cleanup_output = UID.run(cleanup_command, cwd=ROOT, timeout=150, sudo=sudo)
+        SERVICE.check_cleanup_verdict(cleanup_output)
+        if hashlib.sha256(cleanup_binary.read_bytes()).hexdigest() != cleanup_digest or source_identity() != before:
+            raise ValueError('Original cleanup fixture changed during verification')
+        print(cleanup_output, end='' if cleanup_output.endswith('\n') else '\n')
         service_binary = Path(temporary)/'standard-owner-service.test'
         UID.run([compiler, 'test', '-race', '-c', '-mod=readonly',
                  '-tags=routervpn_controller_privileged,routervpn_standard_service_native',
@@ -345,6 +358,7 @@ if __name__ == '__main__':
     parser.add_argument('--namespace-process-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-process-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--namespace-service-binary', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--namespace-cleanup-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-service-group', choices=tuple(SERVICE.GROUPS), help=argparse.SUPPRESS)
     parser.add_argument('--namespace-service-sha256', help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -352,6 +366,11 @@ if __name__ == '__main__':
         raise SystemExit(namespace_test(args.namespace_test_binary))
     if args.namespace_process_binary is not None:
         raise SystemExit(namespace_test(args.namespace_process_binary, '^TestLinuxProcessNamespace', args.namespace_process_sha256))
+    if args.namespace_cleanup_binary is not None:
+        digest=args.namespace_service_sha256
+        if not isinstance(digest,str) or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest):
+            raise SystemExit('Cleanup fixture requires its original compiled executable digest')
+        raise SystemExit(namespace_test(args.namespace_cleanup_binary, '^TestCleanup', digest))
     if args.namespace_service_binary is not None:
         if args.namespace_service_group is None or not re.fullmatch(r'[0-9a-f]{64}', args.namespace_service_sha256 or ''):
             raise ValueError('Standard service requires its exact native test group')

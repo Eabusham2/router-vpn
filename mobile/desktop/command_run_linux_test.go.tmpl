@@ -1,0 +1,194 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+// These tests execute the generated command's actual pinned Box constructors,
+// startup stages and original native retirement. They use only loopback mixed
+// listeners; they do not claim privileged TUN or route retirement acceptance.
+func routerVPNRawCommandTestOptions(t *testing.T, raw string) option.Options {
+	t.Helper()
+	previous := globalCtx
+	globalCtx = include.Context(context.Background())
+	t.Cleanup(func() { globalCtx = previous })
+	var options option.Options
+	if err := SJ.UnmarshalContext(globalCtx, []byte(raw), &options); err != nil {
+		t.Fatalf("actual pinned options parser: %v", err)
+	}
+	return options
+}
+
+func routerVPNRawCommandTestStart(t *testing.T, options option.Options) *routerVPNRawCommand {
+	t.Helper()
+	owner, err := routerVPNCreateRawCommand(options)
+	if err != nil || owner == nil {
+		t.Fatalf("actual raw command creation: owner=%v error=%v", owner, err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := owner.retire(ctx); err != nil {
+			t.Errorf("original raw command cleanup: %v", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case <-owner.started:
+	case <-ctx.Done():
+		t.Fatal("actual raw command startup worker did not join")
+	}
+	return owner
+}
+
+func TestRouterVPNRawCommandNativeStartupAndRetirement(t *testing.T) {
+	options := routerVPNRawCommandTestOptions(t, `{
+		"log":{"disabled":true},
+		"inbounds":[{"type":"mixed","tag":"original-loopback","listen":"127.0.0.1","listen_port":0}]
+	}`)
+	owner := routerVPNRawCommandTestStart(t, options)
+	if owner.startErr != nil || owner.native.box == nil {
+		t.Fatalf("actual no-TUN startup failed: %v", owner.startErr)
+	}
+	originalBox := owner.native.box
+	originalInbound, found := originalBox.Inbound().Get("original-loopback")
+	if !found || originalInbound == nil || originalInbound.Type() != C.TypeMixed {
+		t.Fatal("actual startup lost its original loopback inbound")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := owner.retire(ctx); err != nil {
+		t.Fatalf("actual original Box retirement: %v", err)
+	}
+	if owner.native.box != originalBox || !owner.native.boxClosed || !owner.native.joined || owner.native.boxCloseFail != nil {
+		t.Fatal("successful retirement did not retain and join the original Box")
+	}
+	if active := originalBox.Inbound().Inbounds(); len(active) != 0 {
+		t.Fatalf("original started inbound manager still has %d active inbounds", len(active))
+	}
+	if err := owner.retire(ctx); err != nil || owner.native.box != originalBox {
+		t.Fatalf("repeated retirement replaced or failed the original owner: %v", err)
+	}
+}
+
+func TestRouterVPNRawCommandNativePartialConstructionRetirement(t *testing.T) {
+	for _, test := range []struct {
+		name, tls, cause string
+	}{
+		{"missing-certificate", `{"enabled":true,"key":["not-a-key"]}`, "missing certificate"},
+		{"invalid-key-pair", `{"enabled":true,"certificate":["not-a-certificate"],"key":["not-a-key"]}`, "parse x509 key pair"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := routerVPNRawCommandTestOptions(t, `{"log":{"disabled":true},"inbounds":[
+				{"type":"mixed","tag":"constructed-before-error","listen":"127.0.0.1","listen_port":0},
+				{"type":"mixed","tag":"invalid-tls","listen":"127.0.0.1","listen_port":0,"tls":`+test.tls+`}
+			]}`)
+			owner := routerVPNRawCommandTestStart(t, options)
+			if owner.startErr == nil || !strings.Contains(owner.startErr.Error(), "create service") || !strings.Contains(owner.startErr.Error(), test.cause) {
+				t.Fatalf("actual constructor did not return its intended TLS cause: %v", owner.startErr)
+			}
+			if owner.native.box != nil || len(owner.native.partial) == 0 || owner.native.joined {
+				t.Fatal("failed Box construction discarded the original partial managers")
+			}
+			var originalInbound adapter.Inbound
+			for _, partial := range owner.native.partial {
+				if manager, ok := partial.(adapter.InboundManager); ok {
+					originalInbound, _ = manager.Get("constructed-before-error")
+					if _, exists := manager.Get("invalid-tls"); exists {
+						t.Fatal("failed TLS constructor was registered as an admitted inbound")
+					}
+				}
+			}
+			if originalInbound == nil || originalInbound.Type() != C.TypeMixed {
+				t.Fatal("partial owner did not retain the actual earlier constructed inbound")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := owner.retire(ctx); err != nil {
+				t.Fatalf("actual partial construction retirement: %v", err)
+			}
+			if owner.native.box != nil || len(owner.native.partial) != 0 || !owner.native.joined {
+				t.Fatal("original partial managers were not retired after constructor failure")
+			}
+		})
+	}
+}
+
+func TestRouterVPNRawCommandOptionsRetirementScope(t *testing.T) {
+	tun := func(value any) option.Options {
+		return option.Options{Inbounds: []option.Inbound{{Type: C.TypeTun, Options: value}}}
+	}
+	endpoint := func(kind string, value any) option.Options {
+		return option.Options{Endpoints: []option.Endpoint{{Type: kind, Options: value}}}
+	}
+	tests := []struct {
+		name    string
+		options option.Options
+		refuse  bool
+	}{
+		{"empty", option.Options{}, false},
+		{"ordinary-mixed", option.Options{Inbounds: []option.Inbound{{Type: C.TypeMixed, Options: &option.HTTPMixedInboundOptions{}}}}, false},
+		{"tun-default", tun(&option.TunInboundOptions{}), false},
+		{"tun-system-stack", tun(&option.TunInboundOptions{Stack: "system"}), false},
+		{"tun-gvisor-stack", tun(&option.TunInboundOptions{Stack: "gvisor"}), false},
+		{"tun-mixed-stack", tun(&option.TunInboundOptions{Stack: "mixed"}), false},
+		// This is only the preflight's scope decision, not a namespace creation
+		// test. Whole-process user/namespace setup remains a supported caller.
+		{"whole-process-namespace-config", option.Options{NetworkNamespaces: []option.NetworkNamespace{{Type: C.NetNsTypeUnshare, Tag: "process"}}, Inbounds: []option.Inbound{{Type: C.TypeTun, Options: &option.TunInboundOptions{}}}}, false},
+		{"tun-missing-options", tun(nil), true},
+		{"tun-wrong-options", tun(&option.HTTPMixedInboundOptions{}), true},
+		{"tun-typed-nil", tun((*option.TunInboundOptions)(nil)), true},
+		{"tun-per-inbound-netns", tun(&option.TunInboundOptions{NetNs: "other"}), true},
+		{"tun-auto-redirect", tun(&option.TunInboundOptions{AutoRoute: true, AutoRedirect: true}), true},
+		{"tun-platform", tun(&option.TunInboundOptions{Platform: &option.TunPlatformOptions{}}), true},
+		{"bridge-outbound", option.Options{Outbounds: []option.Outbound{{Type: C.TypeBridge}}}, true},
+		{"wireguard-userspace", endpoint(C.TypeWireGuard, &option.WireGuardEndpointOptions{}), false},
+		{"wireguard-system", endpoint(C.TypeWireGuard, &option.WireGuardEndpointOptions{System: true}), true},
+		{"wireguard-typed-nil", endpoint(C.TypeWireGuard, (*option.WireGuardEndpointOptions)(nil)), true},
+		{"wireguard-wrong-options", endpoint(C.TypeWireGuard, &option.TunInboundOptions{}), true},
+		{"openvpn-client-userspace", endpoint(C.TypeOpenVPNClient, &option.OpenVPNClientEndpointOptions{}), false},
+		{"openvpn-client-system", endpoint(C.TypeOpenVPNClient, &option.OpenVPNClientEndpointOptions{OpenVPNEndpointOptions: option.OpenVPNEndpointOptions{System: true}}), true},
+		{"openvpn-client-typed-nil", endpoint(C.TypeOpenVPNClient, (*option.OpenVPNClientEndpointOptions)(nil)), true},
+		{"openvpn-client-wrong-options", endpoint(C.TypeOpenVPNClient, &option.TunInboundOptions{}), true},
+		{"openvpn-server-userspace", endpoint(C.TypeOpenVPNServer, &option.OpenVPNServerEndpointOptions{}), false},
+		{"openvpn-server-system", endpoint(C.TypeOpenVPNServer, &option.OpenVPNServerEndpointOptions{OpenVPNEndpointOptions: option.OpenVPNEndpointOptions{System: true}}), true},
+		{"openvpn-server-typed-nil", endpoint(C.TypeOpenVPNServer, (*option.OpenVPNServerEndpointOptions)(nil)), true},
+		{"openvpn-server-wrong-options", endpoint(C.TypeOpenVPNServer, &option.TunInboundOptions{}), true},
+		{"openconnect-userspace", endpoint(C.TypeOpenConnect, &option.OpenConnectEndpointOptions{}), false},
+		{"openconnect-system", endpoint(C.TypeOpenConnect, &option.OpenConnectEndpointOptions{System: true}), true},
+		{"openconnect-typed-nil", endpoint(C.TypeOpenConnect, (*option.OpenConnectEndpointOptions)(nil)), true},
+		{"openconnect-wrong-options", endpoint(C.TypeOpenConnect, &option.TunInboundOptions{}), true},
+		{"tailscale-userspace", endpoint(C.TypeTailscale, &option.TailscaleEndpointOptions{}), false},
+		{"tailscale-system", endpoint(C.TypeTailscale, &option.TailscaleEndpointOptions{SystemInterface: true}), true},
+		{"tailscale-typed-nil", endpoint(C.TypeTailscale, (*option.TailscaleEndpointOptions)(nil)), true},
+		{"tailscale-wrong-options", endpoint(C.TypeTailscale, &option.TunInboundOptions{}), true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := routerVPNRawCommandOptions(test.options)
+			if (err != nil) != test.refuse {
+				t.Fatalf("native retirement scope refusal=%v, want %v: %v", err != nil, test.refuse, err)
+			}
+			if test.refuse {
+				// Creation must refuse before allocating a context/worker or
+				// constructing any unsupported native object.
+				owner, createErr := routerVPNCreateRawCommand(test.options)
+				if createErr == nil || owner != nil {
+					t.Fatalf("unsupported graph reached native creation: owner=%v error=%v", owner, createErr)
+				}
+			}
+		})
+	}
+}

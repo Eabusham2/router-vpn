@@ -47,8 +47,10 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`5c0b90d3a98ae6189d99a54221b77f9d53e59252`](https://github.com/Eabusham2/router-vpn/commit/5c0b90d3a98ae6189d99a54221b77f9d53e59252),
-tree `52387a0868c48dfa0dc579a76f972b8638be3a01`.
+[`3e0f06e73329a3f237b3486367e0787a8f95597f`](https://github.com/Eabusham2/router-vpn/commit/3e0f06e73329a3f237b3486367e0787a8f95597f),
+tree `97ccac97b5c1f81f4d38c7a1c5fc03bb197db7f9`. The separate native retirement
+source accompanying this record is described below; it does not inherit this
+cutoff's CI results.
 
 | Published commit | Concrete change and focused evidence | Remaining boundary |
 |---|---|---|
@@ -101,6 +103,60 @@ tree `52387a0868c48dfa0dc579a76f972b8638be3a01`.
 | [`d8acc092`](https://github.com/Eabusham2/router-vpn/commit/d8acc09275bad858e0fdae200ac000dc1f67563d) | Connects both native ALL architecture gates to the authoritative release through a reusable workflow and mandatory aggregation dependency. Preserves the standalone jobs, complete verdict/control inventory, original bounds and host checks. Sixteen wiring checks, including fourteen broken-edge variants, pass in 0.117s; 21 controller checks pass in 20.955s; the full artifact/workflow parity audit passes. The original release workflow fails the intended missing-edge assertion. | A required release dependency is not a completed current-source native or publication result. No shipping MAX predicate is opened by this unit. |
 | [`e88ee4a3`](https://github.com/Eabusham2/router-vpn/commit/e88ee4a39b3118a122a5554d58973f235f4785d8) | Retains the original Linux controller network observer from private preparation through Start and later RPCs. The service's original-child capture/ledger must match the authenticated peer, original session/source/policy and locally transmitted deadline before Record/End. Stop joins that original observer. The server now preserves the absolute deadline instead of adding time through a relative timeout. All 134 portable service verdicts and 88 startup verdicts pass in 92.949s/24.114s; root focused races pass in 5.213s. Old controller and timeout sources fail their causal controls. | Actual children, sealed descriptors, creation pidfds and authenticated socketpairs execute locally; native network/TUN receipts are explicit models. The native-tag image links, but all thirteen installed namespace verdicts remain mandatory. Active MTU, recoverable exact route/rule retirement, cross-adapter transfer, active Always upgrade and same-boot crash recovery remain separate work. |
 | [`5c0b90d3`](https://github.com/Eabusham2/router-vpn/commit/5c0b90d3a98ae6189d99a54221b77f9d53e59252) | Routes main Windows MAX compile/positive/negative commands through the existing original Windows job owner, joining retained descendants before returning the original command status/output. A failed join retains private and prepared-source workspaces and refuses a successor command; preparation failure retains its enclosing source. Root runner executes 51 checks in 5.653s with one Windows-only check pending; sixteen release-wiring checks pass in 0.110s. Three causal mutations reject the old command path and both premature deletion cases. | The observed ARM64 WinError32 does not itself identify a leaked descendant. The new real Windows test deliberately holds an original image, requires immediate unlink after original-job join and preserves a foreign same-image process; it and the complete corrected MAX suites must execute on Windows. No unlink retry, weakened negative, expanded deadline or production admission change is included. |
+| [`5a331333`](https://github.com/Eabusham2/router-vpn/commit/5a331333135507845d1531181006e78850846fb7) | Adds retained macOS Local WG/AWG entry to a distinct WireGuard final peer, preserving each source, private key, PSK, AllowedIPs, MTU and keepalive. Six positive and sixteen refusal cases raise the required native inventory to 188 and policy inventory to 28. Root application/shared races pass in 4.954s/1.596s; six real encrypted exchanges pass in 7.148s, 24 generated graphs parse, eight images cross-link and thirteen runner checks pass. | Actual macOS PF/utun and packaged native acceptance remain required. AWG final peers, Start Layers, ordinary Server/Compare and new predecessor families are not added by this unit. |
+| [`e3d2f137`](https://github.com/Eabusham2/router-vpn/commit/e3d2f1379ed716998d3c24e4dbf13cf3c69f990e) | Preserves every `desktop_standard_*.go` source while preparing the shared Tor/native module, repairing the actual missing copied absence-test declaration. Root actual shipping-projection regression passes in 0.965s. | Source-copy verification does not establish native TUN or installed-service execution. |
+| [`369fd8ee`](https://github.com/Eabusham2/router-vpn/commit/369fd8eebdf071b6b0fae80185edfd745b38856b) | Gives the real Windows image-holder negative fixture its required strict exit status while preserving original-job join, immediate unlink and foreign-process survival. Root 53 runner cases pass with one Windows-only skip in 5.565s. | Both actual Windows holder results are recorded below; whole MAX jobs and production admission remain distinct. |
+| [`9d880001`](https://github.com/Eabusham2/router-vpn/commit/9d88000158ff8cf6eba9bb67ca2923d9ca617c2d) | Lets the original runnable connection monitor settle at two existing fixture transaction boundaries before staging/refusal assertions. Production locks and timeouts are unchanged. Focused root races pass in 5.022s with only native physical inventory explicitly modeled; removing the waits reproduces all three intended operation-busy failures in the controlled race. | Exact native source-contract confirmation arrives at `6327ed02` below; this fixture fix does not alter connection ownership. |
+| [`6327ed02`](https://github.com/Eabusham2/router-vpn/commit/6327ed02548e51986fbcf4cee633360bc10e38e7) | Corrects the original Linux observer's IPv6 policy-rule multicast membership using named kernel group indices, then checks its actual bound groups and port. A mandatory real namespace case adds/deletes an IPv6 rule and requires both events despite identical final state. Root desktop-network races pass in 1.221s, fifteen runner checks in 0.196s and the ARM64 test image links. | The real IPv6 rule/ABA case subsequently passes on native CI at this same SHA, as recorded below. Device network-transition acceptance remains separate. |
+| [`e35f1972`](https://github.com/Eabusham2/router-vpn/commit/e35f1972019dfabfe95100bd7587b8fd97c10943) | Restores cleanup of Windows read-only Git pack files after the original command tree joins. The disposable root and complete path chain must remain original; reparse paths, replacements, special files and read-only foreign hard links are refused. Only observed regular-file read-only attributes change before one recursive deletion. Root 58 executed checks pass in 5.658s; disabling normalization fails the intended old-behavior assertion. | Two actual Windows-only checks, including a real WinError5 index-unlink witness, remain mandatory. WinError5/32 failures are not suppressed or retried. Complete corrected native MAX jobs remain required before admission. |
+| [`93720c2a`](https://github.com/Eabusham2/router-vpn/commit/93720c2af7a4f2c1f4dbf73603902b33807069cc) | Captures each Windows workspace child's full no-follow file identity; cached directory enumeration leaves inode/device/link fields zero and caused a false replacement refusal. The new real-directory regression models only that documented metadata boundary; the exact old helper fails it. Root 59 of 61 runner checks pass in 6.581s. | Replacement, reparse, foreign hard-link, unjoined-owner and cleanup-error checks remain. Actual successful Windows cleanup and bounded MAX jobs are recorded below; the whole release is separate. |
+| [`3e0f06e7`](https://github.com/Eabusham2/router-vpn/commit/3e0f06e73329a3f237b3486367e0787a8f95597f) | Adds one original-monitor synchronization at the temporary Speed Lab restoration fixture boundary. All 24 existing directions pass race tests in 76.769s. Controlled actual monitor ownership reproduces the old HTTP409-before-trial error on TCP/UDP/mixed OpenVPN; the fixed cases pass in 17.118s and root's independent three-branch run in 14.985s. | Only physical network inventory is modeled locally. No production lock, proof, cancellation, restoration or timeout is changed. Both complete application source gates subsequently pass on this exact SHA without the local inventory model, as recorded below. |
+
+
+## Native retirement source accompanying this record
+
+The combined Linux source now retains the native constructor's original TUN,
+continuous routing-event socket, successful-call ledger, dependency owners and
+pending resolver calls. A failed or cancelled cleanup keeps those objects for
+an explicitly requested bounded retry. The installed service's original
+inherited cleanup object carries authenticated requests/results; successful
+child exit alone cannot release protection. The parent independently requires
+complete original interface and routing absence. Ordinary raw commands use
+the same actual construction/start/retirement composition.
+
+Root's combined 110-verdict startup race suite passes in 44.241s. The broader
+134-verdict service core race suite also passes in 74.724s. These execute actual
+children, memory objects and creation pidfds with explicitly modeled networks.
+The new preparer regression executes the actual complete pinned projection
+twice and rejects ten partial or changed inputs. Its old-source control fails
+the second invocation. Actual generated DNS options pass four race-tested
+cases; restoring only the old IPv6 error index reproduces the IPv4 `/32`
+panic. These checks do not establish native routing or live resolver behavior.
+
+The final root resolver and D-Bus race run executes all 54 portable verdicts,
+with package durations 8.308s and 1.020s. The exact verdict parser rejects
+missing, duplicate, foreign, failed or skipped results. All 1,225 declared
+preparation inputs and 300 native projection records agree with the tested
+source. Twenty-nine routing-runner checks pass in 0.078s; repeating the actual
+pinned preparation and its refusal controls passes in 1.076s. The full gate
+requires 59 resolver/D-Bus verdicts: the additional parent and four leaves
+exercise the actual fixed named bus endpoint inside original isolated
+namespaces, endpoint replacement, untrusted ancestry and cancelled-child join.
+Those namespace cases compile locally but cannot execute in this workspace;
+they remain mandatory in native CI. The resolver method server is an explicit
+test peer, not evidence of actual systemd acceptance.
+
+The native routing fixture likewise launches its exact test image directly,
+retains the creation pidfd and joins that child before cleanup. This replaces
+the forking namespace wrapper without changing the seven case bodies or any
+deadline. Four extracted-helper cases use actual processes under the race
+detector (1.485s); root's final prepared-module compile passes in 1.011s with
+no tests selected. The seven real TUN/routing cases remain required in CI.
+
+[LINUX-NATIVE-RETIREMENT.md](LINUX-NATIVE-RETIREMENT.md) records the exact lifetime,
+required native gates, older available-bus compatibility boundary and Linux's
+lack of an atomic creator-generation comparison for rule deletion. Those
+limitations remain requirements; rejecting them does not complete them.
 
 ## Native and release evidence
 
@@ -378,6 +434,63 @@ ACL/lifecycle fixture confirmation without relaxing production ACL rules.
 It does not certify the distinct 166-case external-host gate, whole application
 packaging or the newer source cutoff.
 
+The IPv6 multicast correction has actual same-source native confirmation at
+`6327ed02`: [Linux job 126499727664](https://github.com/Eabusham2/router-vpn/actions/runs/41807937861/job/126499727664)
+succeeds. Its strict cohort runner requires every one of the nine real isolated
+namespace cases, including `ipv6-rule-away-and-back`, before printing success.
+The full log also records all thirteen executed negative controls. This closes
+that native kernel observation case, not physical-device transition acceptance.
+
+The complete source-contract job at `6327ed02`,
+[job 126500070623](https://github.com/Eabusham2/router-vpn/actions/runs/41807937547/job/126500070623),
+passes, including the complete client package in 395.836s. Both required ALL
+jobs in [authoritative run 41807938152](https://github.com/Eabusham2/router-vpn/actions/runs/41807938152)
+also pass: AMD64 `126500341165` and ARM64 `126500341290`. Each has all 26
+verdicts, eight distinct compiled controls and four restoration leaves, with
+identical 1,597-record source digest
+`c98afc2ba669e3317aa9c42ba2f1a3f4e414e5120284794f26a6203e2c9e5574`.
+These are prospective controller-composition receipts with modeled
+child/BFE/transport boundaries, not shipping MAX admission or release proof.
+
+Both real Windows original-job image-holder regressions pass at `369fd8ee`
+in [run 41804819525](https://github.com/Eabusham2/router-vpn/actions/runs/41804819525):
+AMD64 job `126489178237` completes all 53 scope checks in 40.964s; ARM64
+`126489178244` in 16.593s. The original image becomes immediately deletable
+while a foreign same-image process survives. Those enclosing jobs are later
+cancelled. Separately, all ten native suites in
+[MAX run 41804819062](https://github.com/Eabusham2/router-vpn/actions/runs/41804819062)
+reach their strict completion messages, then every whole job fails deleting
+its read-only Git pack index (WinError5). A completed sub-suite is not a
+successful job or final source receipt.
+
+The first whole corrected MAX result is `93720c2a` ARM64 QUIC,
+[job 126514628462](https://github.com/Eabusham2/router-vpn/actions/runs/41812402152/job/126514628462).
+Both actual cleanup regressions and all 61 runner tests pass, followed by the
+native QUIC suite and receipt upload. The downloaded artifact `13313887303`
+matches its uploaded ZIP digest. Its actual JSON records clean source
+`93720c2a`, tree `bb903e3e1a9b64bae8c6f2f76562c87fd944d5ea`, target
+`windows/arm64`, and both private-key and standalone-source workspace removal.
+It correctly retains `prospective=true`, modeled TUN and
+`complete_inventory_proved=false`. The complete
+[ten-partition run](https://github.com/Eabusham2/router-vpn/actions/runs/41812402152)
+subsequently succeeds at 10:47:51 UTC. All ten actual artifact ZIPs match
+their logged upload digests; their receipt JSONs agree on clean source/tree,
+both workspace removals, 1,736 shared source records and the prospective
+admission predicate. The only remaining generated-source difference is each
+job's absolute Xray replacement path in `go.mod`. All 46 compiled negative
+controls across both architectures retain their intended failure outcomes.
+Both required ALL jobs also pass at `93720c2a`, retaining all 26 verdicts,
+eight controls and four restoration leaves per architecture. Newer source,
+shipping admission and full exact-SHA publication remain separate.
+
+The Speed Lab fixture correction receives complete application-package
+confirmation on exact `3e0f06e7`: the
+[multihop source job](https://github.com/Eabusham2/router-vpn/actions/runs/41814611725/job/126522109250)
+passes `cmd/client` in 432.806s, and the
+[requirements source job](https://github.com/Eabusham2/router-vpn/actions/runs/41814611758/job/126522108162)
+passes it in 465.810s. These actual workflow runs use no local physical-network
+inventory overlay. They are not race runs or whole release results.
+
 A fresh GitHub releases read still returned the
 [745b3e41 prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b),
 published October 24, with ten native packages, release JSON and checksums.
@@ -399,14 +512,16 @@ There is no complete exact-current-SHA published release claim in this record.
   startup receipt to the retained service observer. The controller now retains
   its own original observer through private preparation, Start and later RPCs;
   its mandatory installed namespace cases remain unproved locally. Active owned
-  MTU transitions and exact native route/rule retirement remain source work.
-  Initial/reset/Close priority-range cleanup cannot become
-  original-object authority, and child exit alone cannot establish native
-  cleanup success. Persisted
-  metadata alone cannot authorize adopting or deleting a prior table.
+  MTU transitions remain source work. The exact-selector native retirement
+  implementation accompanying this record retains failed original cleanup and
+  replaces priority-range deletion. Actual installed native acceptance,
+  original daemon authority on older available buses and the kernel's lack of
+  atomic creator-generation rule deletion remain explicit boundaries. Child
+  exit or persisted metadata alone cannot authorize releasing protection or
+  adopting/deleting a prior table.
 - Retained macOS direct SOCKS5, AWG and bounded OpenVPN, plus the Local ordinary
   WG/AWG-entry paths to SS, HTTP/HTTPS CONNECT, Hysteria2 (including captured AES
-  and AES plus XOR exit layers) and SOCKS5 exits
+  and AES plus XOR exit layers), SOCKS5 and WireGuard final peers
   are source-implemented with mandatory native cases.
   Their exact-source native acceptance and broader predecessor/entry/Server
   compositions remain accountable. Existing Tor Server/Compare, ordinary Tor
@@ -417,8 +532,9 @@ There is no complete exact-current-SHA published release claim in this record.
 - Protected Windows complete-MAX admission remains closed pending its matching
   native MAX prerequisites and shipping activation. Both unified prospective
   ALL architecture gates passed, and both are now required by release; those
-  specific gaps are no longer open. The Windows command-retirement repair still
-  requires its real file-sharing regression and complete native MAX rerun.
+  specific gaps are no longer open. The Windows command-retirement and
+  read-only workspace regressions now have actual native confirmation.
+  Complete corrected MAX inventory and shipping admission remain open.
 - All original applicable product, map/UI, measurement, profile, Methods,
   onboarding/admin, native-runtime and lifecycle requirements remain accountable
   under the full ledger. This continuation did not independently close every

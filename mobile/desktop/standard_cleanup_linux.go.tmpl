@@ -1,0 +1,74 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+)
+
+// This owner exists before construction. Native failure never enters Box.Close:
+// its original TUN/route ledger remains live for the next bounded Stop attempt.
+type routerVPNStandardCleanup struct {
+	result *standardengine.CleanupFile
+	capture string
+	reader routerVPNStandardInbound
+	instance *box.Box
+	partial []any
+	cancel context.CancelFunc
+	peer *linuxprocess.Bootstrap
+	channel *linuxprocess.Channel
+	ledger string
+	boxAttempted bool
+	boxFailure error
+}
+
+func (o *routerVPNStandardCleanup) retire(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil { return "", err }
+	if err := o.result.Current(); err != nil { return "", err }
+	if o.ledger == "" {
+		var err error
+		if o.reader != nil {
+			o.ledger, err = o.reader.RouterVPNDesktopNetworkRetire(ctx)
+		} else {
+			// No inbound startup call was reached. Box construction alone does
+			// not create a native TUN; partial managers remain owned below.
+			o.ledger, err = desktopnetwork.CanonicalDesktopNetworkRetirementReceipt(desktopnetwork.DesktopNetworkRetirementReceipt{
+				Schema:1, TargetOS:"linux", Objects:[]desktopnetwork.DesktopNetworkObject{}})
+		}
+		if err != nil { o.ledger = ""; return "", err }
+	}
+	if err := ctx.Err(); err != nil { return "", err }
+	if o.cancel != nil { o.cancel() }
+	if o.instance != nil {
+		if !o.boxAttempted {
+			o.boxAttempted = true
+			o.boxFailure = o.instance.Close()
+		}
+		// Box.Close is one-shot. Never convert a previous failed close into
+		// success by calling it again and normalizing os.ErrClosed.
+		if o.boxFailure != nil { return "", o.boxFailure }
+	} else {
+		var pending []any
+		var failures []error
+		for _, item := range o.partial {
+			if closer, ok := item.(interface{ Close() error }); ok {
+				if err := closer.Close(); err != nil { pending=append(pending,item); failures=append(failures,err) }
+			}
+		}
+		o.partial = pending
+		if len(failures)>0 { return "", errors.Join(failures...) }
+	}
+	if err := ctx.Err(); err != nil { return "", err }
+	if o.peer != nil {
+		if err := o.peer.Close(ctx); err != nil { return "", err }
+	}
+	if o.channel != nil {
+		if err := o.channel.Close(ctx); err != nil { return "", err }
+	}
+	return o.ledger, ctx.Err()
+}

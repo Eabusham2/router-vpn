@@ -23,6 +23,16 @@ def verdict():
                      [parent, *(parent + "/" + leaf for leaf in RUNNER.NATIVE_CASES)])
 
 
+class RoutingRetirementVerdicts(unittest.TestCase):
+    def test_exact_original_and_foreign_retirement_cases(self):
+        parent="TestLinuxRoutingRetirementRequiresOriginalJoinedInventory"
+        output="\n".join("--- PASS: "+name+" (0.01s)" for name in (parent,*(parent+"/"+leaf for leaf in RUNNER.ROUTING_RETIREMENT_CASES)))
+        RUNNER.check_routing_retirement_verdict(output)
+        for line in output.splitlines():
+            for mutation in (output.replace(line,"",1),output+"\n"+line,output.replace(line,line.replace("PASS","SKIP"),1),output.replace(line,line.replace("PASS","FAIL"),1)):
+                with self.assertRaises(ValueError):RUNNER.check_routing_retirement_verdict(mutation)
+
+
 class NetworkNamespaceLauncher(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="network-private-source-")
@@ -266,6 +276,7 @@ class PortableNetworkNamespaceDispatch(unittest.TestCase):
 
 def load_tests(loader, _standard_tests, _pattern):
     suite = loader.loadTestsFromTestCase(PortableNetworkNamespaceDispatch)
+    suite.addTests(loader.loadTestsFromTestCase(RoutingRetirementVerdicts))
     # Linux ownership/mode tests require real Linux filesystem semantics. A
     # mocked sys.platform must not run POSIX geteuid/chmod checks on Windows or
     # replace its native retained-handle/creation-time identity semantics.

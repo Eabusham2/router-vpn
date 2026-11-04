@@ -1,0 +1,353 @@
+//go:build linux
+
+package tun
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"os"
+	"runtime"
+	"sync"
+	"syscall"
+
+	"golang.org/x/sys/unix"
+)
+
+// The original subscribed socket remains open from before native creation to
+// the final deletion/readback. A dump cannot replace this event continuity.
+const routervpnLinuxRoutingGroups = uint32(unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE | unix.RTMGRP_IPV6_ROUTE | 1<<(unix.RTNLGRP_IPV6_RULE-1))
+
+type routerVPNLinuxRoutingEvent struct {
+	object         DesktopNetworkObject
+	delete         bool
+	sequence, port uint32
+}
+
+type routerVPNLinuxRoutingCommand struct {
+	sequence uint32
+	result   chan error
+	done     bool
+	err      error
+}
+
+type routerVPNLinuxRoutingWatch struct {
+	mu                                           sync.Mutex
+	file                                         *os.File
+	info                                         os.FileInfo
+	namespace                                    *os.File
+	namespaceInfo                                os.FileInfo
+	port, sequence                               uint32
+	joined                                       chan struct{}
+	closing, closed, fileClosed, namespaceClosed bool
+	failure                                      error
+	events                                       []routerVPNLinuxRoutingEvent
+	waiters                                      map[uint32]*routerVPNLinuxRoutingCommand
+}
+
+func routervpnOpenLinuxRoutingWatch(ctx context.Context) (*routerVPNLinuxRoutingWatch, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("native routing lifetime has no original caller")
+	}
+	ns, err := os.Open("/proc/thread-self/ns/net")
+	if err != nil {
+		return nil, err
+	}
+	info, err := ns.Stat()
+	if err != nil {
+		ns.Close()
+		return nil, err
+	}
+	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC|syscall.SOCK_NONBLOCK, syscall.NETLINK_ROUTE)
+	if err != nil {
+		ns.Close()
+		return nil, err
+	}
+	if err = syscall.Bind(fd, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK, Groups: routervpnLinuxRoutingGroups}); err == nil {
+		err = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 1<<20)
+	}
+	address, addressErr := syscall.Getsockname(fd)
+	bound, ok := address.(*syscall.SockaddrNetlink)
+	if err != nil || addressErr != nil || !ok || bound.Pid == 0 || bound.Groups != routervpnLinuxRoutingGroups {
+		syscall.Close(fd)
+		ns.Close()
+		return nil, errors.Join(errors.New("native routing lifetime lost its socket"), err, addressErr)
+	}
+	w := &routerVPNLinuxRoutingWatch{file: os.NewFile(uintptr(fd), "router-vpn-original-routing"), namespace: ns, namespaceInfo: info,
+		port: bound.Pid, joined: make(chan struct{}), waiters: make(map[uint32]*routerVPNLinuxRoutingCommand)}
+	w.info, err = w.file.Stat()
+	if err != nil {
+		w.file.Close()
+		ns.Close()
+		return nil, err
+	}
+	go w.run()
+	return w, nil
+}
+
+func (w *routerVPNLinuxRoutingWatch) fail(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.failure == nil {
+		w.failure = err
+	}
+}
+
+func (w *routerVPNLinuxRoutingWatch) current() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if w == nil {
+		return errors.New("native routing lifetime was not captured")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closing || w.closed || w.failure != nil {
+		return errors.Join(errors.New("native routing lifetime lost continuity"), w.failure)
+	}
+	info, err := w.file.Stat()
+	ns, nsErr := w.namespace.Stat()
+	current, currentErr := os.Stat("/proc/thread-self/ns/net")
+	if err != nil || nsErr != nil || currentErr != nil || !os.SameFile(info, w.info) || !os.SameFile(ns, w.namespaceInfo) || !os.SameFile(current, w.namespaceInfo) {
+		return errors.New("native routing lifetime lost its original socket or namespace")
+	}
+	return nil
+}
+
+func (w *routerVPNLinuxRoutingWatch) run() {
+	defer close(w.joined)
+	raw, err := w.file.SyscallConn()
+	if err != nil {
+		w.fail(err)
+		return
+	}
+	buffer := make([]byte, 256<<10)
+	for {
+		var size, flags int
+		var sender syscall.Sockaddr
+		var received error
+		err = raw.Read(func(fd uintptr) bool {
+			size, _, flags, sender, received = syscall.Recvmsg(int(fd), buffer, nil, syscall.MSG_DONTWAIT)
+			return received != syscall.EAGAIN && received != syscall.EWOULDBLOCK
+		})
+		if err == nil {
+			err = received
+		}
+		w.mu.Lock()
+		closing := w.closing
+		w.mu.Unlock()
+		if closing {
+			return
+		}
+		from, ok := sender.(*syscall.SockaddrNetlink)
+		if err != nil || !ok || from.Pid != 0 || size == 0 || flags&(syscall.MSG_TRUNC|syscall.MSG_CTRUNC) != 0 {
+			w.fail(errors.Join(errors.New("native routing notification lost its original kernel stream"), err))
+			return
+		}
+		messages, parse := syscall.ParseNetlinkMessage(buffer[:size])
+		consumed := 0
+		for _, message := range messages {
+			consumed += (int(message.Header.Len) + 3) &^ 3
+		}
+		if parse != nil || consumed != size {
+			w.fail(errors.New("native routing notification has incomplete framing"))
+			return
+		}
+		for _, message := range messages {
+			if message.Header.Flags&0x10 != 0 || message.Header.Type == syscall.NLMSG_OVERRUN {
+				w.fail(errors.New("native routing notification lost messages"))
+				return
+			}
+			w.mu.Lock()
+			command := w.waiters[message.Header.Seq]
+			w.mu.Unlock()
+			if command != nil && message.Header.Type == syscall.NLMSG_ERROR {
+				var result error
+				if len(message.Data) < 20 || binary.LittleEndian.Uint32(message.Data[12:]) != command.sequence {
+					result = errors.New("native routing acknowledgement changed its original command")
+				} else if code := int32(binary.LittleEndian.Uint32(message.Data)); code != 0 {
+					result = syscall.Errno(-code)
+				}
+				w.mu.Lock()
+				delete(w.waiters, command.sequence)
+				w.mu.Unlock()
+				command.result <- result
+				continue
+			}
+			if command != nil && message.Header.Type == syscall.RTM_NEWLINK {
+				continue
+			}
+			kind, deleted := "", false
+			switch message.Header.Type {
+			case syscall.RTM_NEWROUTE:
+				kind = "route"
+			case syscall.RTM_DELROUTE:
+				kind, deleted = "route", true
+			case syscall.RTM_NEWRULE:
+				kind = "rule"
+			case syscall.RTM_DELRULE:
+				kind, deleted = "rule", true
+			default:
+				w.fail(errors.New("native routing stream received an unrelated message"))
+				return
+			}
+			object, err := ParseDesktopLinuxNetworkObject(kind, message.Data)
+			if err != nil {
+				w.fail(err)
+				return
+			}
+			w.mu.Lock()
+			if len(w.events) >= 8192 {
+				w.mu.Unlock()
+				w.fail(errors.New("native routing event bound exceeded"))
+				return
+			}
+			w.events = append(w.events, routerVPNLinuxRoutingEvent{object, deleted, message.Header.Seq, message.Header.Pid})
+			w.mu.Unlock()
+		}
+	}
+}
+
+func (w *routerVPNLinuxRoutingWatch) send(ctx context.Context, kind uint16, body []byte) (*routerVPNLinuxRoutingCommand, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("native routing command lost its bounded caller")
+	}
+	if err := w.current(); err != nil {
+		return nil, err
+	}
+	w.mu.Lock()
+	if w.sequence == ^uint32(0) || len(w.waiters) >= 512 {
+		w.mu.Unlock()
+		return nil, errors.New("native routing commands exceeded original bound")
+	}
+	w.sequence++
+	c := &routerVPNLinuxRoutingCommand{sequence: w.sequence, result: make(chan error, 1)}
+	w.waiters[c.sequence] = c
+	w.mu.Unlock()
+	request := make([]byte, 16+len(body))
+	binary.LittleEndian.PutUint32(request, uint32(len(request)))
+	binary.LittleEndian.PutUint16(request[4:], kind)
+	binary.LittleEndian.PutUint16(request[6:], syscall.NLM_F_REQUEST|syscall.NLM_F_ACK)
+	binary.LittleEndian.PutUint32(request[8:], c.sequence)
+	copy(request[16:], body)
+	raw, err := w.file.SyscallConn()
+	if err == nil {
+		var sendErr error
+		err = raw.Control(func(fd uintptr) {
+			sendErr = syscall.Sendto(int(fd), request, syscall.MSG_DONTWAIT, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK})
+		})
+		if err == nil {
+			err = sendErr
+		}
+	}
+	if err != nil {
+		w.mu.Lock()
+		delete(w.waiters, c.sequence)
+		w.mu.Unlock()
+		return nil, err
+	}
+	return c, nil
+}
+
+// A timeout leaves this exact command retained. A retry waits for its original
+// acknowledgement; it never sends another delete while the first is unknown.
+func (w *routerVPNLinuxRoutingWatch) await(ctx context.Context, c *routerVPNLinuxRoutingCommand) error {
+	if c == nil || ctx == nil {
+		return errors.New("native routing command is missing")
+	}
+	if c.done {
+		return c.err
+	}
+	select {
+	case err := <-c.result:
+		c.done, c.err = true, err
+		return err
+	case <-w.joined:
+		return errors.New("native routing observer exited before its command joined")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *routerVPNLinuxRoutingWatch) drain(ctx context.Context) ([]routerVPNLinuxRoutingEvent, error) {
+	body := make([]byte, 16)
+	binary.LittleEndian.PutUint32(body[4:], 1)
+	c, err := w.send(ctx, syscall.RTM_GETLINK, body)
+	if err == nil {
+		err = w.await(ctx, c)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = w.current(); err != nil {
+		return nil, err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	result := w.events
+	w.events = nil
+	return result, nil
+}
+
+func (w *routerVPNLinuxRoutingWatch) remove(ctx context.Context, object DesktopNetworkObject) (*routerVPNLinuxRoutingCommand, error) {
+	body, err := base64.StdEncoding.Strict().DecodeString(object.Native)
+	if err != nil || object.Validate("linux") != nil {
+		return nil, errors.New("native delete lost its captured successful call")
+	}
+	kind := uint16(syscall.RTM_DELROUTE)
+	if object.Kind == "rule" {
+		kind = syscall.RTM_DELRULE
+	}
+	return w.send(ctx, kind, body)
+}
+
+func (w *routerVPNLinuxRoutingWatch) close(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("native routing close lost its original caller")
+	}
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	if !w.fileClosed {
+		info, err := w.file.Stat()
+		if err != nil || !os.SameFile(info, w.info) {
+			w.mu.Unlock()
+			return errors.New("native routing close lost its original socket")
+		}
+	}
+	if !w.namespaceClosed {
+		info, err := w.namespace.Stat()
+		if err != nil || !os.SameFile(info, w.namespaceInfo) {
+			w.mu.Unlock()
+			return errors.New("native routing close lost its original namespace")
+		}
+	}
+	w.closing = true
+	if !w.fileClosed {
+		if err := w.file.Close(); err != nil {
+			w.mu.Unlock()
+			return err
+		}
+		w.fileClosed = true
+	}
+	w.mu.Unlock()
+	select {
+	case <-w.joined:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.namespaceClosed {
+		if err := w.namespace.Close(); err != nil {
+			return err
+		}
+		w.namespaceClosed = true
+	}
+	w.closed = true
+	return nil
+}

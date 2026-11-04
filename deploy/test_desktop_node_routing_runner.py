@@ -19,6 +19,70 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+class NativeRetirementVerdicts(unittest.TestCase):
+    def test_every_real_tun_leaf_is_required_exactly_once(self):
+        root = "TestRouterVPNNativeLinuxRoutingRetirementNamespace"
+        suite = ("native-routing-receipt", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting", (root,))
+        lines = ["--- PASS: " + root + " (1s)\n"] + ["    --- PASS: " + root + "/" + case + " (0.1s)\n" for case in NODE.NATIVE_RETIREMENT_CASES]
+        lines += ["--- PASS: TestRouterVPNNativeLinuxRoutingDNSAddressBoundary" + ("/" + case if case else "") + " (0.01s)\n" for case in ("", *NODE.NATIVE_DNS_CASES)]
+        baseline = Mock()
+        baseline.execute.return_value = (0, "".join(lines))
+        with contextlib.redirect_stdout(io.StringIO()):
+            NODE.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+            for line in lines[1:]:
+                for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line,
+                                "".join(lines).replace(line, line.replace(" (", "-unselected ("), 1)):
+                    with self.subTest(line=line, changed=changed):
+                        baseline.execute.return_value = (0, changed)
+                        with self.assertRaisesRegex(ValueError, "actual original-TUN retirement leaf|captured DNS address verdict"):
+                            NODE.execute_baseline_suite(baseline, suite)
+
+
+class NativeResolverVerdicts(unittest.TestCase):
+    def test_every_original_resolver_verdict_is_required_exactly_once(self):
+        suite = ("native-resolver-lifetime", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver", NODE.NATIVE_RESOLVER_TESTS)
+        names = list(NODE.NATIVE_RESOLVER_TESTS) + ["TestRouterVPNNativeLinuxResolver" + root + "/" + leaf
+                for root, leaves in NODE.NATIVE_RESOLVER_LEAVES.items() for leaf in leaves]
+        lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+        baseline = Mock()
+        baseline.execute.return_value = (0, "".join(lines))
+        with contextlib.redirect_stdout(io.StringIO()):
+            NODE.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+            for line in lines:
+                for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line,
+                                *(["".join(lines).replace(line, line.replace("NamedBusNamespace", "NamedBusNamespaceUnselected"), 1)]
+                                  if "NamedBusNamespace" in line else [])):
+                    with self.subTest(line=line, changed=changed):
+                        baseline.execute.return_value = (0, changed)
+                        with self.assertRaisesRegex(ValueError, "omitted"):
+                            NODE.execute_baseline_suite(baseline, suite)
+
+
+class NativeDBusVerdicts(unittest.TestCase):
+    def test_every_original_descriptor_verdict_is_required_exactly_once(self):
+        suite = ("native-dbus-rights", "github.com/godbus/dbus/v5", "^TestRouterVPNDBus", NODE.NATIVE_DBUS_TESTS)
+        names = list(NODE.NATIVE_DBUS_TESTS) + [NODE.NATIVE_DBUS_TESTS[0] + "/" + case for case in NODE.NATIVE_DBUS_CASES]
+        lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+        baseline = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            baseline.execute.return_value = (0, "".join(lines))
+            NODE.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+            invalid = [changed for line in lines for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line)]
+            invalid += ["".join(lines) + suffix for suffix in (
+                "=== RUN   TestRouterVPNDBusForeign\n--- PASS: TestRouterVPNDBusForeign (0.01s)\n",
+                "--- FAIL: TestRouterVPNDBusReceivedRightsRetireOnError (0.01s)\n",
+                "--- SKIP: foreign (0.01s)\n", "DATA RACE\n", "panic: unexpected wire error\n")]
+            for output in invalid:
+                with self.subTest(output=output):
+                    baseline.execute.return_value = (0, output)
+                    with self.assertRaisesRegex(ValueError, "omitted"):
+                        NODE.execute_baseline_suite(baseline, suite)
+
+
+
 class RoutingNamespaceLauncher(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="node-routing-private-")
@@ -31,6 +95,8 @@ class RoutingNamespaceLauncher(unittest.TestCase):
         self.source = Path("/original-source")
         self.env = {"GOOS": "linux", "EXACT_COMPILER_ENV": "captured",
                     "ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD": "1",
+                    "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE": "foreign-case",
+                    "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE": "foreign-endpoint",
                     "ROUTERVPN_ROUTING_PARENT_NET": "foreign-network",
                     "ROUTERVPN_ROUTING_PARENT_USER": "foreign-user"}
         self.native = Mock()
@@ -70,6 +136,18 @@ class RoutingNamespaceLauncher(unittest.TestCase):
         self.assertEqual(self.env, original)
         self.assertFalse(self.staged[0].parent.exists())
         self.assertTrue(self.binary.exists())
+
+    def test_resolver_uses_only_its_fixed_privileged_selector(self):
+        self.assertEqual(NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env, duration=90,
+                         selector="^TestRouterVPNNativeLinuxResolver"), (0, "actual native fixture output\n"))
+        args, options = self.native.run.call_args
+        self.assertIn("-test.run=^TestRouterVPNNativeLinuxResolver", args[0])
+        self.assertEqual(options["timeout"], 105)
+        self.native.run.reset_mock()
+        with self.assertRaisesRegex(ValueError, "another fixture selector"):
+            NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env, duration=90,
+                                           selector="^TestRouterVPNNativeLinuxResolver|Other")
+        self.native.run.assert_not_called()
 
     def test_root_keeps_the_same_fixture_and_owned_timeout_without_sudo(self):
         self.native.privilege_tool.return_value = None
@@ -236,6 +314,16 @@ class BaselineRoutingDispatch(unittest.TestCase):
                              "^TestRouterVPNNativeLinuxRouting", 90), (0, "native pass"))
         native.assert_called_once_with(self.binary, cwd=self.source, env=self.env, duration=90)
         ordinary.assert_not_called()
+
+    def test_original_resolver_suite_uses_same_retained_binary_privilege_boundary(self):
+        with patch.object(NODE, "linux_routing_receipt_test", return_value=(0, "native pass")) as native, patch.object(NODE, "run") as ordinary:
+            self.assertEqual(self.baselines.execute("native-resolver-lifetime", self.package,
+                             "^TestRouterVPNNativeLinuxResolver", 90), (0, "native pass"))
+        native.assert_called_once_with(self.binary, cwd=self.source, env=self.env, duration=90, selector="^TestRouterVPNNativeLinuxResolver")
+        ordinary.assert_not_called()
+        for package, selector in (("./other", "^TestRouterVPNNativeLinuxResolver"), (self.package, ".*")):
+            with self.assertRaisesRegex(ValueError, "another package or selector"):
+                self.baselines.execute("native-resolver-lifetime", package, selector, 90)
 
     def test_unrelated_suites_keep_ordinary_execution(self):
         with patch.object(NODE, "linux_routing_receipt_test") as native, \

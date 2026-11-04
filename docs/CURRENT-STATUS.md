@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 5c0b90d3
+## Latest implementation continuation — verified through 3e0f06e7
 
 The verified source cutoff is
-[`5c0b90d3`](https://github.com/Eabusham2/router-vpn/commit/5c0b90d3a98ae6189d99a54221b77f9d53e59252),
-tree `52387a0868c48dfa0dc579a76f972b8638be3a01`.
+[`3e0f06e7`](https://github.com/Eabusham2/router-vpn/commit/3e0f06e73329a3f237b3486367e0787a8f95597f),
+tree `97ccac97b5c1f81f4d38c7a1c5fc03bb197db7f9`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -22,7 +22,7 @@ validation limits. Changes and test counts are not a requirements denominator.
 - Retained macOS direct Local SOCKS5, AWG Fast/Strong and bounded OpenVPN are
   integrated with their captured credentials, selected policy and original
   native cleanup. The Local ordinary WG/AWG-entry host also admits SS, HTTP CONNECT,
-  HTTPS CONNECT, Hysteria2 and authenticated SOCKS5 exits while retaining
+  HTTPS CONNECT, Hysteria2, authenticated SOCKS5 and WireGuard exits while retaining
   both private sources and separate proofs. The final node owns publication, Stop,
   measurements and exact Local restoration; only the entry receives physical egress. CONNECT
   retains independent proxy credentials/TLS settings, and HY2 retains its final
@@ -34,7 +34,10 @@ validation limits. Changes and test counts are not a requirements denominator.
   a physical grant. Speed Lab now seals the complete original source/profiles and
   proved execution before interruption, rejecting altered saved layer/API inputs
   before restoration. Server/Compare retain fresh leases for the already proved
-  winner. The native gate requires all 166 cases and 25 policy tests. Its exact
+  winner. The WireGuard final peer keeps its independent key, PSK, addresses,
+  AllowedIPs, MTU and keepalive inside the original WG/AWG entry. AWG final
+  peers and ordinary Server/Compare remain separate requirements. The native
+  gate requires all 188 cases and 28 policy tests. Its exact
   verdict parser now counts anchored lines once; all 961 differential inputs
   preserve acceptance/rejection behavior within the original budget. Focused
   source/race/build checks pass; actual encrypted peers, PF/utun, physical transitions
@@ -71,12 +74,20 @@ validation limits. Changes and test counts are not a requirements denominator.
   the service's exact original-child ledger, capture and locally transmitted
   deadline. The server preserves that absolute deadline instead of renewing it
   through a relative timeout. Original controller-observer join precedes Stop;
-  failed cleanup retains its owner. All 134 portable service and 88 startup
-  verdicts pass in their recorded suites; root focused races pass in 5.213s.
-  Local network receipts are explicitly modeled; all thirteen installed native
-  namespace verdicts remain mandatory. Active owned MTU event continuity,
-  exact native route/rule retirement, cross-adapter protected transfer, active Always upgrades and same-boot service-crash recovery
-  remain unfinished; see the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
+  failed cleanup retains its owner. The service's native retirement protocol now
+  uses the original inherited cleanup object and creation-time child, with
+  authenticated absolute deadlines and complete routing-absence readback.
+  Root's combined 110-verdict startup race suite passes in 44.241s using actual
+  children, memory objects and pidfds with explicitly modeled native networks.
+  The broader 134-verdict service core race suite also passes in 74.724s.
+  All fourteen installed native namespace verdicts remain mandatory. The
+  native implementation retains successful routing calls, its original event
+  stream, TUN and pending resolver operations across failed Stop attempts;
+  [the native retirement contract](LINUX-NATIVE-RETIREMENT.md) records its
+  kernel race, older-bus compatibility and actual-host acceptance boundaries.
+  Active owned MTU event continuity, cross-adapter protected transfer, active
+  Always upgrades and same-boot service-crash recovery remain unfinished; see
+  the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 - All legacy standard preparations use the shared captured device policy and
   bounded transport-host bootstrap. Invalid policy is rejected before lookup;
   transport bootstrap never replaces the selected active-path DNS policy.
@@ -98,9 +109,23 @@ validation limits. Changes and test counts are not a requirements denominator.
   the log does not establish which process retained the image. Main MAX commands
   now use the original Windows job owner, which joins retained descendants before
   returning. Unproved command or preparation cleanup retains source/private
-  workspaces. Root runs 51 checks with one Windows-only file-sharing case pending,
-  plus sixteen release-wiring checks; three old-behavior mutations fail as intended.
-  Actual Windows reruns of this repair remain required. The iOS runner compiles
+  workspaces. The original-job image-sharing test passes on both actual Windows
+  architectures at `369fd8ee`, with immediate image deletion and a foreign
+  same-image process preserved. Those enclosing jobs were later cancelled.
+  Further MAX jobs complete their strict native suites but fail when plain
+  recursive deletion encounters read-only Git pack indexes (WinError5).
+  `e35f1972` normalizes only original owned regular-file read-only attributes
+  after the original command tree joins; replacements, reparse paths and
+  ambiguous hard links are refused, while cleanup errors remain fatal.
+  `93720c2a` captures each child's full no-follow file identity instead of
+  Windows' incomplete cached directory-entry metadata. Root executes 59 of
+  61 checks in 6.581s. Both real Windows cleanup regressions and all ten
+  MAX partitions pass at that SHA. Every downloaded receipt proves both
+  original workspaces were removed and preserves the compiled negative
+  controls. The receipts identify prospective admission and modeled TUN;
+  shipping admission and complete current-source release acceptance remain
+  separate.
+  The iOS runner compiles
   isolated controls alongside the full baseline within the original budget.
   Its original compiler supervisor remains live until acknowledged group
   termination and join. At `84c49e9a`, actual macOS passes all seven fixture and
@@ -120,7 +145,20 @@ validation limits. Changes and test counts are not a requirements denominator.
   The authoritative release now requires the same complete ALL gate on both
   native architectures before aggregation/publication. Prospective MAX/WFP or
   ALL tests do not enable those shipping admission cases; corrected-source MAX
-  completion and the shipping admission change remain outstanding.
+  completion is now established at `93720c2a`, while the shipping admission
+  change remains outstanding. At
+  `6327ed02`, both required ALL jobs again pass all 26 verdicts, eight compiled
+  controls and four restoration leaves, with identical 1,597-file source
+  receipts. The full source-contract job also passes at that SHA, including
+  the complete client test package in 395.836s. These bounded results do not
+  establish completion of the newer source release. A later source run
+  exposed the same runnable-monitor fixture race at the distinct temporary
+  Speed Lab boundary. `3e0f06e7` settles that original transaction before the
+  restoration fixture starts; all 24 modeled-network directions pass the
+  race detector, and the exact old scheduling behavior fails its causal
+  OpenVPN controls. Production locking and restoration logic are unchanged.
+  Both complete application source gates subsequently pass at that exact
+  SHA in 432.806s and 465.810s without the local network-inventory model.
   Linux retained-host and macOS protected complete-MAX integration have distinct
   source boundaries; mobile ALL selectors already exist. Historical staged-PQ
   statements below describe their dated source, not the current predicate.

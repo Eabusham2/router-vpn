@@ -1,0 +1,112 @@
+//go:build !windows && !solaris
+
+package dbus
+
+import (
+	"errors"
+	"reflect"
+	"syscall"
+)
+
+// Every descriptor returned by recvmsg is retained before parsing message data.
+// Decode errors, truncation and unreferenced rights close these exact received
+// descriptors. Only a complete body transfers ownership to the caller.
+func (o *oobReader) routervpnCaptureRights(raw []byte) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	controls, err := syscall.ParseSocketControlMessage(raw)
+	if err != nil {
+		return err
+	}
+	for _, control := range controls {
+		if control.Header.Level != syscall.SOL_SOCKET || control.Header.Type != syscall.SCM_RIGHTS {
+			continue
+		}
+		descriptors, err := syscall.ParseUnixRights(&control)
+		if err != nil {
+			return err
+		}
+		for _, fd := range descriptors {
+			syscall.CloseOnExec(fd)
+			o.routervpnRights = append(o.routervpnRights, fd)
+		}
+	}
+	return nil
+}
+func (o *oobReader) routervpnCloseRights() {
+	for _, fd := range o.routervpnRights {
+		_ = syscall.Close(fd)
+	}
+	o.routervpnRights = nil
+}
+func routervpnAllRightsUsed(body []any, rights []int) bool {
+	expected := map[int]bool{}
+	for _, fd := range rights {
+		expected[fd] = false
+	}
+	var visit func(any, int) error
+	visit = func(value any, depth int) error {
+		if depth > 66 {
+			return errors.New("decoded descriptor container exceeds D-Bus limit")
+		}
+		switch typed := value.(type) {
+		case UnixFD:
+			if _, ok := expected[int(typed)]; !ok {
+				return errors.New("decoded descriptor is not received")
+			}
+			expected[int(typed)] = true
+			return nil
+		case UnixFDIndex:
+			return errors.New("unresolved native descriptor index")
+		case Variant:
+			return visit(typed.Value(), depth+1)
+		}
+		current := reflect.ValueOf(value)
+		if !current.IsValid() {
+			return nil
+		}
+		switch current.Kind() {
+		case reflect.Interface:
+			return visit(current.Elem().Interface(), depth+1)
+		case reflect.Slice, reflect.Array:
+			element := current.Type().Elem()
+			if element != unixFDType && element != unixFDIndexType && element.Kind() != reflect.Interface && element.Kind() != reflect.Struct && element.Kind() != reflect.Map && element.Kind() != reflect.Slice && element.Kind() != reflect.Array {
+				return nil
+			}
+			for i := 0; i < current.Len(); i++ {
+				if err := visit(current.Index(i).Interface(), depth+1); err != nil {
+					return err
+				}
+			}
+		case reflect.Map:
+			iterator := current.MapRange()
+			for iterator.Next() {
+				if err := visit(iterator.Key().Interface(), depth+1); err != nil {
+					return err
+				}
+				if err := visit(iterator.Value().Interface(), depth+1); err != nil {
+					return err
+				}
+			}
+		case reflect.Struct:
+			for i := 0; i < current.NumField(); i++ {
+				if current.Field(i).CanInterface() {
+					if err := visit(current.Field(i).Interface(), depth+1); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if err := visit(body, 0); err != nil {
+		return false
+	}
+	for _, used := range expected {
+		if !used {
+			return false
+		}
+	}
+	return true
+}

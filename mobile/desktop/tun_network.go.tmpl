@@ -44,7 +44,83 @@ func (t *Inbound) RouterVPNDesktopNetworkStartup(ctx context.Context) error {
 		return errors.New("native routing startup requires its original unstarted inbound")
 	}
 	t.tunOptions.RouterVPNNetworkContext = ctx
+	t.routervpnStandardStartup = true
 	return nil
+}
+
+// This path is restricted to the fixed stock child. It retains partial native
+// construction and each completed close stage across bounded Stop retries.
+// A later Box.Close sees the same successful native receipt and is idempotent.
+func (t *Inbound) RouterVPNDesktopNetworkRetire(ctx context.Context) (string, error) {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	return t.routervpnDesktopNetworkRetireLocked(ctx)
+}
+
+func (t *Inbound) RouterVPNDesktopTunCloseContext(ctx context.Context) error {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if runtime.GOOS != "linux" {
+		return errors.New("native context close requires Linux")
+	}
+	_, err := t.routervpnDesktopTunRetireLocked(ctx)
+	return err
+}
+
+func (t *Inbound) routervpnDesktopNetworkRetireLocked(ctx context.Context) (string, error) {
+	if !t.routervpnStandardStartup || t.routervpnDesktop {
+		return "", errors.New("native retirement has no original stock inbound authority")
+	}
+	return t.routervpnDesktopTunRetireLocked(ctx)
+}
+
+func (t *Inbound) routervpnDesktopTunRetireLocked(ctx context.Context) (string, error) {
+	if runtime.GOOS != "linux" || t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration {
+		return "", errors.New("native retirement has no original stock inbound authority")
+	}
+	if t.routervpnRetirementReceipt != "" {
+		return t.routervpnRetirementReceipt, nil
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return "", errors.New("native retirement lost its bounded Stop caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return "", errors.New("native retirement requires its captured Stop deadline")
+	}
+	t.routervpnReady = false
+	if t.tunStack != nil {
+		if err := t.tunStack.Close(); err != nil {
+			return "", err
+		}
+		t.tunStack = nil
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	var raw string
+	var err error
+	if t.tunIf == nil {
+		// New retains a nonnil original native value on every post-open error.
+		// This branch therefore cannot disguise a partially created TUN.
+		raw, err = desktopnetwork.CanonicalDesktopNetworkRetirementReceipt(desktopnetwork.DesktopNetworkRetirementReceipt{Schema: 1, TargetOS: "linux", Objects: []desktopnetwork.DesktopNetworkObject{}})
+	} else {
+		reader, ok := t.tunIf.(interface {
+			RouterVPNDesktopNetworkRetire(context.Context) (string, error)
+		})
+		if !ok {
+			return "", errors.New("original native inbound has no retained retirement capability")
+		}
+		raw, err = reader.RouterVPNDesktopNetworkRetire(ctx)
+	}
+	if err != nil {
+		return "", err
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkRetirementReceipt(raw)
+	if err != nil || receipt.Created && receipt.Name != t.tunOptions.Name || ctx.Err() != nil {
+		return "", errors.New("native retirement ledger differs from its original inbound or caller")
+	}
+	t.routervpnRetirementReceipt = raw
+	return raw, nil
 }
 
 // This read captures only the successfully started original stock inbound's
@@ -55,7 +131,7 @@ func (t *Inbound) RouterVPNDesktopNetworkStartupReceipt(ctx context.Context, gua
 	t.routervpnLifecycle.Lock()
 	defer t.routervpnLifecycle.Unlock()
 	if ctx == nil || ctx.Err() != nil || t.tunOptions.RouterVPNNetworkContext != ctx || !t.routervpnReady || t.tunIf == nil ||
-		t.platformInterface != nil || t.autoRedirect != nil || t.routervpnDesktop || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration || guard == nil || !guard() {
+		t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration || guard == nil || !guard() {
 		return "", errors.New("native startup receipt lost its original ready inbound")
 	}
 	reader, ok := t.tunIf.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })

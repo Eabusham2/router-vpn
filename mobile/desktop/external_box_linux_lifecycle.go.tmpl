@@ -65,3 +65,10 @@ func (p *RouterVPNDesktopLinuxExternalPreparation) CloseProtection(ctx context.C
 	}
 	return p.network.CloseExternalLinuxPhysicalProtection(ctx, p.policy)
 }
+
+// RouterVPNDesktopStandardStart keeps this original Box owned by the fixed
+// retained command when startup fails. The generic Start early-close behavior
+// cannot retire a partial TUN outside the original explicit cleanup budget.
+func (s *Box) RouterVPNDesktopStandardStart() error {
+	return s.start()
+}
