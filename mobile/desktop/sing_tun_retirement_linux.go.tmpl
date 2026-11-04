@@ -301,6 +301,22 @@ func routervpnLinuxStringAttribute(value []byte, wanted string) bool {
 	return bytes.Equal(value, []byte(wanted+"\x00"))
 }
 
+// An installed default route has an unspecified /0 destination. The address
+// validator deliberately rejects unspecified interface/peer addresses, so it
+// cannot identify this original route call. Only the exact well-formed default
+// prefix takes this separate path; address validation stays unchanged.
+func routervpnLinuxRoutePrefix(value *net.IPNet) (netip.Prefix, bool) {
+	if value != nil {
+		address, valid := netip.AddrFromSlice(value.IP)
+		bits, size := value.Mask.Size()
+		address = address.Unmap()
+		if valid && address.IsUnspecified() && bits == 0 && size == address.BitLen() {
+			return netip.PrefixFrom(address, 0), true
+		}
+	}
+	return routervpnLinuxIPPrefix(value)
+}
+
 func (c *routerVPNLinuxRoutingCall) matches(object DesktopNetworkObject) bool {
 	if c.kind == "rule" {
 		return routervpnLinuxRuleMatches(c.rule, object)
@@ -308,7 +324,7 @@ func (c *routerVPNLinuxRoutingCall) matches(object DesktopNetworkObject) bool {
 	if c.route == nil || object.Kind != "route" || object.Index != uint32(c.route.LinkIndex) || object.Table != uint32(c.route.Table) {
 		return false
 	}
-	prefix, ok := routervpnLinuxIPPrefix(c.route.Dst)
+	prefix, ok := routervpnLinuxRoutePrefix(c.route.Dst)
 	if !ok || prefix.Masked().String() != object.Destination {
 		return false
 	}

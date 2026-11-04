@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"syscall"
@@ -516,5 +518,135 @@ func TestRouterVPNNativeLinuxRoutingRetirementSocket(t *testing.T) {
 	}
 	if err = watcher.close(ctx); err != nil {
 		t.Fatal("original socket close was not idempotent", err)
+	}
+}
+
+// Use the actual pinned native route builder. These are modeled kernel
+// notifications parsed by the shipping parser, not a privileged route install.
+func TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes(t *testing.T) {
+	builder := &NativeTun{options: Options{
+		AutoRoute: true, IPRoute2TableIndex: 2022,
+		Inet4Address: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/30")},
+		Inet6Address: []netip.Prefix{netip.MustParsePrefix("fd00::1/64")},
+	}}
+	routes, err := builder.routes(&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Index: 8}})
+	if err != nil || len(routes) != 2 {
+		t.Fatal("actual pinned route builder changed its dual-stack inventory", len(routes), err)
+	}
+	for index, want := range []string{"0.0.0.0/0", "::/0"} {
+		route := routes[index]
+		t.Run(want, func(t *testing.T) {
+			if route.Dst == nil || route.Dst.String() != want || route.LinkIndex != 8 || route.Table != 2022 {
+				t.Fatal("actual pinned route builder did not emit the original default", route)
+			}
+			if _, ok := routervpnLinuxIPPrefix(route.Dst); ok {
+				t.Fatal("route fix loosened original interface/peer address validation")
+			}
+			body := routervpnLinuxNativeBody(retirementRoute(t, 8, 2022))
+			if index == 1 {
+				body[0] = syscall.AF_INET6
+			}
+			if len(route.Gw) != 0 {
+				body = append(body, retirementAttribute(5, route.Gw)...)
+			}
+			object, err := ParseDesktopLinuxNetworkObject("route", body)
+			if err != nil || object.Destination != want {
+				t.Fatal("native default notification changed its exact prefix", err)
+			}
+			for _, scenario := range []string{"original", "wrong-index", "wrong-table", "wrong-family", "wrong-prefix", "wrong-gateway", "duplicate", "delete", "away-and-back"} {
+				t.Run(scenario, func(t *testing.T) {
+					native, model, file := retirementFixture(t)
+					call := &routerVPNLinuxRoutingCall{kind: "route", route: &route, acknowledged: true}
+					native.routervpnRetirement.calls = append(native.routervpnRetirement.calls, call)
+					changed := append([]byte(nil), body...)
+					switch scenario {
+					case "wrong-index", "wrong-table":
+						id, value := uint16(4), uint32(9)
+						if scenario == "wrong-table" {
+							id, value = 15, 2023
+						}
+						for at := 12; at < len(changed); {
+							length := int(binary.LittleEndian.Uint16(changed[at:]))
+							if binary.LittleEndian.Uint16(changed[at+2:]) == id {
+								binary.LittleEndian.PutUint32(changed[at+4:], value)
+							}
+							at += (length + 3) &^ 3
+						}
+					case "wrong-family":
+						changed = routervpnLinuxNativeBody(retirementRoute(t, 8, 2022))
+						changed[0] = syscall.AF_INET6
+						if index == 1 {
+							changed[0] = syscall.AF_INET
+						}
+					case "wrong-prefix", "wrong-gateway":
+						address := netip.MustParseAddr("192.0.2.0")
+						if index == 1 {
+							address = netip.MustParseAddr("fd00::")
+						}
+						if scenario == "wrong-prefix" {
+							changed[1] = 24
+							if index == 1 {
+								changed[1] = 64
+							}
+							changed = append(changed, retirementAttribute(1, address.AsSlice())...)
+						} else {
+							changed = routervpnLinuxNativeBody(retirementRoute(t, 8, 2022))
+							if index == 1 {
+								changed[0] = syscall.AF_INET6
+							}
+							changed = append(changed, retirementAttribute(5, address.AsSlice())...)
+						}
+					}
+					candidate, err := ParseDesktopLinuxNetworkObject("route", changed)
+					if err != nil {
+						t.Fatal(err)
+					}
+					event := routerVPNLinuxRoutingEvent{object: candidate}
+					model.events = []routerVPNLinuxRoutingEvent{event}
+					switch scenario {
+					case "duplicate":
+						model.events = append(model.events, event)
+					case "delete":
+						model.events[0].delete = true
+					case "away-and-back":
+						model.events = append(model.events, routerVPNLinuxRoutingEvent{object: candidate, delete: true}, event)
+					}
+					err = native.routervpnLinuxEvents(retirementStop(t), call, false)
+					if scenario == "original" {
+						if err != nil || !call.bound || call.object != object || len(native.routervpnRetirement.history) != 1 || len(native.routervpnRetirement.events) != 0 {
+							t.Fatal("original acknowledged default notification was not bound exactly once", err)
+						}
+					} else {
+						if err == nil || native.routervpnRetirement.failure == nil {
+							t.Fatal("foreign, duplicate or ABA default notification acquired authority")
+						}
+						if _, retry := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); retry == nil || len(model.removes) != 0 {
+							t.Fatal("latched default notification refusal allowed retirement", retry)
+						}
+					}
+					retirementHeld(t, native, model, file)
+				})
+			}
+			// A /0 notification carrying a nonzero destination is not canonical.
+			nonzero := netip.MustParseAddr("192.0.2.1")
+			if index == 1 {
+				nonzero = netip.MustParseAddr("fd00::1")
+			}
+			if _, err := ParseDesktopLinuxNetworkObject("route", append(append([]byte(nil), body...), retirementAttribute(1, nonzero.AsSlice())...)); err == nil {
+				t.Fatal("noncanonical native default prefix was accepted")
+			}
+		})
+	}
+	for _, bad := range []*net.IPNet{
+		nil, {},
+		{IP: net.IPv4zero, Mask: net.CIDRMask(0, 128)},
+		{IP: net.IPv6zero, Mask: net.CIDRMask(0, 32)},
+		{IP: net.IPv4zero, Mask: net.IPMask{255, 0, 255, 0}},
+		{IP: net.IP{1, 2, 3}, Mask: net.CIDRMask(0, 32)},
+	} {
+		call := &routerVPNLinuxRoutingCall{kind: "route", route: &netlink.Route{Dst: bad, LinkIndex: 8, Table: 2022}}
+		if call.matches(retirementRoute(t, 8, 2022)) {
+			t.Fatal("malformed original route prefix was accepted", bad)
+		}
 	}
 }
