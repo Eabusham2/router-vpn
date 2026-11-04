@@ -82,7 +82,9 @@ def pinned_files(source):
         raise ValueError('Pinned godbus source is not an original module directory')
     files = {}
     digest = hashlib.sha256()
-    for path in sorted(source.rglob('*')):
+    # Go dirhash sorts canonical slash filenames case-sensitively. Native
+    # WindowsPath ordering folds case and would hash the same bytes differently.
+    for path in sorted(source.rglob('*'), key=lambda item: item.relative_to(source).as_posix()):
         if path.is_symlink():
             raise ValueError('Linked godbus source')
         if path.is_file():

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Exercise actual repeated native preparation and incomplete-source refusal."""
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import argparse
+import base64
+import hashlib
 import importlib.util
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('native_retirement_projection', ROOT/'deploy/prepare-desktop-mtu.py')
@@ -53,6 +56,72 @@ class NativeRetirementProjection(unittest.TestCase):
             inbound.write_bytes(original)
             PREP.prepare(vendor)
             self.assertEqual(inbound.read_bytes(), original)
+
+
+class WindowsOrderedPath(type(Path())):
+    """Use actual host I/O with the exact Windows filename comparison rule."""
+    def __lt__(self, other):
+        return PureWindowsPath(str(self)) < PureWindowsPath(str(other))
+
+
+class PinnedDBusModuleInventory(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.preparer = PREP.dbus_preparer()
+        cache = subprocess.check_output(['go', 'env', 'GOMODCACHE'], cwd=SOURCE, text=True, timeout=30).strip()
+        cls.module = Path(cache)/(cls.preparer.MODULE+'@'+cls.preparer.VERSION)
+        if not cls.module.is_dir():
+            raise ValueError('actual checksum-pinned godbus module is required')
+
+    def hash_order(self, paths):
+        digest = hashlib.sha256()
+        for path in paths:
+            filename = self.preparer.MODULE+'@'+self.preparer.VERSION+'/'+path.relative_to(self.module).as_posix()
+            digest.update((hashlib.sha256(path.read_bytes()).hexdigest()+'  '+filename+'\n').encode())
+        return 'h1:'+base64.b64encode(digest.digest()).decode()
+
+    def test_actual_module_uses_go_filename_order_on_both_platforms(self):
+        files = [p for p in self.module.rglob('*') if p.is_file()]
+        canonical = sorted(files, key=lambda p: p.relative_to(self.module).as_posix())
+        windows = sorted(files, key=lambda p: PureWindowsPath(str(p)))
+        self.assertNotEqual(canonical, windows, 'actual corpus no longer distinguishes Windows sorting')
+        self.assertEqual(self.hash_order(canonical), self.preparer.SUM)
+        self.assertNotEqual(self.hash_order(windows), self.preparer.SUM)
+        expected = {p.relative_to(self.module).as_posix():p.read_bytes() for p in canonical}
+        # The actual shipping function must retain all original byte content
+        # under both real host and Windows comparison semantics.
+        self.assertEqual(self.preparer.pinned_files(self.module), expected)
+        with patch.object(self.preparer, 'Path', WindowsOrderedPath):
+            self.assertEqual(self.preparer.pinned_files(self.module), expected)
+        self.assertTrue(any('/' in name for name in expected))
+        self.assertFalse(any('\\' in name for name in expected))
+
+    def test_actual_module_changes_are_never_normalized_or_omitted(self):
+        with tempfile.TemporaryDirectory(prefix='godbus-original-inventory-') as directory:
+            original = Path(directory)/'module'
+            shutil.copytree(self.module, original)
+            target = original/'decoder.go'
+            raw = target.read_bytes()
+            self.assertIn(b'\n', raw)
+            target.chmod(0o600)
+            extra = original/'unreceived-module-file.go'
+            for label in ('changed-byte', 'crlf', 'missing-file', 'extra-file'):
+                with self.subTest(mutation=label):
+                    target.write_bytes(raw)
+                    if label == 'changed-byte':
+                        target.write_bytes(raw+b'\n// changed original module bytes\n')
+                    elif label == 'crlf':
+                        target.write_bytes(raw.replace(b'\n', b'\r\n'))
+                    elif label == 'missing-file':
+                        target.unlink()
+                    else:
+                        extra.write_bytes(b'package dbus\n')
+                    with self.assertRaisesRegex(ValueError, 'Complete pinned godbus module checksum changed'):
+                        self.preparer.pinned_files(original)
+                    if extra.exists():
+                        extra.unlink()
+            target.write_bytes(raw)
+            self.assertEqual(self.preparer.pinned_files(original), self.preparer.pinned_files(self.module))
 
 
 if __name__ == '__main__':
