@@ -5,10 +5,14 @@ can reach the directory service of the last relay on the exact circuit of a
 retained external stream. It returns native ownership and byte accounting; it
 does not return a latency, score, or fabricated network success.
 
-This is a prerequisite for Tor Local / Server / Compare. Public Compare
-admission remains separate until both candidates carry client-origin probes,
-the same selected external endpoint, valid proofs, cancellation, and exact
-restoration through their shipping hosts.
+Tor Local / Server / Compare uses this operation through distinct captured
+candidate owners. Desktop `desktop_tor_comparison_driver.go`, Android
+`AndroidTorCompareRuntime` and Apple `RouterVPNTorCompare` provide the shipping
+host integration. Admission still requires both candidates' client-origin
+probes, the same selected external endpoint, valid proofs, cancellation and
+exact restoration. Source integration is separate from current-SHA native
+builds and physical/public-network acceptance; a prerequisite test alone does
+not close those gates.
 
 ## Measurement boundary
 

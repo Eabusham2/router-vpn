@@ -29,9 +29,13 @@ its own protocol version.
 The native extension and package evidence are prerequisites. A native host must
 also capture the selected policy, bind it to its exact session and source,
 require this capability from its real owned Tor runtime, and start and renew it
-only after the required selected-path and DNS proofs. Local runtime compilation
-continues rejecting enabled padding until its host adoption is complete. The
-extension alone does not close the all-platform padding requirement.
+only after the required selected-path and DNS proofs. Desktop Local compilation
+now derives an owned cover outbound and DNS wrapper in
+`internal/mobiletor/desktop_bridge.go`; its generated command retains the exact
+native receipt and proof through `mobile/desktop/external_tor_padding.go.tmpl`.
+Server and mobile admission have separate host contracts below. Neither the
+extension nor a shared compiler alone closes all-platform runtime and physical
+acceptance requirements.
 
 The standalone server worker now has an owned activation path. Its optional
 private source `padding` object captures `enabled` and `rate_kbps`; the source

@@ -1,12 +1,48 @@
 # Current implementation status
 
-Updated November 3, 2026 UTC. This file distinguishes published source,
+Updated November 4, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through f22d5a32
+## Latest implementation continuation — through 526f24c4
+
+The verified source cutoff is
+[`526f24c4`](https://github.com/Eabusham2/router-vpn/commit/526f24c424a36e5187fc65f5221ef4a4a30bb237),
+tree `40356d6c0a99125cd16f486ae5c83c10915ac8d9`.
+[The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records fourteen
+individually published source/test units, original requirement recovery and
+each validation limit. These are changes, not a requirement denominator.
+
+- Four genuinely unpublished preserved units were recovered after tree and
+  ancestry comparison. Six earlier recovery units were already upstream and
+  were not replayed. Every new main update used normal ancestry and an exact
+  local/remote content-tree check.
+- Retained macOS direct Local SOCKS5 is integrated with captured credentials,
+  authenticated dynamic UDP association, DNS/device policy and original native
+  cleanup. Nine installed native acceptance scenarios are now mandatory. Local
+  race, generated-source and cross-build checks pass; actual PF/utun and physical
+  acceptance remain required. Retained AWG/OpenVPN and broader graphs remain
+  separate work.
+- Linux helper mutation now serializes state and kernel changes under the
+  original inherited lock. Its sudo fixture exercises real descriptor
+  preservation and competing-lock exclusion. This does not yet close protected
+  standard-exit creation, succession and retirement ownership.
+- Windows SOCKS retirement observation, Tor MTU terminal-status matching,
+  generated native inventories, the Darwin PF negative control and iOS SDK
+  fixture isolation have focused executable fixes. Native diagnostics retain
+  exact failure causes without weakening verdicts or production deadlines.
+- Actual macOS controller cleanup passes on both architectures at `4550b091`.
+  Newer exact-source native/package gates remain pending. Latest published
+  release is still the twelve-asset `745b3e41` prerelease; no current full release,
+  private deployment or physical-device acceptance is claimed.
+- Native documentation now distinguishes existing Tor Server/Compare,
+  predecessors and cover implementations from their native/live acceptance.
+  Original optional macOS notarization scope remains separate from legitimate
+  iOS provisioning and distribution requirements.
+
+## Earlier implementation continuation — through f22d5a32
 
 The verified source cutoff is
 [f22d5a32](https://github.com/Eabusham2/router-vpn/commit/f22d5a32a6d7a844801d8aa0cb61f7312fbc3e03),

@@ -19,7 +19,7 @@ python3 deploy/live-release-evidence.py record release-evidence.json \
 
 PASS is refused without at least one evidence file. The manifest stores each evidence file's SHA-256, size, resolved source path and UTC capture time. Final validation re-hashes those raw files, so missing or modified proof loses credit. It does not copy evidence into the repository, so do not commit private bundles, provider keys, router credentials, admin output, or sensitive packet captures.
 
-Required live gates are Windows, macOS, Linux, Android and iOS/iPadOS physical network behavior; off-LAN methods; native visual/DPI QA; private server features; live AI providers; Apple signing/notarization/distribution; one deliberate exact-SHA production deployment; ASUS forwarding/JFFS fail-open revalidation; and final regression.
+Required live gates are Windows, macOS, Linux, Android and iOS/iPadOS physical network behavior; off-LAN methods; native visual/DPI QA; private server features; live AI providers; applicable Apple provisioning/signing/distribution; one deliberate exact-SHA production deployment; ASUS forwarding/JFFS fail-open revalidation; and final regression. Original requirement #339 qualifies macOS signing/notarization as optional polish when practical. The combined Apple gate's existing "where applicable" qualification preserves that scope; it does not waive legitimate iOS installation/provisioning or permit an unproved signing/notarization claim. See [the recovered source qualification](RECONCILIATION-2026-10-30-SOURCES.md#qualifications-and-attribution-corrections).
 
 ```bash
 python3 deploy/live-release-evidence.py status release-evidence.json --sha <same-sha>
@@ -36,4 +36,4 @@ export ROUTER_VPN_RELEASE_SHA=<same-40-char-sha>
 python3 deploy/weighted-release-audit.py
 ```
 
-Without both variables the manual/live gates deliberately remain false. The six weighted manual buckets cover all thirteen live gates: every shipping native platform, off-LAN methods, visual QA, private server features, live AI providers, Apple signing/notarization, the exact-SHA production deployment, ASUS fail-open forwarding revalidation, and final regression. A manifest for another SHA, an empty evidence list, or missing/tampered raw proof cannot award manual credit.
+Without both variables the manual/live gates deliberately remain false. The six weighted manual buckets cover all thirteen live gates: every shipping native platform, off-LAN methods, visual QA, private server features, live AI providers, applicable Apple distribution, the exact-SHA production deployment, ASUS fail-open forwarding revalidation, and final regression. A manifest for another SHA, an empty evidence list, or missing/tampered raw proof cannot award manual credit. The scorer's weighted metric is an implementation gate, not a percentage of the original requirements completed.
