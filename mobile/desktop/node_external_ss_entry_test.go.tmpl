@@ -1,0 +1,473 @@
+package routervpnamnezia
+
+import (
+	STD "bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing/service"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type desktopExternalInstalledSSRequest struct {
+	Method   string `json:"method"`
+	Password string `json:"password"`
+}
+type desktopExternalInstalledSSReceipt struct {
+	Method        string `json:"method"`
+	Address       string `json:"address"`
+	PhysicalTCP   int64  `json:"physical_tcp"`
+	PhysicalUDP   int64  `json:"physical_udp"`
+	Streams       int64  `json:"streams"`
+	Packets       int64  `json:"packets"`
+	PublicReplies uint32 `json:"public_replies"`
+}
+type desktopExternalInstalledSSPeer struct {
+	address string
+	stats   func() desktopExternalInstalledSSReceipt
+	close   func()
+}
+
+var desktopExternalInstalledSSEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledSSRequest, tls.Certificate, string) desktopExternalInstalledSSPeer
+
+func desktopSS2022Credentials(method, password string) bool {
+	size := 32
+	switch method {
+	case "2022-blake3-aes-128-gcm":
+		size = 16
+	case "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
+	default:
+		return false
+	}
+	key, e := base64.StdEncoding.Strict().DecodeString(password)
+	defer clear(key)
+	return e == nil && len(key) == size
+}
+
+// This constructor owns one original TCP/UDP pair and the exact encrypted
+// server lifetime. Native entry callers separately validate their physical role;
+// a final provider is reachable only over the entry's fixed loopback routes.
+func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method, password string, address netip.Addr) desktopExternalInstalledSSPeer {
+	t.Helper()
+	if !desktopSS2022Credentials(method, password) || server == nil || server.ctx == nil || len(server.routes) == 0 {
+		t.Fatal("SS provider lost captured credential or exact routes")
+	}
+	listener, packet, err := desktopNodeLayerPortPair(address, net.Listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.tcp, server.udp = listener, packet
+	service, err := shadowaead_2022.NewServiceWithPassword(method, password, 10, server, nil)
+	if err != nil {
+		listener.Close()
+		packet.Close()
+		t.Fatal(err)
+	}
+	var once sync.Once
+	closePeer := func() {
+		once.Do(func() {
+			server.mu.Lock()
+			server.closing = true
+			connections := make([]io.Closer, 0, len(server.connections))
+			for c := range server.connections {
+				connections = append(connections, c)
+			}
+			server.mu.Unlock()
+			server.cancel()
+			_ = listener.Close()
+			_ = packet.Close()
+			for _, c := range connections {
+				_ = c.Close()
+			}
+			server.workers.Wait()
+		})
+	}
+	t.Cleanup(closePeer)
+	server.workers.Add(2)
+	go func() {
+		defer server.workers.Done()
+		for {
+			c, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			if !server.enter(c) {
+				c.Close()
+				return
+			}
+			go func() {
+				defer server.leave(c)
+				_ = c.SetDeadline(time.Now().Add(45 * time.Second))
+				server.rawTCP.Add(1)
+				_ = service.NewConnection(server.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+			}()
+		}
+	}()
+	go func() {
+		defer server.workers.Done()
+		reader := bufio.NewPacketConn(packet)
+		for {
+			body := buf.NewPacket()
+			source, e := reader.ReadPacket(body)
+			if e != nil {
+				body.Release()
+				return
+			}
+			server.rawUDP.Add(1)
+			if service.NewPacket(server.ctx, reader, body, M.Metadata{Source: source}) != nil {
+				body.Release()
+			}
+		}
+	}()
+	return desktopExternalInstalledSSPeer{address: listener.Addr().String(), close: closePeer, stats: func() desktopExternalInstalledSSReceipt {
+		return desktopExternalInstalledSSReceipt{Method: method, Address: listener.Addr().String(), PhysicalTCP: server.rawTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Streams: server.plainTCP.Load(), Packets: server.plainUDP.Load()}
+	}}
+}
+func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final string, physical netip.Addr) desktopExternalInstalledSSPeer {
+	t.Helper()
+	target, err := netip.ParseAddrPort(final)
+	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || (!physical.Is4() || !physical.IsGlobalUnicast() || physical.IsLoopback()) {
+		t.Fatal("SS entry lost captured physical role and loopback final")
+	}
+	return desktopStartSSEntryAt(t, parent, request, cert, final, physical)
+}
+
+// The explicit loopback component also uses this constructor, with no native
+// role or physical acceptance inferred from that component execution.
+func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final string, address netip.Addr) desktopExternalInstalledSSPeer {
+	t.Helper()
+	target, err := netip.ParseAddrPort(final)
+	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 {
+		t.Fatal("SS entry lost its original final listener")
+	}
+	ctx, cancel := context.WithCancel(parent.ctx)
+	t.Cleanup(cancel)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replies atomic.Uint32
+	proof := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		if q.Host != "1.1.1.1" || q.URL.Path != "/cdn-cgi/trace" {
+			http.Error(w, "unowned entry proof", http.StatusForbidden)
+			return
+		}
+		replies.Add(1)
+		_, _ = io.WriteString(w, "ip=203.0.113.77\n")
+	})}
+	done := make(chan error, 1)
+	go func() {
+		done <- proof.Serve(tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}))
+	}()
+	var once sync.Once
+	closeProof := func() {
+		once.Do(func() {
+			_ = proof.Close()
+			_ = listener.Close()
+			if err := <-done; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				t.Error("original SS proof listener join", err)
+			}
+		})
+	}
+	t.Cleanup(closeProof)
+	server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{
+		{Network: "tcp", Destination: "1.1.1.1:443", Physical: listener.Addr().String()},
+		{Network: "tcp", Destination: "198.51.100.240:8388", Physical: final},
+		{Network: "udp", Destination: "198.51.100.240:8388", Physical: final},
+	}}
+	peer := desktopStartSSProvider(t, server, request.Method, request.Password, address)
+	closeNative, stats := peer.close, peer.stats
+	peer.close = func() { closeNative(); closeProof() }
+	peer.stats = func() desktopExternalInstalledSSReceipt {
+		value := stats()
+		value.PublicReplies = replies.Load()
+		return value
+	}
+	return peer
+}
+
+type desktopSSReferenceManager struct {
+	adapter.OutboundManager
+	owners map[string]adapter.Outbound
+}
+
+func (m *desktopSSReferenceManager) Outbound(tag string) (adapter.Outbound, bool) {
+	value, ok := m.owners[tag]
+	return value, ok
+}
+
+type desktopSSReferenceLower struct {
+	adapter.Outbound
+	virtual, original string
+	calls             atomic.Int64
+}
+
+func (d *desktopSSReferenceLower) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if (network != "tcp" && network != "udp") || destination.String() != d.virtual {
+		return nil, errors.New("SS component rejected foreign physical tuple")
+	}
+	d.calls.Add(1)
+	return (&net.Dialer{}).DialContext(ctx, network, d.original)
+}
+func (*desktopSSReferenceLower) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("SS component requires its original connected transport")
+}
+func desktopSSReferenceKey(method string, seed byte) string {
+	size := 32
+	if method == "2022-blake3-aes-128-gcm" {
+		size = 16
+	}
+	return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(seed), size)))
+}
+func TestRouterVPNDesktopInstalledSSEntryLoopbackTwoHopReference(t *testing.T) {
+	methods := []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"}
+	for i, entry := range methods {
+		for j, final := range methods {
+			t.Run(fmt.Sprintf("method%d-method%d", i, j), func(t *testing.T) { desktopSSReferenceTwoHop(t, entry, final, "") })
+		}
+	}
+	for _, fault := range []string{"entry-key", "entry-method", "final-key", "final-method", "final-route", "dns-route"} {
+		t.Run("negative/"+fault, func(t *testing.T) { desktopSSReferenceTwoHop(t, methods[1], methods[1], fault) })
+	}
+}
+func desktopSSReferenceTwoHop(t *testing.T, entryMethod, finalMethod, fault string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tcp, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcpDone := make(chan struct{})
+	go func() {
+		defer close(tcpDone)
+		c, e := tcp.Accept()
+		if e == nil {
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+			_, _ = io.Copy(c, c)
+		}
+	}()
+	defer func() { tcp.Close(); <-tcpDone }()
+	udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	udpDone := make(chan struct{})
+	go func() {
+		defer close(udpDone)
+		b := make([]byte, 2048)
+		for {
+			n, a, e := udp.ReadFrom(b)
+			if e != nil {
+				return
+			}
+			if _, e = udp.WriteTo(b[:n], a); e != nil {
+				return
+			}
+		}
+	}()
+	defer func() { udp.Close(); <-udpDone }()
+	finalCtx, finalCancel := context.WithCancel(ctx)
+	server := &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "1.1.1.1:443", Physical: tcp.Addr().String()}, {Network: "udp", Destination: "203.0.113.53:5353", Physical: udp.LocalAddr().String()}}}
+	finalKey := desktopSSReferenceKey(finalMethod, 'f')
+	final := desktopStartSSProvider(t, server, finalMethod, finalKey, netip.MustParseAddr("127.0.0.1"))
+	defer final.close()
+	cert, _ := desktopExternalInstalledPeerCertificate(t, false)
+	entryKey := desktopSSReferenceKey(entryMethod, 'e')
+	entry := desktopStartSSEntryAt(t, server, desktopExternalInstalledSSRequest{entryMethod, entryKey}, cert, final.address, netip.MustParseAddr("127.0.0.1"))
+	defer entry.close()
+	lower := &desktopSSReferenceLower{virtual: "198.51.100.239:8388", original: entry.address}
+	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+	if fault == "entry-key" {
+		entryKey = desktopSSReferenceKey(entryMethod, 'x')
+	}
+	if fault == "entry-method" {
+		entryMethod = "2022-blake3-chacha20-poly1305"
+	}
+	first, err := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "captured-entry", option.ShadowsocksOutboundOptions{DialerOptions: option.DialerOptions{Detour: "captured-physical"}, ServerOptions: option.ServerOptions{Server: "198.51.100.239", ServerPort: 8388}, Method: entryMethod, Password: entryKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if e := first.(io.Closer).Close(); e != nil {
+			t.Error("SS original entry cleanup", e)
+		}
+	}()
+	manager.owners["captured-entry"] = first
+	host := "198.51.100.240"
+	if fault == "final-route" {
+		host = "198.51.100.241"
+	}
+	if fault == "final-key" {
+		finalKey = desktopSSReferenceKey(finalMethod, 'y')
+	}
+	if fault == "final-method" {
+		finalMethod = "2022-blake3-chacha20-poly1305"
+	}
+	last, err := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "captured-final", option.ShadowsocksOutboundOptions{DialerOptions: option.DialerOptions{Detour: "captured-entry"}, ServerOptions: option.ServerOptions{Server: host, ServerPort: 8388}, Method: finalMethod, Password: finalKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if e := last.(io.Closer).Close(); e != nil {
+			t.Error("SS original final cleanup", e)
+		}
+	}()
+	for _, network := range []string{"tcp", "udp"} {
+		target := "1.1.1.1:443"
+		if network == "udp" {
+			target = "203.0.113.53:5353"
+		}
+		if fault == "dns-route" {
+			target = "203.0.113.52:5353"
+		}
+		limit := time.Second
+		if fault != "" {
+			limit = 250 * time.Millisecond
+		}
+		operation, stop := context.WithTimeout(ctx, limit)
+		c, e := last.DialContext(operation, network, M.ParseSocksaddr(target))
+		delivered := false
+		if e == nil {
+			deadline, _ := operation.Deadline()
+			_ = c.SetDeadline(deadline)
+			payload := []byte("two-original-ss2022-peers")
+			_, e = c.Write(payload)
+			b := make([]byte, len(payload))
+			if e == nil {
+				if network == "tcp" {
+					_, e = io.ReadFull(c, b)
+				} else {
+					var n int
+					n, e = c.Read(b)
+					if n != len(b) {
+						e = io.ErrUnexpectedEOF
+					}
+				}
+			}
+			delivered = e == nil && string(b) == string(payload)
+			_ = c.Close()
+		}
+		stop()
+		if delivered != (fault == "") {
+			t.Fatal("original encrypted SS chain acceptance mismatch", network, fault, e)
+		}
+	}
+	firstStats, lastStats := entry.stats(), final.stats()
+	if lower.calls.Load() == 0 || firstStats.PhysicalTCP+firstStats.PhysicalUDP == 0 {
+		t.Fatal("SS two-hop never reached captured entry")
+	}
+	if fault == "" {
+		if firstStats.Streams < 1 || firstStats.Packets < 1 || lastStats.Streams < 1 || lastStats.Packets < 1 || lastStats.PhysicalTCP < 1 || lastStats.PhysicalUDP < 1 {
+			t.Fatal("SS two-hop lost actual TCP/UDP encrypted path", firstStats, lastStats)
+		}
+	} else if fault == "entry-key" || fault == "entry-method" || fault == "final-route" {
+		if lastStats.PhysicalTCP != 0 || lastStats.PhysicalUDP != 0 || lastStats.Streams != 0 || lastStats.Packets != 0 {
+			t.Fatal("SS foreign entry/route reached final", firstStats, lastStats)
+		}
+	} else if lastStats.PhysicalTCP < 1 || lastStats.PhysicalUDP < 1 || lastStats.Streams != 0 || lastStats.Packets != 0 {
+		t.Fatal("SS final refusal missed original encrypted provider", firstStats, lastStats)
+	}
+}
+
+// Exercise the actual installed-provider request, readiness and joined shutdown
+// wiring in a separately named loopback component. Its address grants no native
+// physical/interface/PF acceptance.
+func TestRouterVPNDesktopInstalledSSEntryLoopbackProviderProcess(t *testing.T) {
+	const child = "ROUTERVPN_SS_ENTRY_COMPONENT_CHILD"
+	if os.Getenv(child) == "1" {
+		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final string) desktopExternalInstalledSSPeer {
+			return desktopStartSSEntryAt(t, parent, request, cert, final, netip.MustParseAddr("127.0.0.1"))
+		}
+		desktopExternalInstalledReferenceProcess(t, "127.0.0.1", map[string]bool{"shadowsocks": true}, true)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNDesktopInstalledSSEntryLoopbackProviderProcess$", "-test.count=1", "-test.timeout=9s")
+	command.Env = append(os.Environ(), child+"=1")
+	input, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic bytes.Buffer
+	command.Stderr = &diagnostic
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	joined := false
+	defer func() {
+		_ = input.Close()
+		if !joined {
+			err := command.Wait()
+			t.Errorf("original SS provider failed before joined completion: %v %s", err, diagnostic.String())
+		}
+	}()
+	request := desktopExternalInstalledPeerRequest{Schema: 1, Protocol: "shadowsocks", Address: "127.0.0.1", Password: desktopSSReferenceKey("2022-blake3-aes-128-gcm", 'f'), ShadowsocksMethod: "2022-blake3-aes-128-gcm", ShadowsocksEntry: &desktopExternalInstalledSSRequest{Method: "2022-blake3-chacha20-poly1305", Password: desktopSSReferenceKey("2022-blake3-chacha20-poly1305", 'e')}}
+	if err = json.NewEncoder(input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	reader := STD.NewReaderSize(output, 16385)
+	read := func() desktopExternalInstalledPeerReply {
+		raw, e := reader.ReadSlice('\n')
+		if e != nil || len(raw) > 16384 {
+			t.Fatal("actual original SS provider omitted bounded readiness", e)
+		}
+		var reply desktopExternalInstalledPeerReply
+		if e = json.Unmarshal(raw, &reply); e != nil || reply.Schema != 1 || reply.Protocol != "shadowsocks" || reply.Address != "198.51.100.240:8388" || reply.ShadowsocksEntry == nil || reply.ShadowsocksEntry.Method != request.ShadowsocksEntry.Method || reply.CA == "" {
+			t.Fatal("actual SS provider changed original readiness", e)
+		}
+		address, e := netip.ParseAddrPort(reply.ShadowsocksEntry.Address)
+		if e != nil || !address.Addr().IsLoopback() || address.Port() == 0 {
+			t.Fatal("SS component lost original listener pair", e)
+		}
+		return reply
+	}
+	first := read()
+	if _, err = io.WriteString(input, "stats\n"); err != nil {
+		t.Fatal(err)
+	}
+	next := read()
+	if *first.ShadowsocksEntry != *next.ShadowsocksEntry {
+		t.Fatal("original idle SS provider changed before any traffic")
+	}
+	_ = input.Close()
+	_, _ = io.Copy(io.Discard, reader)
+	err = command.Wait()
+	joined = true
+	if err != nil || ctx.Err() != nil {
+		t.Fatal("actual SS provider did not join its original listeners and DNS workers", err, ctx.Err(), diagnostic.String())
+	}
+}

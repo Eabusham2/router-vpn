@@ -44,6 +44,10 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	t.Helper()
 	// The labels select independent imported test profiles. The saved native
 	// protocol remains amneziawg; no preset alias is added to its schema.
+	ssEntry := protocol == "ss-entry-ss"
+	if ssEntry {
+		protocol = "shadowsocks"
+	}
 	openvpnMode := ""
 	if parts := strings.Split(protocol, "-openvpn-"); len(parts) == 2 {
 		openvpnMode = parts[1]
@@ -211,7 +215,7 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	if protocol == "wireguard" || protocol == "amneziawg" || protocol == "openvpn" {
 		graph["outbounds"], graph["endpoints"] = []any{}, []any{transport}
 	}
-	if entrySelected {
+	if entrySelected || ssEntry {
 		transport["tag"] = "external-entry"
 		entry := map[string]any{"id": "captured-wg-entry", "node_kind": "external", "external": private, "home_lan_access": true, "ipv6_mode": "on", "mtu_policy": "auto"}
 		final := map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{23}, 32)), "detour": "external-entry"}
@@ -282,6 +286,9 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 		}
 		selection["protocol"], selection["entry"], selection["entry_tag"] = entryExit, entry, "external-entry"
 		graph["outbounds"] = []any{final}
+		if ssEntry {
+			graph["outbounds"], graph["endpoints"] = []any{transport, final}, []any{}
+		}
 		if entryExit == "wireguard" || entryExit == "amneziawg" || entryExit == "openvpn" {
 			graph["outbounds"], graph["endpoints"] = []any{}, []any{transport, final}
 		}

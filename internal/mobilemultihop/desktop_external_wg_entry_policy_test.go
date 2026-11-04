@@ -171,7 +171,12 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 
 func TestDesktopExternalDarwinWireGuardEntryPreservesOtherGraphBoundaries(t *testing.T) {
 	for _, entry := range []string{"router-wg", "shadowsocks", "socks5", "hysteria2", "http-connect", "https-connect"} {
-		graph, capture := externalTestFixture(t, "shadowsocks", entry)
+		final := "shadowsocks"
+		if entry == "shadowsocks" {
+			// Only the separate captured SS2022 -> SS2022 unit is admitted.
+			final = "hysteria2"
+		}
+		graph, capture := externalTestFixture(t, final, entry)
 		capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 		original := externalDesktopCompile(t, graph, capture)
 		if plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "darwin"); err == nil || plan != nil {

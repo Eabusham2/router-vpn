@@ -1796,6 +1796,8 @@ var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerSer
 var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string, string, uint16) desktopExternalInstalledPacketEntryPeer
 
 type desktopExternalInstalledPeerRequest struct {
+	ShadowsocksEntry     *desktopExternalInstalledSSRequest    `json:"shadowsocks_entry,omitempty"`
+	ShadowsocksMethod    string                                `json:"shadowsocks_method,omitempty"`
 	AmneziaEntry         *desktopExternalInstalledAWGRequest   `json:"amnezia_entry,omitempty"`
 	WireGuardEntry       *desktopExternalInstalledWGRequest    `json:"wireguard_entry,omitempty"`
 	OpenVPNClientAddress string                                `json:"openvpn_client_address,omitempty"`
@@ -1829,6 +1831,7 @@ var desktopExternalInstalledOpenVPNEntry func(*testing.T, *desktopNodeLayerServe
 var desktopExternalInstalledOpenVPN func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
 
 type desktopExternalInstalledPeerReply struct {
+	ShadowsocksEntry        *desktopExternalInstalledSSReceipt          `json:"shadowsocks_entry,omitempty"`
 	PacketEntry             *desktopExternalInstalledPacketEntryReceipt `json:"packet_entry,omitempty"`
 	OpenVPNUsername         string                                      `json:"openvpn_username,omitempty"`
 	OpenVPNPassword         string                                      `json:"openvpn_password,omitempty"`
@@ -2354,6 +2357,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	if request.SOCKSFault != "" && (request.Protocol != "socks5" || request.SOCKSFault != "auth-downgrade" && request.SOCKSFault != "relay-domain" && request.SOCKSFault != "control-eof" && request.SOCKSFault != "relay-route") {
 		t.Fatal("ordinary external reference acquired an unowned SOCKS reply mutation")
 	}
+	if request.ShadowsocksEntry != nil && (request.Protocol != "shadowsocks" || request.Layer != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || !latency || desktopExternalInstalledSSEntry == nil || !desktopSS2022Credentials(request.ShadowsocksEntry.Method, request.ShadowsocksEntry.Password) || !desktopSS2022Credentials(request.ShadowsocksMethod, request.Password)) || request.ShadowsocksEntry == nil && request.ShadowsocksMethod != "" {
+		t.Fatal("unrequested or incomplete ordinary SS entry graph")
+	}
 	if request.Protocol == "wireguard" {
 		if request.Password != "" || request.WireGuard == nil || request.Amnezia != nil || desktopExternalInstalledWireGuard == nil {
 			t.Fatal("installed external WireGuard reference requires its actual platform backend and separate captured keys")
@@ -2368,7 +2374,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	} else {
 		key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
-		valid := request.WireGuard == nil && request.Amnezia == nil && keyErr == nil && len(key) == 32
+		valid := request.WireGuard == nil && request.Amnezia == nil && keyErr == nil && (len(key) == 32 || request.ShadowsocksEntry != nil && request.ShadowsocksMethod == "2022-blake3-aes-128-gcm" && len(key) == 16)
 		clear(key)
 		if !valid {
 			t.Fatal("installed external reference lost its captured credential")
@@ -2430,7 +2436,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsDone })
 	var dnsPacket net.PacketConn
-	if request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" || request.Protocol == "openvpn" || request.Protocol == "socks5" {
+	if request.ShadowsocksEntry != nil || request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" || request.Protocol == "openvpn" || request.Protocol == "socks5" {
 		dnsPacket, err = net.ListenPacket("udp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -2479,11 +2485,16 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	closeTransport := func() {}
 	var wgPeer desktopExternalInstalledWGPeer
 	var entryPeer desktopExternalInstalledPacketEntryPeer
+	var ssEntryPeer desktopExternalInstalledSSPeer
 	var openvpnProfile string
 	var openvpnPeer desktopExternalInstalledOpenVPNPeer
 	var socksPeer *desktopExternalInstalledSOCKSPeer
 	var layerPeer desktopExternalInstalledLayerPeer
-	if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
+	if request.ShadowsocksEntry != nil {
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
+		final := desktopStartSSProvider(t, server, request.ShadowsocksMethod, request.Password, netip.MustParseAddr("127.0.0.1"))
+		address, closeTransport = final.address, final.close
+	} else if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		if request.Protocol == "amneziawg" {
 			if entryRequested {
@@ -2621,6 +2632,13 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			}
 		}()
 	}
+	if request.ShadowsocksEntry != nil {
+		ssEntryPeer = desktopExternalInstalledSSEntry(t, server, *request.ShadowsocksEntry, cert, address)
+		if ssEntryPeer.address == "" || ssEntryPeer.close == nil || ssEntryPeer.stats == nil {
+			t.Fatal("SS entry omitted original native peer")
+		}
+		address = "198.51.100.240:8388"
+	}
 	if entryRequested {
 		exitNetwork := "tcp"
 		exitPort := uint16(8388)
@@ -2665,6 +2683,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if entryPeer.close != nil {
 			entryPeer.close()
 		}
+		if ssEntryPeer.close != nil {
+			ssEntryPeer.close()
+		}
 		closeTransport()
 		for _, connection := range connections {
 			_ = connection.Close()
@@ -2681,6 +2702,10 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if entryPeer.stats != nil {
 			value := entryPeer.stats()
 			reply.PacketEntry = &value
+		}
+		if ssEntryPeer.stats != nil {
+			value := ssEntryPeer.stats()
+			reply.ShadowsocksEntry = &value
 		}
 		if benchmark != nil {
 			reply.Latency = benchmark.receipt()

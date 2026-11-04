@@ -38,6 +38,7 @@ type macOSExternalLayerReceipt struct {
 }
 
 type macOSExternalPeerReply struct {
+	ShadowsocksEntry        *macOSExternalSSEntryReceipt     `json:"shadowsocks_entry,omitempty"`
 	PacketEntry             *macOSExternalPacketEntryReceipt `json:"packet_entry,omitempty"`
 	OpenVPNNetwork          string                           `json:"openvpn_network,omitempty"`
 	OpenVPNProfile          string                           `json:"openvpn_profile,omitempty"`
@@ -66,6 +67,8 @@ type macOSExternalPeerReply struct {
 }
 
 type macOSExternalNativePeer struct {
+	ssEntry                                                          bool
+	ssEntryMethod, ssFinalMethod, ssEntryPassword                    string
 	finalClientKey, finalPeerKey, finalPSK                           string
 	packetEntry                                                      bool
 	entryProtocol, entryVariant                                      string
@@ -149,7 +152,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 	}
 	address, err := netip.ParseAddrPort(reply.Address)
 	expectedAddress := p.physical
-	if p.packetEntry {
+	if p.packetEntry || p.ssEntry {
 		expectedAddress = netip.MustParseAddr("198.51.100.240")
 	}
 	pool := x509.NewCertPool()
@@ -166,6 +169,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 		t.Fatal("ordinary peer acquired an unrequested AWG parameter identity")
 	}
 	macOSExternalNativePacketEntryRead(t, p, reply)
+	macOSExternalNativeSSEntryRead(t, p, reply)
 	macOSExternalNativeOpenVPNRead(t, p, reply, address)
 	p.address, p.ca = address, reply.CA
 	if p.layer == "" {
@@ -206,6 +210,10 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
+	p.ssEntryMethod, p.ssFinalMethod, _, p.ssEntry = macOSExternalSSEntryScenario(scenario)
+	if p.ssEntry {
+		p.entryProtocol = "shadowsocks"
+	}
 	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
 	hysteriaVariant, _, hysteriaEntry := macOSExternalHysteriaEntryScenario(scenario)
 	socksVariant, _, socksEntry := macOSExternalSOCKSEntryScenario(scenario)
@@ -245,7 +253,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if wgFinal && wgVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", wgVariant
 	}
-	if p.packetEntry && strings.HasSuffix(scenario, "-always") {
+	if (p.packetEntry || p.ssEntry) && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
 	}
 	if scenario == "wireguard-always" || scenario == "socks5-always" || strings.HasPrefix(scenario, "amneziawg-") && strings.HasSuffix(scenario, "-always") {
@@ -279,6 +287,10 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal(err)
 	}
 	p.password = base64.StdEncoding.EncodeToString(key)
+	if p.ssEntry {
+		p.password = macOSExternalNativeSSKey(t, p.ssFinalMethod)
+		p.ssEntryPassword = macOSExternalNativeSSKey(t, p.ssEntryMethod)
+	}
 	if layer != "" {
 		if _, err := rand.Read(key); err != nil {
 			t.Fatal(err)
@@ -330,6 +342,10 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		p.output.Close()
 	})
 	request := map[string]any{"schema": 1, "protocol": protocol, "address": p.physical.String(), "password": p.password, "hold": false}
+	if p.ssEntry {
+		request["shadowsocks_method"] = p.ssFinalMethod
+		request["shadowsocks_entry"] = map[string]any{"method": p.ssEntryMethod, "password": p.ssEntryPassword}
+	}
 	if protocol == "openvpn" {
 		request["password"], request["openvpn_network"], request["openvpn_fallback"] = "", p.openvpnNetwork, p.openvpnFallback
 		if !p.packetEntry {
@@ -412,7 +428,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal(err)
 	}
 	initial := p.read(t)
-	if initial.PacketEntry != nil && (initial.PacketEntry.PhysicalUDP != 0 || initial.PacketEntry.Streams != 0 || initial.PacketEntry.Packets != 0 || initial.PacketEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
+	if initial.ShadowsocksEntry != nil && (initial.ShadowsocksEntry.PhysicalTCP != 0 || initial.ShadowsocksEntry.PhysicalUDP != 0 || initial.ShadowsocksEntry.Streams != 0 || initial.ShadowsocksEntry.Packets != 0 || initial.ShadowsocksEntry.PublicReplies != 0) || initial.PacketEntry != nil && (initial.PacketEntry.PhysicalUDP != 0 || initial.PacketEntry.Streams != 0 || initial.PacketEntry.Packets != 0 || initial.PacketEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
 		t.Fatal("native peer claimed traffic before its captured runtime")
 	}
 	return p
@@ -521,6 +537,9 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		t.Fatal("native fixture refused another protocol")
 	}
 	entry := macOSExternalNativePacketEntryProfile(t, p, &profile)
+	if p.ssEntry {
+		entry = macOSExternalNativeSSEntryProfile(t, p, &profile)
+	}
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		t.Fatal("Darwin fixture profile rejected before native execution", err)
 	}
@@ -687,6 +706,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 }
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
+	if _, _, fault, ok := macOSExternalSSEntryScenario(scenario); ok {
+		return "shadowsocks", "", fault
+	}
 	if _, _, fault, ok := macOSExternalOpenVPNFinalScenario(scenario); ok {
 		return "openvpn", "", fault
 	}

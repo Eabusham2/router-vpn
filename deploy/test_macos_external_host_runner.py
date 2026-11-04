@@ -37,10 +37,13 @@ class NativeHostVerdicts(unittest.TestCase):
         final = None
         amnezia = None
         openvpn = None
+        ss = None
         for source in (ROOT/'cmd/client').glob('*darwin_native_test.go'):
             for name, body in re.findall(r'var (macOSExternal\w+Cases) = \[\]string\{([^}]+)\}', source.read_text()):
                 cases = re.findall(r'"([a-z0-9-]+)"', body)
                 actual.extend(cases)
+                if name == 'macOSExternalSSEntryCases':
+                    ss = cases
                 if name == 'macOSExternalOpenVPNFinalCases':
                     openvpn = cases
                 if name == 'macOSExternalAmneziaFinalCases':
@@ -48,6 +51,11 @@ class NativeHostVerdicts(unittest.TestCase):
                 if name == 'macOSExternalWireGuardFinalCases':
                     final = cases
         self.assertCountEqual(G.CASES, actual)
+        self.assertIsNotNone(ss)
+        self.assertEqual(tuple(ss[:18]), tuple(case for case in G.POSITIVE_CASES if case.startswith('ss-entry-')))
+        self.assertEqual(tuple(ss[18:]), tuple(case for case in G.NEGATIVE_CASES if case.startswith('ss-entry-')))
+        self.assertEqual(len(G.CASES), 290)
+        self.assertEqual(len(G.POLICY_TESTS), 37)
         self.assertIsNotNone(openvpn)
         self.assertEqual(tuple(openvpn[:24]),tuple(case for case in G.POSITIVE_CASES if "-entry-" in case and "-openvpn-" in case))
         self.assertEqual(tuple(openvpn[24:]),tuple(case for case in G.NEGATIVE_CASES if "-entry-" in case and "-openvpn-" in case))

@@ -44,7 +44,7 @@ func validateDesktopMacOSExternalSources(profile, entry common.RouterProfile, la
 		return validateDesktopWindowsExternalSource(profile, launch)
 	}
 	owner := launch.external
-	if !desktopExternalPacketEntryOwner(owner) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID ||
+	if !desktopExternalRetainedEntryOwner(owner) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID ||
 		profile.ID != owner.profile.ID || entry.ID != owner.entry.ID {
 		return errors.New("macOS entry source lost its two original saved profiles")
 	}

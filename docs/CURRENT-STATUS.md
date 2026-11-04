@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — verified through ab861d66
+## Latest implementation continuation — verified through 4d25725c
 
 The verified source cutoff is
-[`ab861d66`](https://github.com/Eabusham2/router-vpn/commit/ab861d66236a492e453978ae5f396bf0b8543bb7),
-tree `af6d2c634390ee76df315b1713b8d5fbd0917837`.
+[`4d25725c`](https://github.com/Eabusham2/router-vpn/commit/4d25725ccef863a1e800a18483372308cd5d6a9f),
+tree `affa265d7522c0d3fcbee3ca96485f9864886789`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -45,8 +45,14 @@ validation limits. Changes and test counts are not a requirements denominator.
   UDP cases explicitly capture entry MTU 1440/final 1280; entry 1420 remains
   rejected. Twelve real encrypted loopback positives and eight refusal leaves
   pass with original endpoint cleanup, separately from native acceptance.
-  Ordinary Server/Compare, new predecessors and broader Start Layers remain
-  separate requirements. The native gate now requires all 263 cases and 34
+  Ordinary SS2022 entries can now retain independent SS2022 final peers for
+  all nine supported method pairs in Local On-connect/Always. Both encrypted
+  TCP/UDP transports, separate saved credentials/proofs, selected DNS and exact
+  Local restoration remain captured; only the entry gets physical grants.
+  Root policy/application races, thirteen runner checks and seventeen actual
+  encrypted-loopback/provider-process verdicts pass. Native PF/utun acceptance
+  remains separate. Ordinary Server/Compare, new predecessors and broader
+  Start Layers remain requirements. The native gate now requires all 290 cases and 37
   policy tests. Its exact
   verdict parser now counts anchored lines once; all 961 differential inputs
   preserve acceptance/rejection behavior within the original budget. Focused
@@ -102,7 +108,9 @@ validation limits. Changes and test counts are not a requirements denominator.
   transaction cases remain mandatory in CI. The subsequent native receipt
   correction carries the explicit caller through every link/address/route/rule
   dump instead of reusing an expired constructor. Its focused race and four
-  causal controls pass; the ordinary no-context projection callers still need
+  causal controls pass. Both actual generated-command/TUN jobs at `2f31dfda`
+  pass all six original cases, including MTU rollback and resolver/key refusals;
+  they do not establish the three new MTU transactions. The ordinary no-context projection callers still need
   their own operation-bound integration. Installed service Retest/Cancel,
   coordinated transition history, cross-adapter protected transfer, active
   Always upgrades and same-boot service-crash recovery remain unfinished; see

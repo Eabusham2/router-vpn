@@ -47,10 +47,10 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`ab861d66236a492e453978ae5f396bf0b8543bb7`](https://github.com/Eabusham2/router-vpn/commit/ab861d66236a492e453978ae5f396bf0b8543bb7),
-tree `af6d2c634390ee76df315b1713b8d5fbd0917837`. The native Linux receipt
-operation correction accompanying this record is described below; it does not
-inherit this cutoff's CI results.
+[`4d25725ccef863a1e800a18483372308cd5d6a9f`](https://github.com/Eabusham2/router-vpn/commit/4d25725ccef863a1e800a18483372308cd5d6a9f),
+tree `affa265d7522c0d3fcbee3ca96485f9864886789`. The macOS SS2022-entry
+source accompanying this record is described below; it does not inherit this
+cutoff's CI results.
 
 | Published commit | Concrete change and focused evidence | Remaining boundary |
 |---|---|---|
@@ -219,7 +219,35 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Linux installed-bundle gate fixture accompanying this record
+## macOS SS2022 entry and final source accompanying this record
+
+The retained Local host now admits exactly an ordinary SS2022 entry and
+independent SS2022 final. Each profile independently selects AES-128-GCM,
+AES-256-GCM or ChaCha20-Poly1305 from the SS2022 methods, giving nine pairs.
+Both source revisions, keys, methods, expected public proofs, selected TCP/UDP
+DNS, device policy and exact proved-Local restoration remain captured. Only
+the entry's TCP/UDP tuples receive native physical grants. Layers, other final
+families, predecessors and Server/Compare remain separately unfinished.
+
+Root verified all 21 frozen source files. The complete Darwin policy race
+passes in 10.996s, application source/restoration races in 14.606s and thirteen
+native-gate parser tests in 7.564s. The native inventory retains all 263 prior
+cases and adds eighteen positives and nine refusals, for 290, with 37 policy
+parents. Those native host cases still require real PF/utun execution.
+
+An independent component uses two actual encrypted SS services. Nine method
+pairs exchange TCP and UDP; six credential/method/route negatives reject on
+both transports. A separate original provider subprocess proves readiness,
+DNS-listener ownership and joined EOF cleanup. Root rebased the component's
+graph inputs onto the current native receipt/MTU projection, verified all
+1,297 input hashes and observed exactly seventeen unique RUN/PASS verdicts
+with no skip/failure, under race in 3.730s. This loopback evidence does not
+substitute for physical macOS execution. All 36 app-prepared graphs parse in
+the pinned native registries; the three Darwin ARM64 test images compile.
+Old policy and omitted UDP-DNS provider construction controls fail their
+intended assertions; no rejection or native deadline was removed.
+
+## Linux installed-bundle gate fixture published at 4d25725c
 
 The installed-host ordering fixture predated the required stock-DNS gate. It
 mocked the completed bundle but then attempted a real DNS gate against that
@@ -289,6 +317,14 @@ pass; neither is native execution. The expanded existing kernel-inventory case
 requires fresh reads after canceled construction, and every mandatory native
 MTU candidate now ends its construction operation before the real adopted-TUN
 receipt. Those kernel cases remain required in CI and were not run locally.
+
+The separate generated-command/TUN [run 41828373994](https://github.com/Eabusham2/router-vpn/actions/runs/41828373994)
+passes both exact-`2f31dfda` jobs: AMD64 `126568876844` and ARM64
+`126568876427`. All six original cases include original-TUN retirement:
+On-connect, Always, captured MTU, MTU rollback, resolver failure and wrong key.
+Their native parent durations are 23.91s and 24.02s. This confirms the earlier
+readback failures are closed for those cases; it does not prove the separate
+three-case MTU transaction suite, later channel change or installed service.
 
 ## Native Linux MTU transaction prerequisite published at ab861d66
 

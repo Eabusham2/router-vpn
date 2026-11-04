@@ -13,7 +13,7 @@ import (
 )
 
 func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *testing.T) {
-	for _, selected := range []string{"wg-entry-openvpn-tcp", "wg-entry-openvpn-udp", "wg-entry-openvpn-mixed", "awg-entry-fast-openvpn-tcp", "awg-entry-fast-openvpn-udp", "awg-entry-fast-openvpn-mixed", "awg-entry-strong-openvpn-tcp", "awg-entry-strong-openvpn-udp", "awg-entry-strong-openvpn-mixed", "wg-entry-amneziawg-fast", "wg-entry-amneziawg-strong", "awg-entry-fast-amneziawg-fast", "awg-entry-fast-amneziawg-strong", "awg-entry-strong-amneziawg-fast", "awg-entry-strong-amneziawg-strong", "wg-entry-wireguard", "awg-entry-wireguard-fast", "awg-entry-wireguard-strong", "shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong", "wg-entry-socks5", "awg-entry-socks5-fast", "awg-entry-socks5-strong", "wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor", "awg-entry-hysteria2-fast-aes", "awg-entry-hysteria2-fast-aes-xor", "awg-entry-hysteria2-strong-aes", "awg-entry-hysteria2-strong-aes-xor"} {
+	for _, selected := range []string{"ss-entry-ss", "wg-entry-openvpn-tcp", "wg-entry-openvpn-udp", "wg-entry-openvpn-mixed", "awg-entry-fast-openvpn-tcp", "awg-entry-fast-openvpn-udp", "awg-entry-fast-openvpn-mixed", "awg-entry-strong-openvpn-tcp", "awg-entry-strong-openvpn-udp", "awg-entry-strong-openvpn-mixed", "wg-entry-amneziawg-fast", "wg-entry-amneziawg-strong", "awg-entry-fast-amneziawg-fast", "awg-entry-fast-amneziawg-strong", "awg-entry-strong-amneziawg-fast", "awg-entry-strong-amneziawg-strong", "wg-entry-wireguard", "awg-entry-wireguard-fast", "awg-entry-wireguard-strong", "shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong", "wg-entry-socks5", "awg-entry-socks5-fast", "awg-entry-socks5-strong", "wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor", "awg-entry-hysteria2-fast-aes", "awg-entry-hysteria2-fast-aes-xor", "awg-entry-hysteria2-strong-aes", "awg-entry-hysteria2-strong-aes-xor"} {
 		runExternalPhysicalFactoryProtocolCases(t, []string{selected}, func(t *testing.T, c *externalPhysicalFactoryCase) error {
 			wantInterfaces, err := desktopDarwinPhysicalInterfaces(c.selected, c.ipv6 != "off")
 			if err != nil {
@@ -104,5 +104,28 @@ func TestRouterVPNExternalPhysicalPacketFinalRejectsFinalPhysicalAuthority(t *te
 				t.Fatal("retired entry retained its original tuple")
 			}
 		})
+	}
+}
+
+func TestRouterVPNExternalPhysicalSSEntryRejectsFinalPhysicalAuthority(t *testing.T) {
+	policy := externalPhysicalDeviceFixture(t, "ss-entry-ss", "192.168.50.7", 8443, false, "darwin", "off", "always")
+	f := newExternalPhysicalFixture(t, policy)
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	ctx := f.start(t, source)
+	for _, network := range []string{"tcp", "udp"} {
+		if _, err := f.physical.current(ctx, network, M.ParseSocksaddr("192.168.50.7:8443")); err != nil {
+			t.Fatal("original SS entry lost captured transport", network, err)
+		}
+		for _, destination := range []string{"198.51.100.240:8388", "198.51.100.241:8388", "192.168.50.7:8444", "127.0.0.1:8388"} {
+			if _, err := f.physical.current(ctx, network, M.ParseSocksaddr(destination)); err == nil {
+				t.Fatal("SS final acquired physical egress", network, destination)
+			}
+		}
+	}
+	f.network.Cancel()
+	for _, network := range []string{"tcp", "udp"} {
+		if _, err := f.physical.current(ctx, network, M.ParseSocksaddr("192.168.50.7:8443")); err == nil {
+			t.Fatal("cancelled SS entry retained transport", network)
+		}
 	}
 }

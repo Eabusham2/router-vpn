@@ -110,6 +110,7 @@ BOX_TEMPLATES = {
 }
 PEER_TEMPLATES = {
     'node_external_amnezia_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go',
+    'node_external_ss_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_test.go',
     'node_external_openvpn_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_openvpn_installed_test.go',
     'node_external_wireguard_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_wireguard_installed_test.go',
     'node_darwin_external_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_darwin_external_peer_test.go',

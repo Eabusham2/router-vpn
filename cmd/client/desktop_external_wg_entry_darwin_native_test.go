@@ -276,6 +276,9 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 }
 
 func macOSExternalNativeEntryID(p *macOSExternalNativePeer) string {
+	if p.ssEntry {
+		return "installed-macos-ss-entry"
+	}
 	if p.entryProtocol == "amneziawg" {
 		return "installed-macos-awg-entry"
 	}
