@@ -337,4 +337,6 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-parent-safety-') 
 
 subprocess.run([sys.executable, str(SCRIPT.with_name('test_native_egress.py'))], check=True, timeout=60)
 subprocess.run([sys.executable, str(SCRIPT.with_name('test_darwin_owned_pf.py'))], check=True, timeout=60)
+if sys.platform.startswith('linux'):
+    subprocess.run([sys.executable, str(SCRIPT.with_name('test_linux_kill_switch_mutation_lock.py'))], check=True, timeout=30)
 print('Kill switch tests: OK')

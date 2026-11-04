@@ -10,6 +10,8 @@ persisted so `always` can be reasserted correctly before networking on reboot.
 """
 from __future__ import annotations
 
+import contextlib
+import functools
 import ipaddress
 import json
 import os
@@ -20,7 +22,13 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from typing import Any
+
+# This shared policy module is also imported by portable validators on Windows.
+if sys.platform.startswith("linux"):
+    import fcntl
 
 from profile_id import validate_profile_id as _shared_validate_profile_id
 
@@ -304,14 +312,31 @@ def nft_prefix() -> list[str]:
     sudo = shutil.which("sudo")
     if sudo is None:
         raise RuntimeError("root privileges are required for strict Linux kill switch")
+    retained = getattr(_MUTATION_LOCAL, 'lease', None)
+    if retained is not None:
+        retained.current()
+        # sudo closes nonstandard descriptors by default. Refuse if its
+        # policy does not permit explicit preservation; never retry without it.
+        return [sudo, "-n", "-C", str(retained.descriptor + 1), nft]
     return [sudo, "-n", nft]
 
 
 def run_nft(args: list[str], *, check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(nft_prefix() + args, input=input_text, text=True, capture_output=True, timeout=8, check=False)
-    if check and proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "nftables command failed").strip())
-    return proc
+    with mutation_guard(root_dir()):
+        retained = getattr(_MUTATION_LOCAL, 'lease', None)
+        if retained is not None:
+            retained.current()
+        prefix = nft_prefix()
+        proc = subprocess.run(prefix + args, input=input_text, text=True, capture_output=True,
+                              timeout=8, check=False,
+                              pass_fds=(retained.descriptor,) if retained is not None else ())
+        if retained is not None:
+            retained.current()
+        if proc.returncode != 0 and "-C" in prefix and (proc.stderr or "").lstrip().startswith("sudo:"):
+            raise RuntimeError("standalone nonroot Linux nft execution requires sudo closefrom_override to preserve the mutation lease; use the installed privileged controller or authorize descriptor preservation: " + (proc.stderr or proc.stdout or "sudo/nft failed").strip())
+        if check and proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "nftables command failed").strip())
+        return proc
 
 
 def table_exists() -> bool:
@@ -378,6 +403,117 @@ def _runtime_state_dir(root: Path) -> tuple[Path, os.stat_result]:
     return run, info
 
 
+
+# One private inode serializes this installation's Linux helper writers,
+# including independent CLI invocations and the platform dispatcher. This is
+# transaction exclusion, not authority to retire a captured session or to
+# adopt a table created by another installation. Never unlink the lock. nft
+# inherits the open description, so parent failure cannot admit a second
+# writer while its original kernel command remains alive.
+_MUTATION_LOCAL = threading.local()
+_MUTATION_ADMISSION_SECONDS = 8.0
+
+
+class _MutationLease:
+    def __init__(self, root: Path, parent: int, descriptor: int):
+        self.root, self.parent, self.descriptor = root, parent, descriptor
+        self.root_info = root.lstat()
+        self.parent_info = os.fstat(parent)
+        self.info = os.fstat(descriptor)
+        self.pid = os.getpid()
+
+    def current(self) -> None:
+        _validate_existing_ancestors(self.root / 'run')
+        root_now = self.root.lstat()
+        parent_now = os.stat(self.root / 'run', follow_symlinks=False)
+        lock_now = os.stat('kill-switch.lock', dir_fd=self.parent, follow_symlinks=False)
+        if (self.pid != os.getpid()
+                or not os.path.samestat(self.root_info, root_now)
+                or not stat.S_ISDIR(root_now.st_mode) or root_now.st_uid != os.geteuid()
+                or not os.path.samestat(self.parent_info, parent_now)
+                or not os.path.samestat(self.parent_info, os.fstat(self.parent))
+                or not stat.S_ISDIR(parent_now.st_mode)
+                or parent_now.st_uid != os.geteuid() or parent_now.st_mode & 0o077
+                or not os.path.samestat(self.info, lock_now)
+                or not os.path.samestat(self.info, os.fstat(self.descriptor))
+                or not stat.S_ISREG(lock_now.st_mode) or lock_now.st_nlink != 1
+                or lock_now.st_uid != os.geteuid() or lock_now.st_mode & 0o077):
+            raise RuntimeError('Linux kill-switch mutation lost its retained private lock identity')
+
+
+@contextlib.contextmanager
+def mutation_guard(root: Path):
+    root = Path(os.path.abspath(root))
+    retained = getattr(_MUTATION_LOCAL, 'lease', None)
+    if retained is not None:
+        if retained.root != root:
+            raise RuntimeError('Linux kill-switch mutation cannot borrow another root lock')
+        retained.current()
+        yield retained
+        retained.current()
+        return
+    _require_private_dir(root)
+    if root.lstat().st_uid != os.geteuid():
+        raise RuntimeError('Linux kill-switch root has a foreign owner')
+    run = root / 'run'
+    try:
+        run.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    _require_private_dir(run)
+    parent = os.open(run, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    descriptor = None
+    try:
+        info = os.fstat(parent)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                or not os.path.samestat(info, run.lstat())):
+            raise RuntimeError('Linux kill-switch run directory has a foreign identity')
+        if info.st_mode & 0o077:
+            os.fchmod(parent, 0o700)
+        descriptor = os.open('kill-switch.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o600, dir_fd=parent)
+        lease = _MutationLease(root, parent, descriptor)
+        lease.current()
+        deadline = time.monotonic() + _MUTATION_ADMISSION_SECONDS
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError('Linux kill-switch mutation is still owned by another operation') from exc
+                time.sleep(min(0.02, remaining))
+        lease.current()
+        _MUTATION_LOCAL.lease = lease
+        try:
+            yield lease
+            lease.current()
+        finally:
+            _MUTATION_LOCAL.lease = None
+    finally:
+        # Do not LOCK_UN: an inherited nft description must keep the lock
+        # until the original child has also closed it.
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
+def _serialized_mutation(function):
+    @functools.wraps(function)
+    def guarded(*args, **kwargs):
+        # Darwin state helpers are covered by their separate native PF guard.
+        if not sys.platform.startswith('linux'):
+            return function(*args, **kwargs)
+        if function.__name__ in {'write_state', 'remove_state'}:
+            root = args[0] if args else kwargs['root']
+        else:
+            root = root_dir()
+        with mutation_guard(root):
+            return function(*args, **kwargs)
+    return guarded
+
+
 def read_state(root: Path) -> dict[str, Any]:
     path = state_path(root)
     try:
@@ -397,6 +533,7 @@ def read_state(root: Path) -> dict[str, Any]:
     return value
 
 
+@_serialized_mutation
 def write_state(root: Path, value: dict[str, Any]) -> None:
     if not isinstance(value, dict) or value.get("policy") not in {"on-connect", "always"}:
         raise RuntimeError("refusing invalid persistent kill-switch state")
@@ -474,6 +611,7 @@ def _require_removal_identity(
     return True
 
 
+@_serialized_mutation
 def remove_state(root: Path, *, force_recovery: bool = False) -> None:
     path = state_path(root)
     run, parent_before = _runtime_state_dir(root)
@@ -498,6 +636,7 @@ def remove_state(root: Path, *, force_recovery: bool = False) -> None:
     except OSError:
         pass
 
+@_serialized_mutation
 def remove_table() -> None:
     if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") == "1":
         return
@@ -512,6 +651,7 @@ def policy_value(profile: dict[str, Any]) -> str:
     return policy
 
 
+@_serialized_mutation
 def apply(*, retained_state: dict[str, Any] | None = None) -> int:
     root = root_dir()
     store = read_store(root)
@@ -576,6 +716,7 @@ def apply(*, retained_state: dict[str, Any] | None = None) -> int:
     return 0
 
 
+@_serialized_mutation
 def release(force: bool = False) -> int:
     root = root_dir()
     try:
@@ -601,6 +742,7 @@ def release(force: bool = False) -> int:
     print("strict kill switch released", file=sys.stderr)
     return 0
 
+@_serialized_mutation
 def reassert() -> int:
     root = root_dir()
     state = read_state(root)
