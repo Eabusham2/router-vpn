@@ -26,6 +26,7 @@ W = G.WINDOWS
 spec = importlib.util.spec_from_file_location('desktop_native_build_test', ROOT/'deploy/build-native-runtime.py')
 N = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(N)
+PHYSICAL = N.load('desktop_native_windows_physical_test', 'test_windows_node_physical.py')
 
 
 def file(path, data=b'tool', executable=False):
@@ -60,11 +61,18 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(darwin_route_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None):
+    def test_failed_timed_out_or_missing_native_phase_receipt_cannot_reach_package(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(physical_failure=failure)
+
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None):
         class CompilerBoundary(Exception):
             pass
 
         targets = ('linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64')
+        if physical_failure is not None:
+            targets = tuple(target for target in targets if target.startswith('windows/'))
         if darwin_route_failure is not None:
             targets = tuple(target for target in targets if target.startswith('darwin/'))
         for target in targets:
@@ -79,6 +87,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 forwarder_errors = []
                 openvpn_errors = []
                 darwin_route_errors = []
+                physical_errors = []
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
@@ -268,10 +277,24 @@ class NativeSocketUIDGate(unittest.TestCase):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical.py'):
                         self.assertEqual(system, 'windows')
-                        self.assertEqual(args[2:], [str(source.resolve())])
+                        phase = args[4]
+                        self.assertEqual(args[2:4], [str(source.resolve()), '--phase'])
+                        self.assertEqual(args[5], '--receipt')
+                        self.assertEqual(len(args), 7)
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
-                        self.assertLessEqual(kwargs['timeout'], 1200)
+                        self.assertEqual(kwargs['timeout'], PHYSICAL.PHASE_TIMEOUTS[phase])
+                        if physical_failure and phase == 'external-packet':
+                            if physical_failure is ValueError:
+                                return ''  # zero exit without the mandatory owned receipt
+                            error = (physical_failure(41, args) if physical_failure is subprocess.CalledProcessError
+                                     else physical_failure(args, kwargs['timeout']))
+                            physical_errors.append(error)
+                            raise error
+                        receipt = {'format': 'routervpn-windows-physical-phase-v1', 'phase': phase,
+                                   'architecture': arch, 'source_sha256': PHYSICAL.source_digest({'modeled-source': 'a'*64}),
+                                   'executables': {name: 'b'*64 for name in PHYSICAL._PHASE_IMAGES[phase]}}
+                        Path(args[6]).write_text(json.dumps(receipt))
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq_runner.py'):
                         self.assertEqual(system, 'windows')
@@ -347,7 +370,10 @@ class NativeSocketUIDGate(unittest.TestCase):
                     if library:
                         file(stage/library, b'captured fixture library')
 
-                with patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
+                original_load = N.load
+                with patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else original_load(name, path)), \
+                     patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})), \
+                     patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
                      patch.object(N.platform, 'system', return_value={'darwin': 'Darwin', 'linux': 'Linux', 'windows': 'Windows'}[system]), \
                      patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'arm64'), \
                      patch.object(N, 'pristine'), patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}), \
@@ -355,10 +381,18 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    expected_error = darwin_route_failure or forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = physical_failure or darwin_route_failure or forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
+                if physical_failure:
+                    phases = [args[4] for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical.py')]
+                    self.assertEqual(phases, list(PHYSICAL.PHASES[:5]))
+                    self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
+                    self.assertFalse(any(len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq.py') for args in calls))
+                    if physical_errors:
+                        self.assertIs(caught.exception, physical_errors[0])
+                    continue
                 timers = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_amnezia_timers_pinned.py')]
                 self.assertEqual(len(timers), 1, 'Native build omitted the actual pinned AWG timer gate')
                 self.assertIn(ROOT/'deploy/test_amnezia_timers_pinned.py', N.inputs())
@@ -464,7 +498,9 @@ class NativeSocketUIDGate(unittest.TestCase):
                 kernel_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical_runner.py')]
                 kernel_node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical.py')]
                 self.assertEqual(len(kernel_runner), 1 if system == 'windows' else 0)
-                self.assertEqual(len(kernel_node), len(kernel_runner))
+                self.assertEqual(len(kernel_node), len(kernel_runner) * len(PHYSICAL.PHASES))
+                if kernel_node:
+                    self.assertEqual([args[4] for args in kernel_node], list(PHYSICAL.PHASES))
                 if kernel_node:
                     self.assertEqual(calls.index(kernel_runner[0]), calls.index(observation[0])+1)
                     self.assertEqual(calls.index(kernel_node[0]), calls.index(kernel_runner[0])+1)
@@ -474,9 +510,9 @@ class NativeSocketUIDGate(unittest.TestCase):
                 pq_kernel_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq_runner.py')]
                 pq_kernel = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq.py')]
                 self.assertEqual(len(pq_kernel_runner), len(kernel_runner))
-                self.assertEqual(len(pq_kernel), len(kernel_node))
+                self.assertEqual(len(pq_kernel), len(kernel_runner))
                 if pq_kernel:
-                    self.assertEqual(calls.index(pq_kernel_runner[0]), calls.index(kernel_node[0])+1)
+                    self.assertEqual(calls.index(pq_kernel_runner[0]), calls.index(kernel_node[-1])+1)
                     self.assertEqual(calls.index(pq_kernel[0]), calls.index(pq_kernel_runner[0])+1)
                 for name in ('test_windows_node_pq.py', 'test_windows_node_pq_runner.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())

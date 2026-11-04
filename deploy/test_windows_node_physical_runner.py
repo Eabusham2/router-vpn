@@ -545,7 +545,7 @@ class OrdinaryPacketScope(unittest.TestCase):
                 self.assertIn("-race", command)
                 selected = Path(next(value.removeprefix("-overlay=") for value in command if value.startswith("-overlay=")))
                 self.assertEqual(len(json.loads(selected.read_text())["Replace"]), 6 if "missing-durable-intent" in selected.parent.name else 5)
-                Path(command[command.index("-o") + 1]).write_bytes(b"captured-native-packet-image")
+                Path(command[command.index("-o") + 1]).write_bytes(b"captured-native-packet-image/" + selected.parent.name.encode())
                 return (1, "compile failed") if fault == "compile" else (0, "")
             binary = Path(command[0])
             if binary.parent.name == "external-packet":
@@ -580,6 +580,8 @@ class OrdinaryPacketScope(unittest.TestCase):
                 output += "panic: test timed out\n"
             if fault == "witness":
                 output = output.replace(witnesses[label], "unrelated failure")
+            if fault == "mutant-image":
+                binary.write_bytes(b"changed-negative-image")
             return (0 if fault == label else 1), output
         build = ["owned-go", "test", "-c", "-mod=readonly", "-race", "-tags=windows,routervpn_windows_node_composition"]
         with patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
@@ -594,7 +596,7 @@ class OrdinaryPacketScope(unittest.TestCase):
     def test_packet_dispatch_rejects_changed_images_missing_leaves_and_invalid_controls(self):
         for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"), ("reference", "required encrypted result"),
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
-                               ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect")):
+                               ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect"), ("mutant-image", "control executable changed")):
             with self.subTest(fault=fault):
                 previous = self.workspace
                 self.workspace = previous / fault
@@ -676,6 +678,123 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
                         self.dispatch(fault)
                 finally:
                     self.workspace = previous
+
+
+class NativePhaseOrchestration(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="windows-phase-parser-")
+        self.addCleanup(self.temp.cleanup)
+        self.source = Path(self.temp.name)
+        self.records = {"actual-generated-source": "a" * 64}
+        self.source_sha = GATE.source_digest(self.records)
+        self.env = {"GOARCH": "amd64", "captured": "unchanged"}
+
+    def receipt(self, phase):
+        return {"format": "routervpn-windows-physical-phase-v1", "phase": phase,
+                "architecture": "amd64", "source_sha256": self.source_sha,
+                "executables": {name: "b" * 64 for name in GATE._PHASE_IMAGES[phase]}}
+
+    def dispatch(self, fault=None):
+        calls = []
+        records = dict(self.records)
+        def run(command, *, env, timeout):
+            self.assertIs(env, self.env)
+            phase = command[command.index("--phase") + 1]
+            receipt = command[command.index("--receipt") + 1]
+            self.assertEqual(timeout, GATE.PHASE_TIMEOUTS[phase])
+            self.assertEqual(command[2], self.source)
+            self.assertFalse(receipt.exists())
+            calls.append(phase)
+            value = self.receipt(phase)
+            if fault == "child-failure" and phase == "node-controls":
+                raise RuntimeError("original owned child failure")
+            if fault == "missing":
+                return "PASS"
+            if fault == "source":
+                value["source_sha256"] = "c" * 64
+            if fault == "phase":
+                value["phase"] = "complete"
+            if fault == "target":
+                value["architecture"] = "arm64"
+            if fault == "image":
+                value["executables"].pop(next(iter(value["executables"])))
+            if fault == "unrelated-image":
+                digest = value["executables"].pop(next(iter(value["executables"])))
+                value["executables"]["unrelated.exe"] = digest
+            if fault == "mutated-source":
+                records["actual-generated-source"] = "d" * 64
+            receipt.write_text(json.dumps(value))
+            if fault == "oversized":
+                receipt.write_text(" " * 32769)
+            return "Actual native phase report"
+        with patch.object(GATE, "checked_sources", side_effect=lambda source: (source, dict(records))), contextlib.redirect_stdout(io.StringIO()) as stdout:
+            try:
+                result = GATE.execute_partitioned(self.source, self.env, run)
+            except BaseException:
+                self.assertNotIn("all six native phases", stdout.getvalue())
+                self.assertEqual(len(calls), 2 if fault == "child-failure" else 1)
+                raise
+        return calls, result, stdout.getvalue()
+
+    def test_packaging_requires_all_serial_exact_source_and_executable_receipts(self):
+        calls, results, output = self.dispatch()
+        self.assertEqual(tuple(calls), GATE.PHASES)
+        self.assertEqual(len(set(calls)), 6)
+        self.assertEqual(len(results), 6)
+        self.assertIn("all six native phases and their controls passed", output)
+        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3, 3])
+
+    def test_partial_wrong_target_changed_source_or_missing_images_never_complete(self):
+        for fault in ("missing", "source", "phase", "target", "image", "unrelated-image", "mutated-source", "oversized"):
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                self.dispatch(fault)
+        with self.assertRaisesRegex(RuntimeError, "original owned child failure"):
+            self.dispatch("child-failure")
+
+    def test_complete_set_rejects_missing_duplicate_reordered_and_mixed_sources(self):
+        valid = [self.receipt(phase) for phase in GATE.PHASES]
+        GATE.validate_phase_set(valid)
+        mutations = (valid[:-1], valid + [valid[0]], [valid[0], valid[0], *valid[2:]], list(reversed(valid)))
+        for candidate in mutations:
+            with self.subTest(phases=[v["phase"] for v in candidate]), self.assertRaises(ValueError):
+                GATE.validate_phase_set(candidate)
+        valid[-1] = dict(valid[-1], source_sha256="c" * 64)
+        with self.assertRaises(ValueError):
+            GATE.validate_phase_set(valid)
+
+    def test_default_execution_keeps_complete_inventory_and_failure_propagation(self):
+        original = GATE.execute
+        calls = []
+        def child(source, go, **kwargs):
+            calls.append(kwargs["phase"])
+            return self.receipt(kwargs["phase"])
+        with patch.object(GATE, "execute", side_effect=child), contextlib.redirect_stdout(io.StringIO()):
+            results = original(self.source)
+        self.assertEqual(tuple(calls), GATE.PHASES)
+        self.assertEqual(len(results), 6)
+        calls.clear()
+        def failed(source, go, **kwargs):
+            calls.append(kwargs["phase"])
+            raise RuntimeError("native phase failure")
+        with patch.object(GATE, "execute", side_effect=failed), self.assertRaisesRegex(RuntimeError, "native phase failure"):
+            original(self.source)
+        self.assertEqual(calls, [GATE.PHASES[0]])
+        with self.assertRaises(ValueError):
+            original(self.source, phase="unknown")
+        with self.assertRaises(ValueError):
+            original(self.source, receipt_path=self.source / "partial.json")
+
+    def test_parent_budgets_cover_existing_serial_child_bounds(self):
+        self.assertEqual(set(GATE.PHASES), set(GATE.PHASE_TIMEOUTS))
+        self.assertEqual(set(GATE.PHASES), set(GATE._PHASE_IMAGES))
+        self.assertEqual(GATE.PHASE_TIMEOUTS["node-baseline"], 2 * 180 + 90 + 60 + 300 + 30 + 600 + 300 + 3600 + 600 + 1215)
+        self.assertEqual(GATE.PHASE_TIMEOUTS["node-controls"] - GATE.PHASE_TIMEOUTS["node-baseline"], 4 * (600 + 105) - 600 - 1215)
+        self.assertEqual(GATE.PHASE_TIMEOUTS["external-socks"], 2 * 180 + 90 + 60 + 600 + 315 + 6 * (600 + 75))
+
+    def test_builder_calls_complete_phase_orchestrator_without_old_aggregate(self):
+        source = (ROOT / "deploy/build-native-runtime.py").read_text()
+        self.assertIn("physical.execute_partitioned(source, env, run)", source)
+        self.assertNotIn("run([sys.executable, ROOT/'deploy/test_windows_node_physical.py', source],", source)
 
 
 if __name__ == "__main__":

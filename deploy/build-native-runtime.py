@@ -671,8 +671,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_windows_protection_observation.py', source],
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_windows_node_physical_runner.py'], cwd=ROOT, env=env)
-                run([sys.executable, ROOT/'deploy/test_windows_node_physical.py', source],
-                    env=env, timeout=1200)
+                # Each actual native phase owns its original compiler/test bounds.
+                # A full package requires all source-bound phase receipts.
+                physical = load('desktop_windows_physical_phases', 'test_windows_node_physical.py')
+                physical.execute_partitioned(source, env, run)
                 run([sys.executable, ROOT/'deploy/test_windows_node_pq_runner.py'], cwd=ROOT, env=env)
                 # Actual matching-host CGO/Rust, isolated sockets and BFE. Only
                 # positive PQ execution keeps the shipping predicate unchanged;
