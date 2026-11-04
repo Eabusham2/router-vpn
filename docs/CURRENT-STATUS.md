@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — verified through 0df6174d
+## Latest implementation continuation — verified through 2d040b67
 
 The verified source cutoff is
-[`0df6174d`](https://github.com/Eabusham2/router-vpn/commit/0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7),
-tree `fff965448cc6f77db05189ab58c57bc0b47d810a`.
+[`2d040b67`](https://github.com/Eabusham2/router-vpn/commit/2d040b67e092e82f2793c1074a9eeda609b9b5c2),
+tree `4bd24cd385c7f2e031a3a6e384d71c7d0a21e295`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -22,7 +22,7 @@ validation limits. Changes and test counts are not a requirements denominator.
 - Retained macOS direct Local SOCKS5, AWG Fast/Strong and bounded OpenVPN are
   integrated with their captured credentials, selected policy and original
   native cleanup. The Local ordinary WG/AWG-entry host also admits SS, HTTP CONNECT,
-  HTTPS CONNECT, Hysteria2, authenticated SOCKS5 and WireGuard exits while retaining
+  HTTPS CONNECT, Hysteria2, authenticated SOCKS5, WireGuard and AWG exits while retaining
   both private sources and separate proofs. The final node owns publication, Stop,
   measurements and exact Local restoration; only the entry receives physical egress. CONNECT
   retains independent proxy credentials/TLS settings, and HY2 retains its final
@@ -36,8 +36,13 @@ validation limits. Changes and test counts are not a requirements denominator.
   before restoration. Server/Compare retain fresh leases for the already proved
   winner. The WireGuard final peer keeps its independent key, PSK, addresses,
   AllowedIPs, MTU and keepalive inside the original WG/AWG entry. AWG final
-  peers and ordinary Server/Compare remain separate requirements. The native
-  gate requires all 188 cases and 28 policy tests. Its exact
+  peers now retain all eleven final parameters and their independent packet
+  identity behind WG/AWG entries. Source/restoration tests retain both saved
+  profiles and the original proved Local choice. Six actual encrypted
+  loopback graphs and fourteen refusal cases pass separately from native
+  host acceptance. Ordinary Server/Compare, new predecessors and broader
+  Start Layers remain separate requirements. The native gate now requires
+  all 224 cases and 31 policy tests. Its exact
   verdict parser now counts anchored lines once; all 961 differential inputs
   preserve acceptance/rejection behavior within the original budget. Focused
   source/race/build checks pass; actual encrypted peers, PF/utun, physical transitions
@@ -135,8 +140,7 @@ validation limits. Changes and test counts are not a requirements denominator.
   result repeats at `b1caad7c` and `637edc8d`. The jobs were cancelled later during other
   contracts; complete Xcode/IPA and current-head release acceptance remain
   separate. Every negative, all 50 samples and the original deadlines remain.
-- Windows native admission includes WG-PQ, AWG-PQ and, in the source
-  accompanying this record, the four complete-MAX families: TLS/QUIC with
+- Windows native admission includes WG-PQ, AWG-PQ and the four complete-MAX families: TLS/QUIC with
   WG/AWG. The exact candidate predicate passed all ten native prerequisites at
   `93720c2a`; both ALL gates also passed. The shipping MAX workflow and all
   26 ALL cases/eight controls now use that predicate without an admission
@@ -156,7 +160,11 @@ validation limits. Changes and test counts are not a requirements denominator.
   controls and four restoration leaves, with identical 1,597-file source
   receipts. The full source-contract job also passes at that SHA, including
   the complete client test package in 395.836s. These bounded results do not
-  establish completion of the newer source release. A later source run
+  establish completion of the newer source release. `e4dca85e` repairs
+  cross-platform whole-module checksum ordering without changing pinned bytes;
+  `2d040b67` preserves the exact PQ/MAX admission order in native test controls.
+  Both repairs retain every original rejection boundary and require native
+  reruns. A later source run
   exposed the same runnable-monitor fixture race at the distinct temporary
   Speed Lab boundary. `3e0f06e7` settles that original transaction before the
   restoration fixture starts; all 24 modeled-network directions pass the

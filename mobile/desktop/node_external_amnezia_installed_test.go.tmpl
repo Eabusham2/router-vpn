@@ -4,20 +4,34 @@ package routervpnamnezia
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service/pause"
 	wgconn "github.com/sagernet/wireguard-go/conn"
+	"io"
+	"net"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // This provider runs the pinned AWG cryptographic device independently of the
@@ -27,6 +41,12 @@ func startDesktopDarwinInstalledAmnezia(t *testing.T, server *desktopNodeLayerSe
 	t.Helper()
 	parameters, backend := desktopDarwinAmneziaBackend(t, request)
 	return startDesktopDarwinInstalledPacket(t, server, request.desktopExternalInstalledWGRequest, physical, parameters, backend)
+}
+
+func startDesktopDarwinInstalledAmneziaFinal(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer {
+	t.Helper()
+	parameters, backend := desktopDarwinAmneziaBackend(t, request)
+	return startDesktopDarwinInstalledPacketAt(t, server, request.desktopExternalInstalledWGRequest, netip.MustParseAddr("127.0.0.1"), parameters, backend, true)
 }
 
 func startDesktopDarwinInstalledAmneziaEntry(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress, exitNetwork string, exitPort uint16) desktopExternalInstalledPacketEntryPeer {
@@ -202,5 +222,378 @@ func TestRouterVPNDesktopDarwinAmneziaNativeParameterReadback(t *testing.T) {
 				t.Fatal("parameter readback test acquired an ambient UDP socket")
 			}
 		})
+	}
+}
+
+// This portable reference runs two independent encrypted devices in sequence.
+// The first peer binds this host's observed physical address; its sole fixed UDP
+// route forwards the final encrypted bytes to the loopback-only AWG provider.
+// PF, utun and application proof/restoration remain the mandatory native gate.
+func TestRouterVPNDesktopInstalledAmneziaFinalTwoHopReference(t *testing.T) {
+	for _, entry := range []string{"wireguard", "fast", "strong"} {
+		for _, final := range []string{"fast", "strong"} {
+			faults := []string{"success"}
+			if entry == "wireguard" {
+				faults = append(faults, "client-key", "peer-key", "psk", "parameters", "padding", "destination")
+			} else if entry != final {
+				faults = append(faults, "entry-parameters")
+			}
+			for _, fault := range faults {
+				t.Run(entry+"/"+final+"/"+fault, func(t *testing.T) { desktopAmneziaFinalTwoHop(t, entry, final, fault, false) })
+			}
+		}
+	}
+}
+
+// This separate component runs only loopback sockets and userspace crypto.
+// It neither substitutes for nor contributes a verdict to native host acceptance.
+func TestRouterVPNDesktopInstalledAmneziaFinalLoopbackTwoHopReference(t *testing.T) {
+	for _, entry := range []string{"wireguard", "fast", "strong"} {
+		for _, final := range []string{"fast", "strong"} {
+			faults := []string{"success"}
+			if entry == "wireguard" {
+				faults = append(faults, "client-key", "peer-key", "psk", "parameters", "padding", "destination")
+			} else if entry != final {
+				faults = append(faults, "entry-parameters")
+			}
+			for _, fault := range faults {
+				t.Run(entry+"/"+final+"/"+fault, func(t *testing.T) { desktopAmneziaFinalTwoHop(t, entry, final, fault, true) })
+			}
+		}
+	}
+}
+
+type desktopPacketReferenceClient interface {
+	DialContext(context.Context, string, M.Socksaddr) (net.Conn, error)
+	Close() error
+}
+type desktopPacketFinalLower struct {
+	entry  desktopPacketReferenceClient
+	target string
+	calls  atomic.Uint32
+}
+
+func (d *desktopPacketFinalLower) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	if network != "udp" || target.String() != d.target {
+		return nil, errors.New("final packet tried to leave its captured encrypted entry")
+	}
+	d.calls.Add(1)
+	return d.entry.DialContext(ctx, network, target)
+}
+func (*desktopPacketFinalLower) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("final packet has no physical listener")
+}
+
+// Only the explicit loopback component uses this owned numeric-to-listener
+// mapping. The native entry's physical lower and address validation are unchanged.
+type desktopPacketLoopbackLower struct{ original, virtual string }
+
+func (d desktopPacketLoopbackLower) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	if network != "udp" || target.String() != d.virtual {
+		return nil, errors.New("loopback component rejected a foreign entry tuple")
+	}
+	return (desktopDarwinWGReferenceDialer{d.original}).DialContext(ctx, network, M.ParseSocksaddr(d.original))
+}
+func (desktopPacketLoopbackLower) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("loopback component has no ambient packet listener")
+}
+
+func desktopPacketReferenceKeys(t *testing.T) (*ecdh.PrivateKey, *ecdh.PrivateKey, string, desktopExternalInstalledWGRequest) {
+	t.Helper()
+	provider, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var psk [32]byte
+	if _, err = rand.Read(psk[:]); err != nil {
+		t.Fatal(err)
+	}
+	defer clear(psk[:])
+	encode := base64.StdEncoding.EncodeToString
+	return provider, client, encode(psk[:]), desktopExternalInstalledWGRequest{PrivateKey: encode(provider.Bytes()), ClientPublicKey: encode(client.PublicKey().Bytes()), PresharedKey: encode(psk[:])}
+}
+func desktopPacketReferenceClientStart(t *testing.T, ctx context.Context, variant, target, private, public, psk string, lower N.Dialer, final bool, fault string) desktopPacketReferenceClient {
+	t.Helper()
+	address, address6, mtu := "10.78.0.2/32", "fd78:78::2/128", 1420
+	if final {
+		address, address6, mtu = "10.79.0.2/32", "fd79:79::2/128", 1328
+	}
+	if variant == "wireguard" {
+		client, err := wg.NewEndpoint(wg.EndpointOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Dialer: lower, MTU: uint32(mtu), Address: []netip.Prefix{netip.MustParsePrefix(address), netip.MustParsePrefix(address6)}, PrivateKey: private, Peers: []wg.PeerOptions{{Endpoint: M.ParseSocksaddr(target), PublicKey: public, PreSharedKey: psk, AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		if err = client.Start(false); err != nil {
+			t.Fatal(err)
+		}
+		return client
+	}
+	parameters := desktopDarwinAmneziaReferenceParameters(t, "amneziawg-"+variant)
+	if fault == "parameters" || fault == "entry-parameters" {
+		parameters["h1"] = "50000000-59999999"
+	}
+	if fault == "padding" {
+		parameters["s4"] = "31"
+	}
+	remote := netip.MustParseAddrPort(target)
+	options := Options{Type: mobilemultihop.AmneziaType, MTU: mtu, Address: []string{address, address6}, PrivateKey: private, Peers: []mobilemultihop.AmneziaPeer{{Address: remote.Addr().String(), Port: int(remote.Port()), PublicKey: public, PreSharedKey: psk, AllowedIPs: []string{"0.0.0.0/0", "::/0"}}}, Parameters: parameters}
+	client, err := newEndpoint(ctx, nil, log.NewNOPFactory().Logger(), "independent-packet-client", options, lower, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err = client.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+func desktopAmneziaFinalTwoHop(t *testing.T, entryVariant, finalVariant, fault string, loopback bool) {
+	ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+	defer cancel()
+	var physical netip.Addr
+	if loopback {
+		physical = netip.MustParseAddr("127.0.0.1")
+	} else {
+		// Capture the kernel-selected source from this actual connected UDP socket.
+		// No datagram is sent. This is portable peer setup, not a native interface
+		// inventory receipt or physical grant; the Darwin host gate supplies those.
+		probeContext, probeCancel := context.WithTimeout(ctx, time.Second)
+		probeSocket, err := (&net.Dialer{}).DialContext(probeContext, "udp4", "192.0.2.1:9")
+		probeCancel()
+		if err != nil {
+			t.Fatal("two-hop reference cannot capture local socket source", err)
+		}
+		source, ok := probeSocket.LocalAddr().(*net.UDPAddr)
+		if err := probeSocket.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			physical = source.AddrPort().Addr().Unmap()
+		}
+		if !physical.Is4() || !physical.IsGlobalUnicast() || physical.IsLoopback() {
+			t.Fatal("two-hop reference lacks its actual non-loopback source")
+		}
+
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		c, err := listener.Accept()
+		if err == nil {
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+			_, _ = io.Copy(c, c)
+		}
+	}()
+	defer func() { _ = listener.Close(); <-served }()
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packetDone := make(chan struct{})
+	go func() {
+		defer close(packetDone)
+		data := make([]byte, 2048)
+		for {
+			n, from, err := packet.ReadFrom(data)
+			if err != nil {
+				return
+			}
+			if _, err = packet.WriteTo(data[:n], from); err != nil {
+				return
+			}
+		}
+	}()
+	defer func() { _ = packet.Close(); <-packetDone }()
+	server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, routes: []desktopNodeLayerRoute{{Network: "udp", Destination: "203.0.113.53:5353", Physical: packet.LocalAddr().String()}, {Network: "tcp", Destination: "1.1.1.1:443", Physical: listener.Addr().String()}, {Network: "tcp", Destination: "203.0.113.54:443", Physical: listener.Addr().String()}}}
+	finalProvider, finalClient, finalPSK, finalKeys := desktopPacketReferenceKeys(t)
+	entryProvider, entryClient, entryPSK, entryKeys := desktopPacketReferenceKeys(t)
+	if !desktopExternalIndependentPacketKeys(&entryKeys, &finalKeys) {
+		t.Fatal("final reference lost separate actual keys")
+	}
+	parameters := desktopDarwinAmneziaReferenceParameters(t, "amneziawg-"+finalVariant)
+	finalPeer := startDesktopDarwinInstalledAmneziaFinal(t, server, desktopExternalInstalledAWGRequest{finalKeys, parameters})
+	defer finalPeer.close()
+	expected, e := desktopNodeAWGParameterDigest(parameters)
+	actual, a := finalPeer.parameters()
+	if e != nil || a != nil || actual != expected {
+		t.Fatal("final original AWG parameters changed", e, a)
+	}
+	cert, ca := desktopExternalInstalledPeerCertificate(t, true)
+	var entryPeer desktopExternalInstalledPacketEntryPeer
+	if loopback {
+		parameters, backend := "", startDesktopDarwinWGDevice
+		protocol := "wireguard"
+		if entryVariant != "wireguard" {
+			protocol = "amneziawg"
+			parameters, backend = desktopDarwinAmneziaBackend(t, desktopExternalInstalledAWGRequest{entryKeys, desktopDarwinAmneziaReferenceParameters(t, "amneziawg-"+entryVariant)})
+		}
+		rules := map[string]desktopReferenceRule{"udp/198.51.100.240:8388": {Network: "udp", Address: "198.51.100.240", Port: 8388, Target: finalPeer.address}}
+		original := desktopInstalledPacketDevice(t, server, entryKeys, netip.MustParseAddr("127.0.0.1"), parameters, backend, rules, false)
+		entryPeer = desktopExternalInstalledPacketEntryPeer{address: original.address, close: original.close, stats: func() desktopExternalInstalledPacketEntryReceipt {
+			raw, streams, packets := original.stats()
+			digest := ""
+			if original.parameters != nil {
+				var err error
+				digest, err = original.parameters()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			return desktopExternalInstalledPacketEntryReceipt{Protocol: protocol, ParametersSHA256: digest, Address: original.address, PhysicalUDP: raw, Streams: streams, Packets: packets}
+		}}
+	} else if entryVariant == "wireguard" {
+		entryPeer = startDesktopDarwinInstalledWGEntry(t, server, entryKeys, physical, cert, finalPeer.address, "udp", 8388)
+	} else {
+		entryPeer = startDesktopDarwinInstalledAmneziaEntry(t, server, desktopExternalInstalledAWGRequest{entryKeys, desktopDarwinAmneziaReferenceParameters(t, "amneziawg-"+entryVariant)}, physical, cert, finalPeer.address, "udp", 8388)
+	}
+	defer entryPeer.close()
+	encode := base64.StdEncoding.EncodeToString
+	entryTarget := entryPeer.address
+	var entryLower N.Dialer = desktopDarwinWGReferenceDialer{entryPeer.address}
+	if loopback && entryVariant != "wireguard" {
+		entryTarget = "198.51.100.239:8388"
+		entryLower = desktopPacketLoopbackLower{entryPeer.address, entryTarget}
+	}
+	first := desktopPacketReferenceClientStart(t, ctx, entryVariant, entryTarget, encode(entryClient.Bytes()), encode(entryProvider.PublicKey().Bytes()), entryPSK, entryLower, false, map[bool]string{true: fault}[fault == "entry-parameters"])
+	defer first.Close()
+	wantProof := uint32(0)
+	if !loopback {
+		wantProof = 1
+		// The original entry proves its own public address through its independent TLS responder.
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM([]byte(ca)) {
+			t.Fatal("entry proof lost original certificate")
+		}
+		transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, address string) (net.Conn, error) {
+			return first.DialContext(c, n, M.ParseSocksaddr(address))
+		}}
+		defer transport.CloseIdleConnections()
+		proofCtx, proofStop := context.WithTimeout(ctx, 2*time.Second)
+		request, _ := http.NewRequestWithContext(proofCtx, http.MethodGet, "https://1.1.1.1/cdn-cgi/trace?routervpn_proof=0123456789abcdef0123456789abcdef", nil)
+		response, proofErr := (&http.Client{Transport: transport}).Do(request)
+		if fault == "entry-parameters" {
+			proofStop()
+			if response != nil {
+				response.Body.Close()
+			}
+			raw, streams, packets := finalPeer.stats()
+			entry := entryPeer.stats()
+			if proofErr == nil || entry.PhysicalUDP < 1 || entry.PublicReplies != 0 || entry.Packets != 0 || raw != 0 || streams != 0 || packets != 0 {
+				t.Fatal("invalid entry reached independent final", proofErr, entry, raw, streams, packets)
+			}
+			return
+		}
+		if proofErr != nil {
+			proofStop()
+			t.Fatal("original entry proof failed", proofErr)
+		}
+		body, err := io.ReadAll(io.LimitReader(response.Body, 1024))
+		response.Body.Close()
+		proofStop()
+		if err != nil || response.StatusCode != http.StatusOK || string(body) != "ip=203.0.113.77\n" {
+			t.Fatal("entry public proof changed", err)
+		}
+	}
+	public := finalProvider.PublicKey()
+	if fault == "client-key" {
+		finalClient, err = ecdh.X25519().GenerateKey(rand.Reader)
+	}
+	if fault == "peer-key" {
+		other, e := ecdh.X25519().GenerateKey(rand.Reader)
+		err = e
+		if e == nil {
+			public = other.PublicKey()
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fault == "psk" {
+		raw, _ := base64.StdEncoding.DecodeString(finalPSK)
+		raw[0] ^= 1
+		finalPSK = encode(raw)
+		clear(raw)
+	}
+	target := "198.51.100.240:8388"
+	if fault == "destination" {
+		target = "198.51.100.241:8388"
+	}
+	lower := &desktopPacketFinalLower{entry: first, target: target}
+	final := desktopPacketReferenceClientStart(t, ctx, finalVariant, target, encode(finalClient.Bytes()), encode(public.Bytes()), finalPSK, lower, true, fault)
+	defer final.Close()
+	bounded, stop := context.WithTimeout(ctx, 2*time.Second)
+	defer stop()
+	connection, err := final.DialContext(bounded, "tcp", M.ParseSocksaddr("203.0.113.54:443"))
+	if fault != "success" {
+		if connection != nil {
+			connection.Close()
+		}
+		raw, streams, packets := finalPeer.stats()
+		entry := entryPeer.stats()
+		if err == nil || lower.calls.Load() == 0 || entry.PublicReplies != wantProof || streams != 0 || packets != 0 || fault != "destination" && fault != "entry-parameters" && (entry.Packets < 1 || raw < 1) || (fault == "destination" || fault == "entry-parameters") && (entry.Packets != 0 || raw != 0) {
+			t.Fatal("final refusal missed its two encrypted boundaries", fault, err, entry, raw, streams, packets)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+	const payload = "two independent encrypted packet owners"
+	if _, err = io.WriteString(connection, payload); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, len(payload))
+	if _, err = io.ReadFull(connection, reply); err != nil || string(reply) != payload {
+		t.Fatal("nested TCP changed", err)
+	}
+	udp, err := final.DialContext(bounded, "udp", M.ParseSocksaddr("203.0.113.53:5353"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	_ = udp.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err = io.WriteString(udp, payload); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := udp.Read(reply); err != nil || n != len(payload) || string(reply) != payload {
+		t.Fatal("nested selected UDP route changed", err)
+	}
+	entry := entryPeer.stats()
+	raw, streams, packets := finalPeer.stats()
+	if lower.calls.Load() != 1 || entry.PhysicalUDP < 1 || entry.Packets != 1 || entry.PublicReplies != wantProof || raw < 1 || streams != 1 || packets != 1 {
+		t.Fatal("two encrypted original owners lack complete byte witnesses", entry, raw, streams, packets, lower.calls.Load())
+	}
+	if err = final.Close(); err != nil {
+		t.Fatal(err)
+	}
+	finalPeer.close()
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entryPeer.close()
+	probe, err := net.Dial("udp4", packet.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Close()
+	_ = probe.SetDeadline(time.Now().Add(time.Second))
+	_, err = io.WriteString(probe, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := probe.Read(reply); err != nil || n != len(payload) {
+		t.Fatal("original retirement touched foreign responder", err)
 	}
 }

@@ -44,6 +44,15 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	t.Helper()
 	// The labels select independent imported test profiles. The saved native
 	// protocol remains amneziawg; no preset alias is added to its schema.
+	finalVariant := ""
+	if selected, ok := strings.CutPrefix(protocol, "wg-entry-amneziawg-"); ok {
+		finalVariant, protocol = selected, "wg-entry-wireguard"
+	} else if parts := strings.Split(protocol, "-"); len(parts) == 5 && parts[0] == "awg" && parts[1] == "entry" && parts[3] == "amneziawg" {
+		finalVariant, protocol = parts[4], "awg-entry-wireguard-"+parts[2]
+	}
+	if finalVariant != "" && finalVariant != "fast" && finalVariant != "strong" {
+		t.Fatal("unknown final AWG import")
+	}
 	entrySelected := strings.HasPrefix(protocol, "wg-entry-") || strings.HasPrefix(protocol, "awg-entry-")
 	entryExit := "shadowsocks"
 	entryLayer := ""
@@ -88,6 +97,9 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 			}
 			protocol = "amneziawg-" + parts[3]
 		}
+	}
+	if finalVariant != "" {
+		entryExit = "amneziawg"
 	}
 	variant := ""
 	if selected, ok := strings.CutPrefix(protocol, "amneziawg-"); ok {
@@ -185,12 +197,25 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 		entry := map[string]any{"id": "captured-wg-entry", "node_kind": "external", "external": private, "home_lan_access": true, "ipv6_mode": "on", "mtu_policy": "auto"}
 		final := map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{23}, 32)), "detour": "external-entry"}
 		profile["external"] = map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": final["server"], "port": final["server_port"], "method": final["method"], "password": final["password"]}}
-		if entryExit == "wireguard" {
+		if entryExit == "wireguard" || entryExit == "amneziawg" {
 			key := func(value byte) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32)) }
 			transport["mtu"] = 1420
 			private[protocol].(map[string]any)["mtu"] = 1420
 			final = map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag, "detour": "external-entry", "private_key": key(31), "mtu": 1360, "address": []string{"10.79.0.2/32", "fd79:79::2/128"}, "peers": []any{map[string]any{"address": "198.51.100.240", "port": 8388, "public_key": key(32), "pre_shared_key": key(33), "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}
 			profile["external"] = map[string]any{"protocol": "wireguard", "expected_public_ip": "203.0.113.88", "wireguard": map[string]any{"endpoint": "198.51.100.240:8388", "private_key": key(31), "peer_public_key": key(32), "preshared_key": key(33), "addresses": final["address"], "allowed_ips": []string{"0.0.0.0/0", "::/0"}, "mtu": 1360}}
+			if entryExit == "amneziawg" {
+				parameters := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+				if finalVariant == "fast" {
+					parameters["jc"], parameters["jmin"], parameters["jmax"], parameters["s4"] = "0", "20", "40", "8"
+				}
+				final["type"], final["amnezia"], final["mtu"] = mobilemultihop.AmneziaType, parameters, 1328
+				imported := profile["external"].(map[string]any)
+				config := imported["wireguard"].(map[string]any)
+				config["parameters"], config["mtu"] = parameters, 1328
+				imported["protocol"], imported["amneziawg"] = "amneziawg", config
+				delete(imported, "wireguard")
+				profile["mtu_policy"], profile["manual_mtu"] = "manual", 1328
+			}
 		} else if entryExit == "socks5" {
 			delete(final, "method")
 			final["type"], final["version"], final["username"], final["password"] = "socks", "5", "separate-captured-exit-user", "separate-captured-exit-password"
@@ -215,7 +240,7 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 		}
 		selection["protocol"], selection["entry"], selection["entry_tag"] = entryExit, entry, "external-entry"
 		graph["outbounds"] = []any{final}
-		if entryExit == "wireguard" {
+		if entryExit == "wireguard" || entryExit == "amneziawg" {
 			graph["outbounds"], graph["endpoints"] = []any{}, []any{transport, final}
 		}
 	}

@@ -57,7 +57,7 @@ type DesktopExternalPolicy struct {
 var desktopExternalPolicyError = errors.New("desktop external lower path requires its complete captured native policy")
 
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
-// Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer), SOCKS5 or WireGuard graph.
+// Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer), SOCKS5, WireGuard or AmneziaWG graph.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -73,7 +73,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		entryKind = desktopExternalPacketEntryKind(original, capture)
 	}
 	entry := entryKind != ""
-	packetFinal := entry && capture.Protocol == "wireguard"
+	packetFinal := entry && (capture.Protocol == "wireguard" || capture.Protocol == "amneziawg")
 	if err != nil || !entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" ||
 		capture.Execution != "" || capture.EntryStartLayer != "" ||
 		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
@@ -333,7 +333,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 // bounded admission. The actual first root must still match its exact digest;
 // an entry descriptor cannot turn an unrelated transport into physical egress.
 func desktopExternalPacketEntryExit(protocol string) bool {
-	return protocol == "wireguard" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
+	return protocol == "wireguard" || protocol == "amneziawg" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
 }
 
 func desktopExternalPacketEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture) string {

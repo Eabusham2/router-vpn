@@ -69,7 +69,7 @@ func macOSExternalNativeWireGuardFinalRefusalWitness(t *testing.T, p *macOSExter
 			t.Fatal("final refusal never reached its independent encrypted peer through the proved entry")
 		}
 		switch p.fault {
-		case "wrong-exit-key", "wrong-exit-peer-key", "wrong-exit-psk":
+		case "wrong-exit-key", "wrong-exit-peer-key", "wrong-exit-psk", "wrong-exit-parameters", "wrong-exit-padding":
 			if observed.Streams != 0 || observed.Packets != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
 				t.Fatal("invalid final key acquired plaintext DNS or public proof")
 			}

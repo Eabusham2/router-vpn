@@ -79,9 +79,16 @@ func desktopDarwinPacketReferenceAddress(address netip.Addr, final bool) bool {
 }
 func startDesktopDarwinInstalledPacketRulesAt(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), rules map[string]desktopReferenceRule, final bool) desktopExternalInstalledWGPeer {
 	t.Helper()
-	if !desktopDarwinPacketReferenceAddress(physical, final) || final && parameters != "" || len(rules) < 1 {
+	if !desktopDarwinPacketReferenceAddress(physical, final) || len(rules) < 1 {
 		t.Fatal("packet peer lost its original physical address or fixed inner routes")
 	}
+	return desktopInstalledPacketDevice(t, server, request, physical, parameters, create, rules, final)
+}
+
+// Cryptographic device constructor shared by the strictly validated native peer
+// and the explicitly named loopback component test. It does not grant physical
+// socket authority; all native callers pass through the original role validator.
+func desktopInstalledPacketDevice(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), rules map[string]desktopReferenceRule, final bool) desktopExternalInstalledWGPeer {
 	var values [3][]byte
 	defer func() {
 		for _, value := range values {

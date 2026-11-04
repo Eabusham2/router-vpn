@@ -209,9 +209,10 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
 	hysteriaVariant, _, hysteriaEntry := macOSExternalHysteriaEntryScenario(scenario)
 	socksVariant, _, socksEntry := macOSExternalSOCKSEntryScenario(scenario)
+	awgVariant, awgFinalVariant, _, awgFinal := macOSExternalAmneziaFinalScenario(scenario)
 	wgVariant, _, wgFinal := macOSExternalWireGuardFinalScenario(scenario)
 	layerVariant, _, _, layerEntry := macOSExternalHysteriaLayerEntryScenario(scenario)
-	p.packetEntry = wgFinal || layerEntry || socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	p.packetEntry = awgFinal || wgFinal || layerEntry || socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
 	if p.packetEntry {
 		p.entryProtocol = "wireguard"
 		if strings.HasPrefix(scenario, "awg-entry-ss-") {
@@ -233,6 +234,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	if socksEntry && socksVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", socksVariant
+	}
+	if awgFinal && awgVariant != "wireguard" {
+		p.entryProtocol, p.entryVariant = "amneziawg", awgVariant
 	}
 	if wgFinal && wgVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", wgVariant
@@ -256,7 +260,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		}
 	}
 	if protocol == "amneziawg" {
-		if strings.HasPrefix(scenario, "amneziawg-fast") {
+		if awgFinal {
+			p.variant = awgFinalVariant
+		} else if strings.HasPrefix(scenario, "amneziawg-fast") {
 			p.variant = "fast"
 		} else {
 			p.variant = "strong"
@@ -362,7 +368,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 			request["wireguard"] = keys
 		}
 	}
-	if wgFinal {
+	if wgFinal || awgFinal {
 		provider, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatal(err)
@@ -379,7 +385,13 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		clear(key[:])
 		p.password = ""
 		request["password"] = ""
-		request["wireguard"] = map[string]any{"private_key": base64.StdEncoding.EncodeToString(provider.Bytes()), "client_public_key": base64.StdEncoding.EncodeToString(consumer.PublicKey().Bytes()), "preshared_key": p.finalPSK}
+		keys := map[string]any{"private_key": base64.StdEncoding.EncodeToString(provider.Bytes()), "client_public_key": base64.StdEncoding.EncodeToString(consumer.PublicKey().Bytes()), "preshared_key": p.finalPSK}
+		if awgFinal {
+			keys["parameters"] = macOSExternalNativeAmneziaParameters(t, p.variant)
+			request["amneziawg"] = keys
+		} else {
+			request["wireguard"] = keys
+		}
 	}
 	if layer != "" {
 		layerRequest := map[string]any{"mode": layer, "password": p.layerPassword}
@@ -434,6 +446,9 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		profile.External.WireGuard = &common.ExternalWireGuardConfig{PrivateKey: p.clientKey, PeerPublicKey: p.peerKey, PresharedKey: p.psk, Endpoint: p.address.String(), Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1420, PersistentKeepalive: 25}
 		if p.packetEntry {
 			profile.ManualMTU = 1360
+			if p.protocol == "amneziawg" {
+				profile.ManualMTU = 1328
+			}
 			profile.External.WireGuard.PrivateKey, profile.External.WireGuard.PeerPublicKey, profile.External.WireGuard.PresharedKey = p.finalClientKey, p.finalPeerKey, p.finalPSK
 			profile.External.WireGuard.Addresses = []string{"10.79.0.2/32", "fd79:79::2/128"}
 		}
@@ -662,6 +677,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if _, _, fault, ok := macOSExternalAmneziaFinalScenario(scenario); ok {
+		return "amneziawg", "", fault
+	}
 	if _, fault, ok := macOSExternalWireGuardFinalScenario(scenario); ok {
 		return "wireguard", "", fault
 	}

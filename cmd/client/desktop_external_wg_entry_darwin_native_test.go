@@ -41,7 +41,7 @@ func macOSExternalNativePacketEntryRead(t *testing.T, p *macOSExternalNativePeer
 		t.Fatal("packet entry lost its only captured tunneled stream exit")
 	}
 	address, err := netip.ParseAddrPort(value.Address)
-	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && address != p.entryAddress || value.PhysicalUDP < 0 || value.Streams < 0 || value.Packets < 0 || p.protocol != "hysteria2" && p.protocol != "socks5" && p.protocol != "wireguard" && value.Packets != 0 {
+	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && address != p.entryAddress || value.PhysicalUDP < 0 || value.Streams < 0 || value.Packets < 0 || p.protocol != "hysteria2" && p.protocol != "socks5" && p.protocol != "wireguard" && p.protocol != "amneziawg" && value.Packets != 0 {
 		t.Fatal("WG entry changed its captured physical peer or fixed TCP inner routes")
 	}
 	p.entryAddress = address
@@ -55,6 +55,10 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 	exit.MultihopEnabled, exit.MultihopEntryID, exit.MultihopExitID = true, macOSExternalNativeEntryID(p), exit.ID
 	exit.MultihopExecution, exit.MultihopEntryMode = "local", ""
 	entry := common.RouterProfile{ID: macOSExternalNativeEntryID(p), Name: "Original encrypted WG entry", NodeKind: "external", Endpoint: p.physical.String(), DNSMode: "custom", DNSProtocol: "tcp", DNSHost: "203.0.113.53", DNSPort: 5353, IPv6Mode: "on", HomeLANAccess: true, StartLayer: "off", MTUPolicy: "auto", External: &common.ExternalNodeConfig{Protocol: "wireguard", ExpectedPublicIP: "203.0.113.77", WireGuard: &common.ExternalWireGuardConfig{PrivateKey: p.clientKey, PeerPublicKey: p.peerKey, PresharedKey: p.psk, Endpoint: p.entryAddress.String(), Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1420, PersistentKeepalive: 25}}}
+	finalPacket := exit.External.WireGuard
+	if exit.External.AmneziaWG != nil {
+		finalPacket = &exit.External.AmneziaWG.ExternalWireGuardConfig
+	}
 	wireguard := entry.External.WireGuard
 	if p.entryProtocol == "amneziawg" {
 		entry.Name = "Original encrypted AWG entry"
@@ -84,8 +88,8 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 			t.Fatal(err)
 		}
 		switch p.protocol {
-		case "wireguard":
-			exit.External.WireGuard.PrivateKey = base64.StdEncoding.EncodeToString(key[:])
+		case "wireguard", "amneziawg":
+			finalPacket.PrivateKey = base64.StdEncoding.EncodeToString(key[:])
 		case "shadowsocks":
 			exit.External.Shadowsocks.Password = base64.StdEncoding.EncodeToString(key[:])
 		case "http-connect":
@@ -101,9 +105,13 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 		}
 		clear(key[:])
 	case "wrong-exit-peer-key":
-		exit.External.WireGuard.PeerPublicKey = p.peerKey
+		finalPacket.PeerPublicKey = p.peerKey
 	case "wrong-exit-psk":
-		exit.External.WireGuard.PresharedKey = p.psk
+		finalPacket.PresharedKey = p.psk
+	case "wrong-exit-parameters":
+		exit.External.AmneziaWG.Parameters["h1"] = "50000000-59999999"
+	case "wrong-exit-padding":
+		exit.External.AmneziaWG.Parameters["s4"] = "31"
 	case "wrong-exit-username":
 		if exit.External.SOCKS5 != nil {
 			exit.External.SOCKS5.Username += "-different"
@@ -128,8 +136,8 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 		exit.External.StartLayer.Transport["server"] = "198.51.100.241"
 		exit.External.Hysteria2.Server, exit.Endpoint = "198.51.100.241", "198.51.100.241"
 	case "wrong-exit-address":
-		if exit.External.WireGuard != nil {
-			exit.External.WireGuard.Endpoint = "198.51.100.241:8388"
+		if finalPacket != nil {
+			finalPacket.Endpoint = "198.51.100.241:8388"
 			exit.Endpoint = "198.51.100.241"
 			break
 		}
@@ -160,7 +168,7 @@ func macOSExternalNativePacketEntryProved(t *testing.T, p *macOSExternalNativePe
 	}
 	transportProved := entry != nil && entry.Streams >= 2 && entry.Packets == 0 && observed.Connections >= 1 && observed.Streams >= 2
 	dnsProtocol := "tcp"
-	if p.protocol == "hysteria2" || p.protocol == "wireguard" {
+	if p.protocol == "hysteria2" || p.protocol == "wireguard" || p.protocol == "amneziawg" {
 		dnsProtocol = "udp"
 		transportProved = entry != nil && entry.Streams >= 1 && entry.Packets >= 1 && observed.PhysicalUDP >= 1 && observed.Connections == 0 && observed.Streams >= 1 && observed.Packets >= 1
 	}
@@ -170,8 +178,11 @@ func macOSExternalNativePacketEntryProved(t *testing.T, p *macOSExternalNativePe
 		macOSExternalNativeSOCKSEntryRelays(t, p, observed)
 	}
 	mtu := 1376
-	if p.protocol == "wireguard" {
+	if p.protocol == "wireguard" || p.protocol == "amneziawg" {
 		mtu = 1360
+		if p.protocol == "amneziawg" {
+			mtu = 1328
+		}
 	}
 	if entry == nil || entry.PhysicalUDP < 1 || !transportProved || entry.PublicReplies < 1 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.OuterTag != "external-entry" || live.OuterType != macOSExternalNativeEntryType(p) || live.PhysicalNetwork != "udp" || live.PhysicalAddress != p.entryAddress.String() || live.InnerHost != macOSExternalNativePacketEntryFinalHost(p) || live.InnerDetour != macOSExternalNativePacketEntryFinalDetour(p) || live.DNSProtocol != dnsProtocol || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.Network.MTU != mtu || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") {
 		t.Fatal("packet-entry/stream-exit lost its actual separate authenticated paths, independent entry proof or captured policy")
@@ -187,7 +198,7 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 	if entry == nil || entry.PhysicalUDP < 1 {
 		t.Fatal("WG entry negative missed its actual first encrypted peer")
 	}
-	if p.protocol == "wireguard" {
+	if p.protocol == "wireguard" || p.protocol == "amneziawg" {
 		macOSExternalNativeWireGuardFinalRefusalWitness(t, p, entry, observed)
 	} else if p.protocol == "socks5" {
 		macOSExternalNativeSOCKSEntryRefusalWitness(t, p, entry, observed)

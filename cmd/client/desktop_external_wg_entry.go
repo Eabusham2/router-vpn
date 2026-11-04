@@ -8,10 +8,10 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// This shape selects only the captured Local ordinary WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 with its captured exit layer, SOCKS5, or WireGuard exit.
+// This shape selects only the captured Local ordinary WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 with its captured exit layer, SOCKS5, WireGuard or AmneziaWG exit.
 // It supplies no source, socket or native admission authority by itself.
 func desktopExternalPacketEntryExitProtocol(protocol string) bool {
-	return protocol == "wireguard" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
+	return protocol == "wireguard" || protocol == "amneziawg" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
 }
 
 func desktopExternalPacketEntryFinalLayer(profile common.RouterProfile) bool {

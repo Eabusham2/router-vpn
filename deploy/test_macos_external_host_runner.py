@@ -35,13 +35,19 @@ class NativeHostVerdicts(unittest.TestCase):
         self.assertIsNotNone(body)
         actual = re.findall(r'"([a-z0-9-]+)"', body.group(1))
         final = None
+        amnezia = None
         for source in (ROOT/'cmd/client').glob('*darwin_native_test.go'):
             for name, body in re.findall(r'var (macOSExternal\w+Cases) = \[\]string\{([^}]+)\}', source.read_text()):
                 cases = re.findall(r'"([a-z0-9-]+)"', body)
                 actual.extend(cases)
+                if name == 'macOSExternalAmneziaFinalCases':
+                    amnezia = cases
                 if name == 'macOSExternalWireGuardFinalCases':
                     final = cases
         self.assertCountEqual(G.CASES, actual)
+        self.assertIsNotNone(amnezia)
+        self.assertEqual(tuple(amnezia[:12]), tuple(case for case in G.POSITIVE_CASES if "-amneziawg-" in case and "-entry-" in case))
+        self.assertEqual(tuple(amnezia[12:]), tuple(case for case in G.NEGATIVE_CASES if "-amneziawg-" in case and "-entry-" in case))
         self.assertIsNotNone(final)
         self.assertEqual(tuple(final[:6]), tuple(case for case in G.POSITIVE_CASES if '-entry-wireguard' in case))
         self.assertEqual(tuple(final[6:]), tuple(case for case in G.NEGATIVE_CASES if '-entry-wireguard' in case))

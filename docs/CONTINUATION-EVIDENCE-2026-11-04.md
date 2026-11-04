@@ -47,8 +47,8 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7`](https://github.com/Eabusham2/router-vpn/commit/0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7),
-tree `fff965448cc6f77db05189ab58c57bc0b47d810a`. The Windows admission
+[`2d040b67e092e82f2793c1074a9eeda609b9b5c2`](https://github.com/Eabusham2/router-vpn/commit/2d040b67e092e82f2793c1074a9eeda609b9b5c2),
+tree `4bd24cd385c7f2e031a3a6e384d71c7d0a21e295`. The macOS AWG-final
 source accompanying this record is described below; it does not inherit this
 cutoff's CI results.
 
@@ -113,6 +113,10 @@ cutoff's CI results.
 | [`3e0f06e7`](https://github.com/Eabusham2/router-vpn/commit/3e0f06e73329a3f237b3486367e0787a8f95597f) | Adds one original-monitor synchronization at the temporary Speed Lab restoration fixture boundary. All 24 existing directions pass race tests in 76.769s. Controlled actual monitor ownership reproduces the old HTTP409-before-trial error on TCP/UDP/mixed OpenVPN; the fixed cases pass in 17.118s and root's independent three-branch run in 14.985s. | Only physical network inventory is modeled locally. No production lock, proof, cancellation, restoration or timeout is changed. Both complete application source gates subsequently pass on this exact SHA without the local inventory model, as recorded below. |
 | [`0df6174d`](https://github.com/Eabusham2/router-vpn/commit/0df6174dceb2fe0471fbe8d9813e4a1e5f3b77a7) | Retains the original Linux TUN, continuous routing stream, acknowledged calls, resolver connection and native service child through bounded shutdown retries. The inherited cleanup protocol authenticates original requests/results and requires independent complete routing absence before protection release. Root combined races pass 134 service, 110 startup and 54 portable resolver/D-Bus verdicts; exact preparation inputs and native projection agree. | Real namespace/TUN/service acceptance remains mandatory. The original-child fixture now directly joins its creation-pidfd owner. Older available-bus compatibility, active MTU, cross-adapter transfer, active Always upgrades and same-boot crash continuation remain unfinished. |
 
+| [`37273faa`](https://github.com/Eabusham2/router-vpn/commit/37273faa55d719ca120793d42e4ed66b2a19168d) | Enables the exact four-family Windows MAX predicate proved by all ten matching native prerequisites at `93720c2a`. MAX and ALL now test shipping admission without a capability overlay; independent closed controls and all release dependencies remain. Root admission race passes in 1.019s, 23 controller checks in 17.941s and sixteen release-edge checks in 0.092s. | The original source/cleanup receipts were independently downloaded and verified. Prerequisite native tests model TUN; the newly admitted shipping source still requires its complete native/package/release results and device acceptance. |
+| [`e4dca85e`](https://github.com/Eabusham2/router-vpn/commit/e4dca85eee820409a9c00f8f9e85913fcdf9e7ba) | Hashes the complete pinned godbus module using canonical case-sensitive slash filenames instead of native Path ordering. The actual 92-file corpus reproduces the Windows mismatch with unchanged bytes; the original h1 is preserved. Root's complete three-test preparation run passes in 1.046s, rejecting byte/CRLF/missing/extra changes. | This corrects the actual two-architecture Windows preparation failure. No dependency hash, descriptor guard or runtime policy is weakened; native reruns remain required. |
+| [`2d040b67`](https://github.com/Eabusham2/router-vpn/commit/2d040b67e092e82f2793c1074a9eeda609b9b5c2) | Preserves exact MAX-before-PQ source order when the test helper reopens an independently closed PQ family. Existing shipping byte-equality remains; receipts capture the actual edit. Root's full 25-case PQ runner and three MAX interaction cases pass in 0.559s/0.106s; the old helper fails the original and new causal assertions. | Two native test-runner files only. Shipping admission, no-overlay execution, independent closed controls, malformed-source rejection and all deadlines remain unchanged. Actual native Windows execution remains required. |
+
 
 ## Native retirement source at 0df6174d
 
@@ -159,7 +163,7 @@ required native gates, older available-bus compatibility boundary and Linux's
 lack of an atomic creator-generation comparison for rule deletion. Those
 limitations remain requirements; rejecting them does not complete them.
 
-## Windows complete MAX source accompanying this record
+## Windows complete MAX source at 37273faa
 
 The Windows retained Router host now admits `max-quic-wg`, `max-quic-awg`,
 `max-tls-wg` and `max-tls-awg`. Its admission bytes exactly match the candidate
@@ -184,6 +188,38 @@ checks in 17.941s. Required MAX and ALL workflows still precede release
 aggregation and exact-SHA publication. The prerequisite native tests model TUN;
 these results do not establish physical-device or installed-package acceptance.
 The newly admitted shipping source must receive its own native/release results.
+
+## macOS AWG-final source accompanying this record
+
+The retained macOS Local host now supports ordinary WG, AWG Fast or AWG Strong
+entry to an ordinary AWG Fast or Strong final endpoint, under On-connect or
+Always protection. The two original saved profiles, independent packet keys,
+PSKs, addresses, keepalive, all eleven AWG parameters, selected DNS and device
+policy remain captured. Only the entry receives physical UDP authority; the
+final endpoint and DNS keep their original encrypted-entry detour. Restoration
+retains the complete saved sources and the proved Local execution choice.
+
+The source preserves strict nested MTU validation and 16-byte alignment. With
+an entry MTU of 1420 and an IPv4 final peer, the tested bounds are Fast 1344
+and Strong 1328; one extra byte is rejected, without clamping. Native fixtures
+explicitly select 1328. No production timeout or MTU bound is expanded.
+
+All 188 earlier native cases remain; twelve positives and twenty-four refusals
+raise the required inventory to 224, with 31 policy tests. Root's merged shared
+policy/canonical-identity race passes in 8.611s, application source/restoration
+race in 14.539s, and all thirteen strict inventory/runner checks in 4.621s.
+Twelve actual app-prepared graphs parse in the pinned native registries. Root
+independently verifies the frozen actual loopback logs: six two-device encrypted
+graph positives and fourteen key/PSK/header/padding/route refusals pass, with
+all twenty unique leaves and no failure or skip. The two race selections took
+65.549s and 25.358s. Darwin ARM64 controller, peer and physical-test images
+cross-link; those images were not executed on macOS locally.
+
+Actual PF/utun, native host measurement/restoration and device acceptance remain
+required. Local interface discovery and the original UDP-address probe are
+unavailable here; the separate loopback component does not substitute for those
+boundaries. Ordinary Server/Compare, predecessors, entry/final Start Layers and
+other new graph families remain separate requirements.
 
 ## Native and release evidence
 
@@ -518,6 +554,18 @@ passes `cmd/client` in 432.806s, and the
 passes it in 465.810s. These actual workflow runs use no local physical-network
 inventory overlay. They are not race runs or whole release results.
 
+Native continuation remains blocked by actual results, not merely missing
+local capabilities. Both architectures in the `e4dca85e`
+[Linux generated Node/TUN run](https://github.com/Eabusham2/router-vpn/actions/runs/41819577710)
+fail before readiness when the first routing change is refused as outside its
+original successful call; cleanup then retains the unacknowledged owner.
+The original-rule admission and actual event deltas are under investigation.
+Separately, the `0df6174d` macOS ARM64 controller job reports a changed process
+or exec generation in the final complete-host installation scan; its Intel
+counterpart succeeds. That is a bounded native inventory failure, not proof
+that the whole macOS source or release passed. Neither ownership guard is
+waived by this record.
+
 A fresh GitHub releases read still returned the
 [745b3e41 prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b),
 published October 24, with ten native packages, release JSON and checksums.
@@ -548,7 +596,7 @@ There is no complete exact-current-SHA published release claim in this record.
   adopting/deleting a prior table.
 - Retained macOS direct SOCKS5, AWG and bounded OpenVPN, plus the Local ordinary
   WG/AWG-entry paths to SS, HTTP/HTTPS CONNECT, Hysteria2 (including captured AES
-  and AES plus XOR exit layers), SOCKS5 and WireGuard final peers
+  and AES plus XOR exit layers), SOCKS5, WireGuard and AWG final peers
   are source-implemented with mandatory native cases.
   Their exact-source native acceptance and broader predecessor/entry/Server
   compositions remain accountable. Existing Tor Server/Compare, ordinary Tor

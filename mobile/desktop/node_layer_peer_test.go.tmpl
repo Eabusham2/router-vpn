@@ -1747,6 +1747,7 @@ type desktopExternalInstalledWGPeer struct {
 
 // The actual WG device/bind is supplied only by the Linux reference template.
 // An absent backend is a fixture failure, never a skipped acceptance case.
+var desktopExternalInstalledAmneziaFinal func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer
 var desktopExternalInstalledWireGuardFinal func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer
 
 var desktopExternalInstalledWireGuard func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer
@@ -2370,24 +2371,28 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
+	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
 		t.Fatal("unrequested or unsupported encrypted entry graph")
 	}
-	if entryRequested && request.Protocol == "wireguard" {
+	if entryRequested && (request.Protocol == "wireguard" || request.Protocol == "amneziawg") {
 		entryKeys := request.WireGuardEntry
 		if request.AmneziaEntry != nil {
 			entryKeys = &request.AmneziaEntry.desktopExternalInstalledWGRequest
 		}
-		if desktopExternalInstalledWireGuardFinal == nil || !desktopExternalIndependentPacketKeys(entryKeys, request.WireGuard) {
+		finalKeys, available := request.WireGuard, desktopExternalInstalledWireGuardFinal != nil
+		if request.Protocol == "amneziawg" {
+			finalKeys, available = &request.Amnezia.desktopExternalInstalledWGRequest, desktopExternalInstalledAmneziaFinal != nil
+		}
+		if !available || !desktopExternalIndependentPacketKeys(entryKeys, finalKeys) {
 			t.Fatal("packet final lost its separate original cryptographic owner")
 		}
 	}
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
 	var benchmark *desktopExternalInstalledLatencyPeer
 	if latency {
-		benchmark = newDesktopExternalInstalledLatencyPeerWithMTU(t, cert, request.Protocol == "wireguard")
+		benchmark = newDesktopExternalInstalledLatencyPeerWithMTU(t, cert, request.Protocol == "wireguard" || entryRequested && request.Protocol == "amneziawg")
 	}
 	var dnsQueries, publicAttempts, publicReplies, authFailures atomic.Uint32
 	var failDNS atomic.Bool
@@ -2477,7 +2482,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		if request.Protocol == "amneziawg" {
-			wgPeer = desktopExternalInstalledAmnezia(t, server, *request.Amnezia)
+			if entryRequested {
+				wgPeer = desktopExternalInstalledAmneziaFinal(t, server, *request.Amnezia)
+			} else {
+				wgPeer = desktopExternalInstalledAmnezia(t, server, *request.Amnezia)
+			}
 			if wgPeer.parameters == nil {
 				t.Fatal("installed external AWG reference omitted actual parameter readback")
 			}
@@ -2607,7 +2616,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if request.Layer != nil && request.Layer.Mode == "aes-256-gcm+xor-whitening" {
 			exitPort = 8389
 		}
-		if request.Protocol == "hysteria2" || request.Protocol == "wireguard" {
+		if request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 			exitNetwork = "udp"
 		}
 		if request.AmneziaEntry != nil {
