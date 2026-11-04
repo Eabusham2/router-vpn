@@ -38,10 +38,13 @@ class NativeHostVerdicts(unittest.TestCase):
         amnezia = None
         openvpn = None
         ss = None
+        ssconnect = None
         for source in (ROOT/'cmd/client').glob('*darwin_native_test.go'):
             for name, body in re.findall(r'var (macOSExternal\w+Cases) = \[\]string\{([^}]+)\}', source.read_text()):
                 cases = re.findall(r'"([a-z0-9-]+)"', body)
                 actual.extend(cases)
+                if name == 'macOSExternalSSCONNECTCases':
+                    ssconnect = cases
                 if name == 'macOSExternalSSEntryCases':
                     ss = cases
                 if name == 'macOSExternalOpenVPNFinalCases':
@@ -51,11 +54,14 @@ class NativeHostVerdicts(unittest.TestCase):
                 if name == 'macOSExternalWireGuardFinalCases':
                     final = cases
         self.assertCountEqual(G.CASES, actual)
+        self.assertIsNotNone(ssconnect)
+        self.assertEqual(tuple(ssconnect[:12]), tuple(case for case in G.POSITIVE_CASES if case.startswith('ss-entry-') and '-http' in case))
+        self.assertEqual(tuple(ssconnect[12:]), tuple(case for case in G.NEGATIVE_CASES if case.startswith('ss-entry-') and '-http' in case))
         self.assertIsNotNone(ss)
-        self.assertEqual(tuple(ss[:18]), tuple(case for case in G.POSITIVE_CASES if case.startswith('ss-entry-')))
-        self.assertEqual(tuple(ss[18:]), tuple(case for case in G.NEGATIVE_CASES if case.startswith('ss-entry-')))
-        self.assertEqual(len(G.CASES), 290)
-        self.assertEqual(len(G.POLICY_TESTS), 37)
+        self.assertEqual(tuple(ss[:18]), tuple(case for case in G.POSITIVE_CASES if case.startswith('ss-entry-') and '-ss-' in case))
+        self.assertEqual(tuple(ss[18:]), tuple(case for case in G.NEGATIVE_CASES if case.startswith('ss-entry-') and '-ss-' in case))
+        self.assertEqual(len(G.CASES), 314)
+        self.assertEqual(len(G.POLICY_TESTS), 40)
         self.assertIsNotNone(openvpn)
         self.assertEqual(tuple(openvpn[:24]),tuple(case for case in G.POSITIVE_CASES if "-entry-" in case and "-openvpn-" in case))
         self.assertEqual(tuple(openvpn[24:]),tuple(case for case in G.NEGATIVE_CASES if "-entry-" in case and "-openvpn-" in case))

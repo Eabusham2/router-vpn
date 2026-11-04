@@ -9,7 +9,7 @@ func desktopExternalRetainedEntryOwner(owner *desktopExternalRuntime) bool {
 }
 func desktopExternalSSEntryOwner(owner *desktopExternalRuntime) bool {
 	if owner == nil || owner.direct || owner.predecessor != "" || owner.selection != "local" ||
-		!desktopExternalSS2022Profile(owner.entry) || !desktopExternalSS2022Profile(owner.profile) ||
+		!desktopExternalSS2022Profile(owner.entry) || !desktopExternalSSEntryFinalProfile(owner.profile) ||
 		owner.entry.ID == "" || owner.entry.ID == owner.profile.ID ||
 		owner.profile.MultihopExecution != "" && owner.profile.MultihopExecution != "local" || owner.profile.MultihopEntryMode != "" {
 		return false
@@ -27,4 +27,14 @@ func desktopExternalSS2022Profile(profile common.RouterProfile) bool {
 		return true
 	}
 	return false
+}
+
+func desktopExternalSSEntryFinalProfile(profile common.RouterProfile) bool {
+	if desktopExternalSS2022Profile(profile) {
+		return true
+	}
+	if profile.NodeKind != "external" || profile.External == nil || profile.StartLayer != "" && profile.StartLayer != common.StartLayerOff || profile.External.StartLayer != nil {
+		return false
+	}
+	return profile.External.Protocol == "http-connect" && profile.External.HTTPConnect != nil || profile.External.Protocol == "https-connect" && profile.External.HTTPSConnect != nil
 }

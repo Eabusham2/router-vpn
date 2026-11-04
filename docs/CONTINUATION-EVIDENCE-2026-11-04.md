@@ -219,7 +219,38 @@ shipping predicate and no admission overlay. These controller compositions
 retain their modeled native boundaries; they are not package/device acceptance.
 The complete shipping MAX and later exact-source release gates remain required.
 
-## Windows ALL first forbidden-release witness accompanying this record
+## macOS SS2022 entry to CONNECT final accompanying this record
+
+Retained Local SS2022 entries now support ordinary HTTP CONNECT and HTTPS
+CONNECT finals, with all three admitted SS2022 methods and both On-connect
+and Always protection. Entry and final sources/credentials, final TLS trust/SNI,
+selected TCP DNS, device policy, measurements and the exact proved Local
+restoration remain captured. The CONNECT graph grants only the original
+SS-entry TCP tuple. It opens no entry UDP or direct physical final path;
+selected UDP DNS is refused before native acquisition. Layers, Server/Compare,
+predecessors and other graph families remain separately accountable.
+
+Root verified all seventeen frozen source files against exact `a424c763` while
+preserving the disjoint unfinished receipt-context work. Current policy races
+pass in 14.163s, application source/restoration races in 12.972s and all
+thirteen native-runner checks in 8.404s. The mandatory inventory retains all
+290 prior cases and adds twelve native positives and twelve refusals, giving
+314 cases and forty policy parents. Actual macOS PF/utun acceptance is still
+required; these are not physical-host or complete-release results.
+
+The independent provider composition contains real SS2022 entry encryption
+and separate HTTP(S) final authentication/TLS. Root verified all 1,301 immutable
+prepared input hashes and exactly 32 unique component RUN/PASS verdicts, with
+no skip or failure: seventeen prior SS-to-SS/provider verdicts plus fifteen new
+CONNECT parent/leaf verdicts. Its race run completes in 19.281s. The new leaves
+exercise six method/protocol positives and eight entry-key/method, final
+credential/TLS/SNI, wrong-final and wrong-DNS refusals. Actual provider subprocess
+cleanup remains joined. Twelve app-prepared graphs parse with pinned native
+registries, and the original published admission fails the intended new valid
+graph. Darwin ARM64 controller, physical and peer test images compile; their
+sizes/hashes are retained separately from native execution.
+
+## Windows ALL first forbidden-release witness published at a424c763
 
 The actual `c336566d` Windows AMD64 ALL negative control timed out after its
 unchanged sixty-second bound, before reaching its late final-state assertion.

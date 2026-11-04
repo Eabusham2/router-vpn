@@ -51,8 +51,13 @@ validation limits. Changes and test counts are not a requirements denominator.
   Local restoration remain captured; only the entry gets physical grants.
   Root policy/application races, thirteen runner checks and seventeen actual
   encrypted-loopback/provider-process verdicts pass. Native PF/utun acceptance
-  remains separate. Ordinary Server/Compare, new predecessors and broader
-  Start Layers remain requirements. The native gate now requires all 290 cases and 37
+  remains separate. SS2022 entries additionally retain HTTP/HTTPS CONNECT
+  finals with independent authentication and TLS trust/SNI. This TCP-only graph
+  captures selected TCP DNS and only the original entry TCP physical grant;
+  selected UDP DNS remains refused. Six encrypted method/protocol positives
+  and eight credential/TLS/routing negatives pass, with the exact saved Local
+  graph restored. Ordinary Server/Compare, new predecessors and broader
+  Start Layers remain requirements. The native gate now requires all 314 cases and 40
   policy tests. Its exact
   verdict parser now counts anchored lines once; all 961 differential inputs
   preserve acceptance/rejection behavior within the original budget. Focused

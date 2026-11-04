@@ -51,7 +51,7 @@ type desktopExternalInstalledSSPeer struct {
 	close   func()
 }
 
-var desktopExternalInstalledSSEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledSSRequest, tls.Certificate, string) desktopExternalInstalledSSPeer
+var desktopExternalInstalledSSEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledSSRequest, tls.Certificate, string, string) desktopExternalInstalledSSPeer
 
 func desktopSS2022Credentials(method, password string) bool {
 	size := 32
@@ -146,21 +146,21 @@ func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method
 		return desktopExternalInstalledSSReceipt{Method: method, Address: listener.Addr().String(), PhysicalTCP: server.rawTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Streams: server.plainTCP.Load(), Packets: server.plainUDP.Load()}
 	}}
 }
-func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final string, physical netip.Addr) desktopExternalInstalledSSPeer {
+func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, physical netip.Addr) desktopExternalInstalledSSPeer {
 	t.Helper()
 	target, err := netip.ParseAddrPort(final)
 	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || (!physical.Is4() || !physical.IsGlobalUnicast() || physical.IsLoopback()) {
 		t.Fatal("SS entry lost captured physical role and loopback final")
 	}
-	return desktopStartSSEntryAt(t, parent, request, cert, final, physical)
+	return desktopStartSSEntryAt(t, parent, request, cert, final, network, physical)
 }
 
 // The explicit loopback component also uses this constructor, with no native
 // role or physical acceptance inferred from that component execution.
-func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final string, address netip.Addr) desktopExternalInstalledSSPeer {
+func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, address netip.Addr) desktopExternalInstalledSSPeer {
 	t.Helper()
 	target, err := netip.ParseAddrPort(final)
-	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 {
+	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || network != "tcp" && network != "tcp+udp" {
 		t.Fatal("SS entry lost its original final listener")
 	}
 	ctx, cancel := context.WithCancel(parent.ctx)
@@ -196,8 +196,10 @@ func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request
 	server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{
 		{Network: "tcp", Destination: "1.1.1.1:443", Physical: listener.Addr().String()},
 		{Network: "tcp", Destination: "198.51.100.240:8388", Physical: final},
-		{Network: "udp", Destination: "198.51.100.240:8388", Physical: final},
 	}}
+	if network == "tcp+udp" {
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "198.51.100.240:8388", Physical: final})
+	}
 	peer := desktopStartSSProvider(t, server, request.Method, request.Password, address)
 	closeNative, stats := peer.close, peer.stats
 	peer.close = func() { closeNative(); closeProof() }
@@ -297,7 +299,7 @@ func desktopSSReferenceTwoHop(t *testing.T, entryMethod, finalMethod, fault stri
 	defer final.close()
 	cert, _ := desktopExternalInstalledPeerCertificate(t, false)
 	entryKey := desktopSSReferenceKey(entryMethod, 'e')
-	entry := desktopStartSSEntryAt(t, server, desktopExternalInstalledSSRequest{entryMethod, entryKey}, cert, final.address, netip.MustParseAddr("127.0.0.1"))
+	entry := desktopStartSSEntryAt(t, server, desktopExternalInstalledSSRequest{entryMethod, entryKey}, cert, final.address, "tcp+udp", netip.MustParseAddr("127.0.0.1"))
 	defer entry.close()
 	lower := &desktopSSReferenceLower{virtual: "198.51.100.239:8388", original: entry.address}
 	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
@@ -400,8 +402,8 @@ func desktopSSReferenceTwoHop(t *testing.T, entryMethod, finalMethod, fault stri
 func TestRouterVPNDesktopInstalledSSEntryLoopbackProviderProcess(t *testing.T) {
 	const child = "ROUTERVPN_SS_ENTRY_COMPONENT_CHILD"
 	if os.Getenv(child) == "1" {
-		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final string) desktopExternalInstalledSSPeer {
-			return desktopStartSSEntryAt(t, parent, request, cert, final, netip.MustParseAddr("127.0.0.1"))
+		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string) desktopExternalInstalledSSPeer {
+			return desktopStartSSEntryAt(t, parent, request, cert, final, network, netip.MustParseAddr("127.0.0.1"))
 		}
 		desktopExternalInstalledReferenceProcess(t, "127.0.0.1", map[string]bool{"shadowsocks": true}, true)
 		return

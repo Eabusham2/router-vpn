@@ -44,7 +44,8 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	t.Helper()
 	// The labels select independent imported test profiles. The saved native
 	// protocol remains amneziawg; no preset alias is added to its schema.
-	ssEntry := protocol == "ss-entry-ss"
+	ssSelected := protocol
+	ssEntry := protocol == "ss-entry-ss" || protocol == "ss-entry-http" || protocol == "ss-entry-https"
 	if ssEntry {
 		protocol = "shadowsocks"
 	}
@@ -75,6 +76,12 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	}
 	entrySelected := strings.HasPrefix(protocol, "wg-entry-") || strings.HasPrefix(protocol, "awg-entry-")
 	entryExit := "shadowsocks"
+	if ssSelected == "ss-entry-http" {
+		entryExit = "http-connect"
+	}
+	if ssSelected == "ss-entry-https" {
+		entryExit = "https-connect"
+	}
 	entryLayer := ""
 	if strings.HasSuffix(protocol, "-aes-xor") {
 		entryLayer = "aes-256-gcm+xor-whitening"

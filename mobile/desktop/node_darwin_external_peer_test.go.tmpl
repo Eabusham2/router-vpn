@@ -51,8 +51,8 @@ func TestRouterVPNDesktopDarwinExternalReferenceProcess(t *testing.T) {
 	if found != 1 {
 		t.Fatal("Darwin reference address is not one current physical interface")
 	}
-	desktopExternalInstalledSSEntry = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final string) desktopExternalInstalledSSPeer {
-		return desktopStartSSEntry(t, server, request, cert, final, address)
+	desktopExternalInstalledSSEntry = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string) desktopExternalInstalledSSPeer {
+		return desktopStartSSEntry(t, server, request, cert, final, network, address)
 	}
 	desktopExternalInstalledWireGuardFinal = startDesktopDarwinInstalledWireGuardFinal
 	desktopExternalInstalledAmneziaFinal = startDesktopDarwinInstalledAmneziaFinal

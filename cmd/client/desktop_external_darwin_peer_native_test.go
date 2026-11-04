@@ -211,6 +211,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
 	p.ssEntryMethod, p.ssFinalMethod, _, p.ssEntry = macOSExternalSSEntryScenario(scenario)
+	if method, _, _, found := macOSExternalSSCONNECTScenario(scenario); found {
+		p.ssEntryMethod, p.ssEntry = method, true
+	}
 	if p.ssEntry {
 		p.entryProtocol = "shadowsocks"
 	}
@@ -288,7 +291,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	p.password = base64.StdEncoding.EncodeToString(key)
 	if p.ssEntry {
-		p.password = macOSExternalNativeSSKey(t, p.ssFinalMethod)
+		if p.protocol == "shadowsocks" {
+			p.password = macOSExternalNativeSSKey(t, p.ssFinalMethod)
+		}
 		p.ssEntryPassword = macOSExternalNativeSSKey(t, p.ssEntryMethod)
 	}
 	if layer != "" {
@@ -538,7 +543,11 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 	}
 	entry := macOSExternalNativePacketEntryProfile(t, p, &profile)
 	if p.ssEntry {
-		entry = macOSExternalNativeSSEntryProfile(t, p, &profile)
+		if p.protocol == "shadowsocks" {
+			entry = macOSExternalNativeSSEntryProfile(t, p, &profile)
+		} else {
+			entry = macOSExternalNativeSSCONNECTProfile(t, p, &profile)
+		}
 	}
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		t.Fatal("Darwin fixture profile rejected before native execution", err)
@@ -706,6 +715,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 }
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
+	if _, protocol, fault, found := macOSExternalSSCONNECTScenario(scenario); found {
+		return protocol, "", fault
+	}
 	if _, _, fault, ok := macOSExternalSSEntryScenario(scenario); ok {
 		return "shadowsocks", "", fault
 	}
