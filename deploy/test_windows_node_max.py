@@ -171,7 +171,11 @@ def prepare_workspace_retirement(directory, original):
         if stat.S_ISDIR(actual.st_mode):
             with os.scandir(path) as children:
                 for child in children:
-                    capture(Path(child.path), child.stat(follow_symlinks=False))
+                    # Windows DirEntry.stat caches enumeration data with zero
+                    # inode/device/link fields. Capture the real no-follow
+                    # identity, exactly as the later replacement checks do.
+                    child_path = Path(child.path)
+                    capture(child_path, child_path.lstat())
             current(path, actual)
         elif getattr(actual, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_READONLY and actual.st_nlink != 1:
             raise RuntimeError('Windows MAX read-only workspace file has a foreign hard link')

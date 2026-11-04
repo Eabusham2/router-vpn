@@ -552,6 +552,37 @@ time.sleep(120)
 
 
 class MAXWorkspaceRetirement(unittest.TestCase):
+    def test_windows_enumeration_metadata_is_not_original_file_identity(self):
+        # CPython's Windows DirEntry.stat uses cached FindFirstFile data for
+        # ordinary entries: inode, volume and link count are zero. A full
+        # no-follow stat must supply original identity and hard-link evidence.
+        original_scandir = os.scandir
+        @contextmanager
+        def windows_entries(path):
+            with original_scandir(path) as entries:
+                observed = []
+                for entry in entries:
+                    metadata = entry.stat(follow_symlinks=False)
+                    cached = SimpleNamespace(st_mode=metadata.st_mode,
+                                             st_ino=0, st_dev=0, st_nlink=0,
+                                             st_file_attributes=getattr(metadata, 'st_file_attributes', 0))
+                    observed.append(SimpleNamespace(path=entry.path,
+                        stat=lambda *, follow_symlinks, value=cached: value))
+                yield iter(observed)
+        owner = GATE.MAXCommandOwner()
+        with ExitStack() as checks:
+            with owner.workspace('max-windows-enumeration-') as workspace:
+                index = workspace/'core'/'.git'/'objects'/'pack'/'original.idx'
+                index.parent.mkdir(parents=True); index.write_bytes(b'original pack index')
+                # Restrict the native enumeration model to the identity
+                # capture. The actual recursive deletion remains unchanged.
+                prepare = GATE.prepare_workspace_retirement
+                def observed_prepare(*args):
+                    with patch.object(GATE.os, 'scandir', side_effect=windows_entries):
+                        return prepare(*args)
+                checks.enter_context(patch.object(GATE, 'prepare_workspace_retirement', side_effect=observed_prepare))
+        self.assertFalse(workspace.exists())
+
     @contextmanager
     def modeled_readonly(self, paths, events):
         # Model only Windows file attributes; use real directories and the
