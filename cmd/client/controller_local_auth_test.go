@@ -231,6 +231,7 @@ func TestLocalControllerOwnerEOFDrainsActualHTTPAndHeldOperation(t *testing.T) {
 	owner := testLocalControllerOwner()
 	owner.ownerDone = done
 	a := &app{state: state{Mode: "off", Phase: "off"}, localController: owner}
+	testLocalControllerProtectionBoundary(t, a)
 	operation, finish, err := a.beginConnectionOperation()
 	if err != nil {
 		t.Fatal(err)
