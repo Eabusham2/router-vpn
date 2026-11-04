@@ -1738,7 +1738,7 @@ type desktopExternalInstalledAWGRequest struct {
 }
 
 type desktopExternalInstalledWGPeer struct {
- relay func(net.Conn, net.PacketConn) (net.Addr, func(), error)
+	relay      func(net.Conn, net.PacketConn) (net.Addr, func(), error)
 	address    string
 	stats      func() (physicalUDP, streams, packets int64)
 	close      func()
@@ -1783,14 +1783,14 @@ type desktopExternalInstalledPacketEntryReceipt struct {
 	PublicReplies    uint32 `json:"public_replies"`
 }
 type desktopExternalInstalledPacketEntryPeer struct {
- relay func(net.Conn, net.PacketConn) (net.Addr, func(), error)
+	relay   func(net.Conn, net.PacketConn) (net.Addr, func(), error)
 	address string
 	stats   func() desktopExternalInstalledPacketEntryReceipt
 	close   func()
 }
 
-var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest, tls.Certificate, string, string) desktopExternalInstalledPacketEntryPeer
-var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string, string) desktopExternalInstalledPacketEntryPeer
+var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest, tls.Certificate, string, string, uint16) desktopExternalInstalledPacketEntryPeer
+var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string, string, uint16) desktopExternalInstalledPacketEntryPeer
 
 type desktopExternalInstalledPeerRequest struct {
 	AmneziaEntry         *desktopExternalInstalledAWGRequest   `json:"amnezia_entry,omitempty"`
@@ -1861,8 +1861,8 @@ type desktopExternalInstalledSOCKSPeer struct {
 	relays       []string
 	rejected     atomic.Uint32
 	joinFailed   atomic.Bool
- bindHost string
- entryRelay func(net.Conn, net.PacketConn) (net.Addr, func(), error)
+	bindHost     string
+	entryRelay   func(net.Conn, net.PacketConn) (net.Addr, func(), error)
 }
 
 type desktopExternalInstalledSOCKSControl struct {
@@ -1903,8 +1903,8 @@ type desktopExternalInstalledSOCKSRelay struct {
 	listener    *desktopExternalInstalledSOCKSListener
 	readStarted atomic.Bool
 	closeOnce   sync.Once
- advertised net.Addr
- revoke func()
+	advertised  net.Addr
+	revoke      func()
 }
 
 func (l *desktopExternalInstalledSOCKSListener) ListenPacket(config net.ListenConfig, ctx context.Context, network, address string) (net.PacketConn, error) {
@@ -1932,17 +1932,22 @@ func (l *desktopExternalInstalledSOCKSListener) ListenPacket(config net.ListenCo
 		return nil, net.ErrClosed
 	}
 	advertised := packet.LocalAddr()
- var revoke func()
- l.peer.mu.Lock(); entryRelay := l.peer.entryRelay; l.peer.mu.Unlock()
- if entryRelay != nil {
-  advertised, revoke, err = entryRelay(l.control.Conn, packet)
-  if err != nil { l.peer.server.leave(packet); return nil, err }
- }
- l.relay = &desktopExternalInstalledSOCKSRelay{PacketConn: packet, listener: l, advertised: advertised, revoke: revoke}
+	var revoke func()
+	l.peer.mu.Lock()
+	entryRelay := l.peer.entryRelay
+	l.peer.mu.Unlock()
+	if entryRelay != nil {
+		advertised, revoke, err = entryRelay(l.control.Conn, packet)
+		if err != nil {
+			l.peer.server.leave(packet)
+			return nil, err
+		}
+	}
+	l.relay = &desktopExternalInstalledSOCKSRelay{PacketConn: packet, listener: l, advertised: advertised, revoke: revoke}
 	if l.peer.request.SOCKSFault == "relay-route" {
-  l.relay.advertised = net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr("198.51.100.241"), uint16(packet.LocalAddr().(*net.UDPAddr).Port)))
- }
- l.control.associated.Store(true)
+		l.relay.advertised = net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr("198.51.100.241"), uint16(packet.LocalAddr().(*net.UDPAddr).Port)))
+	}
+	l.control.associated.Store(true)
 	l.peer.mu.Lock()
 	l.peer.relays = append(l.peer.relays, advertised.String())
 	l.peer.mu.Unlock()
@@ -1964,7 +1969,12 @@ func (r *desktopExternalInstalledSOCKSRelay) ReadFrom(body []byte) (int, net.Add
 	return n, source, err
 }
 func (r *desktopExternalInstalledSOCKSRelay) Close() error {
-	r.closeOnce.Do(func() { if r.revoke != nil { r.revoke() }; r.listener.peer.server.leave(r.PacketConn) })
+	r.closeOnce.Do(func() {
+		if r.revoke != nil {
+			r.revoke()
+		}
+		r.listener.peer.server.leave(r.PacketConn)
+	})
 	return nil
 }
 
@@ -2358,7 +2368,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" || request.Layer != nil || !latency ||
+	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
 		t.Fatal("unrequested or unsupported encrypted entry graph")
@@ -2478,8 +2488,10 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			address, openvpnProfile, closeTransport = startDesktopExternalInstalledOpenVPN(t, server, request, dnsPacket.LocalAddr().String(), proofListener.Addr().String())
 		}
 	} else if request.Protocol == "hysteria2" {
-  listenHost := request.Address
-  if entryRequested { listenHost = "127.0.0.1" }
+		listenHost := request.Address
+		if entryRequested {
+			listenHost = "127.0.0.1"
+		}
 		packet, err := net.ListenPacket("udp4", net.JoinHostPort(listenHost, "0"))
 		if err != nil {
 			t.Fatal(err)
@@ -2575,21 +2587,31 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}()
 	}
 	if entryRequested {
-  exitNetwork := "tcp"
-  if request.Protocol == "hysteria2" { exitNetwork = "udp" }
+		exitNetwork := "tcp"
+		exitPort := uint16(8388)
+		if request.Layer != nil && request.Layer.Mode == "aes-256-gcm+xor-whitening" {
+			exitPort = 8389
+		}
+		if request.Protocol == "hysteria2" {
+			exitNetwork = "udp"
+		}
 		if request.AmneziaEntry != nil {
-			entryPeer = desktopExternalInstalledAmneziaEntry(t, server, *request.AmneziaEntry, cert, address, exitNetwork)
+			entryPeer = desktopExternalInstalledAmneziaEntry(t, server, *request.AmneziaEntry, cert, address, exitNetwork, exitPort)
 		} else {
-			entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address, exitNetwork)
+			entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address, exitNetwork, exitPort)
 		}
 		if entryPeer.address == "" || entryPeer.close == nil || entryPeer.stats == nil {
 			t.Fatal("entry peer omitted actual original device")
 		}
 		if socksPeer != nil {
-   if entryPeer.relay == nil { t.Fatal("SOCKS entry omitted original association route owner") }
-   socksPeer.mu.Lock(); socksPeer.entryRelay = entryPeer.relay; socksPeer.mu.Unlock()
-  }
-  address = "198.51.100.240:8388"
+			if entryPeer.relay == nil {
+				t.Fatal("SOCKS entry omitted original association route owner")
+			}
+			socksPeer.mu.Lock()
+			socksPeer.entryRelay = entryPeer.relay
+			socksPeer.mu.Unlock()
+		}
+		address = netip.AddrPortFrom(netip.MustParseAddr("198.51.100.240"), exitPort).String()
 	}
 	t.Cleanup(func() {
 		server.mu.Lock()

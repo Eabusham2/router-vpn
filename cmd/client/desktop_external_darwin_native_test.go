@@ -131,18 +131,19 @@ func macOSExternalNativeController(owned *ownedDesktopController) (bool, error) 
 }
 
 type macOSExternalNativeResult struct {
-	OpenVPNRemotes                                                                       []nativeopenvpn.Remote
-	PhysicalDestinations                                                                 []mobilemultihop.PhysicalEgress
-	IPv6, DNSProtocol, DNSHost                                                           string
-	DNSPort                                                                              int
-	HomeLAN                                                                              bool
-	Session, Source, Config, Protocol                                                    string
-	Layer, OuterTag, OuterType, PhysicalNetwork, PhysicalAddress, InnerHost, InnerDetour string
-	ProcessID                                                                            int
-	Connected, Closed, NativeJoined, WorkspaceRetired                                    bool
-	Network                                                                              desktopnetwork.DesktopNetworkReceipt
-	Baseline                                                                             *desktopMacOSExternalReceipt
-	Proof                                                                                desktopExternalProof
+	OpenVPNRemotes                                                                                                          []nativeopenvpn.Remote
+	PhysicalDestinations                                                                                                    []mobilemultihop.PhysicalEgress
+	IPv6, DNSProtocol, DNSHost                                                                                              string
+	DNSPort                                                                                                                 int
+	HomeLAN                                                                                                                 bool
+	Session, Source, Config, Protocol                                                                                       string
+	Layer, LayerType, LayerHost, LayerDetour, OuterTag, OuterType, PhysicalNetwork, PhysicalAddress, InnerHost, InnerDetour string
+	LayerPort                                                                                                               int
+	ProcessID                                                                                                               int
+	Connected, Closed, NativeJoined, WorkspaceRetired                                                                       bool
+	Network                                                                                                                 desktopnetwork.DesktopNetworkReceipt
+	Baseline                                                                                                                *desktopMacOSExternalReceipt
+	Proof                                                                                                                   desktopExternalProof
 }
 
 func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternalHost) (macOSExternalNativeResult, error) {
@@ -175,12 +176,18 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 		result.PhysicalNetwork, result.PhysicalAddress = destination.Network, net.JoinHostPort(destination.Host, strconv.Itoa(destination.Port))
 	}
 	var graph struct {
-		Outbounds []struct{ Tag, Server, Detour string }
+		Outbounds []struct {
+			Tag, Type, Server, Detour string
+			Port                      int `json:"server_port"`
+		}
 	}
 	if json.Unmarshal([]byte(h.policy.Config()), &graph) != nil {
 		return result, errors.New("native observation lost its original graph")
 	}
 	for _, outbound := range graph.Outbounds {
+		if outbound.Tag == "routervpn-exit-start-layer" {
+			result.LayerType, result.LayerHost, result.LayerDetour, result.LayerPort = outbound.Type, outbound.Server, outbound.Detour, outbound.Port
+		}
 		if outbound.Tag == mobilemultihop.ExternalFinalTag {
 			result.InnerHost, result.InnerDetour = outbound.Server, outbound.Detour
 		}
@@ -254,9 +261,9 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 }
 
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
-	for _, protocol := range append(append(append([]string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
+	for _, protocol := range append(append(append(append([]string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
 		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
-		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...) {
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), macOSExternalHysteriaLayerEntryCases...) {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
@@ -459,6 +466,10 @@ func macOSExternalNativeLayerAuthority(t *testing.T, peer *macOSExternalNativePe
 	kind := "shadowsocks"
 	if peer.layer == common.StartLayerAES256GCMXOR {
 		kind = "routervpn-aes-xor"
+	}
+	if peer.packetEntry {
+		macOSExternalNativePacketEntryLayerAuthority(t, peer, value, kind)
+		return
 	}
 	if value.Layer != peer.layer || value.OuterTag != "routervpn-exit-start-layer" || value.OuterType != kind ||
 		value.PhysicalNetwork != "udp" || value.PhysicalAddress != peer.address.String() ||

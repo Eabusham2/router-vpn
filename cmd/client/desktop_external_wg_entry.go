@@ -8,10 +8,19 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// This shape selects only the captured Local ordinary WG/AWG entry -> SS, HTTP(S) CONNECT, unlayered Hysteria2 or SOCKS5 exit.
+// This shape selects only the captured Local ordinary WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 with its captured exit layer, or SOCKS5 exit.
 // It supplies no source, socket or native admission authority by itself.
 func desktopExternalPacketEntryExitProtocol(protocol string) bool {
 	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
+}
+
+func desktopExternalPacketEntryFinalLayer(profile common.RouterProfile) bool {
+	if profile.StartLayer == "" || profile.StartLayer == common.StartLayerOff {
+		return true
+	}
+	return profile.External != nil && profile.External.Protocol == "hysteria2" &&
+		(profile.StartLayer == common.StartLayerAES256GCM || profile.StartLayer == common.StartLayerAES256GCMXOR) &&
+		profile.External.StartLayer != nil && profile.External.StartLayer.Mode == profile.StartLayer
 }
 
 func desktopExternalPacketEntryOwner(owner *desktopExternalRuntime) bool {
@@ -19,7 +28,7 @@ func desktopExternalPacketEntryOwner(owner *desktopExternalRuntime) bool {
 		owner.profile.NodeKind != "external" || owner.profile.External == nil || !desktopExternalPacketEntryExitProtocol(owner.profile.External.Protocol) ||
 		owner.entry.NodeKind != "external" || owner.entry.External == nil || (owner.entry.External.Protocol != "wireguard" && owner.entry.External.Protocol != "amneziawg") ||
 		owner.entry.ID == "" || owner.entry.ID == owner.profile.ID ||
-		owner.profile.StartLayer != "" && owner.profile.StartLayer != "off" || owner.entry.StartLayer != "" && owner.entry.StartLayer != "off" ||
+		!desktopExternalPacketEntryFinalLayer(owner.profile) || owner.entry.StartLayer != "" && owner.entry.StartLayer != "off" ||
 		owner.profile.MultihopExecution != "" && owner.profile.MultihopExecution != "local" || owner.profile.MultihopEntryMode != "" {
 		return false
 	}

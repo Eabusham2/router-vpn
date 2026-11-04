@@ -37,7 +37,7 @@ func macOSExternalNativePacketEntryRead(t *testing.T, p *macOSExternalNativePeer
 	if p.entryProtocol == "amneziawg" {
 		expectedParameters = macOSExternalNativeAmneziaDigest(t, p.entryVariant)
 	}
-	if value == nil || value.Protocol != p.entryProtocol || value.ParametersSHA256 != expectedParameters || reply.Address != "198.51.100.240:8388" {
+	if value == nil || value.Protocol != p.entryProtocol || value.ParametersSHA256 != expectedParameters || reply.Address != macOSExternalNativePacketEntryFinalAddress(p) {
 		t.Fatal("packet entry lost its only captured tunneled stream exit")
 	}
 	address, err := netip.ParseAddrPort(value.Address)
@@ -115,6 +115,12 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 		} else {
 			t.Fatal("TLS name negative requires a captured TLS final")
 		}
+	case "wrong-layer-route":
+		if exit.External.StartLayer == nil || exit.External.Hysteria2 == nil {
+			t.Fatal("layer route negative requires captured HY2 layer")
+		}
+		exit.External.StartLayer.Transport["server"] = "198.51.100.241"
+		exit.External.Hysteria2.Server, exit.Endpoint = "198.51.100.241", "198.51.100.241"
 	case "wrong-exit-address":
 		if exit.External.SOCKS5 != nil {
 			exit.External.SOCKS5.Host = "198.51.100.241"
@@ -152,7 +158,7 @@ func macOSExternalNativePacketEntryProved(t *testing.T, p *macOSExternalNativePe
 		transportProved = entry != nil && entry.Streams >= 2 && entry.Packets >= 1 && observed.Connections >= 2 && observed.PhysicalUDP >= 1 && observed.Streams >= 1 && observed.Packets >= 1 && observed.SOCKSRejectedReplies == 0
 		macOSExternalNativeSOCKSEntryRelays(t, p, observed)
 	}
-	if entry == nil || entry.PhysicalUDP < 1 || !transportProved || entry.PublicReplies < 1 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.OuterTag != "external-entry" || live.OuterType != macOSExternalNativeEntryType(p) || live.PhysicalNetwork != "udp" || live.PhysicalAddress != p.entryAddress.String() || live.InnerHost != "198.51.100.240" || live.InnerDetour != "external-entry" || live.DNSProtocol != dnsProtocol || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.Network.MTU != 1376 || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") {
+	if entry == nil || entry.PhysicalUDP < 1 || !transportProved || entry.PublicReplies < 1 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.OuterTag != "external-entry" || live.OuterType != macOSExternalNativeEntryType(p) || live.PhysicalNetwork != "udp" || live.PhysicalAddress != p.entryAddress.String() || live.InnerHost != macOSExternalNativePacketEntryFinalHost(p) || live.InnerDetour != macOSExternalNativePacketEntryFinalDetour(p) || live.DNSProtocol != dnsProtocol || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.Network.MTU != 1376 || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") {
 		t.Fatal("packet-entry/stream-exit lost its actual separate authenticated paths, independent entry proof or captured policy")
 	}
 }
@@ -168,6 +174,8 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 	}
 	if p.protocol == "socks5" {
 		macOSExternalNativeSOCKSEntryRefusalWitness(t, p, entry, observed)
+	} else if p.protocol == "hysteria2" && p.layer != "" {
+		macOSExternalNativeHysteriaLayerEntryRefusalWitness(t, p, entry, observed)
 	} else if p.protocol == "hysteria2" {
 		macOSExternalNativeHysteriaEntryRefusalWitness(t, p, entry, observed)
 	} else {
@@ -209,9 +217,10 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 	}
 	status, raw, failure = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
 	var retired macOSExternalNativeResult
-	if failure != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retired) != nil || !retired.Closed || retired.Connected || !retired.NativeJoined || !retired.WorkspaceRetired || retired.ProcessID <= 0 || retired.ProcessID == controllerPID || retired.Baseline == nil || retired.Baseline.Phase != "retired" || retired.Baseline.Baseline.Present || retired.OuterTag != "external-entry" || retired.OuterType != macOSExternalNativeEntryType(p) || retired.PhysicalAddress != p.entryAddress.String() || retired.PhysicalNetwork != "udp" || retired.InnerDetour != "external-entry" {
+	if failure != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retired) != nil || !retired.Closed || retired.Connected || !retired.NativeJoined || !retired.WorkspaceRetired || retired.ProcessID <= 0 || retired.ProcessID == controllerPID || retired.Baseline == nil || retired.Baseline.Phase != "retired" || retired.Baseline.Baseline.Present || retired.OuterTag != "external-entry" || retired.OuterType != macOSExternalNativeEntryType(p) || retired.PhysicalAddress != p.entryAddress.String() || retired.PhysicalNetwork != "udp" || retired.InnerDetour != macOSExternalNativePacketEntryFinalDetour(p) {
 		t.Fatal("entry refusal lost original firstroot/child/PF/utun retirement", status, failure, string(raw))
 	}
+	macOSExternalNativeLayerAuthority(t, p, retired)
 	macOSExternalNativeRetiredKernel(t, ctx, retired.Baseline.Token, before)
 }
 

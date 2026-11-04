@@ -13,8 +13,19 @@ func desktopExternalPacketEntryFixture(t *testing.T, kill, variant string) (comm
 	return desktopExternalPacketEntryExitFixture(t, kill, variant, "shadowsocks")
 }
 func desktopExternalPacketEntryExitFixture(t *testing.T, kill, variant, protocol string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
+	return desktopExternalPacketEntryLayerExitFixture(t, kill, variant, protocol, "")
+}
+func desktopExternalPacketEntryLayerExitFixture(t *testing.T, kill, variant, protocol, layer string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
 	t.Helper()
 	profile, exit := desktopExternalNativeFixture(t, protocol)
+	if layer != "" {
+		profile = desktopLayerProfile(t, protocol, layer)
+		var err error
+		exit, err = standardExitFromExternalProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	entry, _ := desktopExternalNativeFixture(t, "wireguard")
 	entry.ID = "captured-wg-entry"
 	if variant != "wireguard" {
@@ -67,11 +78,21 @@ func TestDesktopExternalPacketEntrySOCKSRetainsBothSourcesAndMeasurementOwner(t 
 		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRetainsSources(t, variant, "socks5") })
 	}
 }
+func TestDesktopExternalPacketEntryHysteriaLayersRetainBothSourcesAndMeasurementOwner(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, layer := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+			t.Run(variant+"/"+layer, func(t *testing.T) { desktopExternalPacketEntryLayerExitRetainsSources(t, variant, "hysteria2", layer) })
+		}
+	}
+}
 func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protocol string) {
+	desktopExternalPacketEntryLayerExitRetainsSources(t, variant, protocol, "")
+}
+func desktopExternalPacketEntryLayerExitRetainsSources(t *testing.T, variant, protocol, layer string) {
 	for _, kill := range []string{"on-connect", "always"} {
-		profile, entry, launch := desktopExternalPacketEntryExitFixture(t, kill, variant, protocol)
+		profile, entry, launch := desktopExternalPacketEntryLayerExitFixture(t, kill, variant, protocol, layer)
 		if err := prepareDesktopExternalPhysicalCaptured(launch, "darwin"); err != nil || launch.external.physical == nil {
-			t.Fatal(err)
+			t.Fatal("captured packet-entry graph has no complete retained physical owner", err)
 		}
 		if err := validateDesktopMacOSExternalSources(profile, entry, launch); err != nil {
 			t.Fatal(err)
@@ -93,6 +114,9 @@ func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protoco
 			t.Fatal("DNS mailbox borrowed entry identity", err)
 		}
 		faults := []string{"entry-key", "entry-peer-key", "entry-psk", "entry-id", "entry-address", "entry-public", "entry-option", "exit-id", "exit-key", "exit-public", "dns", "mtu", "lan", "ipv6"}
+		if layer != "" {
+			faults = append(faults, "layer-key", "layer-mode", "layer-private", "layer-host", "layer-port")
+		}
 		if protocol == "hysteria2" {
 			faults = append(faults, "exit-tls")
 		}
@@ -131,6 +155,8 @@ func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protoco
 					e.External.ExpectedPublicIP = "198.51.100.21"
 				case "entry-option":
 					e.DAITAEnabled = !e.DAITAEnabled
+				case "layer-key", "layer-mode", "layer-private", "layer-host", "layer-port":
+					mutateDesktopExternalEntryLayer(&p, fault)
 				case "exit-key":
 					mutateDesktopExternalEntryExit(t, &p, "password")
 				case "exit-username":
@@ -189,9 +215,19 @@ func TestDesktopExternalPacketEntrySOCKSRestoreKeepsCompleteSourceAndNewSession(
 		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRestore(t, variant, "socks5") })
 	}
 }
+func TestDesktopExternalPacketEntryHysteriaLayersRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, layer := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+			t.Run(variant+"/"+layer, func(t *testing.T) { desktopExternalPacketEntryLayerExitRestore(t, variant, "hysteria2", layer) })
+		}
+	}
+}
 func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol string) {
+	desktopExternalPacketEntryLayerExitRestore(t, variant, protocol, "")
+}
+func desktopExternalPacketEntryLayerExitRestore(t *testing.T, variant, protocol, layer string) {
 	for _, kill := range []string{"on-connect", "always"} {
-		_, _, initial := desktopExternalPacketEntryExitFixture(t, kill, variant, protocol)
+		_, _, initial := desktopExternalPacketEntryLayerExitFixture(t, kill, variant, protocol, layer)
 		exit, err := standardExitFromExternalProfile(initial.external.profile)
 		if err != nil {
 			t.Fatal(err)
@@ -214,6 +250,9 @@ func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol strin
 			t.Fatal("restore discarded original selected MTU")
 		}
 		faults := []string{"entry-key", "entry-ip", "final-key", "source", "server"}
+		if layer != "" {
+			faults = append(faults, "layer-key", "layer-mode", "layer-private", "layer-host", "layer-port")
+		}
 		if protocol == "hysteria2" {
 			faults = append(faults, "final-tls")
 		}
@@ -243,6 +282,8 @@ func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol strin
 					wireguard.PrivateKey = testWGKey('z')
 				case "entry-ip":
 					wireguard.Endpoint = "192.0.2.21:51820"
+				case "layer-key", "layer-mode", "layer-private", "layer-host", "layer-port":
+					mutateDesktopExternalEntryLayer(&copy.profile, fault)
 				case "final-key":
 					mutateDesktopExternalEntryExit(t, &copy.profile, "password")
 				case "final-username":
@@ -309,5 +350,45 @@ func mutateDesktopExternalEntryExit(t *testing.T, profile *common.RouterProfile,
 		}
 	default:
 		t.Fatal("unknown captured stream exit")
+	}
+}
+
+func mutateDesktopExternalEntryLayer(profile *common.RouterProfile, fault string) {
+	switch fault {
+	case "layer-key":
+		profile.External.StartLayer.Transport["password"] = testWGKey('p')
+	case "layer-mode":
+		profile.StartLayer = common.StartLayerOff
+	case "layer-private":
+		profile.External.StartLayer.API = "http://10.77.0.2:8787"
+	case "layer-host":
+		profile.External.StartLayer.Transport["server"] = "198.51.100.21"
+	case "layer-port":
+		profile.External.StartLayer.Transport["server_port"] = float64(8390)
+	}
+}
+
+func TestDesktopExternalPacketEntryHysteriaLayersPreserveUnsupportedGraphs(t *testing.T) {
+	for _, fault := range []string{"entry-layer", "server", "auto", "predecessor", "wrong-protocol", "unknown-layer", "unpaired-layer"} {
+		t.Run(fault, func(t *testing.T) {
+			_, _, launch := desktopExternalPacketEntryLayerExitFixture(t, "always", "strong", "hysteria2", common.StartLayerAES256GCMXOR)
+			switch fault {
+			case "entry-layer":
+				launch.external.entry.StartLayer = common.StartLayerAES256GCM
+			case "server", "auto":
+				launch.external.selection = fault
+			case "predecessor":
+				launch.external.predecessor = "captured-other-source"
+			case "wrong-protocol":
+				launch.external.profile.External.Protocol = "shadowsocks"
+			case "unknown-layer":
+				launch.external.profile.StartLayer = "xor-only"
+			case "unpaired-layer":
+				launch.external.profile.External.StartLayer = nil
+			}
+			if desktopExternalPacketEntryOwner(launch.external) {
+				t.Fatal("unsupported layer composition acquired retained entry owner", fault)
+			}
+		})
 	}
 }

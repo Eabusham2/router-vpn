@@ -177,7 +177,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 		}
 		layer := reply.Layer
 		inner, parseErr := netip.ParseAddrPort(layer.InnerAddress)
-		if parseErr != nil || inner.Addr() != p.physical || inner.Port() == 0 || inner == address || p.inner.IsValid() && p.inner != inner ||
+		if parseErr != nil || inner.Addr() != macOSExternalNativeLayerInnerAddress(p) || inner.Port() == 0 || inner == address || p.inner.IsValid() && p.inner != inner ||
 			p.layer == common.StartLayerAES256GCMXOR && address.Port() != 8389 ||
 			layer.Raw < 0 || layer.Authenticated < 0 || layer.Forwarded < 0 || layer.Rejected < 0 || layer.Raw != reply.PhysicalUDP {
 			t.Fatal("Darwin layer changed its captured outer/private tuples or transport counters", parseErr)
@@ -208,7 +208,8 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
 	hysteriaVariant, _, hysteriaEntry := macOSExternalHysteriaEntryScenario(scenario)
 	socksVariant, _, socksEntry := macOSExternalSOCKSEntryScenario(scenario)
-	p.packetEntry = socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	layerVariant, _, _, layerEntry := macOSExternalHysteriaLayerEntryScenario(scenario)
+	p.packetEntry = layerEntry || socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
 	if p.packetEntry {
 		p.entryProtocol = "wireguard"
 		if strings.HasPrefix(scenario, "awg-entry-ss-") {
@@ -224,6 +225,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	if hysteriaEntry && hysteriaVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", hysteriaVariant
+	}
+	if layerEntry && layerVariant != "wireguard" {
+		p.entryProtocol, p.entryVariant = "amneziawg", layerVariant
 	}
 	if socksEntry && socksVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", socksVariant
@@ -452,7 +456,7 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 				clear(other[:])
 			}
 			profile.External.StartLayer = &common.ExternalStartLayer{Mode: p.layer, API: "http://10.93.0.1:8787", Transport: map[string]any{
-				"type": "shadowsocks", "tag": "captured-private-layer", "server": p.physical.String(), "server_port": int(p.address.Port()),
+				"type": "shadowsocks", "tag": "captured-private-layer", "server": p.address.Addr().String(), "server_port": int(p.address.Port()),
 				"method": "2022-blake3-aes-256-gcm", "password": password}}
 			if p.fault == "wrong-inner-key" {
 				profile.External.Hysteria2.Password += "-different-captured-inner"
@@ -629,6 +633,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if _, layer, fault, ok := macOSExternalHysteriaLayerEntryScenario(scenario); ok {
+		return "hysteria2", layer, fault
+	}
 	if _, fault, ok := macOSExternalSOCKSEntryScenario(scenario); ok {
 		return "socks5", "", fault
 	}

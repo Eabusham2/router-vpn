@@ -512,15 +512,15 @@ func desktopDarwinInstalledPacketReference(t *testing.T, mode string) {
 
 // The second encrypted peer is deliberately loopback-only. Its virtual address
 // can be reached solely through the first peer's fixed decrypted routing table.
-func startDesktopDarwinInstalledWGEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress, exitNetwork string) desktopExternalInstalledPacketEntryPeer {
+func startDesktopDarwinInstalledWGEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress, exitNetwork string, exitPort uint16) desktopExternalInstalledPacketEntryPeer {
 	t.Helper()
-	return startDesktopDarwinInstalledPacketEntry(t, parent, request, physical, cert, exitAddress, exitNetwork, "wireguard", "", startDesktopDarwinWGDevice)
+	return startDesktopDarwinInstalledPacketEntry(t, parent, request, physical, cert, exitAddress, exitNetwork, exitPort, "wireguard", "", startDesktopDarwinWGDevice)
 }
 
-func startDesktopDarwinInstalledPacketEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress, exitNetwork, protocol, parameters string, backend func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error)) desktopExternalInstalledPacketEntryPeer {
+func startDesktopDarwinInstalledPacketEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress, exitNetwork string, exitPort uint16, protocol, parameters string, backend func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error)) desktopExternalInstalledPacketEntryPeer {
 	t.Helper()
 	target, err := netip.ParseAddrPort(exitAddress)
-	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || exitNetwork != "tcp" && exitNetwork != "udp" {
+	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || exitNetwork != "tcp" && exitNetwork != "udp" || exitPort != 8388 && exitPort != 8389 || exitPort == 8389 && exitNetwork != "udp" {
 		t.Fatal("entry lost its actual loopback-only encrypted exit")
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -546,8 +546,8 @@ func startDesktopDarwinInstalledPacketEntry(t *testing.T, parent *desktopNodeLay
 	shutdown := func() { closeProof.Do(func() { _ = proof.Close(); _ = listener.Close(); <-done }) }
 	t.Cleanup(shutdown)
 	rules := map[string]desktopReferenceRule{
-		"tcp/1.1.1.1:443":                    {Network: "tcp", Address: "1.1.1.1", Port: 443, Target: listener.Addr().String()},
-		exitNetwork + "/198.51.100.240:8388": {Network: exitNetwork, Address: "198.51.100.240", Port: 8388, Target: exitAddress},
+		"tcp/1.1.1.1:443": {Network: "tcp", Address: "1.1.1.1", Port: 443, Target: listener.Addr().String()},
+		exitNetwork + "/" + netip.AddrPortFrom(netip.MustParseAddr("198.51.100.240"), exitPort).String(): {Network: exitNetwork, Address: "198.51.100.240", Port: int(exitPort), Target: exitAddress},
 	}
 	peer := startDesktopDarwinInstalledPacketRules(t, parent, request, physical, parameters, backend, rules)
 	return desktopExternalInstalledPacketEntryPeer{relay: func(control net.Conn, packet net.PacketConn) (net.Addr, func(), error) {

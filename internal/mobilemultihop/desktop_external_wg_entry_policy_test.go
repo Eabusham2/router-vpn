@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"reflect"
+	"router-vpn/internal/multihoprelay"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,17 @@ func TestDesktopExternalDarwinPacketEntrySOCKSRetainsCompletePolicy(t *testing.T
 		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitOwnsPolicy(t, variant, "socks5") })
 	}
 }
+func TestDesktopExternalDarwinPacketEntryHysteriaLayersRetainCompletePolicy(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(variant+"/"+layer, func(t *testing.T) { desktopExternalPacketEntryLayerOwnsPolicy(t, variant, "hysteria2", layer) })
+		}
+	}
+}
 func desktopExternalPacketEntryExitOwnsPolicy(t *testing.T, variant, protocol string) {
+	desktopExternalPacketEntryLayerOwnsPolicy(t, variant, protocol, "")
+}
+func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, layer string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		for _, ipv6 := range []string{"on", "off"} {
 			for _, lan := range []bool{false, true} {
@@ -57,16 +68,30 @@ func desktopExternalPacketEntryExitOwnsPolicy(t *testing.T, variant, protocol st
 				profile := capture["profile"].(map[string]any)
 				profile["kill_switch_policy"], profile["ipv6_mode"], profile["home_lan_access"] = kill, ipv6, lan
 				profile["mtu_policy"], profile["manual_mtu"] = "manual", 1360
+				if layer != "" {
+					externalTestAddLayer(profile, layer, "203.0.113.20", "10.93.0.1", "e")
+				}
 				original := externalDesktopCompile(t, graph, capture)
 				plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "darwin")
 				if err != nil {
 					t.Fatal(err)
+				}
+				if layer != "" {
+					for _, foreign := range []string{"linux", "windows"} {
+						if unsupported, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), foreign); err == nil || unsupported != nil {
+							t.Fatal("Darwin layered entry expanded another host", foreign)
+						}
+					}
 				}
 				actual, err := plan.Capture()
 				if err != nil {
 					t.Fatal(err)
 				}
 				meta := plan.Metadata()
+				finalDetour := "external-entry"
+				if layer != "" {
+					finalDetour = multihoprelay.ExitStartLayerTag
+				}
 				derived := externalTestRead(t, plan.Config())
 				source := externalTestRead(t, original.Config())
 				entry := externalTestFind(t, derived, "external-entry")
@@ -84,8 +109,14 @@ func desktopExternalPacketEntryExitOwnsPolicy(t *testing.T, variant, protocol st
 					delete(exit, "session_id")
 					delete(exit, "source_sha256")
 				}
-				if actual.EntryID != "saved-entry" || actual.EntryTag != "external-entry" || len(actual.PhysicalRoots) != 1 || actual.PhysicalRoots[0].Tag != "external-entry" || meta.RootTag != "external-entry" || meta.RootType != rootType || meta.Protocol != protocol || meta.SOCKSUDPAssociationRequired != (protocol == "socks5") || meta.SOCKSUDPAssociationTunneled != (protocol == "socks5") || actual.PhysicalRoots[0].DynamicSOCKSUDP || entry["detour"] != DesktopExternalPhysicalTag || exit["detour"] != "external-entry" || !reflect.DeepEqual(exit, externalTestFind(t, source, ExternalFinalTag)) || actual.SelectedDNS.Detour != ExternalFinalTag || actual.SelectedDNS.Physical || actual.ConfiguredMTU != 1360 || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan {
+				if actual.EntryID != "saved-entry" || actual.EntryTag != "external-entry" || len(actual.PhysicalRoots) != 1 || actual.PhysicalRoots[0].Tag != "external-entry" || meta.RootTag != "external-entry" || meta.RootType != rootType || meta.Protocol != protocol || meta.SOCKSUDPAssociationRequired != (protocol == "socks5") || meta.SOCKSUDPAssociationTunneled != (protocol == "socks5") || actual.PhysicalRoots[0].DynamicSOCKSUDP || entry["detour"] != DesktopExternalPhysicalTag || actual.StartLayer != layer || exit["detour"] != finalDetour || !reflect.DeepEqual(exit, externalTestFind(t, source, ExternalFinalTag)) || actual.SelectedDNS.Detour != ExternalFinalTag || actual.SelectedDNS.Physical || actual.ConfiguredMTU != 1360 || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan {
 					t.Fatal("entry lost exact root, final graph or device policy")
+				}
+				if layer != "" {
+					outer := externalTestFind(t, derived, multihoprelay.ExitStartLayerTag)
+					if !reflect.DeepEqual(outer, externalTestFind(t, source, multihoprelay.ExitStartLayerTag)) || outer["detour"] != "external-entry" || exit["server"] != "10.93.0.1" || len(derived["outbounds"].([]any)) != 3 {
+						t.Fatal("exit layer changed its captured key/private transport or bypassed original packet entry")
+					}
 				}
 				for _, tuple := range actual.PhysicalRoots[0].Destinations {
 					if tuple.Network != "udp" || tuple.Port != 8443 || tuple.Host != "198.51.100.20" {
