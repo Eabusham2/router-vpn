@@ -40,7 +40,7 @@ func (s desktopMacOSExternalSelection) valid() bool {
 	return s.Schema == 1 && validProfileID(s.ProfileID) && desktopMacOSExternalShort.MatchString(s.Session) &&
 		desktopMacOSExternalLong.MatchString(s.Source) && desktopMacOSExternalLong.MatchString(s.Config) &&
 		(s.Policy == "on-connect" || s.Policy == "always") &&
-		(s.Protocol == "socks5" || s.Protocol == "shadowsocks" || s.Protocol == "http-connect" || s.Protocol == "https-connect" || s.Protocol == "hysteria2" || s.Protocol == "wireguard")
+		(s.Protocol == "socks5" || s.Protocol == "shadowsocks" || s.Protocol == "http-connect" || s.Protocol == "https-connect" || s.Protocol == "hysteria2" || s.Protocol == "wireguard" || s.Protocol == "amneziawg")
 }
 
 func decodeDesktopMacOSExternalReceipt(raw []byte, capture desktopMacOSExternalSelection, phase string) (desktopMacOSExternalReceipt, error) {

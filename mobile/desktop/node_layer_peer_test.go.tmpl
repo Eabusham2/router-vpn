@@ -2279,11 +2279,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	}
 	if request.Protocol == "wireguard" {
 		if request.Password != "" || request.WireGuard == nil || request.Amnezia != nil || desktopExternalInstalledWireGuard == nil {
-			t.Fatal("installed external WireGuard reference requires its actual Linux backend and separate captured keys")
+			t.Fatal("installed external WireGuard reference requires its actual platform backend and separate captured keys")
 		}
 	} else if request.Protocol == "amneziawg" {
 		if request.Password != "" || request.WireGuard != nil || request.Amnezia == nil || desktopExternalInstalledAmnezia == nil {
-			t.Fatal("installed external AWG reference requires its actual Linux backend and complete independent parameters")
+			t.Fatal("installed external AWG reference requires its actual platform backend and complete independent parameters")
 		}
 	} else if request.Protocol == "openvpn" {
 		if request.Password != "" || request.WireGuard != nil || request.Amnezia != nil || request.OpenVPNNetwork != "tcp" && request.OpenVPNNetwork != "udp" {

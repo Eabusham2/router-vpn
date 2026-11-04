@@ -1,0 +1,194 @@
+//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	wgconn "github.com/sagernet/wireguard-go/conn"
+	"net/netip"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// This provider runs the pinned AWG cryptographic device independently of the
+// client engine, with its own stack/listener and actual complete UAPI readback.
+// It shares only the fixed destinations and captured UDP bind with the WG peer.
+func startDesktopDarwinInstalledAmnezia(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest, physical netip.Addr) desktopExternalInstalledWGPeer {
+	t.Helper()
+	parameters, err := awgpolicy.ParametersUAPI(request.Parameters)
+	expected, digestErr := desktopNodeAWGParameterDigest(request.Parameters)
+	padding, paddingErr := strconv.Atoi(request.Parameters["s4"])
+	if err != nil || digestErr != nil || paddingErr != nil || len(request.Parameters) != 11 {
+		t.Fatal("Darwin AWG reference lost its complete eleven captured parameters")
+	}
+	return startDesktopDarwinInstalledPacket(t, server, request.desktopExternalInstalledWGRequest, physical, parameters,
+		func(_ context.Context, stack wg.Device, bind *desktopDarwinWGBind, ipc string) (desktopDarwinWGDevice, error) {
+			wrapped := wrapTun(stack)
+			device := awg.NewDevice(wrapped, &desktopDarwinAWGBind{bind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+			err := device.IpcSet(ipc)
+			if err == nil {
+				err = wrapped.configuredPadding(padding)
+			}
+			if err == nil {
+				_, err = desktopNodeAWGParameterReadback(device, expected)
+			}
+			if err == nil {
+				err = stack.Start()
+			}
+			if err == nil {
+				err = device.Up()
+			}
+			if err != nil {
+				device.Close()
+				return desktopDarwinWGDevice{}, err
+			}
+			return desktopDarwinWGDevice{close: device.Close, readback: func() (string, error) { return desktopNodeAWGParameterReadback(device, expected) }}, nil
+		})
+}
+
+type desktopDarwinAWGBind struct{ *desktopDarwinWGBind }
+
+var _ awgconn.Bind = (*desktopDarwinAWGBind)(nil)
+
+func (b *desktopDarwinAWGBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
+	reads, port, err := b.desktopDarwinWGBind.Open(port)
+	if err != nil {
+		return nil, 0, err
+	}
+	converted := make([]awgconn.ReceiveFunc, len(reads))
+	for index, read := range reads {
+		converted[index] = func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
+			values := make([]wgconn.Endpoint, len(endpoints))
+			n, err := read(packets, sizes, values)
+			for i := 0; i < n; i++ {
+				endpoints[i] = values[i]
+			}
+			return n, err
+		}
+	}
+	return converted, port, nil
+}
+func (b *desktopDarwinAWGBind) Send(packets [][]byte, endpoint awgconn.Endpoint) error {
+	return b.desktopDarwinWGBind.Send(packets, endpoint, 0)
+}
+func (b *desktopDarwinAWGBind) ParseEndpoint(value string) (awgconn.Endpoint, error) {
+	return b.desktopDarwinWGBind.ParseEndpoint(value)
+}
+
+func desktopNodeAWGParameterDigest(parameters map[string]string) (string, error) {
+	text, err := awgpolicy.ParametersUAPI(parameters)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func desktopNodeAWGParameterReadback(device *awg.Device, expected string) (string, error) {
+	bad := errors.New("AWG native readback differs from its exact captured parameters")
+	raw, err := device.IpcGet()
+	if err != nil || len(raw) == 0 || len(raw) > 64<<10 {
+		return "", bad
+	}
+	// The native getter omits numeric zero values. It also includes private
+	// keys, which are neither returned nor printed by this receipt.
+	parameters := map[string]string{"jc": "0", "jmin": "0", "jmax": "0", "s1": "0", "s2": "0", "s3": "0", "s4": "0"}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || !awgpolicy.IsParameter(key) {
+			continue
+		}
+		if seen[key] {
+			return "", bad
+		}
+		seen[key], parameters[key] = true, value
+	}
+	raw = ""
+	actual, err := desktopNodeAWGParameterDigest(parameters)
+	if err != nil || actual != expected {
+		return "", bad
+	}
+	return actual, nil
+}
+
+func desktopDarwinAmneziaReferenceParameters(t *testing.T, mode string) map[string]string {
+	t.Helper()
+	value := map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32",
+		"h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+	if mode == "amneziawg-fast" {
+		value["jc"], value["jmin"], value["jmax"], value["s4"] = "0", "20", "40", "8"
+	} else if mode != "amneziawg-strong" {
+		t.Fatal("unknown AWG peer import")
+	}
+	return value
+}
+
+// The actual pinned AWG getter omits zero Jc. Exercise that boundary and reject
+// a changed value in every imported field without opening a physical listener.
+// Encrypted byte exchange remains the separate real peer/native-host gate.
+func TestRouterVPNDesktopDarwinAmneziaNativeParameterReadback(t *testing.T) {
+	for _, mode := range []string{"amneziawg-fast", "amneziawg-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			parameters := desktopDarwinAmneziaReferenceParameters(t, mode)
+			configured, err := awgpolicy.ParametersUAPI(parameters)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected, err := desktopNodeAWGParameterDigest(parameters)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: log.NewNOPFactory().Logger(), MTU: 1420, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bind := &desktopDarwinWGBind{local: netip.MustParseAddr("192.0.2.1"), remote: netip.MustParseAddr("192.0.2.1")}
+			device := awg.NewDevice(wrapTun(stack), &desktopDarwinAWGBind{bind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+			defer device.Close()
+			if err = device.IpcSet(configured); err != nil {
+				t.Fatal(err)
+			}
+			if actual, err := desktopNodeAWGParameterReadback(device, expected); err != nil || actual != expected {
+				t.Fatal("actual AWG native parameter readback failed", err)
+			}
+			for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+				value := "50000000-59999999"
+				if !strings.HasPrefix(key, "h") {
+					n, err := strconv.Atoi(parameters[key])
+					if err != nil {
+						t.Fatal(err)
+					}
+					value = strconv.Itoa(n + 1)
+				}
+				if err := device.IpcSet(key + "=" + value + "\n"); err != nil {
+					t.Fatal("actual AWG getter negative did not install its valid parameter", key, err)
+				}
+				if _, err := desktopNodeAWGParameterReadback(device, expected); err == nil {
+					t.Fatal("actual AWG getter accepted a replaced captured parameter", key)
+				}
+				if err := device.IpcSet(configured); err != nil {
+					t.Fatal(err)
+				}
+				if actual, err := desktopNodeAWGParameterReadback(device, expected); err != nil || actual != expected {
+					t.Fatal("original eleven-parameter capture was not restored", key, err)
+				}
+			}
+			bind.mu.Lock()
+			opened := bind.opened
+			bind.mu.Unlock()
+			if opened {
+				t.Fatal("parameter readback test acquired an ambient UDP socket")
+			}
+		})
+	}
+}

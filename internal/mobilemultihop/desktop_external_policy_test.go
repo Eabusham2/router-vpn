@@ -302,19 +302,6 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 			t.Fatal("uncaptured session acquired a physical plan")
 		}
 	}
-	for _, protocol := range []string{"wireguard", "amneziawg"} {
-		original := desktopExternalPolicyFixture(t, protocol, "always", "on", true)
-		for _, target := range []string{"windows", "darwin"} {
-			if target == "windows" || protocol == "wireguard" {
-				// Windows packet endpoints and Darwin WireGuard each retain their
-				// exact captured policy in the dedicated positive cases below.
-				continue
-			}
-			if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
-				t.Fatal("unintegrated outer transport acquired a claimed native physical implementation", protocol, target)
-			}
-		}
-	}
 	for _, protocol := range []string{"socks5", "hysteria2"} {
 		if _, err := NewDesktopExternalPolicy(desktopExternalPolicyFixture(t, protocol, "off", "on", true), desktopExternalTestSession, "linux"); err == nil {
 			t.Fatal("Off acquired a strict Linux baseline without an explicit captured policy", protocol)
@@ -359,7 +346,7 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 		}
 		before := original.Config()
 		targets := []string{"linux", "windows"}
-		if protocol == "hysteria2" || protocol == "wireguard" {
+		if protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg" {
 			targets = append(targets, "darwin")
 		}
 		for _, target := range targets {
@@ -667,4 +654,10 @@ func TestDesktopExternalPolicyDarwinHysteria2LayerRejectsReplacedAuthority(t *te
 
 func TestDesktopExternalPolicyDarwinWireGuardPreservesCapturedEndpoint(t *testing.T) {
 	desktopExternalPacketPolicyPreservesEndpoint(t, "wireguard", "", "darwin")
+}
+
+func TestDesktopExternalPolicyDarwinAmneziaPreservesCapturedEndpoint(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketPolicyPreservesEndpoint(t, "amneziawg", variant, "darwin") })
+	}
 }

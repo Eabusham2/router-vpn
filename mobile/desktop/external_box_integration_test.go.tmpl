@@ -1687,7 +1687,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "darwin" {
-		protocols = append(protocols, "socks5")
+		protocols = append(protocols, "socks5", "awg2-fast", "awg2-strong")
 	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5")

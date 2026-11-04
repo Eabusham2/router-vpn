@@ -3,7 +3,7 @@
 
 The actual installed supervisor/controller consumes a complete private signed
 copy of the native bundle. Real independent SS2022, HTTP, HTTPS, Hysteria2,
-WireGuard and authenticated SOCKS5 peers exercise selected DNS, public-exit TLS, utun MTU, captured PF reference and
+WireGuard, AmneziaWG and authenticated SOCKS5 peers exercise selected DNS, public-exit TLS, utun MTU, captured PF reference and
 joined Disconnect. This gate temporarily installs only its fingerprint-bound
 peer root in the native system keychain and removes it after all clients join.
 It must never be selected implicitly by an ordinary developer bundle build.
@@ -23,13 +23,12 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FLAG = 'ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE'
-POSITIVE_CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto', 'socks5', 'socks5-always')
-NEGATIVE_CASES = ('hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key',
-                  'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit', 'socks5-wrong-password', 'socks5-auth-downgrade', 'socks5-relay-domain', 'socks5-control-eof', 'socks5-wrong-dns', 'socks5-wrong-trust', 'socks5-wrong-exit')
+POSITIVE_CASES = ('shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto', 'socks5', 'socks5-always', 'amneziawg-fast', 'amneziawg-fast-always', 'amneziawg-strong', 'amneziawg-strong-always')
+NEGATIVE_CASES = ('hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key', 'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit', 'socks5-wrong-password', 'socks5-auth-downgrade', 'socks5-relay-domain', 'socks5-control-eof', 'socks5-wrong-dns', 'socks5-wrong-trust', 'socks5-wrong-exit', 'amneziawg-fast-wrong-client-key', 'amneziawg-strong-wrong-psk', 'amneziawg-fast-wrong-parameters', 'amneziawg-strong-wrong-parameters', 'amneziawg-strong-wrong-dns', 'amneziawg-strong-wrong-trust', 'amneziawg-strong-wrong-exit')
 CASES = POSITIVE_CASES + NEGATIVE_CASES
 TEST = 'TestMacOSRetainedExternalNativeSealedProtocols'
 MTU_RECEIPT = 'actual sealed Darwin WireGuard MTU accepted: automatic changed utun, transferred bytes, original Cancel rollback joined, Retest committed and original runtime PF retained'
-POLICY_TESTS = ('TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries', 'TestDesktopMacOSWireGuardRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary')
+POLICY_TESTS = ('TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries', 'TestDesktopMacOSWireGuardRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSAmneziaRetainsCapturedSourceAndGraphBoundary')
 PEER_TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego,routervpn_darwin_external_host'
 
 
@@ -64,7 +63,7 @@ def source_identity(core):
     for name in ('deploy/test_macos_external_host.py', 'deploy/test_macos_external_host_runner.py',
                  'deploy/seal-native-runtime.py', 'configs/client/modes.json',
                  'mobile/desktop/node_layer_peer_test.go.tmpl', 'mobile/desktop/node_darwin_external_peer_test.go.tmpl',
-                 'mobile/desktop/node_external_hysteria_layer_installed_test.go.tmpl', 'mobile/desktop/node_external_wireguard_installed_test.go.tmpl'):
+                 'mobile/desktop/node_external_hysteria_layer_installed_test.go.tmpl', 'mobile/desktop/node_external_wireguard_installed_test.go.tmpl', 'mobile/desktop/node_external_amnezia_installed_test.go.tmpl'):
         app[name] = sha(ROOT/name)
     files = [core/'go.mod', core/'go.sum', *core.glob('*.go')]
     for directory in ('protocol/routervpnamnezia', 'routervpn', 'experimental/libbox/routervpn'):
@@ -78,6 +77,8 @@ def success_receipt(case):
 
 
 def refusal_receipt(case):
+    if case.startswith('amneziawg-'):
+        return 'actual sealed Darwin AmneziaWG refused '+case+': actual encrypted peer and eleven-parameter readback reached, expected proof boundary rejected, original UDP PF and utun retired, controller joined'
     if case.startswith('socks5-'):
         return 'actual sealed Darwin SOCKS refused '+case+': actual peer reached, expected association or proof boundary rejected, original control UDP PF and utun retired, controller joined'
     if case.startswith('wireguard-'):

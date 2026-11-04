@@ -159,7 +159,7 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 	result.DNSProtocol, result.DNSHost, result.DNSPort = capture.SelectedDNS.Type, capture.SelectedDNS.Host, capture.SelectedDNS.Port
 	root := capture.PhysicalRoots[0]
 	result.Layer, result.OuterTag, result.OuterType = capture.StartLayer, root.Tag, root.Type
-	if capture.StartLayer != "" || capture.Protocol == "wireguard" || capture.Protocol == "socks5" {
+	if capture.StartLayer != "" || capture.Protocol == "wireguard" || capture.Protocol == "amneziawg" || capture.Protocol == "socks5" {
 		if len(root.Destinations) != 1 {
 			return result, errors.New("layer observation lost its one original physical tuple")
 		}
@@ -248,7 +248,7 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
 	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
 		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
-		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit"} {
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit"} {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
@@ -311,7 +311,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	beforeTunnels := macOSExternalNativeTunnels(t)
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/external-profile/connect", `{"profile_id":"installed-macos-external","direct":true,"execution":"local"}`)
 	if peer.fault != "" {
-		if protocol == "socks5" {
+		if protocol == "amneziawg" {
+			macOSExternalNativeAmneziaRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+		} else if protocol == "socks5" {
 			macOSExternalNativeSOCKSRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
 		} else if protocol == "wireguard" {
 			macOSExternalNativeWireGuardRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
@@ -326,7 +328,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		if receipt.ExitCode != 0 {
 			t.Fatal("rejected layer controller did not join original cleanup", receipt.ExitCode)
 		}
-		if protocol == "socks5" {
+		if protocol == "amneziawg" {
+			t.Logf("actual sealed Darwin AmneziaWG refused %s: actual encrypted peer and eleven-parameter readback reached, expected proof boundary rejected, original UDP PF and utun retired, controller joined", scenario)
+		} else if protocol == "socks5" {
 			t.Logf("actual sealed Darwin SOCKS refused %s: actual peer reached, expected association or proof boundary rejected, original control UDP PF and utun retired, controller joined", scenario)
 		} else if protocol == "wireguard" {
 			t.Logf("actual sealed Darwin WireGuard refused %s: encrypted peer reached, expected proof boundary rejected, native PF reference and utun retired, original controller joined", scenario)
@@ -355,7 +359,7 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		t.Fatalf("actual Darwin external ownership/readiness receipt failed: status=%d error=%v response=%s", status, err, raw)
 	}
 	macOSExternalNativeLayerAuthority(t, peer, live)
-	if protocol == "wireguard" {
+	if protocol == "wireguard" || protocol == "amneziawg" {
 		expectedIPv6 := "off"
 		if peer.policy == "always" {
 			expectedIPv6 = "on"
@@ -368,7 +372,7 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	if protocol == "socks5" {
 		macOSExternalNativeSOCKSProved(t, peer, live, observed)
 	}
-	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || (protocol == "hysteria2" || protocol == "wireguard") && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && protocol != "wireguard" && observed.Connections < 1 {
+	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || (protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg") && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && protocol != "wireguard" && protocol != "amneziawg" && observed.Connections < 1 {
 		t.Fatal("independent peer did not observe the selected native transport, DNS and actual exit proof", observed)
 	}
 	if peer.layer != "" && (observed.Layer == nil || observed.Layer.Authenticated < 1 || observed.Layer.Forwarded < 1 || observed.Layer.Rejected != 0) {

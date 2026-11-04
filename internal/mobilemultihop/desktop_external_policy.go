@@ -93,7 +93,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	// Native packet endpoints retain their original table and complete captured lower
 	// tuples. OpenVPN keeps every ordered TCP/UDP remote; it cannot collapse
 	// fallback into one peer or borrow a Router node identity.
-	if targetOS == "linux" || targetOS == "windows" || targetOS == "darwin" && capture.Protocol == "wireguard" {
+	if targetOS == "linux" || targetOS == "windows" || targetOS == "darwin" && (capture.Protocol == "wireguard" || capture.Protocol == "amneziawg") {
 		switch capture.Protocol {
 		case "wireguard":
 			family, kind, supported = "endpoints", "wireguard", true

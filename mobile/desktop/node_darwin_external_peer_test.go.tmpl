@@ -46,7 +46,10 @@ func TestRouterVPNDesktopDarwinExternalReferenceProcess(t *testing.T) {
 	desktopExternalInstalledWireGuard = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest) desktopExternalInstalledWGPeer {
 		return startDesktopDarwinInstalledWireGuard(t, server, request, address)
 	}
+	desktopExternalInstalledAmnezia = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer {
+		return startDesktopDarwinInstalledAmnezia(t, server, request, address)
+	}
 	desktopExternalInstalledReferenceProcessWithLayer(t, address.String(), map[string]bool{
-		"shadowsocks": true, "http-connect": true, "https-connect": true, "hysteria2": true, "wireguard": true, "socks5": true,
+		"shadowsocks": true, "http-connect": true, "https-connect": true, "hysteria2": true, "wireguard": true, "socks5": true, "amneziawg": true,
 	}, true, os.Getenv("ROUTERVPN_DARWIN_EXTERNAL_LAYER") == "1")
 }

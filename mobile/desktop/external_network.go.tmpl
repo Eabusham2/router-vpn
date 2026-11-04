@@ -168,7 +168,7 @@ func (n *ExternalNetworkOwner) Start(stage adapter.StartStage) error {
 		// already been retained by the native factory. This separate phase
 		// admits only the compiled lower tuples, never proof or TUN readiness.
 		meta := n.policy.Metadata()
-		n.sockets = meta.TargetOS == runtime.GOOS && (runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" && meta.Protocol == "wireguard") && (meta.Protocol == "wireguard" || meta.Protocol == "amneziawg" || meta.Protocol == "openvpn")
+		n.sockets = meta.TargetOS == runtime.GOOS && (runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" && (meta.Protocol == "wireguard" || meta.Protocol == "amneziawg")) && (meta.Protocol == "wireguard" || meta.Protocol == "amneziawg" || meta.Protocol == "openvpn")
 	}
 	if stage == adapter.StartStateStarted {
 		n.ready = true

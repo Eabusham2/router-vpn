@@ -460,3 +460,9 @@ func TestDesktopExternalPhysicalDarwinHysteria2LayersKeepOuterAndInnerOwners(t *
 func TestDesktopExternalPhysicalDarwinWireGuardPreservesCapturedPolicy(t *testing.T) {
 	desktopExternalPhysicalUDPPolicy(t, "wireguard", "", "darwin")
 }
+
+func TestDesktopExternalPhysicalDarwinAmneziaPreservesCapturedPolicy(t *testing.T) {
+	for _, variant := range []string{"fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPhysicalUDPPolicy(t, "amneziawg", variant, "darwin") })
+	}
+}

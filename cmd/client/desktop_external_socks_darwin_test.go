@@ -49,7 +49,7 @@ func TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary(t *testing.T) {
 			}
 		})
 	}
-	for _, fault := range []string{"server", "auto", "off", "entry", "predecessor", "layer", "awg", "openvpn"} {
+	for _, fault := range []string{"server", "auto", "off", "entry", "predecessor", "layer", "openvpn"} {
 		t.Run(fault, func(t *testing.T) {
 			_, launch := desktopRetainedSOCKSFixture(t, "always")
 			switch fault {
@@ -64,8 +64,6 @@ func TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary(t *testing.T) {
 				launch.external.predecessor = "captured predecessor"
 			case "layer":
 				launch.external.profile.StartLayer = "aes-256-gcm"
-			case "awg":
-				launch.external.profile.External.Protocol = "amneziawg"
 			case "openvpn":
 				launch.external.profile.External.Protocol = "openvpn"
 			}

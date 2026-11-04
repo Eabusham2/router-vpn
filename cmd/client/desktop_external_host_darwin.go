@@ -49,7 +49,7 @@ func desktopMacOSExternalEligible(launch *desktopNodeLaunch) bool {
 		return false
 	}
 	switch launch.external.profile.External.Protocol {
-	case "socks5", "shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard":
+	case "socks5", "shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg":
 		return true
 	}
 	return false

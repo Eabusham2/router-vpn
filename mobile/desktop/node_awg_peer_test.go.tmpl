@@ -109,43 +109,6 @@ func (b *desktopNodeAWGBind) ParseEndpoint(value string) (awgconn.Endpoint, erro
 	return b.desktopNodeWGBind.ParseEndpoint(value)
 }
 
-func desktopNodeAWGParameterDigest(parameters map[string]string) (string, error) {
-	text, err := awgpolicy.ParametersUAPI(parameters)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(digest[:]), nil
-}
-
-func desktopNodeAWGParameterReadback(device *awg.Device, expected string) (string, error) {
-	bad := errors.New("AWG native readback differs from its exact captured parameters")
-	raw, err := device.IpcGet()
-	if err != nil || len(raw) == 0 || len(raw) > 64<<10 {
-		return "", bad
-	}
-	// The native getter omits numeric zero values. It also includes private
-	// keys, which are neither returned nor printed by this receipt.
-	parameters := map[string]string{"jc": "0", "jmin": "0", "jmax": "0", "s1": "0", "s2": "0", "s3": "0", "s4": "0"}
-	seen := map[string]bool{}
-	for _, line := range strings.Split(raw, "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || !awgpolicy.IsParameter(key) {
-			continue
-		}
-		if seen[key] {
-			return "", bad
-		}
-		seen[key], parameters[key] = true, value
-	}
-	raw = ""
-	actual, err := desktopNodeAWGParameterDigest(parameters)
-	if err != nil || actual != expected {
-		return "", bad
-	}
-	return actual, nil
-}
-
 func desktopNodeAWGReferenceFactory(expected string, padding int) desktopNodeUDPReferenceFactory {
 	return func(_ context.Context, stack wg.Device, bind *desktopNodeWGBind, ipc string) (desktopNodeUDPReferenceDevice, error) {
 		wrapped := wrapTun(stack)
