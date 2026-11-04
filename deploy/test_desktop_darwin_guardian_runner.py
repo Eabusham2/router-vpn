@@ -72,6 +72,14 @@ class MacOSNativeVerdicts(unittest.TestCase):
             with self.subTest(ending=ending), self.assertRaises(RuntimeError):
                 self.gate.require_native_verdicts('\n'.join(self.lines)+'\n'+ending)
 
+    def test_fixture_events_metadata_requires_its_unique_native_verdict(self):
+        name = 'TestMacOSOwnedControllerNativeFixtureEventsPreserveCapturedDirectoryMetadata'
+        line = '--- PASS: '+name+' (0.01s)'
+        self.assertIn(line, self.lines)
+        for changed in ('', line+'\n'+line, 'diagnostic '+line):
+            with self.subTest(verdict=changed), self.assertRaises(RuntimeError):
+                self.gate.require_native_verdicts(self.output.replace(line, changed, 1))
+
     def test_fail_skip_race_panic_fatal_or_build_failure_never_becomes_pass(self):
         for failure in ('--- FAIL: SomeOtherCase (0.01s)', '    --- SKIP: SomeCase/child (0.00s)',
                         'FAIL', 'SKIP', 'WARNING: DATA RACE', 'panic: broken',

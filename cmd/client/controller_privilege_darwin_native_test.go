@@ -268,12 +268,12 @@ func macOSControllerFixtureChild() error {
 		}
 	default: // An authenticated shutdown request may precede desktop EOF.
 	}
-	if err = os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-canceled"), []byte("captured cancellation\n"), 0600); err != nil {
+	if err = os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-canceled"), []byte("captured cancellation\n"), 0600); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		if _, err = os.Stat(filepath.Join(macOSOwnedControllerRoot, "fixture-release")); err == nil {
+		if _, err = os.Stat(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-release")); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -304,7 +304,7 @@ func (d *macOSControllerFixtureDependent) Close(ctx context.Context) error {
 			return errors.New("actual Darwin parent released an inherited lock before dependent join")
 		}
 	}
-	return os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-parent-joined"), []byte("original native parent and dependent joined\n"), 0600)
+	return os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-parent-joined"), []byte("original native parent and dependent joined\n"), 0600)
 }
 
 type macOSControllerNativePeer struct {
@@ -360,6 +360,15 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 			t.Fatal(err)
 		}
 	}
+	// Create this before any root identity or native capture. Later observation
+	// writes change only this private child directory, not captured ancestors.
+	events := filepath.Join(macOSOwnedControllerRoot, macOSControllerFixtureEvents)
+	if err = os.Mkdir(events, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(events, 0700); err != nil {
+		t.Fatal(err)
+	}
 	rootIdentity, err := os.Lstat(macOSOwnedControllerRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +402,7 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 			t.Error("native fixture root changed; refusing replacement cleanup", err)
 			return
 		}
-		_ = os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-release"), []byte("joined\n"), 0600)
+		_ = os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-release"), []byte("joined\n"), 0600)
 		if fixture.supervisor != nil {
 			_ = fixture.supervisor.Process.Signal(syscall.SIGTERM)
 			select {
@@ -750,7 +759,7 @@ func macOSOwnedNativeLifetimeCases(t *testing.T, endings []string) {
 				t.Fatal(err)
 			}
 			macOSControllerNativeAwait(t, func() bool {
-				_, err := os.Stat(filepath.Join(macOSOwnedControllerRoot, "fixture-canceled"))
+				_, err := os.Stat(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-canceled"))
 				return err == nil
 			}, "captured desktop EOF did not cancel actual connection ownership")
 			for _, path := range []string{macOSOwnedInstallLock, macOSOwnedProcessLock} {
@@ -764,7 +773,7 @@ func macOSOwnedNativeLifetimeCases(t *testing.T, endings []string) {
 			if n, err := connection.Read(probe[:]); n != 0 || err == nil || !errors.Is(err, os.ErrDeadlineExceeded) {
 				t.Fatal("supervisor invented joined receipt before held cleanup", n, err)
 			}
-			if err = os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-release"), []byte("release captured operation\n"), 0600); err != nil {
+			if err = os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-release"), []byte("release captured operation\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			joined := macOSControllerNativeReceipt(t, connection, "joined", started.ProcessID)
@@ -772,7 +781,7 @@ func macOSOwnedNativeLifetimeCases(t *testing.T, endings []string) {
 			if joined.ExitCode != 0 {
 				t.Fatal("captured controller did not join successfully", joined.ExitCode)
 			}
-			if body, err := os.ReadFile(filepath.Join(macOSOwnedControllerRoot, "fixture-parent-joined")); err != nil || string(body) != "original native parent and dependent joined\n" {
+			if body, err := os.ReadFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-parent-joined")); err != nil || string(body) != "original native parent and dependent joined\n" {
 				t.Fatal("actual supervisor acknowledged exit without original native parent/dependent join", err)
 			}
 			for _, path := range []string{macOSOwnedInstallLock, macOSOwnedProcessLock} {
@@ -917,14 +926,14 @@ func TestMacOSOwnedControllerNativeSupervisorRestartDoesNotAdoptLiveChild(t *tes
 		t.Fatal(err)
 	}
 	macOSControllerNativeAwait(t, func() bool {
-		_, err := os.Stat(filepath.Join(macOSOwnedControllerRoot, "fixture-canceled"))
+		_, err := os.Stat(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-canceled"))
 		return err == nil
 	}, "orphaned owner ignored actual desktop EOF")
 	if held, err := ownedDesktopLock(macOSOwnedInstallLock, true); err == nil {
 		held.Close()
 		t.Fatal("orphaned child lost its installation lock before cleanup")
 	}
-	if err := os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-release"), []byte("release\n"), 0600); err != nil {
+	if err := os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-release"), []byte("release\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	macOSControllerNativeAwait(t, func() bool {
@@ -1043,10 +1052,10 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 		}
 	})
 	macOSControllerNativeAwait(t, func() bool {
-		_, err := os.Stat(filepath.Join(macOSOwnedControllerRoot, "fixture-canceled"))
+		_, err := os.Stat(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-canceled"))
 		return err == nil
 	}, "actual AppKit client did not request captured cleanup")
-	if err := os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-release"), []byte("release\n"), 0600); err != nil {
+	if err := os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-release"), []byte("release\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	select {

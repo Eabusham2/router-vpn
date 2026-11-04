@@ -31,7 +31,7 @@ PROBE_SPEC = importlib.util.spec_from_file_location('macos_controller_image_prob
 PROBE = importlib.util.module_from_spec(PROBE_SPEC)
 PROBE_SPEC.loader.exec_module(PROBE)
 CASES = ('InterpreterSelection', 'InstallerCapabilities', 'InstallerExclusionAndRetry', 'LifetimeAndInheritedLocks', 'ParentImageReplacement', 'CapturedRuntimeChild', 'RejectsForeignUIDAndInvalidFrames',
-         'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient', 'PFBaselineUtility')
+         'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient', 'PFBaselineUtility', 'FixtureEventsPreserveCapturedDirectoryMetadata')
 PARENT_CASES = ('ParentOriginalSessionAndJoin', 'ParentFailedDependentRetainsOriginalLocks',
                 'ParentRejectsReplacedControllerAndSession', 'ParentLifetimeCancellationAndBoundedJoin',
                 'ParentConcurrentCloseJoinsEnteredDependent', 'SessionCloseDoesNotCloseBorrowedController',

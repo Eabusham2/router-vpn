@@ -83,7 +83,11 @@ func macOSRuntimeFixtureChild() error {
 		if options.Case == "cleanup-failure" {
 			return errors.New("fixture retained native cleanup")
 		}
-		return os.WriteFile(filepath.Join(scope.Workspace, "fixture-child-cleaned"), []byte("original native cleanup\n"), 0600)
+		marker, err := macOSRuntimeFixtureCleanedPath(macOSOwnedControllerRoot, scope.Workspace)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(marker, []byte("original native cleanup\n"), 0600)
 	})
 }
 
@@ -265,7 +269,11 @@ func macOSRuntimeFixtureCases(ctx context.Context, parent *desktopMacOSSessionCa
 				if err != nil {
 					return err
 				}
-				body, err := os.ReadFile(filepath.Join(directory, "fixture-child-cleaned"))
+				marker, err := macOSRuntimeFixtureCleanedPath(macOSOwnedControllerRoot, directory)
+				if err != nil {
+					return err
+				}
+				body, err := os.ReadFile(marker)
 				if err != nil || string(body) != "original native cleanup\n" {
 					return errors.New("native child exited without original cleanup")
 				}
@@ -357,7 +365,7 @@ func (d *macOSRuntimeFixtureDependent) Close(ctx context.Context) (failure error
 		return err
 	}
 	phase = "joined-marker"
-	return os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-runtime-joined"), []byte("original runtime joined before locks\n"), 0600)
+	return os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-runtime-joined"), []byte("original runtime joined before locks\n"), 0600)
 }
 
 func TestMacOSOwnedControllerNativeCapturedRuntimeChild(t *testing.T) {
@@ -393,7 +401,11 @@ func TestMacOSOwnedControllerNativeCapturedRuntimeChild(t *testing.T) {
 	if err != nil || response.StatusCode != 200 || string(body) != "captured native runtime cases passed\n" {
 		t.Fatal("actual controller/runtime bootstrap failed", response.StatusCode, string(body), err)
 	}
-	if err = os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-release"), []byte("release original operation\n"), 0600); err != nil {
+	originalRoot, rootBefore, err := macOSFixtureDirectoryMetadata(macOSOwnedControllerRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-release"), []byte("release original operation\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err = connection.CloseWrite(); err != nil {
@@ -403,7 +415,11 @@ func TestMacOSOwnedControllerNativeCapturedRuntimeChild(t *testing.T) {
 	if joined.ExitCode != 0 {
 		t.Fatal("captured runtime controller did not join successfully", joined.ExitCode)
 	}
-	if body, err := os.ReadFile(filepath.Join(macOSOwnedControllerRoot, "fixture-runtime-joined")); err != nil || string(body) != "original runtime joined before locks\n" {
+	currentRoot, rootAfter, err := macOSFixtureDirectoryMetadata(macOSOwnedControllerRoot)
+	if err != nil || !os.SameFile(originalRoot, currentRoot) || rootBefore != rootAfter {
+		t.Fatal("actual controller teardown observation changed captured root ACL metadata", err)
+	}
+	if body, err := os.ReadFile(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-runtime-joined")); err != nil || string(body) != "original runtime joined before locks\n" {
 		t.Fatal("actual runtime was not joined before original locks", string(body), err)
 	}
 }
