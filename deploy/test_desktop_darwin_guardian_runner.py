@@ -359,5 +359,13 @@ class MacOSPythonDiscovery(unittest.TestCase):
             run.assert_not_called()
 
 
+class DarwinOriginalControlLifetime(unittest.TestCase):
+    def test_actual_control_method_joins_rejected_grant_and_preserves_other_operations(self):
+        spec = importlib.util.spec_from_file_location('darwin_control_lifetime', ROOT/'deploy/test_desktop_darwin_control_lifetime.py')
+        regression = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(regression)
+        regression.execute(ROOT)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

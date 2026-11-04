@@ -600,10 +600,13 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 	if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != "" {
 		failure := errors.Join(err, fmt.Errorf("Darwin physical guardian rejected or lost %s: %s", request.Operation, reply.Error))
 		p.lose("control-receive-"+request.Operation, failure)
-		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture {
-			// An unknown result cannot be followed by another request on a
-			// shifted sequence. EOF makes the independent guardian retire all
-			// permits/handles; Revoke still requires actual absent readback.
+		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || request.Operation == "grant" && reply.Error != "" {
+			// A sent grant may have failed before or after native application.
+			// Retain its attempted sequence; do not retry retirement against a
+			// possibly older guardian record on this still-open channel. EOF
+			// retires only this original generation. Revoke/Release still wait
+			// for the actual guardian join and independent PF absence proof.
+			// Unknown frames likewise cannot continue on a shifted sequence.
 			p.channel.Close()
 		}
 		return reply, received, failure
