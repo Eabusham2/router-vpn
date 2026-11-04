@@ -691,3 +691,85 @@ func TestRouterVPNExternalSOCKSRootCloseJoinsAndRetainsOriginalFailure(t *testin
 		t.Fatal("late root close erased a joined error or reused its owned connection")
 	}
 }
+
+// The native factory tests model only endpoint object identity and OS permit
+// observations. No packet exchange is claimed by this constructor fixture.
+// Installed native acceptance separately uses the actual encrypted endpoints.
+type externalSOCKSEntryModel struct {
+	adapter.Endpoint
+	kind, tag string
+}
+
+func (e *externalSOCKSEntryModel) Type() string { return e.kind }
+func (e *externalSOCKSEntryModel) Tag() string  { return e.tag }
+
+type externalSOCKSEntryManager struct {
+	adapter.EndpointManager
+	mu    sync.Mutex
+	entry adapter.Endpoint
+}
+
+func (m *externalSOCKSEntryManager) Get(tag string) (adapter.Endpoint, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.entry, m.entry != nil && m.entry.Tag() == tag
+}
+func prepareExternalSOCKSEntryModel(t *testing.T, f *externalPhysicalFixture) (*ExternalSOCKSOutbound, *externalSOCKSEntryManager) {
+	t.Helper()
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	var options ExternalSOCKSOptions
+	if json.Unmarshal([]byte(f.policy.Config()), &graph) != nil || len(graph.Outbounds) != 2 || json.Unmarshal(graph.Outbounds[0], &options) != nil {
+		t.Fatal("entry association lost exact captured options")
+	}
+	root, err := NewExternalSOCKSOutbound(f.native.ctx, nil, nil, mobilemultihop.ExternalFinalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := f.policy.Metadata()
+	endpoints := &externalSOCKSEntryManager{entry: &externalSOCKSEntryModel{kind: meta.RootType, tag: meta.RootTag}}
+	service.MustRegister[adapter.EndpointManager](f.native.ctx, endpoints)
+	manager := &externalSOCKSManager{objects: map[string]adapter.Outbound{root.Tag(): root, f.physical.Tag(): f.physical}}
+	service.MustRegister[adapter.OutboundManager](f.native.ctx, manager)
+	t.Cleanup(func() {
+		if err := root.(*ExternalSOCKSOutbound).Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return root.(*ExternalSOCKSOutbound), endpoints
+}
+func TestRouterVPNExternalPhysicalSOCKSEntryRejectsReplacedEndpointAndPhysicalFinal(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		return
+	} // Only Darwin admits this complete graph.
+	for _, kind := range []string{"wg-entry-socks5", "awg-entry-socks5-fast", "awg-entry-socks5-strong"} {
+		t.Run(kind, func(t *testing.T) {
+			policy := externalPhysicalDeviceFixture(t, kind, "192.168.50.7", 8443, false, "darwin", "off", "always")
+			f := newExternalPhysicalFixture(t, policy)
+			manager := service.FromContext[adapter.OutboundManager](f.native.ctx)
+			selected, _ := manager.Outbound(mobilemultihop.ExternalFinalTag)
+			root := selected.(*ExternalSOCKSOutbound)
+			endpoints := service.FromContext[adapter.EndpointManager](f.native.ctx).(*externalSOCKSEntryManager)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			ctx := f.start(t, source)
+			if _, err := root.current(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				if _, err := f.physical.current(ctx, network, M.ParseSocksaddr("198.51.100.240:8388")); err == nil {
+					t.Fatal("tunneled final acquired physical permission")
+				}
+			}
+			endpoints.mu.Lock()
+			endpoints.entry = &externalSOCKSEntryModel{kind: root.entry.Type(), tag: root.entry.Tag()}
+			endpoints.mu.Unlock()
+			if _, err := root.current(ctx); err == nil {
+				t.Fatal("identical replacement entry acquired original association authority")
+			}
+			if _, err := root.DialContext(ctx, "udp", M.ParseSocksaddr("203.0.113.53:5353")); err == nil {
+				t.Fatal("retired entry admitted a fresh association")
+			}
+		})
+	}
+}

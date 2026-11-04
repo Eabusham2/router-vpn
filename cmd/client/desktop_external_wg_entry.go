@@ -8,10 +8,10 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// This shape selects only the captured Local ordinary WG/AWG entry -> SS, HTTP(S) CONNECT or unlayered Hysteria2 exit.
+// This shape selects only the captured Local ordinary WG/AWG entry -> SS, HTTP(S) CONNECT, unlayered Hysteria2 or SOCKS5 exit.
 // It supplies no source, socket or native admission authority by itself.
 func desktopExternalPacketEntryExitProtocol(protocol string) bool {
-	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2"
+	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
 }
 
 func desktopExternalPacketEntryOwner(owner *desktopExternalRuntime) bool {

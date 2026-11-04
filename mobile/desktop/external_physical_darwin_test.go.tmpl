@@ -12,7 +12,7 @@ import (
 )
 
 func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *testing.T) {
-	for _, selected := range []string{"shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong"} {
+	for _, selected := range []string{"shadowsocks", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "socks5", "openvpn-tcp", "openvpn-udp", "openvpn-mixed", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong", "wg-entry-socks5", "awg-entry-socks5-fast", "awg-entry-socks5-strong"} {
 		runExternalPhysicalFactoryProtocolCases(t, []string{selected}, func(t *testing.T, c *externalPhysicalFactoryCase) error {
 			wantInterfaces, err := desktopDarwinPhysicalInterfaces(c.selected, c.ipv6 != "off")
 			if err != nil {
@@ -39,7 +39,7 @@ func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *tes
 			case "openvpn-udp":
 				wantPrivate = wantPrivate[1:]
 			}
-			if c.fixture.policy.Metadata().Protocol == "socks5" {
+			if c.fixture.policy.Metadata().Protocol == "socks5" && !c.fixture.policy.Metadata().SOCKSUDPAssociationTunneled {
 				wantPrivate = wantPrivate[:1]
 			}
 			return c.fixture.network.prepareExternalPhysicalDarwin(c.fixture.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopDarwinSocketOptions) (desktopDarwinPhysicalPolicy, error) {

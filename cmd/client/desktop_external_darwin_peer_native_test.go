@@ -207,7 +207,8 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
 	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
 	hysteriaVariant, _, hysteriaEntry := macOSExternalHysteriaEntryScenario(scenario)
-	p.packetEntry = hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	socksVariant, _, socksEntry := macOSExternalSOCKSEntryScenario(scenario)
+	p.packetEntry = socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
 	if p.packetEntry {
 		p.entryProtocol = "wireguard"
 		if strings.HasPrefix(scenario, "awg-entry-ss-") {
@@ -223,6 +224,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	if hysteriaEntry && hysteriaVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", hysteriaVariant
+	}
+	if socksEntry && socksVariant != "wireguard" {
+		p.entryProtocol, p.entryVariant = "amneziawg", socksVariant
 	}
 	if p.packetEntry && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
@@ -309,7 +313,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		request["password"], request["openvpn_network"], request["openvpn_fallback"] = "", p.openvpnNetwork, p.openvpnFallback
 		request["openvpn_client_address"] = p.openvpnClient.String()
 	}
-	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof") {
+	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof" || fault == "relay-route") {
 		request["socks_fault"] = fault
 	}
 	if protocol == "wireguard" || protocol == "amneziawg" || p.packetEntry {
@@ -390,7 +394,7 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		}
 	case "socks5":
 		profile.DNSProtocol = "udp"
-		profile.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: p.physical.String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
+		profile.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: p.address.Addr().String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
 		if p.fault == "wrong-password" {
 			profile.External.SOCKS5.Password += "-different"
 		}
@@ -625,6 +629,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if _, fault, ok := macOSExternalSOCKSEntryScenario(scenario); ok {
+		return "socks5", "", fault
+	}
 	if _, fault, ok := macOSExternalHysteriaEntryScenario(scenario); ok {
 		return "hysteria2", "", fault
 	}

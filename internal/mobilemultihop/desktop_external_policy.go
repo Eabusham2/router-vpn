@@ -41,6 +41,7 @@ type DesktopExternalMetadata struct {
 	IPv6Mode                    string `json:"ipv6_mode"`
 	HomeLANAccess               bool   `json:"home_lan_access"`
 	SOCKSUDPAssociationRequired bool   `json:"socks_udp_association_required"`
+	SOCKSUDPAssociationTunneled bool   `json:"socks_udp_association_tunneled,omitempty"`
 }
 
 // DesktopExternalPolicy can be constructed only from a valid ExternalPolicy.
@@ -56,7 +57,7 @@ type DesktopExternalPolicy struct {
 var desktopExternalPolicyError = errors.New("desktop external lower path requires its complete captured native policy")
 
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
-// Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT or unlayered Hysteria2 graph.
+// Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, unlayered Hysteria2 or SOCKS5 graph.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -121,7 +122,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		}
 	}
 	if !supported || capture.FinalTag != ExternalFinalTag || root.Family != family || root.Tag != rootTag || root.Type != rootKind ||
-		root.DynamicSOCKSUDP != (capture.Protocol == "socks5" && capture.UDPAvailable) ||
+		root.DynamicSOCKSUDP != (!entry && capture.Protocol == "socks5" && capture.UDPAvailable) ||
 		root.DynamicSOCKSUDP && (root.SOCKSVersion != "5" || root.SOCKSControl == nil || root.SOCKSControl.Network != "tcp") {
 		return nil, desktopExternalPolicyError
 	}
@@ -178,7 +179,8 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		OriginalMetadataSHA256: capture.MetadataSHA256, OriginalCaptureSHA256: capture.CaptureSHA256,
 		Protocol: capture.Protocol, RootTag: root.Tag, RootType: root.Type, OriginalRootSHA256: root.ConfigSHA256,
 		KillSwitchPolicy: capture.KillSwitchPolicy, IPv6Mode: capture.IPv6Mode, HomeLANAccess: capture.HomeLANAccess,
-		SOCKSUDPAssociationRequired: root.DynamicSOCKSUDP,
+		SOCKSUDPAssociationRequired: capture.Protocol == "socks5" && capture.UDPAvailable,
+		SOCKSUDPAssociationTunneled: entry && capture.Protocol == "socks5" && capture.UDPAvailable,
 	}
 	// This pre-derivation descriptor is not a self-referential graph hash. It
 	// binds the exact original source plus target/session before insertion into
@@ -259,6 +261,15 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		if !ok || exit["tag"] != ExternalFinalTag || exit["type"] != kind || exit["detour"] != capture.EntryTag {
 			return nil, desktopExternalPolicyError
 		}
+		if meta.SOCKSUDPAssociationTunneled {
+			username, _ := exit["username"].(string)
+			password, _ := exit["password"].(string)
+			if len(username) > 255 || len(password) > 255 {
+				return nil, desktopExternalPolicyError
+			}
+			exit["type"] = DesktopExternalSOCKSType
+			exit["session_id"], exit["source_sha256"] = sessionID, meta.SourceSHA256
+		}
 	}
 	graph["outbounds"] = append(outbounds, map[string]any{
 		"type": DesktopExternalPhysicalType, "tag": DesktopExternalPhysicalTag,
@@ -285,7 +296,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 // bounded admission. The actual first root must still match its exact digest;
 // an entry descriptor cannot turn an unrelated transport into physical egress.
 func desktopExternalPacketEntryExit(protocol string) bool {
-	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2"
+	return protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
 }
 
 func desktopExternalPacketEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture) string {

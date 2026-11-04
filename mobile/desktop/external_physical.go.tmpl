@@ -26,7 +26,7 @@ type externalPhysicalDestination struct {
 // eligible. This is a request constraint, not an endpoint-wide firewall permit;
 // the broker still creates, proves and retires each individual kernel socket.
 func externalPhysicalDestinations(capture mobilemultihop.ExternalDesktopCapture) (map[externalPhysicalDestination]bool, error) {
-	if capture.Protocol == "socks5" && len(capture.PhysicalRoots) == 1 {
+	if capture.Protocol == "socks5" && capture.EntryID == "" && len(capture.PhysicalRoots) == 1 {
 		root := capture.PhysicalRoots[0]
 		if !root.DynamicSOCKSUDP || root.SOCKSVersion != "5" || root.SOCKSControl == nil || root.SOCKSControl.Network != "tcp" ||
 			len(root.Destinations) != 1 || root.Destinations[0] != *root.SOCKSControl {

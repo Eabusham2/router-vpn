@@ -36,17 +36,19 @@ func RegisterExternalSOCKSOutbound(registry *outbound.Registry) {
 // map or imported JSON field can authorize a negotiated UDP relay.
 type ExternalSOCKSOutbound struct {
 	outbound.Adapter
-	mu         sync.Mutex
-	ctx        context.Context
-	options    ExternalSOCKSOptions
-	control    M.Socksaddr
-	owner      *ExternalNetworkOwner
-	lower      *ExternalPhysicalOutbound
-	policy     *mobilemultihop.DesktopExternalPolicy
-	operations map[*externalSOCKSOperation]struct{}
-	closed     bool
-	closeOnce  sync.Once
-	closeErr   error
+	mu           sync.Mutex
+	ctx          context.Context
+	options      ExternalSOCKSOptions
+	control      M.Socksaddr
+	owner        *ExternalNetworkOwner
+	lower        *ExternalPhysicalOutbound
+	entry        adapter.Endpoint
+	entryAddress M.Socksaddr
+	policy       *mobilemultihop.DesktopExternalPolicy
+	operations   map[*externalSOCKSOperation]struct{}
+	closed       bool
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options ExternalSOCKSOptions) (adapter.Outbound, error) {
@@ -55,7 +57,7 @@ func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.Conte
 		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) ||
 		err != nil || address.String() != options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || options.ServerPort == 0 ||
 		options.Version != "5" || options.Network != "" || options.UDPOverTCP != nil ||
-		!reflect.DeepEqual(options.DialerOptions, option.DialerOptions{Detour: mobilemultihop.DesktopExternalPhysicalTag}) ||
+		!(reflect.DeepEqual(options.DialerOptions, option.DialerOptions{Detour: mobilemultihop.DesktopExternalPhysicalTag}) || runtime.GOOS == "darwin" && reflect.DeepEqual(options.DialerOptions, option.DialerOptions{Detour: "external-entry"})) ||
 		(options.Username == "") != (options.Password == "") || len(options.Username) > 255 || len(options.Password) > 255 {
 		return nil, errors.New("retained SOCKS5 requires its exact native control, authentication and native lower owner")
 	}
@@ -90,12 +92,36 @@ func (o *ExternalSOCKSOutbound) prepare(policy *mobilemultihop.DesktopExternalPo
 		original.Tag != o.Tag() || !reflect.DeepEqual(original.ExternalSOCKSOptions, o.options) {
 		return errors.New("retained SOCKS5 substituted captured credentials or control options")
 	}
+	var entry adapter.Endpoint
+	var entryAddress M.Socksaddr
+	if meta.SOCKSUDPAssociationTunneled {
+		capture, err := policy.Capture()
+		if err != nil || runtime.GOOS != "darwin" || capture.EntryTag != "external-entry" || capture.EntryID == "" || meta.RootTag != capture.EntryTag || o.options.Detour != capture.EntryTag || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].DynamicSOCKSUDP || len(capture.PhysicalRoots[0].Destinations) != 1 {
+			return errors.New("tunneled SOCKS lost its sole original encrypted entry")
+		}
+		root := capture.PhysicalRoots[0]
+		if root.Type != "wireguard" && root.Type != mobilemultihop.AmneziaType || root.Destinations[0].Network != "udp" {
+			return errors.New("tunneled SOCKS changed its original packet entry")
+		}
+		manager := service.FromContext[adapter.EndpointManager](o.ctx)
+		if manager == nil {
+			return errors.New("tunneled SOCKS lost original endpoint manager")
+		}
+		var found bool
+		entry, found = manager.Get(capture.EntryTag)
+		if !found || entry == nil || entry.Type() != root.Type || entry.Tag() != root.Tag {
+			return errors.New("tunneled SOCKS lost original native entry object")
+		}
+		entryAddress = M.SocksaddrFrom(netip.MustParseAddr(root.Destinations[0].Host), uint16(root.Destinations[0].Port))
+	} else if o.options.Detour != mobilemultihop.DesktopExternalPhysicalTag {
+		return errors.New("direct SOCKS acquired an unrequested entry")
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed || o.ctx.Err() != nil || o.owner != nil || o.lower != nil || o.policy != nil || len(o.operations) != 0 {
 		return errors.New("retained SOCKS5 preparation is repeated, retired or late")
 	}
-	o.owner, o.lower, o.policy = owner, lower, policy
+	o.owner, o.lower, o.policy, o.entry, o.entryAddress = owner, lower, policy, entry, entryAddress
 	return nil
 }
 
@@ -116,6 +142,19 @@ func (o *ExternalSOCKSOutbound) current(ctx context.Context) (*mobiletor.Desktop
 	selected, found := manager.Outbound(o.Tag())
 	if !found || selected != o {
 		return nil, errors.New("retained SOCKS5 was replaced by another native root")
+	}
+	if policy.Metadata().SOCKSUDPAssociationTunneled {
+		endpoints := service.FromContext[adapter.EndpointManager](o.ctx)
+		if endpoints == nil || o.entry == nil {
+			return nil, errors.New("tunneled SOCKS lost its retained entry")
+		}
+		selected, found := endpoints.Get(o.options.Detour)
+		if !found || selected != o.entry {
+			return nil, errors.New("tunneled SOCKS entry was replaced")
+		}
+		// Check the original physical root generation without granting either
+		// the SOCKS control or the negotiated relay a physical socket.
+		return lower.current(ctx, "udp", o.entryAddress)
 	}
 	// The permanently captured TCP control tuple still constrains this source.
 	// A private per-call dialer alone can use its authenticated UDP reply below.
@@ -241,7 +280,11 @@ func (s *externalSOCKSOperation) DialContext(ctx context.Context, network string
 	// its current interface, then acknowledges only this bound socket tuple.
 	// No dynamic relay is added to ExternalPhysicalOutbound.allowed.
 	var connection net.Conn
-	if network == "udp" {
+	if s.root.entry != nil {
+		// The private client reaches this call only after authenticating its
+		// own TCP control. Both sockets stay inside this original endpoint.
+		connection, err = s.root.entry.DialContext(ctx, network, address)
+	} else if network == "udp" {
 		// Only this exact per-operation native Client reaches UDP after its
 		// authenticated reply. The broker takes the original TCP object, not
 		// a caller-supplied tuple or permission shared with another operation.

@@ -30,7 +30,7 @@ func desktopExternalPacketEntryExitFixture(t *testing.T, kill, variant, protocol
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
-	if protocol == "hysteria2" {
+	if protocol == "hysteria2" || protocol == "socks5" {
 		profile.DNSProtocol = "udp"
 	}
 	launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
@@ -62,6 +62,11 @@ func TestDesktopExternalPacketEntryHysteriaRetainsBothSourcesAndMeasurementOwner
 		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRetainsSources(t, variant, "hysteria2") })
 	}
 }
+func TestDesktopExternalPacketEntrySOCKSRetainsBothSourcesAndMeasurementOwner(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRetainsSources(t, variant, "socks5") })
+	}
+}
 func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		profile, entry, launch := desktopExternalPacketEntryExitFixture(t, kill, variant, protocol)
@@ -91,7 +96,7 @@ func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protoco
 		if protocol == "hysteria2" {
 			faults = append(faults, "exit-tls")
 		}
-		if protocol == "http-connect" || protocol == "https-connect" {
+		if protocol == "http-connect" || protocol == "https-connect" || protocol == "socks5" {
 			faults = append(faults, "exit-username")
 			if protocol == "https-connect" {
 				faults = append(faults, "exit-tls")
@@ -179,6 +184,11 @@ func TestDesktopExternalPacketEntryHysteriaRestoreKeepsCompleteSourceAndNewSessi
 		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRestore(t, variant, "hysteria2") })
 	}
 }
+func TestDesktopExternalPacketEntrySOCKSRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRestore(t, variant, "socks5") })
+	}
+}
 func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		_, _, initial := desktopExternalPacketEntryExitFixture(t, kill, variant, protocol)
@@ -204,7 +214,7 @@ func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol strin
 		if protocol == "hysteria2" {
 			faults = append(faults, "final-tls")
 		}
-		if protocol == "http-connect" || protocol == "https-connect" {
+		if protocol == "http-connect" || protocol == "https-connect" || protocol == "socks5" {
 			faults = append(faults, "final-username")
 			if protocol == "https-connect" {
 				faults = append(faults, "final-tls")
@@ -269,6 +279,12 @@ func mutateDesktopExternalEntryExit(t *testing.T, profile *common.RouterProfile,
 	switch profile.External.Protocol {
 	case "shadowsocks":
 		profile.External.Shadowsocks.Password += "changed"
+	case "socks5":
+		if field == "username" {
+			profile.External.SOCKS5.Username += "changed"
+		} else {
+			profile.External.SOCKS5.Password += "changed"
+		}
 	case "hysteria2":
 		if field == "tls" {
 			profile.External.Hysteria2.TLSServerName = "different.example"

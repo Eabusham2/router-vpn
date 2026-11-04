@@ -119,7 +119,7 @@ func (n *ExternalNetworkOwner) PrepareExternalPhysicalBroker(policy *mobilemulti
 	}
 	var socks *ExternalSOCKSOutbound
 	if meta.SOCKSUDPAssociationRequired {
-		selected, exists := manager.Outbound(meta.RootTag)
+		selected, exists := manager.Outbound(mobilemultihop.ExternalFinalTag)
 		socks, ok = selected.(*ExternalSOCKSOutbound)
 		if !exists || !ok || socks == nil || socks.options.ExternalCaptureOptions != n.capture {
 			return errors.New("ordinary SOCKS5 preparation has no captured per-association native root")

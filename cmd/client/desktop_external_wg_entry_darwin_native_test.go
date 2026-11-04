@@ -41,7 +41,7 @@ func macOSExternalNativePacketEntryRead(t *testing.T, p *macOSExternalNativePeer
 		t.Fatal("packet entry lost its only captured tunneled stream exit")
 	}
 	address, err := netip.ParseAddrPort(value.Address)
-	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && address != p.entryAddress || value.PhysicalUDP < 0 || value.Streams < 0 || value.Packets < 0 || p.protocol != "hysteria2" && value.Packets != 0 {
+	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && address != p.entryAddress || value.PhysicalUDP < 0 || value.Streams < 0 || value.Packets < 0 || p.protocol != "hysteria2" && p.protocol != "socks5" && value.Packets != 0 {
 		t.Fatal("WG entry changed its captured physical peer or fixed TCP inner routes")
 	}
 	p.entryAddress = address
@@ -90,6 +90,8 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 			exit.External.HTTPConnect.Password = base64.StdEncoding.EncodeToString(key[:])
 		case "https-connect":
 			exit.External.HTTPSConnect.Password = base64.StdEncoding.EncodeToString(key[:])
+		case "socks5":
+			exit.External.SOCKS5.Password = base64.StdEncoding.EncodeToString(key[:])
 		case "hysteria2":
 			exit.External.Hysteria2.Password = base64.StdEncoding.EncodeToString(key[:])
 		default:
@@ -97,6 +99,10 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 		}
 		clear(key[:])
 	case "wrong-exit-username":
+		if exit.External.SOCKS5 != nil {
+			exit.External.SOCKS5.Username += "-different"
+			break
+		}
 		if exit.External.HTTPConnect == nil {
 			t.Fatal("username negative requires captured CONNECT")
 		}
@@ -110,6 +116,11 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 			t.Fatal("TLS name negative requires a captured TLS final")
 		}
 	case "wrong-exit-address":
+		if exit.External.SOCKS5 != nil {
+			exit.External.SOCKS5.Host = "198.51.100.241"
+			exit.Endpoint = "198.51.100.241"
+			break
+		}
 		if exit.External.Hysteria2 == nil {
 			t.Fatal("UDP route negative requires captured QUIC")
 		}
@@ -136,6 +147,11 @@ func macOSExternalNativePacketEntryProved(t *testing.T, p *macOSExternalNativePe
 		dnsProtocol = "udp"
 		transportProved = entry != nil && entry.Streams >= 1 && entry.Packets >= 1 && observed.PhysicalUDP >= 1 && observed.Connections == 0 && observed.Streams >= 1 && observed.Packets >= 1
 	}
+	if p.protocol == "socks5" {
+		dnsProtocol = "udp"
+		transportProved = entry != nil && entry.Streams >= 2 && entry.Packets >= 1 && observed.Connections >= 2 && observed.PhysicalUDP >= 1 && observed.Streams >= 1 && observed.Packets >= 1 && observed.SOCKSRejectedReplies == 0
+		macOSExternalNativeSOCKSEntryRelays(t, p, observed)
+	}
 	if entry == nil || entry.PhysicalUDP < 1 || !transportProved || entry.PublicReplies < 1 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.OuterTag != "external-entry" || live.OuterType != macOSExternalNativeEntryType(p) || live.PhysicalNetwork != "udp" || live.PhysicalAddress != p.entryAddress.String() || live.InnerHost != "198.51.100.240" || live.InnerDetour != "external-entry" || live.DNSProtocol != dnsProtocol || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.Network.MTU != 1376 || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") {
 		t.Fatal("packet-entry/stream-exit lost its actual separate authenticated paths, independent entry proof or captured policy")
 	}
@@ -150,7 +166,9 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 	if entry == nil || entry.PhysicalUDP < 1 {
 		t.Fatal("WG entry negative missed its actual first encrypted peer")
 	}
-	if p.protocol == "hysteria2" {
+	if p.protocol == "socks5" {
+		macOSExternalNativeSOCKSEntryRefusalWitness(t, p, entry, observed)
+	} else if p.protocol == "hysteria2" {
 		macOSExternalNativeHysteriaEntryRefusalWitness(t, p, entry, observed)
 	} else {
 		switch p.fault {
