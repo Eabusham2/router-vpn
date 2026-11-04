@@ -8,6 +8,7 @@ admission and a separately compiled exact-four-family closed control.
 --prospective retains the closed-source prerequisite before public activation.
 """
 from pathlib import Path
+from contextlib import contextmanager
 import argparse
 import hashlib
 import importlib.util
@@ -87,6 +88,59 @@ def checked_sources(source):
                      'deploy/windows_build_owner.py', 'deploy/test_windows_build_owner.py'):
         records['windows-max/' + relative] = MAX.regular_digest(ROOT / relative)
     return source, records
+
+
+class MAXCommandOwner:
+    """Retain each exact command tree until its native job has fully joined."""
+    def __init__(self):
+        self.retired = True
+
+    def run(self, command, *, cwd, env, timeout):
+        if not self.retired:
+            raise RuntimeError('Windows MAX cannot replace an unjoined native command')
+        arguments = [str(value) for value in command]
+        self.retired = False
+        try:
+            result = REFERENCE.BUILD.BUILD_OWNER.run(arguments, cwd=cwd, env=env, timeout=timeout)
+        except subprocess.CalledProcessError as error:
+            if error.cmd != arguments:
+                raise
+            # This exception is emitted only after the original job and
+            # bootstrap joined. Preserve its nonzero status for causal verdicts.
+            self.retired = True
+            return error.returncode, (error.stdout + error.stderr).decode('utf-8', errors='replace')
+        except subprocess.TimeoutExpired as error:
+            # A timeout from the bootstrap's own join has different argv and
+            # must retain every source/key/image workspace, even after exit.
+            if error.cmd == arguments:
+                self.retired = True
+            raise
+        if result.args != arguments:
+            raise RuntimeError('Windows MAX native completion changed its original command')
+        self.retired = True
+        return result.returncode, (result.stdout + result.stderr).decode('utf-8', errors='replace')
+
+    @contextmanager
+    def preparation(self):
+        if not self.retired:
+            raise RuntimeError('Windows MAX cannot prepare over an unjoined command')
+        # Existing preparation helpers own their native commands separately.
+        # Keep their exact exception/status/deadline semantics, but do not let an
+        # unknown join failure authorize deletion of this enclosing source tree.
+        self.retired = False
+        yield
+        self.retired = True
+
+    @contextmanager
+    def workspace(self, prefix):
+        directory = Path(tempfile.mkdtemp(prefix=prefix))
+        try:
+            yield directory
+        finally:
+            # A failed native join is not authority to delete files that an
+            # original descendant may still use. No automatic finalizer retries.
+            if self.retired:
+                shutil.rmtree(directory)
 
 
 def observation_contract(compiler, source, captured, race, files, parent, cases):
@@ -600,9 +654,10 @@ def execution_plan(suite, changes):
     return families, suite in ('complete', 'succession'), suite in ('complete', 'ownership-controls-1'), selected
 
 
-def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_path=None, expected_sha=None, suite='complete'):
+def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_path=None, expected_sha=None, suite='complete', command_owner=None):
     if platform.system() != 'Windows' or not WFP.BOOT.IDENTITY.ctypes.windll.shell32.IsUserAnAdmin():
         raise ValueError('Complete MAX WFP requires actual elevated Windows')
+    command_owner = MAXCommandOwner() if command_owner is None else command_owner
     receipt_path = WPQ.new_receipt_path(receipt_path)
     repository = repository_identity(expected_sha)
     source, before = checked_sources(Path(source))
@@ -625,7 +680,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
     race = ['-race'] if architecture == 'amd64' else []
     tools = MAX.tool_receipts(source, compiler, captured, target, cache)
     dependencies = MAX.dependency_receipt(source, compiler, captured)
-    status, output = NODE.run([compiler, 'mod', 'verify'], cwd=source, env=captured, timeout=300)
+    status, output = command_owner.run([compiler, 'mod', 'verify'], cwd=source, env=captured, timeout=300)
     if status:
         raise ValueError('Windows MAX checksum verification failed:\n' + output[-8192:])
     packet = REFERENCE.BUILD.POLICY.AMNEZIA
@@ -636,7 +691,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
     observation_contract(compiler, source, captured, race,
                          (UDP_CONTROL / 'udp_observation.go', UDP_CONTROL / 'udp_observation_test.go'),
                          UDP_OBSERVATION, UDP_CASES)
-    with tempfile.TemporaryDirectory(prefix='routervpn-windows-complete-max-' + suite + '-') as directory:
+    with command_owner.workspace('routervpn-windows-complete-max-' + suite + '-') as directory:
         workspace = Path(directory)
         keys = workspace / 'private' / 'keys'
         REFERENCE.generate_keys(target, cache, keys)
@@ -658,7 +713,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 selected = overlay(source, owned, prospective=prospective, mutation=mutation, closed=closed)
                 before_overlay = overlay_source_hashes(source, selected)
                 binary = owned / 'complete-max-native.test.exe'
-                status, output = NODE.run([*build, '-overlay=' + str(selected), '-o', binary, './protocol/routervpnpq'], cwd=source, env=captured, timeout=600)
+                status, output = command_owner.run([*build, '-overlay=' + str(selected), '-o', binary, './protocol/routervpnpq'], cwd=source, env=captured, timeout=600)
                 if status:
                     raise ValueError('Windows MAX compilation failed: ' + name + '\n' + output[-32768:])
                 if overlay_source_hashes(source, selected) != before_overlay:
@@ -672,7 +727,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 mapping = binary.parent / 'overlay.json'
                 if overlay_source_hashes(source, mapping) != compiled_overlays[name]:
                     raise ValueError('Windows MAX overlay changed before native execution: ' + name)
-                status, output = NODE.run([binary, '-test.run=^' + parent + '$', '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
+                status, output = command_owner.run([binary, '-test.run=^' + parent + '$', '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
                                           cwd=source, env=captured, timeout=timeout + 15)
                 print(output, end='' if output.endswith('\n') else '\n', flush=True)
                 MAX.required_output(status, output, parent, cases)
@@ -696,7 +751,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             digest = MAX.regular_digest(binary)
             run_suite(binary, OPEN, (), 15)
             run_suite(binary, MARKERS, MARKER_CASES, 30)
-            status, output = NODE.run([binary, '-test.run=^Test(RealPinnedFactory|RealFactory|RealPQTraffic)|^(' + STARTUP_RECORDS + '|' + PORT_PAIR + ')$', '-test.v', '-test.count=1', '-test.timeout=120s'],
+            status, output = command_owner.run([binary, '-test.run=^Test(RealPinnedFactory|RealFactory|RealPQTraffic)|^(' + STARTUP_RECORDS + '|' + PORT_PAIR + ')$', '-test.v', '-test.count=1', '-test.timeout=120s'],
                                       cwd=source, env=captured, timeout=135)
             print(output, end='' if output.endswith('\n') else '\n', flush=True)
             for parent in MAX.PQ.NATIVE_CASES:
@@ -721,7 +776,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 negative_digest = MAX.regular_digest(negative)
                 if overlay_source_hashes(source, negative.parent / 'overlay.json') != compiled_overlays[name]:
                     raise ValueError('Windows MAX control overlay changed before execution')
-                status, output = NODE.run([negative, '-test.run=' + MAX.selector(parent, case), '-test.count=1', '-test.timeout=90s', '-test.v'],
+                status, output = command_owner.run([negative, '-test.run=' + MAX.selector(parent, case), '-test.count=1', '-test.timeout=90s', '-test.v'],
                                           cwd=source, env=captured, timeout=105)
                 try:
                     rejected_output(status, output, parent, case, witness)
@@ -790,26 +845,28 @@ def standalone(go='go', *, prospective=False, receipt_path=None, expected_sha=No
     native = REFERENCE.BUILD
     previous = dict(os.environ)
     execution_plan(suite, ())
-    with tempfile.TemporaryDirectory(prefix='routervpn-windows-max-core-' + suite + '-') as directory:
+    command_owner = MAXCommandOwner()
+    with command_owner.workspace('routervpn-windows-max-core-' + suite + '-') as directory:
         workspace = Path(directory)
         source, xray, pq, cache = (workspace / name for name in ('core', 'xray', 'pq', 'cargo-cache-' + suite))
         try:
             os.environ.clear()
             os.environ.update(captured)
-            native.checkout(source, 'https://github.com/SagerNet/sing-box.git', native.PIN)
-            native.checkout(xray, 'https://github.com/XTLS/Xray-core.git', native.POLICY.XRAY.XRAY_PIN)
-            native.pristine(source, native.PIN)
-            native.pristine(xray, native.POLICY.XRAY.XRAY_PIN)
-            native.PQ.build(target, pq, cache)
-            native.POLICY.prepare_native(source, xray)
-            native.PERFORMANCE.prepare(source)
-            native.OPENVPN.prepare(source)
-            native.EXTERNAL.prepare(source, go=str(compiler), env=captured)
-            native.BUFFERS.prepare(source)
-            native.run([compiler, 'mod', 'tidy'], cwd=source, env=captured)
-            native.run([compiler, 'mod', 'verify'], cwd=source, env=captured)
-            native.POLICY.AMNEZIA.verify(source)
-            result = execute(source, pq, cache, str(compiler), prospective=prospective, env=captured, expected_sha=expected_sha, suite=suite)
+            with command_owner.preparation():
+                native.checkout(source, 'https://github.com/SagerNet/sing-box.git', native.PIN)
+                native.checkout(xray, 'https://github.com/XTLS/Xray-core.git', native.POLICY.XRAY.XRAY_PIN)
+                native.pristine(source, native.PIN)
+                native.pristine(xray, native.POLICY.XRAY.XRAY_PIN)
+                native.PQ.build(target, pq, cache)
+                native.POLICY.prepare_native(source, xray)
+                native.PERFORMANCE.prepare(source)
+                native.OPENVPN.prepare(source)
+                native.EXTERNAL.prepare(source, go=str(compiler), env=captured)
+                native.BUFFERS.prepare(source)
+                native.run([compiler, 'mod', 'tidy'], cwd=source, env=captured)
+                native.run([compiler, 'mod', 'verify'], cwd=source, env=captured)
+                native.POLICY.AMNEZIA.verify(source)
+            result = execute(source, pq, cache, str(compiler), prospective=prospective, env=captured, expected_sha=expected_sha, suite=suite, command_owner=command_owner)
         finally:
             os.environ.clear()
             os.environ.update(previous)

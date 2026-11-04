@@ -14,6 +14,7 @@ import os
 import tempfile
 import subprocess
 import shutil
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -404,6 +405,128 @@ class CapturedNativeCleanup(unittest.TestCase):
                        'windows\narm64', 'linux\n386\nlinux\n386', ''):
             with self.subTest(target=target), patch('subprocess.check_output', return_value=target), self.assertRaises(ValueError):
                 captured_cleanup_test_command('captured-go', Path('cleanup_test.go'), {})
+
+
+class MAXCommandRetirement(unittest.TestCase):
+    def test_original_success_and_negative_wait_for_owned_completion(self):
+        for status in (0, 7):
+            owner = GATE.MAXCommandOwner()
+            command, environment = [Path('captured.exe'), 'exact argument'], {'original': 'environment'}
+            events = []
+            def completed(arguments, **kwargs):
+                self.assertEqual(arguments, ['captured.exe', 'exact argument'])
+                self.assertEqual(kwargs, {'cwd': Path('captured-source'), 'env': environment, 'timeout': 105})
+                self.assertFalse(owner.retired)
+                events.append('original descendants joined')
+                if status:
+                    raise subprocess.CalledProcessError(status, arguments, output=b'original stdout\xff', stderr=b'original stderr\xfe')
+                return subprocess.CompletedProcess(arguments, status, b'original stdout\xff', b'original stderr\xfe')
+            with patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER, 'run', side_effect=completed):
+                result = owner.run(command, cwd=Path('captured-source'), env=environment, timeout=105)
+            self.assertEqual(result, (status, 'original stdout\ufffdoriginal stderr\ufffd'))
+            self.assertEqual(events, ['original descendants joined'])
+            self.assertTrue(owner.retired)
+
+    def test_unproved_owner_retains_both_workspaces_and_refuses_next_command(self):
+        for fault in ('cleanup', 'bootstrap-timeout', 'foreign-status', 'foreign-success'):
+            owner, workspaces = GATE.MAXCommandOwner(), []
+            def failed(arguments, **kwargs):
+                if fault == 'cleanup':
+                    raise RuntimeError('original descendant failed to join')
+                if fault == 'bootstrap-timeout':
+                    raise subprocess.TimeoutExpired(['original-bootstrap'], 10)
+                if fault == 'foreign-status':
+                    raise subprocess.CalledProcessError(1, ['foreign'], output=b'', stderr=b'')
+                return subprocess.CompletedProcess(['foreign'], 0, b'', b'')
+            try:
+                with patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER, 'run', side_effect=failed), self.assertRaises(Exception):
+                    with owner.workspace('max-original-source-') as source:
+                        workspaces.append(source)
+                        with owner.workspace('max-original-private-') as private:
+                            workspaces.append(private)
+                            (private/'original.test.exe').write_bytes(b'original image')
+                            owner.run(['original.test.exe'], cwd=source, env={}, timeout=105)
+                self.assertFalse(owner.retired)
+                self.assertTrue(all(path.is_dir() for path in workspaces),'Unproved native owner deleted an original workspace')
+                self.assertEqual((workspaces[1]/'original.test.exe').read_bytes(), b'original image')
+                with self.assertRaisesRegex(RuntimeError, 'cannot replace an unjoined'):
+                    owner.run(['new.exe'], cwd=workspaces[0], env={}, timeout=105)
+            finally:
+                for path in workspaces:
+                    if path.exists():shutil.rmtree(path)
+
+    def test_original_timeout_stays_failure_after_proved_join(self):
+        owner = GATE.MAXCommandOwner()
+        expired = subprocess.TimeoutExpired(['original.exe'], 105, output=b'original deadline', stderr=b'original stderr')
+        with patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER, 'run', side_effect=expired):
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                with owner.workspace('max-joined-timeout-') as workspace:
+                    owner.run(['original.exe'], cwd=workspace, env={}, timeout=105)
+        self.assertIs(caught.exception, expired)
+        self.assertTrue(owner.retired)
+        self.assertFalse(workspace.exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'actual Windows file sharing and job APIs required')
+    def test_actual_completed_control_joins_original_image_holder_before_unlink(self):
+        # A command exits with its deliberate negative witness while a genuine
+        # descendant still holds the original control image without delete sharing.
+        child = r'''
+import ctypes,os,sys,time
+from pathlib import Path
+kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+kernel.CreateFileW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p]
+kernel.CreateFileW.restype=ctypes.c_void_p
+handle=kernel.CreateFileW(sys.argv[1],0x80000000,0,None,3,0x80,None)
+if handle in (None,ctypes.c_void_p(-1).value):raise ctypes.WinError(ctypes.get_last_error())
+Path(sys.argv[2]).write_text('original descendant holds image')
+time.sleep(120)
+'''
+        parent = r'''
+import subprocess,sys,time
+from pathlib import Path
+child=subprocess.Popen([sys.executable,'-I','-S','-c',sys.argv[1],sys.argv[2],sys.argv[3]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+deadline=time.monotonic()+10
+while not Path(sys.argv[3]).is_file():
+    if time.monotonic()>=deadline:raise RuntimeError('original image holder did not start')
+    time.sleep(.01)
+print(sys.argv[4],flush=True)
+sys.exit(7)
+'''
+        testcase, observed = self, []
+        original_job = GATE.REFERENCE.BUILD.BUILD_OWNER.WindowsJob
+        with tempfile.TemporaryDirectory(prefix='max-native-original-image-') as directory:
+            root=Path(directory); image=root/'original-control.test.exe'; image.write_bytes(b'original bounded fixture image')
+            foreign=subprocess.Popen([sys.executable,'-I','-S','-c','import sys; print("ready",flush=True); sys.stdin.buffer.read()'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            try:
+                self.assertEqual(foreign.stdout.readline().strip(),b'ready')
+                class ObservedJob(original_job):
+                    def seal(job):
+                        # Direct Popen completion alone cannot make this unlink
+                        # succeed. Observe the actual sharing violation before
+                        # original-job retirement, without changing its result.
+                        with testcase.assertRaises(PermissionError) as caught:
+                            image.unlink()
+                        testcase.assertEqual(caught.exception.winerror,32)
+                        observed.append('original image still held after command exit')
+                        return super().seal()
+                parent_test='TestRouterVPNDesktopNodeWindowsMAXTLS'
+                case='max-tls-wg/off';witness='original test-only negative witness'
+                command=[sys.executable,'-I','-S','-c',parent,child,str(image),str(root/'ready'),failure(parent_test,case,witness)]
+                with patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER,'WindowsJob',ObservedJob):
+                    owner=GATE.MAXCommandOwner()
+                    status,output=owner.run(command,cwd=root,env=dict(os.environ),timeout=15)
+                self.assertEqual(status,7)
+                GATE.rejected_output(status,output,parent_test,case,witness)
+                self.assertEqual(observed,['original image still held after command exit'])
+                self.assertTrue(owner.retired)
+                image.unlink()
+                self.assertFalse(image.exists())
+                self.assertIsNone(foreign.poll(),'MAX cleanup killed an unrelated same-image process')
+                print('Actual MAX command owner joined original image holder before immediate unlink; negative status and foreign process preserved',flush=True)
+            finally:
+                try:foreign.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    foreign.kill();foreign.communicate(timeout=10)
 
 
 class MAXObservationCompilation(unittest.TestCase):
@@ -1105,7 +1228,14 @@ class MAXNativeBoundaries(unittest.TestCase):
             stack.enter_context(patch.object(GATE.NODE, 'build_layer_reference', side_effect=relay))
             stack.enter_context(patch.object(GATE.NODE, 'build_xray_reference', side_effect=xray))
             stack.enter_context(patch.object(GATE.NODE, 'xray_reference_sources', return_value={'test-only-xray': 'source'}))
-            stack.enter_context(patch.object(GATE.NODE, 'run', side_effect=command))
+            stack.enter_context(patch.object(GATE.NODE, 'run', side_effect=AssertionError('MAX escaped its original command owner')))
+            def owned_command(arguments, **kwargs):
+                status, output = command(arguments, **kwargs)
+                args = [str(value) for value in arguments]
+                if status:
+                    raise subprocess.CalledProcessError(status, args, output=output.encode(), stderr=b'')
+                return subprocess.CompletedProcess(args, status, output.encode(), b'')
+            stack.enter_context(patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER, 'run', side_effect=owned_command))
             def observation(compiler, source, captured, race, files, parent, cases):
                 status, output = command([compiler, 'test', *files], cwd=source, env=captured, timeout=45)
                 GATE.MAX.required_output(status, output, parent, cases)
@@ -1241,15 +1371,11 @@ class MAXNativeBoundaries(unittest.TestCase):
                 native=GATE.REFERENCE.BUILD
                 original=dict(os.environ)
                 observed=[]
-                real_temporary=GATE.tempfile.TemporaryDirectory
-                owned_root=self.work
-                class OwnedTemporary:
-                    def __init__(self, **kwargs): self.owner=real_temporary(dir=owned_root,**kwargs)
-                    def __enter__(self): return self.owner.__enter__()
-                    def __exit__(self,*args):
-                        result=self.owner.__exit__(*args)
-                        if fail: raise OSError('owned source cleanup acknowledgment failed')
-                        return result
+                original_cleanup=GATE.shutil.rmtree
+                def cleanup(directory, *args, **kwargs):
+                    result=original_cleanup(directory, *args, **kwargs)
+                    if fail: raise OSError('owned source cleanup acknowledgment failed')
+                    return result
                 def modeled_execute(source,pq,cache,go,**kwargs):
                     self.assertTrue(source.parent.is_dir())
                     self.assertFalse(receipt.exists())
@@ -1264,7 +1390,7 @@ class MAXNativeBoundaries(unittest.TestCase):
                     stack.enter_context(patch.object(GATE.NODE,'selected_compiler',return_value=(Path('go'),{'PATH':os.defpath,'GOOS':'windows','CGO_ENABLED':'1'},'amd64')))
                     stack.enter_context(patch.object(GATE,'execute',side_effect=modeled_execute))
                     stack.enter_context(patch.object(GATE,'repository_identity',return_value=repository))
-                    stack.enter_context(patch.object(GATE.tempfile,'TemporaryDirectory',OwnedTemporary))
+                    stack.enter_context(patch.object(GATE.shutil,'rmtree',side_effect=cleanup))
                     stack.enter_context(patch.object(native,'checkout',side_effect=lambda path,*args:path.mkdir()))
                     for owner,name in ((native,'pristine'),(native.PQ,'build'),(native.POLICY,'prepare_native'),
                             (native.PERFORMANCE,'prepare'),(native.OPENVPN,'prepare'),(native.EXTERNAL,'prepare'),
@@ -1281,6 +1407,88 @@ class MAXNativeBoundaries(unittest.TestCase):
                 self.assertEqual(receipt.exists(),not fail)
                 if not fail:
                     self.assertTrue(json.loads(receipt.read_text())['standalone_source_workspace_removed'])
+
+    def test_standalone_retains_source_and_private_image_after_unproved_native_join(self):
+        receipt=self.work/'unjoined-standalone.json'
+        native=GATE.REFERENCE.BUILD
+        previous=dict(os.environ); observed=[]
+        def modeled_execute(source,pq,cache,go,**kwargs):
+            owner=kwargs.get('command_owner')
+            self.assertIsInstance(owner,GATE.MAXCommandOwner,'Standalone lost its original shared command owner')
+            observed.append(source.parent)
+            with owner.workspace('max-unproved-private-') as private:
+                observed.append(private)
+                image=private/'original.test.exe';image.write_bytes(b'original image')
+                owner.run([image],cwd=source,env={},timeout=105)
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(GATE.platform,'system',return_value='Windows'))
+                windll=stack.enter_context(patch.object(GATE.WFP.BOOT.IDENTITY.ctypes,'windll',create=True))
+                windll.shell32.IsUserAnAdmin.return_value=True
+                stack.enter_context(patch.object(GATE.NODE,'selected_compiler',return_value=(Path('go'),{'PATH':os.defpath,'GOOS':'windows','CGO_ENABLED':'1'},'amd64')))
+                stack.enter_context(patch.object(GATE,'execute',side_effect=modeled_execute))
+                stack.enter_context(patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER,'run',side_effect=RuntimeError('original native join unproved')))
+                stack.enter_context(patch.object(native,'checkout',side_effect=lambda path,*args:path.mkdir()))
+                for owner,name in ((native,'pristine'),(native.PQ,'build'),(native.POLICY,'prepare_native'),
+                        (native.PERFORMANCE,'prepare'),(native.OPENVPN,'prepare'),(native.EXTERNAL,'prepare'),
+                        (native.BUFFERS,'prepare'),(native,'run'),(native.POLICY.AMNEZIA,'verify')):
+                    stack.enter_context(patch.object(owner,name,return_value=None))
+                with self.assertRaisesRegex(RuntimeError,'original native join unproved'):
+                    GATE.standalone(prospective=True,receipt_path=receipt)
+            self.assertEqual(dict(os.environ),previous)
+            self.assertFalse(receipt.exists())
+            self.assertEqual(len(observed),2)
+            self.assertTrue(all(path.is_dir() for path in observed),'Unproved original command lost its source or private workspace')
+            self.assertEqual((observed[1]/'original.test.exe').read_bytes(),b'original image')
+        finally:
+            for directory in observed:
+                if directory.exists():shutil.rmtree(directory)
+
+    def test_actual_preparation_bridge_preserves_failure_and_source_workspace(self):
+        native=GATE.REFERENCE.BUILD
+        for kind in ('join', 'status', 'timeout'):
+            receipt=self.work/(kind+'-prepare.json'); roots=[]; previous=dict(os.environ)
+            command=['captured-go','mod','tidy']
+            error=(RuntimeError('actual preparation descendant join unproved') if kind=='join' else
+                   subprocess.CalledProcessError(7,command,output=b'original preparation stdout',stderr=b'original preparation stderr') if kind=='status' else
+                   subprocess.TimeoutExpired(command,1800,output=b'original preparation stdout',stderr=b'original preparation stderr'))
+            def checkout(path,*args):
+                path.mkdir()
+                if not roots:roots.append(path.parent)
+            def unjoined(arguments,**kwargs):
+                self.assertEqual([str(x) for x in arguments],command)
+                self.assertEqual(kwargs['timeout'],1800,'Preparation changed its original default command deadline')
+                self.assertEqual(kwargs['cwd'],roots[0]/'core')
+                raise error
+            try:
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(GATE.platform,'system',return_value='Windows'))
+                    windll=stack.enter_context(patch.object(GATE.WFP.BOOT.IDENTITY.ctypes,'windll',create=True))
+                    windll.shell32.IsUserAnAdmin.return_value=True
+                    stack.enter_context(patch.object(GATE.NODE,'selected_compiler',return_value=(Path('captured-go'),{'PATH':os.defpath,'GOOS':'windows','CGO_ENABLED':'1'},'amd64')))
+                    # Only the OS selection is modeled. The actual preparation
+                    # bridge still calls the actual retained-owner entrypoint.
+                    stack.enter_context(patch.object(native,'os',type('NativeHost',(),{'name':'nt'})()))
+                    stack.enter_context(patch.object(native.BUILD_OWNER,'run',side_effect=unjoined))
+                    stack.enter_context(patch.object(native,'checkout',side_effect=checkout))
+                    for owner,name in ((native,'pristine'),(native.PQ,'build'),(native.POLICY,'prepare_native'),
+                            (native.PERFORMANCE,'prepare'),(native.OPENVPN,'prepare'),(native.EXTERNAL,'prepare'),
+                            (native.BUFFERS,'prepare'),(native.POLICY.AMNEZIA,'verify')):
+                        stack.enter_context(patch.object(owner,name,return_value=None))
+                    execute=stack.enter_context(patch.object(GATE,'execute',side_effect=AssertionError('Native execution followed failed preparation')))
+                    stack.enter_context(redirect_stdout(io.StringIO()))
+                    with self.assertRaises(type(error)) as caught:
+                        GATE.standalone(prospective=True,receipt_path=receipt)
+                    self.assertIs(caught.exception,error,'Preparation replaced its original failure')
+                    execute.assert_not_called()
+                self.assertEqual(dict(os.environ),previous)
+                self.assertFalse(receipt.exists())
+                self.assertEqual(len(roots),1)
+                self.assertTrue(roots[0].is_dir(),'Unproved preparation deleted its original source workspace')
+                self.assertTrue((roots[0]/'core').is_dir())
+            finally:
+                for directory in roots:
+                    if directory.exists():shutil.rmtree(directory)
 
     def test_registration_requires_same_sha_native_workflow_in_authoritative_aggregate(self):
         self.assertEqual(GATE.NODE.PREP.PEER_TEMPLATES['node_max_peer_windows_test.go.tmpl'],GATE.PEER)
