@@ -20,18 +20,18 @@ SPEC.loader.exec_module(GATE)
 
 
 class ViaEntrySourceBoundary(unittest.TestCase):
-    def test_real_sdk_never_receives_the_synthetic_network_clock(self):
+    def run_gate(self, negative_result=None):
         original = (GATE.APP / 'IOSViaEntryTCP.swift').read_text()
         sdk_sources = []
         executable_sources = []
         executions = []
         witnesses = (
-            'only valid responses can win',
+            'actual routed comparison has fifty samples',
             'actual summary removes five samples at each end',
             'receipt selects robust fifty-sample winner',
-            'network changed during native retirement',
-            'cancel substituted for acknowledged socket drain',
-            'direct probe lost its required physical interface',
+            'a network change during teardown cannot adopt old results onto the new path',
+            'Cancel is not fabricated socket drain: cancel',
+            'direct measurements require captured physical interface',
         )
 
         def run(command, **options):
@@ -59,12 +59,15 @@ class ViaEntrySourceBoundary(unittest.TestCase):
                 if 'static func measure(_ target: RouterProfile,' in source:
                     return subprocess.CompletedProcess(command, 1, '', "IOSViaEntryLatency.swift: sending 'candidate' risks causing data races")
                 return subprocess.CompletedProcess(command, 0)
-            self.assertEqual(len(command), 1)
+            target = (None, 'statistics', 'statistics', 'statistics', 'retirement-network', 'socket-drain', 'physical-binding')[len(executions)]
+            self.assertEqual(command[1:], [] if target is None else [target])
             self.assertEqual(Path(command[0]).name, 'tests')
             self.assertEqual(options['timeout'], 120)
             executions.append(command)
             if len(executions) == 1:
                 return subprocess.CompletedProcess(command, 0, 'substituted executable', '')
+            if negative_result is not None:
+                return subprocess.CompletedProcess(command, *negative_result)
             return subprocess.CompletedProcess(command, 1, '', 'FAIL: ' + witnesses[len(executions) - 2])
 
         with patch.object(GATE.shutil, 'which', return_value='/fixture/swiftc'), \
@@ -77,6 +80,16 @@ class ViaEntrySourceBoundary(unittest.TestCase):
         self.assertEqual(len(executable_sources), 8)
         self.assertEqual(len(sdk_sources), 2)
         self.assertEqual((GATE.APP / 'IOSViaEntryTCP.swift').read_text(), original)
+
+    def test_exact_targeted_mutations_preserve_the_full_baseline_and_real_sdk_clock(self):
+        self.run_gate()
+
+    def test_targeted_negative_must_fail_at_its_own_assertion(self):
+        for result, message in [((0, 'unexpected pass', ''), 'Negative control escaped'),
+                                ((1, '', 'FAIL: unrelated witness'), 'failed at an unrelated witness'),
+                                ((1, '', 'compiler/runtime crashed'), 'Negative control escaped')]:
+            with self.subTest(result=result), self.assertRaisesRegex(AssertionError, message):
+                self.run_gate(result)
 
 
 if __name__ == '__main__':

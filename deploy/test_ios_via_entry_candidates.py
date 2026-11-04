@@ -143,7 +143,73 @@ import Network
   for _ in 0..<2000{if predicate(){return};try? await Task.sleep(for:.milliseconds(1))}
   fail("boundary was not reached")
  }
+ static func retirementNetwork() async throws {
+   let model=try fresh(),runner=IOSViaEntryLatency();Trace.restoreHook={NWTest.shared.changed()}
+   await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
+   check("a network change during teardown cannot adopt old results onto the new path",runner.receipt==nil && !runner.error.isEmpty && !model.connected && !IOSMTUMeasurementGate.held)
+ }
+ static func socketDrain() async throws {
+  for fault in ["cancel","disconnect","new-profile","network","source","session"] {
+   let model=try fresh(),runner=IOSViaEntryLatency();NWTest.shared.holdCancellation(true)
+   let worker=Task{await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))}
+   await wait{NWTest.shared.events.contains(where:{$0.hasPrefix("cancel:")})}
+   check("socket completion retains owned temporary runtime "+fault,runner.running && model.connected && IOSMTUMeasurementGate.held && !Trace.values.contains("journal-finish"))
+   if fault=="cancel"{runner.cancel()}
+   else if fault=="network"{NWTest.shared.changed()}
+   else if fault=="source"{IOSNodeBundleStore.shared.records["one"]=Data("changed-source".utf8)}
+   else if fault=="session"{model.activeSessionIdentity=nil}
+   else{IOSSpeedLabContext.$owner.withValue(nil){model.disconnect();if fault=="new-profile"{model.nodes["replacement"]=try! bundle("replacement","203.0.113.3");model.selectNode("replacement")}}}
+   try? await Task.sleep(for:.milliseconds(5))
+   check("Cancel is not fabricated socket drain: "+fault,runner.running && IOSMTUMeasurementGate.held && !NWTest.shared.events.contains(where:{$0.hasPrefix("drained:")}))
+   NWTest.shared.drain();await worker.value
+   check("invalidated response never publishes a result: "+fault,runner.receipt==nil && !runner.error.isEmpty && !runner.running && !IOSMTUMeasurementGate.held)
+   check("newer intent respected: "+fault,model.bundle?.selectedRouterID==(fault=="new-profile" ? "replacement":"original") && !model.connected)
+  }
+ }
+ static func robustSamples() async throws {
+   NWTest.shared.reset();NWTest.shared.configure(inverted:true)
+   let first=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"one",name:"A",endpoint:"203.0.113.20"),excluding:[])
+   let second=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"two",name:"B",endpoint:"203.0.113.21"),excluding:[])
+   check("actual routed comparison has fifty samples",first.samples==50 && second.samples==50 && first.failed==0 && second.failed==0 && NWTest.shared.events.filter{$0.hasPrefix("start:")}.count==102)
+   check("synthetic clock observes both edges of all discovery and fifty-response probes",NWTest.shared.measurementReads==204)
+   check("actual routed trimmed mean differs from favorable median",first.medianMS!<second.medianMS! && first.trimmedMeanMS!>second.trimmedMeanMS!)
+   let model=try fresh(),capture=try IOSViaEntryCapture(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
+   let network=try await IOSViaEntryNetwork.shared.snapshot()
+   let ranked=try IOSViaEntryReceipt(capture:capture,values:[first,second],model:model,network:network)
+   check("receipt selects robust fifty-sample winner",ranked.fastest?.id=="two")
+   let summary=IOSViaEntryTCP.summarize(IOSViaEntryTCPTarget(id:"summary",name:"Summary",endpoint:"203.0.113.20"),values:Array(repeating:1.0,count:26)+Array(repeating:100.0,count:24),failed:0)
+   check("actual summary removes five samples at each end",summary.medianMS==1 && abs(summary.trimmedMeanMS!-48.025)<0.000001 && summary.samples==50)
+   let a=IOSViaEntryValue(id:"one",name:"A",medianMS:1,trimmedMeanMS:20,samples:50,failed:0,reason:"fixture")
+   let b=IOSViaEntryValue(id:"two",name:"B",medianMS:2,trimmedMeanMS:20,samples:50,failed:0,reason:"fixture")
+   let tied=try IOSViaEntryReceipt(capture:capture,values:[b,a],model:model,network:network)
+   check("receipt trimmed ties use stable ID",tied.fastest?.id=="one")
+   for value in [IOSViaEntryValue(id:"short",name:"short",medianMS:1,trimmedMeanMS:1,samples:49,failed:0,reason:"fixture"),IOSViaEntryValue(id:"failed",name:"failed",medianMS:1,trimmedMeanMS:1,samples:50,failed:1,reason:"fixture"),IOSViaEntryValue(id:"invalid",name:"invalid",medianMS:1,trimmedMeanMS:.nan,samples:50,failed:0,reason:"fixture")] {check("incomplete/invalid result has no automatic score",!value.eligible)}
+ }
+ static func physicalBinding() async throws {
+   NWTest.shared.reset();let captured=try await IOSViaEntryNetwork.shared.snapshot()
+   _ = try await IOSViaEntryTCP.probeDirect(host:"203.0.113.22",port:443,timeoutMS:100,network:captured)
+   check("direct measurements require captured physical interface",NWTest.shared.events.contains("bound:physical-wifi"))
+   NWTest.shared.reset();_ = try await IOSViaEntryTCP.probe(host:"203.0.113.22",port:443,timeoutMS:100)
+   check("routed candidate probe never bypasses tunnel with physical binding",!NWTest.shared.events.contains(where:{$0.hasPrefix("bound:")}))
+   NWTest.shared.changed();NWTest.shared.reset()
+   do{_ = try await IOSViaEntryTCP.probeDirect(host:"203.0.113.22",port:443,timeoutMS:100,network:captured);check("stale physical interface must reject",false)}catch{}
+   check("stale physical interface cannot fall back to unbound socket",NWTest.shared.events.isEmpty)
+ }
  static func main()async throws {
+  // Baseline runs every case below. Each mutant executes its original owning
+  // witness directly, without replaying unrelated fifty-sample mode coverage.
+  if CommandLine.arguments.count > 1 {
+   guard CommandLine.arguments.count == 2 else{fail("invalid focused witness arguments")}
+   switch CommandLine.arguments[1] {
+   case "statistics":try await robustSamples()
+   case "retirement-network":try await retirementNetwork()
+   case "socket-drain":try await socketDrain()
+   case "physical-binding":try await physicalBinding()
+   default:fail("unknown focused witness")
+   }
+   print("Apple candidate focused witness: PASS (\(checks) checks)")
+   return
+  }
   do {
    let model=try fresh(),runner=IOSViaEntryLatency()
    let queued=runner.start(model:model,entryID:"entry",mode:"wg",candidates:candidates(model));runner.cancel();await queued.value
@@ -190,11 +256,7 @@ import Network
    await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
    check("newer choice before native ownership prevents any temporary start",runner.receipt==nil && !runner.error.isEmpty && model.bundle?.selectedRouterID=="new-user-choice" && NWTest.shared.events.isEmpty && !Trace.values.contains("mtu-hold"))
   }
-  do {
-   let model=try fresh(),runner=IOSViaEntryLatency();Trace.restoreHook={NWTest.shared.changed()}
-   await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
-   check("a network change during teardown cannot adopt old results onto the new path",runner.receipt==nil && !runner.error.isEmpty && !model.connected && !IOSMTUMeasurementGate.held)
-  }
+  try await retirementNetwork()
   do {
    let model=try fresh(),runner=IOSViaEntryLatency();Trace.delayedRetirement=true
    let worker=Task{await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))}
@@ -220,22 +282,7 @@ import Network
    let receipt=runner.receipt!;IOSNodeBundleStore.shared.records["one"]=Data("changed-private-source".utf8)
    reject("changed candidate credentials revoke selection"){try receipt.requireCurrent(model:model,entryID:"entry",entryMode:"wg")}
   }
-  for fault in ["cancel","disconnect","new-profile","network","source","session"] {
-   let model=try fresh(),runner=IOSViaEntryLatency();NWTest.shared.holdCancellation(true)
-   let worker=Task{await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))}
-   await wait{NWTest.shared.events.contains(where:{$0.hasPrefix("cancel:")})}
-   check("socket completion retains owned temporary runtime "+fault,runner.running && model.connected && IOSMTUMeasurementGate.held && !Trace.values.contains("journal-finish"))
-   if fault=="cancel"{runner.cancel()}
-   else if fault=="network"{NWTest.shared.changed()}
-   else if fault=="source"{IOSNodeBundleStore.shared.records["one"]=Data("changed-source".utf8)}
-   else if fault=="session"{model.activeSessionIdentity=nil}
-   else{IOSSpeedLabContext.$owner.withValue(nil){model.disconnect();if fault=="new-profile"{model.nodes["replacement"]=try! bundle("replacement","203.0.113.3");model.selectNode("replacement")}}}
-   try? await Task.sleep(for:.milliseconds(5))
-   check("Cancel is not fabricated socket drain: "+fault,runner.running && IOSMTUMeasurementGate.held && !NWTest.shared.events.contains(where:{$0.hasPrefix("drained:")}))
-   NWTest.shared.drain();await worker.value
-   check("invalidated response never publishes a result: "+fault,runner.receipt==nil && !runner.error.isEmpty && !runner.running && !IOSMTUMeasurementGate.held)
-   check("newer intent respected: "+fault,model.bundle?.selectedRouterID==(fault=="new-profile" ? "replacement":"original") && !model.connected)
-  }
+  try await socketDrain()
   for endpoint in ["203.0.113.10","127.0.0.1","10.0.0.1","169.254.1.1","100.64.0.1","fd12::1","::1","router.example","tor"] {
    var p=try bundle("blocked",endpoint).routerProfiles[0];p.endpoint=endpoint;NWTest.shared.reset()
    let result=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:p.id,name:p.name,endpoint:p.endpoint),excluding:["203.0.113.10"])
@@ -255,25 +302,7 @@ import Network
    check("asynchronous probe retains captured endpoint and port",NWTest.shared.events.contains("start:203.0.113.21:8388") && !NWTest.shared.events.contains(where:{$0.hasPrefix("start:203.0.113.22:")}))
    check("probe cannot mutate the replacement private profile",p.id=="replacement" && p.name=="Replacement candidate" && p.endpoint=="203.0.113.22:443")
   }
-  do {
-   NWTest.shared.reset();NWTest.shared.configure(inverted:true)
-   let first=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"one",name:"A",endpoint:"203.0.113.20"),excluding:[])
-   let second=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"two",name:"B",endpoint:"203.0.113.21"),excluding:[])
-   check("actual routed comparison has fifty samples",first.samples==50 && second.samples==50 && first.failed==0 && second.failed==0 && NWTest.shared.events.filter{$0.hasPrefix("start:")}.count==102)
-   check("synthetic clock observes both edges of all discovery and fifty-response probes",NWTest.shared.measurementReads==204)
-   check("actual routed trimmed mean differs from favorable median",first.medianMS!<second.medianMS! && first.trimmedMeanMS!>second.trimmedMeanMS!)
-   let model=try fresh(),capture=try IOSViaEntryCapture(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
-   let network=try await IOSViaEntryNetwork.shared.snapshot()
-   let ranked=try IOSViaEntryReceipt(capture:capture,values:[first,second],model:model,network:network)
-   check("receipt selects robust fifty-sample winner",ranked.fastest?.id=="two")
-   let summary=IOSViaEntryTCP.summarize(IOSViaEntryTCPTarget(id:"summary",name:"Summary",endpoint:"203.0.113.20"),values:Array(repeating:1.0,count:26)+Array(repeating:100.0,count:24),failed:0)
-   check("actual summary removes five samples at each end",summary.medianMS==1 && abs(summary.trimmedMeanMS!-48.025)<0.000001 && summary.samples==50)
-   let a=IOSViaEntryValue(id:"one",name:"A",medianMS:1,trimmedMeanMS:20,samples:50,failed:0,reason:"fixture")
-   let b=IOSViaEntryValue(id:"two",name:"B",medianMS:2,trimmedMeanMS:20,samples:50,failed:0,reason:"fixture")
-   let tied=try IOSViaEntryReceipt(capture:capture,values:[b,a],model:model,network:network)
-   check("receipt trimmed ties use stable ID",tied.fastest?.id=="one")
-   for value in [IOSViaEntryValue(id:"short",name:"short",medianMS:1,trimmedMeanMS:1,samples:49,failed:0,reason:"fixture"),IOSViaEntryValue(id:"failed",name:"failed",medianMS:1,trimmedMeanMS:1,samples:50,failed:1,reason:"fixture"),IOSViaEntryValue(id:"invalid",name:"invalid",medianMS:1,trimmedMeanMS:.nan,samples:50,failed:0,reason:"fixture")] {check("incomplete/invalid result has no automatic score",!value.eligible)}
-  }
+  try await robustSamples()
   do {
    NWTest.shared.reset();NWTest.shared.configure(partial:true)
    let value=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:"partial",name:"Partial",endpoint:"203.0.113.22"),excluding:[])
@@ -289,16 +318,7 @@ import Network
    let starts=NWTest.shared.events.filter{$0.hasPrefix("start:")}.count
    check("comparison deadline drains within one candidate",starts>0 && starts<51 && starts==NWTest.shared.events.filter{$0.hasPrefix("drained:")}.count)
   }
-  do {
-   NWTest.shared.reset();let captured=try await IOSViaEntryNetwork.shared.snapshot()
-   _ = try await IOSViaEntryTCP.probeDirect(host:"203.0.113.22",port:443,timeoutMS:100,network:captured)
-   check("direct measurements require captured physical interface",NWTest.shared.events.contains("bound:physical-wifi"))
-   NWTest.shared.reset();_ = try await IOSViaEntryTCP.probe(host:"203.0.113.22",port:443,timeoutMS:100)
-   check("routed candidate probe never bypasses tunnel with physical binding",!NWTest.shared.events.contains(where:{$0.hasPrefix("bound:")}))
-   NWTest.shared.changed();NWTest.shared.reset()
-   do{_ = try await IOSViaEntryTCP.probeDirect(host:"203.0.113.22",port:443,timeoutMS:100,network:captured);check("stale physical interface must reject",false)}catch{}
-   check("stale physical interface cannot fall back to unbound socket",NWTest.shared.events.isEmpty)
-  }
+  try await physicalBinding()
   do {
    let model=try fresh(),runner=IOSViaEntryLatency();CandidateFault.wrongRaw=true
    await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
@@ -352,18 +372,19 @@ def main():
             for name, source in contents.items():
                 path = folder / name; path.write_text(source); paths.append(str(path))
             return paths
-        def execute(contents, mutation=None, expected=None):
+        def execute(contents, mutation=None, expected=None, witness=None):
             label = mutation or 'shipping baseline'
             print(f'Apple candidate stage: compile {label}', flush=True)
             paths = write_sources(contents)
             subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
                 '-Xlinker', '-rpath', '-Xlinker', str(folder)] + paths + ['-o', str(binary)], check=True, timeout=150)
             print(f'Apple candidate stage: execute {label}', flush=True)
-            result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=120)
+            result = subprocess.run([str(binary)] + ([witness] if witness else []), text=True, capture_output=True, timeout=120)
             if mutation:
                 assert result.returncode != 0 and 'FAIL:' in result.stderr, f'Negative control escaped: {mutation}\n{result.stdout}\n{result.stderr}'
                 if expected:
-                    assert 'FAIL: '+expected in result.stderr, f'{mutation} failed at an unrelated witness: {result.stdout}{result.stderr}'
+                    allowed = (expected,) if isinstance(expected, str) else expected
+                    assert any('FAIL: '+item in result.stderr for item in allowed), f'{mutation} failed at an unrelated witness: {result.stdout}{result.stderr}'
                 print(f'Apple candidate negative control rejected: {mutation}', flush=True)
             else:
                 assert result.returncode == 0, result.stdout + result.stderr
@@ -384,13 +405,27 @@ def main():
                 '_ = physical'),
         }
         expected_witnesses = {
-            'fifty candidate samples': 'only valid responses can win',
+            'fifty candidate samples': 'actual routed comparison has fifty samples',
             'trimmed candidate statistic': 'actual summary removes five samples at each end',
             'receipt robust winner': 'receipt selects robust fifty-sample winner',
+            'network changed during native retirement': 'a network change during teardown cannot adopt old results onto the new path',
+            'cancel substituted for acknowledged socket drain': (
+                'socket completion retains owned temporary runtime cancel',
+                'Cancel is not fabricated socket drain: cancel'),
+            'direct probe lost its required physical interface': 'direct measurements require captured physical interface',
         }
+        focused_witnesses = {
+            'fifty candidate samples': 'statistics',
+            'trimmed candidate statistic': 'statistics',
+            'receipt robust winner': 'statistics',
+            'network changed during native retirement': 'retirement-network',
+            'cancel substituted for acknowledged socket drain': 'socket-drain',
+            'direct probe lost its required physical interface': 'physical-binding',
+        }
+        assert set(mutations) == set(expected_witnesses) == set(focused_witnesses)
         for name, (before, after) in mutations.items():
             assert sum(source.count(before) for source in code.values()) == 1, f'Mutation anchor changed: {name}'
-            execute({path: source.replace(before, after) for path, source in code.items()}, name, expected_witnesses.get(name))
+            execute({path: source.replace(before, after) for path, source in code.items()}, name, expected_witnesses[name], focused_witnesses[name])
         unsafe = dict(code)
         before = '_ target: IOSViaEntryTCPTarget, excluding excluded:'
         assert unsafe['IOSViaEntryTCP.swift'].count(before) == 1
