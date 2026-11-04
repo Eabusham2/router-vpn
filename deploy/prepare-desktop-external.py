@@ -616,6 +616,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_linux_baseline_netlink_test.go', 'desktop_socket_linux_baseline_netlink_native_test.go',
                     'desktop_socket_linux_baseline_owner_test.go', 'desktop_socket_linux_baseline_owner_native_test.go',
                     'desktop_socket_linux_node_baseline_test.go', 'desktop_socket_linux_node_baseline_native_test.go',
+                    'desktop_standard_linux_protection_test.go', 'desktop_standard_linux_protection_native_test.go',
                     'desktop_socket_linux_node_running_test.go', 'desktop_socket_linux_node_running_native_test.go',
                     'desktop_socket_linux_node_succession_retired_native_test.go',
                     'desktop_socket_linux_guardian_record_test.go', 'desktop_socket_linux_guardian_process_test.go',

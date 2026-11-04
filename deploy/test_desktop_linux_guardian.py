@@ -34,8 +34,15 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
-KERNEL_GROUPS = (('sockets', KERNEL_CASES[:15]), ('retained', KERNEL_CASES[15:-1]),
-                 ('socks', ('SOCKSAssociation',)))
+STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted')
+STANDARD_PARSER_CASES = ('CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority')
+STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_protection.go',
+                                  'desktop_standard_linux_protection_test.go',
+                                  'desktop_standard_linux_protection_native_test.go'})
+KERNEL_CASES += STANDARD_KERNEL_CASES
+KERNEL_GROUPS = (('sockets', KERNEL_CASES[:15]),
+                 ('retained', KERNEL_CASES[15:KERNEL_CASES.index('SOCKSAssociation')]),
+                 ('socks', ('SOCKSAssociation',)), ('standard', STANDARD_KERNEL_CASES))
 SOCKS_CASES = ('private-ipv4', 'private-ipv6', 'public-cross-family', 'reject/future-control',
                'reject/changed-binding', 'reject/native-control-absent', 'reject/closed-control',
                'reject/plain-relay-bypass', 'reject/parent-before-child', 'reject/association-reuse')
@@ -391,6 +398,7 @@ def execute(source: Path, go='go', *, env=None):
                 'desktop_socket_linux_node_creation.go', 'desktop_socket_linux_node_creation_record.go',
                 'desktop_socket_linux_node_creation_record_test.go', 'desktop_socket_linux_node_creation_native_test.go',
                 'desktop_socket_linux_node_succession_retired.go', 'desktop_socket_linux_node_succession_retired_native_test.go'}
+    required |= STANDARD_SOURCE_FILES
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -411,12 +419,13 @@ def execute(source: Path, go='go', *, env=None):
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o022 or info.st_size == 0:
             raise ValueError('Linux guardian compiler did not produce its owned executable')
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestDesktopLinuxRunning|TestDesktopLinuxSOCKS)', '-test.count=1',
+        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestLinuxStandard|TestDesktopLinuxRunning|TestDesktopLinuxSOCKS)', '-test.count=1',
                                    '-test.timeout=20s', '-test.v'], cwd=source)
         if any('--- PASS: TestLinuxBaseline' + name + ' (' not in baseline_output for name in BASELINE_CASES) or '--- SKIP:' in baseline_output:
             raise ValueError('Linux baseline receipt gate omitted an owned transaction boundary')
         if any('--- PASS: TestDesktopLinuxRunningPolicy' + name + ' (' not in baseline_output for name in RUNNING_PARSER_CASES):
             raise ValueError('Linux running inventory gate omitted its complete native JSON contract')
+        require_socks_verdicts(baseline_output, 'TestLinuxStandard', STANDARD_PARSER_CASES)
         require_socks_verdicts(baseline_output, 'TestDesktopLinuxSOCKS', SOCKS_PARSER_CASES)
         require_socks_verdicts(baseline_output, 'TestDesktopLinuxRunningSOCKS', RUNNING_SOCKS_PARSER_CASES)
         print(baseline_output, end='' if baseline_output.endswith('\n') else '\n')
@@ -430,6 +439,7 @@ def execute(source: Path, go='go', *, env=None):
         output = '\n'.join(outputs)
         if any('--- PASS: TestDesktopLinuxGuardianKernel' + name + ' (' not in output for name in KERNEL_CASES) or '--- SKIP:' in output:
             raise ValueError('Linux guardian kernel gate did not execute every required boundary')
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernel', STANDARD_KERNEL_CASES)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelSOCKSAssociation/', SOCKS_CASES)
         for network in ('tcp4', 'udp4', 'tcp6', 'udp6'):
             if '--- PASS: TestDesktopLinuxGuardianKernelTCPAndUDP/' + network + ' (' not in output:
@@ -467,6 +477,8 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'retired native join acknowledgment': 'empty inventory substituted for native close acknowledgment',
         'retired complete native baseline': 'changed native baseline was accepted as retained protection',
         'active table flags': 'actual heartbeat accepted the dormant native baseline',
+        'original standard acknowledgement': 'readback without original acknowledgement recovered creator',
+        'reserved standard initial absence': 'standard policy was invisible to global absence',
         'conditional baseline generation': 'stale ruleset generation did not reject the actual conditional transaction',
         'original baseline table handle': 'retired handle deleted or adopted a same-name replacement',
         'committed baseline receipt': 'substituted for committed batch receipt',
@@ -513,6 +525,15 @@ def execute_mutations(source: Path, go='go', *, env=None):
         ('original live guardian witness', 'NodeProcessWitness', 'desktop_socket_linux_guardian_process.go', (
             ('guardian, guardianErr := w.child.Current(ctx)', 'guardian, guardianErr := w.record.Guardian, error(nil)'),
         )),
+        ('original standard creation receipt', 'TestLinuxStandardCreationReceiptRetainsExactEndpointPolicy', 'desktop_socket_linux_node_baseline.go', (
+            ('!reflect.DeepEqual(row, request[index])', '!reflect.DeepEqual(row, row)'),
+        )),
+        ('original standard acknowledgement', 'StandardProtectionCreator', 'desktop_standard_linux_protection.go', (
+            ('|| !p.acknowledged {', '{'),
+        )),
+        ('reserved standard initial absence', 'StandardProtectionCreator', 'desktop_socket_linux_expectation.go', (
+            ('strings.HasPrefix(name, desktopLinuxStandardTablePrefix)', 'strings.HasPrefix(name, "unowned_standard_prefix_")'),
+        )),
         ('original Node creation receipt', 'TestLinuxBaselineNodeCreationReceiptRequiresExactOperations', 'desktop_socket_linux_node_baseline.go', (
             ('!reflect.DeepEqual(row, request[index])', '!reflect.DeepEqual(row, row)'),
         )),
@@ -520,7 +541,7 @@ def execute_mutations(source: Path, go='go', *, env=None):
             ('\t\tif err := b.read(ctx, false); err != nil {\n\t\t\treturn err\n\t\t}\n', ''),
         )),
         ('closed Node successor', 'NodeBaselineSuccession', 'desktop_socket_linux_node_baseline.go', (
-            ('\t\tif err := successor.read(ctx, true); err != nil {\n\t\t\treturn err\n\t\t}\n', ''),
+            ('\t\tif err := successor.read(ctx, prepared); err != nil {\n\t\t\treturn err\n\t\t}\n', ''),
         )),
         ('reserved Node initial absence', 'NodeBaselineSuccession', 'desktop_socket_linux_expectation.go', (
             ('strings.HasPrefix(name, desktopLinuxNodeTablePrefix)', 'strings.HasPrefix(name, "unowned_node_prefix_")'),
@@ -539,7 +560,7 @@ def execute_mutations(source: Path, go='go', *, env=None):
         )),
         ('kernel UID predicate', 'RejectsWrongUIDAndPrivatePeer', 'desktop_socket_linux_nft.go', (
             ('output meta skuid %d meta l4proto %s', 'output meta l4proto %s'),
-            ('desktopLinuxNFTTable, uid, network, family', 'desktopLinuxNFTTable, network, family'),
+            ('n.table(), uid, network, family', 'n.table(), network, family'),
             ('return []any{match(map[string]any{"meta": map[string]any{"key": "skuid"}}, float64(n.UID)), match(',
              'return []any{match('),
         )),
@@ -616,7 +637,7 @@ def execute_mutations(source: Path, go='go', *, env=None):
             binary = directory/(str(index)+'-guardian.test')
             UID.run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=routervpn_linux_guardian',
                      '-overlay='+str(overlay), '-o', binary, './routervpn/mobiletor'], cwd=source, env=captured)
-            native = not case.startswith('TestLinuxBaseline')
+            native = not case.startswith(('TestLinuxBaseline', 'TestLinuxStandard'))
             expected_case = 'TestDesktopLinuxGuardianKernel'+case if native else case
             if native:
                 command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary),

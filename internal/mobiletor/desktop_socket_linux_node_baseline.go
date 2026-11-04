@@ -35,6 +35,7 @@ type DesktopLinuxNodeBaseline struct {
 	preparedRecord            DesktopLinuxProtectionRecord
 	successor                 *DesktopLinuxNodeBaseline
 	homeLAN                   bool
+	standard                  bool
 	complete, removed, closed bool
 	uncertain, closeErr       error
 }
@@ -113,6 +114,12 @@ func desktopLinuxNodeBaselineRequest(c DesktopSocketCapture, options DesktopLinu
 
 func desktopLinuxNodeBaselineReceipt(raw []byte, c DesktopSocketCapture, options DesktopLinuxSocketOptions) (*desktopLinuxNFT, error) {
 	request := desktopLinuxNodeBaselineRequest(c, options)
+	return desktopLinuxBaselineReceipt(raw, c, request, desktopLinuxNFTForCapture(c, true))
+}
+
+// Shared receipt parsing does not grant guardian authority. Each caller supplies
+// its exact exclusive request and distinct table scope.
+func desktopLinuxBaselineReceipt(raw []byte, c DesktopSocketCapture, request []map[string]any, n *desktopLinuxNFT) (*desktopLinuxNFT, error) {
 	if len(raw) == 0 || len(raw) > 64<<10 || !c.valid() {
 		return nil, errors.New("Linux Node creation has no bounded original receipt")
 	}
@@ -126,10 +133,9 @@ func desktopLinuxNodeBaselineReceipt(raw []byte, c DesktopSocketCapture, options
 		return nil, errors.New("Linux Node creation receipt contains trailing data")
 	}
 	rows, ok := root["nftables"].([]any)
-	if !ok || len(rows) != len(request) || len(request) < 6 || len(request) > 8 {
+	if !ok || len(rows) != len(request) || len(request) < 6 || len(request) > 24 {
 		return nil, errors.New("Linux Node creation receipt omitted or added native operations")
 	}
-	n := desktopLinuxNFTForCapture(c, true)
 	for index, raw := range rows {
 		row, ok := raw.(map[string]any)
 		if !ok || len(row) != 1 {
@@ -204,7 +210,11 @@ func (b *DesktopLinuxNodeBaseline) currentNamespace(ctx context.Context) error {
 }
 
 func (b *DesktopLinuxNodeBaseline) read(ctx context.Context, prepared bool) error {
-	if b.removed || b.nft.TableName != desktopLinuxNodeTable(b.nft.Capture) || b.nft.TableHandle == 0 || b.nft.ChainHandle == 0 {
+	expectedTable := desktopLinuxNodeTable(b.nft.Capture)
+	if b.standard {
+		expectedTable = desktopLinuxStandardTable(b.nft.Capture)
+	}
+	if b.removed || b.nft.TableName != expectedTable || b.nft.TableHandle == 0 || b.nft.ChainHandle == 0 {
 		return errors.New("Linux Node baseline lost its original creation receipt")
 	}
 	rows, err := desktopLinuxNFTReadTable(ctx, b.nft.table())
@@ -274,7 +284,7 @@ func (b *DesktopLinuxNodeBaseline) BindPrepared(ctx context.Context, record Desk
 		return err
 	}
 	defer func() { b.gate <- struct{}{} }()
-	if !b.complete || b.removed || b.prepared != nil || record.Validate() != nil || record.Capture != b.nft.Capture ||
+	if b.standard || !b.complete || b.removed || b.prepared != nil || record.Validate() != nil || record.Capture != b.nft.Capture ||
 		record.TableName != b.nft.TableName || record.TableHandle != b.nft.TableHandle || record.ChainHandle != b.nft.ChainHandle {
 		return errors.New("Linux Node preparation belongs to another original baseline or source")
 	}
@@ -409,6 +419,10 @@ func (b *DesktopLinuxNodeBaseline) Release(ctx context.Context) error {
 // exact tables, so a changed/deleted successor makes the kernel reject the old
 // deletion. An acknowledged retry only proves absence and never deletes again.
 func (b *DesktopLinuxNodeBaseline) Supersede(ctx context.Context, successor *DesktopLinuxNodeBaseline) error {
+	return b.supersede(ctx, successor, true)
+}
+
+func (b *DesktopLinuxNodeBaseline) supersede(ctx context.Context, successor *DesktopLinuxNodeBaseline, prepared bool) error {
 	if b == nil || successor == nil || b == successor || b.nft == nil || successor.nft == nil || b.nft.Capture.SessionID == successor.nft.Capture.SessionID {
 		return errors.New("Linux Node succession requires two distinct original creators")
 	}
@@ -424,7 +438,7 @@ func (b *DesktopLinuxNodeBaseline) Supersede(ctx context.Context, successor *Des
 		return err
 	}
 	defer func() { second.gate <- struct{}{} }()
-	if !b.complete || !successor.complete || b.prepared == nil || successor.prepared == nil || b.successor != nil && b.successor != successor ||
+	if !b.complete || !successor.complete || b.standard != successor.standard || prepared == b.standard || prepared && (b.prepared == nil || successor.prepared == nil) || b.successor != nil && b.successor != successor ||
 		successor.removed || successor.successor != nil || !os.SameFile(b.namespaceInfo, successor.namespaceInfo) {
 		return errors.New("Linux Node succession lost its exact prepared owners or pending candidate")
 	}
@@ -446,7 +460,7 @@ func (b *DesktopLinuxNodeBaseline) Supersede(ctx context.Context, successor *Des
 		if err := b.read(ctx, false); err != nil {
 			return err
 		}
-		if err := successor.read(ctx, true); err != nil {
+		if err := successor.read(ctx, prepared); err != nil {
 			return err
 		}
 		after, err := b.netlink.generation(ctx)
@@ -471,7 +485,7 @@ func (b *DesktopLinuxNodeBaseline) Supersede(ctx context.Context, successor *Des
 	if err := b.absence(ctx); err != nil {
 		return err
 	}
-	_, err := successor.observe(ctx, true)
+	_, err := successor.observe(ctx, prepared)
 	return err
 }
 

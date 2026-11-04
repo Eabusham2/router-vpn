@@ -145,9 +145,9 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 	}
 	tracker := sessionTrackerFor(a)
 	tracker.declareRequest("standard-exit", sessionBase)
-	// A captured Off standard exit must never run generic global release before
-	// its original absence check. Existing owned runtimes still join normally.
-	holdProtection := runtime.GOOS == "linux" && q.Direct && exit.Protocol != "openvpn" && exit.Protocol != "amneziawg" && exit.StartLayer == nil && legacyStandardExitOffPolicy(control)
+	// A captured stock standard exit must never run generic global release before
+	// its original protection admission or succession. Existing owned runtimes still join normally.
+	holdProtection := runtime.GOOS == "linux" && q.Direct && exit.Protocol != "openvpn" && exit.Protocol != "amneziawg" && exit.StartLayer == nil
 	if err = a.stopModeWithIntent(holdProtection); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)

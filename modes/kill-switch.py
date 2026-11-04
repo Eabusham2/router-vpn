@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import ipaddress
 import json
 import os
@@ -510,8 +511,108 @@ def _serialized_mutation(function):
         else:
             root = root_dir()
         with mutation_guard(root):
-            return function(*args, **kwargs)
+            recovery = (function.__name__ == 'release' and (args[0] if args else kwargs.get('force', False))) or (function.__name__ == 'remove_state' and kwargs.get('force_recovery', False))
+            with _standard_mutation_guard(root, corrupt_recovery=recovery):
+                return function(*args, **kwargs)
     return guarded
+
+
+def _standard_boot_id() -> str:
+    body = Path('/proc/sys/kernel/random/boot_id').read_text(encoding='ascii')
+    if not re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\n', body):
+        raise RuntimeError('standard protection lost its actual kernel boot identity')
+    return body.strip()
+
+
+def _standard_owner(state: dict[str, Any]):
+    marker = state.get('linux_standard_owner')
+    if marker is None:
+        return None
+    failure = RuntimeError('standard protection state lost its original bounded creation receipt')
+    if (type(marker) is not dict or set(marker) != {'schema', 'boot_id', 'creation'}
+            or marker['schema'] != 1 or type(marker['schema']) is not int
+            or not isinstance(marker['boot_id'], str)
+            or not re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}', marker['boot_id'])):
+        raise failure
+    creation = marker['creation']
+    fields = {'namespace_device', 'namespace_inode', 'baseline', 'creation_generation', 'session', 'config_sha256', 'table', 'table_handle', 'chain_handle', 'baseline_sha256'}
+    if type(creation) is not dict or set(creation) != fields:
+        raise failure
+    for key, length in [('session', 32), ('config_sha256', 64), ('baseline_sha256', 64)]:
+        if not isinstance(creation[key], str) or not re.fullmatch('[a-f0-9]{'+str(length)+'}', creation[key]):
+            raise failure
+    if creation['table'] != 'router_vpn_standard_' + creation['session']:
+        raise failure
+    for key in ('namespace_device', 'namespace_inode', 'creation_generation', 'table_handle', 'chain_handle'):
+        if type(creation[key]) is not int or not 0 < creation[key] < 2**53:
+            raise failure
+    if creation['creation_generation'] >= 2**32:
+        raise failure
+    baseline = creation['baseline']
+    if (type(baseline) is not dict or not 5 <= len(baseline) <= 22
+            or any(not re.fullmatch('[1-9][0-9]*', key) or int(key) >= 2**53 for key in baseline)
+            or str(creation['chain_handle']) in baseline):
+        raise failure
+    canonical = json.dumps(baseline, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+    if hashlib.sha256(canonical).hexdigest() != creation['baseline_sha256']:
+        raise failure
+    return marker
+
+
+def _standard_native_tables_absent(*, allow_generic=False) -> None:
+    result = run_nft(['-j', '-n', 'list', 'tables'])
+    if len(result.stdout) > 2 << 20:
+        raise RuntimeError('standard protection absence exceeded its native readback bound')
+    value = json.loads(result.stdout, object_pairs_hook=_unique_json_members)
+    if type(value) is not dict or set(value) != {'nftables'} or type(value['nftables']) is not list:
+        raise RuntimeError('standard protection has no complete native table listing')
+    metadata = 0
+    for row in value['nftables']:
+        if type(row) is not dict or len(row) != 1:
+            raise RuntimeError('standard protection table listing is ambiguous')
+        if 'metainfo' in row and type(row['metainfo']) is dict:
+            metadata += 1
+            continue
+        table = row.get('table')
+        if (type(table) is not dict or not isinstance(table.get('name'), str)
+                or not isinstance(table.get('family'), str) or not table['family']
+                or type(table.get('handle')) is not int or not 0 < table['handle'] < 2**53):
+            raise RuntimeError('standard protection table listing lost its native identity')
+        name = table['name']
+        if (name == TABLE and not allow_generic) or name.startswith(('router_vpn_node_', 'router_vpn_standard_')):
+            raise RuntimeError('Linux protection has another native table; original owner required')
+    if metadata != 1:
+        raise RuntimeError('standard protection table listing omitted native metadata')
+
+
+@contextlib.contextmanager
+def _standard_mutation_guard(root: Path, *, corrupt_recovery=False):
+    # Same-boot JSON never recreates the original native capability. The live
+    # controller performs its own exact mutation. A boot change only permits
+    # the existing early reassert path after independent full native absence.
+    lease = getattr(_MUTATION_LOCAL, 'lease', None)
+    nested = getattr(_MUTATION_LOCAL, 'standard_guard', None)
+    if nested is not None:
+        if nested != (root, lease):
+            raise RuntimeError('standard protection mutation borrowed another helper transaction')
+        yield
+        return
+    try:
+        saved = read_state(root)
+    except RuntimeError:
+        if not corrupt_recovery:
+            raise
+        saved = {}
+    marker = _standard_owner(saved)
+    if marker is not None:
+        if marker['boot_id'] == _standard_boot_id():
+            raise RuntimeError('standard protection requires its original live controller; helper mutation cannot adopt or release its table')
+        _standard_native_tables_absent()
+    _MUTATION_LOCAL.standard_guard = (root, lease)
+    try:
+        yield
+    finally:
+        _MUTATION_LOCAL.standard_guard = None
 
 
 def read_state(root: Path) -> dict[str, Any]:
@@ -716,6 +817,19 @@ def apply(*, retained_state: dict[str, Any] | None = None) -> int:
     return 0
 
 
+def _remove_release_table(force: bool) -> None:
+    if force and sys.platform.startswith('linux'):
+        # An empty, corrupt or legacy state file cannot prove that an original
+        # scoped creator is gone. Never remove an unknown scoped table or its
+        # remaining recovery state. Dry-run is not native absence authority.
+        _standard_native_tables_absent(allow_generic=True)
+    remove_table()
+    if force and sys.platform.startswith('linux'):
+        # Verify the real result before any state unlink or success report,
+        # including an ordinary generic-table query that failed as "missing".
+        _standard_native_tables_absent()
+
+
 @_serialized_mutation
 def release(force: bool = False) -> int:
     root = root_dir()
@@ -726,18 +840,18 @@ def release(force: bool = False) -> int:
             raise
         # force-off is the explicit local recovery path: remove the firewall
         # first, then unlink only the poisoned leaf itself without following it.
-        remove_table()
+        _remove_release_table(force)
         remove_state(root, force_recovery=True)
         print("strict kill switch force-off recovery completed", file=sys.stderr)
         return 0
     if not state:
         if force:
-            remove_table()
+            _remove_release_table(force)
         return 0
     if not force and state.get("policy") == "always":
         print("strict kill switch remains active (always policy)", file=sys.stderr)
         return 0
-    remove_table()
+    _remove_release_table(force)
     remove_state(root, force_recovery=force)
     print("strict kill switch released", file=sys.stderr)
     return 0
@@ -785,7 +899,7 @@ def reassert() -> int:
 
     os.environ["HOMEVPN_PROFILE_ID"] = runtime_id
     os.environ["HOMEVPN_POLICY_PROFILE_ID"] = control_id
-    os.environ["HOMEVPN_ENDPOINT"] = str(runtime_profile.get("endpoint") or state.get("endpoint") or "")
+    os.environ["HOMEVPN_ENDPOINT"] = str(state.get("endpoint") if _standard_owner(state) is not None else runtime_profile.get("endpoint") or state.get("endpoint") or "")
     os.environ.pop("HOMEVPN_NATIVE_ENDPOINTS_JSON", None)
     os.environ.pop("HOMEVPN_NATIVE_EGRESS_JSON", None)
     os.environ.pop("HOMEVPN_TOR_PHYSICAL_BROKER", None)
@@ -793,14 +907,78 @@ def reassert() -> int:
     return apply(retained_state=state)
 
 
+
+def _standard_set_normalized(value):
+    if isinstance(value, list):
+        return [_standard_set_normalized(item) for item in value]
+    if isinstance(value, dict):
+        result = {key: _standard_set_normalized(item) for key, item in value.items()}
+        if isinstance(result.get('set'), list):
+            result['set'].sort(key=lambda item: json.dumps(item, sort_keys=True))
+        return result
+    return value
+
+
+def _standard_status_active(state: dict[str, Any]) -> bool:
+    marker = _standard_owner(state)
+    if marker is None or marker['boot_id'] != _standard_boot_id():
+        return False
+    creation = marker['creation']
+    namespace = os.stat('/proc/thread-self/ns/net')
+    if (namespace.st_dev, namespace.st_ino) != (creation['namespace_device'], creation['namespace_inode']):
+        return False
+    result = run_nft(['-j', '-n', 'list', 'table', 'inet', creation['table']], check=False)
+    if result.returncode != 0 or len(result.stdout) > 2 << 20:
+        return False
+    root = json.loads(result.stdout, object_pairs_hook=_unique_json_members)
+    if type(root) is not dict or set(root) != {'nftables'} or type(root['nftables']) is not list:
+        return False
+    tables = chains = metadata = 0
+    rules = set()
+    for row in root['nftables']:
+        if type(row) is not dict or len(row) != 1:
+            return False
+        kind, value = next(iter(row.items()))
+        if type(value) is not dict:
+            return False
+        if kind == 'metainfo':
+            metadata += 1
+        elif kind == 'table':
+            tables += 1
+            if (set(value) - {'family', 'name', 'handle', 'flags'} or value.get('family') != 'inet'
+                    or value.get('name') != creation['table'] or value.get('handle') != creation['table_handle']
+                    or value.get('flags', []) != []):
+                return False
+        elif kind == 'chain':
+            chains += 1
+            expected = {'family': 'inet', 'table': creation['table'], 'name': 'output', 'handle': creation['chain_handle'],
+                        'type': 'filter', 'hook': 'output', 'prio': -310, 'policy': 'drop',
+                        'comment': 'routervpn-owned-baseline:' + creation['session'] + ':' + creation['config_sha256']}
+            if value != expected:
+                return False
+        elif kind == 'rule':
+            handle = str(value.get('handle'))
+            if (set(value) - {'family', 'table', 'chain', 'handle', 'expr', 'comment'}
+                    or value.get('family') != 'inet' or value.get('table') != creation['table'] or value.get('chain') != 'output'
+                    or value.get('comment') not in (None, '') or handle in rules or handle not in creation['baseline']
+                    or _standard_set_normalized(value.get('expr')) != _standard_set_normalized(creation['baseline'][handle])):
+                return False
+            rules.add(handle)
+        else:
+            return False
+    after = os.stat('/proc/thread-self/ns/net')
+    return (tables == chains == 1 and metadata <= 1 and rules == set(creation['baseline'])
+            and (after.st_dev, after.st_ino) == (namespace.st_dev, namespace.st_ino))
+
 def status() -> int:
     root = root_dir()
     state = read_state(root)
     if not state:
         print(json.dumps({"active": False, "policy": "off"}))
         return 1
-    active = bool(os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") == "1" or (sys.platform.startswith("linux") and table_exists()))
-    print(json.dumps({"active": active, **state}, sort_keys=True))
+    active = (_standard_status_active(state) if _standard_owner(state) is not None else
+              bool(os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") == "1" or (sys.platform.startswith("linux") and table_exists())))
+    print(json.dumps({**state, "active": active, "enforced": active}, sort_keys=True))
     return 0 if active else 1
 
 

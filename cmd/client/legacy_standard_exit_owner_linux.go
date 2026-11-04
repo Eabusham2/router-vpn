@@ -20,32 +20,39 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"router-vpn/internal/mobiletor"
 )
 
 var legacyStandardExitOwners sync.Map // map[*app]*linuxLegacyStandardExitOwner
 
 type linuxLegacyStandardExitOwner struct {
-	tunAbsent                             func() error
-	processRetired                        bool
-	closedFiles                           map[*os.File]bool
-	originalPIDFD                         *os.File
-	creatorDone                           chan struct{}
-	runtimeMode, base, routerID           string
-	pidInfo                               os.FileInfo
-	mu                                    sync.Mutex
-	sourceImage, sourceConfig             *os.File
-	offProtectionCheck                    func(context.Context) error
-	app                                   *app
-	launch                                *desktopNodeLaunch
-	image, config, directory, namespace   *os.File
-	namespaceInfo                         os.FileInfo
-	session, digest                       string
-	command                               *exec.Cmd
-	pidfd                                 int
-	pidFile                               *os.File
-	started, registered, workspaceRetired bool
-	done                                  chan struct{}
-	receipt                               *linuxLegacyExitReceipt
+	protectionPolicy, protectionRoot, protectionProfileID, protectionEndpoint string
+	protectionLAN                                                             bool
+	protectionFactory                                                         legacyExitProtectionFactory
+	protectionAbsence                                                         func(context.Context) error
+	protection, offInherited                                                  *legacyExitProtectionSlot
+	tunAbsent                                                                 func() error
+	processRetired                                                            bool
+	closedFiles                                                               map[*os.File]bool
+	originalPIDFD                                                             *os.File
+	creatorDone                                                               chan struct{}
+	runtimeMode, base, routerID                                               string
+	pidInfo                                                                   os.FileInfo
+	mu                                                                        sync.Mutex
+	sourceImage, sourceConfig                                                 *os.File
+	offProtectionCheck                                                        func(context.Context) error
+	app                                                                       *app
+	launch                                                                    *desktopNodeLaunch
+	image, config, directory, namespace                                       *os.File
+	namespaceInfo                                                             os.FileInfo
+	session, digest                                                           string
+	command                                                                   *exec.Cmd
+	pidfd                                                                     int
+	pidFile                                                                   *os.File
+	started, registered, workspaceRetired                                     bool
+	done                                                                      chan struct{}
+	receipt                                                                   *linuxLegacyExitReceipt
 }
 
 type linuxLegacyExitReceipt struct {
@@ -81,9 +88,8 @@ func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMo
 	if original == nil || len(original.Args) != 6 || filepath.Base(original.Args[1]) != "native-standard-exit-linux.sh" || original.Args[2] != "up" {
 		return nil, nil
 	}
-	// This complete adapter initially covers direct, ordinary Off-policy exits.
-	// Protected, hopped and custom native-engine paths retain their existing
-	// adapters until their original protection creator can be transferred.
+	// Direct stock exits retain their original process and protection creators.
+	// Hopped and custom native-engine paths keep their separate adapters.
 	environment := func(key string) string {
 		for i := len(original.Env) - 1; i >= 0; i-- {
 			if value, ok := strings.CutPrefix(original.Env[i], key+"="); ok {
@@ -101,14 +107,22 @@ func prepareLegacyStandardExitOwnerWithTUN(a *app, original *exec.Cmd, runtimeMo
 	if !exists {
 		return nil, errors.New("legacy standard exit lost its captured policy profile")
 	}
-	if !legacyStandardExitOffPolicy(control) {
-		return nil, nil
+	policy := strings.ToLower(strings.TrimSpace(control.KillSwitchPolicy))
+	if policy == "" {
+		if control.KillSwitch {
+			policy = "on-connect"
+		} else {
+			policy = "off"
+		}
+	}
+	if policy != "off" && policy != "on-connect" && policy != "always" {
+		return nil, errors.New("standard exit has an invalid captured kill-switch policy")
 	}
 	launch := &desktopNodeLaunch{}
 	if err := captureDesktopRuntimeDirectory(launch, original.Args[3]); err != nil {
 		return nil, err
 	}
-	owner := &linuxLegacyStandardExitOwner{tunAbsent: tunAbsent, app: a, launch: launch, pidfd: -1, runtimeMode: runtimeMode, base: base, routerID: routerID}
+	owner := &linuxLegacyStandardExitOwner{protectionPolicy: policy, protectionRoot: original.Dir, protectionProfileID: control.ID, protectionEndpoint: original.Args[4], protectionLAN: control.HomeLANAccess, protectionFactory: createLegacyExitNativeProtection, protectionAbsence: mobiletor.ReadDesktopLinuxProtectionAbsence, tunAbsent: tunAbsent, app: a, launch: launch, pidfd: -1, runtimeMode: runtimeMode, base: base, routerID: routerID}
 	failed := true
 	defer func() {
 		if failed {
@@ -309,12 +323,7 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 	o.app.state.Connected, o.app.state.Phase, o.app.state.LastError = false, "standard-exit:starting", ""
 	o.registered = true
 	o.app.mu.Unlock()
-	// Off owns no firewall mutation. Under the same helper lease, prove that
-	// no persisted or native Router VPN protection would be silently adopted.
-	if o.offProtectionCheck == nil {
-		return errors.New("legacy Off launch lost its original absence check")
-	}
-	if err := o.offProtectionCheck(ctx); err != nil {
+	if err := o.applyProtection(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -408,7 +417,7 @@ type linuxLegacyStandardExitStop struct {
 func captureLegacyStandardExitStop(a *app) (desktopRetainedStopCapture, error) {
 	value, exists := legacyStandardExitOwners.Load(a)
 	if !exists {
-		return nil, nil
+		return captureLegacyExitDetachedProtectionStop(a)
 	}
 	owner, ok := value.(*linuxLegacyStandardExitOwner)
 	if !ok || owner == nil {
@@ -494,6 +503,9 @@ func (o *linuxLegacyStandardExitOwner) Current(ctx context.Context) error {
 		return admissionErr
 	}
 	if err := desktopExternalDirectoryCurrent(o.launch); err != nil {
+		return err
+	}
+	if err := o.currentProtection(ctx); err != nil {
 		return err
 	}
 	if !o.started || o.pidFile == nil || o.pidFile != o.originalPIDFD {
@@ -636,8 +648,10 @@ func (s *linuxLegacyStandardExitStop) Retire(ctx context.Context, command *exec.
 	if err := s.current(); err != nil {
 		return err
 	}
-	// Captured Off never applied protection and cannot release current global
-	// state. A helper or another owner may have installed Always meanwhile.
+	// Only this captured native creator may retire or retain its policy.
+	if err := o.retireProtection(ctx, release); err != nil {
+		return err
+	}
 	if err := s.current(); err != nil {
 		return err
 	}

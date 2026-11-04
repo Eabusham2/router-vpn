@@ -2,6 +2,7 @@
 """Real process/flock witnesses; nft policy and protected networking are not exercised."""
 import importlib.util
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -33,12 +34,158 @@ class MutationLockTests(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
+
+    def standard_state(self, boot=None):
+        namespace = os.stat('/proc/thread-self/ns/net')
+        baseline = {str(handle): [{'accept': None}] for handle in range(10, 15)}
+        digest = hashlib.sha256(json.dumps(baseline, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        creation = dict(namespace_device=namespace.st_dev, namespace_inode=namespace.st_ino, baseline=baseline,
+                        creation_generation=3, session='a'*32, config_sha256='b'*64,
+                        table='router_vpn_standard_'+'a'*32, table_handle=7, chain_handle=1, baseline_sha256=digest)
+        return dict(policy='always', profile_id='node', policy_profile_id='node', endpoint='203.0.113.19',
+                    endpoint_ips=['203.0.113.19'], home_lan_access=False, platform='linux', enforced=True,
+                    linux_standard_owner=dict(schema=1, boot_id=boot or mod._standard_boot_id(), creation=creation))
+
+    def save_standard_state(self, state):
+        path = self.root / 'run/kill-switch.json'
+        path.write_text(json.dumps(state)); path.chmod(0o600)
+        return path
+
+    def test_same_boot_standard_owner_blocks_every_generic_mutation(self):
+        state = self.standard_state()
+        path = self.save_standard_state(state)
+        original = path.read_bytes()
+        actions = [lambda: mod.apply(), lambda: mod.release(), lambda: mod.release(True), lambda: mod.reassert(),
+                   lambda: mod.remove_table(), lambda: mod.remove_state(self.root),
+                   lambda: mod.write_state(self.root, {'policy': 'always'})]
+        for action in actions:
+            with self.subTest(action=action), mock.patch.object(mod, 'run_nft', side_effect=AssertionError('native mutation must not start')):
+                with self.assertRaisesRegex(RuntimeError, 'original live controller'):
+                    action()
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_cold_reassert_preserves_captured_direct_exit_after_native_absence(self):
+        state = self.standard_state('00000000-0000-0000-0000-000000000001')
+        self.save_standard_state(state)
+        observed = subprocess.CompletedProcess([], 0, '{"nftables":[{"metainfo":{}}]}', '')
+        with mock.patch.object(mod, 'run_nft', return_value=observed) as run:
+            self.assertEqual(mod.reassert(), 0)
+            run.assert_called_once_with(['-j', '-n', 'list', 'tables'])
+        saved = mod.read_state(self.root)
+        self.assertEqual(saved['endpoint'], '203.0.113.19')
+        self.assertEqual(saved['policy'], 'always')
+        self.assertNotIn('linux_standard_owner', saved)
+
+    def test_cold_state_cannot_adopt_a_new_native_table(self):
+        state = self.standard_state('00000000-0000-0000-0000-000000000001')
+        path = self.save_standard_state(state); original = path.read_bytes()
+        for name in (mod.TABLE, 'router_vpn_node_foreign', state['linux_standard_owner']['creation']['table']):
+            observed = subprocess.CompletedProcess([], 0, json.dumps({'nftables': [{'metainfo': {}}, {'table': {'family': 'inet', 'name': name, 'handle': 9}}]}), '')
+            with self.subTest(name=name), mock.patch.object(mod, 'run_nft', return_value=observed):
+                with self.assertRaisesRegex(RuntimeError, 'another native table'):
+                    mod.reassert()
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_standard_status_requires_exact_original_handle_and_inventory(self):
+        state = self.standard_state(); self.save_standard_state(state)
+        c = state['linux_standard_owner']['creation']
+        rows = [{'metainfo': {}}, {'table': {'family': 'inet', 'name': c['table'], 'handle': c['table_handle']}},
+                {'chain': {'family': 'inet', 'table': c['table'], 'name': 'output', 'handle': c['chain_handle'],
+                           'type': 'filter', 'hook': 'output', 'prio': -310, 'policy': 'drop',
+                           'comment': 'routervpn-owned-baseline:'+c['session']+':'+c['config_sha256']}}]
+        rows += [{'rule': {'family': 'inet', 'table': c['table'], 'chain': 'output', 'handle': int(handle), 'expr': expr}} for handle, expr in c['baseline'].items()]
+        def query(): return subprocess.CompletedProcess([], 0, json.dumps({'nftables': rows}), '')
+        with mock.patch.object(mod, 'run_nft', side_effect=lambda *_, **__: query()):
+            self.assertTrue(mod._standard_status_active(state))
+            rows[1]['table']['handle'] += 1
+            self.assertFalse(mod._standard_status_active(state))
+            rows[1]['table']['handle'] -= 1
+            rows[-1]['rule']['expr'] = [{'drop': None}]
+            self.assertFalse(mod._standard_status_active(state))
+
+    def test_force_off_refuses_scoped_tables_with_valid_empty_or_corrupt_state(self):
+        path = self.root / 'run/kill-switch.json'
+        for saved in (b'{"policy":"always"}', None, b'{broken'):
+            for name in ('router_vpn_standard_'+'a'*32, 'router_vpn_node_'+'b'*32):
+                with self.subTest(saved=saved, table=name):
+                    if saved is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_bytes(saved); path.chmod(0o600)
+                    listing = {'nftables': [{'metainfo': {}}, {'table': {'family': 'inet', 'name': name, 'handle': 9}}]}
+                    observed = subprocess.CompletedProcess([], 0, json.dumps(listing), '')
+                    with mock.patch.object(mod, 'run_nft', return_value=observed) as query, \
+                            mock.patch.object(mod, 'remove_table') as remove:
+                        with self.assertRaisesRegex(RuntimeError, 'another native table'):
+                            mod.release(True)
+                        query.assert_called_once_with(['-j', '-n', 'list', 'tables'])
+                        remove.assert_not_called()
+                    self.assertEqual(path.read_bytes() if path.exists() else None, saved)
+
+    def test_force_off_requires_native_absence_after_generic_removal(self):
+        path = self.root / 'run/kill-switch.json'
+        for saved in (b'{"policy":"always"}', None, b'{broken'):
+            for remaining in (None, mod.TABLE, 'router_vpn_standard_'+'a'*32):
+                with self.subTest(saved=saved, remaining=remaining):
+                    if saved is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_bytes(saved); path.chmod(0o600)
+                    names = [mod.TABLE]
+                    def listing(arguments, **kwargs):
+                        self.assertEqual(arguments, ['-j', '-n', 'list', 'tables'])
+                        rows = [{'metainfo': {}}] + [{'table': {'family': 'inet', 'name': name, 'handle': index+1}} for index, name in enumerate(names)]
+                        return subprocess.CompletedProcess([], 0, json.dumps({'nftables': rows}), '')
+                    def removal():
+                        names[:] = [] if remaining is None else [remaining]
+                    with mock.patch.object(mod, 'run_nft', side_effect=listing) as query, \
+                            mock.patch.object(mod, 'remove_table', side_effect=removal) as remove:
+                        if remaining is None:
+                            self.assertEqual(mod.release(True), 0)
+                            self.assertFalse(path.exists())
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, 'another native table'):
+                                mod.release(True)
+                            self.assertEqual(path.read_bytes() if path.exists() else None, saved)
+                        self.assertEqual(query.call_count, 2)
+                        remove.assert_called_once_with()
+
+    def test_force_off_never_substitutes_dry_run_or_failed_readback_for_absence(self):
+        path = self.save_standard_state({'policy': 'always'})
+        original = path.read_bytes()
+        observations = [RuntimeError('native readback denied'), '{}', '{"nftables":[]}',
+                        '{"nftables":[{"metainfo":{}},{"metainfo":{}}]}',
+                        '{"nftables":[{"metainfo":{}},{"table":{"name":"other","family":"inet"}}]}']
+        for observation in observations:
+            with self.subTest(observation=observation), mock.patch.object(mod, 'remove_table') as remove:
+                result = subprocess.CompletedProcess([], 0, observation, '') if isinstance(observation, str) else None
+                with mock.patch.object(mod, 'run_nft', side_effect=observation if isinstance(observation, Exception) else None, return_value=result) as query:
+                    with self.assertRaises((RuntimeError, ValueError)):
+                        mod.release(True)
+                    self.assertEqual(query.call_count, 1)
+                    remove.assert_not_called()
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_force_off_darwin_keeps_its_existing_native_dispatch_boundary(self):
+        with mock.patch.object(mod.sys, 'platform', 'darwin'), \
+                mock.patch.object(mod, 'read_state', return_value={}), \
+                mock.patch.object(mod, 'remove_table') as remove, \
+                mock.patch.object(mod, 'run_nft', side_effect=AssertionError('Darwin cannot query Linux nft')):
+            self.assertEqual(mod.release(True), 0)
+            remove.assert_called_once_with()
+
     def test_every_cli_mutator_and_dispatcher_waits_for_same_inode(self):
         for script in (SCRIPT, SCRIPT.with_name('kill-switch-platform.py')):
             for action in ('apply', 'release', 'force-off', 'reassert'):
                 with self.subTest(script=script.name, action=action):
+                    env = dict(self.env)
+                    if action == 'force-off':
+                        # This lock test owns no native policy observer. A
+                        # missing nft must fail after lock admission, even in
+                        # dry-run; the scoped-readback cases above model it.
+                        env['PATH'] = str(self.root / 'no-native-tools')
                     with mod.mutation_guard(self.root):
-                        process = subprocess.Popen([sys.executable, str(script), action], env=self.env,
+                        process = subprocess.Popen([sys.executable, str(script), action], env=env,
                                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         try:
                             with self.assertRaises(subprocess.TimeoutExpired):
@@ -48,7 +195,11 @@ class MutationLockTests(unittest.TestCase):
                             process.communicate(timeout=2)
                             raise
                     out, err = process.communicate(timeout=3)
-                    self.assertEqual(process.returncode, 0, err.decode())
+                    if action == 'force-off':
+                        self.assertNotEqual(process.returncode, 0)
+                        self.assertIn(b'nftables', err)
+                    else:
+                        self.assertEqual(process.returncode, 0, err.decode())
 
     def test_direct_mutators_cannot_bypass_existing_owner(self):
         code = '''import importlib.util, pathlib, sys

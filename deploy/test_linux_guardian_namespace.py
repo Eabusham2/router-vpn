@@ -270,16 +270,13 @@ def isolated():
     return os.waitstatus_to_exitcode(status)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--isolated', action='store_true', help=argparse.SUPPRESS)
-    arguments = parser.parse_args()
-    if arguments.isolated:
-        raise SystemExit(isolated())
+def check_verdict_inventory():
     flattened = tuple(case for _, cases in GUARDIAN.KERNEL_GROUPS for case in cases)
     if flattened != GUARDIAN.KERNEL_CASES or len(flattened) != len(set(flattened)):
         raise AssertionError('Bounded native groups omit or repeat a required kernel boundary')
-    for prefix, cases in (('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
+    for prefix, cases in (('TestLinuxStandard', GUARDIAN.STANDARD_PARSER_CASES),
+                          ('TestDesktopLinuxGuardianKernel', GUARDIAN.STANDARD_KERNEL_CASES),
+                          ('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES),
                           ('TestDesktopLinuxRunningSOCKS', GUARDIAN.RUNNING_SOCKS_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernelNodeRunning/', GUARDIAN.RUNNING_CASES)):
@@ -290,12 +287,22 @@ def main():
                    valid+'\n--- FAIL: other (0.01s)', valid+'\nFAIL', valid+'\npanic: lost result']
         defects.extend('\n'.join(lines[:index]+lines[index+1:]) for index in range(len(lines)))
         defects.extend(valid.replace(line, 'expected: '+line) for line in lines)
+        defects.extend(valid.replace(prefix+case, prefix+'Renamed'+case) for case in cases)
         for output in defects:
             try:
                 GUARDIAN.require_socks_verdicts(output, prefix, cases)
             except ValueError:
                 continue
-            raise AssertionError('Native SOCKS verdict gate accepted an omitted, duplicate or failed result')
+            raise AssertionError('Native verdict gate accepted an omitted, renamed, duplicate or failed result')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--isolated', action='store_true', help=argparse.SUPPRESS)
+    arguments = parser.parse_args()
+    if arguments.isolated:
+        raise SystemExit(isolated())
+    check_verdict_inventory()
     from test_linux_guardian_cleanup import check as check_timeout_cleanup
     check_timeout_cleanup()
     sudo = GUARDIAN.UID.privilege_tool()

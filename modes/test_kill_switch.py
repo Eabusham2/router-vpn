@@ -278,6 +278,17 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-state-safety-') a
     else:
         p=subprocess.run([sys.executable,str(SCRIPT),'reassert'],env=env,text=True,capture_output=True)
         assert p.returncode!=0 and 'symlink' in p.stderr,p.stderr
+        # The real force-off command requires a complete native listing even
+        # in dry-run. This isolated executable models only that read boundary;
+        # it cannot invoke or mutate the host firewall.
+        native=root/'native-observer';native.mkdir()
+        nft=native/'nft'
+        nft.write_text('#!'+sys.executable+'\nimport json,sys\nassert sys.argv[1:]==["-j","-n","list","tables"]\nprint(json.dumps({"nftables":[{"metainfo":{}}]}))\n')
+        nft.chmod(0o700)
+        sudo=native/'sudo'
+        sudo.write_text('#!'+sys.executable+'\nimport os,sys\na=sys.argv[1:]\nwhile a and a[0] in ("-n","-C","--"):\n option=a.pop(0)\n if option=="-C": a.pop(0)\nos.execv(a[0],a)\n')
+        sudo.chmod(0o700)
+        env['PATH']=str(native)+os.pathsep+env.get('PATH','')
         p=subprocess.run([sys.executable,str(SCRIPT),'force-off'],env=env,text=True,capture_output=True)
         assert p.returncode==0,p.stderr
         assert not state.exists() and real.exists()

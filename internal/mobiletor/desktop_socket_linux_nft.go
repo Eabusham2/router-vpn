@@ -123,6 +123,10 @@ func (n *desktopLinuxNFT) captureBaseline(rows []map[string]any, options Desktop
 }
 
 func desktopLinuxNFTCommand(ctx context.Context, args []string, input string) ([]byte, error) {
+	return desktopLinuxNFTCommandFiles(ctx, args, input, nil)
+}
+
+func desktopLinuxNFTCommandFiles(ctx context.Context, args []string, input string, files []*os.File) ([]byte, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, netClosedError()
 	}
@@ -137,6 +141,7 @@ func desktopLinuxNFTCommand(ctx context.Context, args []string, input string) ([
 	command := exec.CommandContext(ctx, "/usr/sbin/nft", args...)
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
 	command.Stdin = strings.NewReader(input)
+	command.ExtraFiles = files
 	var output, diagnostic bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &diagnostic
@@ -170,7 +175,7 @@ func desktopLinuxNFTRead(ctx context.Context) ([]map[string]any, error) {
 }
 
 func desktopLinuxNFTReadTable(ctx context.Context, tableName string) ([]map[string]any, error) {
-	if tableName != desktopLinuxNFTTable && (!strings.HasPrefix(tableName, desktopLinuxNodeTablePrefix) || !desktopSocketHex(strings.TrimPrefix(tableName, desktopLinuxNodeTablePrefix), 32)) {
+	if tableName != desktopLinuxNFTTable && !desktopLinuxOwnedTableName(tableName) {
 		return nil, errors.New("Linux physical readback rejected an unowned table name")
 	}
 	raw, err := desktopLinuxNFTCommand(ctx, []string{"-j", "-n", "list", "table", "inet", tableName}, "")

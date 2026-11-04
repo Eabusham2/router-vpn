@@ -27,7 +27,8 @@ SPEC.loader.exec_module(PREP)
 
 def checked_sources(source):
     source = PREP.checked_vendor(source)
-    expected = sorted((ROOT/'internal/mobiletor').glob('desktop_socket_*.go'))
+    expected = sorted([*(ROOT/'internal/mobiletor').glob('desktop_socket_*.go'),
+                       *(ROOT/'internal/mobiletor').glob('desktop_standard_*.go')])
     required = {'desktop_socket_source.go', 'desktop_socket_source_unix.go',
                 'desktop_socket_source_privileged_test.go', 'desktop_socket_source_unix_test.go'}
     if not required.issubset(path.name for path in expected):

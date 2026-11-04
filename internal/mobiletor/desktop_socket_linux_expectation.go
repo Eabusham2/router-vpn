@@ -24,7 +24,7 @@ func ReadDesktopLinuxProtectionAbsence(ctx context.Context) error {
 		return err
 	}
 	if err := desktopLinuxTableListAbsent(rows, func(name string) bool {
-		return name == desktopLinuxNFTTable || strings.HasPrefix(name, desktopLinuxNodeTablePrefix)
+		return name == desktopLinuxNFTTable || strings.HasPrefix(name, desktopLinuxNodeTablePrefix) || strings.HasPrefix(name, desktopLinuxStandardTablePrefix)
 	}); err != nil {
 		return err
 	}

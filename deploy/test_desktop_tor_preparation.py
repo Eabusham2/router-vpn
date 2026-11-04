@@ -144,6 +144,31 @@ class DesktopPTPreparation(unittest.TestCase):
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
+            # The standard-exit creator shares the mandatory native inventory
+            # with the socket owner. Both native witnesses must be copied by
+            # this actual shipping preparation, not merely present in our tree.
+            standard = ('desktop_standard_linux_protection.go',
+                        'desktop_standard_linux_protection_test.go',
+                        'desktop_standard_linux_protection_native_test.go')
+            spec = importlib.util.spec_from_file_location('prepared_standard_uid_gate', ROOT/'deploy/test_desktop_socket_uid.py')
+            uid_gate = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(uid_gate)
+            _, inventory = uid_gate.checked_sources(self.vendor)
+            for name in standard:
+                original = ROOT/'internal/mobiletor'/name
+                target = self.vendor/'routervpn/mobiletor'/name
+                exact = PREP.relocated_shared_source(original.read_bytes())
+                self.assertEqual(generated['routervpn/mobiletor/'+name], exact)
+                self.assertEqual(target.read_bytes(), exact)
+                self.assertEqual(inventory[name], hashlib.sha256(original.read_bytes()).hexdigest())
+                self.assertIn(original, PREP.inputs())
+                target.unlink()
+                with self.assertRaisesRegex(ValueError, 'actual copied regular file'):
+                    uid_gate.checked_sources(self.vendor)
+                target.write_bytes(exact+b'\n// replaced acceptance source\n')
+                with self.assertRaisesRegex(ValueError, 'exact prepared source'):
+                    uid_gate.checked_sources(self.vendor)
+                target.write_bytes(exact)
             for package in ('windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection'):
                 for path in sorted((ROOT/'internal'/package).glob('*.go')):
                     if path.name.endswith('_test.go'):
