@@ -47,8 +47,8 @@ credentials; supported connected GitHub writes succeeded. This was not a
 branch, force-push, PR, deployment or router-change operation.
 
 The source cutoff for this record is
-[`526f24c424a36e5187fc65f5221ef4a4a30bb237`](https://github.com/Eabusham2/router-vpn/commit/526f24c424a36e5187fc65f5221ef4a4a30bb237),
-tree `40356d6c0a99125cd16f486ae5c83c10915ac8d9`.
+[`4f186c907c378babd667daacf5b3c10933abb072`](https://github.com/Eabusham2/router-vpn/commit/4f186c907c378babd667daacf5b3c10933abb072),
+tree `e29ab3b1ea315cfaadd6dbcdcab1dc92e6d398be`.
 
 | Published commit | Concrete change and focused evidence | Remaining boundary |
 |---|---|---|
@@ -66,6 +66,18 @@ tree `40356d6c0a99125cd16f486ae5c83c10915ac8d9`.
 | [`50589f2b`](https://github.com/Eabusham2/router-vpn/commit/50589f2b06169748299d458cce10b91e79d8f58e) | Windows SOCKS observer independently verifies exact original retirement after policy close; callbacks retain their reader through join. Integrated 34 runner checks, actual observer race/refusal cases and both Windows overlay cross-links pass. Old observer reproduces its missing-lock error. | Actual BFE/WFP execution remains required. |
 | [`d2a42810`](https://github.com/Eabusham2/router-vpn/commit/d2a428104413d71ccaf0248e77ea365f3c7d4a02) | Updated the fake sudo egress peer for exact `-n -C N` descriptor preservation. Real inherited-flock exclusion, malformed/missing-descriptor negatives and the full kill-switch suite pass. Old parser reproduces CI's FileNotFoundError. | Only the prefix function's euid boundary is controlled locally; this is not a claim of a real nonroot sudo deployment test. |
 | [`526f24c4`](https://github.com/Eabusham2/router-vpn/commit/526f24c424a36e5187fc65f5221ef4a4a30bb237) | Integrated retained direct Local macOS SOCKS5 with exact authenticated control/UDP relay, selected policy and owned cleanup. Fresh shared-policy and application race tests, four generated lifecycle cases, 12 runner checks, exact 1,667-file source closure and both controller/peer/runtime cross-build sets pass. Nine native acceptance scenarios are mandatory. | Real macOS peer/PF/utun acceptance remains required. Local actual-interface tests stopped at denied netlink inventory, before peer or Router-restoration acceptance. |
+| [`9196a037`](https://github.com/Eabusham2/router-vpn/commit/9196a037d868317f3037aac5529fc42bea53530b) | Retained the Linux legacy direct stock Off owner: exact sealed engine/configuration, creation-time pidfd, joined child and original workspace/namespace/TUN cleanup. Focused real-process race checks and five causal rejection controls pass. | The protected successor is separately recorded below; cold service ownership and other legacy graph adapters are not established by this unit. |
+| [`332f1085`](https://github.com/Eabusham2/router-vpn/commit/332f1085693b42bb164389fddf84e417c56e34b0) | Every legacy standard preparation uses the captured shared device-policy compiler. Twenty-one policy cases and the old-source causal control pass; eighteen actual generated graphs parse with the pinned native core. | This policy wiring alone does not prove selected DNS through the running path. |
+| [`957ea8b9`](https://github.com/Eabusham2/router-vpn/commit/957ea8b9ae0098431d2a871638e4cb3517036d3b) | Integrated retained direct Local macOS AWG Fast/Strong with all eleven original parameters, exact credentials, policy and native ownership. Shared/application race checks, actual AWG parameter readback mutations, twelve runner checks, exact source closure and both-architecture links pass. | Four positives and seven rejection cases are mandatory in native CI. The positive fixture uses manual MTU 1376; it is not automatic-MTU or physical acceptance. |
+| [`081dc001`](https://github.com/Eabusham2/router-vpn/commit/081dc0010eda0f005754738d423dc648c626b8c9) | Restored bounded hostname bootstrap for legacy standard direct/entry preparation: validate the complete graph first, resolve each distinct transport host once on the captured network, retain a bounded public address and preserve credentials/TLS/DNS. Thirty-six new cases pass; old shipping builders fail all nine hostname cases. | Only transport bootstrap is resolved outside the tunnel. A successful bootstrap is not selected-DNS proof or physical-path acceptance. |
+| [`f436aa4d`](https://github.com/Eabusham2/router-vpn/commit/f436aa4d8b3a08a12d228bda24b3626f63d0196c) | Windows negative-case cleanup keeps the originally admitted target rather than rediscovering a different global owner. Eight extracted real-helper race cases and forty-one runner checks pass; the old helper fails the causal case. | The observed Windows MAX native cleanup timeout still requires a successful native rerun. Original cleanup and whole-test deadlines remain unchanged. |
+| [`71fc8139`](https://github.com/Eabusham2/router-vpn/commit/71fc81394e6264b549abe63d5311d568bc6efb1a) | Extended the Linux legacy direct stock owner to On-connect/Always with original native table creation, generation-bound succession, saved-file capability and exact retirement. Combined application race, kernel-receipt parser, real preparer/inventory checks and full 53-Darwin/22-Linux helper tests pass. Force Off refuses unknown scoped tables and verifies real absence before success. | The two new actual kernel cases are mandatory in the native guardian gate. Same-boot orphan recovery, persistent Always ownership and installer handoff require the continuing service integration; refusal alone does not close them. |
+| [`728c96a8`](https://github.com/Eabusham2/router-vpn/commit/728c96a8611551a91e91e6df66b6f40ae8e5a44b) | Integrated the existing bounded OpenVPN endpoint into the retained direct Local macOS host, including ordered TCP/UDP fallback, policy, connected-remote identity and owned cleanup. Combined shared-policy/application races, twelve runner checks, exact generated closure and both-architecture component links pass. | Eight actual positive and eight refusal cases join the mandatory inventory. Native encrypted peer/PF/utun/address-alias execution remains required; manual MTU 1376 fixtures do not establish automatic MTU. |
+| [`0193fe77`](https://github.com/Eabusham2/router-vpn/commit/0193fe779adb9d83f534cad84c30fa7585a862cf) | Repaired aggregate Apple candidate test runtime by executing each of six mutations against its original owning witness. Inlining the four extracted helpers reproduces the old full Swift fixture byte-for-byte; the Network double is unchanged. Actual writer/dispatch/SDK-boundary tests reject unexpected success and unrelated failures. | The full baseline, 50 samples, all six mutations, actor compiler negative and original 150/120-second bounds remain. Swift/native elapsed acceptance must be observed in a completed newer run. |
+| [`ca974a90`](https://github.com/Eabusham2/router-vpn/commit/ca974a907382b1fa71f9d461469402e7afae8c5d) | Integrated retained Local ordinary WG entry to SS exit on macOS. Both private sources and independent proofs remain captured; final-node identity now governs publication, Stop and Speed Lab, while the first root governs physical egress. Root policy/application race and twelve runner checks pass; two-peer fixture builds and exact source closure pass. | The mandatory 63-case inventory adds two graph positives and six refusals. Actual encrypted two-hop/PF/utun execution is pending. Other entry families, Server/Compare and broader compositions remain separate work. |
+| [`99814590`](https://github.com/Eabusham2/router-vpn/commit/9981459074bcf68e985a8193e7e4dc1001097a5f) | Linux legacy direct stock connections now require an uncached selected-DNS exchange through the original child listener before public proof and Connected. Creation pidfd, retained socket inode/cookie, sealed/named graph, profile, native protection and preparation-time physical-network identity remain bound. Combined application/DNS race checks pass (11.294s/1.021s), as do response and ownership rejection cases and causal route/listener/network controls. Four native-gate tests require unique actual package/parent/four-child run/pass records; missing, duplicate, skipped, failed, foreign, malformed or incomplete results cannot satisfy the gate. | Actual pinned-core UDP/TCP cache cases are required for new and reused native Linux bundles. They were blocked locally at netlink startup; full TUN/exit traffic, monotonic network-event/ABA handling and remote service forwarding remain separate acceptance/integration obligations. |
+| [`6fa048b0`](https://github.com/Eabusham2/router-vpn/commit/6fa048b01020d0bb0ef8c3b90200f5fd4337f122) | Corrected the actual Windows ARM64 cleanup-runner blocker: selected native Go host/target identity controls whether race instrumentation is supported. All eight cleanup cases and the original 15/60-second bounds remain. All 44 runner tests pass locally in 2.027s; the old call site fails the ARM64 command witness. | Only native Windows ARM64 omits unsupported `-race`; supported hosts retain it. Actual native MAX/WFP execution and retirement must still pass. |
+| [`4f186c90`](https://github.com/Eabusham2/router-vpn/commit/4f186c907c378babd667daacf5b3c10933abb072) | Extended the retained macOS Local packet-entry graph to imported AWG Fast/Strong → SS exit. Both saved sources, all eleven AWG parameters, separate entry/final proofs and exact Local restoration remain captured. Root shared-policy/application race tests pass in 10.909s/4.173s; twelve native-gate tests pass in 13.497s. Actual native AWG readback mutations, exact 1,669-file generated closure and eight cross-links pass in the isolated source check. | Four positives and nine refusals raise the mandatory native inventory to 76. No macOS encrypted two-hop/PF/utun pass is claimed locally. Other final protocols, predecessors, layers and ordinary Server/Compare remain separate work. |
 
 ## Native and release evidence
 
@@ -79,12 +91,31 @@ reports 7.20 seconds. Both full logs were read. This closes the assertion that
 the old marker failure necessarily persists; it does not identify causation
 or certify the newer source cutoff.
 
-At the source-cutoff read, the authoritative
-[526f24c4 release gate](https://github.com/Eabusham2/router-vpn/actions/runs/41762317459)
-and relevant native jobs were pending/queued. Earlier cancelled attempts are
-neither passes nor source failures. The last completed iOS timeout precedes the
-new stage diagnostics; no sample-count, drain or runtime-deadline reduction
-was made to turn it green.
+The completed iOS run at `f436aa4d` provides the newer diagnostic evidence:
+[run 41766421526, job 126366026395](https://github.com/Eabusham2/router-vpn/actions/runs/41766421526/job/126366026395)
+passes the 259-check candidate baseline, then hits the 150-second aggregate bound
+while repeating full suites for mutants. The baseline takes about 49.54 seconds
+and the trimmed-statistic mutant about 49.08 seconds. This is the observed reason
+for `0193fe77`; cancelled later runs are not verification that the repair passed.
+
+Actual generated Linux Router-node command/TUN acceptance passes on both
+architectures at `71fc8139` in
+[run 41768866500](https://github.com/Eabusham2/router-vpn/actions/runs/41768866500):
+[AMD64 job 126373600379](https://github.com/Eabusham2/router-vpn/actions/runs/41768866500/job/126373600379)
+and [ARM64 job 126373600655](https://github.com/Eabusham2/router-vpn/actions/runs/41768866500/job/126373600655).
+Both full logs confirm On-connect, Always, captured MTU, rollback, resolver
+failure and wrong-key cases. This is existing generated Router-node acceptance;
+it does not substitute for the new legacy standard table or DNS gates.
+
+The actual Windows ARM64 scope step at `ca974a90` failed in
+[run 41769899807, job 126379727281](https://github.com/Eabusham2/router-vpn/actions/runs/41769899807/job/126379727281)
+and [job 126379727417](https://github.com/Eabusham2/router-vpn/actions/runs/41769899807/job/126379727417)
+because the extracted cleanup runner unconditionally requested unsupported
+`-race`. Both log excerpts were read. Actual MAX/WFP exchange had not started;
+`6fa048b0` repairs this command selection, not an observed transport failure.
+
+Newer source-cutoff native and authoritative release jobs still require complete
+exact-SHA results. Earlier cancellation supersedes neither a failure nor a pass.
 
 A fresh GitHub releases read still returned the
 [745b3e41 prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b),
@@ -96,13 +127,14 @@ There is no complete exact-current-SHA published release claim in this record.
 
 ## Remaining requirements and continuing work
 
-- Retained Linux standard-exit ownership and protected table succession are
-  active implementation work. The published helper lock is only a foundation;
-  neither persisted state nor a table name grants authority to delete another
-  session's protection.
-- Darwin retained direct SOCKS5 now exists; its native acceptance remains open.
-  Retained AWG/OpenVPN and broader ordinary predecessor/entry/Server graphs are
-  not closed by that source unit. Existing Tor Server/Compare, ordinary Tor
+- Linux legacy direct stock process/protection ownership is published. Persistent
+  Always ownership across controller exit/restart, cold service startup and
+  installer replacement are active integration work. Persisted metadata alone
+  cannot authorize adopting or deleting a prior table.
+- Retained macOS direct SOCKS5, AWG and bounded OpenVPN, plus the Local ordinary
+  WG/AWG-entry/SS-exit graphs are source-implemented with mandatory native cases.
+  Their exact-source native acceptance and broader predecessor/entry/Server
+  compositions remain accountable. Existing Tor Server/Compare, ordinary Tor
   predecessors and desktop Tor cover must not be mislabeled wholly absent.
 - The exact current source still needs complete native/package/image/compose
   gates and publication. Latest-attempt jobs/logs decide current blockers;

@@ -6,39 +6,53 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 526f24c4
+## Latest implementation continuation — through 4f186c90
 
 The verified source cutoff is
-[`526f24c4`](https://github.com/Eabusham2/router-vpn/commit/526f24c424a36e5187fc65f5221ef4a4a30bb237),
-tree `40356d6c0a99125cd16f486ae5c83c10915ac8d9`.
-[The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records fourteen
-individually published source/test units, original requirement recovery and
-each validation limit. These are changes, not a requirement denominator.
+[`4f186c90`](https://github.com/Eabusham2/router-vpn/commit/4f186c907c378babd667daacf5b3c10933abb072),
+tree `e29ab3b1ea315cfaadd6dbcdcab1dc92e6d398be`.
+[The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
+individually published changes, original requirement recovery and exact
+validation limits. Changes and test counts are not a requirements denominator.
 
 - Four genuinely unpublished preserved units were recovered after tree and
-  ancestry comparison. Six earlier recovery units were already upstream and
-  were not replayed. Every new main update used normal ancestry and an exact
-  local/remote content-tree check.
-- Retained macOS direct Local SOCKS5 is integrated with captured credentials,
-  authenticated dynamic UDP association, DNS/device policy and original native
-  cleanup. Nine installed native acceptance scenarios are now mandatory. Local
-  race, generated-source and cross-build checks pass; actual PF/utun and physical
-  acceptance remain required. Retained AWG/OpenVPN and broader graphs remain
-  separate work.
-- Linux helper mutation now serializes state and kernel changes under the
-  original inherited lock. Its sudo fixture exercises real descriptor
-  preservation and competing-lock exclusion. This does not yet close protected
-  standard-exit creation, succession and retirement ownership.
-- Windows SOCKS retirement observation, Tor MTU terminal-status matching,
-  generated native inventories, the Darwin PF negative control and iOS SDK
-  fixture isolation have focused executable fixes. Native diagnostics retain
-  exact failure causes without weakening verdicts or production deadlines.
-- Actual macOS controller cleanup passes on both architectures at `4550b091`.
-  Newer exact-source native/package gates remain pending. Latest published
-  release is still the twelve-asset `745b3e41` prerelease; no current full release,
-  private deployment or physical-device acceptance is claimed.
-- Native documentation now distinguishes existing Tor Server/Compare,
-  predecessors and cover implementations from their native/live acceptance.
+  ancestry comparison. Six earlier units were already upstream and were not
+  replayed. Every new main update used normal ancestry and a checked identical
+  local/remote content tree.
+- Retained macOS direct Local SOCKS5, AWG Fast/Strong and bounded OpenVPN are
+  integrated with their captured credentials, selected policy and original
+  native cleanup. The Local ordinary WG/AWG-entry-to-SS-exit host additionally retains
+  both private sources and separate proofs, with the correct final-node identity
+  for publication, Stop, measurements and exact Local restoration. The native
+  gate requires its full 76-case inventory. Source/race/build checks pass;
+  actual encrypted peers, PF/utun, physical transitions and broader graph
+  families retain their distinct acceptance and implementation obligations.
+- Linux legacy direct stock engines retain their original sealed image,
+  configuration, creation pidfd, native protection creator, state-file capability
+  and exact teardown. Off, On-connect and Always share the original ownership
+  model. Force Off cannot report success while reserved protection remains.
+  Selected DNS must be proved through the original uncached engine path before
+  connection adoption, with immutable preparation-time physical-network capture.
+  Persistent ownership across controller exit/restart, cold startup and installer
+  replacement is active service integration work.
+- All legacy standard preparations use the shared captured device policy and
+  bounded transport-host bootstrap. Invalid policy is rejected before lookup;
+  transport bootstrap never replaces the selected active-path DNS policy.
+- Windows negative cleanup retains the original admitted target. The native
+  ARM64 runner executes the same eight cleanup cases without unsupported race
+  instrumentation; supported platforms retain race checks. The fresh iOS
+  diagnostic located repeated full mutation suites exhausting their aggregate
+  budget; targeted execution preserves the original full baseline, every
+  negative, all 50 samples and the unchanged native deadline. Current native
+  reruns decide whether each observed blocker is closed.
+- Actual macOS controller cleanup passes both architectures at `4550b091`.
+  Actual generated Linux Router-node TUN checks pass both architectures at
+  `71fc8139`, including protection, MTU rollback, bad DNS and bad key cases.
+  Those are exact-SHA bounded results. The latest observed published release
+  remains the twelve-asset `745b3e41` prerelease; current native packages,
+  publication, private deployment and device acceptance are distinct.
+- Existing Tor Server/Compare, ordinary predecessors and cover paths remain
+  implemented and must not be recreated from stale missing-feature summaries.
   Original optional macOS notarization scope remains separate from legitimate
   iOS provisioning and distribution requirements.
 
