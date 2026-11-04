@@ -189,7 +189,67 @@ aggregation and exact-SHA publication. The prerequisite native tests model TUN;
 these results do not establish physical-device or installed-package acceptance.
 The newly admitted shipping source must receive its own native/release results.
 
-## macOS AWG-final source accompanying this record
+## Published native follow-through after 2d040b67
+
+The following updates were independently committed and their normal-ancestry
+`main` refs were read back. Each remote tree matched the focused tested local
+tree; none constitutes full product, current release or device completion.
+
+| Commit | Concrete change and evidence |
+|---|---|
+| [`48c5d1ff`](https://github.com/Eabusham2/router-vpn/commit/48c5d1ffa17c24d11e06fb9434e7dd3fe306a653) | Publishes the retained macOS WG/AWG-entry to AWG-final source described below. |
+| [`d1c8af15`](https://github.com/Eabusham2/router-vpn/commit/d1c8af15a159218e79b03769207de119cc577685) | Retains the actual userspace OpenVPN transport's successful Close before later TLS closeNotify. Kernel sockets keep their original optional capabilities. Failed closes, in-flight errors and the strict error classifier are unchanged. Root's five pinned endpoint parents pass under race in 1.021s; ten close-policy tests with both causal controls and three projection tests pass. |
+| [`aefcb959`](https://github.com/Eabusham2/router-vpn/commit/aefcb9598e8f31291bdcd49faf241bd8ad8236af) | Uses an exact route-only conversion for original IPv4/IPv6 default routes; the interface/peer validator remains strict. The actual pinned route builder reproduces the old refusal. Root's twelve portable retirement groups pass under race in 1.096s and 29 routing-runner tests pass. Both native generated-command/TUN jobs subsequently pass their six required cases, as detailed below. |
+| [`54afd853`](https://github.com/Eabusham2/router-vpn/commit/54afd85336cf12390af75a5049dd48e9a042ef29) | Preserves exact compiled Windows ALL source bytes through its evidence sidecar, including LF/CRLF, and rechecks that original source after every run. It changes no shipping predicate or case/deadline. Root's23 runner tests pass in 18.669s. Both native ALL jobs subsequently pass all 26 positives, eight controls and four restoration leaves. |
+| [`cf863300`](https://github.com/Eabusham2/router-vpn/commit/cf86330014216fb66923fcea3969e5709cc2d04b) | A witnessed live-to-live native image transition permits at most three complete fresh macOS inventories under the same original installation. Partial paths and prior foreign-image observations are discarded. Unknown/denied/disappeared/matching images and changed installation members still refuse. All102 portable cases and 47 causal controls pass. A new actual shell-to-cat exec case remains mandatory on Mac; local tests do not establish that native result. |
+
+At `aefcb959`, [run 41822297998](https://github.com/Eabusham2/router-vpn/actions/runs/41822297998)
+reports success for [AMD64 job 126548828146](https://github.com/Eabusham2/router-vpn/actions/runs/41822297998/job/126548828146)
+and [ARM64 job 126548828375](https://github.com/Eabusham2/router-vpn/actions/runs/41822297998/job/126548828375).
+Root read both job identities and full case verdicts. On-connect, Always,
+captured-MTU, MTU rollback, resolver failure and wrong key each prove original
+TUN retirement; aggregates are18.50s and 23.73s. The separate installed-service,
+standalone namespace, physical-device and release gates are not inferred.
+
+At `54afd853`, [run 41822865047](https://github.com/Eabusham2/router-vpn/actions/runs/41822865047)
+completed both ALL architecture jobs: AMD64 `126550102194` and ARM64
+`126550101822`. Their26 positive verdicts, eight exact negative controls and
+four restored-winner leaves are recorded independently, with the unchanged
+shipping predicate and no admission overlay. These controller compositions
+retain their modeled native boundaries; they are not package/device acceptance.
+The complete shipping MAX and later exact-source release gates remain required.
+
+## macOS OpenVPN-final source accompanying this record
+
+The retained Local macOS host now admits WG, AWG Fast or AWG Strong entry to
+the bounded imported OpenVPN final. The final endpoint retains the original
+entry detour for every TCP, UDP, TCP-to-TCP fallback and TCP-to-UDP fallback
+attempt. Only the original entry UDP tuple receives physical authority.
+Both saved source revisions, private credentials, exact imported remote order,
+selected DNS/LAN/IPv6/MTU, entry and final proof, original cleanup and sealed
+proved-Local restoration remain required. This adds no layers, ordinary
+Server/Compare, predecessor chains or arbitrary provider directives.
+
+The existing UDP overhead check is unchanged: positive imports explicitly use
+entry 1440/final 1280; an entry 1420 cannot carry that final and remains rejected.
+Twenty-four native positives and fifteen refusal cases raise the required
+inventory from 224/31 to263 cases/34 policy tests without removing a name or
+extending native bounds. Physical-factory tests deny the final and first
+fallback TCP/UDP tuples for every captured entry variant.
+
+The actual independent provider and production endpoint execute twelve encrypted
+loopback positives and eight entry-key/parameter, final credential/trust/control,
+fixed-remote and DNS-route refusals under race in 32.075s. Both real TCP and UDP
+payloads and original cleanup are asserted. Root verified all 1,294 mapped input
+hashes, all 21 frozen source files and every unique component verdict, with no
+failure or skip. Twenty-four actual app-prepared graphs parse using the pinned
+option registries. Controller, peer and physical-factory Darwin ARM64 images
+cross-link successfully; no Mac execution is implied. Root's integrated shared-policy race passes in 8.903s, application
+source/restoration race in 17.178s, and all thirteen strict runner tests in
+6.484s. Actual signed-bundle PF/utun execution of all 263 cases remains
+mandatory, alongside broader graph requirements and physical acceptance.
+
+## macOS AWG-final source published at 48c5d1ff
 
 The retained macOS Local host now supports ordinary WG, AWG Fast or AWG Strong
 entry to an ordinary AWG Fast or Strong final endpoint, under On-connect or
@@ -596,7 +656,7 @@ There is no complete exact-current-SHA published release claim in this record.
   adopting/deleting a prior table.
 - Retained macOS direct SOCKS5, AWG and bounded OpenVPN, plus the Local ordinary
   WG/AWG-entry paths to SS, HTTP/HTTPS CONNECT, Hysteria2 (including captured AES
-  and AES plus XOR exit layers), SOCKS5, WireGuard and AWG final peers
+  and AES plus XOR exit layers), SOCKS5, WireGuard, AWG and bounded OpenVPN final peers
   are source-implemented with mandatory native cases.
   Their exact-source native acceptance and broader predecessor/entry/Server
   compositions remain accountable. Existing Tor Server/Compare, ordinary Tor
@@ -608,7 +668,8 @@ There is no complete exact-current-SHA published release claim in this record.
   complete matching native prerequisites; both ALL architecture gates remain
   required by release. The Windows command-retirement and read-only workspace
   regressions have actual native confirmation. The admitted shipping source
-  still requires its own complete MAX/ALL, package and release verification;
+  has both ALL architecture results at 54afd853 but still requires its complete
+  current MAX, package and release verification;
   prospective prerequisite receipts do not substitute for those results.
 - All original applicable product, map/UI, measurement, profile, Methods,
   onboarding/admin, native-runtime and lifecycle requirements remain accountable

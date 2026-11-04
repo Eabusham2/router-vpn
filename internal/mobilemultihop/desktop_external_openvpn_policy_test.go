@@ -191,3 +191,64 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 		})
 	}
 }
+
+func TestDesktopExternalDarwinPacketEntryOpenVPNOrderedRemotesAndEnvelope(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, network := range []string{"tcp", "udp", "mixed"} {
+			t.Run(variant+"/"+network, func(t *testing.T) {
+				graph, capture, want := desktopOpenVPNPhysicalInputs(t, network, "always")
+				roots, rootCapture := externalTestFixture(t, "wireguard", "wireguard")
+				field := "wireguard"
+				if variant != "wireguard" {
+					externalAmneziaReplace(t, roots, rootCapture, true, variant)
+					field = "amneziawg"
+				}
+				root := externalTestFind(t, roots, "external-entry")
+				root["mtu"] = float64(1440)
+				entry := rootCapture["entry"].(map[string]any)
+				entry["external"].(map[string]any)[field].(map[string]any)["mtu"] = float64(1440)
+				final := externalTestFind(t, graph, ExternalFinalTag)
+				final["detour"] = "external-entry"
+				graph["endpoints"] = append(graph["endpoints"].([]any), root)
+				capture["entry"], capture["entry_tag"] = entry, "external-entry"
+				capture["profile"].(map[string]any)["manual_mtu"] = float64(1280)
+				original := externalDesktopCompile(t, graph, capture)
+				plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "darwin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				final = externalTestFind(t, externalTestRead(t, plan.Config()), ExternalFinalTag)
+				actual, err := nativeopenvpn.Remotes(final)
+				owner, ownerErr := plan.Capture()
+				if err != nil || ownerErr != nil || !reflect.DeepEqual(actual, want) || owner.ConfiguredMTU != 1280 || len(owner.PhysicalRoots) != 1 || owner.PhysicalRoots[0].Tag != "external-entry" || len(owner.PhysicalRoots[0].Destinations) != 1 || owner.PhysicalRoots[0].Destinations[0].Network != "udp" || owner.SelectedDNS.Detour != ExternalFinalTag {
+					t.Fatal("ordered fallback escaped original entry, selected DNS or MTU", err, ownerErr)
+				}
+				for _, fault := range []string{"ordered-remote", "remote-host", "username", "password"} {
+					t.Run(fault, func(t *testing.T) {
+						copy := externalTestRead(t, externalTestJSON(t, graph))
+						changed := externalTestFind(t, copy, ExternalFinalTag)
+						switch fault {
+						case "username", "password":
+							changed[fault] = "another-original-secret"
+						case "ordered-remote":
+							rows := changed["servers"].([]any)
+							rows[0], rows[1] = rows[1], rows[0]
+						case "remote-host":
+							changed["servers"].([]any)[0].(map[string]any)["server"] = "198.51.100.241"
+						}
+						if accepted, e := NewExternalPolicy(externalTestJSON(t, copy), externalTestJSON(t, capture)); e == nil || accepted != nil {
+							t.Fatal("changed complete OpenVPN import acquired original capture", fault)
+						}
+					})
+				}
+				if network != "tcp" {
+					root["mtu"] = float64(1420)
+					entry["external"].(map[string]any)[field].(map[string]any)["mtu"] = float64(1420)
+					if accepted, e := NewExternalPolicy(externalTestJSON(t, graph), externalTestJSON(t, capture)); e == nil || accepted != nil {
+						t.Fatal("unfragmented UDP OpenVPN exceeded captured entry envelope")
+					}
+				}
+			})
+		}
+	}
+}

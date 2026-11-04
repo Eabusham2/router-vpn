@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
+	"strings"
 	"testing"
 )
 
@@ -41,7 +42,7 @@ func macOSExternalNativePacketEntryRead(t *testing.T, p *macOSExternalNativePeer
 		t.Fatal("packet entry lost its only captured tunneled stream exit")
 	}
 	address, err := netip.ParseAddrPort(value.Address)
-	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && address != p.entryAddress || value.PhysicalUDP < 0 || value.Streams < 0 || value.Packets < 0 || p.protocol != "hysteria2" && p.protocol != "socks5" && p.protocol != "wireguard" && p.protocol != "amneziawg" && value.Packets != 0 {
+	if err != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && address != p.entryAddress || value.PhysicalUDP < 0 || value.Streams < 0 || value.Packets < 0 || p.protocol != "hysteria2" && p.protocol != "socks5" && p.protocol != "wireguard" && p.protocol != "amneziawg" && p.protocol != "openvpn" && value.Packets != 0 {
 		t.Fatal("WG entry changed its captured physical peer or fixed TCP inner routes")
 	}
 	p.entryAddress = address
@@ -55,6 +56,9 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 	exit.MultihopEnabled, exit.MultihopEntryID, exit.MultihopExitID = true, macOSExternalNativeEntryID(p), exit.ID
 	exit.MultihopExecution, exit.MultihopEntryMode = "local", ""
 	entry := common.RouterProfile{ID: macOSExternalNativeEntryID(p), Name: "Original encrypted WG entry", NodeKind: "external", Endpoint: p.physical.String(), DNSMode: "custom", DNSProtocol: "tcp", DNSHost: "203.0.113.53", DNSPort: 5353, IPv6Mode: "on", HomeLANAccess: true, StartLayer: "off", MTUPolicy: "auto", External: &common.ExternalNodeConfig{Protocol: "wireguard", ExpectedPublicIP: "203.0.113.77", WireGuard: &common.ExternalWireGuardConfig{PrivateKey: p.clientKey, PeerPublicKey: p.peerKey, PresharedKey: p.psk, Endpoint: p.entryAddress.String(), Addresses: []string{"10.78.0.2/32", "fd78:78::2/128"}, AllowedIPs: []string{"0.0.0.0/0", "::/0"}, MTU: 1420, PersistentKeepalive: 25}}}
+	if p.protocol == "openvpn" {
+		entry.External.WireGuard.MTU = 1440
+	}
 	finalPacket := exit.External.WireGuard
 	if exit.External.AmneziaWG != nil {
 		finalPacket = &exit.External.AmneziaWG.ExternalWireGuardConfig
@@ -136,6 +140,11 @@ func macOSExternalNativePacketEntryProfile(t *testing.T, p *macOSExternalNativeP
 		exit.External.StartLayer.Transport["server"] = "198.51.100.241"
 		exit.External.Hysteria2.Server, exit.Endpoint = "198.51.100.241", "198.51.100.241"
 	case "wrong-exit-address":
+		if exit.External.OpenVPN != nil {
+			exit.External.OpenVPN.Config = strings.ReplaceAll(exit.External.OpenVPN.Config, "198.51.100.240", "198.51.100.241")
+			exit.Endpoint = "198.51.100.241"
+			break
+		}
 		if finalPacket != nil {
 			finalPacket.Endpoint = "198.51.100.241:8388"
 			exit.Endpoint = "198.51.100.241"
@@ -177,7 +186,19 @@ func macOSExternalNativePacketEntryProved(t *testing.T, p *macOSExternalNativePe
 		transportProved = entry != nil && entry.Streams >= 2 && entry.Packets >= 1 && observed.Connections >= 2 && observed.PhysicalUDP >= 1 && observed.Streams >= 1 && observed.Packets >= 1 && observed.SOCKSRejectedReplies == 0
 		macOSExternalNativeSOCKSEntryRelays(t, p, observed)
 	}
+	if p.protocol == "openvpn" {
+		dnsProtocol = "udp"
+		transportProved = entry != nil && entry.Streams >= 1 && observed.Packets >= 1 && observed.Streams >= 1
+		if p.openvpnNetwork == "tcp" {
+			transportProved = transportProved && entry.Streams >= 2 && entry.Packets == 0 && observed.Connections >= 1 && observed.PhysicalUDP == 0
+		} else {
+			transportProved = transportProved && entry.Packets >= 1 && observed.PhysicalUDP >= 1 && observed.Connections == 0
+		}
+	}
 	mtu := 1376
+	if p.protocol == "openvpn" {
+		mtu = 1280
+	}
 	if p.protocol == "wireguard" || p.protocol == "amneziawg" {
 		mtu = 1360
 		if p.protocol == "amneziawg" {
@@ -198,7 +219,9 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 	if entry == nil || entry.PhysicalUDP < 1 {
 		t.Fatal("WG entry negative missed its actual first encrypted peer")
 	}
-	if p.protocol == "wireguard" || p.protocol == "amneziawg" {
+	if p.protocol == "openvpn" {
+		macOSExternalNativeOpenVPNEntryRefusalWitness(t, p, entry, observed)
+	} else if p.protocol == "wireguard" || p.protocol == "amneziawg" {
 		macOSExternalNativeWireGuardFinalRefusalWitness(t, p, entry, observed)
 	} else if p.protocol == "socks5" {
 		macOSExternalNativeSOCKSEntryRefusalWitness(t, p, entry, observed)

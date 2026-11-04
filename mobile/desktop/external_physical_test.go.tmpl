@@ -44,6 +44,22 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	t.Helper()
 	// The labels select independent imported test profiles. The saved native
 	// protocol remains amneziawg; no preset alias is added to its schema.
+	openvpnMode := ""
+	if parts := strings.Split(protocol, "-openvpn-"); len(parts) == 2 {
+		openvpnMode = parts[1]
+		if openvpnMode != "tcp" && openvpnMode != "udp" && openvpnMode != "mixed" {
+			t.Fatal("uncaptured OpenVPN final transport")
+		}
+		if parts[0] == "wg-entry" {
+			protocol = "wg-entry-wireguard"
+		} else if parts[0] == "awg-entry-fast" {
+			protocol = "awg-entry-wireguard-fast"
+		} else if parts[0] == "awg-entry-strong" {
+			protocol = "awg-entry-wireguard-strong"
+		} else {
+			t.Fatal("uncaptured OpenVPN packet entry")
+		}
+	}
 	finalVariant := ""
 	if selected, ok := strings.CutPrefix(protocol, "wg-entry-amneziawg-"); ok {
 		finalVariant, protocol = selected, "wg-entry-wireguard"
@@ -100,6 +116,9 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	}
 	if finalVariant != "" {
 		entryExit = "amneziawg"
+	}
+	if openvpnMode != "" {
+		entryExit = "openvpn"
 	}
 	variant := ""
 	if selected, ok := strings.CutPrefix(protocol, "amneziawg-"); ok {
@@ -216,6 +235,29 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 				delete(imported, "wireguard")
 				profile["mtu_policy"], profile["manual_mtu"] = "manual", 1328
 			}
+		} else if entryExit == "openvpn" {
+			transport["mtu"] = 1440
+			private[protocol].(map[string]any)["mtu"] = 1440
+			network := "tcp"
+			if openvpnMode == "udp" || openvpnMode == "mixed" {
+				network = "udp"
+			}
+			config := "client\ndev tun\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint " + strings.Repeat("ab", 32) + "\ntun-mtu 1280\ndata-ciphers AES-256-GCM\n"
+			if openvpnMode == "mixed" {
+				config += "remote 198.51.100.240 8387 tcp\n"
+			}
+			config += "remote 198.51.100.240 8388 " + network + "\n"
+			compiled, err := nativeopenvpn.CompileEndpoint(config, "captured-final-user", "captured-final-secret", mobilemultihop.ExternalFinalTag, "external-entry")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Unmarshal into a fresh object so no prior stream-only keys survive.
+			final = map[string]any{}
+			if json.Unmarshal([]byte(compiled), &final) != nil {
+				t.Fatal("OpenVPN final projection failed")
+			}
+			profile["external"] = map[string]any{"protocol": "openvpn", "expected_public_ip": "203.0.113.88", "openvpn": map[string]any{"config": config, "username": "captured-final-user", "password": "captured-final-secret"}}
+			profile["mtu_policy"], profile["manual_mtu"] = "manual", 1280
 		} else if entryExit == "socks5" {
 			delete(final, "method")
 			final["type"], final["version"], final["username"], final["password"] = "socks", "5", "separate-captured-exit-user", "separate-captured-exit-password"
@@ -240,7 +282,7 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 		}
 		selection["protocol"], selection["entry"], selection["entry_tag"] = entryExit, entry, "external-entry"
 		graph["outbounds"] = []any{final}
-		if entryExit == "wireguard" || entryExit == "amneziawg" {
+		if entryExit == "wireguard" || entryExit == "amneziawg" || entryExit == "openvpn" {
 			graph["outbounds"], graph["endpoints"] = []any{}, []any{transport, final}
 		}
 	}

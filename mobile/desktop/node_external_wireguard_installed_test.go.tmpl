@@ -88,7 +88,14 @@ func startDesktopDarwinInstalledPacketRulesAt(t *testing.T, server *desktopNodeL
 // Cryptographic device constructor shared by the strictly validated native peer
 // and the explicitly named loopback component test. It does not grant physical
 // socket authority; all native callers pass through the original role validator.
-func desktopInstalledPacketDevice(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), rules map[string]desktopReferenceRule, final bool) desktopExternalInstalledWGPeer {
+func desktopInstalledPacketDevice(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, parameters string, create func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), rules map[string]desktopReferenceRule, final bool, capturedMTU ...uint32) desktopExternalInstalledWGPeer {
+	mtu := uint32(1420)
+	if len(capturedMTU) != 0 {
+		if len(capturedMTU) != 1 || capturedMTU[0] != 1440 {
+			t.Fatal("entry reference lost captured OpenVPN outer MTU")
+		}
+		mtu = capturedMTU[0]
+	}
 	var values [3][]byte
 	defer func() {
 		for _, value := range values {
@@ -116,7 +123,7 @@ func desktopInstalledPacketDevice(t *testing.T, server *desktopNodeLayerServer, 
 		allowed = "allowed_ip=10.79.0.2/32\nallowed_ip=fd79:79::2/128\n"
 	}
 	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler,
-		UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: 1420,
+		UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: mtu,
 		Address: addresses})
 	if err != nil {
 		handler.close()
@@ -554,6 +561,23 @@ func startDesktopDarwinInstalledPacketEntry(t *testing.T, parent *desktopNodeLay
 	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || exitNetwork != "tcp" && exitNetwork != "udp" || exitPort != 8388 && exitPort != 8389 || exitPort == 8389 && exitNetwork != "udp" {
 		t.Fatal("entry lost its actual loopback-only encrypted exit")
 	}
+	return desktopInstalledPacketEntryRoutes(t, parent, request, physical, cert, []desktopReferenceRule{{Network: exitNetwork, Address: "198.51.100.240", Port: int(exitPort), Target: exitAddress}}, protocol, parameters, backend, 1420)
+}
+func desktopInstalledPacketEntryRoutes(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, physical netip.Addr, cert tls.Certificate, routes []desktopReferenceRule, protocol, parameters string, backend func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error), mtu uint32) desktopExternalInstalledPacketEntryPeer {
+	t.Helper()
+	if !desktopDarwinPacketReferenceAddress(physical, false) || len(routes) < 1 || len(routes) > 2 {
+		t.Fatal("entry lost its captured physical root/final routes")
+	}
+	seen := map[string]bool{}
+	for i, r := range routes {
+		target, e := netip.ParseAddrPort(r.Target)
+		key := fmt.Sprintf("%s/%s:%d", r.Network, r.Address, r.Port)
+		if e != nil || !target.Addr().IsLoopback() || target.Port() == 0 || r.Address != "198.51.100.240" || (r.Network != "tcp" && r.Network != "udp") || seen[key] || i == 0 && r.Port != 8388 && r.Port != 8389 || r.Port == 8389 && (r.Network != "udp" || mtu == 1440) || i == 1 && (r.Port != 8387 || r.Network != "tcp" || mtu != 1440) {
+			t.Fatal("entry lost original ordered fixed remote routes")
+		}
+		seen[key] = true
+	}
+	exitNetwork, exitAddress := routes[0].Network, routes[0].Target
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -576,11 +600,18 @@ func startDesktopDarwinInstalledPacketEntry(t *testing.T, parent *desktopNodeLay
 	var closeProof sync.Once
 	shutdown := func() { closeProof.Do(func() { _ = proof.Close(); _ = listener.Close(); <-done }) }
 	t.Cleanup(shutdown)
-	rules := map[string]desktopReferenceRule{
-		"tcp/1.1.1.1:443": {Network: "tcp", Address: "1.1.1.1", Port: 443, Target: listener.Addr().String()},
-		exitNetwork + "/" + netip.AddrPortFrom(netip.MustParseAddr("198.51.100.240"), exitPort).String(): {Network: exitNetwork, Address: "198.51.100.240", Port: int(exitPort), Target: exitAddress},
+	rules := map[string]desktopReferenceRule{"tcp/1.1.1.1:443": {Network: "tcp", Address: "1.1.1.1", Port: 443, Target: listener.Addr().String()}}
+	for _, r := range routes {
+		rules[fmt.Sprintf("%s/%s:%d", r.Network, r.Address, r.Port)] = r
 	}
-	peer := startDesktopDarwinInstalledPacketRules(t, parent, request, physical, parameters, backend, rules)
+	var peer desktopExternalInstalledWGPeer
+	if mtu == 1420 {
+		peer = startDesktopDarwinInstalledPacketRules(t, parent, request, physical, parameters, backend, rules)
+	} else if mtu == 1440 {
+		peer = desktopInstalledPacketDevice(t, parent, request, physical, parameters, backend, rules, false, mtu)
+	} else {
+		t.Fatal("uncaptured entry MTU")
+	}
 	return desktopExternalInstalledPacketEntryPeer{relay: func(control net.Conn, packet net.PacketConn) (net.Addr, func(), error) {
 		if exitNetwork != "tcp" || control == nil || control.LocalAddr().String() != exitAddress {
 			return nil, nil, errors.New("association route lost original final control")

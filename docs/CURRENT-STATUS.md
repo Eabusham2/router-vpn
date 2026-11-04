@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — verified through 2d040b67
+## Latest implementation continuation — verified through cf863300
 
 The verified source cutoff is
-[`2d040b67`](https://github.com/Eabusham2/router-vpn/commit/2d040b67e092e82f2793c1074a9eeda609b9b5c2),
-tree `4bd24cd385c7f2e031a3a6e384d71c7d0a21e295`.
+[`cf863300`](https://github.com/Eabusham2/router-vpn/commit/cf86330014216fb66923fcea3969e5709cc2d04b),
+tree `93ed7e858ec23c37c7c59905bd7182c12f889e71`.
 [The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
@@ -22,7 +22,7 @@ validation limits. Changes and test counts are not a requirements denominator.
 - Retained macOS direct Local SOCKS5, AWG Fast/Strong and bounded OpenVPN are
   integrated with their captured credentials, selected policy and original
   native cleanup. The Local ordinary WG/AWG-entry host also admits SS, HTTP CONNECT,
-  HTTPS CONNECT, Hysteria2, authenticated SOCKS5, WireGuard and AWG exits while retaining
+  HTTPS CONNECT, Hysteria2, authenticated SOCKS5, WireGuard, AWG and bounded OpenVPN exits while retaining
   both private sources and separate proofs. The final node owns publication, Stop,
   measurements and exact Local restoration; only the entry receives physical egress. CONNECT
   retains independent proxy credentials/TLS settings, and HY2 retains its final
@@ -40,9 +40,14 @@ validation limits. Changes and test counts are not a requirements denominator.
   identity behind WG/AWG entries. Source/restoration tests retain both saved
   profiles and the original proved Local choice. Six actual encrypted
   loopback graphs and fourteen refusal cases pass separately from native
-  host acceptance. Ordinary Server/Compare, new predecessors and broader
-  Start Layers remain separate requirements. The native gate now requires
-  all 224 cases and 31 policy tests. Its exact
+  host acceptance. OpenVPN final TCP, UDP and ordered TCP/TCP or TCP/UDP
+  fallback retain the exact imported credentials and entry detour. The nested
+  UDP cases explicitly capture entry MTU 1440/final 1280; entry 1420 remains
+  rejected. Twelve real encrypted loopback positives and eight refusal leaves
+  pass with original endpoint cleanup, separately from native acceptance.
+  Ordinary Server/Compare, new predecessors and broader Start Layers remain
+  separate requirements. The native gate now requires all 263 cases and 34
+  policy tests. Its exact
   verdict parser now counts anchored lines once; all 961 differential inputs
   preserve acceptance/rejection behavior within the original budget. Focused
   source/race/build checks pass; actual encrypted peers, PF/utun, physical transitions

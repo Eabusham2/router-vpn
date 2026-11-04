@@ -316,9 +316,15 @@ func desktopPacketReferenceKeys(t *testing.T) (*ecdh.PrivateKey, *ecdh.PrivateKe
 	encode := base64.StdEncoding.EncodeToString
 	return provider, client, encode(psk[:]), desktopExternalInstalledWGRequest{PrivateKey: encode(provider.Bytes()), ClientPublicKey: encode(client.PublicKey().Bytes()), PresharedKey: encode(psk[:])}
 }
-func desktopPacketReferenceClientStart(t *testing.T, ctx context.Context, variant, target, private, public, psk string, lower N.Dialer, final bool, fault string) desktopPacketReferenceClient {
+func desktopPacketReferenceClientStart(t *testing.T, ctx context.Context, variant, target, private, public, psk string, lower N.Dialer, final bool, fault string, capturedMTU ...int) desktopPacketReferenceClient {
 	t.Helper()
 	address, address6, mtu := "10.78.0.2/32", "fd78:78::2/128", 1420
+	if len(capturedMTU) != 0 {
+		if len(capturedMTU) != 1 || capturedMTU[0] != 1440 || final {
+			t.Fatal("uncaptured packet client MTU")
+		}
+		mtu = capturedMTU[0]
+	}
 	if final {
 		address, address6, mtu = "10.79.0.2/32", "fd79:79::2/128", 1328
 	}

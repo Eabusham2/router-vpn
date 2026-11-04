@@ -18,6 +18,32 @@ func desktopExternalPacketEntryExitFixture(t *testing.T, kill, variant, protocol
 func desktopExternalPacketEntryLayerExitFixture(t *testing.T, kill, variant, protocol, layer string, finalVariants ...string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
 	t.Helper()
 	profile, exit := desktopExternalNativeFixture(t, protocol)
+	if protocol == "openvpn" {
+		mode := "udp"
+		if len(finalVariants) != 0 {
+			mode = finalVariants[0]
+		}
+		network := "tcp"
+		if mode == "udp" || mode == "mixed-fallback" {
+			network = "udp"
+		}
+		if mode != "tcp" && mode != "udp" && mode != "tcp-fallback" && mode != "mixed-fallback" {
+			t.Fatal("uncaptured OpenVPN fixture transport")
+		}
+		config := "client\ndev tun\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint " + strings.Repeat("ab", 32) + "\ntun-mtu 1280\ndata-ciphers AES-256-GCM:AES-128-GCM\n"
+		if strings.Contains(mode, "fallback") {
+			config += "remote 198.51.100.240 8387 tcp\n"
+		}
+		config += "remote 198.51.100.240 8388 " + network + "\n"
+		profile.External.OpenVPN = &common.ExternalOpenVPNConfig{Config: config, Username: "separate-final-user", Password: "separate-final-secret"}
+		profile.Endpoint = "198.51.100.240"
+		var err error
+		exit, err = standardExitFromExternalProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if protocol == "amneziawg" {
 		profile.External.AmneziaWG.PresharedKey, profile.External.AmneziaWG.PersistentKeepalive = testWGKey('r'), 25
 		variant := "strong"
@@ -45,6 +71,9 @@ func desktopExternalPacketEntryLayerExitFixture(t *testing.T, kill, variant, pro
 	}
 	entry, _ := desktopExternalNativeFixture(t, "wireguard")
 	entry.ID = "captured-wg-entry"
+	if protocol == "openvpn" {
+		entry.External.WireGuard.MTU = 1440
+	}
 	if protocol == "wireguard" || protocol == "amneziawg" {
 		entry.External.WireGuard.MTU = 1420
 		entry.External.WireGuard.PrivateKey, entry.External.WireGuard.PeerPublicKey, entry.External.WireGuard.PresharedKey = testWGKey('i'), testWGKey('j'), testWGKey('k')
@@ -62,6 +91,10 @@ func desktopExternalPacketEntryLayerExitFixture(t *testing.T, kill, variant, pro
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
+	if protocol == "openvpn" {
+		profile.ManualMTU = 1280
+		profile.DNSProtocol = "udp"
+	}
 	if protocol == "amneziawg" {
 		profile.ManualMTU = 1328
 	}
@@ -150,6 +183,9 @@ func desktopExternalPacketEntryLayerExitRetainsSources(t *testing.T, variant, pr
 			}
 			faults = append(faults, "exit-keepalive")
 		}
+		if protocol == "openvpn" {
+			faults = append(faults, "exit-username", "exit-config")
+		}
 		if protocol == "hysteria2" {
 			faults = append(faults, "exit-tls")
 		}
@@ -190,6 +226,8 @@ func desktopExternalPacketEntryLayerExitRetainsSources(t *testing.T, variant, pr
 					e.DAITAEnabled = !e.DAITAEnabled
 				case "layer-key", "layer-mode", "layer-private", "layer-host", "layer-port":
 					mutateDesktopExternalEntryLayer(&p, fault)
+				case "exit-config":
+					mutateDesktopExternalEntryExit(t, &p, "config")
 				case "exit-key":
 					mutateDesktopExternalEntryExit(t, &p, "password")
 				case "exit-address", "exit-client-address", "exit-allowed-ips", "exit-mtu", "exit-keepalive":
@@ -384,6 +422,14 @@ func mutateDesktopExternalEntryParameter(t *testing.T, parameters map[string]str
 func mutateDesktopExternalEntryExit(t *testing.T, profile *common.RouterProfile, field string) {
 	t.Helper()
 	switch profile.External.Protocol {
+	case "openvpn":
+		if field == "username" {
+			profile.External.OpenVPN.Username += "changed"
+		} else if field == "config" {
+			profile.External.OpenVPN.Config += "\n# changed original source\n"
+		} else {
+			profile.External.OpenVPN.Password += "changed"
+		}
 	case "wireguard", "amneziawg":
 		packet := profile.External.WireGuard
 		if profile.External.AmneziaWG != nil {
@@ -492,7 +538,7 @@ func TestDesktopExternalPacketEntryWireGuardRestoreKeepsCompleteSourceAndNewSess
 }
 
 func TestDesktopExternalPacketEntryWireGuardPreservesUnsupportedGraphs(t *testing.T) {
-	for _, fault := range []string{"entry-layer", "final-layer", "server", "auto", "predecessor", "openvpn-final", "same-id", "off"} {
+	for _, fault := range []string{"entry-layer", "final-layer", "server", "auto", "predecessor", "substituted-openvpn-final", "same-id", "off"} {
 		t.Run(fault, func(t *testing.T) {
 			_, _, launch := desktopExternalPacketEntryExitFixture(t, "always", "strong", "wireguard")
 			switch fault {
@@ -504,8 +550,12 @@ func TestDesktopExternalPacketEntryWireGuardPreservesUnsupportedGraphs(t *testin
 				launch.external.selection = fault
 			case "predecessor":
 				launch.external.predecessor = strings.Repeat("a", 64)
-			case "openvpn-final":
+			case "substituted-openvpn-final":
 				launch.external.profile.External.Protocol = "openvpn"
+				if validateDesktopMacOSExternalSources(launch.external.profile, launch.external.entry, launch) == nil {
+					t.Fatal("substituted final protocol borrowed original sealed graph")
+				}
+				return
 			case "same-id":
 				launch.external.entry.ID = launch.external.profile.ID
 			case "off":
@@ -546,7 +596,7 @@ func TestDesktopExternalPacketEntryAmneziaRestoreKeepsCompleteSourceAndNewSessio
 }
 func TestDesktopExternalPacketEntryAmneziaPreservesUnsupportedGraphs(t *testing.T) {
 	t.Run("padding-mtu", desktopExternalPacketEntryAmneziaPreservesExactPaddingMTUBound)
-	for _, fault := range []string{"entry-layer", "final-layer", "server", "auto", "predecessor", "openvpn-final", "same-id", "off"} {
+	for _, fault := range []string{"entry-layer", "final-layer", "server", "auto", "predecessor", "substituted-openvpn-final", "same-id", "off"} {
 		t.Run(fault, func(t *testing.T) {
 			_, _, launch := desktopExternalPacketEntryLayerExitFixture(t, "always", "fast", "amneziawg", "", "strong")
 			switch fault {
@@ -558,8 +608,12 @@ func TestDesktopExternalPacketEntryAmneziaPreservesUnsupportedGraphs(t *testing.
 				launch.external.selection = fault
 			case "predecessor":
 				launch.external.predecessor = strings.Repeat("a", 64)
-			case "openvpn-final":
+			case "substituted-openvpn-final":
 				launch.external.profile.External.Protocol = "openvpn"
+				if validateDesktopMacOSExternalSources(launch.external.profile, launch.external.entry, launch) == nil {
+					t.Fatal("substituted final protocol borrowed original sealed graph")
+				}
+				return
 			case "same-id":
 				launch.external.entry.ID = launch.external.profile.ID
 			case "off":
@@ -596,5 +650,56 @@ func desktopExternalPacketEntryAmneziaPreservesExactPaddingMTUBound(t *testing.T
 				t.Fatal("oversized selected AWG MTU silently changed")
 			}
 		})
+	}
+}
+
+func TestDesktopExternalPacketEntryOpenVPNRetainsBothSourcesAndMeasurementOwner(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, mode := range []string{"tcp", "udp", "tcp-fallback", "mixed-fallback"} {
+			t.Run(variant+"/"+mode, func(t *testing.T) { desktopExternalPacketEntryLayerExitRetainsSources(t, variant, "openvpn", "", mode) })
+		}
+	}
+}
+func TestDesktopExternalPacketEntryOpenVPNRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		for _, mode := range []string{"tcp", "udp", "tcp-fallback", "mixed-fallback"} {
+			t.Run(variant+"/"+mode, func(t *testing.T) { desktopExternalPacketEntryLayerExitRestore(t, variant, "openvpn", "", mode) })
+		}
+	}
+}
+
+func TestDesktopExternalPacketEntryOpenVPNPreservesUnsupportedGraphs(t *testing.T) {
+	for _, fault := range []string{"entry-layer", "final-layer", "server", "auto", "predecessor", "same-id", "off"} {
+		t.Run(fault, func(t *testing.T) {
+			_, _, launch := desktopExternalPacketEntryExitFixture(t, "always", "strong", "openvpn")
+			switch fault {
+			case "entry-layer":
+				launch.external.entry.StartLayer = common.StartLayerAES256GCM
+			case "final-layer":
+				launch.external.profile.StartLayer = common.StartLayerAES256GCM
+			case "server":
+				launch.external.selection = "server"
+			case "auto":
+				launch.external.selection = "auto"
+			case "predecessor":
+				launch.external.predecessor = "captured-other-graph"
+			case "same-id":
+				launch.external.entry.ID = launch.external.profile.ID
+			case "off":
+				launch.external.profile.KillSwitchPolicy = "off"
+			}
+			if desktopExternalPacketEntryOwner(launch.external) {
+				t.Fatal("OpenVPN final expanded unsupported owner graph", fault)
+			}
+		})
+	}
+	profile, entry, _ := desktopExternalPacketEntryExitFixture(t, "always", "wireguard", "openvpn")
+	entry.External.WireGuard.MTU = 1420
+	exit, err := standardExitFromExternalProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil); err == nil || launch != nil {
+		t.Fatal("unfragmented UDP OpenVPN bypassed original packet entry MTU")
 	}
 }

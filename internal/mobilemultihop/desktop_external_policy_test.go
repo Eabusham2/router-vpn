@@ -13,6 +13,11 @@ const desktopExternalTestSession = "0123456789abcdef0123456789abcdef"
 
 func desktopExternalInputFixture(t *testing.T, protocol, entry, variant string) (map[string]any, map[string]any) {
 	t.Helper()
+	if protocol == "openvpn" {
+		graph, capture := externalTestFixture(t, "wireguard", entry)
+		externalOpenVPNReplace(t, graph, capture, false, "udp")
+		return graph, capture
+	}
 	if protocol != "amneziawg" {
 		return externalTestFixture(t, protocol, entry)
 	}

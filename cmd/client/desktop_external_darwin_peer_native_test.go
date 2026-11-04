@@ -209,10 +209,11 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
 	hysteriaVariant, _, hysteriaEntry := macOSExternalHysteriaEntryScenario(scenario)
 	socksVariant, _, socksEntry := macOSExternalSOCKSEntryScenario(scenario)
+	ovpnVariant, ovpnTransport, _, ovpnFinal := macOSExternalOpenVPNFinalScenario(scenario)
 	awgVariant, awgFinalVariant, _, awgFinal := macOSExternalAmneziaFinalScenario(scenario)
 	wgVariant, _, wgFinal := macOSExternalWireGuardFinalScenario(scenario)
 	layerVariant, _, _, layerEntry := macOSExternalHysteriaLayerEntryScenario(scenario)
-	p.packetEntry = awgFinal || wgFinal || layerEntry || socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	p.packetEntry = ovpnFinal || awgFinal || wgFinal || layerEntry || socksEntry || hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
 	if p.packetEntry {
 		p.entryProtocol = "wireguard"
 		if strings.HasPrefix(scenario, "awg-entry-ss-") {
@@ -235,6 +236,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if socksEntry && socksVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", socksVariant
 	}
+	if ovpnFinal && ovpnVariant != "wireguard" {
+		p.entryProtocol, p.entryVariant = "amneziawg", ovpnVariant
+	}
 	if awgFinal && awgVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", awgVariant
 	}
@@ -248,10 +252,12 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		p.policy = "always"
 	}
 	if protocol == "openvpn" {
-		p.openvpnClient = p.physical
-		p.physical = macOSExternalNativeOpenVPNAddress(t, p.physical)
+		if !p.packetEntry {
+			p.openvpnClient = p.physical
+			p.physical = macOSExternalNativeOpenVPNAddress(t, p.physical)
+		}
 		p.openvpnNetwork = "tcp"
-		if strings.HasPrefix(scenario, "openvpn-udp") || strings.HasPrefix(scenario, "openvpn-mixed-fallback") {
+		if strings.HasPrefix(scenario, "openvpn-udp") || strings.HasPrefix(scenario, "openvpn-mixed-fallback") || ovpnTransport == "udp" || ovpnTransport == "mixed-fallback" {
 			p.openvpnNetwork = "udp"
 		}
 		p.openvpnFallback = strings.Contains(scenario, "-fallback")
@@ -282,7 +288,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	clear(key)
 	p.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopDarwinExternalReferenceProcess$", "-test.count=1", "-test.timeout=300s")
 	p.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_CHILD=1", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_ADDRESS=" + p.physical.String()}
-	if protocol == "openvpn" {
+	if protocol == "openvpn" && !p.packetEntry {
 		p.command.Env = append(p.command.Env, "ROUTERVPN_DARWIN_EXTERNAL_CLIENT_ADDRESS="+p.openvpnClient.String())
 	}
 	if layer != "" {
@@ -326,7 +332,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	request := map[string]any{"schema": 1, "protocol": protocol, "address": p.physical.String(), "password": p.password, "hold": false}
 	if protocol == "openvpn" {
 		request["password"], request["openvpn_network"], request["openvpn_fallback"] = "", p.openvpnNetwork, p.openvpnFallback
-		request["openvpn_client_address"] = p.openvpnClient.String()
+		if !p.packetEntry {
+			request["openvpn_client_address"] = p.openvpnClient.String()
+		}
 	}
 	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof" || fault == "relay-route") {
 		request["socks_fault"] = fault
@@ -427,6 +435,9 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 	}
 	switch p.protocol {
 	case "openvpn":
+		if p.packetEntry {
+			profile.ManualMTU = 1280
+		}
 		profile.DNSProtocol = "udp"
 		profile.External.OpenVPN = macOSExternalNativeOpenVPNProfile(t, p)
 		if p.fault == "wrong-exit" {
@@ -676,6 +687,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 }
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
+	if _, _, fault, ok := macOSExternalOpenVPNFinalScenario(scenario); ok {
+		return "openvpn", "", fault
+	}
 	t.Helper()
 	if _, _, fault, ok := macOSExternalAmneziaFinalScenario(scenario); ok {
 		return "amneziawg", "", fault

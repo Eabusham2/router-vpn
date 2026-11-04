@@ -69,9 +69,22 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 					external["protocol"], external["amneziawg"] = "amneziawg", imported
 					delete(external, "wireguard")
 				}
+				if protocol == "openvpn" {
+					externalTestFind(t, graph, "external-entry")["mtu"] = float64(1440)
+					entry := capture["entry"].(map[string]any)
+					imported := entry["external"].(map[string]any)
+					field := "wireguard"
+					if variant != "wireguard" {
+						field = "amneziawg"
+					}
+					imported[field].(map[string]any)["mtu"] = float64(1440)
+				}
 				profile := capture["profile"].(map[string]any)
 				profile["kill_switch_policy"], profile["ipv6_mode"], profile["home_lan_access"] = kill, ipv6, lan
 				mtu := 1360
+				if protocol == "openvpn" {
+					mtu = 1280
+				}
 				if protocol == "amneziawg" {
 					mtu = 1328
 				}
@@ -120,8 +133,11 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 				if actual.EntryID != "saved-entry" || actual.EntryTag != "external-entry" || len(actual.PhysicalRoots) != 1 || actual.PhysicalRoots[0].Tag != "external-entry" || meta.RootTag != "external-entry" || meta.RootType != rootType || meta.Protocol != protocol || meta.SOCKSUDPAssociationRequired != (protocol == "socks5") || meta.SOCKSUDPAssociationTunneled != (protocol == "socks5") || actual.PhysicalRoots[0].DynamicSOCKSUDP || entry["detour"] != DesktopExternalPhysicalTag || actual.StartLayer != layer || exit["detour"] != finalDetour || !reflect.DeepEqual(exit, externalTestFind(t, source, ExternalFinalTag)) || actual.SelectedDNS.Detour != ExternalFinalTag || actual.SelectedDNS.Physical || actual.ConfiguredMTU != mtu || actual.KillSwitchPolicy != kill || actual.IPv6Mode != ipv6 || actual.HomeLANAccess != lan {
 					t.Fatal("entry lost exact root, final graph or device policy")
 				}
-				if protocol == "wireguard" || protocol == "amneziawg" {
+				if protocol == "wireguard" || protocol == "amneziawg" || protocol == "openvpn" {
 					finalType := protocol
+					if protocol == "openvpn" {
+						finalType = "openvpn-client"
+					}
 					if protocol == "amneziawg" {
 						finalType = AmneziaType
 					}
@@ -167,8 +183,8 @@ func TestDesktopExternalDarwinWireGuardEntryPreservesOtherGraphBoundaries(t *tes
 		externalOpenVPNReplace(t, graph, capture, false, "tcp")
 		capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 		original := externalDesktopCompile(t, graph, capture)
-		if plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "darwin"); err == nil || plan != nil {
-			t.Fatal("unimplemented final graph admitted", protocol)
+		if plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "windows"); err == nil || plan != nil {
+			t.Fatal("unimplemented host/final graph admitted", protocol)
 		}
 	}
 }
@@ -184,5 +200,11 @@ func TestDesktopExternalDarwinPacketEntryAmneziaRetainsCompletePolicy(t *testing
 		for _, final := range []string{"fast", "strong"} {
 			t.Run(entry+"/"+final, func(t *testing.T) { desktopExternalPacketEntryLayerOwnsPolicy(t, entry, "amneziawg", "", final) })
 		}
+	}
+}
+
+func TestDesktopExternalDarwinPacketEntryOpenVPNRetainsCompletePolicy(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitOwnsPolicy(t, variant, "openvpn") })
 	}
 }

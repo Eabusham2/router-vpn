@@ -65,6 +65,17 @@ func TestRouterVPNDesktopDarwinExternalReferenceProcess(t *testing.T) {
 	desktopExternalInstalledAmneziaEntry = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest, cert tls.Certificate, exitAddress, exitNetwork string, exitPort uint16) desktopExternalInstalledPacketEntryPeer {
 		return startDesktopDarwinInstalledAmneziaEntry(t, server, request, address, cert, exitAddress, exitNetwork, exitPort)
 	}
+	desktopExternalInstalledOpenVPNFinal = startDesktopDarwinInstalledOpenVPNFinal
+	desktopExternalInstalledOpenVPNEntry = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, cert tls.Certificate, final desktopExternalInstalledOpenVPNPeer) desktopExternalInstalledPacketEntryPeer {
+		if request.AmneziaEntry != nil {
+			params, backend := desktopDarwinAmneziaBackend(t, *request.AmneziaEntry)
+			return desktopInstalledPacketEntryRoutes(t, server, request.AmneziaEntry.desktopExternalInstalledWGRequest, address, cert, final.entryRoutes, "amneziawg", params, backend, 1440)
+		}
+		if request.WireGuardEntry == nil {
+			t.Fatal("OpenVPN final lost original packet entry")
+		}
+		return desktopInstalledPacketEntryRoutes(t, server, *request.WireGuardEntry, address, cert, final.entryRoutes, "wireguard", "", startDesktopDarwinWGDevice, 1440)
+	}
 	desktopExternalInstalledOpenVPN = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string) desktopExternalInstalledOpenVPNPeer {
 		client, err := netip.ParseAddr(os.Getenv("ROUTERVPN_DARWIN_EXTERNAL_CLIENT_ADDRESS"))
 		if err != nil || client.String() != request.OpenVPNClientAddress || !interfaceAddresses[ownedIndex][client] || !client.Is4() || !client.IsGlobalUnicast() || client.IsLoopback() {

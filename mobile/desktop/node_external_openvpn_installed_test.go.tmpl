@@ -4,6 +4,7 @@ package routervpnamnezia
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -11,9 +12,17 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/openvpn"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"io"
 	"math/big"
 	"net"
@@ -44,6 +53,26 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 	if err != nil || !clientAddress.Is4() || !clientAddress.IsGlobalUnicast() || clientAddress.IsLoopback() {
 		t.Fatal("OpenVPN provider lost its captured original client address")
 	}
+	return startDesktopInstalledOpenVPNProvider(t, parent, request, dnsAddress, publicAddress, physical, clientAddress, false)
+}
+
+// The final provider has no physical listener. Only the original entry's fixed
+// decrypted routes can reach its exact loopback TCP/UDP listener objects.
+func startDesktopDarwinInstalledOpenVPNFinal(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string) desktopExternalInstalledOpenVPNPeer {
+	t.Helper()
+	if request.OpenVPNClientAddress != "" || request.OpenVPNNetwork != "tcp" && request.OpenVPNNetwork != "udp" {
+		t.Fatal("OpenVPN final lost its captured tunneled role")
+	}
+	loopback := netip.MustParseAddr("127.0.0.1")
+	return startDesktopInstalledOpenVPNProvider(t, parent, request, dnsAddress, publicAddress, loopback, loopback, true)
+}
+func startDesktopInstalledOpenVPNProvider(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string, physical, clientAddress netip.Addr, final bool) desktopExternalInstalledOpenVPNPeer {
+	t.Helper()
+	mtu := 1400
+	if final {
+		mtu = 1280
+	}
+	var err error
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +168,7 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 	t.Cleanup(closePeer)
 	unavailable := ""
 	if request.OpenVPNFallback {
-		refusal, err = net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+		refusal, err = net.Listen("tcp4", net.JoinHostPort(physical.String(), "0"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,14 +194,14 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 	received := func() { finalSequence.CompareAndSwap(0, order.Add(1)) }
 	address := ""
 	if request.OpenVPNNetwork == "tcp" {
-		listener, err = net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+		listener, err = net.Listen("tcp4", net.JoinHostPort(physical.String(), "0"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		address = listener.Addr().String()
 		transport.Listener = &desktopDarwinOpenVPNListener{Listener: listener, physical: physical, client: clientAddress, count: &rawTCP, received: received}
 	} else {
-		packet, err = net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
+		packet, err = net.ListenPacket("udp4", net.JoinHostPort(physical.String(), "0"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +210,7 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 	}
 	transport.ListenAddress = address
 	options := ovpn.ServerOptions{Context: ctx, Mode: ovpn.ModeTLS, Transport: transport, Resources: ovpn.ServerResourceOptions{MaxClients: 1}, Logger: log.NewNOPFactory().Logger(),
-		DataChannel: ovpn.ServerDataChannelOptions{MTU: 1400, Ciphers: []string{"AES-256-GCM", "AES-128-GCM"}, PacketHeadroom: stackvpn.PacketHeadroom},
+		DataChannel: ovpn.ServerDataChannelOptions{MTU: uint32(mtu), Ciphers: []string{"AES-256-GCM", "AES-128-GCM"}, PacketHeadroom: stackvpn.PacketHeadroom},
 		Tunnel:      ovpn.ServerTunnelOptions{AddressPools: []netip.Prefix{netip.MustParsePrefix("10.211.18.1/24"), netip.MustParsePrefix("fd78:211::1/64")}, Topology: "subnet"},
 		TLS:         ovpn.ServerTLSOptions{CertificateAuthority: ovpn.Material{Content: []byte(ca)}, Certificate: ovpn.Material{Content: []byte(certificate)}, Key: ovpn.Material{Content: []byte(key)}, VerifyClientCertificate: "require", RemoteCertificateTLS: "client"},
 		Authentication: ovpn.ServerAuthenticationOptions{Authenticator: func(_ context.Context, user, pass string) error {
@@ -201,7 +230,7 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 		options.KeyDirection = -1
 		options.TLS.Crypt = ovpn.Material{Content: []byte(controlKey)}
 	}
-	device, err = stackvpn.NewDevice(stackvpn.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), System: false, Handler: handler, MTU: 1400, UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, Configuration: stackvpn.Configuration{MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.211.18.1/24"), netip.MustParsePrefix("fd78:211::1/64")}, Topology: "subnet"}})
+	device, err = stackvpn.NewDevice(stackvpn.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), System: false, Handler: handler, MTU: uint32(mtu), UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, Configuration: stackvpn.Configuration{MTU: uint32(mtu), Address: []netip.Prefix{netip.MustParsePrefix("10.211.18.1/24"), netip.MustParsePrefix("fd78:211::1/64")}, Topology: "subnet"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,6 +276,15 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 			}
 		}
 	}()
+	entryRoutes := []desktopReferenceRule{}
+	if final {
+		entryRoutes = append(entryRoutes, desktopReferenceRule{Network: request.OpenVPNNetwork, Address: "198.51.100.240", Port: 8388, Target: address})
+		address = "198.51.100.240:8388"
+		if unavailable != "" {
+			entryRoutes = append(entryRoutes, desktopReferenceRule{Network: "tcp", Address: "198.51.100.240", Port: 8387, Target: unavailable})
+			unavailable = "198.51.100.240:8387"
+		}
+	}
 	config := "# exact captured native OpenVPN import\r\nclient\ndev tun\nauth-user-pass\n"
 	if unavailable != "" {
 		remote := netip.MustParseAddrPort(unavailable)
@@ -254,7 +292,7 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 	}
 	remote := netip.MustParseAddrPort(address)
 	config += fmt.Sprintf("remote %s %d %s\n", remote.Addr(), remote.Port(), request.OpenVPNNetwork)
-	config += "verify-x509-name provider.routervpn.test name\nremote-cert-tls server\ndata-ciphers AES-256-GCM:AES-128-GCM\ntun-mtu 1400\nhand-window 3\ntls-timeout 1\n<ca>\n" + ca + "</ca>\n<cert>\n" + client + "</cert>\n<key>\n" + clientKey + "</key>\n<" + control + ">\n" + controlKey + "</" + control + ">\n"
+	config += "verify-x509-name provider.routervpn.test name\nremote-cert-tls server\ndata-ciphers AES-256-GCM:AES-128-GCM\ntun-mtu " + fmt.Sprint(mtu) + "\nhand-window 3\ntls-timeout 1\n<ca>\n" + ca + "</ca>\n<cert>\n" + client + "</cert>\n<key>\n" + clientKey + "</key>\n<" + control + ">\n" + controlKey + "</" + control + ">\n"
 	if control == "tls-auth" {
 		config += "key-direction 1\n"
 	}
@@ -264,7 +302,7 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 	if _, err = nativeopenvpn.CompileProfile(nativeopenvpn.Profile{Config: config, Username: username, Password: password}, "custom-exit", ""); err != nil {
 		t.Fatal(err)
 	}
-	return desktopExternalInstalledOpenVPNPeer{address: address, profile: config, username: username, password: password, close: closePeer, stats: func() desktopExternalInstalledOpenVPNStats {
+	return desktopExternalInstalledOpenVPNPeer{entryRoutes: entryRoutes, address: address, profile: config, username: username, password: password, close: closePeer, stats: func() desktopExternalInstalledOpenVPNStats {
 		return desktopExternalInstalledOpenVPNStats{connections: rawTCP.Load(), physicalUDP: rawUDP.Load(), streams: handler.tcp.Load(), packets: handler.udp.Load(), authFailures: authFailures.Load(), fallbackAttempts: fallbackAttempts.Load(), firstSequence: firstSequence.Load(), finalSequence: finalSequence.Load()}
 	}}
 }
@@ -316,4 +354,247 @@ func (p *desktopDarwinOpenVPNPacket) ReadFrom(b []byte) (int, net.Addr, error) {
 		p.received()
 		return n, a, nil
 	}
+}
+
+// This component uses actual WG/AWG packets and the real OpenVPN endpoint's
+// detour dialer, TLS control channel and data stack. Loopback replaces only the
+// first provider's socket location; it grants no PF/utun or physical evidence.
+type desktopOpenVPNReferenceNetwork struct{ adapter.NetworkManager }
+
+func (*desktopOpenVPNReferenceNetwork) InterfaceFinder() control.InterfaceFinder { return nil }
+
+type desktopOpenVPNReferenceOutbound struct {
+	adapter.Outbound
+	client desktopPacketReferenceClient
+}
+
+func (d *desktopOpenVPNReferenceOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	return d.client.DialContext(ctx, network, destination)
+}
+func (*desktopOpenVPNReferenceOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("OpenVPN must retain original connected transport")
+}
+
+type desktopOpenVPNReferenceManager struct {
+	adapter.OutboundManager
+	outbound adapter.Outbound
+}
+
+func (m *desktopOpenVPNReferenceManager) Outbound(tag string) (adapter.Outbound, bool) {
+	return m.outbound, tag == "captured-entry"
+}
+
+func TestRouterVPNDesktopInstalledOpenVPNFinalLoopbackTwoHopReference(t *testing.T) {
+	for _, entry := range []string{"wireguard", "fast", "strong"} {
+		for _, transport := range []string{"tcp", "udp", "tcp-fallback", "mixed-fallback"} {
+			t.Run(entry+"/"+transport, func(t *testing.T) { desktopOpenVPNFinalTwoHop(t, entry, transport, "") })
+		}
+	}
+	for _, fault := range []string{"entry-key", "entry-parameters", "password", "username", "control", "provider-trust", "remote", "dns-route"} {
+		t.Run("negative/"+fault, func(t *testing.T) { desktopOpenVPNFinalTwoHop(t, "strong", "udp", fault) })
+	}
+}
+func desktopOpenVPNFinalTwoHop(t *testing.T, variant, transport, fault string) {
+	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 8*time.Second)
+	defer cancel()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		c, e := listener.Accept()
+		if e == nil {
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(6 * time.Second))
+			_, _ = io.Copy(c, c)
+		}
+	}()
+	defer func() { _ = listener.Close(); <-served }()
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packetDone := make(chan struct{})
+	go func() {
+		defer close(packetDone)
+		b := make([]byte, 2048)
+		for {
+			n, a, e := packet.ReadFrom(b)
+			if e != nil {
+				return
+			}
+			if _, e = packet.WriteTo(b[:n], a); e != nil {
+				return
+			}
+		}
+	}()
+	defer func() { _ = packet.Close(); <-packetDone }()
+	parent := &desktopNodeLayerServer{ctx: ctx, cancel: cancel}
+	network := "tcp"
+	if transport == "udp" || transport == "mixed-fallback" {
+		network = "udp"
+	}
+	final := startDesktopDarwinInstalledOpenVPNFinal(t, parent, desktopExternalInstalledPeerRequest{OpenVPNNetwork: network, OpenVPNFallback: strings.Contains(transport, "fallback")}, packet.LocalAddr().String(), listener.Addr().String())
+	defer final.close()
+	_, client, psk, keys := desktopPacketReferenceKeys(t)
+	params, backend := "", startDesktopDarwinWGDevice
+	if variant != "wireguard" {
+		params, backend = desktopDarwinAmneziaBackend(t, desktopExternalInstalledAWGRequest{keys, desktopDarwinAmneziaReferenceParameters(t, "amneziawg-"+variant)})
+	}
+	rules := map[string]desktopReferenceRule{}
+	for _, r := range final.entryRoutes {
+		rules[fmt.Sprintf("%s/%s:%d", r.Network, r.Address, r.Port)] = r
+	}
+	entry := desktopInstalledPacketDevice(t, parent, keys, netip.MustParseAddr("127.0.0.1"), params, backend, rules, false, 1440)
+	defer entry.close()
+	lower := &desktopPacketLoopbackLower{original: entry.address, virtual: "198.51.100.239:8388"}
+	private := base64.StdEncoding.EncodeToString(client.Bytes())
+	if fault == "entry-key" {
+		_, other, _, _ := desktopPacketReferenceKeys(t)
+		private = base64.StdEncoding.EncodeToString(other.Bytes())
+	}
+	clientEntry := desktopPacketReferenceClientStart(t, ctx, variant, "198.51.100.239:8388", private, base64.StdEncoding.EncodeToString(mustDesktopOpenVPNProviderPublic(t, keys.PrivateKey)), psk, lower, false, fault, 1440)
+	defer func() {
+		if e := clientEntry.Close(); e != nil {
+			t.Error("original entry cleanup", e)
+		}
+	}()
+	profile := nativeopenvpn.Profile{Config: final.profile, Username: final.username, Password: final.password}
+	switch fault {
+	case "password":
+		profile.Password += "wrong"
+	case "username":
+		profile.Username += "wrong"
+	case "control":
+		profile.Config = strings.ReplaceAll(profile.Config, strings.Repeat("a", 32), strings.Repeat("b", 32))
+	case "provider-trust":
+		profile.Config = strings.Replace(profile.Config, "provider.routervpn.test name", "different.routervpn.test name", 1)
+	case "remote":
+		profile.Config = strings.ReplaceAll(profile.Config, "198.51.100.240", "198.51.100.241")
+	}
+	compiled, err := nativeopenvpn.CompileProfile(profile, "captured-openvpn", "captured-entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var options option.OpenVPNClientEndpointOptions
+	if err = json.Unmarshal(body, &options); err != nil {
+		t.Fatal(err)
+	}
+	ownedCtx := service.ContextWith[adapter.NetworkManager](ctx, &desktopOpenVPNReferenceNetwork{})
+	ownedCtx = service.ContextWith[adapter.OutboundManager](ownedCtx, &desktopOpenVPNReferenceManager{outbound: &desktopOpenVPNReferenceOutbound{client: clientEntry}})
+	endpoint, err := openvpn.NewClientEndpoint(ownedCtx, nil, log.NewNOPFactory().Logger(), "captured-openvpn", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if e := endpoint.Close(); e != nil {
+			t.Error("original final cleanup", e)
+		}
+	}()
+	if err = endpoint.Start(adapter.StartStatePostStart); err != nil {
+		t.Fatal(err)
+	}
+	accepted := fault == ""
+	limit := 6 * time.Second
+	if !accepted {
+		limit = 1500 * time.Millisecond
+	}
+	proof, stop := context.WithTimeout(ctx, limit)
+	defer stop()
+	target := "203.0.113.53:5353"
+	if fault == "dns-route" {
+		target = "203.0.113.52:5353"
+	}
+	delivered := false
+	for proof.Err() == nil {
+		c, e := endpoint.DialContext(proof, "udp", M.ParseSocksaddr(target))
+		if e == nil {
+			deadline, _ := proof.Deadline()
+			_ = c.SetDeadline(deadline)
+			payload := []byte("original-openvpn-two-hop")
+			_, e = c.Write(payload)
+			b := make([]byte, 64)
+			var n int
+			if e == nil {
+				n, e = c.Read(b)
+			}
+			_ = c.Close()
+			if e == nil && string(b[:n]) == string(payload) {
+				delivered = true
+				break
+			}
+		}
+		select {
+		case <-proof.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if delivered != accepted {
+		t.Fatal("two-hop encrypted payload acceptance mismatch", fault, delivered)
+	}
+	stats := final.stats()
+	entryRaw, entryStreams, entryPackets := entry.stats()
+	if entryRaw < 1 {
+		t.Fatal("two-hop control never reached its original encrypted entry")
+	}
+	if fault != "entry-key" && fault != "entry-parameters" && fault != "remote" && (stats.finalSequence == 0 || network == "tcp" && stats.connections < 1 || network == "udp" && stats.physicalUDP < 1) {
+		t.Fatal("two-hop control missed its original independent provider", fault, stats)
+	}
+	if (fault == "password" || fault == "username") && stats.authFailures < 1 {
+		t.Fatal("two-hop credential refusal missed original authenticator", stats)
+	}
+	if fault == "entry-key" || fault == "entry-parameters" {
+		if entryStreams != 0 || entryPackets != 0 {
+			t.Fatal("untrusted entry delivered decrypted traffic")
+		}
+	}
+	if fault == "dns-route" && (entryPackets < 1 || stats.packets != 0) {
+		t.Fatal("DNS-route refusal crossed the fixed final DNS route")
+	}
+	if accepted {
+		c, e := endpoint.DialContext(proof, "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		deadline, _ := proof.Deadline()
+		_ = c.SetDeadline(deadline)
+		payload := []byte("original-openvpn-stream")
+		_, e = c.Write(payload)
+		b := make([]byte, len(payload))
+		if e == nil {
+			_, e = io.ReadFull(c, b)
+		}
+		_ = c.Close()
+		if e != nil || string(b) != string(payload) {
+			t.Fatal("encrypted final TCP payload", e)
+		}
+		if stats.packets < 1 || stats.finalSequence == 0 || strings.Contains(transport, "fallback") && (stats.fallbackAttempts < 1 || stats.firstSequence == 0 || stats.firstSequence >= stats.finalSequence) {
+			t.Fatal("original ordered provider transport missing", stats)
+		}
+	} else if fault == "entry-key" || fault == "entry-parameters" || fault == "remote" {
+		if stats.connections != 0 || stats.physicalUDP != 0 || stats.packets != 0 {
+			t.Fatal("foreign firstroot/remote reached final provider", stats)
+		}
+	} else if fault != "dns-route" && (stats.packets != 0 || stats.streams != 0) {
+		t.Fatal("untrusted provider credentials delivered plaintext", stats)
+	}
+}
+func mustDesktopOpenVPNProviderPublic(t *testing.T, encoded string) []byte {
+	t.Helper()
+	raw, e := base64.StdEncoding.DecodeString(encoded)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer clear(raw)
+	key, e := ecdh.X25519().NewPrivateKey(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return key.PublicKey().Bytes()
 }

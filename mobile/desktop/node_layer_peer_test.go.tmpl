@@ -1817,10 +1817,14 @@ type desktopExternalInstalledOpenVPNStats struct {
 	firstSequence, finalSequence                                               uint64
 }
 type desktopExternalInstalledOpenVPNPeer struct {
+	entryRoutes                          []desktopReferenceRule
 	address, profile, username, password string
 	stats                                func() desktopExternalInstalledOpenVPNStats
 	close                                func()
 }
+
+var desktopExternalInstalledOpenVPNFinal func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
+var desktopExternalInstalledOpenVPNEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, tls.Certificate, desktopExternalInstalledOpenVPNPeer) desktopExternalInstalledPacketEntryPeer
 
 var desktopExternalInstalledOpenVPN func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
 
@@ -2371,7 +2375,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
+	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
 		t.Fatal("unrequested or unsupported encrypted entry graph")
@@ -2502,8 +2506,15 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 		address, closeTransport = wgPeer.address, wgPeer.close
 	} else if request.Protocol == "openvpn" {
-		if desktopExternalInstalledOpenVPN != nil {
-			openvpnPeer = desktopExternalInstalledOpenVPN(t, server, request, dnsPacket.LocalAddr().String(), proofListener.Addr().String())
+		provider := desktopExternalInstalledOpenVPN
+		if entryRequested {
+			provider = desktopExternalInstalledOpenVPNFinal
+			if provider == nil || desktopExternalInstalledOpenVPNEntry == nil || request.OpenVPNClientAddress != "" {
+				t.Fatal("OpenVPN final omitted its original tunneled provider/entry")
+			}
+		}
+		if provider != nil {
+			openvpnPeer = provider(t, server, request, dnsPacket.LocalAddr().String(), proofListener.Addr().String())
 			if openvpnPeer.address == "" || openvpnPeer.profile == "" || openvpnPeer.stats == nil || openvpnPeer.close == nil {
 				t.Fatal("native OpenVPN provider omitted its original actual transport")
 			}
@@ -2619,7 +2630,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 			exitNetwork = "udp"
 		}
-		if request.AmneziaEntry != nil {
+		if request.Protocol == "openvpn" {
+			entryPeer = desktopExternalInstalledOpenVPNEntry(t, server, request, cert, openvpnPeer)
+		} else if request.AmneziaEntry != nil {
 			entryPeer = desktopExternalInstalledAmneziaEntry(t, server, *request.AmneziaEntry, cert, address, exitNetwork, exitPort)
 		} else {
 			entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address, exitNetwork, exitPort)
