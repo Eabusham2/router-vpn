@@ -28,6 +28,18 @@ def failure(parent, case, witness):
     return witness + '\n--- FAIL: ' + parent + ' (0.01s)\n    --- FAIL: ' + parent + '/' + case + ' (0.01s)\nFAIL\n'
 
 
+MAX_IMAGE_HOLDER_PARENT = r'''
+import subprocess,sys,time
+from pathlib import Path
+child=subprocess.Popen([sys.executable,'-I','-S','-c',sys.argv[1],sys.argv[2],sys.argv[3]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+deadline=time.monotonic()+10
+while not Path(sys.argv[3]).is_file():
+    if time.monotonic()>=deadline:raise RuntimeError('original image holder did not start')
+    time.sleep(.01)
+print(sys.argv[4],flush=True)
+sys.exit(1)
+'''
+
 EXCHANGE_DIAGNOSTIC_HARNESS = r'''package routervpnamnezia
 import("bytes";"context";"errors";"fmt";"io";"net";"strings";"syscall";"testing";"time")
 var _,_,_ = fmt.Sprintf, syscall.Errno(0), io.EOF
@@ -466,6 +478,24 @@ class MAXCommandRetirement(unittest.TestCase):
         self.assertTrue(owner.retired)
         self.assertFalse(workspace.exists())
 
+    def test_image_holder_parent_preserves_exact_rejection_contract(self):
+        # Execute the same parent program used by the Windows sharing test.
+        # This portable child supplies readiness and exits; it makes no claim
+        # about native Job ownership or Windows image sharing.
+        child = 'import sys; from pathlib import Path; Path(sys.argv[2]).write_text("ready")'
+        parent_test = 'TestRouterVPNDesktopNodeWindowsMAXTLS'
+        case = 'max-tls-wg/off'
+        witness = 'original test-only negative witness'
+        with tempfile.TemporaryDirectory(prefix='max-holder-parent-contract-') as directory:
+            root = Path(directory)
+            command = [sys.executable, '-I', '-S', '-c', MAX_IMAGE_HOLDER_PARENT,
+                       child, str(root/'image'), str(root/'ready'),
+                       failure(parent_test, case, witness)]
+            result = subprocess.run(command, cwd=root, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, timeout=15)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            GATE.rejected_output(result.returncode, result.stdout, parent_test, case, witness)
+
     @unittest.skipUnless(os.name == 'nt', 'actual Windows file sharing and job APIs required')
     def test_actual_completed_control_joins_original_image_holder_before_unlink(self):
         # A command exits with its deliberate negative witness while a genuine
@@ -481,17 +511,7 @@ if handle in (None,ctypes.c_void_p(-1).value):raise ctypes.WinError(ctypes.get_l
 Path(sys.argv[2]).write_text('original descendant holds image')
 time.sleep(120)
 '''
-        parent = r'''
-import subprocess,sys,time
-from pathlib import Path
-child=subprocess.Popen([sys.executable,'-I','-S','-c',sys.argv[1],sys.argv[2],sys.argv[3]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-deadline=time.monotonic()+10
-while not Path(sys.argv[3]).is_file():
-    if time.monotonic()>=deadline:raise RuntimeError('original image holder did not start')
-    time.sleep(.01)
-print(sys.argv[4],flush=True)
-sys.exit(7)
-'''
+
         testcase, observed = self, []
         original_job = GATE.REFERENCE.BUILD.BUILD_OWNER.WindowsJob
         with tempfile.TemporaryDirectory(prefix='max-native-original-image-') as directory:
@@ -511,11 +531,11 @@ sys.exit(7)
                         return super().seal()
                 parent_test='TestRouterVPNDesktopNodeWindowsMAXTLS'
                 case='max-tls-wg/off';witness='original test-only negative witness'
-                command=[sys.executable,'-I','-S','-c',parent,child,str(image),str(root/'ready'),failure(parent_test,case,witness)]
+                command=[sys.executable,'-I','-S','-c',MAX_IMAGE_HOLDER_PARENT,child,str(image),str(root/'ready'),failure(parent_test,case,witness)]
                 with patch.object(GATE.REFERENCE.BUILD.BUILD_OWNER,'WindowsJob',ObservedJob):
                     owner=GATE.MAXCommandOwner()
                     status,output=owner.run(command,cwd=root,env=dict(os.environ),timeout=15)
-                self.assertEqual(status,7)
+                self.assertEqual(status,1)
                 GATE.rejected_output(status,output,parent_test,case,witness)
                 self.assertEqual(observed,['original image still held after command exit'])
                 self.assertTrue(owner.retired)
