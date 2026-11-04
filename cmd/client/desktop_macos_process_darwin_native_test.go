@@ -323,26 +323,40 @@ type macOSRuntimeFixtureDependent struct {
 	directory string
 }
 
-func (d *macOSRuntimeFixtureDependent) Close(ctx context.Context) error {
+func (d *macOSRuntimeFixtureDependent) Close(ctx context.Context) (failure error) {
+	phase := "runtime-close"
+	defer func() {
+		if failure != nil {
+			// Controller teardown retains a failed dependent but has no error
+			// return. Preserve the actual native cause before its later missing
+			// marker assertion, within the runner's existing bounded log tail.
+			fmt.Fprintf(os.Stderr, "captured runtime parent retirement phase=%s: %.4096s\n", phase, failure.Error())
+		}
+	}()
 	if err := d.process.Close(ctx); err != nil {
 		return err
 	}
+	phase = "native-cleanup-proof"
 	if err := d.process.NativeCleanup(ctx); err != nil {
 		return err
 	}
+	phase = "original-waiter"
 	select {
 	case <-d.process.joined:
 	default:
 		return errors.New("original parent released an unjoined runtime")
 	}
+	phase = "original-controller-locks"
 	for _, file := range []*os.File{d.process.parent.parent.input, d.process.parent.parent.installLock, d.process.parent.parent.processLock} {
 		if _, err := file.Stat(); err != nil {
 			return errors.New("runtime join followed original lock release")
 		}
 	}
+	phase = "original-workspace"
 	if err := os.RemoveAll(d.directory); err != nil {
 		return err
 	}
+	phase = "joined-marker"
 	return os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-runtime-joined"), []byte("original runtime joined before locks\n"), 0600)
 }
 
