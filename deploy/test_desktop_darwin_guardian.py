@@ -578,7 +578,9 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
              ('checks := append(global[:], physical, baseline, pointer, generation)', 'checks := global[:]'),)),
         ('admitted PF inspection join', 'PFReadbackFailureAndCancellationJoin', 'PF readback returned before its admitted native checks joined',
          'desktop_socket_pf_readback.go', (
-             ('joined.Wait()', '// broken native inspection join'),)),
+             # Return with admitted checks alive, without also racing their
+             # unfinished result slots during the later diagnostic aggregate.
+             ('joined.Wait()', 'return errors.New("broken native inspection join")'),)),
         ('PF inspection failure propagation', 'PFReadbackFailureAndCancellationJoin', 'PF readback discarded its exact failure or cancellation cleanup',
          'desktop_socket_pf_readback.go', (
              ('return errors.Join(ctx.Err(), errors.Join(results...))', 'return nil'),)),
