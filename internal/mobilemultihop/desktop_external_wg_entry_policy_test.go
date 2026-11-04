@@ -24,6 +24,11 @@ func TestDesktopExternalDarwinPacketEntryCONNECTRetainsCompletePolicy(t *testing
 		}
 	}
 }
+func TestDesktopExternalDarwinPacketEntryHysteriaRetainsCompletePolicy(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitOwnsPolicy(t, variant, "hysteria2") })
+	}
+}
 func desktopExternalPacketEntryExitOwnsPolicy(t *testing.T, variant, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		for _, ipv6 := range []string{"on", "off"} {
@@ -96,7 +101,7 @@ func TestDesktopExternalDarwinWireGuardEntryPreservesOtherGraphBoundaries(t *tes
 			t.Fatal("unimplemented first root admitted", entry)
 		}
 	}
-	for _, protocol := range []string{"wireguard", "socks5", "hysteria2"} {
+	for _, protocol := range []string{"wireguard", "socks5"} {
 		graph, capture := externalTestFixture(t, protocol, "wireguard")
 		capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 		original := externalDesktopCompile(t, graph, capture)

@@ -29,10 +29,10 @@ func startDesktopDarwinInstalledAmnezia(t *testing.T, server *desktopNodeLayerSe
 	return startDesktopDarwinInstalledPacket(t, server, request.desktopExternalInstalledWGRequest, physical, parameters, backend)
 }
 
-func startDesktopDarwinInstalledAmneziaEntry(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress string) desktopExternalInstalledPacketEntryPeer {
+func startDesktopDarwinInstalledAmneziaEntry(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledAWGRequest, physical netip.Addr, cert tls.Certificate, exitAddress, exitNetwork string) desktopExternalInstalledPacketEntryPeer {
 	t.Helper()
 	parameters, backend := desktopDarwinAmneziaBackend(t, request)
-	return startDesktopDarwinInstalledPacketEntry(t, server, request.desktopExternalInstalledWGRequest, physical, cert, exitAddress, "amneziawg", parameters, backend)
+	return startDesktopDarwinInstalledPacketEntry(t, server, request.desktopExternalInstalledWGRequest, physical, cert, exitAddress, exitNetwork, "amneziawg", parameters, backend)
 }
 
 func desktopDarwinAmneziaBackend(t *testing.T, request desktopExternalInstalledAWGRequest) (string, func(context.Context, wg.Device, *desktopDarwinWGBind, string) (desktopDarwinWGDevice, error)) {

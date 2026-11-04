@@ -206,7 +206,8 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
 	_, connectVariant, _, connectEntry := macOSExternalConnectEntryScenario(scenario)
-	p.packetEntry = connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
+	hysteriaVariant, _, hysteriaEntry := macOSExternalHysteriaEntryScenario(scenario)
+	p.packetEntry = hysteriaEntry || connectEntry || strings.HasPrefix(scenario, "wg-entry-ss") || strings.HasPrefix(scenario, "awg-entry-ss-")
 	if p.packetEntry {
 		p.entryProtocol = "wireguard"
 		if strings.HasPrefix(scenario, "awg-entry-ss-") {
@@ -219,6 +220,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	if connectEntry && connectVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", connectVariant
+	}
+	if hysteriaEntry && hysteriaVariant != "wireguard" {
+		p.entryProtocol, p.entryVariant = "amneziawg", hysteriaVariant
 	}
 	if p.packetEntry && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
@@ -356,7 +360,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal(err)
 	}
 	initial := p.read(t)
-	if initial.PacketEntry != nil && (initial.PacketEntry.PhysicalUDP != 0 || initial.PacketEntry.Streams != 0 || initial.PacketEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
+	if initial.PacketEntry != nil && (initial.PacketEntry.PhysicalUDP != 0 || initial.PacketEntry.Streams != 0 || initial.PacketEntry.Packets != 0 || initial.PacketEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
 		t.Fatal("native peer claimed traffic before its captured runtime")
 	}
 	return p
@@ -430,7 +434,7 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		profile.External.HTTPSConnect = connect
 	case "hysteria2":
 		profile.DNSProtocol = "udp"
-		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: p.physical.String(), Port: int(p.address.Port()), Password: p.password, TLSServerName: "captured-external.example"}
+		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: p.address.Addr().String(), Port: int(p.address.Port()), Password: p.password, TLSServerName: "captured-external.example"}
 		if p.layer != "" {
 			profile.StartLayer = p.layer
 			profile.External.Hysteria2.Port = int(p.inner.Port())
@@ -621,6 +625,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
 	t.Helper()
+	if _, fault, ok := macOSExternalHysteriaEntryScenario(scenario); ok {
+		return "hysteria2", "", fault
+	}
 	if protocol, _, fault, ok := macOSExternalConnectEntryScenario(scenario); ok {
 		return protocol, "", fault
 	}

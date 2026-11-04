@@ -49,7 +49,7 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
  if entrySelected {
   parts := strings.Split(protocol, "-")
   if len(parts) < 3 { t.Fatal("missing captured stream exit") }
-  switch parts[2] { case "ss": case "http": entryExit = "http-connect"; case "https": entryExit = "https-connect"; default: t.Fatal("unowned captured stream exit") }
+  switch parts[2] { case "ss": case "http": entryExit = "http-connect"; case "https": entryExit = "https-connect"; case "hysteria2": entryExit = "hysteria2"; default: t.Fatal("unowned captured stream exit") }
   if parts[0] == "wg" { if len(parts)!=3 { t.Fatal("unknown WG import") }; protocol = "wireguard" } else { if len(parts)!=4 { t.Fatal("unknown AWG import") }; protocol = "amneziawg-"+parts[3] }
  }
 	variant := ""
@@ -148,7 +148,11 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 		entry := map[string]any{"id": "captured-wg-entry", "node_kind": "external", "external": private, "home_lan_access": true, "ipv6_mode": "on", "mtu_policy": "auto"}
 		final := map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{23}, 32)), "detour": "external-entry"}
 		profile["external"] = map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": final["server"], "port": final["server_port"], "method": final["method"], "password": final["password"]}}
-  if entryExit != "shadowsocks" {
+  if entryExit == "hysteria2" {
+   delete(final, "method")
+   final["type"], final["password"], final["tls"] = "hysteria2", "separate-captured-quic-password", map[string]any{"enabled":true,"server_name":"captured-exit.example"}
+   profile["external"] = map[string]any{"protocol":"hysteria2","expected_public_ip":"203.0.113.88","hysteria2":map[string]any{"server":final["server"],"port":final["server_port"],"password":final["password"],"tls_server_name":"captured-exit.example"}}
+  } else if entryExit != "shadowsocks" {
    delete(final, "method")
    final["type"], final["username"], final["password"] = "http", "separate-captured-exit-user", "separate-captured-exit-password"
    proxy := map[string]any{"host": final["server"], "port": final["server_port"], "username": final["username"], "password": final["password"]}
@@ -325,7 +329,7 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 		protocols = append(protocols, "hysteria2")
 	}
 	if runtime.GOOS == "darwin" {
-		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong")
+		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong")
 	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong")

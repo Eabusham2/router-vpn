@@ -1787,8 +1787,8 @@ type desktopExternalInstalledPacketEntryPeer struct {
 	close   func()
 }
 
-var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest, tls.Certificate, string) desktopExternalInstalledPacketEntryPeer
-var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string) desktopExternalInstalledPacketEntryPeer
+var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledWGRequest, tls.Certificate, string, string) desktopExternalInstalledPacketEntryPeer
+var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string, string) desktopExternalInstalledPacketEntryPeer
 
 type desktopExternalInstalledPeerRequest struct {
 	AmneziaEntry         *desktopExternalInstalledAWGRequest   `json:"amnezia_entry,omitempty"`
@@ -2340,7 +2340,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" || request.Layer != nil || !latency ||
+	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" || request.Layer != nil || !latency ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
 		t.Fatal("unrequested or unsupported encrypted entry graph")
@@ -2460,7 +2460,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			address, openvpnProfile, closeTransport = startDesktopExternalInstalledOpenVPN(t, server, request, dnsPacket.LocalAddr().String(), proofListener.Addr().String())
 		}
 	} else if request.Protocol == "hysteria2" {
-		packet, err := net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
+  listenHost := request.Address
+  if entryRequested { listenHost = "127.0.0.1" }
+		packet, err := net.ListenPacket("udp4", net.JoinHostPort(listenHost, "0"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2555,10 +2557,12 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}()
 	}
 	if entryRequested {
+  exitNetwork := "tcp"
+  if request.Protocol == "hysteria2" { exitNetwork = "udp" }
 		if request.AmneziaEntry != nil {
-			entryPeer = desktopExternalInstalledAmneziaEntry(t, server, *request.AmneziaEntry, cert, address)
+			entryPeer = desktopExternalInstalledAmneziaEntry(t, server, *request.AmneziaEntry, cert, address, exitNetwork)
 		} else {
-			entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address)
+			entryPeer = desktopExternalInstalledWireGuardEntry(t, server, *request.WireGuardEntry, cert, address, exitNetwork)
 		}
 		if entryPeer.address == "" || entryPeer.close == nil || entryPeer.stats == nil {
 			t.Fatal("entry peer omitted actual original device")

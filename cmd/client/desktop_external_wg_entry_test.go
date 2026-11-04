@@ -30,6 +30,9 @@ func desktopExternalPacketEntryExitFixture(t *testing.T, kill, variant, protocol
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
+	if protocol == "hysteria2" {
+		profile.DNSProtocol = "udp"
+	}
 	launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +55,11 @@ func TestDesktopExternalPacketEntryCONNECTRetainsBothSourcesAndMeasurementOwner(
 		for _, protocol := range []string{"http-connect", "https-connect"} {
 			t.Run(variant+"/"+protocol, func(t *testing.T) { desktopExternalPacketEntryExitRetainsSources(t, variant, protocol) })
 		}
+	}
+}
+func TestDesktopExternalPacketEntryHysteriaRetainsBothSourcesAndMeasurementOwner(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRetainsSources(t, variant, "hysteria2") })
 	}
 }
 func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protocol string) {
@@ -80,7 +88,10 @@ func desktopExternalPacketEntryExitRetainsSources(t *testing.T, variant, protoco
 			t.Fatal("DNS mailbox borrowed entry identity", err)
 		}
 		faults := []string{"entry-key", "entry-peer-key", "entry-psk", "entry-id", "entry-address", "entry-public", "entry-option", "exit-id", "exit-key", "exit-public", "dns", "mtu", "lan", "ipv6"}
-		if protocol != "shadowsocks" {
+		if protocol == "hysteria2" {
+			faults = append(faults, "exit-tls")
+		}
+		if protocol == "http-connect" || protocol == "https-connect" {
 			faults = append(faults, "exit-username")
 			if protocol == "https-connect" {
 				faults = append(faults, "exit-tls")
@@ -163,6 +174,11 @@ func TestDesktopExternalPacketEntryCONNECTRestoreKeepsCompleteSourceAndNewSessio
 		}
 	}
 }
+func TestDesktopExternalPacketEntryHysteriaRestoreKeepsCompleteSourceAndNewSession(t *testing.T) {
+	for _, variant := range []string{"wireguard", "fast", "strong"} {
+		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitRestore(t, variant, "hysteria2") })
+	}
+}
 func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		_, _, initial := desktopExternalPacketEntryExitFixture(t, kill, variant, protocol)
@@ -185,7 +201,10 @@ func desktopExternalPacketEntryExitRestore(t *testing.T, variant, protocol strin
 			t.Fatal("restore discarded original selected MTU")
 		}
 		faults := []string{"entry-key", "entry-ip", "final-key", "source", "server"}
-		if protocol != "shadowsocks" {
+		if protocol == "hysteria2" {
+			faults = append(faults, "final-tls")
+		}
+		if protocol == "http-connect" || protocol == "https-connect" {
 			faults = append(faults, "final-username")
 			if protocol == "https-connect" {
 				faults = append(faults, "final-tls")
@@ -250,6 +269,12 @@ func mutateDesktopExternalEntryExit(t *testing.T, profile *common.RouterProfile,
 	switch profile.External.Protocol {
 	case "shadowsocks":
 		profile.External.Shadowsocks.Password += "changed"
+	case "hysteria2":
+		if field == "tls" {
+			profile.External.Hysteria2.TLSServerName = "different.example"
+		} else {
+			profile.External.Hysteria2.Password += "changed"
+		}
 	case "http-connect", "https-connect":
 		proxy := profile.External.HTTPConnect
 		if profile.External.Protocol == "https-connect" {
