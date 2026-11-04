@@ -97,10 +97,10 @@ func desktopExternalCaptureUnchecked(control common.RouterProfile, e standardExi
 	return cloneRouterProfile(profile), nil
 }
 
-func compileDesktopAmneziaPolicy(graph map[string]any, control common.RouterProfile, entry *common.RouterProfile, exit standardExit) (map[string]any, error) {
-	if exit.Protocol != "amneziawg" && exit.StartLayer == nil && (entry == nil || entry.External == nil || entry.External.Protocol != "amneziawg" && entry.External.StartLayer == nil) {
-		return graph, nil
-	}
+// Stock transports need the same captured device policy as native AWG and
+// layered transports. Skipping this stage would retain historical MTU and omit
+// selected LAN/IPv6 enforcement even though the transport itself is valid.
+func compileDesktopStandardExitPolicy(graph map[string]any, control common.RouterProfile, entry *common.RouterProfile, exit standardExit) (map[string]any, error) {
 	profile, err := desktopExternalCapture(control, exit)
 	if err != nil {
 		return nil, err

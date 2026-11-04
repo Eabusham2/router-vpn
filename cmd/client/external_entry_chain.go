@@ -74,7 +74,7 @@ func prepareExternalEntryStandardExit(root string, control, entryProfile common.
 	if err != nil {
 		return "", "", err
 	}
-	cfg, err = compileDesktopAmneziaPolicy(cfg, control, &entryProfile, exit)
+	cfg, err = compileDesktopStandardExitPolicy(cfg, control, &entryProfile, exit)
 	if err != nil {
 		return "", "", err
 	}

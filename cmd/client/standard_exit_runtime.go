@@ -227,16 +227,15 @@ func buildDirectStandardExitConfig(control common.RouterProfile, exit standardEx
 	return standardExitConfig(control, dnsServer, endpoints, outbounds), nil
 }
 
-func standardExitConfig(control common.RouterProfile, dnsServer map[string]any, endpoints, outbounds []any) map[string]any {
-	mtu := 1280
-	if control.EffectiveMTU >= 1280 && control.EffectiveMTU <= 9000 {
-		mtu = control.EffectiveMTU
-	}
+func standardExitConfig(_ common.RouterProfile, dnsServer map[string]any, endpoints, outbounds []any) map[string]any {
+	// This is only the transport seed. The shared captured-policy compiler
+	// applies Fixed/Jumbo and per-hop bounds before a runnable file is written.
+	// A saved effective value is not a measurement of this new path.
 	return map[string]any{
 		"log": map[string]any{"level": "warn", "timestamp": true},
 		"dns": map[string]any{"servers": []any{dnsServer}, "final": "selected-dns"},
 		"inbounds": []any{
-			map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []any{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": mtu, "auto_route": true, "strict_route": true, "stack": "system"},
+			map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []any{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"},
 			map[string]any{"type": "mixed", "tag": "standard-exit-proof", "listen": "127.0.0.1", "listen_port": 1099},
 		},
 		"endpoints": endpoints, "outbounds": outbounds,
@@ -257,7 +256,7 @@ func prepareNativeStandardExit(root string, control, entry common.RouterProfile,
 	if err != nil {
 		return "", "", err
 	}
-	cfg, err = compileDesktopAmneziaPolicy(cfg, control, &entry, exit)
+	cfg, err = compileDesktopStandardExitPolicy(cfg, control, &entry, exit)
 	if err != nil {
 		return "", "", err
 	}
@@ -268,7 +267,7 @@ func prepareDirectStandardExit(root string, control common.RouterProfile, exit s
 	if err != nil {
 		return "", "", err
 	}
-	cfg, err = compileDesktopAmneziaPolicy(cfg, control, nil, exit)
+	cfg, err = compileDesktopStandardExitPolicy(cfg, control, nil, exit)
 	if err != nil {
 		return "", "", err
 	}
