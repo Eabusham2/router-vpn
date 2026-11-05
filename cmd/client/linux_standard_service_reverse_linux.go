@@ -79,7 +79,7 @@ func (s *linuxStandardService) reverseRequest(ctx context.Context, peer *linuxSt
 		return nil, err
 	}
 	q := request.Reverse
-	if peer == nil || q == nil || q.Intent.Validate() != nil || q.Parent.Validate() != nil || q.Source.Validate() != nil || q.Source.Standard || request.Schema != 1 || request.Session != q.Intent.DestinationSession || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || request.Release || request.MTU != nil || request.Transfer != nil || request.ProfileRevision != "" || request.ResultRevision != "" {
+	if peer == nil || q == nil || q.Intent.Validate() != nil || q.Parent.Validate() != nil || q.Source.Validate() != nil || q.Source.Standard || request.Schema != 1 || request.Session != q.Intent.DestinationSession || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || request.Release || request.Bootstrap != nil || request.MTU != nil || request.Transfer != nil || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return nil, errors.New("reverse transfer changed its fixed authenticated scope")
 	}
 	switch request.Action {
@@ -114,7 +114,7 @@ func (s *linuxStandardService) reverseRequest(ctx context.Context, peer *linuxSt
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
-	if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+	if s.bootstrapPending() || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
 		return nil, errors.New("original image handoff freezes ordinary service requests")
 	}
 	runtime.LockOSThread()

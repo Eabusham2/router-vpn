@@ -34,7 +34,7 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
-STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer')
+STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer', 'StandardBootstrapSocket')
 STANDARD_PARSER_CASES = ('ImageTransferUnknownResultRetainsOriginalPin', 'ImageTransferPolicy', 'ImageTransferOriginalEndpointInventory', 'ImageTransferCancellationKeepsOriginalPins', 'CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority', 'ScopedAbsenceNeverClaimsNodeOrMalformedAbsence', 'NodeTransferRejectsChangedInventory', 'NodeTransferUnknownResultRetainsPins')
 STANDARD_TRANSFER_INVENTORY = ('original', 'session', 'handle', 'uid', 'baseline', 'home-lan', 'unknown-field', 'noncanonical', 'widened-baseline')
 STANDARD_TRANSFER_UNKNOWN = ('unknown-removal', 'cancelled-finish', 'closed-creator')
@@ -43,7 +43,10 @@ REVERSE_TRANSFER_NATIVE = ('original', 'lost-ack-retry', 'abort', 'cancelled', '
 REVERSE_TRANSFER_PARSER = ('ClosedInventory', 'ClosedInventory/node', 'ClosedInventory/standard', *(f'ClosedInventory/{kind}/{case}' for kind in ('node', 'standard') for case in ('original','handle-zero','capture','endpoint','wide-rule','extra-set','noncanonical','namespace')), 'CancellationKeepsBothPins')
 IMAGE_TRANSFER_NATIVE = ('original', 'lost-ack-retry', 'abort', 'cancelled', 'changed-successor', 'successor-lost', 'wrong-lease', 'lease-reopen', 'successor-lost-after', 'changed-native-policy', 'abort-before-successor-removal', 'cancelled-result-after-removal')
 IMAGE_TRANSFER_PARSER = (*(f'Policy/{case}' for case in ('original','endpoint-order','multiple-address-order','different-endpoint','home-lan','same-session','namespace','node-source','node-successor','widened-rule')), *(f'CancellationKeepsOriginalPins/{case}' for case in ('source-snapshot','commit','result','finish','successor-snapshot','resolve')))
-STANDARD_SOURCE_FILES = frozenset({'desktop_standard_service_transfer_linux.go', 'desktop_standard_service_transfer_linux_test.go', 'desktop_standard_service_transfer_native_linux_test.go', 'desktop_standard_node_reverse_transfer_linux.go', 'desktop_standard_node_reverse_transfer_linux_test.go', 'desktop_standard_node_reverse_transfer_native_linux_test.go', 'desktop_standard_node_transfer_linux.go', 'desktop_standard_node_transfer_linux_test.go', 'desktop_standard_node_transfer_native_linux_test.go', 'desktop_standard_linux_protection.go',
+BOOTSTRAP_PARSER = ('CloseJoinsOriginalObjects', 'CloseJoinsOriginalObjects/connection', 'CloseJoinsOriginalObjects/file', 'CloseJoinsOriginalObjects/both', 'GrantRequiresExactCreation', *(f'GrantRequiresExactCreation/{case}' for case in ('tuple','mark','uid','interface','handle','duplicate','trailing','foreign-operation')),
+ 'InventoryRetainsOriginalBaseline', *(f'InventoryRetainsOriginalBaseline/{case}' for case in ('replacement','broader','foreign-extra','baseline-loss','unknown-echo')),
+ 'HeldGateKeepsOriginalDeadline', 'RejectsArbitraryQuestions', *(f'RejectsArbitraryQuestions/{case}' for case in ('many','extra','txt','compressed','trailing','invalid-label')))
+STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_bootstrap.go', 'desktop_standard_linux_bootstrap_test.go', 'desktop_standard_linux_bootstrap_native_test.go', 'desktop_standard_service_transfer_linux.go', 'desktop_standard_service_transfer_linux_test.go', 'desktop_standard_service_transfer_native_linux_test.go', 'desktop_standard_node_reverse_transfer_linux.go', 'desktop_standard_node_reverse_transfer_linux_test.go', 'desktop_standard_node_reverse_transfer_native_linux_test.go', 'desktop_standard_node_transfer_linux.go', 'desktop_standard_node_transfer_linux_test.go', 'desktop_standard_node_transfer_native_linux_test.go', 'desktop_standard_linux_protection.go',
                                   'desktop_standard_linux_protection_test.go',
                                   'desktop_standard_linux_protection_native_test.go', 'desktop_standard_linux_absence_test.go'})
 KERNEL_CASES += STANDARD_KERNEL_CASES
@@ -434,6 +437,7 @@ def execute(source: Path, go='go', *, env=None):
             raise ValueError('Linux running inventory gate omitted its complete native JSON contract')
         require_socks_verdicts(baseline_output, 'TestLinuxNodeStandardTransfer', REVERSE_TRANSFER_PARSER)
         require_socks_verdicts(baseline_output, 'TestLinuxStandard', STANDARD_PARSER_CASES)
+        require_socks_verdicts(baseline_output, 'TestLinuxStandardBootstrap', BOOTSTRAP_PARSER)
         require_socks_verdicts(baseline_output, 'TestLinuxStandardImageTransfer', IMAGE_TRANSFER_PARSER)
         require_socks_verdicts(baseline_output, 'TestLinuxStandardNodeTransferRejectsChangedInventory/', STANDARD_TRANSFER_INVENTORY)
         require_socks_verdicts(baseline_output, 'TestLinuxStandardNodeTransferUnknownResultRetainsPins/', STANDARD_TRANSFER_UNKNOWN)
@@ -451,6 +455,7 @@ def execute(source: Path, go='go', *, env=None):
         if any('--- PASS: TestDesktopLinuxGuardianKernel' + name + ' (' not in output for name in KERNEL_CASES) or '--- SKIP:' in output:
             raise ValueError('Linux guardian kernel gate did not execute every required boundary')
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernel', STANDARD_KERNEL_CASES)
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapSocket/', ('original', 'cancel-after-grant'))
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardImageTransfer/', IMAGE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeStandardTransfer/', REVERSE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardNodeTransfer/', STANDARD_TRANSFER_NATIVE)

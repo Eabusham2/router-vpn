@@ -17,6 +17,36 @@ class StandardServiceGateTests(unittest.TestCase):
     def output(self, group):
         return '\n'.join('--- PASS: '+name+' (0.01s)' for name in gate.case_names(group))
 
+    def test_bootstrap_sources_and_native_inventory_are_mandatory(self):
+        required = {'cmd/client/linux_standard_service_boot_bootstrap_linux.go',
+                    'cmd/client/linux_standard_service_boot_bootstrap_client_linux.go',
+                    'cmd/client/linux_standard_service_boot_hostname_namespace_native_test.go',
+                    'cmd/client/linux_standard_service_boot_resolver_linux.go',
+                    'internal/mobiletor/desktop_standard_linux_bootstrap.go',
+                    'internal/mobiletor/desktop_standard_linux_bootstrap_native_test.go',
+                    'internal/linuxprocess/bootstrap_cleanup_gate_linux_native_test.go',
+                    'internal/dnsmeasure/transport_bootstrap.go'}
+        self.assertTrue(required.issubset(gate.SOURCE))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in gate.SOURCE:
+                target = root/name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT/name).read_bytes())
+            gate.validate_inventory(root)
+            for name in required:
+                target = root/name; body = target.read_bytes(); target.unlink()
+                with self.assertRaises(ValueError): gate.validate_inventory(root)
+                target.write_bytes(body)
+        spec=importlib.util.spec_from_file_location('bootstrap_guardian',ROOT/'deploy/test_desktop_linux_guardian.py')
+        guardian=importlib.util.module_from_spec(spec);spec.loader.exec_module(guardian)
+        self.assertIn('StandardBootstrapSocket', guardian.STANDARD_KERNEL_CASES)
+        output='\n'.join('--- PASS: TestLinuxStandardBootstrap'+case+' (0.01s)' for case in guardian.BOOTSTRAP_PARSER)
+        guardian.require_socks_verdicts(output,'TestLinuxStandardBootstrap',guardian.BOOTSTRAP_PARSER)
+        for line in output.splitlines():
+            for bad in (output.replace(line,'',1), output+'\n'+line, output.replace(line,line.replace('PASS','SKIP'))):
+                with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,'TestLinuxStandardBootstrap',guardian.BOOTSTRAP_PARSER)
+
     def test_actual_worker_bounded_join_and_causal(self):
         spec=importlib.util.spec_from_file_location('standard_worker_stop',ROOT/'deploy/test_standard_worker_stop.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.execute()

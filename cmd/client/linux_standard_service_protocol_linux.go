@@ -21,6 +21,7 @@ const linuxStandardServiceSocket = linuxStandardServiceDirectory + "/control.soc
 const linuxStandardServicePacketLimit = 64 << 10
 
 type linuxStandardServiceRequest struct {
+	Bootstrap       *linuxStandardBootBootstrapRequest       `json:"bootstrap,omitempty"`
 	ImageUpgrade    *linuxStandardServiceImageUpgradeRequest `json:"image_upgrade,omitempty"`
 	Schema          int                                      `json:"schema"`
 	Action          string                                   `json:"action"`
@@ -45,6 +46,7 @@ type linuxStandardServiceRequest struct {
 }
 
 type linuxStandardServiceResponse struct {
+	Bootstrap           *linuxStandardBootBootstrapResponse       `json:"bootstrap,omitempty"`
 	ImageUpgrade        *linuxStandardServiceImageUpgradeResponse `json:"image_upgrade,omitempty"`
 	Startup             *linuxStandardServiceStartup              `json:"startup,omitempty"`
 	authenticatedPeer   *linuxStandardServicePeer                 // local original witness; never decoded
@@ -71,10 +73,16 @@ func linuxStandardServiceDecode(body []byte, target any) error {
 	}
 	switch v := target.(type) {
 	case *linuxStandardServiceRequest:
+		if v.Bootstrap != nil && v.Action != "boot-bootstrap" && v.Action != "boot-bootstrap-cleanup" {
+			return errors.New("ordinary request supplied bootstrap scope")
+		}
 		if v.ImageUpgrade != nil && !strings.HasPrefix(v.Action, "image-") {
 			return errors.New("ordinary request supplied image upgrade scope")
 		}
 	case *linuxStandardServiceResponse:
+		if v.Bootstrap != nil && v.Action != "boot-bootstrap" && v.Action != "boot-bootstrap-cleanup" {
+			return errors.New("ordinary response supplied bootstrap scope")
+		}
 		if v.ImageUpgrade != nil && !strings.HasPrefix(v.Action, "image-") {
 			return errors.New("ordinary response supplied image upgrade scope")
 		}

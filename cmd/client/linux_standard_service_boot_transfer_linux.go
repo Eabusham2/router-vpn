@@ -82,9 +82,23 @@ func captureLinuxStandardBootNodeTransfer(ctx context.Context, h *desktopLinuxNo
 		return nil, context.DeadlineExceeded
 	}
 	source := &linuxStandardServiceBootTransferSource{app: h.parent.app, parent: h.parent, image: image, namespace: namespace, session: session}
+	var bootstrapBinding *linuxStandardBootBootstrapBinding
+	if h.bootBootstrap != nil {
+		b := h.bootBootstrap
+		if err := desktopnetwork.LockContext(ctx, &b.mu); err != nil {
+			return nil, err
+		}
+		defer b.mu.Unlock()
+		var err error
+		bootstrapBinding, err = b.bindTransferLocked(ctx, h, source)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Reuse a previously authenticated original service generation when a
 	// protection view already retained it. Its owner keeps the peer lifetime.
-	if raw, exists := linuxStandardServiceProtectionClients.Load(source.app); exists {
+	if raw, exists := linuxStandardServiceProtectionClients.Load(source.app); exists && h.bootBootstrap == nil {
 		client, ok := raw.(*linuxStandardServiceProtectionClient)
 		if !ok || client == nil || client.app != source.app || client.controller != h.parent.controller {
 			return nil, errors.New("boot capture found another protection client")
@@ -98,15 +112,24 @@ func captureLinuxStandardBootNodeTransfer(ctx context.Context, h *desktopLinuxNo
 		}
 		client.mu.Unlock()
 	}
-	t := &linuxStandardServiceNodeTransfer{boot: source, host: h, operation: h.operation, request: linuxStandardServiceTransferRequest{Boot: true, ID: id, DeadlineNS: deadline.UnixNano(), Destination: h.selection, ProfileID: desktopExternalPathProfileID(h.launch), ProfileRevision: h.revision}}
-	t.mu.Lock()
+	t := &linuxStandardServiceNodeTransfer{boot: source, host: h, operation: h.operation, request: linuxStandardServiceTransferRequest{Bootstrap: bootstrapBinding, Boot: true, ID: id, DeadlineNS: deadline.UnixNano(), Destination: h.selection, ProfileID: desktopExternalPathProfileID(h.launch), ProfileRevision: h.revision}}
+	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+		return nil, err
+	}
 	defer t.mu.Unlock()
-	source.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &source.mu); err != nil {
+		return nil, err
+	}
 	defer source.mu.Unlock()
 	if _, loaded := linuxStandardBootTransfers.LoadOrStore(source.app, t); loaded {
 		return nil, errors.New("boot transfer replaced an unresolved original capture")
 	}
 	h.standardTransfer = t // Retain before the authenticated request can be sent.
+	if h.bootBootstrap != nil {
+		if err := h.bootBootstrap.consumeTransferLocked(); err != nil {
+			return t, err
+		}
+	}
 	response, err := t.rpcLocked(ctx, "transfer-reserve", nil, nil)
 	// Optional service absence never proves native policy absence. No request
 	// was sent, and normal Node admission retains its independent native gate.

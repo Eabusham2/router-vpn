@@ -65,7 +65,7 @@ EMPTY_RECOVERY_UNITS = {
         'guardian-is-old-controller', 'guardian-is-current-controller', 'guardian-proc-alias-old', 'guardian-proc-alias-current',
         'engine-is-old-controller', 'engine-is-current-controller', 'engine-is-guardian'),
 }
-PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
+PROCESS_CASES = ('BootstrapCleanupWitnessOriginalGate', 'Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
                  'PreservesBorrowedParent', 'ChannelBoundsAndCancellation', 'InheritedCloseOnExec',
                  'ChannelPeerClosed', 'RetirementReadiness', 'AcknowledgedPeerClose', 'SealedImageAdmission', 'SealedBootstrap')

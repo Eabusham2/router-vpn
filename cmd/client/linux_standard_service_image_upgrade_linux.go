@@ -140,7 +140,7 @@ func (s *linuxStandardService) reserveImage(ctx context.Context, peer *linuxStan
 	if a == nil || a.generation == nil || a.source == nil || a.owner == nil || a.generation.selection == *q.Generation {
 		return nil, errors.New("image prepare has no original immutable generation authority")
 	}
-	if s.quiescing || s.transferPending() || s.reversePending() || s.legacyBoot != nil || s.protectionView != nil && s.protectionView.data.Pending || s.session != nil && (!s.session.joined || s.session.cleanupPending) {
+	if s.quiescing || s.bootstrapPending() || s.transferPending() || s.reversePending() || s.legacyBoot != nil || s.protectionView != nil && s.protectionView.data.Pending || s.session != nil && (!s.session.joined || s.session.cleanupPending) {
 		return nil, errors.New("image prepare requires joined engine and settled original policy")
 	}
 	if _, ok := legacyStandardExitOwners.Load(s.app); ok {

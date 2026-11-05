@@ -39,6 +39,8 @@ type linuxStandardServiceSession struct {
 // created, started and waited by this process, never reconstructed from a
 // client's PID or represented by a controller-side exec.Cmd.Process.
 type linuxStandardService struct {
+	bootstrap            *linuxStandardServiceBootBootstrap
+	bootstrapHistory     map[string]linuxStandardBootBootstrapHistory
 	imageAuthority       *linuxStandardImageAuthority
 	imageUpgrade         *linuxStandardImageUpgrade
 	gate                 chan struct{}
@@ -395,7 +397,7 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 }
 
 func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File, startup **linuxStandardServiceStartup) (failure error) {
-	if request.ProfileRevision != "" || request.ResultRevision != "" || request.MTU != nil || request.Transfer != nil || request.Reverse != nil {
+	if request.Bootstrap != nil || request.ProfileRevision != "" || request.ResultRevision != "" || request.MTU != nil || request.Transfer != nil || request.Reverse != nil {
 		return errors.New("runtime request supplied unrelated protection source")
 	}
 	if request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() {
@@ -410,7 +412,7 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
-	if s.quiescing || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+	if s.quiescing || s.bootstrapPending() || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
 		return errors.New("standard service is retiring its original idle lifetime")
 	}
 	defer func() {
@@ -548,7 +550,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	}
 	defer func() {
 		<-s.gate
-		retained := s.session != nil && s.session.peer == peer || s.protectionView != nil && s.protectionView.peer == peer || s.reverse != nil && s.reverse.peer == peer || s.transfer != nil && !s.transfer.terminal() && s.transfer.peer == peer
+		retained := s.session != nil && s.session.peer == peer || s.protectionView != nil && s.protectionView.peer == peer || s.reverse != nil && s.reverse.peer == peer || s.transfer != nil && !s.transfer.terminal() && s.transfer.peer == peer || s.bootstrap != nil && s.bootstrap.peer == peer
 		s.gate <- struct{}{}
 		if !retained {
 			_ = peer.Close()
@@ -588,6 +590,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	var mtu *linuxStandardServiceMTUResponse
 	var transfer *linuxStandardServiceTransferResponse
 	var reverse *linuxStandardServiceReverseResponse
+	var bootstrap *linuxStandardBootBootstrapResponse
 	select {
 	case <-live.Done():
 		err = live.Err()
@@ -604,6 +607,12 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	} else if upgrade {
 		err = s.handleIdleUpgrade(live, peer, request, files)
 		shutdownAccepted = err == nil
+	} else if request.Action == "boot-bootstrap" || request.Action == "boot-bootstrap-cleanup" {
+		if len(files) != 0 {
+			err = errors.New("bootstrap supplied unrelated descriptors")
+		} else {
+			bootstrap, err = s.bootBootstrapRequest(live, peer, request)
+		}
 	} else if strings.HasPrefix(request.Action, "reverse-") {
 		reverse, err = s.reverseRequest(live, peer, request, files)
 	} else if standardTransferAction(request.Action) {
@@ -652,7 +661,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 		startup = nil
 		mtu = nil
 	}
-	response := linuxStandardServiceResponse{Startup: startup, MTU: mtu, Transfer: transfer, Reverse: reverse, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
+	response := linuxStandardServiceResponse{Bootstrap: bootstrap, Startup: startup, MTU: mtu, Transfer: transfer, Reverse: reverse, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
 	if err != nil {
 		response.Error = err.Error()
 		if len(response.Error) > 2048 {
@@ -666,7 +675,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 }
 
 func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File) error {
-	if request.Schema != 1 || request.Action != "shutdown-idle" || request.MTU != nil || request.Transfer != nil || request.Reverse != nil || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
+	if request.Schema != 1 || request.Action != "shutdown-idle" || request.Bootstrap != nil || request.MTU != nil || request.Transfer != nil || request.Reverse != nil || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
 		request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileID != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return errors.New("standard service idle-upgrade request changed its fixed scope")
 	}
@@ -679,7 +688,7 @@ func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linu
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
-	if s.quiescing || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+	if s.quiescing || s.bootstrapPending() || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
 		return errors.New("standard service already retired admission")
 	}
 	if s.transferPending() || s.reversePending() {
@@ -715,6 +724,7 @@ func (s *linuxStandardService) watch(ctx context.Context) {
 			s.gate <- struct{}{}
 			continue
 		}
+		s.retireBootBootstrap(ctx)
 		s.retryBoot(ctx)
 		if s.session != nil && (!s.session.joined || s.session.cleanupPending) {
 			dead, err := s.session.peer.Retired()

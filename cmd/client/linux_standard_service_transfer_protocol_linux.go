@@ -9,6 +9,7 @@ import (
 )
 
 type linuxStandardServiceTransferRequest struct {
+	Bootstrap       *linuxStandardBootBootstrapBinding          `json:"bootstrap,omitempty"`
 	Boot            bool                                        `json:"boot,omitempty"`
 	ID              string                                      `json:"id"`
 	DeadlineNS      int64                                       `json:"deadline_ns"`

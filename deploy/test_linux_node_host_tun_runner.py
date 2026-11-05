@@ -31,7 +31,7 @@ class InstalledReverseServiceVerdict(unittest.TestCase):
         G.check_reverse_verdict(self.completed())
         self.assertEqual(G.REVERSE_CASES[:3], ('node-standard-original', 'node-standard-lost-commit-reply', 'node-standard-lost-prepare-reply'))
         self.assertEqual(G.REVERSE_CASES[3:], ('node-standard-lost-start-reply', 'node-standard-cancel-before-remove', 'node-standard-longer-deadline', 'node-standard-post-removal-failure', 'node-standard-always-lost-prepare', 'node-standard-always-cancel-before-remove'))
-        self.assertEqual(len(G.CASES), 457)
+        self.assertEqual(len(G.CASES), 458)
         self.assertEqual(len(G.REVERSE_CASES), 9)
 
 
@@ -79,7 +79,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_layered_wireguard_hysteria_requires_exact_three_owner_completion(self):
         expected = tuple('external-' + mode + '-' + action for mode in ('wghy2aes', 'wghy2xor') for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-entry-public', 'wrong-layer-key', 'wrong-key', 'wrong-trust', 'wrong-ca', 'dns-failure', 'source', 'replacement')) + ('external-wghy2xor-wrong-whitening',)
         self.assertEqual(G.EXTERNAL_WG_HYSTERIA_LAYER_CASES, expected)
-        self.assertEqual(G.CASES[432:], expected)
+        self.assertEqual(G.CASES[433:], expected)
         good = self.completed()
         G.check_verdict(good)
         for case in expected:
@@ -91,7 +91,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                         G.check_verdict(changed)
             with self.assertRaises(ValueError):
                 G.check_verdict(good.replace('retained layered Hysteria2: ' + case, 'unverified layer: ' + case))
-        for changed in (self.completed(G.CASES[:432]), good + '--- SKIP: foreign (0.1s)\n'):
+        for changed in (self.completed(G.CASES[:433]), good + '--- SKIP: foreign (0.1s)\n'):
             with self.assertRaises(ValueError):
                 G.check_verdict(changed)
 
@@ -100,7 +100,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(G.EXTERNAL_WG_HYSTERIA_CASES, expected)
         self.assertEqual(G.CASES[417:420], G.TRANSFER_CASES)
         self.assertEqual(G.CASES[420:429], expected)
-        self.assertEqual(len(G.CASES), 457)
+        self.assertEqual(len(G.CASES), 458)
         good = self.completed()
         G.check_verdict(good)
         for case in expected:
@@ -114,8 +114,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             G.check_verdict(self.completed(G.CASES[:420]))
 
     def test_boot_transfer_keeps_existing_inventory_and_exact_creator_receipts(self):
-        self.assertEqual(G.CASES[429:432], G.BOOT_TRANSFER_CASES)
-        self.assertEqual(G.BOOT_TRANSFER_CASES, ('service-boot-transfer', 'service-boot-transfer-cancel', 'service-boot-transfer-lost-reply'))
+        self.assertEqual(G.CASES[429:433], G.BOOT_TRANSFER_CASES)
+        self.assertEqual(G.BOOT_TRANSFER_CASES, ('service-boot-transfer', 'service-boot-transfer-cancel', 'service-boot-transfer-lost-reply', 'service-boot-hostname'))
         good = self.completed()
         G.check_verdict(good)
         for case in G.BOOT_TRANSFER_CASES:
@@ -275,7 +275,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_CASES) + len(G.BOOT_TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_LAYER_CASES))
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
-        self.assertEqual(G.CASES[299:417] + G.CASES[417+len(G.TRANSFER_CASES):429] + G.CASES[432:], G.EXTERNAL_CASES)
+        self.assertEqual(G.CASES[299:417] + G.CASES[417+len(G.TRANSFER_CASES):429] + G.CASES[433:], G.EXTERNAL_CASES)
         self.assertEqual(len(G.CASES), len(set(G.CASES)))
         self.assertEqual(set(G.EXTERNAL_CASES) & set(G.ORIGINAL_CASES), set())
         for case in G.EXTERNAL_CASES:

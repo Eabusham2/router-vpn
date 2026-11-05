@@ -13,7 +13,7 @@ import (
 )
 
 func (s *linuxStandardService) imageRequest(ctx context.Context, peer *linuxStandardServicePeer, role string, q linuxStandardServiceRequest) (*linuxStandardServiceImageUpgradeResponse, *os.File, error) {
-	if q.ImageUpgrade == nil || q.MTU != nil || q.Reverse != nil || q.Transfer != nil || q.Directory != "" || q.ConfigSHA256 != "" || q.ProfileID != "" || q.ProfileSHA256 != "" || q.NetworkID != "" || q.RouterID != "" || q.Endpoint != "" || q.RuntimeMode != "" || q.Base != "" || q.Release || q.ProfileRevision != "" || q.ResultRevision != "" {
+	if q.ImageUpgrade == nil || q.Bootstrap != nil || q.MTU != nil || q.Reverse != nil || q.Transfer != nil || q.Directory != "" || q.ConfigSHA256 != "" || q.ProfileID != "" || q.ProfileSHA256 != "" || q.NetworkID != "" || q.RouterID != "" || q.Endpoint != "" || q.RuntimeMode != "" || q.Base != "" || q.Release || q.ProfileRevision != "" || q.ResultRevision != "" {
 		return nil, nil, errors.New("image action supplied cross-scope data")
 	}
 	if err := peer.Current(ctx); err != nil {

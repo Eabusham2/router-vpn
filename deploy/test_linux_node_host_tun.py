@@ -134,7 +134,7 @@ EXTERNAL_WG_HYSTERIA_CASES = tuple('external-wghy2-' + action for action in (
     'wrong-key', 'wrong-trust', 'wrong-ca', 'dns-failure'))
 EXTERNAL_CASES += EXTERNAL_WG_HYSTERIA_CASES
 CASES += EXTERNAL_WG_HYSTERIA_CASES
-BOOT_TRANSFER_CASES = ('service-boot-transfer', 'service-boot-transfer-cancel', 'service-boot-transfer-lost-reply')
+BOOT_TRANSFER_CASES = ('service-boot-transfer', 'service-boot-transfer-cancel', 'service-boot-transfer-lost-reply', 'service-boot-hostname')
 CASES += BOOT_TRANSFER_CASES
 PUBLIC_CASES += BOOT_TRANSFER_CASES
 ACTIVE_CASES += BOOT_TRANSFER_CASES

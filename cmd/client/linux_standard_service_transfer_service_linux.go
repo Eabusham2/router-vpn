@@ -20,6 +20,7 @@ import (
 )
 
 type linuxStandardServiceTransfer struct {
+	bootstrap      *linuxStandardServiceBootBootstrap
 	peer           *linuxStandardServicePeer
 	session        *linuxStandardServiceSession
 	slot           *legacyExitProtectionSlot
@@ -82,7 +83,7 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 	default:
 		return nil, errors.New("standard transfer action is unavailable")
 	}
-	if ctx == nil || ctx.Err() != nil || q == nil || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || request.Schema != 1 || !validControllerOwnerToken(request.Session) || !validControllerOwnerToken(q.ID) || request.Reverse != nil || request.MTU != nil || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.ProfileID != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
+	if ctx == nil || ctx.Err() != nil || q == nil || request.Bootstrap != nil || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || request.Schema != 1 || !validControllerOwnerToken(request.Session) || !validControllerOwnerToken(q.ID) || request.Reverse != nil || request.MTU != nil || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.ProfileID != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return nil, errors.New("standard transfer request changed its fixed original scope")
 	}
 	if q.DeadlineNS <= 0 || q.Destination.Validate() != nil || !validProfileID(q.ProfileID) || len(q.ProfileRevision) != 64 {
@@ -166,6 +167,9 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 		t = nil
 	}
 	if t == nil {
+		if err := s.validateBootBootstrapTransfer(ctx, peer, q, request.Action == "transfer-resolve"); err != nil {
+			return nil, err
+		}
 		if (request.Action != "transfer-reserve" && request.Action != "transfer-resolve") || q.Snapshot != nil || q.Prepared != nil || s.quiescing || !q.Boot && (s.session == nil || s.session.cleanupPending || s.session.request.Session != request.Session || s.session.peer.record != peer.record) || q.Boot && (s.boot == nil || s.boot.closed || s.bootFailure != nil || s.session != nil && (!s.session.joined || s.session.cleanupPending)) {
 			return nil, errors.New("standard transfer has no live original source to reserve")
 		}
@@ -250,6 +254,14 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 			s.transferHistory = make(map[string]linuxStandardServiceTransferResponse)
 		}
 		s.transfer = t // Retain original creator before persistence can fail.
+		if q.Bootstrap != nil && s.bootstrap != nil {
+			t.bootstrap = s.bootstrap
+			t.peer = s.bootstrap.peer
+			if err := t.finishBootstrapAdoption(s); err != nil {
+				return &t.result, err
+			}
+		}
+
 		if request.Action == "transfer-resolve" {
 			_, err = t.native.Finish(ctx)
 			if err == nil {
@@ -276,6 +288,9 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 	original.Prepared = nil
 	if !t.sourceStillCaptured(s) || t.peer.record != peer.record || request.Session != t.sourceRequestSession() || !reflect.DeepEqual(original, t.request) {
 		return nil, errors.New("standard transfer request replaced its exact original reservation")
+	}
+	if err := t.finishBootstrapAdoption(s); err != nil {
+		return &t.result, err
 	}
 	if request.Action == "transfer-reserve" || request.Action == "transfer-current" || request.Action == "transfer-commit" {
 		if time.Now().UnixNano() >= t.request.DeadlineNS {
@@ -483,5 +498,26 @@ func (t *linuxStandardServiceTransfer) finishBootPeer() error {
 		return err
 	}
 	t.bootPeerClosed = true
+	return nil
+}
+
+// A failed fixed descriptor close remains on the accepted original transfer;
+// retrying settlement cannot rerun the lookup or create a second reservation.
+func (t *linuxStandardServiceTransfer) finishBootstrapAdoption(s *linuxStandardService) error {
+	original := t.bootstrap
+	if original == nil {
+		return nil
+	}
+	if s.bootstrap != original || t.peer != original.peer || t.request.Bootstrap == nil || t.request.Bootstrap.ID != original.request.ID {
+		return errors.New("transfer lost original bootstrap adoption")
+	}
+	if original.resolver != nil {
+		if err := original.resolver.close(); err != nil {
+			return err
+		}
+	}
+	s.recordBootBootstrapRetirement(original.request, original.session, original.peer)
+	s.bootstrap = nil
+	t.bootstrap = nil
 	return nil
 }

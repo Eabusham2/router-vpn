@@ -810,6 +810,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			peer := linuxHostTUNStartPeer(t, scenario)
 			linuxHostTUNDirectHealth(t, peer)
 			linuxHostTUNInstallProfile(t, peer, scenario)
+			if scenario == "service-boot-hostname" {
+				linuxHostTUNBootHostnameFixture(t, peer)
+			}
 			if linuxHostTUNBootTransferCase(scenario) {
 				linuxHostTUNBootTransferService(t, installed, peer)
 			} else if linuxHostTUNTransferCase(scenario) {

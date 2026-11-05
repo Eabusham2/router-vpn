@@ -25,6 +25,7 @@ type DesktopLinuxStandardProtection struct {
 	baseline     *DesktopLinuxNodeBaseline
 	generation   uint32
 	acknowledged bool
+	bootstrap    *desktopLinuxStandardBootstrap
 }
 
 // DesktopLinuxStandardProtectionReceipt describes the original acknowledged
@@ -180,6 +181,9 @@ func (p *DesktopLinuxStandardProtection) complete(ctx context.Context) error {
 	if b.uncertain != nil {
 		return b.uncertain
 	}
+	if p.bootstrap != nil {
+		return errors.New("standard protection retains original bootstrap cleanup")
+	}
 	if b.complete {
 		return nil
 	}
@@ -206,7 +210,7 @@ func (p *DesktopLinuxStandardProtection) Receipt(ctx context.Context) (DesktopLi
 		return DesktopLinuxStandardProtectionReceipt{}, err
 	}
 	defer func() { b.gate <- struct{}{} }()
-	if !b.complete || b.closed || b.uncertain != nil {
+	if !b.complete || b.closed || b.uncertain != nil || p.bootstrap != nil {
 		return DesktopLinuxStandardProtectionReceipt{}, errors.New("standard protection creation is incomplete")
 	}
 	encoded, err := json.Marshal(b.nft.Baseline)

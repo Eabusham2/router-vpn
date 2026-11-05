@@ -578,10 +578,15 @@ type desktopLinuxNodeParentCapture struct {
 }
 
 func captureDesktopLinuxNodeParent(a *app) (*desktopLinuxNodeParentCapture, error) {
+	return captureDesktopLinuxNodeParentContext(context.Background(), a)
+}
+func captureDesktopLinuxNodeParentContext(ctx context.Context, a *app) (*desktopLinuxNodeParentCapture, error) {
 	if a == nil {
 		return nil, errors.New("Linux Node parent requires its captured application")
 	}
-	a.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	owner := a.localController
 	a.mu.Unlock()
 	if owner == nil {
@@ -592,7 +597,7 @@ func captureDesktopLinuxNodeParent(a *app) (*desktopLinuxNodeParentCapture, erro
 		return nil, errors.New("Linux Node parent has no retained native bootstrap")
 	}
 	capture := &desktopLinuxNodeParentCapture{app: a, controller: owner, parent: parent, record: parent.record, lifetime: parent.ctx}
-	if err := capture.Current(context.Background()); err != nil {
+	if err := capture.Current(ctx); err != nil {
 		return nil, err
 	}
 	return capture, nil
@@ -636,6 +641,9 @@ func (c *desktopLinuxNodeParentCapture) Current(ctx context.Context) error {
 }
 
 func (c *desktopLinuxNodeParentCapture) currentAppContext(ctx context.Context) error {
+	return c.currentAppModeContext(ctx, false)
+}
+func (c *desktopLinuxNodeParentCapture) currentAppModeContext(ctx context.Context, retirement bool) error {
 	if c == nil || c.app == nil {
 		return errors.New("Linux Node parent lost its captured application")
 	}
@@ -643,5 +651,5 @@ func (c *desktopLinuxNodeParentCapture) currentAppContext(ctx context.Context) e
 		return err
 	}
 	defer c.app.mu.Unlock()
-	return errors.Join(c.currentAppLocked(false), ctx.Err())
+	return errors.Join(c.currentAppLocked(retirement), ctx.Err())
 }

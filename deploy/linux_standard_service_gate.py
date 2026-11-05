@@ -92,6 +92,12 @@ CORE = {
 NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-generation', 'on-connect-mtu', 'on-connect-public', 'on-connect-public-restore', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-route-change', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
 NATIVE.update({'GenerationRetainedPeerSurvivesActivation': (), 'GenerationListenerPreventsAbsence': ('present', 'created-during-readback')})
 STARTUP = {
+    'BootBootstrapDeadPeerCleanupClock': ('live','retired','cancelled-observer','expired-retirement','foreign-pidfd'),
+    'BootBootstrapServiceKeepsOriginalAdmission': ('no-boot','image-reserved','image-frozen','image-settled','failed-boot','pending-transfer','cross-scope','cancel-before-admission','held-gate','cleanup-tombstone'),
+    'BootBootstrapPeerCleanupRetainsAcknowledgedClose': ('cancel-before-close','partial-close'),
+    'BootResolverCaptureUsesOnlyOriginalConfiguredUpstreams': (),
+    'BootResolverCaptureRejectsChangedSources': ('contents','same-bytes-replacement','link','permissions','stub-contents'),
+    'BootResolverRejectsUnownedStubAndImplicitFallback': (),
     'BootTransferRetriesReleasedOriginal': ('boot', 'active'),
     'BootTransferAdmissionKeepsOriginalPeer': ('no-boot', 'failed-boot', 'live-engine', 'pending-transfer', 'history-full', 'cancelled'),
     'BootTransferRetiredIntentRejectsReplay': ('original-result', 'renewed-deadline', 'other-session', 'other-selection', 'other-kind', 'late-reserve'),
@@ -200,6 +206,17 @@ MTU_NATIVE = {
 # These package gates are part of service MTU acceptance, not renamed client
 # tests. Each is executed and checked before the captured service binary runs.
 AUXILIARY = {
+    'boot-bootstrap-context': ('./cmd/client', {
+      'TestBootBootstrapFramesRejectCrossScope': ('start','image-prepare','mtu-start','reverse-prepare','transfer-reserve','protection-status'),
+      'TestBootBootstrapOriginalParentAdmissionIsBounded': ('capture','shipping-prepare','retirement'),
+      'TestBootBootstrapParentGenerationStillRejectsReplacement': (),
+    }),
+    'boot-bootstrap-dns': ('./internal/dnsmeasure', {
+      'TestTransportBootstrapExactQuestionAndFamilies': (),
+      'TestTransportBootstrapRejectsForeignOrMalformedAnswer': ('id','question','truncated','nxdomain','trailing','short-address','foreign-owner','mapped','too-many'),
+      'TestTransportBootstrapBoundedAliasChain': (),
+      'TestTransportBootstrapDoesNotExpandSearchNames': (),
+    }),
     'speedlab-caller': ('./cmd/client', {
         'TestSpeedLabServiceCallerContextCapture': ('identity', 'expected', 'restore-plan'),
         'TestSpeedLabServiceObserverJoinsCaller': ('request-cancel', 'explicit-stop'),
@@ -232,6 +249,8 @@ AUXILIARY = {
     }),
 }
 AUXILIARY_TESTS = {
+    'cmd/client/linux_standard_service_boot_bootstrap_test.go': 'boot-bootstrap-context',
+    'internal/dnsmeasure/transport_bootstrap_test.go': 'boot-bootstrap-dns',
     'cmd/client/speed_lab_service_caller_linux_test.go': 'speedlab-caller',
     'cmd/client/speed_lab_tunnel_transport_test.go': 'speedlab-transport',
     'internal/linuxprotection/node_standard_transfer_test.go': 'node-standard-journal',
@@ -436,3 +455,19 @@ SOURCE.update({'client/linux/routervpn-mtu-v20.inc', 'client/linux/test-mtu-v20.
 SOURCE.add('cmd/client/linux_standard_service_reverse_namespace_native_test.go')
 
 SOURCE.update({'cmd/client/linux_standard_service_boot_transfer_' + name for name in ('linux.go', 'linux_test.go', 'namespace_native_test.go')})
+
+# The hostname bootstrap is an owned outer transport operation. Its code and
+# actual native witnesses are part of the same mandatory service source seal.
+SOURCE.update({'cmd/client/' + name for name in (
+ 'linux_standard_service_boot_bootstrap_linux.go', 'linux_standard_service_boot_bootstrap_client_linux.go',
+ 'linux_standard_service_boot_bootstrap_test.go', 'linux_standard_service_boot_bootstrap_native_test.go',
+ 'linux_standard_service_boot_resolver_linux.go', 'linux_standard_service_boot_resolver_native_test.go',
+ 'linux_standard_service_boot_hostname_namespace_native_test.go', 'desktop_node_linux_parent.go',
+ 'desktop_node_linux_retirement.go', 'desktop_node_host_linux.go', 'desktop_node_host_linux_tun_native_test.go')})
+SOURCE.update({'internal/dnsmeasure/transport_bootstrap.go','internal/dnsmeasure/transport_bootstrap_test.go',
+ 'internal/linuxprocess/bootstrap_cleanup_gate_linux_native_test.go',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap.go','internal/mobiletor/desktop_standard_linux_bootstrap_test.go',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap_native_test.go','internal/mobiletor/desktop_standard_linux_protection.go'})
+NATIVE_MTU_SOURCES.update({'cmd/client/' + name for name in (
+ 'linux_standard_service_boot_bootstrap_native_test.go', 'linux_standard_service_boot_resolver_native_test.go',
+ 'linux_standard_service_boot_hostname_namespace_native_test.go')})

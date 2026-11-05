@@ -15,6 +15,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/linuxprotection"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
@@ -38,6 +39,7 @@ type desktopLinuxNodeHost struct {
 	launch                    *desktopNodeLaunch
 	process                   *desktopLinuxNodeProcess
 	standardTransfer          *linuxStandardServiceNodeTransfer
+	bootBootstrap             *linuxStandardBootBootstrapClient
 	transaction               *desktopLinuxNodeTransaction
 	source                    []byte
 	network                   string
@@ -70,22 +72,31 @@ func prepareDesktopLinuxNodeHost(operation context.Context, a *app, profile comm
 // installation, private source, operation and native namespace captures are
 // the same shipping owners. There is no environment or request override.
 func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile common.RouterProfile, mode string, restoredMTU int,
-	verify func(context.Context, string) (string, error), lookup applexray.Lookup) (*desktopLinuxNodeHost, error) {
+	verify func(context.Context, string) (string, error), lookup applexray.Lookup) (result *desktopLinuxNodeHost, failure error) {
+	if operation != nil && operation.Err() != nil {
+		return nil, operation.Err()
+	}
 	if operation == nil || operation.Err() != nil || a == nil || verify == nil ||
 		!mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) || desktopOwnedNodeProtectionPolicy(profile) == "off" {
 		return nil, errors.New("Linux Node host requires its captured supported protected graph")
 	}
-	parent, err := captureDesktopLinuxNodeParent(a)
+	ctx, cancel := context.WithTimeout(operation, 30*time.Second)
+	defer cancel()
+	parent, err := captureDesktopLinuxNodeParentContext(ctx, a)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(operation, 30*time.Second)
 	stopParent := context.AfterFunc(parent.lifetime, cancel)
 	defer func() { stopParent(); cancel() }()
-	network := physicalNetworkIdentity()
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	revision := desktopOwnedNodeProfileToken(profile)
 	options := [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	saved, exists := a.profileByIDLocked(profile.ID)
 	savedOptions := [3]bool{saved.DAITAEnabled, saved.JumboTUN, saved.SocksEnabled}
 	selectedOptions := [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks}
@@ -94,13 +105,19 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 		return nil, errors.New("Linux Node preparation changed its saved profile or selected runtime options")
 	}
 	current := func() error {
-		if ctx.Err() != nil || network == "" || physicalNetworkIdentity() != network {
+		observed, e := physicalNetworkIdentityContext(ctx)
+		if e != nil {
+			return e
+		}
+		if ctx.Err() != nil || network == "" || observed != network {
 			return errors.Join(ctx.Err(), errors.New("Linux Node preparation lost its captured physical network"))
 		}
 		if err := parent.Current(ctx); err != nil {
 			return err
 		}
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return err
+		}
 		defer a.mu.Unlock()
 		actual, exists := a.profileByIDLocked(profile.ID)
 		if a.checkCapturedConnectionOperationLocked(operation) != nil || a.connectionCancelIntent == operation || !exists ||
@@ -140,14 +157,56 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 	}()
 	compile, stopCompile := context.WithTimeout(ctx, 10*time.Second)
 	defer stopCompile()
-	original, endpoint, err := compileDesktopNode(compile, profile, mode, files, start, lookup)
+	var bootstrap *linuxStandardBootBootstrapClient
+	defer func() {
+		if bootstrap != nil && result == nil {
+			cleanup, stop := context.WithDeadline(context.WithoutCancel(operation), time.Unix(0, bootstrap.request.DeadlineNS))
+			defer stop()
+			failure = errors.Join(failure, bootstrap.cleanup(cleanup))
+		}
+	}()
+	capturedLookup := func(call context.Context, name string) ([]netip.Addr, error) {
+		if err := current(); err != nil {
+			return nil, err
+		}
+		var err error
+		if bootstrap == nil {
+			bootstrap, err = captureLinuxBootBootstrapClient(call, a, parent, operation, profile, mode, network)
+			if err != nil {
+				return nil, err
+			}
+		}
+		answers, handled, err := bootstrap.lookup(call, name)
+		if err != nil {
+			return nil, err
+		}
+		if !handled {
+			bootstrap = nil
+			if lookup == nil {
+				return nil, errors.New("captured bootstrap resolver unavailable")
+			}
+			answers, err = lookup(call, name)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := current(); err != nil {
+			return nil, err
+		}
+		return answers, call.Err()
+	}
+	original, endpoint, err := compileDesktopNode(compile, profile, mode, files, start, capturedLookup)
 	if err != nil {
 		return nil, err
 	}
 	if err := current(); err != nil {
 		return nil, err
 	}
-	return newDesktopLinuxNodeHostWithSource(ctx, parent, operation, profile, mode, original, endpoint, network, savedOptions, restoredMTU)
+	result, failure = newDesktopLinuxNodeHostWithSource(ctx, parent, operation, profile, mode, original, endpoint, network, savedOptions, restoredMTU)
+	if result != nil {
+		result.bootBootstrap = bootstrap
+	}
+	return result, failure
 }
 
 func (h *desktopLinuxNodeHost) enter(ctx context.Context) error {
@@ -312,6 +371,11 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 		return nil
 	}
 	h.closing = true
+	if h.bootBootstrap != nil && !h.bootBootstrap.consumed.Load() {
+		if err := h.bootBootstrap.cleanup(ctx); err != nil {
+			return err
+		}
+	}
 	if err := h.retireLocked(ctx, false); err != nil {
 		return err
 	}

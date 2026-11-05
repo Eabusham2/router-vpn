@@ -224,9 +224,22 @@ func (p *linuxStandardServicePeer) Retired() (bool, error) {
 	return legacyExitPIDFDState(p.pidfd)
 }
 
-func (p *linuxStandardServicePeer) Close() error {
+func (p *linuxStandardServicePeer) Close() error { return p.CloseContext(context.Background()) }
+
+// CloseContext joins only this original captured witness. The caller retains
+// any partial close and may retry it without reauthenticating a replacement.
+func (p *linuxStandardServicePeer) CloseContext(ctx context.Context) error {
 	if p == nil {
 		return nil
+	}
+	if ctx == nil {
+		return errors.New("service peer close omitted its caller")
+	}
+	if p.task != nil {
+		if err := p.task.Close(ctx); err != nil {
+			return err
+		}
+		p.task = nil
 	}
 	var result error
 	if p.generation != nil {
@@ -239,13 +252,6 @@ func (p *linuxStandardServicePeer) Close() error {
 			p.command = nil
 		} else {
 			result = errors.Join(result, err)
-		}
-	}
-	if p.task != nil {
-		err := p.task.Close(context.Background())
-		result = errors.Join(result, err)
-		if err == nil {
-			p.task = nil
 		}
 	}
 	if p.pidfd != nil {

@@ -275,6 +275,10 @@ func linuxStandardServiceExchangeGeneration(ctx context.Context, channel *net.Un
 	if response.MTU != nil && !mtuAction || mtuAction && (response.Startup != nil || response.Protection != nil || response.Complete && response.MTU == nil) {
 		return response, errors.New("standard service response changed original MTU scope")
 	}
+	bootstrapAction := request.Action == "boot-bootstrap" || request.Action == "boot-bootstrap-cleanup"
+	if response.Bootstrap != nil && !bootstrapAction || bootstrapAction && (response.ImageUpgrade != nil || response.Startup != nil || response.MTU != nil || response.Transfer != nil || response.Reverse != nil || response.Protection != nil || response.Complete && response.Bootstrap == nil) {
+		return response, errors.New("service response changed original bootstrap scope")
+	}
 	response.transmittedDeadline = request.DeadlineNS
 	response.authenticatedPeer = *originalPeer
 	if !response.Complete {

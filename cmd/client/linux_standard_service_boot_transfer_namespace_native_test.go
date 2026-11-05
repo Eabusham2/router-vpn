@@ -113,7 +113,7 @@ func TestLinuxStandardServiceBootTransferRetiredIntentRejectsReplay(t *testing.T
 	}
 }
 
-var linuxHostTUNBootTransferCases = []string{"service-boot-transfer", "service-boot-transfer-cancel", "service-boot-transfer-lost-reply"}
+var linuxHostTUNBootTransferCases = []string{"service-boot-transfer", "service-boot-transfer-cancel", "service-boot-transfer-lost-reply", "service-boot-hostname"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNBootTransferCases...) }
 func linuxHostTUNBootTransferCase(scenario string) bool {
@@ -127,8 +127,8 @@ func linuxHostTUNBootTransferCase(scenario string) bool {
 
 // Prior-boot metadata selects the ordinary reassert path only. The installed
 // service must create the real guard before notifying READY; no old native
-// handle is adopted. Literal endpoint coverage is deliberate: hostname
-// bootstrap under the boot guard is a separate currently missing dependency.
+// handle is adopted. The hostname case separately installs its captured
+// machine resolver outside the original guard endpoint exceptions.
 func linuxHostTUNBootTransferService(t *testing.T, installed string, peer *linuxHostTUNPeer) {
 	t.Helper()
 	path := filepath.Join(linuxOwnedControllerRoot, "routers.json")
@@ -158,7 +158,7 @@ func linuxHostTUNBootTransferService(t *testing.T, installed string, peer *linux
 }
 
 func linuxHostTUNBootTransferPreflight(ctx context.Context, a *app, scenario string) (failure error) {
-	if !linuxHostTUNBootTransferCase(scenario) || scenario == "service-boot-transfer" {
+	if !linuxHostTUNBootTransferCase(scenario) || (scenario == "service-boot-transfer" || scenario == "service-boot-hostname") {
 		return nil
 	}
 	operation, finish, err := a.beginConnectionTransaction()
@@ -238,6 +238,16 @@ func linuxHostTUNTransferredBoot(host *desktopLinuxNodeHost) error {
 		return errors.New("public Node Connect omitted boot transfer")
 	}
 	transfer := host.standardTransfer
+	if bootstrap := host.bootBootstrap; bootstrap != nil {
+		binding := transfer.request.Bootstrap
+		if !bootstrap.consumed.Load() || binding == nil || binding.ID != bootstrap.request.ID || binding.Address != host.launch.endpoint {
+			return errors.New("public hostname Connect lost original lookup-to-transfer binding")
+		}
+		if _, exists := linuxStandardBootBootstraps.Load(bootstrap.app); exists {
+			return errors.New("completed hostname transfer retained lookup admission")
+		}
+	}
+
 	if transfer.boot == nil || transfer.owner != nil || !transfer.request.Boot || !transfer.resolved.Load() || !transfer.committed.Load() || transfer.intent.Load() == nil || host.transaction == nil || host.transaction.head.Record.Transfer == nil || *host.transaction.head.Record.Transfer != *transfer.intent.Load() {
 		return errors.New("public boot succession omitted original durable/native settlement")
 	}

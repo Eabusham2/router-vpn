@@ -6,6 +6,37 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## Retained Always guard: transport hostname bootstrap
+
+The installed Linux service now supplies a bounded outer-transport hostname
+bootstrap for public Node Connect while retaining its original prior-boot Always
+guard. The authenticated operation captures the selected profile, physical path,
+trusted root-owned machine resolver files and exact service peer. It uses only the
+**first configured captured upstream over UDP**; it does not provide resolver
+failover, TCP fallback, a public resolver exception or a loopback daemon exemption.
+Selected Home AdGuard and payload DNS are unchanged. Each exact A/AAAA query has
+an original creator-owned socket/tuple/UID/mark/device grant and acknowledged nft
+handle. The grant must be independently absent, with the original baseline and
+all descriptors joined, before lookup evidence can support boot-to-Node transfer.
+
+Cancellation and retries retain the same creator. Actual original-controller
+pidfd retirement admits a once-only 30-second cleanup clock; it cannot restart a
+lookup, reuse an answer, reconnect or transfer protection. Unknown removal or
+expired cleanup stays retained and blocks further ownership admission. This
+cleanup allowance is an explicit implementation limit, separate from and unable
+to renew the original lookup deadline. Active image handoff fences both lookup
+and pending cleanup admission.
+
+Local evidence is 77 focused race verdicts across the client, process witness,
+DNS and native parser packages; 27 exact relocated native helper verdicts on the
+pinned core (including completed-close retries); and five causal mutants rejected
+at their intended assertions. The mandatory kernel socket test adds original and
+cancel-after-grant cases, and the installed public `service-boot-hostname` case
+brings the preserved host inventory to 458. The native namespace positives require
+privileged CI: they were compiled here, but this workspace cannot execute the
+required network/mount operations. These source results do not certify a package,
+a physical device or a deployment.
+
 ## November 5 continuation — original caller ownership
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh

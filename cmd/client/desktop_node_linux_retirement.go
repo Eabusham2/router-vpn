@@ -17,13 +17,13 @@ import (
 // namespace, credentials and descriptor owners. None of those may be rebuilt
 // from journal values or a replacement application.
 func (c *desktopLinuxNodeParentCapture) retirementCurrent(ctx context.Context) error {
-	if err := c.currentAppMode(true); err != nil {
+	if err := c.currentAppModeContext(ctx, true); err != nil {
 		return err
 	}
 	if err := c.parent.observeCurrent(ctx, true); err != nil {
 		return err
 	}
-	return c.currentAppMode(true)
+	return c.currentAppModeContext(ctx, true)
 }
 
 func (j *desktopLinuxNodeJournal) checkOperation(ctx context.Context, retiring *desktopLinuxNodeTransaction) error {

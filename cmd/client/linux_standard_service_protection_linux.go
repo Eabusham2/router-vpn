@@ -61,7 +61,7 @@ func (s *linuxStandardService) protectionAbsent(ctx context.Context, lease *lega
 }
 
 func (s *linuxStandardService) protectionRequest(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest) (*linuxStandardServiceProtectionData, error) {
-	if ctx == nil || ctx.Err() != nil || peer == nil || request.MTU != nil || request.Reverse != nil || request.Transfer != nil || request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" {
+	if ctx == nil || ctx.Err() != nil || peer == nil || request.Bootstrap != nil || request.MTU != nil || request.Reverse != nil || request.Transfer != nil || request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" {
 		return nil, errors.New("standard protection request changed its captured scope")
 	}
 	if err := peer.Current(ctx); err != nil {
@@ -73,7 +73,7 @@ func (s *linuxStandardService) protectionRequest(ctx context.Context, peer *linu
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
-	if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+	if s.bootstrapPending() || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
 		return nil, errors.New("original image handoff freezes ordinary service requests")
 	}
 	if s.transferPending() {
