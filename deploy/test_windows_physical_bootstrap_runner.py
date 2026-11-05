@@ -20,6 +20,32 @@ EXTERNAL = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(EXTERNAL)
 
 
+class ExternalMTURetentionControls(unittest.TestCase):
+    def test_two_controls_discard_independent_original_owners(self):
+        with tempfile.TemporaryDirectory(prefix="external-mtu-retention-") as directory:
+            core = Path(directory)
+            originals = {
+                "routervpn_desktop_tor_box_mtu.go": ROOT / "mobile/desktop/tor_box_mtu.go.tmpl",
+                "adapter/inbound/routervpn_mtu.go": ROOT / "mobile/mtu/manager.go.tmpl",
+            }
+            for name, source in originals.items():
+                target = core / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+            controls = EXTERNAL.mtu_retention_mutants(core)
+            self.assertEqual({c[0] for c in controls}, {"discarded-original-engine-candidate", "discarded-original-manager-candidate"})
+            fixture = (ROOT / "mobile/desktop/external_box_integration_test.go.tmpl").read_text()
+            for _, name, package, case, witness, changed in controls:
+                self.assertEqual(package, ".")
+                self.assertEqual(case, "TestRouterVPNDesktopExternalPhysicalIntegration/network-reset-after-native-publication")
+                self.assertIn(witness, fixture)
+                self.assertNotEqual(changed, originals[name].read_text())
+                self.assertEqual((core / name).read_bytes(), originals[name].read_bytes())
+            (core / "routervpn_desktop_tor_box_mtu.go").write_text("changed source")
+            with self.assertRaises(ValueError):
+                EXTERNAL.mtu_retention_mutants(core)
+
+
 class ExternalOutputBoundary(unittest.TestCase):
     def report(self, status, output):
         raw = io.BytesIO()
@@ -149,9 +175,11 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
                  patch.object(EXTERNAL.IDENTITY, "selected_compiler", return_value=("owned-go", {}, "amd64")), \
                  patch.object(EXTERNAL.IDENTITY, "run", side_effect=run), \
                  patch.object(EXTERNAL, "mutants", return_value=()), \
+                 patch.object(EXTERNAL, "mtu_retention_mutants", return_value=()) as retention_controls, \
                  patch.object(EXTERNAL, "report_baseline", side_effect=report), \
                  contextlib.redirect_stdout(io.StringIO()):
                 EXTERNAL.execute(core)
+            retention_controls.assert_called_once_with(core)
             self.assertEqual(sources.call_count, 2)
             self.assertTrue({"command", "box", "factory"}.issubset(observed))
             self.assertTrue(set(EXTERNAL.JOURNAL_COMMAND_CASES).issubset(observed["command"]))

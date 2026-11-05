@@ -1571,6 +1571,34 @@ Privileged installed execution remains unavailable locally; the nine real
 reverse scenarios require their actual CI runs. This change does not close
 boot-guard hostname bootstrap, unrelated graph families or device acceptance.
 
+## Genuine network loss retains internal MTU cleanup ownership
+
+Windows physical-bootstrap jobs `127092339894` and `127092340244` at `617c3dd6`
+both failed the `network-reset-after-native-publication` fixture. The production
+MTU path retains the manager-returned candidate in the original engine before
+final readback. A genuine network-generation failure cancels the proof and
+returns no public reader, while the manager and engine keep their candidate
+for cleanup. The old fixture incorrectly required the public return value to
+be that retained candidate.
+
+The corrected fixture independently requires a nil public result, the exact
+manager candidate, the exact engine candidate, unusable native readback and
+joined cleanup through the same proof and Box. It checks original, candidate
+and unused rollback readers and physical/socket authority after closure.
+Two separate production mutations discard the engine candidate or the manager
+candidate; the Windows runner requires each matching ownership assertion,
+not a compile error, timeout or unrelated failure. Production behavior is unchanged.
+
+All **20 Python runner checks pass (6.719s)**. Ordinary pinned native preparation
+and native test compilation pass. The first cold compilation reached the existing
+600-second runner allowance before executing tests; a cached completion then
+ran all three selected leaves in 0.224s. Each stopped at actual non-loopback
+interface discovery with `netlinkrib: operation not permitted`, before its
+proof, MTU or ownership assertions. No local behavioral pass or mutation-control
+pass is claimed; the two controls were not run against a blocked baseline.
+Actual Windows execution remains mandatory. The separate one-use grant timing
+fixture remains a distinct investigation and is not changed by this unit.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

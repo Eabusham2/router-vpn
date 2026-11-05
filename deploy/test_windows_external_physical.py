@@ -152,6 +152,23 @@ def checked_sources(source):
     return source, records
 
 
+def mtu_retention_mutants(source):
+    engine_path = "routervpn_desktop_tor_box_mtu.go"
+    manager_path = "adapter/inbound/routervpn_mtu.go"
+    engine = (source / engine_path).read_text(encoding="utf-8")
+    manager = (source / manager_path).read_text(encoding="utf-8")
+    case = "TestRouterVPNDesktopExternalPhysicalIntegration/network-reset-after-native-publication"
+    return (
+        ("discarded-original-engine-candidate", engine_path, ".", case,
+         "late network cancellation discarded the original engine candidate",
+         IDENTITY.replace_once(engine, "\te.tun = current\n", "\te.tun = expected\n")),
+        ("discarded-original-manager-candidate", manager_path, ".", case,
+         "late network cancellation discarded the original manager candidate",
+         IDENTITY.replace_once(manager, "\t\t\tm.inboundByTag[expected.Tag()] = value\n",
+                               "\t\t\tm.inboundByTag[expected.Tag()] = expected\n")),
+    )
+
+
 def mutants(source):
     command = (source / "cmd/sing-box/routervpn_external.go").read_text(encoding="utf-8")
     admission = (source / "cmd/sing-box/routervpn_external_command_admission.go").read_text(encoding="utf-8")
@@ -270,7 +287,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 report_baseline(run_name, run_required, status, output)
                 if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                     raise ValueError("Ordinary Windows composition binary changed during execution")
-        for label, relative, package, test, witness, replacement in mutants(source):
+        for label, relative, package, test, witness, replacement in (*mutants(source), *mtu_retention_mutants(source)):
             changed = Path(directory) / (label + ".go")
             changed.write_text(replacement, encoding="utf-8")
             overlay = Path(directory) / (label + ".json")

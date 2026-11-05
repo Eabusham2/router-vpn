@@ -133,6 +133,15 @@ preparation, module verification and actual Box test compilation complete;
 local execution is blocked at netlink initialization before assertions. Native
 CI behavioral evidence remains required for this fixture correction.
 
+The Windows external integration fixture now distinguishes failed public MTU
+adoption from retained internal cleanup ownership after genuine network loss.
+It requires a nil public result, the exact candidate in both original manager
+and engine, an unusable reader and joined original Box/proof cleanup. Two
+independent production mutations must fail the matching ownership assertion.
+All 20 runner checks pass and the normally prepared native test compiles;
+local execution stops at restricted netlink interface discovery before these
+assertions. Actual Windows behavioral and mutation-control results remain open.
+
 The real loopback comparison fixture now gives both candidate responses a
 measurable interval. Windows AMD64 and ARM64 had each rejected a zero-time
 fixture candidate before reaching the lease-cancellation assertion. Only test

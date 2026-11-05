@@ -1189,6 +1189,29 @@ type desktopExternalIntegrationFixture struct {
 	peer                            *desktopExternalIntegrationPeer
 	proof                           *RouterVPNExternalProofRequest
 	startRejected                   bool
+	boxClosed                       bool
+}
+
+// Close the same proof and Box once; explicit retirement checks and the test
+// cleanup share this original owner, never a reconstructed reader or source.
+func (f *desktopExternalIntegrationFixture) closeOriginal(t *testing.T) bool {
+	t.Helper()
+	if f.boxClosed {
+		return true
+	}
+	joined := true
+	if f.proof != nil {
+		if err := f.proof.Close(); err != nil {
+			t.Error("real shared proof did not join", err)
+			joined = false
+		}
+	}
+	if err := f.box.Close(); err != nil {
+		t.Error("real external Box did not join", err)
+		return false
+	}
+	f.boxClosed = true
+	return joined
 }
 
 func desktopExternalIntegrationAddress(t *testing.T) (net.Interface, netip.Addr) {
@@ -1493,14 +1516,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		t.Fatal("real native Box", err)
 	}
 	t.Cleanup(func() {
-		if f.proof != nil {
-			if err := f.proof.Close(); err != nil {
-				t.Error("real shared proof did not join", err)
-			}
-		}
-		if err := f.box.Close(); err != nil {
-			t.Error("real external Box did not join", err)
-		}
+		f.closeOriginal(t)
 		if !f.source.closed.Load() {
 			t.Error("real Box discarded the OS source before joined cleanup")
 		}
@@ -1904,13 +1920,37 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 					t.Fatal("retired physical generation kept a replacement reader")
 				}
 			} else {
-				// Returning the exact published reader on a failed adoption preserves
-				// cleanup ownership; it cannot become a healthy connection or permit.
-				if current != candidate || !exists || actual != candidate {
-					t.Fatal("late network cancellation discarded or changed the actual published cleanup owner")
+				// Genuine generation loss has no public candidate. The original
+				// manager and engine must nevertheless retain that exact reader
+				// until the original Box joins its cleanup.
+				if current != nil {
+					t.Fatal("late network cancellation returned a public native reader")
+				}
+				if !exists || actual != candidate {
+					t.Fatal("late network cancellation discarded the original manager candidate")
+				}
+				f.proof.engine.mu.RLock()
+				retained := f.proof.engine.tun
+				f.proof.engine.mu.RUnlock()
+				if retained != candidate {
+					t.Fatal("late network cancellation discarded the original engine candidate")
 				}
 				if _, _, _, readErr := candidate.RouterVPNDesktopMTUInterface(); readErr == nil {
 					t.Fatal("late network cancellation left a usable native reader")
+				}
+				if !f.closeOriginal(t) {
+					t.Fatal("late network cancellation failed original-owner joined cleanup")
+				}
+				for role, reader := range map[string]*desktopTorBoxTUN{"original": f.tun, "candidate": candidate.desktopTorBoxTUN, "rollback": rollback.desktopTorBoxTUN} {
+					reader.mu.Lock()
+					closed, ready := reader.closed, reader.ready
+					reader.mu.Unlock()
+					if !closed || ready {
+						t.Fatal("original Box left its retained native reader unretired", role)
+					}
+				}
+				if !f.source.closed.Load() || f.network.Current() || f.network.SocketCurrent() {
+					t.Fatal("original Box cleanup retained physical source or socket authority")
 				}
 			}
 			f.source.mu.Lock()
