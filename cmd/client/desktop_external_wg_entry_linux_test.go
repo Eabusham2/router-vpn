@@ -18,6 +18,9 @@ func TestDesktopLinuxWireGuardCONNECTRetainsBothSavedSources(t *testing.T) {
 		t.Run(protocol, func(t *testing.T) { desktopLinuxPacketEntryRetainsBothSavedSources(t, protocol) })
 	}
 }
+func TestDesktopLinuxWireGuardHysteriaRetainsBothSavedSources(t *testing.T) {
+	desktopLinuxPacketEntryRetainsBothSavedSources(t, "hysteria2")
+}
 func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		t.Run(kill, func(t *testing.T) {
@@ -45,6 +48,9 @@ func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol strin
 					faults = append(faults, "exit-sni")
 				}
 			}
+			if protocol == "hysteria2" {
+				faults = append(faults, "exit-address", "exit-sni")
+			}
 			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
 					p, e := cloneRouterProfile(profile), cloneRouterProfile(entry)
@@ -68,6 +74,10 @@ func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol strin
 					case "exit-sni":
 						mutateDesktopExternalEntryExit(t, &p, "tls")
 					case "exit-address":
+						if protocol == "hysteria2" {
+							p.External.Hysteria2.Server = "198.51.100.121"
+							break
+						}
 						proxy := p.External.HTTPConnect
 						if protocol == "https-connect" {
 							proxy = p.External.HTTPSConnect
@@ -125,9 +135,23 @@ func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol strin
 }
 
 func TestDesktopLinuxWireGuardEntryKeepsOtherGraphsClosed(t *testing.T) {
+	desktopLinuxPacketEntryKeepsOtherGraphsClosed(t, "shadowsocks")
+}
+func TestDesktopLinuxWireGuardHysteriaKeepsOtherGraphsClosed(t *testing.T) {
+	desktopLinuxPacketEntryKeepsOtherGraphsClosed(t, "hysteria2")
+	for _, layer := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+		t.Run("complete-"+layer, func(t *testing.T) {
+			_, _, launch := desktopExternalPacketEntryLayerExitFixture(t, "always", "wireguard", "hysteria2", layer)
+			if !desktopExternalPacketEntryOwner(launch.external) || desktopLinuxExternalEligible(launch) {
+				t.Fatal("Linux admitted an independently complete but unsupported final layer")
+			}
+		})
+	}
+}
+func desktopLinuxPacketEntryKeepsOtherGraphsClosed(t *testing.T, protocol string) {
 	for _, fault := range []string{"server", "auto", "off", "predecessor", "entry-layer", "final-layer", "final-protocol", "entry-protocol"} {
 		t.Run(fault, func(t *testing.T) {
-			_, _, launch := desktopExternalPacketEntryFixture(t, "always", "wireguard")
+			_, _, launch := desktopExternalPacketEntryExitFixture(t, "always", "wireguard", protocol)
 			switch fault {
 			case "server", "auto":
 				launch.external.selection = fault
@@ -140,7 +164,7 @@ func TestDesktopLinuxWireGuardEntryKeepsOtherGraphsClosed(t *testing.T) {
 			case "final-layer":
 				launch.external.profile.StartLayer = common.StartLayerAES256GCM
 			case "final-protocol":
-				launch.external.profile.External.Protocol = "hysteria2"
+				launch.external.profile.External.Protocol = "socks5"
 			case "entry-protocol":
 				launch.external.entry.External.Protocol = "amneziawg"
 			}
@@ -217,6 +241,30 @@ func TestDesktopLinuxWireGuardCONNECTRejectsSelectedUDPWithoutFallback(t *testin
 			}
 			if profile.DNSProtocol != "udp" || original.external.physical.Validate() != nil {
 				t.Fatal("refusal modified saved DNS or original native graph")
+			}
+		})
+	}
+}
+
+func TestDesktopLinuxWireGuardHysteriaRetainsSelectedDNS(t *testing.T) {
+	for _, selected := range []string{"udp", "tcp"} {
+		t.Run(selected, func(t *testing.T) {
+			profile, entry, _ := desktopExternalPacketEntryExitFixture(t, "always", "wireguard", "hysteria2")
+			profile.DNSProtocol = selected
+			exit, err := standardExitFromExternalProfile(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil {
+				t.Fatal(err)
+			}
+			capture, err := launch.external.physical.Capture()
+			if err != nil || capture.SelectedDNS.Type != selected || capture.SelectedDNS.Host != profile.DNSHost || int(capture.SelectedDNS.Port) != profile.DNSPort || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" {
+				t.Fatal("Hysteria2 changed selected DNS or gave the final a physical root", err, capture)
 			}
 		})
 	}

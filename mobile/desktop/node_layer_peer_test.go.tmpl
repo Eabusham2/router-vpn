@@ -34,6 +34,9 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	QUIC "github.com/sagernet/quic-go"
+	QLOG "github.com/sagernet/quic-go/qlog"
+	QW "github.com/sagernet/quic-go/qlogwriter"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
@@ -41,6 +44,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	boxService "github.com/sagernet/sing-box/adapter/service"
+	DIALER "github.com/sagernet/sing-box/common/dialer"
 	boxTLS "github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	boxDNS "github.com/sagernet/sing-box/dns"
@@ -63,6 +67,7 @@ import (
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
+	QTLS "github.com/sagernet/sing-quic"
 	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	"github.com/sagernet/sing/common/auth"
@@ -71,6 +76,7 @@ import (
 	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	aTLS "github.com/sagernet/sing/common/tls"
 	"github.com/sagernet/sing/protocol/socks"
 	"github.com/sagernet/sing/protocol/socks/socks5"
 )
@@ -1798,6 +1804,7 @@ var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerSer
 var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string, string, uint16) desktopExternalInstalledPacketEntryPeer
 
 type desktopExternalInstalledPeerRequest struct {
+	HysteriaFault        string                                `json:"hysteria_fault,omitempty"`
 	HTTPSFault           string                                `json:"https_fault,omitempty"`
 	ShadowsocksEntry     *desktopExternalInstalledSSRequest    `json:"shadowsocks_entry,omitempty"`
 	ShadowsocksMethod    string                                `json:"shadowsocks_method,omitempty"`
@@ -2190,10 +2197,171 @@ func TestRouterVPNDesktopExternalCONNECTCertificateRefusal(t *testing.T) {
 	}
 }
 
+// This fixture observer consumes original quic-go close events. It cannot
+// change TLS trust, authentication, stream routing or handshake deadlines.
+type desktopExternalHysteriaObservation struct {
+	authFailures        atomic.Uint32
+	certificateRefusals atomic.Uint32
+}
+type desktopExternalHysteriaTrace struct{ count *atomic.Uint32 }
+
+func (o *desktopExternalHysteriaTrace) SupportsSchemas(schema string) bool {
+	return schema == QLOG.EventSchema
+}
+func (o *desktopExternalHysteriaTrace) AddProducer() QW.Recorder {
+	return &desktopExternalHysteriaTrace{count: o.count}
+}
+func (o *desktopExternalHysteriaTrace) Close() error { return nil }
+func desktopExternalHysteriaCertificateRefused(event QLOG.ConnectionClosed) bool {
+	if event.Initiator != QLOG.InitiatorRemote || event.ConnectionError == nil || event.ApplicationError != nil || event.Trigger != "" {
+		return false
+	}
+	switch uint64(*event.ConnectionError) {
+	case 0x12a, 0x12e, 0x130:
+		return true
+	}
+	return false
+}
+func (o *desktopExternalHysteriaTrace) RecordEvent(event QW.Event) {
+	if closed, ok := event.(QLOG.ConnectionClosed); ok && desktopExternalHysteriaCertificateRefused(closed) {
+		o.count.Add(1)
+	}
+}
+
+type desktopExternalHysteriaTLS struct {
+	aTLS.ServerConfig
+	observation *desktopExternalHysteriaObservation
+	prepareErr  error
+}
+
+func (c *desktopExternalHysteriaTLS) ConfigureHTTP3() {
+	c.prepareErr = QTLS.ConfigureHTTP3(c.ServerConfig)
+}
+func (c *desktopExternalHysteriaTLS) capturedConfig(config *QUIC.Config) (*QUIC.Config, error) {
+	if c.prepareErr != nil {
+		return nil, c.prepareErr
+	}
+	if config == nil || config.Tracer != nil || c.observation == nil {
+		return nil, errors.New("Hysteria fixture replaced original QUIC observer")
+	}
+	copied := config.Clone()
+	copied.Tracer = func(_ context.Context, client bool, _ QUIC.ConnectionID) QW.Trace {
+		if client {
+			return nil
+		}
+		return &desktopExternalHysteriaTrace{count: &c.observation.certificateRefusals}
+	}
+	return copied, nil
+}
+func (c *desktopExternalHysteriaTLS) Listen(conn net.PacketConn, config *QUIC.Config) (QTLS.Listener, error) {
+	copied, err := c.capturedConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	// This observer is installed only for the original plain HY2 fixture. These
+	// are the same no-obfuscation options supplied by its native Service.Start.
+	return QTLS.ListenWithOptions(conn, c.ServerConfig, copied, QTLS.ListenOptions{StatelessReset: true})
+}
+func (c *desktopExternalHysteriaTLS) ListenEarly(conn net.PacketConn, config *QUIC.Config) (QTLS.EarlyListener, error) {
+	copied, err := c.capturedConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return QTLS.ListenEarlyWithOptions(conn, c.ServerConfig, copied, QTLS.ListenOptions{StatelessReset: true})
+}
+
+func TestRouterVPNDesktopExternalHysteriaAuthenticationAndTrust(t *testing.T) {
+	certificate, ca := desktopExternalInstalledPeerCertificate(t, false)
+	foreignCertificate, _ := desktopExternalInstalledPeerCertificate(t, false)
+	for _, fault := range []string{"captured", "password", "sni", "trust"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			observer := &desktopExternalHysteriaObservation{}
+			server := &desktopNodeLayerServer{ctx: ctx, connections: make(map[io.Closer]bool)}
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			selectedCertificate := certificate
+			if fault == "trust" {
+				selectedCertificate = foreignCertificate
+			}
+			closeServer := startDesktopExternalInstalledHysteria2(t, server, packet, selectedCertificate, "captured-native-password", observer)
+			defer closeServer()
+			logger := log.NewNOPFactory().NewLogger("captured-hysteria-native-client")
+			name, password := "captured-external.example", "captured-native-password"
+			if fault == "sni" {
+				name = "foreign-final.example"
+			}
+			if fault == "password" {
+				password = "different-native-password"
+			}
+			config, err := boxTLS.NewClient(ctx, logger, "127.0.0.1", option.OutboundTLSOptions{Enabled: true, ServerName: name, Certificate: []string{ca}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			physical, err := DIALER.NewDefault(ctx, option.DialerOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := HYQUIC.NewClient(HYQUIC.ClientOptions{Context: ctx, Dialer: physical, Logger: logger, ServerAddress: M.ParseSocksaddr(packet.LocalAddr().String()), Password: password, TLSConfig: config})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.CloseWithError(context.Canceled)
+			association, failure := client.ListenPacket(ctx)
+			if association != nil {
+				defer association.Close()
+			}
+			switch fault {
+			case "captured":
+				if failure != nil || association == nil || observer.authFailures.Load() != 0 || observer.certificateRefusals.Load() != 0 {
+					t.Fatal("captured HY2 authentication failed", failure)
+				}
+			case "password":
+				if failure == nil || association != nil || observer.authFailures.Load() == 0 || observer.certificateRefusals.Load() != 0 {
+					t.Fatal("HY2 password bypassed actual native authentication", failure)
+				}
+			default:
+				var hostname x509.HostnameError
+				var authority x509.UnknownAuthorityError
+				if failure == nil || association != nil || fault == "sni" && !errors.As(failure, &hostname) || fault == "trust" && !errors.As(failure, &authority) {
+					t.Fatal("HY2 TLS refusal lacked original x509 cause", failure)
+				}
+				tick := time.NewTicker(time.Millisecond)
+				defer tick.Stop()
+				for observer.certificateRefusals.Load() == 0 {
+					select {
+					case <-ctx.Done():
+						t.Fatal("HY2 peer never received original certificate alert", failure)
+					case <-tick.C:
+					}
+				}
+				if observer.authFailures.Load() != 0 {
+					t.Fatal("untrusted HY2 reached authentication")
+				}
+			}
+			if server.rawUDP.Load() == 0 || server.plainUDP.Load() != 0 || server.plainTCP.Load() != 0 {
+				t.Fatal("authentication witness substituted data or omitted original UDP transport")
+			}
+			if err := ctx.Err(); err != nil {
+				t.Fatal("native Hysteria evidence followed its original observation deadline", err)
+			}
+		})
+	}
+	code := QLOG.TransportErrorCode(0x12a)
+	for _, event := range []QLOG.ConnectionClosed{{Initiator: QLOG.InitiatorLocal, ConnectionError: &code}, {Initiator: QLOG.InitiatorRemote, ConnectionError: &code, Trigger: QLOG.ConnectionCloseTriggerIdleTimeout}, {Initiator: QLOG.InitiatorRemote}, {Trigger: QLOG.ConnectionCloseTriggerApplication}} {
+		if desktopExternalHysteriaCertificateRefused(event) {
+			t.Fatal("ordinary QUIC shutdown or timeout fabricated certificate rejection", event)
+		}
+	}
+}
+
 // The external profile has the captured plain Hysteria2 TLS/password contract.
 // Reuse the actual pinned service and routed handler, with no Salamander option
 // invented from the independent Router fixture's private configuration.
-func startDesktopExternalInstalledHysteria2(t *testing.T, server *desktopNodeLayerServer, packet net.PacketConn, cert tls.Certificate, password string) func() {
+func startDesktopExternalInstalledHysteria2(t *testing.T, server *desktopNodeLayerServer, packet net.PacketConn, cert tls.Certificate, password string, observations ...*desktopExternalHysteriaObservation) func() {
 	t.Helper()
 	private, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
 	if err != nil {
@@ -2212,8 +2380,23 @@ func startDesktopExternalInstalledHysteria2(t *testing.T, server *desktopNodeLay
 		_ = packet.Close()
 		t.Fatal(err)
 	}
-	service, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: server.ctx, Logger: logger, TLSConfig: tlsConfig,
-		UDPTimeout: 10 * time.Second, Handler: desktopNodeHysteria2Handler{server}})
+	var selectedTLS aTLS.ServerConfig = tlsConfig
+	var masquerade http.Handler
+	if len(observations) > 1 {
+		t.Fatal("duplicate Hysteria observation owner")
+	}
+	if len(observations) == 1 && observations[0] != nil {
+		original := observations[0]
+		selectedTLS = &desktopExternalHysteriaTLS{ServerConfig: tlsConfig, observation: original}
+		masquerade = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.Host == "hysteria" && r.URL.Path == "/auth" {
+				original.authFailures.Add(1)
+			}
+			http.NotFound(w, r)
+		})
+	}
+	service, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: server.ctx, Logger: logger, TLSConfig: selectedTLS,
+		UDPTimeout: 10 * time.Second, Handler: desktopNodeHysteria2Handler{server}, MasqueradeHandler: masquerade})
 	if err == nil {
 		service.UpdateUsers([]int{1}, []string{password})
 		err = tlsConfig.Start()
@@ -2476,9 +2659,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	// The Linux installed fixture admits only the same bounded WG -> SS/CONNECT pairs
+	// The Linux installed fixture admits only the same bounded WG -> SS/CONNECT/HY2 pairs
 	// as its shipping host; other entry graphs keep their platform gate.
-	linuxWGEntry := !latency && capturedAddress == "11.77.0.2" && (request.Protocol == "shadowsocks" || request.Protocol == "http-connect" || request.Protocol == "https-connect") && request.WireGuardEntry != nil && request.AmneziaEntry == nil && request.Layer == nil
+	linuxWGEntry := !latency && capturedAddress == "11.77.0.2" && (request.Protocol == "shadowsocks" || request.Protocol == "http-connect" || request.Protocol == "https-connect" || request.Protocol == "hysteria2") && request.WireGuardEntry != nil && request.AmneziaEntry == nil && request.Layer == nil
 	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" || request.Layer != nil && request.Protocol != "hysteria2" || !latency && !linuxWGEntry ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
@@ -2500,10 +2683,21 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	if request.HTTPSFault != "" && (!linuxWGEntry || request.Protocol != "https-connect" || request.HTTPSFault != "untrusted-ca") {
 		t.Fatal("uncaptured CONNECT TLS failure")
 	}
+	if request.HysteriaFault != "" && (!linuxWGEntry || request.Protocol != "hysteria2" || request.HysteriaFault != "untrusted-ca") {
+		t.Fatal("uncaptured Hysteria TLS failure")
+	}
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
 	proxyCertificate := cert
 	if request.HTTPSFault == "untrusted-ca" {
 		proxyCertificate, _ = desktopExternalInstalledPeerCertificate(t, false)
+	}
+	var hysteriaObservation *desktopExternalHysteriaObservation
+	if linuxWGEntry && request.Protocol == "hysteria2" {
+		hysteriaObservation = &desktopExternalHysteriaObservation{}
+	}
+	hysteriaCertificate := cert
+	if request.HysteriaFault == "untrusted-ca" {
+		hysteriaCertificate, _ = desktopExternalInstalledPeerCertificate(t, false)
 	}
 	var benchmark *desktopExternalInstalledLatencyPeer
 	if latency {
@@ -2650,7 +2844,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		server.udp = packet
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		address = packet.LocalAddr().String()
-		closeTransport = startDesktopExternalInstalledHysteria2(t, server, packet, cert, request.Password)
+		closeTransport = startDesktopExternalInstalledHysteria2(t, server, packet, hysteriaCertificate, request.Password, hysteriaObservation)
 		if request.Layer != nil {
 			layerPeer = desktopExternalInstalledHysteriaLayer(t, ctx, netip.MustParseAddrPort(address), *request.Layer)
 			if layerPeer.address == "" || layerPeer.stats == nil || layerPeer.close == nil {
@@ -2811,6 +3005,10 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
 			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Packets: server.plainUDP.Load(),
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load(), TLSCertificateRefusals: tlsCertificateRefusals.Load()}
+		if hysteriaObservation != nil {
+			reply.AuthFailures = hysteriaObservation.authFailures.Load()
+			reply.TLSCertificateRefusals = hysteriaObservation.certificateRefusals.Load()
+		}
 		if entryPeer.stats != nil {
 			value := entryPeer.stats()
 			reply.PacketEntry = &value

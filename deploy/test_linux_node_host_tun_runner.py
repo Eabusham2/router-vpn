@@ -41,11 +41,30 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:15: verified installed host layered WireGuard: ' + case for case in cases if case in G.WIREGUARD_LAYER_CASES),
                           *('    native_test.go:16: verified installed host layered AWG2: ' + case for case in cases if case in G.AMNEZIA_LAYER_CASES),
                           *('    native_test.go:17: verified installed host captured SIP003 lanes: ' + case for case in cases if case in G.SIP003_CASES),
+                          *('    native_test.go:23: verified installed host independent WireGuard entry and Hysteria2 final: ' + case for case in cases if case in G.EXTERNAL_WG_HYSTERIA_CASES),
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
                           *('    native_test.go:21: verified installed host independent WireGuard entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_WG_CONNECT_CASES),
                           *('    native_test.go:20: verified installed host independent WireGuard entry and SS final: ' + case for case in cases if case in G.EXTERNAL_WG_ENTRY_CASES),
                           *('    native_test.go:19: verified installed host retained layered Hysteria2: ' + case for case in cases if case in G.EXTERNAL_HYSTERIA2_LAYER_CASES)]) + '\n'
+
+    def test_wireguard_hysteria_keeps_prior_inventory_and_original_receipts(self):
+        expected = tuple('external-wghy2-' + action for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-entry-public', 'wrong-key', 'wrong-trust', 'wrong-ca', 'dns-failure'))
+        self.assertEqual(G.EXTERNAL_WG_HYSTERIA_CASES, expected)
+        self.assertEqual(G.CASES[417:420], G.TRANSFER_CASES)
+        self.assertEqual(G.CASES[420:], expected)
+        self.assertEqual(len(G.CASES), 429)
+        good = self.completed()
+        G.check_verdict(good)
+        for case in expected:
+            lines = [line for line in good.splitlines(True) if ('Hysteria2 final: ' + case + '\n') in line or ('KernelNodeHostTUN/' + case + ' (') in line]
+            self.assertEqual(len(lines), 2)
+            for line in lines:
+                for changed in (good.replace(line, ''), good + line):
+                    with self.subTest(case=case), self.assertRaises(ValueError):
+                        G.check_verdict(changed)
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed(G.CASES[:420]))
 
     def test_service_transfer_requires_original_completion_and_exact_verdict(self):
         good = self.completed()
@@ -70,6 +89,19 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         for bad in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:', 'fatal error:', '[build failed]'):
             with self.assertRaises(ValueError):
                 G.check_connect_tls_verdict(good + bad)
+
+    def test_hysteria_auth_requires_actual_captured_and_rejected_certificates(self):
+        lines = ['--- PASS: TestRouterVPNDesktopExternalHysteriaAuthenticationAndTrust (0.01s)',
+                 *('    --- PASS: ' + case + ' (0.01s)' for case in G.HYSTERIA_AUTH_CASES)]
+        good = '\n'.join(lines) + '\n'
+        G.check_hysteria_auth_verdict(good)
+        for line in lines:
+            for changed in (good.replace(line + '\n', ''), good + line + '\n', good.replace(line, 'prefix ' + line)):
+                with self.assertRaises(ValueError):
+                    G.check_hysteria_auth_verdict(changed)
+        for bad in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:', 'fatal error:', '[build failed]'):
+            with self.assertRaises(ValueError):
+                G.check_hysteria_auth_verdict(good + bad)
 
     def test_compiled_layer_authority_requires_both_modes(self):
         self.assertEqual(len(G.LAYER_AUTHORITY_CASES), 2)
@@ -163,11 +195,11 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_external_succession_keeps_all_original_cases_and_real_lifecycle(self):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
-        self.assertEqual(len(G.EXTERNAL_CASES), 118)
-        self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES))
+        self.assertEqual(len(G.EXTERNAL_CASES), 127)
+        self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_CASES))
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
-        self.assertEqual(G.CASES[299:417], G.EXTERNAL_CASES)
+        self.assertEqual(G.CASES[299:417] + G.CASES[417+len(G.TRANSFER_CASES):], G.EXTERNAL_CASES)
         self.assertEqual(len(G.CASES), len(set(G.CASES)))
         self.assertEqual(set(G.EXTERNAL_CASES) & set(G.ORIGINAL_CASES), set())
         for case in G.EXTERNAL_CASES:

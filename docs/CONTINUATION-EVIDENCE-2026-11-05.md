@@ -1121,6 +1121,51 @@ and mixed Start/proof failures. This local run uses `with_purego` and omits the
 unavailable native PQ static archive; full static-link, architecture and
 privileged installed acceptance remain native CI responsibilities.
 
+## Linux retained WireGuard entry to Hysteria2 final
+
+The Linux native host and shared policy gate now admit the actual retained
+Local imported WireGuard entry to Hysteria2 final with Start Layers Off, for
+On-connect and Always protection. This uses the existing native Hysteria2
+runtime. The two private profiles retain independent keys/passwords and final
+TLS/SNI/CA; only the WireGuard entry owns physical egress. Selected UDP or TCP
+DNS reaches the final, and both original source observations, measurement
+authority and complete restoration remain captured. Valid layered graphs and
+other unsupported Linux compositions remain separate requirements.
+
+The installed fixture binds a real private Hysteria2 final behind the original
+WireGuard peer. Wrong entry key, final password, SNI, CA and selected-DNS cases
+cannot pass through a physical final fallback. Native TLS refusal requires both
+the original client's typed x509 error and the original server's remote QUIC
+certificate alert; ordinary timeout, local shutdown and application-close
+events cannot satisfy it. Password refusal uses the actual native HY2
+authentication rejection, without generating a successful measurement.
+
+Exact `5ab593c8` plus only the nine changed files passes focused client race
+tests in 18.832s and policy race tests in 9.150s. Fresh normal preparation of
+pinned core `1ac1a339cb1223e9c70eae14c44411c75033c02d` produces external digest
+`46a13cb8e24fe32d0cd7233dbbaa4ba1d665891f75f1a396404efa03316b9d8a`.
+Actual native physical startup passes four WG-to-SS/HTTP/HTTPS/HY2 leaves in
+1.240s; actual HY2 captured/password/SNI/trust passes four leaves in 1.619s.
+Native preparation used `bdda6789` plus those same nine files; complete
+external/policy/performance digests and buffer preparation source are identical
+at `5ab593c8`. Later intervening audit/doc commits change no Go/native inputs.
+Module verification and normal ownership/preparation checks pass. Local native
+tests use `with_purego`; no unavailable native PQ archive is represented as
+linked or tested.
+
+All 31 installed-runner tests pass in 19.081s. The previous 420 cases are
+preserved, and nine mandatory cases add On-connect, Always, public Connect,
+cancellation, wrong entry key, wrong final password, wrong SNI, wrong CA and
+DNS failure, for a total of 429. The workspace has no NET_ADMIN; these nine
+privileged namespace cases are registered and strictly required by native CI
+but have not executed locally. Actual installed/native architecture, physical
+device, off-LAN, leak/reconnect and private deployment evidence remain separate.
+
+Both UI gate failures described above are now closed by actual GitHub results
+at published `0f46cb02`: map-first run `41978725510` and native UI run
+`41978725494` completed successfully. This does not establish completion of the
+remaining workflows or a new full published release.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

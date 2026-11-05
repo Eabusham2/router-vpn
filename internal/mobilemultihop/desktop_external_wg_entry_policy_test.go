@@ -162,7 +162,7 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 				}
 				for _, target := range []string{"linux", "windows"} {
 					p, e := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), target)
-					if target == "linux" && variant == "wireguard" && (protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect") && layer == "" {
+					if target == "linux" && variant == "wireguard" && (protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2") && layer == "" {
 						if e != nil || p == nil || p.Validate() != nil {
 							t.Fatal("Linux lost its exact imported WG/final pair", e)
 						}

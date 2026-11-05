@@ -105,7 +105,7 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 	switch owner.profile.External.Protocol {
 	case "shadowsocks":
 		return desktopExternalSS2022Profile(owner.profile)
-	case "http-connect", "https-connect":
+	case "http-connect", "https-connect", "hysteria2":
 		return true
 	}
 	return false

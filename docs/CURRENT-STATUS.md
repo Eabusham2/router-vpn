@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`e7d5b43c`, the integrated observation change in `a94cde9d`, and the installed
+`0f46cb02`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -22,7 +22,8 @@ generation precede removal of the original service table. Durable intent and
 bounded resolve retries retain the correct guard across cancellation, lost
 replies and partial cleanup. The exact source passes focused client/native/
 journal race tests. Six native nft cases and three installed transfer cases are
-mandatory but have not executed locally; the installed inventory is 420 cases.
+mandatory but have not executed locally; the installed inventory is now 429 cases
+including the separately verified Hysteria2 graph addition below.
 Reverse Node-to-standard transfer, generic boot-owner succession, active Always
 upgrades and same-boot crash continuation remain separate source requirements.
 
@@ -47,6 +48,17 @@ admission, ordered captured guards, proof and locked publication, plus reuse of
 the existing restoration operation. All 26 shipping-audit tests pass, including
 43 broken-source controls. Both local UI aggregators pass this backend audit;
 their Java/Swift/process-inspection checks remain environment-blocked here.
+Both actual GitHub UI workflows subsequently passed on the published `0f46cb02`.
+
+Linux now retains the Local imported WireGuard entry to Hysteria2 final with
+Start Layers Off and On-connect or Always protection. Independent credentials,
+final TLS/SNI, exit-routed UDP/TCP selected DNS, original source observations,
+measurement ownership and complete restoration remain captured. Focused client
+and policy races, actual native startup/authentication/TLS tests and all 31
+installed-runner checks pass. Nine mandatory namespace cases extend the
+inventory from 420 to 429; those privileged cases have not executed locally.
+Other graph families, layered Linux paths, Server/Compare and device acceptance
+retain their own unfinished requirements.
 
 Original caller deadlines now reach native manager, graph, network, physical,
 PT/broker, selected-proof and OpenVPN observations. Pure observation expiry

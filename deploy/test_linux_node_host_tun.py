@@ -126,6 +126,11 @@ EXTERNAL_HYSTERIA2_LAYER_CASES = tuple('external-' + mode + '-' + action for mod
 EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES + EXTERNAL_HYSTERIA2_LAYER_CASES + EXTERNAL_WG_ENTRY_CASES + EXTERNAL_WG_CONNECT_CASES
 CASES += EXTERNAL_CASES
 CASES += TRANSFER_CASES
+EXTERNAL_WG_HYSTERIA_CASES = tuple('external-wghy2-' + action for action in (
+    'on-connect', 'always', 'public', 'cancelled', 'wrong-entry-public',
+    'wrong-key', 'wrong-trust', 'wrong-ca', 'dns-failure'))
+EXTERNAL_CASES += EXTERNAL_WG_HYSTERIA_CASES
+CASES += EXTERNAL_WG_HYSTERIA_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -230,8 +235,22 @@ def check_connect_tls_verdict(output):
         if len(re.findall(r'^' + indent + '--- PASS: ' + re.escape(case) + r' \([^\r\n]*\)$', output, re.MULTILINE)) != 1:
             raise ValueError('Installed CONNECT reference omitted or duplicated its actual TLS case: ' + case)
 
+HYSTERIA_AUTH_CASES = tuple('TestRouterVPNDesktopExternalHysteriaAuthenticationAndTrust/' + case
+                          for case in ('captured', 'password', 'sni', 'trust'))
+
+
+def check_hysteria_auth_verdict(output):
+    if any(value in output for value in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:', 'fatal error:', '[build failed]')):
+        raise ValueError('Installed Hysteria authentication reference did not complete its actual TLS certificate checks')
+    required = (('', 'TestRouterVPNDesktopExternalHysteriaAuthenticationAndTrust'), *(('    ', case) for case in HYSTERIA_AUTH_CASES))
+    for indent, case in required:
+        if len(re.findall(r'^' + indent + '--- PASS: ' + re.escape(case) + r' \([^\r\n]*\)$', output, re.MULTILINE)) != 1:
+            raise ValueError('Installed Hysteria authentication reference omitted or duplicated its actual TLS case: ' + case)
+
+
 
 def check_verdict(output, case=None):
+    output = output.replace('\r\n', '\n')
     cases = CASES if case is None else (case,)
     if any(value not in CASES for value in cases) or '--- FAIL:' in output or '--- SKIP:' in output:
         raise ValueError('Installed Linux host did not complete its actual native acceptance')
@@ -244,15 +263,22 @@ def check_verdict(output, case=None):
     # gate as the real installed scenario inventory grows.
     receipts = set()
     transfer_receipts = []
+    hysteria_receipts = []
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('independent WireGuard entry and Hysteria2 final: '):
+                hysteria_receipts.append(suffix.removeprefix('independent WireGuard entry and Hysteria2 final: '))
             if suffix.startswith("original service transfer: "):
                 transfer_receipts.append(suffix.removeprefix("original service transfer: "))
     if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
     for value in cases:
+        if value in EXTERNAL_WG_HYSTERIA_CASES:
+            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
+            if hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+                raise ValueError('Installed WG/Hysteria graph omitted or duplicated original native completion: ' + value)
         if value in TRANSFER_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if transfer_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
@@ -435,6 +461,13 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Installed CONNECT TLS reference failed:\n' + connect_tls_output[-16384:])
         check_connect_tls_verdict(connect_tls_output)
         print(connect_tls_output, end='' if connect_tls_output.endswith('\n') else '\n')
+        status, hysteria_auth_output = NODE.run([str(peer), '-test.v', '-test.timeout=30s',
+                                              '-test.run=^TestRouterVPNDesktopExternalHysteriaAuthenticationAndTrust$'],
+                                             cwd=source, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed Hysteria authentication/TLS reference failed:\n' + hysteria_auth_output[-16384:])
+        check_hysteria_auth_verdict(hysteria_auth_output)
+        print(hysteria_auth_output, end='' if hysteria_auth_output.endswith('\n') else '\n')
         logs = []
         for case in CASES:
             command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary), '--peer-binary', str(peer),
@@ -462,6 +495,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
                                 (('installed-controller-test', binary), ('independent-wg-awg2-ss2022-and-hysteria2-peers', peer), ('shipping-whitening-relay', whitening))},
                   'layer_authority_cases': list(LAYER_AUTHORITY_CASES), 'layer_authority_output_sha256': hashlib.sha256(authority_output.encode()).hexdigest(),
+                  'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
