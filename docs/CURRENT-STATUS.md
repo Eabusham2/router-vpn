@@ -72,6 +72,57 @@ network transitions, leaks, off-LAN behavior, signing or release publication.
 Other imported entry protocols, other paired final families and Server/Compare
 for this direction remain unfinished; no original requirement is removed.
 
+## Linux ordinary Shadowsocks entry to Shadowsocks final
+
+The retained Linux Node path admits Local execution through an independently
+imported Shadowsocks 2022 entry and final, with both Start Layers Off. All three
+supported SS2022 methods can be selected independently. Only the entry receives
+physical TCP/UDP permission; the final transport and selected DNS remain behind
+it. Both captured sources, separate public-identity proofs, cancellation and
+complete Speed Lab restoration retain the original session. This increment does
+not add Server/Compare or other entry/final compositions.
+
+The full client/shared race family reports 109 passing verdicts; the 49 affected
+verdicts also pass after the newer upstream compiler and network-reader changes.
+Actual pinned-native SS2022 cipher/authentication tests and the explicitly modeled
+physical owner report 21 passing verdicts, with the four physical-owner verdicts
+rechecked against the newer network reader. The merged physical runner's 53
+checks and installed-host runner's 38 checks pass. The installed host inventory retains its existing 458
+cases and adds 23 SS2022-pair cases, for 481 plus the separate nine reverse
+transfer cases; their privileged execution remains an exact-SHA CI obligation.
+Failed cipher authentication has a typed receipt distinct from EOF, timeout,
+cancellation and generic connection failure. The Darwin receipt consumer keeps
+the same strict schema; its portable interoperability check is separate from
+actual macOS execution. See the [November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md)
+for source identity, negative controls and acceptance limits.
+
+## Linux standard child: idle original-parent retirement
+
+The fixed native standard child now observes its retained original parent while
+FD11 is idle. Parent loss reaches owned retirement without waiting for another
+MTU command. An expired observation alone remains inconclusive; independently
+observed process/channel loss still latches failure. The actual bootstrap uses
+its existing context-aware participant observation instead of converting pure
+caller cancellation into fabricated original-owner loss.
+
+Readiness is recorded only after the original Ready exchange succeeds. A later
+parent failure retains the existing four-second native teardown allowance even
+when startup has expired. Failed startup keeps its original deadline clamp.
+Successful cleanup preserves a genuine post-Ready runtime failure, and uncertain
+cleanup retains the original FD10 retry owner. This does not create a fresh
+allowance for interrupted MTU work or adopt a lost service's nonempty guard.
+
+Focused evidence includes 19 worker verdicts, 17 original-process/bootstrap
+verdicts and six normally prepared fixed-command retirement verdicts. Removing
+the idle guard, restoring the old cancellation behavior, clamping post-Ready
+retirement to startup, and suppressing the original failure each fail their
+intended assertions. The actual TUN/parent-death fixture remains mandatory CI:
+its local child launch failed before execution because the workspace's active
+PID namespace and mounted proc view disagree. The executable exists and ordinary
+self-execution succeeds; the identical namespace launch fails with ENOENT.
+The [continuation evidence](CONTINUATION-EVIDENCE-2026-11-05.md) preserves the
+frozen native source, preparation and precise acceptance boundary.
+
 ## Retained Always guard: transport hostname bootstrap
 
 The installed Linux service now supplies a bounded outer-transport hostname

@@ -16,8 +16,11 @@ class SealedProcessGateTests(unittest.TestCase):
     def test_complete_exact_native_inventory(self):
         names, output = self.verdict()
         GATE.check_sealed_process_verdict(output)
-        source = (Path(__file__).resolve().parents[1]/'internal/linuxprocess/sealed_image_linux_native_test.go').read_text()
+        root = Path(__file__).resolve().parents[1]
         for group, leaves in GATE.PROCESS_SEALED_GROUPS.items():
+            name = ('bootstrap_current_linux_native_test.go' if group == 'BootstrapCurrentObservation'
+                    else 'sealed_image_linux_native_test.go')
+            source = (root/'internal/linuxprocess'/name).read_text()
             self.assertIn(group, GATE.PROCESS_CASES)
             self.assertIn('func TestLinuxProcessNamespace'+group+'(', source)
             for leaf in leaves:

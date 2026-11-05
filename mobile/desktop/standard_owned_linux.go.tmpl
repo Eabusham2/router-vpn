@@ -41,6 +41,24 @@ type routerVPNStandardInbound interface {
 	RouterVPNDesktopNetworkRetire(context.Context) (string, error)
 }
 
+// Readiness is an actual successful parent exchange, not whether Run returned
+// an error. A later parent loss must still retire the original reader after
+// the startup deadline has expired, under the existing four-second allowance.
+func routerVPNStandardRetire(result *standardengine.CleanupFile, expected string, startupDeadline time.Time, ready bool, failure error, retire func(context.Context) (string, error)) error {
+	deadline := time.Now().Add(4 * time.Second)
+	startupFailed := failure != nil && !ready
+	if startupFailed && deadline.After(startupDeadline) {
+		deadline = startupDeadline
+	}
+	retirement := standardengine.RetireOriginal(result, expected, deadline, startupFailed, retire)
+	if ready {
+		return errors.Join(failure, retirement)
+	}
+	// Missing/rejected Ready fails the parent's startup exchange. A zero exit
+	// here reports only successful original cleanup, as before.
+	return retirement
+}
+
 func routerVPNRunStandard(lifetime context.Context, expected string) (failure error) {
 	captureFile := os.NewFile(standardengine.CaptureFD, "original-standard-capture")
 	configFile := os.NewFile(standardengine.ConfigFD, "original-standard-config")
@@ -73,15 +91,9 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 		return err
 	}
 	cleanup := &routerVPNStandardCleanup{result: result, capture: expected}
+	ready := false
 	defer func() {
-		deadline := time.Now().Add(4 * time.Second)
-		startupFailed := failure != nil
-		if startupFailed && deadline.After(time.Unix(0, capture.DeadlineNS)) {
-			deadline = time.Unix(0, capture.DeadlineNS)
-		}
-		// Missing/rejected Ready still fails the parent's startup exchange. A
-		// zero child exit here reports only successful original cleanup.
-		failure = standardengine.RetireOriginal(result, expected, deadline, startupFailed, cleanup.retire)
+		failure = routerVPNStandardRetire(result, expected, time.Unix(0, capture.DeadlineNS), ready, failure, cleanup.retire)
 	}()
 	operations, err := standardengine.CaptureOperationFile(os.NewFile(standardengine.OperationFD, "original-standard-operations"), capture.OperationDevice, capture.OperationInode, capture.OperationSize, capture.OperationLayout, expected)
 	cleanup.operations = operations // Retained even when capture fails, before construction.
@@ -181,6 +193,7 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	if err := peer.Send(startup, body); err != nil {
 		return err
 	}
+	ready = true
 	// An unstarted supervisor owns no mutation or join. Only attach it to
 	// cleanup once Ready is sent and Run will execute; failed startup still
 	// retires the exact retained reader through its bounded native capability.

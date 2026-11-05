@@ -1,0 +1,141 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+)
+
+// Executes the shipping fixed-command deferred retirement with actual FD10.
+// The callback models native retirement so expired startup and failed cleanup
+// can be proved independently of the privileged successful-TUN fixture.
+func TestRouterVPNStandardParentRetirementMilestone(t *testing.T) {
+	for _, name := range []string{"pre-ready", "pre-ready-expired", "post-ready-expired", "post-ready-retry", "normal-stop"} {
+		t.Run(name, func(t *testing.T) {
+			file, err := standardengine.NewCleanupFile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			expected := strings.Repeat("a", 64)
+			ready := strings.HasPrefix(name, "post-ready") || name == "normal-stop"
+			originalFailure := errors.New("original parent loss")
+			failure := originalFailure
+			if name == "normal-stop" {
+				failure = nil
+			}
+			startup := time.Now().Add(2 * time.Second)
+			if strings.Contains(name, "expired") || name == "post-ready-retry" {
+				startup = time.Now().Add(-time.Second)
+			}
+			began := time.Now()
+			var calls atomic.Int32
+			bounds := make(chan time.Time, 2)
+			joined := make(chan error, 1)
+			finished := false
+			defer func() {
+				if finished {
+					return
+				}
+				// Even an assertion-control failure settles this exact FD10 before
+				// its file closes; no orphan test goroutine or teardown race may
+				// substitute for the intended production assertion.
+				_ = file.WriteRequest(standardengine.CleanupRequest{Schema: 1, CaptureSHA256: expected, Sequence: 2, DeadlineNS: time.Now().Add(time.Second).UnixNano()})
+				select {
+				case <-joined:
+				case <-time.After(2 * time.Second):
+					t.Error("fixture could not join original retirement after assertion")
+				}
+			}()
+			go func() {
+				joined <- routerVPNStandardRetire(file, expected, startup, ready, failure, func(ctx context.Context) (string, error) {
+					bound, ok := ctx.Deadline()
+					if !ok {
+						return "", errors.New("original retirement omitted deadline")
+					}
+					bounds <- bound
+					if calls.Add(1) == 1 && name == "post-ready-retry" {
+						return "", errors.New("original native cleanup remains held")
+					}
+					return "original-retirement", ctx.Err()
+				})
+			}()
+			limit := time.Now().Add(2 * time.Second)
+			var report standardengine.CleanupResult
+			for {
+				report, err = file.ReadResult(expected)
+				if err == nil {
+					break
+				}
+				if time.Now().After(limit) {
+					t.Fatal("fixed command omitted original retirement result", err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if report.StartupFailed != (!ready && failure != nil) {
+				t.Fatal("runtime failure was mislabeled startup", report)
+			}
+			if name == "pre-ready-expired" {
+				if calls.Load() != 0 || report.Complete || report.DeadlineNS != startup.UnixNano() {
+					t.Fatal("failed startup obtained a new cleanup allowance", report, calls.Load())
+				}
+			} else {
+				var bound time.Time
+				select {
+				case bound = <-bounds:
+				case <-time.After(time.Second):
+					t.Fatal("post-Ready failure did not invoke original cleanup after startup expiry")
+				}
+				if ready && (bound.Before(began.Add(4*time.Second)) || bound.After(time.Now().Add(4*time.Second))) {
+					t.Fatal("post-Ready cleanup lost existing four-second bound", bound)
+				}
+				if !ready && !bound.Equal(startup) {
+					t.Fatal("pre-Ready cleanup renewed startup deadline")
+				}
+				if calls.Load() != 1 {
+					t.Fatal("original cleanup was omitted or duplicated")
+				}
+			}
+			if name == "pre-ready-expired" || name == "post-ready-retry" {
+				if report.Complete {
+					t.Fatal("pending original cleanup claimed completion")
+				}
+				request := standardengine.CleanupRequest{Schema: 1, CaptureSHA256: expected, Sequence: 1, DeadlineNS: time.Now().Add(time.Second).UnixNano()}
+				if err := file.WriteRequest(request); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case bound := <-bounds:
+					if bound.UnixNano() != request.DeadlineNS {
+						t.Fatal("explicit original retry changed deadline")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("original cleanup retry was not retained")
+				}
+			}
+			select {
+			case err := <-joined:
+				finished = true
+				if ready && failure != nil && !errors.Is(err, originalFailure) {
+					t.Fatal("successful cleanup suppressed genuine post-Ready failure", err)
+				}
+				if (!ready || failure == nil) && err != nil {
+					t.Fatal("existing startup/normal-stop outcome changed", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("fixed-command original retirement did not join")
+			}
+			final, err := file.ReadResult(expected)
+			if err != nil || !final.Complete || final.Ledger != "original-retirement" {
+				t.Fatal("joined cleanup omitted actual callback result", final, err)
+			}
+		})
+	}
+}

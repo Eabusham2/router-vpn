@@ -99,6 +99,19 @@ func (w *NativeMTUWorker) Run(lifetime context.Context) (failure error) {
 			return nil
 		case <-ticker.C:
 		}
+		// The original parent owns FD11, but an idle file remains readable after
+		// that process dies. Observe the retained parent even when no command or
+		// cleanup request arrives; only a pure observation expiry is inconclusive.
+		parent, finishParent := nativeMTUObservation(lifetime)
+		parentErr := w.guard(parent)
+		parentPending := common.ObservationContextExpired(parent, parentErr)
+		finishParent()
+		if parentPending {
+			continue
+		}
+		if parentErr != nil {
+			return parentErr
+		}
 		if len(w.units) != 0 {
 			if err := w.retryRequested(lifetime, w.units[len(w.units)-1]); err != nil {
 				return err

@@ -1,0 +1,388 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"os/signal"
+	"runtime"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/netlink"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	"golang.org/x/sys/unix"
+)
+
+const standardParentNativeRole = "ROUTERVPN_STANDARD_PARENT_NATIVE_ROLE"
+const standardParentNativeTest = "TestRouterVPNStandardIdleParentNamespace"
+
+type standardParentNativeReport struct {
+	Capture       string
+	Device, Inode uint64
+	Deadline      int64
+	Ready         string
+}
+
+func standardParentNativeSeal(t *testing.T, name string, source io.Reader, executable bool) *os.File {
+	t.Helper()
+	fd, err := unix.MemfdCreate(name, unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(fd), name)
+	t.Cleanup(func() { _ = f.Close() })
+	if _, err = io.Copy(f, source); err != nil {
+		t.Fatal(err)
+	}
+	mode := os.FileMode(0400)
+	if executable {
+		mode = 0500
+	}
+	if err = f.Chmod(mode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = unix.FcntlInt(f.Fd(), unix.F_ADD_SEALS, unix.F_SEAL_SEAL|unix.F_SEAL_SHRINK|unix.F_SEAL_GROW|unix.F_SEAL_WRITE); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func standardParentNativeControl(t *testing.T, f *os.File) *net.UnixConn {
+	t.Helper()
+	c, err := net.FileConn(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, ok := c.(*net.UnixConn)
+	if !ok {
+		c.Close()
+		t.Fatal("fixture lost actual Unix control")
+	}
+	t.Cleanup(func() { _ = u.Close() })
+	if err = u.SetDeadline(time.Now().Add(35 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func TestRouterVPNStandardIdleParentNamespace(t *testing.T) {
+	role := os.Getenv(standardParentNativeRole)
+	if role == "engine" {
+		globalCtx = include.Context(context.Background())
+		lifetime, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := routerVPNRunStandard(lifetime, os.Getenv("ROUTERVPN_STANDARD_PARENT_CAPTURE")); err == nil {
+			t.Fatal("definite original parent loss became a normal engine exit")
+		}
+		fmt.Println("original idle parent loss remained a genuine engine failure")
+		return
+	}
+	if role == "creator" {
+		standardParentNativeCreator(t)
+		return
+	}
+	if role == "namespace" {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		if os.Getpid() != 1 {
+			t.Fatal("parent-loss fixture requires its private PID namespace init")
+		}
+		for index, name := range []string{"net", "user", "mnt", "pid"} {
+			original := os.NewFile(uintptr(3+index), "original-outer-"+name)
+			before, err := original.Stat()
+			after, currentErr := os.Stat("/proc/thread-self/ns/" + name)
+			_ = original.Close()
+			if err != nil || currentErr != nil || os.SameFile(before, after) {
+				t.Fatal("native fixture did not enter independent original namespace", name, err, currentErr)
+			}
+		}
+		if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+			t.Fatal(err)
+		}
+		// Proc observations and SCM credentials must describe the same private
+		// PID namespace. The original mounted proc belongs to the outer one.
+		if err := unix.Mount("proc", "/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+			t.Fatal(err)
+		}
+		// This isolated fixture has no host resolve1 authority. It must not
+		// mutate or impersonate the host daemon across network namespaces.
+		if err := unix.Mount("tmpfs", "/run", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755"); err != nil {
+			t.Fatal(err)
+		}
+		standardParentNativeObserve(t)
+		return
+	}
+	if role != "" {
+		t.Fatal("unknown fixed-command parent fixture role")
+	}
+	t.Run("idle-after-startup-expiry", func(t *testing.T) {
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, image, "-test.run=^"+standardParentNativeTest+"$", "-test.timeout=40s")
+		for _, name := range []string{"net", "user", "mnt", "pid"} {
+			original, err := os.Open("/proc/thread-self/ns/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer original.Close()
+			command.ExtraFiles = append(command.ExtraFiles, original)
+		}
+		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", standardParentNativeRole + "=namespace"}
+		command.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID,
+			UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}, GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}, GidMappingsEnableSetgroups: false}
+		output, err := command.CombinedOutput()
+		if err != nil || strings.Contains(string(output), "--- FAIL:") || strings.Contains(string(output), "--- SKIP:") || strings.Count(string(output), "original idle parent loss retired actual standard TUN\n") != 1 || strings.Count(string(output), "original idle parent loss remained a genuine engine failure\n") != 1 {
+			t.Fatalf("actual fixed-command parent loss did not retire: %v\n%s", err, output)
+		}
+	})
+}
+
+func standardParentNativeCreator(t *testing.T) {
+	control := standardParentNativeControl(t, os.NewFile(3, "original-fixture-control"))
+	imagePath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(imagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := standardParentNativeSeal(t, "actual-standard-command-image", source, true)
+	_ = source.Close()
+	imageCapability, err := linuxprocess.CaptureSealedImage(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"router-vpn","mtu":1280,"address":["172.29.97.1/30"],"auto_route":false,"stack":"system"}],"outbounds":[{"type":"socks","tag":"custom-exit","server":"127.0.0.1","server_port":443}],"route":{"final":"custom-exit"}}`)
+	config := standardParentNativeSeal(t, "actual-standard-config", strings.NewReader(string(raw)), false)
+	workspacePath, err := os.MkdirTemp("/run", "original-standard-parent-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspacePath)
+	workspace, err := os.Open(workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspace.Close()
+	library, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer library.Close() // SOCKS does not load Cronet; inherited descriptor stays real.
+	cleanup, err := standardengine.NewCleanupFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup.Close()
+	operations, err := standardengine.NewOperationFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operations.Close(context.Background())
+	device, inode := cleanup.Identity()
+	opDevice, opInode := operations.Identity()
+	deadline := time.Now().Add(10 * time.Second)
+	capture, err := (standardengine.Capture{Schema: 1, Session: strings.Repeat("b", 32), ConfigSHA256: standardengine.SHA256(raw), Mode: "standard-socks5", DeadlineNS: deadline.UnixNano(), CleanupDevice: device, CleanupInode: inode, OperationDevice: opDevice, OperationInode: opInode, OperationSize: standardengine.OperationSize, OperationLayout: standardengine.OperationLayout}).Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := standardengine.SHA256(capture)
+	captured := standardParentNativeSeal(t, "original-standard-capture", strings.NewReader(string(capture)), false)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	if err = operations.BindCapture(ctx, digest); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := linuxprocess.CaptureSelf(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close(context.Background())
+	directory, err := parent.DuplicateDirectory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.Close()
+	channel, childChannel, err := linuxprocess.ChannelPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer channel.Close(context.Background())
+	defer childChannel.Close()
+	command := exec.Command("/proc/self/fd/3", "-test.run=^"+standardParentNativeTest+"$", "-test.timeout=35s")
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", standardParentNativeRole + "=engine", "ROUTERVPN_STANDARD_PARENT_CAPTURE=" + digest}
+	command.ExtraFiles = []*os.File{image, config, workspace, library, childChannel, directory, captured, cleanup.File(), operations.File()}
+	command.Stdout, command.Stderr = os.Stdout, os.Stderr
+	pidfd := -1
+	command.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if pidfd < 0 {
+		t.Fatal("actual engine omitted creation pidfd")
+	}
+	original := os.NewFile(uintptr(pidfd), "actual-engine-creation-pidfd")
+	defer original.Close()
+	peer, err := linuxprocess.BindCreatedSealedChild(ctx, channel, parent, original, command.Process.Pid, imageCapability, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := peer.Receive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := standardengine.DecodeReady(body, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := json.Marshal(standardParentNativeReport{digest, device, inode, deadline.UnixNano(), ready.NetworkReceipt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = control.WriteMsgUnix(report, unix.UnixRights(int(original.Fd()), int(cleanup.File().Fd())), nil); err != nil {
+		t.Fatal(err)
+	}
+	var trigger [1]byte
+	if _, err = io.ReadFull(control, trigger[:]); err != nil || trigger[0] != 1 {
+		t.Fatal("original creator omitted exact crash trigger", err)
+	}
+	// Abrupt exit deliberately bypasses every native Stop/cleanup defer.
+	os.Exit(0)
+}
+
+func standardParentNativeObserve(t *testing.T) {
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := standardParentNativeControl(t, os.NewFile(uintptr(pair[0]), "original-fixture-observer"))
+	endpoint := os.NewFile(uintptr(pair[1]), "original-fixture-creator")
+	defer endpoint.Close()
+	creator := exec.Command(image, "-test.run=^"+standardParentNativeTest+"$", "-test.timeout=35s")
+	creator.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", standardParentNativeRole + "=creator"}
+	creator.ExtraFiles = []*os.File{endpoint}
+	creator.Stdout, creator.Stderr = os.Stdout, os.Stderr
+	if err = creator.Start(); err != nil {
+		t.Fatal(err)
+	}
+	joined := false
+	defer func() {
+		if !joined {
+			_ = creator.Process.Kill()
+			_ = creator.Wait()
+		}
+	}()
+	packet, rights := make([]byte, 32768), make([]byte, unix.CmsgSpace(8))
+	n, count, flags, _, err := control.ReadMsgUnix(packet, rights)
+	if err != nil || flags&(unix.MSG_TRUNC|unix.MSG_CTRUNC) != 0 {
+		t.Fatal("original creator omitted bounded native evidence", err)
+	}
+	controls, err := unix.ParseSocketControlMessage(rights[:count])
+	if err != nil || len(controls) != 1 {
+		t.Fatal("original creation descriptors missing", err)
+	}
+	fds, err := unix.ParseUnixRights(&controls[0])
+	if err != nil || len(fds) != 2 {
+		t.Fatal("original creation descriptors changed", err)
+	}
+	for _, fd := range fds {
+		unix.CloseOnExec(fd)
+	}
+	defer unix.Close(fds[0])
+	var report standardParentNativeReport
+	if err = json.Unmarshal(packet[:n], &report); err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := standardengine.CaptureCleanupFile(os.NewFile(uintptr(fds[1]), "captured-original-cleanup"), report.Device, report.Inode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup.Close()
+	ready, err := desktopnetwork.ParseDesktopNetworkReceipt(report.Ready)
+	if err != nil || ready.Name != "router-vpn" || ready.Index < 1 {
+		t.Fatal("actual command omitted original TUN Ready", err)
+	}
+	until := time.Unix(0, report.Deadline).Add(20 * time.Millisecond)
+	if wait := time.Until(until); wait < 0 || wait > 11*time.Second {
+		t.Fatal("creator changed original startup deadline")
+	} else {
+		time.Sleep(wait)
+	}
+	poll := []unix.PollFd{{Fd: int32(fds[0]), Events: unix.POLLIN}}
+	if _, err = unix.Poll(poll, 0); err != nil || poll[0].Revents != 0 {
+		t.Fatal("live original parent lost idle native child", err)
+	}
+	if _, err = control.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err = creator.Wait(); err != nil {
+		t.Fatal("exact original creator did not exit", err)
+	}
+	joined = true
+	if _, err = unix.Poll(poll, 6000); err != nil || poll[0].Revents&unix.POLLIN == 0 {
+		t.Fatal("idle original parent loss did not retire actual fixed command", err)
+	}
+	// This observer is the private PID namespace's init. It joins the orphan
+	// through the original creation pidfd received before its creator exited.
+	var status unix.Siginfo
+	if err = unix.Waitid(unix.P_PIDFD, fds[0], &status, unix.WEXITED, nil); err != nil {
+		t.Fatal("original fixed command did not join by its creation pidfd", err)
+	}
+	result, err := cleanup.ReadResult(report.Capture)
+	if err != nil || !result.Complete || result.StartupFailed || result.Authority != "signal" || result.Sequence != 0 {
+		t.Fatal("post-Ready original cleanup was skipped or mislabeled", result, err)
+	}
+	retirement, err := desktopnetwork.ParseDesktopNetworkRetirementReceipt(result.Ledger)
+	if err != nil || !retirement.Created || retirement.Unindexed || retirement.Incarnation != ready.Incarnation || retirement.Name != ready.Name || retirement.Index != ready.Index {
+		t.Fatal("actual fixed command omitted original retirement evidence", err)
+	}
+	addresses, objects := make(map[string]bool), make(map[string]bool)
+	for _, address := range retirement.Addresses {
+		addresses[address] = true
+	}
+	for _, object := range retirement.Objects {
+		objects[object.Key()] = true
+	}
+	for _, address := range ready.Addresses {
+		if !addresses[address] {
+			t.Fatal("retirement omitted original Ready address")
+		}
+	}
+	for _, object := range ready.Objects {
+		if !objects[object.Key()] {
+			t.Fatal("retirement omitted original Ready object")
+		}
+	}
+	if _, err = netlink.LinkByIndex(int(ready.Index)); err == nil {
+		t.Fatal("actual original TUN remained after parent-loss retirement")
+	} else {
+		var missing netlink.LinkNotFoundError
+		if !errors.As(err, &missing) {
+			t.Fatal("TUN absence was not observed", err)
+		}
+	}
+	fmt.Println("original idle parent loss retired actual standard TUN")
+}

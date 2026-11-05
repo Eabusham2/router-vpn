@@ -184,7 +184,8 @@ class LinuxSSEntryVerdicts(unittest.TestCase):
 
 class StandardServiceMTUVerdicts(unittest.TestCase):
     def test_actual_standard_reader_verdict_cannot_be_omitted_or_substituted(self):
-        for suite, expected in ((NODE.STANDARD_MTU_SUITE, 9), (NODE.STANDARD_MTU_RETIRE_SUITE, 3)):
+        for suite, expected in ((NODE.STANDARD_MTU_SUITE, 9), (NODE.STANDARD_MTU_RETIRE_SUITE, 3),
+                                (NODE.STANDARD_PARENT_SUITE, 6), (NODE.STANDARD_PARENT_NATIVE_SUITE, 2)):
             names = suite[3]
             self.assertEqual(len(names), expected)
             output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
@@ -590,6 +591,20 @@ class RoutingNamespaceLauncher(unittest.TestCase):
                                                duration=90, selector=changed)
         self.native.run.assert_not_called()
 
+    def test_parent_lifetime_uses_only_each_exact_privileged_selector(self):
+        for suite in (NODE.STANDARD_PARENT_SUITE, NODE.STANDARD_PARENT_NATIVE_SUITE):
+            selector = suite[2]
+            self.assertEqual(NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env,
+                             duration=90, selector=selector), (0, "actual native fixture output\n"))
+            command, options = self.native.run.call_args
+            self.assertIn("-test.run=" + selector, command[0])
+            self.assertEqual(options["timeout"], 105)
+            self.native.run.reset_mock()
+            with self.assertRaisesRegex(ValueError, "another fixture selector"):
+                NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env,
+                                               duration=90, selector=selector + "|Other")
+            self.native.run.assert_not_called()
+
     def test_missing_trusted_privilege_fails_before_execution(self):
         self.native.privilege_tool.side_effect = ValueError("no trusted native privilege")
         with self.assertRaisesRegex(ValueError, "trusted native privilege"):
@@ -784,6 +799,23 @@ class BaselineRoutingDispatch(unittest.TestCase):
                 self.baselines.execute(name, changed_package, changed_selector, 90)
             compile_image.assert_not_called()
             native.assert_not_called()
+
+    def test_parent_lifetime_preserves_exact_original_binary_privilege(self):
+        for suite in (NODE.STANDARD_PARENT_SUITE, NODE.STANDARD_PARENT_NATIVE_SUITE):
+            name, package, selector, _ = suite
+            self.baselines.binaries[package] = self.binary, NODE.retained_binary(self.binary)
+            with patch.object(NODE, "linux_routing_receipt_test", return_value=(0, "native pass")) as native, \
+                 patch.object(NODE, "run") as ordinary:
+                self.assertEqual(self.baselines.execute(name, package, selector, 90), (0, "native pass"))
+                native.assert_called_once_with(self.binary, cwd=self.source, env=self.env, duration=90, selector=selector)
+                ordinary.assert_not_called()
+            for foreign_package, foreign_selector in (("./foreign", selector), (package, selector + "|Other")):
+                with patch.object(self.baselines, "binary") as compile_image, \
+                     patch.object(NODE, "linux_routing_receipt_test") as native, \
+                     self.assertRaisesRegex(ValueError, "another package or selector"):
+                    self.baselines.execute(name, foreign_package, foreign_selector, 90)
+                compile_image.assert_not_called()
+                native.assert_not_called()
 
     def test_changed_package_or_selector_cannot_gain_routing_privilege(self):
         for package, selector in (("./unrelated", "^TestRouterVPNNativeLinuxRouting"),

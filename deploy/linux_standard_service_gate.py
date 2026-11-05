@@ -127,6 +127,7 @@ STARTUP = {
     'StartupStockGraphs': tuple(protocol+'/'+policy for protocol in ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2') for policy in ('default', 'fixed', 'ipv6-off')),
 }
 CLEANUP = {
+    'TestCleanupOperationIdleOriginalParent': ('live', 'lost', 'expired', 'mixed', 'held-command-lock'),
     'TestCleanupSharedRunWorkerClosureKeepsOriginalDeadline': (),
     'TestCleanupSharedRunUnsubmittedRequiresBothOriginalObservers': (),
     'TestCleanupSharedRunWorkerClosesWithoutMutation': (),
@@ -475,3 +476,10 @@ NATIVE_MTU_SOURCES.update({'cmd/client/' + name for name in (
  'linux_standard_service_boot_hostname_namespace_native_test.go')})
 
 SOURCE.add('cmd/client/linux_standard_service_boot_bootstrap_client_linux_test.go')
+
+# Original idle-child supervision and its actual parent/retirement witnesses.
+SOURCE.update({'internal/standardengine/worker_parent_linux_test.go',
+               'internal/linuxprocess/bootstrap_linux.go',
+               'internal/linuxprocess/bootstrap_current_linux_native_test.go',
+               'mobile/desktop/standard_parent_linux_test.go.tmpl',
+               'mobile/desktop/standard_parent_native_linux_test.go.tmpl'})

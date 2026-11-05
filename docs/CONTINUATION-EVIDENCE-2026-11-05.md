@@ -2224,6 +2224,54 @@ receipt and passing native verdict. Actual privileged execution, native macOS
 acceptance, packages, physical devices and publication are not established by
 the local runner/model evidence.
 
+## Idle standard child and original parent retirement
+
+The native fixed-command MTU loop previously observed its original parent only
+while handling work. Its retained FD11 can remain idle/readable after that parent
+dies, so an idle child could miss retirement. The loop now checks the original
+authenticated peer under the existing one-second observation bound. Pure context
+expiry causes another observation; a separate process/channel failure ends the
+worker. The bootstrap's existing context-aware observer preserves both original
+participants without turning a cancelled observation into permanent revocation.
+
+The fixed command captures a successful Ready milestone independently of its
+return error. After Ready, actual parent loss retains the existing four-second
+cleanup allowance and the genuine runtime error. Before Ready, failed startup
+keeps the original startup deadline. The original FD10 retains unsuccessful
+retirement and explicit retry; no active-operation deadline is renewed.
+
+The frozen native preparation is based on `b9930302` plus this unit, using pinned
+core `1ac1a339cb1223e9c70eae14c44411c75033c02d`; all 2,045 expected source records
+match. Later WG packet-drain and imported mobile graph work was preserved in
+current source without relabeling that older prepared composition as a test of
+those changes. The physical runner merges both the new parent suites and the
+upstream WG drain hook while retaining the existing SS and privileged MTU suites.
+
+Verification records 19 worker verdicts (5.836 seconds), 17 actual original-process
+and bootstrap verdicts (2.593 seconds), and six prepared fixed-command component
+verdicts (1.918 seconds). The old bootstrap produces five intended cancellation
+failures while its genuine-loss controls still reject. Removing the idle guard
+fails the original-parent-loss assertion (5.051 seconds). Two separately compiled
+native component controls reject the old startup clamp (0.504 seconds) and lost
+original runtime error (0.629 seconds). Their failures reach the intended checks,
+with no substituted panic, race, skip or setup failure.
+
+The first native invocation reached its unchanged 600-second build ceiling
+without a verdict. Cached compilation subsequently completed; the actual TUN
+namespace case then failed before child start with `fork/exec` ENOENT. A bounded
+control verifies a present regular executable and successful ordinary self-exec,
+but observes process ID 35, `/proc/self` 1082469 and no `/proc/35`; the same namespace
+flags reproduce the launch failure. Go's namespace mapping setup uses the child
+PID under `/proc`, so this local environment cannot establish the requested
+namespace/TUN result. No EPERM cause, actual TUN success, physical-device result
+or current full release is inferred. The strict native fixture and its exact
+verdict inventory remain in CI. Same-boot recovery of a lost service's nonempty
+guard remains separate unfinished source work.
+
+The current-status mobile refresh had removed the adjacent, unrelated Linux
+SS2022-entry/SS2022-final evidence section. That section is restored unchanged,
+while the newer mobile packet-entry implementation and its evidence remain.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

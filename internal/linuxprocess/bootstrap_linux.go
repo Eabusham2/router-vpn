@@ -327,29 +327,10 @@ func (b *Bootstrap) enter(ctx context.Context) error {
 }
 
 func (b *Bootstrap) current(ctx context.Context) error {
-	if ctx.Err() != nil || !b.complete || b.revoked || b.closed || b.parent == nil || b.pending != nil || b.channel == nil || b.channel.stopping.Load() {
-		return errors.Join(ctx.Err(), errors.New("Linux child bootstrap is incomplete or retired"))
-	}
-	if _, err := b.channel.currentIdentity(); err != nil {
-		b.revoked = true
-		return err
-	}
-	parent, err := b.parent.Current(ctx)
-	if err != nil || parent != b.parentRecord {
-		b.revoked = true
-		return errors.Join(err, errors.New("Linux child bootstrap lost its original captured parent"))
-	}
-	var child Observation
-	if b.borrowParent {
-		child, err = b.child.Current(ctx)
-	} else {
-		child, err = b.self.Current(ctx)
-	}
-	if err != nil || child != b.childRecord {
-		b.revoked = true
-		return errors.Join(err, errors.New("Linux child bootstrap lost its original created child"))
-	}
-	return ctx.Err()
+	// Current also guards idle native lifetimes. Use the same original
+	// participant observation as ObservationsContext: caller expiry alone
+	// cannot revoke an authenticated owner, while real loss still latches.
+	return b.currentObservation(ctx)
 }
 
 func (b *Bootstrap) Current(ctx context.Context) error {
