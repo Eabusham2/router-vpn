@@ -22,8 +22,54 @@ class XrayEntryBindings(unittest.TestCase):
         for mode in COMPOSITE_MODES:self.assertIn('"'+mode+'"',entry)
         self.assertIn('Unknown saved entry transport.',entry)
         self.assertIn('throw new IllegalArgumentException',java)
-        self.assertIn('.putString(MULTI_MODE,multiMode)',profiles)
-        self.assertIn('.putString("multihop_entry_mode",entryMode)',profiles)
+        self.assert_profile_mode_publication(profiles)
+    def assert_profile_mode_publication(self,profiles):
+        # Saved transport names enter the captured map before publication. The
+        # final preference commit must still own that original selection.
+        load=profiles.split('synchronized Record load(String id)',1)[1].split('synchronized void delete(String id)',1)[0]
+        markers=('Map<String,Object> nextPreferences=new LinkedHashMap<>(originalPreferences)',
+                 'nextPreferences.put(MULTI_MODE,multiMode)',
+                 'nextPreferences.put("multihop_entry_mode",entryMode)',
+                 'PreferenceUpdate preferenceUpdate=new PreferenceUpdate(originalPreferences,nextPreferences)',
+                 'synchronized(prefs()) {\n        try{',
+                 'if(!preferenceUpdate.original.equals(snapshotPreferences()))',
+                 'publishPreferences(preferenceUpdate)')
+        positions=[]
+        for marker in markers:
+            self.assertEqual(load.count(marker),1,marker)
+            positions.append(load.index(marker))
+        self.assertEqual(positions,sorted(positions),'captured modes must precede owned publication')
+        publish=profiles.split('private void publishPreferences(',1)[1].split('private boolean ownsPreferences(',1)[0]
+        guards=('synchronized(prefs())','if(!update.original.equals(snapshotPreferences()))',
+                'update.attempted=true','restorePreferences(update.next)',
+                'if(!update.next.equals(snapshotPreferences()))')
+        positions=[]
+        for marker in guards:
+            self.assertEqual(publish.count(marker),1,marker)
+            positions.append(publish.index(marker))
+        self.assertEqual(positions,sorted(positions),'preference publication must preserve original ownership')
+
+    def test_mode_publication_rejects_relabeling_bypass_and_late_checks(self):
+        source=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java').read_text()
+        for before,after in (
+            ('nextPreferences.put(MULTI_MODE,multiMode)','nextPreferences.put(MULTI_MODE,"wg")'),
+            ('nextPreferences.put("multihop_entry_mode",entryMode)','nextPreferences.put("multihop_entry_mode","wg")'),
+            ('PreferenceUpdate preferenceUpdate=new PreferenceUpdate(originalPreferences,nextPreferences)','PreferenceUpdate preferenceUpdate=new PreferenceUpdate(snapshotPreferences(),nextPreferences)'),
+            ('synchronized(prefs()) {\n        try{','{\n        try{'),
+            ('if(!preferenceUpdate.original.equals(snapshotPreferences()))','if(false)'),
+            ('publishPreferences(preferenceUpdate)','restorePreferences(nextPreferences)'),
+            ('if(!update.original.equals(snapshotPreferences()))','if(false)'),
+            ('update.attempted=true','update.attempted=false'),
+            ('if(!update.next.equals(snapshotPreferences()))','if(false)'),
+        ):
+            with self.subTest(bypass=before):
+                self.assertIn(before,source)
+                with self.assertRaises(AssertionError):self.assert_profile_mode_publication(source.replace(before,after))
+        first=source.index('private void publishPreferences(');last=source.index('private boolean ownsPreferences(',first)
+        publish=source[first:last];write='restorePreferences(update.next);'
+        changed=publish.replace(write,'').replace('if(!update.original.equals(snapshotPreferences()))',write+'if(!update.original.equals(snapshotPreferences()))')
+        with self.assertRaises(AssertionError):self.assert_profile_mode_publication(source[:first]+changed+source[last:])
+
     def test_composite_modes_use_complete_captured_compilation(self):
         java=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java').read_text()
         compiler=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeCompositeProfile.java').read_text()
