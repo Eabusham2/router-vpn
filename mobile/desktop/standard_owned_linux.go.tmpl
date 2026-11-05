@@ -167,6 +167,10 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	if err != nil || receipt.Name != shape.Name || receipt.Index < 1 || receipt.MTU != shape.MTU {
 		return errors.New("standard ledger differs from its actual captured inbound")
 	}
+	mtu, err := routerVPNStandardMTUWorker(startup, operations, instance, shape.Tag, inbound, ledger, peer.Current)
+	if err != nil {
+		return err
+	}
 	if err := operations.AcknowledgeLaunch(startup, ledger); err != nil {
 		return err
 	}
@@ -177,10 +181,10 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	if err := peer.Send(startup, body); err != nil {
 		return err
 	}
-	cleanup.mtu, err = routerVPNStandardMTUWorker(operations, instance, shape.Tag, inbound, ledger, peer.Current)
-	if err != nil {
-		return err
-	}
+	// An unstarted supervisor owns no mutation or join. Only attach it to
+	// cleanup once Ready is sent and Run will execute; failed startup still
+	// retires the exact retained reader through its bounded native capability.
+	cleanup.mtu = mtu
 	// Only the original creating service can retire this process. Its immutable
 	// creation pidfd and joined Stop remain outside this observational channel.
 	return cleanup.mtu.Run(lifetime)

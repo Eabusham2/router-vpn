@@ -4,6 +4,23 @@ package main
 
 import (
 	"context"
+	"errors"
+	"github.com/sagernet/netlink"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	SJ "github.com/sagernet/sing/common/json"
+	"golang.org/x/sys/unix"
+	"net"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -35,4 +52,289 @@ func TestRouterVPNStandardMTUActualBoxKeepsOriginalReader(t *testing.T) {
 	if tx, err := live.Change(ctx, "interface-name", 1400); err == nil || tx != nil {
 		t.Fatal("serialized name became native authority", err)
 	}
+}
+
+// This executes the prepared shipping worker factory with the real Box and
+// concrete native TUN adapter. No host TUN is opened. An unstarted reader must
+// reach its actual bounded claim and refuse readiness; dropping the grant call
+// from the worker factory changes this result even though the code compiles.
+// Successful first mutation/restore is required by the installed namespace gate.
+func TestRouterVPNStandardMTUActualBoxRequiresNativeClaim(t *testing.T) {
+	for _, scenario := range []string{"unstarted-native", "foreign-reader", "cancelled", "unbounded", "guard-loss", "wrong-tag", "invalid-receipt"} {
+		t.Run(scenario, func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			instance := desktopNodeMTUActualBox(t)
+			backend := &routerVPNStandardMTUBackend{instance: instance, tag: "tun-in"}
+			actual, err := backend.Current(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := actual.(adapter.Inbound)
+			// This denied input never supplies authority to an unstarted reader.
+			receipt := desktopnetwork.DesktopNetworkReceipt{Schema: 1, TargetOS: "linux", Incarnation: strings.Repeat("a", 32), Name: "retained0", Index: 8, MTU: 1280, Addresses: []string{"172.29.97.1/30"}, Objects: []desktopnetwork.DesktopNetworkObject{}}
+			ready, err := desktopnetwork.CanonicalDesktopNetworkReceipt(receipt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			work, tag := context.Context(parent), "tun-in"
+			calls := 0
+			guardFailure := errors.New("original standard peer retired")
+			guard := func(ctx context.Context) error {
+				if ctx != work {
+					t.Fatal("native claim replaced original startup caller")
+				}
+				calls++
+				if scenario == "guard-loss" {
+					return guardFailure
+				}
+				return ctx.Err()
+			}
+			switch scenario {
+			case "foreign-reader":
+				other := &routerVPNStandardMTUBackend{instance: desktopNodeMTUActualBox(t), tag: tag}
+				foreign, err := other.Current(parent)
+				if err != nil || foreign == actual {
+					t.Fatal("independent actual Box reader missing", err)
+				}
+				original = foreign.(adapter.Inbound)
+			case "cancelled":
+				stopped, stop := context.WithCancel(parent)
+				stop()
+				work = stopped
+			case "unbounded":
+				work = context.Background()
+			case "wrong-tag":
+				tag = "foreign-tun"
+			case "invalid-receipt":
+				ready = "{}"
+			}
+			worker, err := routerVPNStandardMTUWorker(work, nil, instance, tag, original, ready, guard)
+			if worker != nil || err == nil {
+				t.Fatal("unadmitted native reader gained an MTU worker", err)
+			}
+			if scenario == "unstarted-native" {
+				if calls != 1 || !strings.Contains(err.Error(), "desktop TUN or physical path retired") {
+					t.Fatal("worker bypassed actual native claim before FD11 readiness", calls, err)
+				}
+			} else if scenario == "guard-loss" {
+				if calls != 1 || !errors.Is(err, guardFailure) {
+					t.Fatal("native claim lost original peer refusal", calls, err)
+				}
+			} else if calls != 0 {
+				t.Fatal("invalid original admission entered native claim", calls, err)
+			}
+			if scenario == "cancelled" && !errors.Is(err, context.Canceled) {
+				t.Fatal("native admission lost original cancellation", err)
+			}
+			if current, err := backend.Current(parent); err != nil || current != actual {
+				t.Fatal("failed original claim replaced native reader", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNStandardMTUActualBoxRetiresUnstartedReader(t *testing.T) {
+	for _, scenario := range []string{"original", "cancelled-retry"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			instance := desktopNodeMTUActualBox(t)
+			backend := &routerVPNStandardMTUBackend{instance: instance, tag: "tun-in"}
+			original, err := backend.Current(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := standardengine.NewCleanupFile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer result.Close()
+			owner := &routerVPNStandardCleanup{result: result, instance: instance, reader: original.(*tun.Inbound)}
+			if scenario == "cancelled-retry" {
+				stopped, stop := context.WithCancel(ctx)
+				stop()
+				if raw, err := owner.retire(stopped); raw != "" || !errors.Is(err, context.Canceled) || owner.ledger != "" || owner.boxAttempted {
+					t.Fatal("cancelled cleanup supplied retirement", raw, err)
+				}
+			}
+			raw, err := owner.retire(ctx)
+			if err != nil {
+				t.Fatal("actual unstarted native reader could not retire", err)
+			}
+			receipt, err := desktopnetwork.ParseDesktopNetworkRetirementReceipt(raw)
+			if err != nil || receipt.Created || !owner.boxAttempted || owner.boxFailure != nil || owner.reader != original {
+				t.Fatal("unstarted reader invented native creation or changed cleanup owner", receipt, err)
+			}
+			if again, err := owner.retire(ctx); err != nil || again != raw {
+				t.Fatal("completed original cleanup changed its receipt", again, err)
+			}
+		})
+	}
+}
+
+// This mandatory native case creates a real TUN in an original child namespace,
+// grants the shipping worker's native claim, then fails before FD11 readiness.
+// It proves bounded cleanup of that exact claimed reader and actual process
+// join. The installed-service namespace test separately proves peer-bound
+// mutation, both observers, selected DNS, restore and full service Stop.
+func TestRouterVPNStandardMTUNativeClaimFailureNamespace(t *testing.T) {
+	const marker = "ROUTERVPN_STANDARD_MTU_CLAIM_FAILURE"
+	const parent = "TestRouterVPNStandardMTUNativeClaimFailureNamespace"
+	cases := []string{"post-grant-failure", "post-grant-cancel"}
+	selected := os.Getenv(marker)
+	if selected == "" {
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var originalNS []*os.File
+		for _, name := range []string{"net", "user"} {
+			file, err := os.Open("/proc/thread-self/ns/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			originalNS = append(originalNS, file)
+		}
+		for _, name := range cases {
+			t.Run(name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+				defer cancel()
+				command := exec.CommandContext(ctx, image, "-test.v", "-test.run=^"+parent+"$", "-test.timeout=10s")
+				command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", marker + "=" + name}
+				command.ExtraFiles = originalNS
+				pidfd := -1
+				command.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET, UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}, GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}, GidMappingsEnableSetgroups: false, PidFD: &pidfd}
+				output, err := command.CombinedOutput()
+				if pidfd >= 0 {
+					defer unix.Close(pidfd)
+				}
+				if err != nil {
+					t.Fatalf("original native claim child failed: %v\n%s", err, output)
+				}
+				polls := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+				if pidfd < 0 || command.ProcessState == nil || !command.ProcessState.Success() {
+					t.Fatal("native claim child omitted original process join")
+				}
+				if _, err := unix.Poll(polls, 0); err != nil || polls[0].Revents&unix.POLLIN == 0 {
+					t.Fatal("original claim child pidfd did not retire", err)
+				}
+				for _, verdict := range []string{"=== RUN   " + parent + "/" + name + "\n", "--- PASS: " + parent + "/" + name + " "} {
+					if strings.Count(string(output), verdict) != 1 {
+						t.Fatal("native child omitted exact claim-failure case", string(output))
+					}
+				}
+				if strings.Contains(string(output), "--- FAIL:") || strings.Contains(string(output), "--- SKIP:") || strings.Contains(string(output), "DATA RACE") {
+					t.Fatal("native claim child did not pass", string(output))
+				}
+				for i, name := range []string{"net", "user"} {
+					before, err := originalNS[i].Stat()
+					after, currentErr := os.Stat("/proc/thread-self/ns/" + name)
+					if err != nil || currentErr != nil || !os.SameFile(before, after) {
+						t.Fatal("native child changed parent namespace", name, err, currentErr)
+					}
+				}
+			})
+		}
+		return
+	}
+	if selected != cases[0] && selected != cases[1] {
+		t.Fatal("unknown native claim-failure case")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	for i, name := range []string{"net", "user"} {
+		file := os.NewFile(uintptr(3+i), "original-parent-"+name)
+		defer file.Close()
+		before, err := file.Stat()
+		after, currentErr := os.Stat("/proc/thread-self/ns/" + name)
+		var fs syscall.Statfs_t
+		if err != nil || currentErr != nil || syscall.Fstatfs(int(file.Fd()), &fs) != nil || fs.Type != 0x6e736673 || os.SameFile(before, after) {
+			t.Fatal("native claim child lost original distinct namespace", name, err, currentErr)
+		}
+	}
+	t.Run(selected, func(t *testing.T) {
+		loopback, err := netlink.LinkByName("lo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := netlink.LinkSetUp(loopback); err != nil {
+			t.Fatal(err)
+		}
+		life, stopLife := context.WithCancel(context.Background())
+		defer stopLife()
+		startup, stopStartup := context.WithTimeout(life, 5*time.Second)
+		defer stopStartup()
+		registry := box.Context(life, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+		options, err := SJ.UnmarshalExtendedContext[option.Options](registry, []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"rvpn-claim","address":["172.29.198.1/30"],"mtu":1280,"auto_route":false,"dns_mode":"disabled","stack":"system"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance, err := box.New(box.Options{Context: registry, Options: options})
+		if err != nil {
+			t.Fatal(err)
+		}
+		original, exists := instance.Inbound().Get("tun-in")
+		if !exists {
+			t.Fatal("original native inbound missing")
+		}
+		reader := original.(*tun.Inbound)
+		result, err := standardengine.NewCleanupFile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer result.Close()
+		owner := &routerVPNStandardCleanup{result: result, instance: instance, reader: reader, cancel: stopLife}
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, _ = owner.retire(cleanup)
+		}()
+		if err := reader.RouterVPNDesktopNetworkStartup(startup); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.RouterVPNDesktopStandardStart(); err != nil {
+			t.Fatal("actual standard Box startup", err)
+		}
+		ready, err := reader.RouterVPNDesktopNetworkStartupReceipt(startup, func() bool { return startup.Err() == nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := desktopnetwork.ParseDesktopNetworkReceipt(ready)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Missing FD11 is a real post-claim worker-admission failure, before Run
+		// or Ready. The owner already retains this exact concrete native reader.
+		worker, err := routerVPNStandardMTUWorker(startup, nil, instance, "tun-in", original, ready, func(ctx context.Context) error { return ctx.Err() })
+		if worker != nil || err == nil || !strings.Contains(err.Error(), "native MTU worker omitted original lifetime or reader") {
+			t.Fatal("did not reach original post-claim admission boundary", err)
+		}
+		if name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(startup); err != nil || name != before.Name || uint32(index) != before.Index || mtu != before.MTU {
+			t.Fatal("actual bounded claim was omitted", name, index, mtu, err)
+		}
+		if selected == "post-grant-cancel" {
+			stopStartup()
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if raw, err := reader.RouterVPNDesktopNetworkRetire(cleanup); err == nil || raw != "" {
+			t.Fatal("stock-only retirement predicate was weakened", raw, err)
+		}
+		raw, err := owner.retire(cleanup)
+		if err != nil {
+			t.Fatal("original claimed reader failed pre-Ready cleanup", err)
+		}
+		retired, err := desktopnetwork.ParseDesktopNetworkRetirementReceipt(raw)
+		if err != nil || !retired.Created || retired.Incarnation != before.Incarnation || retired.Index != before.Index || retired.Name != before.Name || owner.reader != reader || owner.mtu != nil || !owner.boxAttempted || owner.boxFailure != nil {
+			t.Fatal("post-claim failure lost actual joined original retirement", retired, err)
+		}
+		if _, err := net.InterfaceByName(before.Name); err == nil {
+			t.Fatal("retired original TUN remains live")
+		}
+		if again, err := owner.retire(cleanup); err != nil || again != raw {
+			t.Fatal("repeated original Stop changed completion", again, err)
+		}
+	})
 }

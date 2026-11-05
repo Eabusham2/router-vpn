@@ -9,6 +9,8 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/standardengine"
 	"time"
 )
@@ -58,7 +60,54 @@ func (t *routerVPNStandardMTUTransaction) Evidence() [standardengine.OperationRe
 	return result
 }
 
-func routerVPNStandardMTUWorker(file *standardengine.OperationFile, instance *box.Box, tag string, original adapter.Inbound, ready string, guard func(context.Context) error) (*standardengine.NativeMTUWorker, error) {
+// The startup receipt observes native ownership; it does not grant replacement
+// authority. Claim that same ready reader through its bounded native API before
+// advertising FD11 readiness, retaining the creating service's original guard.
+func routerVPNStandardMTUAdmit(ctx context.Context, instance *box.Box, tag string, original adapter.Inbound, ready string, guard func(context.Context) error) error {
+	if ctx == nil || instance == nil || original == nil || guard == nil || tag == "" {
+		return errors.New("standard MTU admission lost its original startup owner")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("standard MTU admission requires its original startup deadline")
+	}
+	reader, ok := original.(*tun.Inbound)
+	if !ok || reader.Tag() != tag {
+		return errors.New("standard MTU admission requires its original native TUN reader")
+	}
+	backend := &routerVPNStandardMTUBackend{instance, tag}
+	current, err := backend.Current(ctx)
+	if err != nil || current != original {
+		return errors.Join(err, errors.New("standard MTU admission changed its original Box reader"))
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(ready)
+	if err != nil || receipt.TargetOS != "linux" {
+		return errors.Join(err, errors.New("standard MTU admission lost its original native receipt"))
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUContext(ctx, guard)
+	if err != nil {
+		return err
+	}
+	if name != receipt.Name || uint32(index) != receipt.Index || mtu != receipt.MTU {
+		return errors.New("standard MTU claim differs from its original startup reader")
+	}
+	actual, err := reader.RouterVPNDesktopNetworkReceiptContext(ctx)
+	if err != nil || actual != ready {
+		return errors.Join(err, errors.New("standard MTU claim changed its original successful-call receipt"))
+	}
+	current, err = backend.Current(ctx)
+	if err != nil || current != original {
+		return errors.Join(err, errors.New("standard MTU claim replaced its original Box reader"))
+	}
+	return errors.Join(guard(ctx), ctx.Err())
+}
+
+func routerVPNStandardMTUWorker(ctx context.Context, file *standardengine.OperationFile, instance *box.Box, tag string, original adapter.Inbound, ready string, guard func(context.Context) error) (*standardengine.NativeMTUWorker, error) {
+	if err := routerVPNStandardMTUAdmit(ctx, instance, tag, original, ready, guard); err != nil {
+		return nil, err
+	}
 	return standardengine.NewNativeMTUWorker(file, &routerVPNStandardMTUBackend{instance, tag}, original, ready, guard,
 		func(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc, error) {
 			// Preserve the same eight-second original cleanup allowance as the

@@ -612,6 +612,36 @@ locally, then its actual TUN constructor is denied a netlink socket with
 operation-not-permitted. That privileged positive remains mandatory in native
 CI; no production fallback, skipped assertion or invented connection is added.
 
+## Original native service MTU grant and retained cleanup
+
+Review of the installed service integration found that its successful startup
+receipt did not grant MTU replacement authority. The fixed child now calls the
+actual native Context claim before FD11 launch acknowledgement and Ready. It
+requires the same Box/tag/reader, original bounded startup caller, creating peer
+guard, complete unchanged native receipt and matching name/index/MTU. It repeats
+the reader and guard checks before publication. The worker attaches to cleanup
+only after Ready succeeds, immediately before Run; an unstarted supervisor is
+not treated as joined work.
+
+Claimed TUNs deliberately fail the stock-only retirement predicate. Cleanup now
+uses the exact native reader retained before startup/grant, or the exact reader
+returned by the joined worker. Bounded TunClose must yield an actual completed
+MTU retirement receipt with no live Ready receipt. Failure, cancellation or an
+expired cleanup attempt retains the original capability for retry. No receipt,
+name, topology or replacement reader is adopted, and the stock predicate is
+unchanged.
+
+The actual prepared native command passes all 12 adapter race verdicts
+(1.492s). The final projection includes `6a832cb1`'s retirement decoder in both
+native packages and keeps Ready's smaller bound. Two independently compiling
+negative controls fail for their intended cause: omitted grant and reverted
+stock-only cleanup. Both current Python service-MTU verdict tests pass after
+preserving upstream Tor registration gates. The new post-grant failure and
+cancellation namespace cases compile and are mandatory; successful native grant,
+first installed MTU mutation, restoration and joined Stop still require their
+NET_ADMIN CI runs. The local prepared build uses `with_purego`; it is not evidence
+for the normal static runtime archive or package publication.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

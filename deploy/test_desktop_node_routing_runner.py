@@ -86,19 +86,43 @@ class NativeLifecycleAdmissionVerdicts(unittest.TestCase):
 class StandardServiceMTUVerdicts(unittest.TestCase):
     def test_actual_standard_reader_verdict_cannot_be_omitted_or_substituted(self):
         suite = NODE.STANDARD_MTU_SUITE
-        name = suite[3][0]
-        output = "=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n"
+        names = suite[3]
+        self.assertEqual(len(names), 12)
+        output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
         baseline = Mock()
         baseline.execute.return_value = (0, output)
         with contextlib.redirect_stdout(io.StringIO()):
             NODE.execute_baseline_suite(baseline, suite)
             baseline.execute.assert_called_once_with(*suite[:3], 90)
-            for changed in ("", output + output, output.replace(name, name + "Foreign"),
-                            output.replace("--- PASS:", "--- SKIP:"),
-                            output.replace("--- PASS:", "--- FAIL:")):
-                baseline.execute.return_value = (0, changed)
-                with self.subTest(changed=changed), self.assertRaises(ValueError):
-                    NODE.execute_baseline_suite(baseline, suite)
+            for name in names:
+                for changed in (output.replace("--- PASS: " + name + " (0.01s)\n", "", 1),
+                                output + "--- PASS: " + name + " (0.01s)\n",
+                                output.replace(name, name + "Foreign"),
+                                output.replace("--- PASS: " + name, "--- SKIP: " + name),
+                                output.replace("--- PASS: " + name, "--- FAIL: " + name)):
+                    baseline.execute.return_value = (0, changed)
+                    with self.subTest(name=name, changed=changed), self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
+
+
+    def test_actual_claim_failure_requires_native_cleanup_and_child_join(self):
+        suite = NODE.STANDARD_MTU_NATIVE_SUITE
+        self.assertEqual(len(suite[3]), 3)
+        output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in suite[3])
+        baseline = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            baseline.execute.return_value = (0, output)
+            NODE.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+            for name in suite[3]:
+                for changed in (output.replace("--- PASS: " + name + " (0.01s)\n", "", 1),
+                                output + "--- PASS: " + name + " (0.01s)\n",
+                                output.replace(name, name + "Foreign"),
+                                output.replace("--- PASS: " + name, "--- SKIP: " + name),
+                                output.replace("--- PASS: " + name, "--- FAIL: " + name)):
+                    baseline.execute.return_value = (0, changed)
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
 
 
 class NativeAddressRetirementVerdicts(unittest.TestCase):

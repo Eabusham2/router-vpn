@@ -118,8 +118,29 @@ encrypted peer fixture compiles. The installed-host runner retains its previous
 and joined-lifecycle evidence; all 26 runner regressions pass. Those six real
 namespace cases have not run locally because this environment lacks NET_ADMIN.
 Their exact-SHA CI result, other graph families, Server/Compare and broader
-Start Layers remain separate requirements. Native service MTU grant/retirement
-and replacement-startup corrections are being verified separately.
+Start Layers remain separate requirements. The native service MTU grant and
+retirement correction below is locally verified; replacement startup retains
+its separate original-context correction and native acceptance obligation.
+
+## Original native service MTU authority
+
+The fixed service child now grants MTU replacement authority to its exact
+ready native TUN before acknowledging FD11 or sending Ready. Admission verifies
+the original Box, tag, reader pointer, canonical receipt, name/index/MTU and
+bounded creating-service guard. A startup receipt alone cannot grant mutation.
+Cleanup retains that same concrete reader before admission and uses its bounded
+TUN close and completed retirement receipt after a grant or later startup
+failure. It also handles the joined worker's actual successor. The stock-only
+retirement restriction remains intact.
+
+The prepared native command passes all 12 required actual-Box race verdicts
+(1.492s) against the current separate retirement bound. Compiling controls that
+omit the grant or restore stock-only cleanup fail their intended assertions.
+Two runner regression tests preserve all required verdicts and both new native
+post-grant failure/cancellation cases. The latter compile but require privileged
+CI execution. Local preparation uses the supported pure-Go build option; the
+normal native package, first successful TUN mutation, rollback and final Stop
+still require the shipping native and installed-host gates.
 
 ## Previous implementation continuation — verified through 4d25725c
 

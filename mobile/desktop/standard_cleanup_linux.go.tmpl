@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/protocol/tun"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/linuxprocess"
 	"github.com/sagernet/sing-box/routervpn/standardengine"
@@ -65,7 +66,7 @@ func (o *routerVPNStandardCleanup) retire(ctx context.Context) (string, error) {
 	if o.ledger == "" {
 		var err error
 		if o.reader != nil {
-			o.ledger, err = o.reader.RouterVPNDesktopNetworkRetire(ctx)
+			o.ledger, err = routerVPNStandardRetireReader(ctx, o.reader)
 		} else {
 			// No inbound startup call was reached. Box construction alone does
 			// not create a native TUN; partial managers remain owned below.
@@ -128,4 +129,22 @@ func (o *routerVPNStandardCleanup) retire(ctx context.Context) (string, error) {
 		}
 	}
 	return o.ledger, ctx.Err()
+}
+
+// reader was retained before startup/grant, or returned by the joined original
+// MTU worker. Its concrete native capability survives claim and pre-Ready
+// failure; the stock-only retirement method deliberately refuses claimed TUNs.
+func routerVPNStandardRetireReader(ctx context.Context, reader routerVPNStandardInbound) (string, error) {
+	original, ok := reader.(*tun.Inbound)
+	if !ok || original == nil {
+		return "", errors.New("standard retirement lost its retained native reader")
+	}
+	if err := original.RouterVPNDesktopTunCloseContext(ctx); err != nil {
+		return "", err
+	}
+	ready, retired, err := original.RouterVPNDesktopMTUReceiptContext(ctx)
+	if err != nil || ready != "" || retired == "" {
+		return "", errors.Join(err, errors.New("standard retirement omitted its original completed native receipt"))
+	}
+	return retired, ctx.Err()
 }
