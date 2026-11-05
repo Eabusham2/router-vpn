@@ -921,6 +921,38 @@ responses. GTK and Xvfb dependencies are unavailable in this workspace, so these
 actual native callbacks remain part of the mandatory Linux UI CI rather than a
 claimed local execution.
 
+## Joined native cancellation preserves actual returned failures
+
+The Linux native desktop jobs at `2873d854` exposed the same External/Tor
+cancellation and constructor-redaction failures on AMD64 and ARM64 (run
+`41973093506`, jobs `127065804094` and `127065804158`). The command loops now
+acknowledge explicit caller cancellation only after their exact original owners
+and stopped receipts finish. Startup deadline expiry and cleanup failure remain
+errors. Private constructor text is hidden behind a printable safe error while
+`errors.Is` and `errors.As` retain the actual original cause.
+
+Both loops also retain the actual worker outcome whether it arrives during the
+main select or while cleanup joins it. Only the existing pure original-context
+classifier may accept that returned error as cancellation. A genuine failure or
+mixed failure/cancellation is preserved, with sanitized printable text. This
+closes the race where the old cleanup path discarded the worker's real result.
+
+The frozen four-path manifest is SHA256
+`524813b73c2c703aa4c1960092986103752afd0e48401796d299e749c5ee5147`.
+The actual generated native command passes 30 focused race verdicts (7.098s) and
+all 67 directly affected command ownership/security verdicts (11.404s), without
+skips. With the new tests and old production, precisely eight genuine/mixed
+startup/proof cases fail while all four pure-cancellation cases pass. No compiler,
+panic, race, timeout, omission or skip is accepted as the causal failure.
+
+The complete native build's existing mandatory regex includes both new regression
+parents. The separate no-TUN server Tor projection uses its own relay command and
+has no reference to the new desktop error wrapper; all 12 server preparation and
+negative checks pass (10.264s). A wider local prepared-core trial had one direct
+native whole-owner fixture failure, reproduced unchanged without the patch; that
+local environment result is retained rather than claimed repaired. Actual ARM64
+execution, the full native matrix and release publication remain CI obligations.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

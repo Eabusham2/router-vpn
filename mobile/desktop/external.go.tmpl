@@ -35,6 +35,13 @@ import (
 var routerVPNExternalSession = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var routerVPNExternalFailure = errors.New("captured desktop external runtime failed; private credentials were not logged")
 
+// Preserve typed constructor causes for ownership decisions without putting
+// private parser/configuration text in the command's printable error.
+type routerVPNPrivateCommandFailure struct{ public, cause error }
+
+func (e routerVPNPrivateCommandFailure) Error() string { return e.public.Error() }
+func (e routerVPNPrivateCommandFailure) Unwrap() error { return e.cause }
+
 func init() { mainCommand.AddCommand(routerVPNNewExternalCommand()) }
 
 func routerVPNNewExternalCommand() *cobra.Command {
@@ -715,12 +722,13 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 			progress.Stage = "cleanup-pending"
 			_ = files.publish("progress.json", progress)
 		}
-		return errors.Join(routerVPNExternalFailure, factoryErr)
+		return routerVPNPrivateCommandFailure{routerVPNExternalFailure, errors.Join(routerVPNExternalFailure, factoryErr)}
 	}
 	type result struct {
 		raw string
 		err error
 	}
+	var completed result
 	done := make(chan result, 1)
 	go func() {
 		if factoryErr != nil {
@@ -741,9 +749,15 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	finished, connected, stopping := false, false, false
+	cleanupJoined := false
 	defer func() {
-		if !connected {
+		// An acknowledged explicit Stop is successful only after this exact
+		// owner has drained. Expired startup admission remains a failure.
+		if !connected && !(cleanupJoined && parent.Err() == context.Canceled && startup.Err() == context.Canceled) {
 			failure = errors.Join(failure, startup.Err())
+		}
+		if factoryErr != nil {
+			failure = routerVPNPrivateCommandFailure{routerVPNExternalFailure, errors.Join(routerVPNExternalFailure, failure, factoryErr)}
 		}
 	}()
 	var receipt routerVPNExternalProofRecord
@@ -755,7 +769,12 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 	for !stopping {
 		select {
 		case outcome := <-done:
+			completed = outcome
 			finished = true
+			if parent.Err() == context.Canceled && startup.Err() == context.Canceled {
+				stopping = true
+				break
+			}
 			if outcome.err != nil || startup.Err() != nil || parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) || routerVPNExternalHealthyContext(startup, owner) != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
@@ -889,7 +908,12 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 	if !finished {
 		// Actual proof cancellation is bounded by the shared native request.
 		// Retain the process and owner until it joins, even if a host times out.
-		<-done
+		completed = <-done
+	}
+	// Cancellation does not erase an independently returned startup/proof
+	// failure. Only a pure original-context cause can acknowledge clean Stop.
+	if completed.err != nil && !mobiletor.ObservationContextExpired(parent, completed.err) {
+		failure = routerVPNPrivateCommandFailure{routerVPNExternalFailure, errors.Join(routerVPNExternalFailure, failure, completed.err)}
 	}
 	for dnsFiles != nil && dnsFiles.service.Close() != nil {
 		progress.Stage = "cleanup-pending"
@@ -927,6 +951,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 	if files.publish("stopped.json", closed) != nil {
 		return routerVPNExternalFailure
 	}
+	cleanupJoined = true
 	return failure
 }
 

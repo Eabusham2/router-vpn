@@ -512,3 +512,68 @@ func (f *routerVPNTorCommandFixture) HealthyContext(ctx context.Context) error {
 	}
 	return nil
 }
+
+type routerVPNTorReturnedFailure struct {
+	*routerVPNTorCommandFixture
+	cancelParent context.CancelFunc
+	failure      error
+	atStart      bool
+}
+
+func (f *routerVPNTorReturnedFailure) Start() error {
+	if !f.atStart {
+		return f.routerVPNTorCommandFixture.Start()
+	}
+	f.cancelParent()
+	<-f.base.cancel
+	return f.failure
+}
+func (f *routerVPNTorReturnedFailure) Run() (mobiletor.DesktopBridgeProof, error) {
+	f.cancelParent()
+	<-f.base.cancel
+	return mobiletor.DesktopBridgeProof{}, f.failure
+}
+func TestRouterVPNDesktopTorCancellationPreservesReturnedFailure(t *testing.T) {
+	for _, phase := range []string{"start", "proof"} {
+		for _, kind := range []string{"pure", "genuine", "mixed"} {
+			t.Run(phase+"/"+kind, func(t *testing.T) {
+				files := routerVPNNewTorFileFixture(t)
+				base := routerVPNNewTorCommandFixture(t, files, false)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				cause := &os.PathError{Op: "private-startup", Path: "private-proxy-secret", Err: errors.New("original-owner-lost")}
+				var returned error = desktopExternalCancelledFailure{}
+				if kind == "genuine" {
+					returned = cause
+				}
+				if kind == "mixed" {
+					returned = errors.Join(context.Canceled, cause)
+				}
+				owner := &routerVPNTorReturnedFailure{base, cancel, returned, phase == "start"}
+				err := routerVPNRunTor(ctx, files.directory, routerVPNTorTestSession, files.binary, files.getenv, func(context.Context, *routerVPNTorFiles, *routerVPNTorBinary) (routerVPNTorOwner, error) {
+					return owner, nil
+				})
+				if kind == "pure" {
+					if err != nil {
+						t.Fatal("pure Tor cancellation did not acknowledge joined cleanup", err)
+					}
+				} else {
+					var actual *os.PathError
+					if err == nil || !errors.Is(err, cause) || !errors.As(err, &actual) || actual != cause {
+						t.Fatal("Tor cancellation hid actual returned failure", err)
+					}
+					if strings.Contains(err.Error(), "private-startup") || strings.Contains(err.Error(), "private-proxy-secret") {
+						t.Fatal("returned Tor failure exposed private cause")
+					}
+				}
+				if base.base.closes.Load() == 0 {
+					t.Fatal("returned Tor failure discarded exact cleanup")
+				}
+				routerVPNTorCheckStoppedFixture(t, files)
+				if _, err := os.Lstat(filepath.Join(files.directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("canceled returned Tor failure published proof")
+				}
+			})
+		}
+	}
+}

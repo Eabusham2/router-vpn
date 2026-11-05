@@ -133,6 +133,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 		proof mobiletor.DesktopBridgeProof
 		err   error
 	}
+	var completed outcome
 	done := make(chan outcome, 1)
 	go func() {
 		if factoryErr != nil {
@@ -149,8 +150,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	finished, connected, stopping := false, false, false
+	cleanupJoined := false
 	defer func() {
-		if !connected {
+		// A clean explicit cancellation is acknowledged only after the exact
+		// child/native owners join; startup expiry must still reach the caller.
+		if !connected && !(cleanupJoined && parent.Err() == context.Canceled && startup.Err() == context.Canceled) {
 			failure = errors.Join(failure, startup.Err())
 		}
 	}()
@@ -263,6 +267,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				transition = nil
 			}
 		case result := <-done:
+			completed = result
 			finished = true
 			if startup.Err() != nil || parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
 				stopping = true
@@ -409,7 +414,10 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	progress.Stage = "stopping"
 	_ = files.publish("progress.json", progress)
 	if !finished {
-		<-done
+		completed = <-done
+	}
+	if completed.err != nil && !mobiletor.ObservationContextExpired(parent, completed.err) {
+		failure = routerVPNPrivateCommandFailure{routerVPNTorFailure, errors.Join(routerVPNTorFailure, failure, completed.err)}
 	}
 	// The standalone Tor child, PT/network observer, DNS/proof workers and Box
 	// remain attached to this process until their actual captured owners drain.
@@ -474,5 +482,6 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	if err := finish(); err != nil {
 		return err
 	}
+	cleanupJoined = true
 	return failure
 }
