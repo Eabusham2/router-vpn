@@ -58,13 +58,13 @@ func init() {
 // named Unix listeners, kernel peer pidfds, actual installed service/helper
 // processes, readiness and process join. Missing capabilities fail the gate.
 func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *testing.T) {
-	for _, scenario := range []string{"off", "on-connect", "on-connect-mtu", "on-connect-public", "on-connect-public-restore", "on-connect-failure", "on-connect-network-failure", "on-connect-route-change", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
+	for _, scenario := range []string{"off", "on-connect", "on-connect-generation", "on-connect-mtu", "on-connect-public", "on-connect-public-restore", "on-connect-failure", "on-connect-network-failure", "on-connect-route-change", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy := scenario
 			if scenario == "always-off" {
 				policy = "always"
 			}
-			if scenario == "on-connect-mtu" || scenario == "on-connect-public" || scenario == "on-connect-public-restore" || scenario == "on-connect-route-change" || scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
+			if scenario == "on-connect-generation" || scenario == "on-connect-mtu" || scenario == "on-connect-public" || scenario == "on-connect-public-restore" || scenario == "on-connect-route-change" || scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
 				policy = "on-connect"
 			}
 			executable := linuxControllerNamespaceInstall(t)
@@ -113,13 +113,34 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 					t.Fatal(err)
 				}
 			}
+			serviceExecutable, serviceSocket := executable, linuxStandardServiceSocket
+			var generationDirectory string
+			if scenario == "on-connect-generation" {
+				image, readErr := os.ReadFile(executable)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				// This fixture gives the real service utility its own immutable
+				// image; canonical native helpers remain protected by global SH.
+				generationDirectory = standardGenerationTestFiles(t, linuxOwnedControllerRoot, image, "installed-generation")
+				serviceExecutable = filepath.Join(generationDirectory, "router-vpn-client")
+				serviceSocket = filepath.Join(linuxStandardServiceDirectory, "g-"+filepath.Base(generationDirectory)+".sock")
+				canonical, statErr := os.Stat(executable)
+				if statErr != nil {
+					t.Fatal(statErr)
+				}
+				selected, statErr := os.Stat(serviceExecutable)
+				if statErr != nil || os.SameFile(canonical, selected) {
+					t.Fatal("service generation reused canonical executable inode", statErr)
+				}
+			}
 			notifyPath := filepath.Join("/run", "standard-service-ready-"+scenario)
 			notify, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: notifyPath, Net: "unixgram"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer notify.Close()
-			service := exec.Command(executable, linuxStandardServiceArgument)
+			service := exec.Command(serviceExecutable, linuxStandardServiceArgument)
 			service.Env = []string{linuxControllerNamespaceMarker + "=1", "NOTIFY_SOCKET=" + notifyPath, "GORACE=atexit_sleep_ms=0"}
 			if scenario == "on-connect-failure" {
 				service.Env = append(service.Env, "ROUTERVPN_STANDARD_SERVICE_NATIVE_TRIGGER=1")
@@ -143,6 +164,15 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 			n, _, err := notify.ReadFromUnix(packet)
 			if err != nil || !strings.Contains(string(packet[:n]), "READY=1") {
 				t.Fatal("installed service did not prove native readiness", err, string(packet[:n]), diagnostic.String())
+			}
+			if generationDirectory != "" {
+				for _, path := range []string{linuxOwnedInstallLock, generationDirectory + ".lock"} {
+					lock, lockErr := ownedDesktopLock(path, true)
+					if lockErr == nil {
+						_ = lock.Close()
+						t.Fatal("live original service did not retain source lease", path)
+					}
+				}
 			}
 			if policy == "on-connect" || scenario == "always-off" {
 				reader, writer := linuxControllerUserPipe(t, executable)
@@ -218,7 +248,7 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				case <-ctx.Done():
 					t.Fatal("helper claimed completion before original service joined")
 				}
-				if _, err = os.Lstat(linuxStandardServiceSocket); !errors.Is(err, os.ErrNotExist) {
+				if _, err = os.Lstat(serviceSocket); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("original listener not removed", err)
 				}
 				lock, err := ownedDesktopLock(linuxOwnedInstallLock, true)
@@ -226,6 +256,13 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 					t.Fatal("joined original service retained shared source lock", err)
 				}
 				_ = lock.Close()
+				if generationDirectory != "" {
+					lock, err = ownedDesktopLock(generationDirectory+".lock", true)
+					if err != nil {
+						t.Fatal("joined original service retained immutable generation", err)
+					}
+					_ = lock.Close()
+				}
 			} else {
 				if err == nil || !strings.Contains(string(output), "original Always protection") {
 					t.Fatal("idle helper falsely retired actual boot Always", err, string(output))

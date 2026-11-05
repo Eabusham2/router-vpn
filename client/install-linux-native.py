@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,11 @@ NETWORK_UNITS = ('NetworkManager.service', 'systemd-networkd.service',
                  'networking.service', 'connman.service', 'wicked.service')
 UPGRADE_ARGUMENT = '--linux-standard-owner-upgrade'
 SERVICE_ARGUMENT = '--linux-standard-owner-service'
+GENERATION_ACTIVATION = 'service-generation.json'
+GENERATION_MANIFEST = 'generation.json'
+GENERATION_MAX_FILES = 8192
+GENERATION_MAX_MANIFEST = 2 << 20
+GENERATION_MAX_ACTIVATION = 4096
 EARLY_UNIT = '''# Router VPN retained original protection owner; no HTTP controller runs at boot.
 [Unit]
 Description=Router VPN persistent always kill switch
@@ -151,7 +157,7 @@ def reject_retained_protection(root: Path):
 def reject_running_previous(root: Path, proc=Path('/proc')):
     # Older installations predate the shared lock. Read executable identities;
     # never signal a printed PID or kill another process to force an upgrade.
-    prefix = str(root) + '/'
+    prefixes = (str(root) + '/', str(root) + '.service-generations/')
     for process in proc.iterdir():
         if not process.name.isdecimal():
             continue
@@ -161,7 +167,7 @@ def reject_running_previous(root: Path, proc=Path('/proc')):
             continue
         except PermissionError as error:
             raise RuntimeError('Cannot prove that the previous native installation is idle') from error
-        if executable.startswith(prefix):
+        if executable.startswith(prefixes):
             raise RuntimeError('Close Router VPN and its owned native processes before upgrading.')
         legacy = False
         if Path(executable).name == 'router-vpn-client':
@@ -251,7 +257,7 @@ def stage_application(source: Path, root: Path, stage: Path):
             copy_checked(source / name, stage / name)
     if root.exists():
         for child in root.iterdir():
-            if child.name not in CODE_TREES | CODE_FILES:
+            if child.name not in CODE_TREES | CODE_FILES | {GENERATION_ACTIVATION}:
                 copy_checked(child, stage / child.name, private=True)
     for name in ('client.json', 'routers.json', 'generated'):
         if not (stage / name).exists():
@@ -266,6 +272,145 @@ def stage_application(source: Path, root: Path, stage: Path):
     final_source = ordinary(source, directory=True)
     if (captured_source.st_dev, captured_source.st_ino, captured_source.st_mtime_ns, captured_source.st_ctime_ns) != (final_source.st_dev, final_source.st_ino, final_source.st_mtime_ns, final_source.st_ctime_ns):
         raise ValueError('The source package changed during installation capture')
+
+
+def generation_json(value):
+    # Match encoding/json's UTF-8 representation and default HTML escaping.
+    raw = json.dumps(value, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+    for character, escaped in ((b'<', br'\u003c'), (b'>', br'\u003e'), (b'&', br'\u0026'),
+                               (chr(0x2028).encode(), br'\u2028'), (chr(0x2029).encode(), br'\u2029')):
+        raw = raw.replace(character, escaped)
+    return raw
+
+
+def generation_inventory(root: Path):
+    records = []
+    for base, directories, files in os.walk(root, followlinks=False):
+        for name in sorted(directories + files):
+            path = Path(base) / name
+            if path == root / GENERATION_MANIFEST:
+                continue
+            info = ordinary(path, directory=path.is_dir(), trusted=True)
+            relative = path.relative_to(root).as_posix()
+            if stat.S_ISDIR(info.st_mode):
+                records.append({'path': relative, 'mode': stat.S_IMODE(info.st_mode), 'sha256': ''})
+            else:
+                digest = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for block in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(block)
+                records.append({'path': relative, 'mode': stat.S_IMODE(info.st_mode), 'sha256': digest.hexdigest()})
+            if len(records) > GENERATION_MAX_FILES:
+                raise ValueError('Service generation inventory exceeded its entry bound')
+    return sorted(records, key=lambda item: item['path'])
+
+
+def generation_manifest(inventory):
+    if not inventory or len(inventory) > GENERATION_MAX_FILES:
+        raise ValueError('Service generation inventory exceeded its entry bound')
+    manifest = generation_json({'schema': 1, 'files': inventory})
+    if len(manifest) > GENERATION_MAX_MANIFEST:
+        raise ValueError('Service generation manifest exceeded its byte bound')
+    return manifest
+
+
+def bounded_generation_read(path: Path, limit: int):
+    with path.open('rb') as stream:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError('Service generation metadata exceeded its byte bound')
+    return raw
+
+
+def stage_service_generation(stage: Path, root: Path):
+    # No live image or generation is renamed, overwritten, or inferred from a
+    # saved creator. Global source EX is still required by install(). Each
+    # generation additionally has its own adjacent lifetime SH/GC EX lease.
+    store = root.with_name(root.name + '.service-generations')
+    if not store.exists():
+        store.mkdir(mode=0o700)
+        os.chown(store, 0, 0)
+    ordinary(store, directory=True, trusted=True)
+    if stat.S_IMODE(store.stat().st_mode) != 0o700:
+        raise ValueError('Service generations directory is not private')
+    temporary = Path(tempfile.mkdtemp(prefix='.new-', dir=store))
+    try:
+        for name in sorted(CODE_FILES | CODE_TREES):
+            if (stage / name).exists():
+                copy_checked(stage / name, temporary / name)
+        inventory = generation_inventory(temporary)
+        manifest = generation_manifest(inventory)
+        generation = hashlib.sha256(manifest).hexdigest()
+        destination = store / generation
+        lock = store / (generation + '.lock')
+        descriptor = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            named = ordinary(lock, trusted=True)
+            actual = os.fstat(descriptor)
+            if (actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino) or stat.S_IMODE(actual.st_mode) != 0o600:
+                raise ValueError('Service generation lock changed identity')
+            if destination.exists() or destination.is_symlink():
+                ordinary(destination, directory=True, trusted=True)
+                ordinary(destination / GENERATION_MANIFEST, trusted=True)
+                if bounded_generation_read(destination / GENERATION_MANIFEST, GENERATION_MAX_MANIFEST) != manifest or generation_inventory(destination) != inventory:
+                    raise ValueError('Existing immutable service generation changed')
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with (temporary / GENERATION_MANIFEST).open('xb') as stream:
+                    stream.write(manifest)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                    os.fchmod(stream.fileno(), 0o600)
+                os.rename(temporary, destination)
+                parent = os.open(store, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+                try:
+                    os.fsync(parent)
+                finally:
+                    os.close(parent)
+        finally:
+            os.close(descriptor)
+        image = next(item['sha256'] for item in inventory if item['path'] == 'router-vpn-client')
+        activation = generation_json({'schema': 1, 'generation': generation, 'image_sha256': image})
+        with (stage / GENERATION_ACTIVATION).open('xb') as stream:
+            stream.write(activation)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o600)
+        return destination
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
+def activated_service_image(root: Path):
+    activation = root / GENERATION_ACTIVATION
+    if not activation.exists() and not activation.is_symlink():
+        return root / 'router-vpn-client'  # Strict compatibility for old installs.
+    ordinary(activation, trusted=True)
+    raw = bounded_generation_read(activation, GENERATION_MAX_ACTIVATION)
+    value = json.loads(raw)
+    if not isinstance(value, dict) or set(value) != {'schema', 'generation', 'image_sha256'} or type(value['schema']) is not int or value['schema'] != 1 or generation_json({'schema': value['schema'], 'generation': value['generation'], 'image_sha256': value['image_sha256']}) != raw:
+        raise ValueError('Invalid service generation activation')
+    for key in ('generation', 'image_sha256'):
+        if not isinstance(value[key], str) or len(value[key]) != 64 or any(c not in '0123456789abcdef' for c in value[key]):
+            raise ValueError('Invalid service generation digest')
+    generation = root.with_name(root.name + '.service-generations') / value['generation']
+    ordinary(generation.parent, directory=True, trusted=True)
+    ordinary(generation, directory=True, trusted=True)
+    ordinary(generation / GENERATION_MANIFEST, trusted=True)
+    manifest = bounded_generation_read(generation / GENERATION_MANIFEST, GENERATION_MAX_MANIFEST)
+    if hashlib.sha256(manifest).hexdigest() != value['generation'] or generation_manifest(generation_inventory(generation)) != manifest:
+        raise ValueError('Service generation source changed')
+    image = generation / 'router-vpn-client'
+    ordinary(image, trusted=True)
+    with image.open('rb') as stream:
+        digest = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+        digest = digest.hexdigest()
+    if digest != value['image_sha256']:
+        raise ValueError('Service generation executable changed')
+    return image
 
 
 def verify_runtimes(stage: Path):
@@ -373,7 +518,9 @@ class SystemIntegration:
         self.write('/usr/share/icons/hicolor/256x256/apps/router-vpn.png', (root / 'router-vpn.png').read_bytes())
         self.write('/usr/share/polkit-1/actions/com.eabusham.routervpn.controller.policy',
                    (root / 'client/linux/com.eabusham.routervpn.controller.policy').read_bytes())
-        self.write('/etc/systemd/system/' + EARLY_NAME, EARLY_UNIT.encode())
+        image = activated_service_image(root)
+        unit = EARLY_UNIT.replace('/opt/router-vpn-client/router-vpn-client ' + SERVICE_ARGUMENT, str(image) + ' ' + SERVICE_ARGUMENT)
+        self.write('/etc/systemd/system/' + EARLY_NAME, unit.encode())
         for unit in NETWORK_UNITS:
             self.write('/etc/systemd/system/' + unit + '.d/50-router-vpn-protection.conf', NETWORK_DROPIN.encode())
         self.run(['/usr/bin/systemctl', 'daemon-reload'])
@@ -422,6 +569,7 @@ def install(source: Path, root=ROOT, *, integration=None, verifier=verify_runtim
                 try:
                     stage_application(source, root, stage)
                     verifier(stage)
+                    stage_service_generation(stage, root)
                     # An old application cannot acquire the shared launch lock
                     # while staged state is captured. Recheck legacy executables.
                     reject_running_previous(root, proc)

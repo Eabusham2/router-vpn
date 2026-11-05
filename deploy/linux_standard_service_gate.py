@@ -16,6 +16,10 @@ CORE = {
     'ReverseClientKeepsOriginalPeer': ('original', 'lost-ack-retry', 'foreign-peer', 'changed-intent', 'transport-expiry', 'mixed-failure', 'late-response', 'replacement'),
     'ReverseStopKeepsBoundedOwner': (),
     'ReverseCaptureKeepsBoundedIntent': (),
+    'GenerationRejectsChangedSource': ('current', 'legacy', 'bad-code', 'undeclared', 'linked-image', 'unsafe-mode', 'changed-manifest', 'foreign-lock', 'bad-activation', 'activation-link', 'activation-trailing', 'expired'),
+    'GenerationExpiryKeepsOriginalLease': (),
+    'GenerationBusyLeaseCannotAdopt': (),
+    'GenerationRetainedPeerSocketPair': (),
     'TransferKeepsOriginalStartupBudget': ('earlier-startup', 'earlier-transfer', 'cancelled-startup'),
     'TransferResumesFinishedNativeCleanup': ('native-close', 'saved-close'),
     'TransferRequiresNativeAndDurableSettlement': ('reserved', 'entered', 'committed', 'aborted-before-native-finish', 'aborted-pending-write', 'settled-pending-write', 'aborted', 'settled'),
@@ -74,7 +78,8 @@ CORE = {
     'MonitorRejectsUnprovedOrRepeatedActivation': ('dns', 'joined', 'unattempted', 'wrong-operation', 'foreign-runtime', 'foreign-tracker'),
     'MonitorShippingActivationOrderAndRefusal': ('active', 'monitor-refused', 'persistence-failed'),
 }
-NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-mtu', 'on-connect-public', 'on-connect-public-restore', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-route-change', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
+NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-generation', 'on-connect-mtu', 'on-connect-public', 'on-connect-public-restore', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-route-change', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
+NATIVE.update({'GenerationRetainedPeerSurvivesActivation': (), 'GenerationListenerPreventsAbsence': ('present', 'created-during-readback')})
 STARTUP = {
     'PublicHTTPSPeer': ('latency', 'download', 'upload', 'foreign-auth', 'foreign-destination', 'tls-hostname'),
     'SpeedLabCapturesOriginalService': ('original', 'command', 'profile', 'dns', 'activation', 'pending', 'run', 'sockets', 'mtu', 'session', 'exit'),
@@ -237,7 +242,7 @@ GROUPS = {'core': CORE, 'startup': STARTUP, 'native': NATIVE, 'mtu': MTU, 'mtu-n
 GROUP_PREFIXES = {group: (MTU_PREFIX if group.startswith('mtu') else PREFIX) for group in GROUPS}
 SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'peer_linux.go', 'protocol_linux.go', 'runtime_linux.go', 'client_linux.go', 'dns_linux.go',
-    'boot_linux.go', 'other.go', 'upgrade_linux.go', 'peer_native_test.go', 'runtime_native_test.go',
+    'boot_linux.go', 'other.go', 'upgrade_linux.go', 'generation_linux.go', 'generation_native_test.go', 'peer_native_test.go', 'runtime_native_test.go',
     'channel_native_test.go', 'client_test.go', 'boot_test.go', 'upgrade_native_test.go', 'namespace_test.go', 'route_native_test.go',
     'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go','startup_native_test.go','startup_config_test.go','startup_namespace_test.go','controller_epoch_linux.go','controller_epoch_native_test.go','observation_context_native_test.go','watcher_context_native_test.go','retirement_native_test.go')}
 SOURCE.update({'internal/standardengine/operation.go', 'internal/standardengine/operation_linux.go', 'internal/standardengine/operation_linux_test.go', 'internal/standardengine/protocol.go', 'internal/standardengine/protocol_test.go', 'mobile/desktop/standard_owned_linux.go.tmpl', 'internal/standardengine/cleanup_linux.go', 'internal/standardengine/cleanup_loop_linux.go', 'internal/standardengine/cleanup_linux_test.go', 'internal/standardengine/cleanup_loop_linux_test.go', 'internal/desktopnetwork/desktop_network_retirement.go', 'mobile/desktop/standard_cleanup_linux.go.tmpl', 'cmd/client/linux_standard_engine_linux.go', 'cmd/client/linux_standard_engine_retirement_linux.go', 'cmd/client/legacy_standard_exit_preparation_linux.go', 'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})

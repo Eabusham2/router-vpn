@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -179,8 +178,22 @@ func linuxStandardServiceRPC(ctx context.Context, image, namespace os.FileInfo, 
 	if request.BudgetMS < 1 {
 		return response, context.DeadlineExceeded
 	}
+	if originalPeer == nil {
+		return response, errors.New("standard service call omitted its retained peer slot")
+	}
+	image, arguments, socket, generation, err := linuxStandardServiceDestination(ctx, linuxOwnedControllerRoot, linuxStandardServiceDirectory, image, *originalPeer)
+	if err != nil {
+		return response, err
+	}
+	if generation != nil {
+		defer func() {
+			if *originalPeer == nil || (*originalPeer).generation != generation {
+				_ = generation.Close()
+			}
+		}()
+	}
 	dialer := net.Dialer{Deadline: deadline}
-	connection, err := dialer.DialContext(ctx, "unixpacket", linuxStandardServiceSocket)
+	connection, err := dialer.DialContext(ctx, "unixpacket", socket)
 	if err != nil {
 		return response, err
 	}
@@ -189,12 +202,16 @@ func linuxStandardServiceRPC(ctx context.Context, image, namespace os.FileInfo, 
 	if !ok {
 		return response, errors.New("standard service did not return its native Unix channel")
 	}
-	return linuxStandardServiceExchange(ctx, channel, image, namespace, originalPeer, request, directory, []string{filepath.Join(linuxOwnedControllerRoot, "router-vpn-client"), linuxStandardServiceArgument}, beforeWrite)
+	return linuxStandardServiceExchangeGeneration(ctx, channel, image, namespace, originalPeer, request, directory, arguments, beforeWrite, generation)
 }
 
 // Production always supplies its fixed service role. Native tests can exercise
 // this same framed exchange with original inherited channels and exact peer args.
 func linuxStandardServiceExchange(ctx context.Context, channel *net.UnixConn, image, namespace os.FileInfo, originalPeer **linuxStandardServicePeer, request linuxStandardServiceRequest, directory *os.File, arguments []string, beforeWrite func()) (response linuxStandardServiceResponse, failure error) {
+	return linuxStandardServiceExchangeGeneration(ctx, channel, image, namespace, originalPeer, request, directory, arguments, beforeWrite, nil)
+}
+
+func linuxStandardServiceExchangeGeneration(ctx context.Context, channel *net.UnixConn, image, namespace os.FileInfo, originalPeer **linuxStandardServicePeer, request linuxStandardServiceRequest, directory *os.File, arguments []string, beforeWrite func(), generation *linuxStandardServiceGeneration) (response linuxStandardServiceResponse, failure error) {
 	finish, err := linuxStandardServiceDeadline(ctx, channel)
 	if err != nil {
 		return response, err
@@ -203,6 +220,13 @@ func linuxStandardServiceExchange(ctx context.Context, channel *net.UnixConn, im
 	peer, err := captureLinuxStandardServicePeer(ctx, channel, image, arguments, namespace)
 	if err != nil {
 		return response, err
+	}
+	peer.generation = generation
+	if generation != nil {
+		if err := peer.Current(ctx); err != nil {
+			_ = peer.Close()
+			return response, err
+		}
 	}
 	if (*originalPeer) == nil {
 		(*originalPeer) = peer

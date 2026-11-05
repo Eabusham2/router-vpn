@@ -20,12 +20,14 @@ import (
 // This peer is obtained from an actual connected Unix socket. Neither a
 // request's process number nor persistent service metadata can construct it.
 type linuxStandardServicePeer struct {
-	pidfd     *os.File
-	pidfdInfo os.FileInfo
-	task      *linuxprocess.Witness
-	record    linuxprocess.Observation
-	command   *os.File
-	arguments []byte
+	image      os.FileInfo
+	generation *linuxStandardServiceGeneration
+	pidfd      *os.File
+	pidfdInfo  os.FileInfo
+	task       *linuxprocess.Witness
+	record     linuxprocess.Observation
+	command    *os.File
+	arguments  []byte
 }
 
 func linuxStandardPeerProcID(fd *os.File, peerPID int) (int, error) {
@@ -87,7 +89,7 @@ func captureLinuxStandardServicePeer(ctx context.Context, connection *net.UnixCo
 	if ctx == nil || connection == nil || image == nil || namespace == nil || len(arguments) == 0 {
 		return nil, errors.New("standard service has no captured peer constraints")
 	}
-	p := &linuxStandardServicePeer{}
+	p := &linuxStandardServicePeer{image: image}
 	defer func() {
 		if failure != nil {
 			_ = p.Close()
@@ -177,6 +179,11 @@ func captureLinuxStandardServicePeer(ctx context.Context, connection *net.UnixCo
 }
 
 func (p *linuxStandardServicePeer) Current(ctx context.Context) error {
+	if p != nil && p.generation != nil {
+		if err := p.generation.Current(ctx); err != nil {
+			return err
+		}
+	}
 	if p == nil || p.pidfd == nil || p.task == nil || p.command == nil || len(p.arguments) == 0 || ctx == nil {
 		return errors.New("standard service peer has no retained capability")
 	}
@@ -222,6 +229,10 @@ func (p *linuxStandardServicePeer) Close() error {
 		return nil
 	}
 	var result error
+	if p.generation != nil {
+		result = errors.Join(result, p.generation.Close())
+		p.generation = nil
+	}
 	if p.command != nil {
 		err := p.command.Close()
 		if err == nil || errors.Is(err, os.ErrClosed) {

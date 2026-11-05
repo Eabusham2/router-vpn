@@ -41,6 +41,17 @@ DNS/traffic counters, both original guards, durable settlement and joined
 teardown. All 33 runner checks pass and the privileged client binary compiles;
 the actual three scenarios remain mandatory native CI evidence.
 
+The installed Linux service now executes from a verified immutable code
+image. New discovery uses the selected generation; retained peers keep their
+original image, endpoint, process identity and generation lease for Current,
+Stop and cleanup even after activation changes. Python and Go share the exact
+bounded manifest encoding, including Unicode and HTML escapes. The merged
+source passes 74 focused race verdicts and all 10 mandatory-runner checks;
+installer and causal evidence is recorded below. Both global source and
+generation leases remain required. Active Always upgrade, which needs a live
+two-generation native handoff, is still unfinished; see
+[the generation boundary](LINUX-SERVICE-IMAGE-GENERATIONS.md).
+
 The MAX TLS reference now retains actual native TCP/UDP pairs for its variable
 packet and middle endpoints instead of assuming fixed ports are available.
 All 21 port-pair leaves and their parent pass under race while TCP51820 is held;

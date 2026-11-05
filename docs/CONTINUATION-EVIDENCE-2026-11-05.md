@@ -1428,6 +1428,42 @@ diagnostics. They do not prove kernel event ordering or fix the intermittent
 ARM64 failure. A recurrence must be read at the exact source revision to
 determine which event and phase failed before changing the retirement policy.
 
+## Immutable installed Linux service generations
+
+The installer creates content-addressed, root-owned code generations separately
+from canonical private profiles, credentials and native state. Canonical
+activation selects an exact generation executable and endpoint only for new
+discovery. The retained original peer holds its generation capability, source
+lease, executable identity and kernel peer pidfd; later activation cannot
+redirect Current, Stop or cleanup. Global source and owner locks remain required.
+The new native namespace case runs the actual generation service together with
+the canonical controller and upgrade helper, selected DNS and original join.
+
+Both generation manifest producers use canonical UTF-8 Go-compatible JSON,
+including HTML and U+2028/U+2029 escapes. Inventory/manifest/activation limits
+match before promotion. Unknown readiness preserves both exact generations and
+recovery material. Invalid activation cannot fall back to a different service.
+
+The final integration on `aacc5d6f` preserves all existing reverse-transfer,
+public MTU and Speed Lab restoration cases. All **74 focused client race
+verdicts pass (32.530s)**, with the actual namespace-tagged package compiled;
+all **10 runner checks pass (42.251s)**, including the 29 original FD11 verdicts
+and shared-clock/worker-join causal controls. The frozen foundation separately
+passed 34 local installer cases plus two final actual-Go-codec/bounds cases.
+Its five causal controls reject incompatible manifest encoding, mutable image
+selection, cleanup after unknown readiness, loss of generation SH exclusion,
+and redirecting retained cleanup to the latest activation.
+
+The immutable contribution manifest is
+`1eac496b15c7e4a9dc4bf20912541e18f9200791bf8549d95361ef8f9ed9bda9`;
+its evidence manifest is
+`4d843df4badb32d7a37703656887b5136cfa7867c487407c89985f07e70525d0`.
+Local named Unix listeners and native namespaces remain restricted; actual
+installed generation acceptance and the two existing foreign-UID installer
+cases remain mandatory CI evidence. This change does not claim an active Always
+upgrade: original-creator succession, in-place canonical code promotion,
+successor readiness and old process join remain the next source unit.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -1436,7 +1472,7 @@ determine which event and phase failed before changing the retirement policy.
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
-| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node and reverse Node-to-standard transfers retain both original creators, durable intent and bounded resolution. | Both directions require privileged installed/native acceptance. Other/generic boot-owner succession, active Always upgrades and same-boot service-crash continuation remain unfinished. |
+| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node and reverse Node-to-standard transfers retain both original creators, durable intent and bounded resolution. | Both directions require privileged installed/native acceptance. Immutable code generations and retained original-generation peers are integrated and locally tested. Other/generic boot-owner succession, the active Always two-generation handoff and same-boot service-crash continuation remain unfinished. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 

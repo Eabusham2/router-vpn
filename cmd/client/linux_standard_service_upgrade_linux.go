@@ -119,7 +119,17 @@ func linuxStandardServiceUpgradeUtility(arguments []string) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err = os.Lstat(linuxStandardServiceSocket); errors.Is(err, os.ErrNotExist) {
+	generation, err := captureLinuxStandardServiceGeneration(ctx, linuxOwnedControllerRoot)
+	if err != nil {
+		return true, err
+	}
+	serviceArguments := []string{filepath.Join(linuxOwnedControllerRoot, "router-vpn-client"), linuxStandardServiceArgument}
+	if generation != nil {
+		defer generation.Close()
+		image, serviceArguments = generation.imageInfo, []string{generation.imagePath, linuxStandardServiceArgument}
+	}
+	socket := generation.socket(linuxStandardServiceDirectory)
+	if _, err = os.Lstat(socket); errors.Is(err, os.ErrNotExist) {
 		// A clean idle predecessor may already have exited. Absence authorizes
 		// only this fresh source-installation check, never adoption or deletion
 		// of any persisted/native protection. The exclusive lifetime lock also
@@ -132,7 +142,7 @@ func linuxStandardServiceUpgradeUtility(arguments []string) (bool, error) {
 			return true, lockErr
 		}
 		defer owner.Close()
-		if _, err = os.Lstat(linuxStandardServiceSocket); !errors.Is(err, os.ErrNotExist) {
+		if _, err = os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
 			return true, errors.Join(err, errors.New("standard upgrade cannot replace an original listener"))
 		}
 		service := newLinuxStandardService(linuxOwnedControllerRoot, image, namespace)
@@ -140,8 +150,7 @@ func linuxStandardServiceUpgradeUtility(arguments []string) (bool, error) {
 	} else if err != nil {
 		return true, err
 	}
-	return true, linuxStandardServiceUpgrade(ctx, linuxStandardServiceSocket, image, namespace,
-		[]string{filepath.Join(linuxOwnedControllerRoot, "router-vpn-client"), linuxStandardServiceArgument})
+	return true, linuxStandardServiceUpgrade(ctx, socket, image, namespace, serviceArguments)
 }
 
 func linuxStandardServiceUpgrade(ctx context.Context, socket string, image, namespace os.FileInfo, serviceArguments []string) error {

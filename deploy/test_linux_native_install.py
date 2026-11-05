@@ -247,6 +247,138 @@ class InstallerTransactions(unittest.TestCase):
         config['auto_test_seconds'] = 9
         write(self.root / 'client.json', json.dumps(config), 0o600)
 
+    def test_service_generation_manifest_matches_actual_go_decoder(self):
+        name = 'café<&>' + chr(0x2028) + chr(0x2029) + '.txt'
+        write(self.source / 'client' / name, 'exact Unicode source bytes')
+        self.install()
+        image = self.installer.activated_service_image(self.root)
+        raw = (image.parent / self.installer.GENERATION_MANIFEST).read_bytes()
+        self.assertEqual((image.parent / 'client' / name).read_bytes(), b'exact Unicode source bytes')
+        go = shutil.which('go')
+        if not go:
+            raise RuntimeError('Go required for actual service generation decoder interoperability')
+        source = (REPOSITORY / 'cmd/client/linux_standard_service_generation_linux.go').read_text()
+        def declaration(marker):
+            body = source[source.index(marker):]
+            return body[:body.index('\n}') + 2]
+        declarations = '\n'.join(declaration(marker) for marker in (
+            'type linuxStandardGenerationEntry struct {',
+            'type linuxStandardGenerationManifestData struct {',
+            'func linuxStandardGenerationDecode('))
+        program = self.base / 'generation-codec.go'
+        program.write_text('package main\nimport("bytes";"encoding/json";"errors";"io";"os")\n' + declarations +
+            '\nfunc main(){raw,e:=io.ReadAll(os.Stdin);if e!=nil{panic(e)};var value linuxStandardGenerationManifestData;if e=linuxStandardGenerationDecode(raw,&value);e!=nil{panic(e)};body,e:=json.Marshal(value);if e!=nil{panic(e)};if _,e=os.Stdout.Write(body);e!=nil{panic(e)}}\n')
+        env = dict(os.environ, GOMAXPROCS='2')
+        decoded = subprocess.run([go, 'run', '-p=2', str(program)], input=raw,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 timeout=120, check=True, env=env)
+        self.assertEqual(decoded.stdout, raw, 'installer changed actual Go canonical bytes')
+
+    def test_service_generation_bounds_match_native_before_publication(self):
+        tree = self.base / 'oversized-source'
+        tree.mkdir(mode=0o700)
+        self.assertEqual(self.installer.GENERATION_MAX_FILES, 8192)
+        self.assertEqual(self.installer.GENERATION_MAX_MANIFEST, 2 << 20)
+        for number in range(8193):
+            write(tree / (str(number).zfill(5) + '-' + 'x' * 230), b'')
+        with self.assertRaisesRegex(ValueError, 'inventory exceeded'):
+            self.installer.generation_inventory(tree)
+        (tree / ('08192-' + 'x' * 230)).unlink()
+        records = self.installer.generation_inventory(tree)
+        self.assertEqual(len(records), 8192)
+        self.assertGreater(len(self.installer.generation_json({'schema': 1, 'files': records})), 2 << 20)
+        with self.assertRaisesRegex(ValueError, 'manifest exceeded'):
+            self.installer.generation_manifest(records)
+        self.assertFalse(self.root.exists(), 'oversized inventory published a service source')
+        self.install()
+        activation = self.root / self.installer.GENERATION_ACTIVATION
+        activation.write_bytes(b' ' * 4097)
+        with self.assertRaisesRegex(ValueError, 'metadata exceeded'):
+            self.installer.activated_service_image(self.root)
+
+    def test_service_generation_is_exact_code_only_and_reused_without_mutation(self):
+        self.install()
+        activation = self.root / self.installer.GENERATION_ACTIVATION
+        first = activation.read_bytes()
+        image = self.installer.activated_service_image(self.root)
+        generation = image.parent
+        before = snapshot(generation, metadata=True)
+        self.assertNotEqual(image.stat().st_ino, (self.root / 'router-vpn-client').stat().st_ino)
+        for private in ('routers.json', 'client.json', 'generated', 'run', 'state.json'):
+            self.assertFalse((generation / private).exists(), private)
+        manifest = (generation / self.installer.GENERATION_MANIFEST).read_bytes()
+        self.assertEqual(hashlib.sha256(manifest).hexdigest(), generation.name)
+        self.assertEqual(json.loads(manifest)['files'], self.installer.generation_inventory(generation))
+        self.new_integration(early_enabled=True)
+        self.install()
+        self.assertEqual(activation.read_bytes(), first)
+        self.assertEqual(snapshot(generation, metadata=True), before)
+
+    def test_service_generation_retains_original_lease_across_selection_change(self):
+        self.install()
+        old = self.installer.activated_service_image(self.root)
+        snapshot_before = snapshot(old.parent, metadata=True)
+        lock = old.parent.with_name(old.parent.name + '.lock')
+        held = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(held, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            source = package_fixture(self.base / 'next-package', version='generation-two')
+            self.new_integration(early_enabled=True)
+            self.install(source=source)
+            new = self.installer.activated_service_image(self.root)
+            self.assertNotEqual(old.parent, new.parent)
+            self.assertEqual(snapshot(old.parent, metadata=True), snapshot_before)
+            other = os.open(lock, os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(other)
+        finally:
+            os.close(held)
+
+    def test_service_generation_tampering_cannot_publish_source(self):
+        self.install()
+        image = self.installer.activated_service_image(self.root)
+        before = snapshot(self.root, metadata=True)
+        image.write_bytes(b'changed generation executable')
+        self.new_integration(early_enabled=True)
+        with self.assertRaisesRegex(ValueError, 'immutable service generation changed'):
+            self.install()
+        self.assertEqual(snapshot(self.root, metadata=True), before)
+        with self.assertRaisesRegex(ValueError, 'generation source changed'):
+            self.installer.activated_service_image(self.root)
+
+    def test_service_generation_lost_ready_retains_both_exact_generations(self):
+        self.install()
+        old = self.installer.activated_service_image(self.root)
+        before = snapshot(old.parent, metadata=True)
+        source = package_fixture(self.base / 'next-generation', version='next-generation')
+        self.new_integration(early_enabled=True, fail=('start', self.installer.EARLY_NAME))
+        with self.assertRaisesRegex(RuntimeError, 'activation did not complete'):
+            self.install(source=source)
+        self.assertTrue(old.is_file(), 'uncertain readiness discarded original immutable generation')
+        selected = json.loads((self.root / self.installer.GENERATION_ACTIVATION).read_bytes())['generation']
+        self.assertTrue((old.parent.parent / selected / 'router-vpn-client').is_file(), 'uncertain readiness discarded selected possible creator source')
+        new = self.installer.activated_service_image(self.root)
+        self.assertNotEqual(old.parent, new.parent)
+        self.assertEqual(snapshot(old.parent, metadata=True), before)
+        self.assertTrue(new.is_file())
+        unit = self.system / 'etc/systemd/system' / self.installer.EARLY_NAME
+        self.assertIn('ExecStart=' + str(new) + ' ' + self.installer.SERVICE_ARGUMENT, unit.read_text())
+        self.assertEqual(len(list(self.base.glob('.' + self.root.name + '.install-*'))), 1)
+
+    def test_service_generation_pre_activation_failure_restores_original_selection(self):
+        self.install()
+        before = (self.root / self.installer.GENERATION_ACTIVATION).read_bytes()
+        original = self.installer.activated_service_image(self.root)
+        source = package_fixture(self.base / 'failed-generation', version='failed-generation')
+        self.new_integration(early_enabled=True, fail=('enable', self.installer.EARLY_NAME))
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.install(source=source)
+        self.assertEqual((self.root / self.installer.GENERATION_ACTIVATION).read_bytes(), before)
+        self.assertEqual(self.installer.activated_service_image(self.root), original)
+
     def test_first_install_verifies_private_stage_before_promotion(self):
         source_before = snapshot(self.source, metadata=True)
         commands = []
@@ -833,7 +965,7 @@ class InstallerTransactions(unittest.TestCase):
         self.assertEqual(parser['Service']['Restart'], 'no')
         self.assertEqual(parser['Service']['TimeoutStartSec'], 'infinity')
         self.assertEqual(parser['Unit']['RefuseManualStop'], 'yes')
-        self.assertEqual(parser['Service']['ExecStart'], '/opt/router-vpn-client/router-vpn-client --linux-standard-owner-service')
+        self.assertEqual(parser['Service']['ExecStart'], str(self.installer.activated_service_image(self.root)) + ' --linux-standard-owner-service')
         for name in ('NetworkManager.service', 'systemd-networkd.service', 'networking.service', 'connman.service', 'wicked.service'):
             parser.read_string((self.system / 'etc/systemd/system' / (name + '.d/50-router-vpn-protection.conf')).read_text())
             self.assertEqual(parser['Unit'].get('Requires'), self.installer.EARLY_NAME, name)
@@ -914,6 +1046,15 @@ def real_package(package):
 def negative_controls():
     source = INSTALLER_PATH.read_text()
     mutations = [
+        ('use Python-only ASCII escaping for generation metadata',
+         "ensure_ascii=False", "ensure_ascii=True", 'test_service_generation_manifest_matches_actual_go_decoder'),
+        ('leave notify service on mutable canonical image',
+         "unit = EARLY_UNIT.replace('/opt/router-vpn-client/router-vpn-client ' + SERVICE_ARGUMENT, str(image) + ' ' + SERVICE_ARGUMENT)",
+         'unit = EARLY_UNIT', 'test_always_service_and_network_dependencies_are_installed_without_restart'),
+        ('discard generations after uncertain readiness',
+         "raise RuntimeError('New protection owner activation did not complete;",
+         "shutil.rmtree(root.with_name(root.name + '.service-generations')); raise RuntimeError('New protection owner activation did not complete;",
+         'test_service_generation_lost_ready_retains_both_exact_generations'),
         ('ignore the shared controller lock',
          'fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)', 'None',
          'test_fixed_adjacent_lock_blocks_controller_and_parallel_installer'),
@@ -921,7 +1062,7 @@ def negative_controls():
          'test_upgrade_preserves_private_state_with_fresh_root_owned_inodes'),
         ('skip bundled runtime verification', '            verifier(stage)', '            pass',
          'test_invalid_runtime_keeps_previous_application_and_system_files'),
-        ('discard previous private state', 'if child.name not in CODE_TREES | CODE_FILES:', 'if False:',
+        ('discard previous private state', 'if child.name not in CODE_TREES | CODE_FILES | {GENERATION_ACTIVATION}:', 'if False:',
          'test_upgrade_preserves_private_state_with_fresh_root_owned_inodes'),
         ('skip system-file rollback', '                    integration.rollback()', '                    pass',
          'test_system_failure_rolls_back_application_files_and_service_enablement'),

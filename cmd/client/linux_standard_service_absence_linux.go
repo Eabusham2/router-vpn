@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"router-vpn/internal/mobiletor"
 )
@@ -80,6 +81,15 @@ func observeLinuxStandardServiceAbsence(ctx context.Context, root, directory str
 	}
 	socket := filepath.Join(directory, "control.sock")
 	noSocket := func() error {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "g-") && strings.HasSuffix(entry.Name(), ".sock") {
+				return errors.New("service absence found a retained or foreign generation listener")
+			}
+		}
 		if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
 			return errors.Join(err, errors.New("service absence found an original or foreign listener"))
 		}

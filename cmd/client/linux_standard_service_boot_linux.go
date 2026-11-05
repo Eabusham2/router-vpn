@@ -315,11 +315,25 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 	if err = ownedDesktopInstall(linuxOwnedControllerRoot); err != nil {
 		return true, err
 	}
+	startup, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	generation, err := captureLinuxStandardServiceGeneration(startup, linuxOwnedControllerRoot)
+	if err != nil {
+		return true, err
+	}
+	if generation != nil {
+		defer generation.Close()
+	}
 	image, err := os.Stat("/proc/self/exe")
 	installed, installedErr := os.Lstat(filepath.Join(linuxOwnedControllerRoot, "router-vpn-client"))
-	if err != nil || installedErr != nil || !os.SameFile(image, installed) {
+	expectedImage := installed
+	if generation != nil {
+		expectedImage = generation.imageInfo
+	}
+	if err != nil || installedErr != nil || !os.SameFile(image, expectedImage) {
 		return true, errors.Join(err, installedErr, errors.New("standard service is not its original installed executable"))
 	}
+	socket := generation.socket(linuxStandardServiceDirectory)
 	if err = os.Mkdir(linuxStandardServiceDirectory, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 		return true, err
 	}
@@ -335,7 +349,7 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 		return true, err
 	}
 	defer owner.Close()
-	if _, err = os.Lstat(linuxStandardServiceSocket); err == nil {
+	if _, err = os.Lstat(socket); err == nil {
 		return true, errors.New("standard service listener already exists; original owner retirement has not been proved")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return true, err
@@ -357,18 +371,20 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 	if err != nil {
 		return true, err
 	}
-	service := newLinuxStandardService(linuxOwnedControllerRoot, image, namespace)
+	// Incoming controllers/helpers retain their canonical installed image.
+	// This service separately retains its immutable generation image and lease.
+	service := newLinuxStandardService(linuxOwnedControllerRoot, installed, namespace)
 	service.readiness = readiness
-	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: linuxStandardServiceSocket, Net: "unixpacket"})
+	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: socket, Net: "unixpacket"})
 	if err != nil {
 		return true, err
 	}
 	listener.SetUnlinkOnClose(false)
 	defer listener.Close()
-	if err = os.Chmod(linuxStandardServiceSocket, 0600); err != nil {
+	if err = os.Chmod(socket, 0600); err != nil {
 		return true, err
 	}
-	originalSocket, err := os.Lstat(linuxStandardServiceSocket)
+	originalSocket, err := os.Lstat(socket)
 	if err != nil {
 		return true, err
 	}
@@ -379,7 +395,6 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
-	startup, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	service.bootFailure = service.reassert(startup)
 	cancel()
 	notification, finishNotification := context.WithTimeout(context.Background(), 5*time.Second)
@@ -434,7 +449,7 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 					return true, closeErr
 				}
 			}
-			return true, errors.Join(err, linuxStandardServiceRemoveListener(linuxStandardServiceSocket, originalSocket))
+			return true, errors.Join(err, linuxStandardServiceRemoveListener(socket, originalSocket))
 		default:
 		}
 		// Unexpected listener failure never exits a process which may retain an
@@ -444,15 +459,15 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 		removed := false
 		for {
 			if !removed {
-				removed = linuxStandardServiceRemoveListener(linuxStandardServiceSocket, originalSocket) == nil
+				removed = linuxStandardServiceRemoveListener(socket, originalSocket) == nil
 			}
 			if removed {
-				listener, err = net.ListenUnix("unixpacket", &net.UnixAddr{Name: linuxStandardServiceSocket, Net: "unixpacket"})
+				listener, err = net.ListenUnix("unixpacket", &net.UnixAddr{Name: socket, Net: "unixpacket"})
 				if err == nil {
 					listener.SetUnlinkOnClose(false)
-					originalSocket, err = os.Lstat(linuxStandardServiceSocket)
+					originalSocket, err = os.Lstat(socket)
 					removed = false
-					chmodErr := os.Chmod(linuxStandardServiceSocket, 0600)
+					chmodErr := os.Chmod(socket, 0600)
 					err = errors.Join(err, chmodErr)
 					if err == nil {
 						break
