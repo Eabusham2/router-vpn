@@ -1464,6 +1464,31 @@ cases remain mandatory CI evidence. This change does not claim an active Always
 upgrade: original-creator succession, in-place canonical code promotion,
 successor readiness and old process join remain the next source unit.
 
+## Wintun reference replays the complete pinned preparation
+
+Windows physical-bootstrap jobs `127092339894` (AMD64) and `127092340244`
+(ARM64), run `41981265173` at `617c3dd6`, failed before the Wintun test with
+missing `protocol/tun/inbound.go`. The reference copied only original module
+files, while the current desktop-MTU preparer also consumes the native inbound
+projection produced by the retained-MTU prerequisite. These relevant sources
+remained unchanged through `c26bf5bc`.
+
+The reference now privately clones the exact pinned Git tree with replacement
+objects disabled. It checks original `go.mod`, `go.sum` and inbound bytes
+against that pin, runs retained-MTU preparation followed by desktop-MTU
+preparation in normal shipping order, and compares the complete resulting
+native TUN tree. It never repairs or borrows prepared bytes from the subject.
+
+All 14 runner tests pass in 1.031s, including actual Git-object reads, changed
+working-tree inputs, replacement objects, missing pin/inbound and preparation
+ordering. Actual ordinary preparation and comparison also passes for 206
+native TUN files, including both embedded Windows driver architectures, while
+the subject's module/inbound/native-tree bytes remain unchanged. That replay
+uses a POSIX subprocess-launch adapter for the Windows-only process-group
+helper; the commands, pin, preparers and source comparison remain actual.
+This verifies preparation, not Windows driver execution. The separate native
+integration ownership assertions in the same jobs retain their own investigation.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

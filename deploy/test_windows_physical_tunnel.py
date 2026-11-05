@@ -59,22 +59,23 @@ def compare_tun_source(expected, source):
     return actual
 
 
-def pinned_reference_modules(source, env):
-    """Read immutable pre-replacement module authority from the core pin.
+def pinned_reference_inputs(source, env):
+    """Read immutable preparation inputs from the original core pin.
 
     The prepared graph replaces sing-tun locally, so its final go mod tidy may
     remove the original module checksum. Replaying that graph in a fresh
-    directory cannot establish the upstream checksum. Read both original
-    module files from the exact Git object, without Git replacement objects;
-    never add a recovered checksum to the prepared subject.
+    directory cannot establish the upstream checksum. Read the original
+    module files and native TUN inbound from the exact Git object, without Git
+    replacement objects. The normal preparer patches the inbound as well as
+    the module; never recover any of these inputs into the prepared subject.
     """
     modules = {}
-    for name in ("go.mod", "go.sum"):
+    for name in ("go.mod", "go.sum", "protocol/tun/inbound.go"):
         status, output = IDENTITY.run(
             ["git", "--no-replace-objects", "-C", source, "show", BOOT.PREP.PIN + ":" + name],
             cwd=source, env=env, timeout=30)
         if status or not output:
-            raise ValueError("Pinned Wintun reference module read failed: " + name + "\n" + output[-4096:])
+            raise ValueError("Pinned Wintun reference input read failed: " + name + "\n" + output[-4096:])
         modules[name] = output.encode("utf-8")
     return modules
 
@@ -99,14 +100,32 @@ def verified_tun_source(source, compiler, env):
         if path.is_symlink() or not path.is_file():
             raise ValueError("Actual Wintun module identity is not a regular source file")
         records[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    modules = pinned_reference_modules(source, captured)
+    modules = pinned_reference_inputs(source, captured)
     with tempfile.TemporaryDirectory(prefix="routervpn-wintun-source-") as directory:
-        workspace = Path(directory)
+        workspace = Path(directory) / "core"
+        reference_env = dict(captured, GIT_NO_REPLACE_OBJECTS="1")
+        for command in (
+            ["git", "--no-replace-objects", "clone", "--local", "--no-hardlinks", "--no-checkout", source, workspace],
+            ["git", "--no-replace-objects", "-C", workspace, "-c", "core.autocrlf=false", "-c", "core.hooksPath=", "checkout", "--detach", BOOT.PREP.PIN],
+        ):
+            status, output = IDENTITY.run(command, cwd=source, env=reference_env, timeout=30)
+            if status:
+                raise ValueError("Pinned Wintun reference checkout failed:\n" + output[-4096:])
         for name, raw in modules.items():
-            (workspace / name).write_bytes(raw)
+            target = workspace / name
+            if target.is_symlink() or not target.is_file() or target.read_bytes() != raw:
+                raise ValueError("Pinned Wintun reference checkout changed original input: " + name)
             records["pinned/" + name] = hashlib.sha256(raw).hexdigest()
+        # Desktop TUN preparation consumes the complete retained-MTU inbound
+        # projection. Replay its real prerequisite on the private pinned core,
+        # exactly as prepare-desktop-external does; never borrow prepared bytes.
+        prerequisite = "import runpy,sys; from pathlib import Path; runpy.run_path(sys.argv[1])['prepare'](Path(sys.argv[2]), mobile=False)"
+        status, output = IDENTITY.run([sys.executable, "-c", prerequisite, BOOT.PREP.MTU.__file__, workspace],
+                                      cwd=source, env=reference_env, timeout=90)
+        if status:
+            raise ValueError("Pinned Wintun retained-MTU preparation failed:\n" + output[-8192:])
         status, output = IDENTITY.run([sys.executable, BOOT.PREP.DESKTOP_MTU.__file__, workspace],
-                                      cwd=source, env=captured, timeout=90)
+                                      cwd=source, env=reference_env, timeout=90)
         if status:
             raise ValueError("Checksum-pinned Wintun reference preparation failed:\n" + output[-8192:])
         actual = compare_tun_source(workspace / "routervpn-desktop-tun", source / "routervpn-desktop-tun")

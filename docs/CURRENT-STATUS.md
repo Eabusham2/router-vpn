@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`55d01978`, the integrated observation change in `a94cde9d`, and the installed
+`783c7888`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -98,6 +98,12 @@ installed-runner checks pass. Nine mandatory namespace cases extend the
 inventory from 420 to 429; those privileged cases have not executed locally.
 Other graph families, layered Linux paths, Server/Compare and device acceptance
 retain their own unfinished requirements.
+
+The Windows Wintun comparison now prepares its private reference from the full
+original pinned Git tree and runs both required MTU preparation stages. It
+rejects replacement objects and missing inputs without repairing the subject.
+All 14 runner tests and actual ordinary comparison of 206 native TUN files pass.
+The local launch adapter is POSIX; actual Windows driver execution remains CI work.
 
 The Windows SOCKS missing-grant control now observes original I/O and descriptor
 closure before proof completion, which correctly remains blocked by the retained

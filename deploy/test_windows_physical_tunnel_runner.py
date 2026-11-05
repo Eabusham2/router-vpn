@@ -96,7 +96,7 @@ class ActualWintunSourceBoundary(unittest.TestCase):
             GATE.mutants(source.replace("desktopWFPNumber(desktopWFPInterface, 4, luid)", "alteredProduction()"))
 
 
-class PinnedWintunModuleAuthority(unittest.TestCase):
+class PinnedWintunInputAuthority(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="windows-tunnel-module-pin-")
         self.addCleanup(self.temp.cleanup)
@@ -106,15 +106,18 @@ class PinnedWintunModuleAuthority(unittest.TestCase):
             "go.mod": b"module fixture\n\ngo 1.26.3\n\nrequire github.com/sagernet/sing-tun v0.9.3\n",
             "go.sum": b"github.com/sagernet/sing-tun v0.9.3 h1:fCXbGezGMUXi00X0MmG3iX5QR91sPApZwzfr0MAVHv4=\n",
         }
+        self.original["protocol/tun/inbound.go"] = b"package tun\n// original pinned inbound authority\n"
         for name, raw in self.original.items():
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             (self.root / name).write_bytes(raw)
-        self.git("add", "go.mod", "go.sum")
+        self.git("add", *self.original)
         self.git("commit", "-q", "-m", "Pinned reference modules")
         self.pin = self.git("rev-parse", "HEAD").strip()
         (self.root / "go.mod").write_bytes(self.original["go.mod"] +
                                             b"\nreplace github.com/sagernet/sing-tun => ./routervpn-desktop-tun\n")
         # Actual post-preparation tidy no longer needs the original checksum.
         (self.root / "go.sum").write_bytes(b"unrelated.example/dependency v1.0.0 h1:retained\n")
+        (self.root / "protocol/tun/inbound.go").write_bytes(b"package tun\n// changed prepared inbound\n")
         self.prepared = {name: (self.root / name).read_bytes() for name in self.original}
 
     def git(self, *args):
@@ -133,7 +136,7 @@ class PinnedWintunModuleAuthority(unittest.TestCase):
 
     def read(self, pin):
         with patch.object(GATE.BOOT.PREP, "PIN", pin), patch.object(GATE.IDENTITY, "run", self.actual_run):
-            return GATE.pinned_reference_modules(self.root, dict(os.environ))
+            return GATE.pinned_reference_inputs(self.root, dict(os.environ))
 
     def assert_subject_unchanged(self):
         self.assertEqual({name: (self.root / name).read_bytes() for name in self.original}, self.prepared)
@@ -143,19 +146,63 @@ class PinnedWintunModuleAuthority(unittest.TestCase):
         self.assert_subject_unchanged()
 
     def test_git_replacement_object_cannot_substitute_checksum_authority(self):
-        self.git("add", "go.mod", "go.sum")
+        self.git("add", *self.original)
         self.git("commit", "-q", "-m", "Prepared graph without original checksum")
         replacement = self.git("rev-parse", "HEAD").strip()
         self.git("replace", self.pin, replacement)
         self.assertNotEqual(self.git("show", self.pin + ":go.sum").encode(), self.original["go.sum"])
+        self.assertNotEqual(self.git("show", self.pin + ":protocol/tun/inbound.go").encode(), self.original["protocol/tun/inbound.go"])
         self.assertEqual(self.read(self.pin), self.original)
         self.assert_subject_unchanged()
 
     def test_missing_pin_fails_without_using_prepared_or_downloaded_checksums(self):
-        with self.assertRaisesRegex(ValueError, "Pinned Wintun reference module read failed"):
+        with self.assertRaisesRegex(ValueError, "Pinned Wintun reference input read failed"):
             self.read("0" * 40)
         self.assert_subject_unchanged()
 
+
+    def test_missing_original_inbound_cannot_fall_back_to_prepared_source(self):
+        self.git("rm", "--cached", "protocol/tun/inbound.go")
+        self.git("commit", "-q", "-m", "Missing original inbound")
+        missing = self.git("rev-parse", "HEAD").strip()
+        with self.assertRaisesRegex(ValueError, "input read failed: protocol/tun/inbound.go"):
+            self.read(missing)
+        self.assert_subject_unchanged()
+
+    def test_reference_preparer_receives_all_original_inputs_and_subject_is_unchanged(self):
+        import hashlib
+        subject = self.root / "routervpn-desktop-tun"
+        subject.mkdir()
+        (subject / "tun_windows.go").write_bytes(b"package tun\n// prepared fixture output\n")
+        calls = []
+
+        def run(command, *, cwd, env, timeout):
+            if str(command[0]) == "git":
+                return self.actual_run(command, cwd=cwd, env=env, timeout=timeout)
+            if "list" in command:
+                return 0, json.dumps({"Path": GATE.BOOT.PREP.DESKTOP_MTU.MODULE,
+                    "Dir": str(subject), "Replace": {"Path": "./routervpn-desktop-tun", "Dir": str(subject)}})
+            self.assertEqual(env["GIT_NO_REPLACE_OBJECTS"], "1")
+            if command[1] == "-c":
+                self.assertEqual(command[3], GATE.BOOT.PREP.MTU.__file__)
+                reference = Path(command[4])
+                calls.append({name: (reference / name).read_bytes() for name in self.original})
+                (reference / "protocol/tun/inbound.go").write_bytes(b"fixture retained-MTU output")
+                return 0, ""
+            self.assertEqual(command[1], GATE.BOOT.PREP.DESKTOP_MTU.__file__)
+            reference = Path(command[2])
+            self.assertEqual((reference / "protocol/tun/inbound.go").read_bytes(), b"fixture retained-MTU output")
+            generated = reference / "routervpn-desktop-tun"
+            generated.mkdir()
+            (generated / "tun_windows.go").write_bytes((subject / "tun_windows.go").read_bytes())
+            return 0, ""
+
+        with patch.object(GATE.BOOT.PREP, "PIN", self.pin), patch.object(GATE.IDENTITY, "run", run):
+            records = GATE.verified_tun_source(self.root, Path("/compiler/go"), dict(os.environ))
+        self.assertEqual(calls, [self.original])
+        for name, raw in self.original.items():
+            self.assertEqual(records["pinned/" + name], hashlib.sha256(raw).hexdigest())
+        self.assert_subject_unchanged()
 
 class FailedSessionOverlayBoundary(unittest.TestCase):
     def setUp(self):
