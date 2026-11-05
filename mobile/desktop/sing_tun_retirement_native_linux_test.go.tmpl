@@ -73,6 +73,12 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 						t.Fatal("native retirement child changed original parent namespace", namespace, e, other)
 					}
 				}
+				if name == "complete-original-retirement" {
+					if strings.Count(output, "original TUN address-generation: 0 -> 3") != 1 {
+						t.Fatal("actual first-up address-generation proof missing", output)
+					}
+					t.Log("original TUN address-generation: 0 -> 3")
+				}
 				// Keep nested verdicts private so the outer native inventory stays exact.
 				t.Log("original isolated native retirement child joined:", name)
 			})
@@ -131,6 +137,12 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 			Inet4Address: []netip.Prefix{netip.MustParsePrefix("172.29.93.1/30")}, Inet6Address: []netip.Prefix{netip.MustParsePrefix("fd29:93::1/126")},
 			AutoRoute: true, StrictRoute: true, IPRoute2TableIndex: 2022, IPRoute2RuleIndex: 9000,
 			Inet4RouteAddress: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, Inet6RouteAddress: []netip.Prefix{netip.MustParsePrefix("::/0")}}
+		if selected == "complete-original-retirement" {
+			value, err := os.ReadFile("/proc/sys/net/ipv6/conf/default/addr_gen_mode")
+			if err != nil || strings.TrimSpace(string(value)) != "0" {
+				t.Fatal("fresh namespace fixture requires inherited EUI64 default without changing it", string(value), err)
+			}
+		}
 		created, err := New(options)
 		native, ok := created.(*NativeTun)
 		if err != nil || !ok || native == nil {
@@ -153,6 +165,13 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 				t.Fatal("create fixture-owned conflicting rule", err)
 			}
 		}
+		var beforePolicy routerVPNLinuxAddressPolicy
+		if selected == "complete-original-retirement" {
+			beforePolicy, err = native.routervpnLinuxAddressMode(startup)
+			if err != nil || !beforePolicy.present || beforePolicy.mode != 0 || beforePolicy.up || beforePolicy.linkType != 0xfffe || beforePolicy.index != uint32(native.routervpnOwnedIndex) {
+				t.Fatal("fresh actual TUN lost its original EUI64/down policy", beforePolicy, err)
+			}
+		}
 		var startErr error
 		if selected != "partial-address-before-ready" {
 			startErr = native.Start()
@@ -163,6 +182,14 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 			}
 		} else if startErr != nil {
 			t.Fatal("actual native TUN startup", startErr)
+		}
+		if selected == "complete-original-retirement" {
+			afterPolicy, err := native.routervpnLinuxAddressMode(startup)
+			mode, policyErr := routervpnLinuxAddressModeAfterUp(beforePolicy, afterPolicy)
+			if err != nil || policyErr != nil || mode != 3 || !afterPolicy.up {
+				t.Fatal("actual original TUN first-up transition", beforePolicy, afterPolicy, err, policyErr)
+			}
+			t.Logf("original TUN address-generation: %d -> %d", beforePolicy.mode, afterPolicy.mode)
 		}
 		var ready DesktopNetworkReceipt
 		if startErr == nil && selected != "partial-address-before-ready" {

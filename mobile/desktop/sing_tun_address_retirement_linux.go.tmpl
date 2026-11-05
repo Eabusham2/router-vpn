@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net/netip"
 	"sort"
 	"syscall"
@@ -130,54 +131,110 @@ func (t *NativeTun) routervpnLinuxAddressSnapshot(ctx context.Context) ([]router
 	return result, ctx.Err()
 }
 
-func (t *NativeTun) routervpnLinuxAddressMode(ctx context.Context) (byte, error) {
+// Keep absence distinct from IN6_ADDR_GEN_MODE_NONE and retain the actual
+// link kind/administrative state from the same RTM_NEWLINK response.
+type routerVPNLinuxAddressPolicy struct {
+	mode        byte
+	present     bool
+	linkType    uint16
+	index       uint32
+	stableFlags uint32
+	token       string
+	up          bool
+}
+
+func routervpnLinuxAddressPolicy(body []byte) (routerVPNLinuxAddressPolicy, error) {
+	var policy routerVPNLinuxAddressPolicy
+	if len(body) < 16 {
+		return policy, errors.New("native generation policy link is truncated")
+	}
+	policy.linkType = binary.LittleEndian.Uint16(body[2:])
+	policy.index = binary.LittleEndian.Uint32(body[4:])
+	flags := binary.LittleEndian.Uint32(body[8:])
+	policy.up = flags&syscall.IFF_UP != 0
+	policy.stableFlags = flags &^ uint32(syscall.IFF_UP|syscall.IFF_RUNNING|0x10000|0x20000) // LOWER_UP/DORMANT are operational state.
+	attrs, err := routervpnLinuxAttributes(body[16:])
+	if err != nil {
+		return policy, err
+	}
+	for key, raw := range attrs {
+		if key&0x3fff != 26 {
+			continue
+		} // IFLA_AF_SPEC
+		families, err := routervpnLinuxAttributes(raw)
+		if err != nil {
+			return policy, err
+		}
+		for family, data := range families {
+			if family&0x3fff != syscall.AF_INET6 {
+				continue
+			}
+			ipv6, err := routervpnLinuxAttributes(data)
+			if err != nil {
+				return policy, err
+			}
+			for kind, value := range ipv6 {
+				if kind&0x3fff == 7 { // IFLA_INET6_TOKEN
+					if policy.token != "" || len(value) != 16 {
+						return policy, errors.New("native address generation token is invalid")
+					}
+					policy.token = string(value)
+				}
+				if kind&0x3fff != 8 {
+					continue
+				} // IFLA_INET6_ADDR_GEN_MODE
+				if policy.present || len(value) != 1 || value[0] > 3 {
+					return policy, errors.New("native address generation policy is invalid")
+				}
+				policy.mode, policy.present = value[0], true
+			}
+		}
+	}
+	return policy, nil
+}
+
+func (t *NativeTun) routervpnLinuxAddressMode(ctx context.Context) (routerVPNLinuxAddressPolicy, error) {
 	if model := t.routervpnRetirement.addressMode; model != nil {
 		return model(ctx)
 	}
 	rows, err := linuxDump(ctx, syscall.RTM_GETLINK, syscall.RTM_NEWLINK)
 	if err != nil {
-		return 0, err
+		return routerVPNLinuxAddressPolicy{}, err
 	}
 	for _, row := range rows {
 		if len(row.Data) < 16 {
-			return 0, errors.New("native generation policy link is truncated")
+			return routerVPNLinuxAddressPolicy{}, errors.New("native generation policy link is truncated")
 		}
 		if binary.LittleEndian.Uint32(row.Data[4:]) != uint32(t.routervpnOwnedIndex) {
 			continue
 		}
-		attrs, err := routervpnLinuxAttributes(row.Data[16:])
-		if err != nil {
-			return 0, err
-		}
-		for key, raw := range attrs {
-			if key&0x3fff != 26 {
-				continue
-			} // IFLA_AF_SPEC
-			families, err := routervpnLinuxAttributes(raw)
-			if err != nil {
-				return 0, err
-			}
-			for family, data := range families {
-				if family&0x3fff != syscall.AF_INET6 {
-					continue
-				}
-				ipv6, err := routervpnLinuxAttributes(data)
-				if err != nil {
-					return 0, err
-				}
-				for kind, value := range ipv6 {
-					if kind&0x3fff == 8 { // IFLA_INET6_ADDR_GEN_MODE
-						if len(value) != 1 || value[0] > 3 {
-							return 0, errors.New("native address generation policy is invalid")
-						}
-						return value[0], ctx.Err()
-					}
-				}
-			}
-		}
-		return 1, ctx.Err() // No IPv6 generation policy: no automatic address is admissible.
+		policy, err := routervpnLinuxAddressPolicy(row.Data)
+		return policy, errors.Join(err, ctx.Err())
 	}
-	return 0, errors.New("native address generation lost its original index")
+	return routerVPNLinuxAddressPolicy{}, errors.New("native address generation lost its original index")
+}
+
+func routervpnLinuxAddressModeAfterUp(before, after routerVPNLinuxAddressPolicy) (byte, error) {
+	if before.index == 0 || before.index != after.index || before.linkType != after.linkType || before.stableFlags != after.stableFlags || before.token != after.token || before.present != after.present {
+		return 0, errors.New("native address generation lost its original link policy")
+	}
+	if !after.up {
+		return 0, errors.New("successful native LinkSetUp did not leave its original link up")
+	}
+	if before.mode == after.mode {
+		if !after.present {
+			return 1, nil
+		} // No automatic address is admissible.
+		return after.mode, nil
+	}
+	// Linux addrconf_dev_config converts EUI64 to RANDOM for ARPHRD_NONE:
+	// this original TUN has no hardware EUI. Only that exact first-up transition
+	// qualifies; its new address must still match the random-mode kernel shape
+	// and the original successful-call notification history below.
+	if before.present && before.linkType == 0xfffe && !before.up && after.up && before.mode == 0 && after.mode == 3 {
+		return after.mode, nil
+	}
+	return 0, fmt.Errorf("native address generation policy changed across LinkSetUp: mode=%d->%d type=%d index=%d up=%t->%t", before.mode, after.mode, before.linkType, before.index, before.up, after.up)
 }
 
 func routervpnLinuxAutomaticAddress(row routerVPNLinuxAddressRecord, mode byte) bool {
@@ -289,9 +346,10 @@ func (t *NativeTun) routervpnLinuxAddressMutation(ctx context.Context, prefix st
 	if len(before) != len(s.addresses) || len(before) >= 32 && !linkUp {
 		return errors.New("native address mutation found foreign or unbounded addresses")
 	}
-	var mode byte
+	var policy routerVPNLinuxAddressPolicy
+	mode := byte(1)
 	if linkUp {
-		mode, err = t.routervpnLinuxAddressMode(ctx)
+		policy, err = t.routervpnLinuxAddressMode(ctx)
 		if err != nil {
 			return err
 		}
@@ -316,8 +374,9 @@ func (t *NativeTun) routervpnLinuxAddressMutation(ctx context.Context, prefix st
 		if err != nil {
 			return err
 		}
-		if current != mode {
-			return errors.New("native address generation policy changed across LinkSetUp")
+		mode, err = routervpnLinuxAddressModeAfterUp(policy, current)
+		if err != nil {
+			return err
 		}
 	}
 	added := 0

@@ -60,7 +60,7 @@ type routerVPNLinuxRetirement struct {
 	addressObserved                                            map[string]routerVPNLinuxAddressRecord
 	addressDeleted                                             map[string]bool
 	addressSnapshot                                            func(context.Context) ([]routerVPNLinuxAddressRecord, error)
-	addressMode                                                func(context.Context) (byte, error)
+	addressMode                                                func(context.Context) (routerVPNLinuxAddressPolicy, error)
 	// Explicit native-observer models are supplied only by focused tests.
 	original func(context.Context) error
 	snapshot func(context.Context, string) ([]DesktopNetworkObject, error)

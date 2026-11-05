@@ -53,18 +53,19 @@ func retirementAddress(t *testing.T, prefix string, auto bool, mutate func(map[u
 	return row
 }
 
-func retirementAddressFixture(t *testing.T) (*NativeTun, *retirementModel, *[]routerVPNLinuxAddressRecord) {
+func retirementAddressFixture(t *testing.T) (*NativeTun, *retirementModel, *[]routerVPNLinuxAddressRecord, *routerVPNLinuxAddressPolicy) {
 	t.Helper()
 	n, m, _ := retirementFixture(t)
 	ctx := retirementStop(t)
 	n.options.RouterVPNNetworkContext = ctx
 	rows := []routerVPNLinuxAddressRecord{}
 	n.routervpnRetirement.addressSnapshot = func(ctx context.Context) ([]routerVPNLinuxAddressRecord, error) { return slices.Clone(rows), ctx.Err() }
-	n.routervpnRetirement.addressMode = func(ctx context.Context) (byte, error) { return 2, ctx.Err() }
+	policy := &routerVPNLinuxAddressPolicy{mode: 2, present: true, linkType: 0xfffe, index: 8}
+	n.routervpnRetirement.addressMode = func(ctx context.Context) (routerVPNLinuxAddressPolicy, error) { return *policy, ctx.Err() }
 	if err := n.routervpnLinuxAddressBegin(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return n, m, &rows
+	return n, m, &rows, policy
 }
 func retirementAddressAdd(n *NativeTun, m *retirementModel, rows *[]routerVPNLinuxAddressRecord, row routerVPNLinuxAddressRecord) error {
 	return n.routervpnLinuxAddressMutation(n.options.RouterVPNNetworkContext, row.prefix, false, func() error {
@@ -76,9 +77,9 @@ func retirementAddressAdd(n *NativeTun, m *retirementModel, rows *[]routerVPNLin
 }
 
 func TestRouterVPNNativeLinuxPartialAddressRetirement(t *testing.T) {
-	for _, scenario := range []string{"partial-add-refusal", "cancel-after-add", "link-up-addrconf", "dad-completion"} {
+	for _, scenario := range []string{"partial-add-refusal", "cancel-after-add", "link-up-addrconf", "link-up-eui64-random", "dad-completion"} {
 		t.Run(scenario, func(t *testing.T) {
-			n, m, rows := retirementAddressFixture(t)
+			n, m, rows, policy := retirementAddressFixture(t)
 			first := retirementAddress(t, "192.0.2.7/24", false, nil)
 			if scenario == "cancel-after-add" {
 				work, cancel := context.WithCancel(n.options.RouterVPNNetworkContext)
@@ -104,11 +105,18 @@ func TestRouterVPNNativeLinuxPartialAddressRetirement(t *testing.T) {
 			} else {
 				second := retirementAddress(t, "fe80::1234/64", true, nil)
 				event := second
+				if scenario == "link-up-eui64-random" {
+					policy.mode = 0
+				}
 				if scenario == "dad-completion" {
 					event.flags |= syscall.IFA_F_TENTATIVE
 				}
 				err := n.routervpnLinuxAddressMutation(n.options.RouterVPNNetworkContext, "", true, func() error {
 					*rows = append(*rows, second)
+					policy.up = true
+					if scenario == "link-up-eui64-random" {
+						policy.mode = 3
+					}
 					m.events = append(m.events, routerVPNLinuxRoutingEvent{address: &event})
 					return nil
 				})
@@ -139,9 +147,9 @@ func TestRouterVPNNativeLinuxPartialAddressRetirement(t *testing.T) {
 }
 
 func TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects(t *testing.T) {
-	for _, scenario := range []string{"global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up"} {
+	for _, scenario := range []string{"global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up", "eui64-ethernet", "eui64-already-up", "eui64-still-down", "eui64-type-change", "eui64-missing-policy", "eui64-disappeared-policy", "eui64-wrong-address-flags", "eui64-stable-change", "eui64-index-change", "eui64-flags-change", "eui64-token-change", "unchanged-still-down"} {
 		t.Run(scenario, func(t *testing.T) {
-			n, m, rows := retirementAddressFixture(t)
+			n, m, rows, _ := retirementAddressFixture(t)
 			ctx := n.options.RouterVPNNetworkContext
 			var err error
 			if scenario == "pre-existing" {
@@ -179,12 +187,27 @@ func TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects(t *testing.T) 
 						delete(attrs, 11)
 					case "label":
 						attrs[syscall.IFA_LABEL] = []byte("foreign\x00")
+					case "eui64-wrong-address-flags":
+						attrs[8] = retirementU32(syscall.IFA_F_PERMANENT)
 					case "finite-lifetime":
 						binary.LittleEndian.PutUint32(attrs[syscall.IFA_CACHEINFO], 600)
 					}
 				})
-				mode := byte(2)
-				n.routervpnRetirement.addressMode = func(context.Context) (byte, error) { return mode, nil }
+				policy := routerVPNLinuxAddressPolicy{mode: 2, present: true, linkType: 0xfffe, index: 8}
+				eui64 := false
+				switch scenario {
+				case "eui64-ethernet", "eui64-already-up", "eui64-still-down", "eui64-type-change", "eui64-missing-policy", "eui64-disappeared-policy", "eui64-wrong-address-flags", "eui64-stable-change", "eui64-index-change", "eui64-flags-change", "eui64-token-change":
+					eui64, policy.mode = true, 0
+				}
+				switch scenario {
+				case "eui64-ethernet":
+					policy.linkType = 1
+				case "eui64-already-up":
+					policy.up = true
+				case "eui64-missing-policy":
+					policy.present = false
+				}
+				n.routervpnRetirement.addressMode = func(context.Context) (routerVPNLinuxAddressPolicy, error) { return policy, nil }
 				work, cancel := context.WithCancel(ctx)
 				defer cancel()
 				err = n.routervpnLinuxAddressMutation(work, "", true, func() error {
@@ -195,8 +218,25 @@ func TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects(t *testing.T) 
 					if scenario == "cancel-after-link-up" {
 						cancel()
 					}
-					if scenario == "changed-policy" {
-						mode = 3
+					if scenario == "changed-policy" || eui64 {
+						policy.mode = 3
+					}
+					policy.up = true
+					switch scenario {
+					case "eui64-still-down", "unchanged-still-down":
+						policy.up = false
+					case "eui64-type-change":
+						policy.linkType = 1
+					case "eui64-disappeared-policy":
+						policy.present = false
+					case "eui64-stable-change":
+						policy.mode = 2
+					case "eui64-index-change":
+						policy.index++
+					case "eui64-flags-change":
+						policy.stableFlags = syscall.IFF_NOARP
+					case "eui64-token-change":
+						policy.token = string(make([]byte, 16))
 					}
 					if scenario == "same-name-replacement" {
 						foreign, openErr := os.CreateTemp(t.TempDir(), "same-name-foreign-object")
@@ -216,6 +256,57 @@ func TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects(t *testing.T) 
 				if raw, err := n.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil || raw != "" {
 					t.Fatal("foreign address produced completed retirement evidence", raw, err)
 				}
+			}
+		})
+	}
+}
+
+// These are actual rtnetlink payloads, including nested-attribute flags. The
+// transition proof must never infer link kind or IPv6 policy from a name.
+func TestRouterVPNNativeLinuxAddressPolicyNetlink(t *testing.T) {
+	for _, scenario := range []string{"eui64-down", "random-up", "none", "absent", "duplicate", "invalid", "truncated", "token", "invalid-token"} {
+		t.Run(scenario, func(t *testing.T) {
+			body := make([]byte, 16)
+			binary.LittleEndian.PutUint16(body[2:], 0xfffe)
+			binary.LittleEndian.PutUint32(body[4:], 8)
+			binary.LittleEndian.PutUint32(body[8:], syscall.IFF_NOARP)
+			mode := byte(0)
+			if scenario == "random-up" {
+				mode = 3
+				binary.LittleEndian.PutUint32(body[8:], syscall.IFF_UP|syscall.IFF_NOARP|syscall.IFF_RUNNING|0x10000)
+			}
+			if scenario == "none" {
+				mode = 1
+			}
+			if scenario == "invalid" {
+				mode = 4
+			}
+			if scenario != "absent" {
+				ipv6 := retirementAttribute(8, []byte{mode})
+				if scenario == "token" {
+					ipv6 = append(ipv6, retirementAttribute(7, make([]byte, 16))...)
+				}
+				if scenario == "invalid-token" {
+					ipv6 = append(ipv6, retirementAttribute(7, make([]byte, 15))...)
+				}
+				if scenario == "duplicate" {
+					ipv6 = append(ipv6, retirementAttribute(8|0x8000, []byte{mode})...)
+				}
+				families := retirementAttribute(syscall.AF_INET6|0x8000, ipv6)
+				body = append(body, retirementAttribute(26|0x8000, families)...)
+			}
+			if scenario == "truncated" {
+				body = body[:15]
+			}
+			policy, err := routervpnLinuxAddressPolicy(body)
+			if scenario == "invalid" || scenario == "truncated" || scenario == "duplicate" || scenario == "invalid-token" {
+				if err == nil {
+					t.Fatal("malformed policy acquired native authority", policy)
+				}
+				return
+			}
+			if err != nil || policy.linkType != 0xfffe || policy.index != 8 || policy.stableFlags != syscall.IFF_NOARP || (len(policy.token) == 16) != (scenario == "token") || policy.up != (scenario == "random-up") || policy.present != (scenario != "absent") || policy.mode != mode {
+				t.Fatal("actual rtnetlink policy lost its link kind/state or presence", policy, err)
 			}
 		})
 	}
