@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"time"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/standardengine"
 )
@@ -100,13 +101,16 @@ func (n *linuxStandardRequestEpoch) namespaceCurrent() error {
 }
 
 func (n *linuxStandardRequestEpoch) sources(ctx context.Context) error {
-	if n == nil || n.owner == nil || ctx == nil || ctx.Err() != nil || !n.bound || n.closed || n.lifetime.Err() != nil || n.observer == nil {
+	if n == nil || n.owner == nil || ctx == nil || !n.bound || n.closed || n.lifetime == nil || n.lifetime.Err() != nil || n.observer == nil {
 		return errors.New("standard controller lost its original network epoch")
 	}
 	o := n.owner
 	if o.requestEpoch != n || o.namespace != n.namespace || o.dns != n.dns || o.launch != n.launch || o.sourceConfig != n.source || o.config != n.sealed ||
 		o.session != n.session || o.digest != n.digest || o.runtimeMode != n.mode || n.dns == nil || n.source == nil || n.sealed == nil || n.dns.source != n.source || n.dns.sealed != n.sealed {
 		return errors.New("standard controller epoch changed its original source capability")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := n.namespaceCurrent(); err != nil {
 		return err
@@ -127,32 +131,48 @@ func (n *linuxStandardRequestEpoch) sources(ctx context.Context) error {
 	if err != nil || standardengine.SHA256(sealed) != n.digest {
 		return errors.New("standard controller lost its original sealed configuration")
 	}
-	o.app.mu.Lock()
-	profile, found := o.app.profileByIDLocked(n.dns.profileID)
-	o.app.mu.Unlock()
+	application := o.app
+	if application == nil {
+		return errors.New("standard controller lost its captured application")
+	}
+	if err := desktopnetwork.LockContext(ctx, &application.mu); err != nil {
+		return err
+	}
+	if o.app != application {
+		application.mu.Unlock()
+		return errors.New("standard controller application owner changed during observation")
+	}
+	profile, found := application.profileByIDLocked(n.dns.profileID)
+	application.mu.Unlock()
 	digest, digestErr := linuxStandardProfileDigest(profile)
 	if !found || digestErr != nil || digest != n.profileDigest || asyncMeasurementProfileToken(profile) != n.dns.profileToken {
 		return errors.New("standard controller source policy changed after original capture")
 	}
-	return n.namespaceCurrent()
+	return errors.Join(n.namespaceCurrent(), ctx.Err())
 }
 
 func (n *linuxStandardRequestEpoch) current(ctx context.Context, ready bool) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if err := n.sources(ctx); err != nil {
+	if n != nil && n.failure != nil {
+		return n.failure
+	}
+	observationFailure := func(err error) error {
+		if n != nil && n.ready && common.ObservationContextExpired(ctx, err) {
+			return err
+		}
 		return n.fail(err)
 	}
-	if n.failure != nil {
-		return n.failure
+	if err := n.sources(ctx); err != nil {
+		return observationFailure(err)
 	}
 	if ready && !n.ready || n.begun && !n.ready {
 		return errors.New("standard controller has no completed original startup epoch")
 	}
-	if err := n.observer.CurrentContext(ctx); err != nil {
-		return n.fail(err)
-	}
-	return n.fail(n.sources(ctx))
+	observed := n.observer.CurrentContext(ctx)
+	// Always recheck retained capabilities even when the observer expired:
+	// mixed source loss must remain permanently latched on this same epoch.
+	return observationFailure(errors.Join(observed, n.sources(ctx)))
 }
 
 func (n *linuxStandardRequestEpoch) begin(ctx context.Context) error {
@@ -210,7 +230,7 @@ func (n *linuxStandardRequestEpoch) admit(ctx context.Context, startup *linuxSta
 	}
 	n.ready = true
 	n.startup = &linuxStandardServiceStartup{Capture: append([]byte(nil), startup.Capture...), Ready: append([]byte(nil), startup.Ready...)}
-	return n.current(ctx, true)
+	return n.fail(n.current(ctx, true))
 }
 
 // Join the original stream before asking the service to generate teardown

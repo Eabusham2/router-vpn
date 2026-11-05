@@ -10,8 +10,8 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`eed2c44a`, the integrated observation change in `a94cde9d`, and the installed
-Linux service operation-channel foundation in the commit containing this section.
+`f76382cf`, the integrated observation change in `a94cde9d`, and the installed
+Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
 
@@ -29,6 +29,12 @@ acknowledgement. Separate work/cancellation lock regions, bounded raw evidence
 pages and non-reusable original keys passed real inherited-child/process-lock
 tests. FD10 retirement remains unchanged. The transport is a foundation for
 active MTU operations; it does not yet run a candidate or expose Retest/Cancel.
+
+Already-proved service/controller network observers preserve their original
+identity after pure read expiry and retain genuine failures, including failures
+raced with cancellation. Startup bind/Begin/final admission remain fail-closed.
+The outer background watchers and service MTU coordinator retain separate
+integration obligations; the focused observer tests do not close those paths.
 
 This is not all-requirement completion. Installed Linux standard-service MTU
 Retest/Cancel remains unimplemented, and broader MTU operation admission still

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"runtime"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 )
 
@@ -95,7 +96,7 @@ func (s *linuxStandardService) proveDNSWithNetworkObservers(ctx context.Context,
 }
 
 func (s *linuxStandardService) networkCurrent(ctx context.Context, session *linuxStandardServiceSession, required bool) error {
-	if session == nil || s.session != session || session.owner == nil || ctx == nil || ctx.Err() != nil {
+	if session == nil || s.session != session || session.owner == nil || ctx == nil {
 		return errors.New("network observation lost its original service session")
 	}
 	n := session.network
@@ -103,33 +104,38 @@ func (s *linuxStandardService) networkCurrent(ctx context.Context, session *linu
 		if required {
 			return errors.New("standard service has no armed original network epoch")
 		}
-		return nil
-	}
-	if n.session != session || n.owner != session.owner || n.closed || n.lifetime == nil || n.lifetime.Err() != nil || n.observer == nil {
-		return errors.New("network epoch lost its retained owner or reader")
+		return ctx.Err()
 	}
 	if n.failure != nil {
 		return n.failure
 	}
+	fail := func(err error) error {
+		if err != nil && !common.ObservationContextExpired(ctx, err) {
+			n.failure = err
+		}
+		return err
+	}
+	if n.session != session || n.owner != session.owner || n.closed || n.lifetime == nil || n.lifetime.Err() != nil || n.observer == nil {
+		return fail(errors.New("network epoch lost its retained owner or reader"))
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := n.owner.namespaceCurrent(); err != nil {
-		n.failure = err
-		return err
+		return fail(err)
 	}
-	if err := n.observer.CurrentContext(ctx); err != nil {
-		n.failure = err
-		return err
+	observed := n.observer.CurrentContext(ctx)
+	// An expired observation does not erase independently witnessed replacement
+	// or namespace loss, including a replacement raced with that same read.
+	var after error
+	if s.session != session || session.network != n || session.owner != n.owner || n.closed || n.lifetime.Err() != nil || n.observer == nil {
+		after = errors.New("network readback changed its original session")
+	} else {
+		after = n.owner.namespaceCurrent()
 	}
-	if s.session != session || session.network != n || session.owner != n.owner || ctx.Err() != nil {
-		n.failure = errors.New("network readback changed its original session")
-		return n.failure
-	}
-	if err := n.owner.namespaceCurrent(); err != nil {
-		n.failure = err
-		return err
-	}
-	return nil
+	return fail(errors.Join(observed, after, ctx.Err()))
 }
 
 // Retire only this session's original observer before its engine creates

@@ -114,7 +114,8 @@ assertion was disabled and no unsuccessful setup is recorded as a pass.
 
 ## Installed Linux service: original operation channel foundation
 
-The commit containing this section adds FD11 to the actual service launch and
+Commit [`f76382cf`](https://github.com/Eabusham2/router-vpn/commit/f76382cf57fb9c12851b5962a108b49beaf31f51)
+adds FD11 to the actual service launch and
 fixed native child. The original sealed capture binds its device, inode, size
 and layout. Startup verifies the child's acknowledgement against the exact
 authenticated Ready receipt. Original FD10 retirement remains unchanged.
@@ -151,6 +152,31 @@ worker and receive acknowledgements from both original observers before another
 request can be admitted. The service observer and native tracker are the same
 object; the controller request observer is the second one. FD11 evidence cannot
 create either observer's authority.
+
+### Preserving already-proved service observers after an expired read
+
+The service network observer and controller request observer now distinguish a
+pure expired observation from confirmed source, namespace, reader or lifetime
+loss. A pure expired read leaves the same already-proved observer usable for a
+later call. A real failure joined with cancellation remains permanently latched.
+The controller's source read acquires the original application mutex within the
+same caller context; it cannot leave an unbounded waiter or accept a replacement
+application after the wait.
+
+Original startup admission is stricter: cancellation during bind, Begin or final
+admission still invalidates that startup. This change does not grant a new
+observer, bypass original connection intent or implement service MTU mutation.
+The focused actual privileged/race selection passed 28 test verdicts, including
+eight service observer cases, eight controller observer cases, three startup
+cancellation leaves and five existing proof-failure leaves. Original children,
+sealed sources, namespaces and authenticated channels are real; event delivery
+uses the existing explicit model. Reverting the two production files failed five
+intended observation cases. Removing only the final startup failure latch failed
+the final-admission case. The merged mandatory service runner passed four checks.
+
+These tests establish observer behavior. The outer service/controller background
+watchers still require their own expiry/retirement review; a passing inner
+observer test does not certify those callers.
 
 ## Remaining requirement/evidence ledger
 
