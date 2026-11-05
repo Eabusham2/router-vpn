@@ -790,6 +790,35 @@ drain-timeout observation for this later attempt; complete native job/log and
 current-commit release verification remain separate. Its earlier controller
 foundation failure predates the named-selector repair in `e90d6f9d`.
 
+## Tor fixtures retain contextual observation and accepted startup
+
+Seven test files now supply the current contextual network observer or capture
+and transmit the original native startup before starting their isolated child.
+The static shipping-callsite assertion checks the actual
+`prelaunch.startContext(operation, check)` call. Production code, rejection
+assertions, deadlines, physical-network checks and cleanup remain unchanged.
+The independent shared-launch audit repair in `b8087a6b` was preserved.
+
+An isolated exact `90afe8cb` snapshot plus only these seven files ran 40 selected
+parents under race: 30 passed and ten Speed Lab identity/MTU parents encountered
+this workspace's physical netlink `operation not permitted` restriction. One
+automatic measurement remained idle after that refusal. There were no skips.
+The original session's child has accepted startup; however, the two newly edited
+Speed Lab restore-child start blocks are not reached locally because initial
+physical observation fails first. Their actual execution remains mandatory in
+native CI. The unchanged full failed run (59.792s) is retained as evidence.
+
+A separate exact selection of the 30 executable parents passes under race in
+57.383s, with no failures or skips. It covers staged context, original startup
+and deadline rejection, predecessor/selected-DNS identities, actual isolated
+MTU child transitions and owned prelaunch cleanup. This bounded result does not
+turn the 40-parent attempt into a full pass or establish physical restoration.
+
+Native MTU integration at `efe29d9d` subsequently passed its Ubuntu job
+`127063860816` in run `41972542087`; its macOS job was still queued at this
+observation. This is a platform-specific result for that exact source, not a
+complete native matrix or release publication.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

@@ -151,12 +151,12 @@ func TestTorUsesOwnedDynamicAdapterInsteadOfFixedExitStore(t *testing.T) {
 	// These are the two shipping call sites. Both retain the prepared owner;
 	// neither can reintroduce the old command-only adapter around our tested
 	// cancellation/start-failure cleanup boundary.
-	for _, caller := range []struct{ file, function, prepare string }{
-		{"speed_lab_tor_path.go", "func (a *app) startPreparedSpeedLabTorPath", "prepared.prelaunch.start(current)"},
-		{"tor_bridge_routes.go", "func (a *app) torBridgeConnectSelectionOwned", "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)"},
+	for _, caller := range []struct{ file, function, prepare, start string }{
+		{"speed_lab_tor_path.go", "func (a *app) startPreparedSpeedLabTorPath", "prepared.prelaunch.start(current)", "prepared.prelaunch.start(current)"},
+		{"tor_bridge_routes.go", "func (a *app) torBridgeConnectSelectionOwned", "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)", "prelaunch.startContext(operation, check)"},
 	} {
 		source := sourceFunctionForTest(t, caller.file, caller.function)
-		if !strings.Contains(source, caller.prepare) || !strings.Contains(source, "prelaunch.start(") {
+		if !strings.Contains(source, caller.prepare) || !strings.Contains(source, caller.start) {
 			t.Fatal("shipping Tor caller dropped its prepared workspace owner", caller.file)
 		}
 	}

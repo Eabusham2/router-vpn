@@ -41,6 +41,9 @@ func desktopTorPreparedFixture(t *testing.T, bridges ...string) (*app, torBridge
 	}
 	prepared.Launch.tor.network = "captured-test-network"
 	prepared.Launch.tor.networkIdentity = func() string { return "captured-test-network" }
+	prepared.Launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) {
+		return prepared.Launch.tor.networkIdentity(), ctx.Err()
+	}
 	a := &app{cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "profiles.json")}, profiles: common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}}
 	t.Cleanup(func() {
 		if prepared.Launch.command != nil && prepared.Launch.command.Process != nil {

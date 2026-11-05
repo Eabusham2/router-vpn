@@ -219,6 +219,9 @@ func TestDesktopTorPredecessorStagingAndProofRetainBothIdentities(t *testing.T) 
 	launch.tor.adopted = nil
 	owner := desktopTorPreparedOwner(t, a, prepared)
 	launch.tor.network, launch.tor.networkIdentity = "entry-test-network", func() string { return "entry-test-network" }
+	launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) {
+		return launch.tor.networkIdentity(), ctx.Err()
+	}
 	calls := 0
 	err = owner.start(func() error {
 		calls++
@@ -257,6 +260,9 @@ func desktopTorRunningEntryFixture(t *testing.T, kind string, changes ...func(*c
 	}
 	launch := prepared.Launch
 	launch.tor.network, launch.tor.networkIdentity = "entry-test-network", func() string { return "entry-test-network" }
+	launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) {
+		return launch.tor.networkIdentity(), ctx.Err()
+	}
 	owner := desktopTorPreparedOwner(t, a, prepared)
 	expected, _ := json.Marshal(launch.tor.expected)
 	command := exec.Command(os.Args[0], "-test.run=^TestDesktopTorProcessFixture$")

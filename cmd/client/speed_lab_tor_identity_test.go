@@ -287,6 +287,15 @@ func TestSpeedLabTorCancelledTestRestoresFreshOwnedSession(t *testing.T) {
 		command.Env = append(os.Environ(), "ROUTERVPN_TOR_TEST_CHILD=proof", "ROUTERVPN_TOR_TEST_DIRECTORY="+restored.directory, "ROUTERVPN_TOR_TEST_EXPECTED="+base64.StdEncoding.EncodeToString(expected), "GORACE=atexit_sleep_ms=0")
 		command.Stdout, command.Stderr = io.Discard, io.Discard
 		restored.command = command
+		startup, startupErr := captureDesktopNativeStartup(a.connectionOperationContextOrBackground(), restored)
+		if startupErr != nil {
+			return startupErr
+		}
+		t.Cleanup(restored.startup.Load().stop)
+		command.Env, startupErr = desktopNativeStartupEnvironment(startup, restored, command.Env)
+		if startupErr != nil {
+			return startupErr
+		}
 		if err := command.Start(); err != nil {
 			return err
 		}

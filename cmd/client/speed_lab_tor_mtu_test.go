@@ -137,6 +137,15 @@ func (fixture *speedLabTorMTURestoreFixture) actions(t *testing.T, kind string) 
 		command.Env = append(os.Environ(), "ROUTERVPN_TOR_TEST_CHILD="+kind, "ROUTERVPN_TOR_TEST_DIRECTORY="+launch.directory, "ROUTERVPN_TOR_TEST_EXPECTED="+base64.StdEncoding.EncodeToString(expected), "GORACE=atexit_sleep_ms=0")
 		command.Stdout, command.Stderr = io.Discard, io.Discard
 		launch.command = command
+		startup, startupErr := captureDesktopNativeStartup(a.connectionOperationContextOrBackground(), launch)
+		if startupErr != nil {
+			return startupErr
+		}
+		t.Cleanup(launch.startup.Load().stop)
+		command.Env, startupErr = desktopNativeStartupEnvironment(startup, launch, command.Env)
+		if startupErr != nil {
+			return startupErr
+		}
 		if err := command.Start(); err != nil {
 			return err
 		}

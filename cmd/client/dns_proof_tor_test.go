@@ -48,6 +48,9 @@ func torDNSProofFixture(t *testing.T, entry, home bool, protocol string) (*app, 
 	}
 	launch := prepared.Launch
 	launch.tor.network, launch.tor.networkIdentity = "dns-captured-network", func() string { return "dns-captured-network" }
+	launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) {
+		return launch.tor.networkIdentity(), ctx.Err()
+	}
 	owner := desktopTorPreparedOwner(t, a, prepared)
 	expected, _ := json.Marshal(launch.tor.expected)
 	command := exec.Command(os.Args[0], "-test.run=^TestDesktopTorProcessFixture$")
