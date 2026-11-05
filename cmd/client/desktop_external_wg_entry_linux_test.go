@@ -11,11 +11,19 @@ import (
 )
 
 func TestDesktopLinuxWireGuardEntryRetainsBothSavedSources(t *testing.T) {
+	desktopLinuxPacketEntryRetainsBothSavedSources(t, "shadowsocks")
+}
+func TestDesktopLinuxWireGuardCONNECTRetainsBothSavedSources(t *testing.T) {
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		t.Run(protocol, func(t *testing.T) { desktopLinuxPacketEntryRetainsBothSavedSources(t, protocol) })
+	}
+}
+func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		t.Run(kill, func(t *testing.T) {
-			profile, entry, launch := desktopExternalPacketEntryFixture(t, kill, "wireguard")
+			profile, entry, launch := desktopExternalPacketEntryExitFixture(t, kill, "wireguard", protocol)
 			if !desktopLinuxExternalEligible(launch) {
-				t.Fatal("original WG/SS pair was not admitted")
+				t.Fatal("original captured WG/final pair was not admitted")
 			}
 			if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil || launch.external.physical == nil {
 				t.Fatal(err)
@@ -27,10 +35,17 @@ func TestDesktopLinuxWireGuardEntryRetainsBothSavedSources(t *testing.T) {
 				t.Fatal(err)
 			}
 			capture, err := launch.external.physical.Capture()
-			if err != nil || capture.EntryID != entry.ID || capture.Protocol != "shadowsocks" || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag {
+			if err != nil || capture.EntryID != entry.ID || capture.Protocol != protocol || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag {
 				t.Fatal("entry acquired final DNS or physical permission", err, capture)
 			}
-			for _, fault := range []string{"entry-key", "entry-peer", "entry-psk", "entry-address", "entry-public", "entry-option", "exit-key", "exit-public", "dns", "mtu", "entry-missing", "final-missing"} {
+			faults := []string{"entry-key", "entry-peer", "entry-psk", "entry-address", "entry-public", "entry-option", "exit-key", "exit-public", "dns", "mtu", "entry-missing", "final-missing"}
+			if protocol == "http-connect" || protocol == "https-connect" {
+				faults = append(faults, "exit-username", "exit-address")
+				if protocol == "https-connect" {
+					faults = append(faults, "exit-sni")
+				}
+			}
+			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
 					p, e := cloneRouterProfile(profile), cloneRouterProfile(entry)
 					switch fault {
@@ -47,7 +62,17 @@ func TestDesktopLinuxWireGuardEntryRetainsBothSavedSources(t *testing.T) {
 					case "entry-option":
 						e.DAITAEnabled = !e.DAITAEnabled
 					case "exit-key":
-						p.External.Shadowsocks.Password = testWGKey('r')
+						mutateDesktopExternalEntryExit(t, &p, "password")
+					case "exit-username":
+						mutateDesktopExternalEntryExit(t, &p, "username")
+					case "exit-sni":
+						mutateDesktopExternalEntryExit(t, &p, "tls")
+					case "exit-address":
+						proxy := p.External.HTTPConnect
+						if protocol == "https-connect" {
+							proxy = p.External.HTTPSConnect
+						}
+						proxy.Host = "198.51.100.121"
 					case "exit-public":
 						p.External.ExpectedPublicIP = "198.51.100.22"
 					case "dns":
@@ -167,5 +192,32 @@ func TestDesktopLinuxWireGuardEntryFinalProfileObservation(t *testing.T) {
 	f.a.profiles.Profiles[0].DNSPort++
 	if preflight.currentAppLocked() == nil {
 		t.Fatal("changed final policy acquired captured preflight")
+	}
+}
+
+func TestDesktopLinuxWireGuardCONNECTRejectsSelectedUDPWithoutFallback(t *testing.T) {
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		t.Run(protocol, func(t *testing.T) {
+			profile, entry, original := desktopExternalPacketEntryExitFixture(t, "always", "wireguard", protocol)
+			if err := prepareDesktopExternalPhysicalCaptured(original, "linux"); err != nil {
+				t.Fatal(err)
+			}
+			capture, err := original.external.physical.Capture()
+			if err != nil || capture.SelectedDNS.Type != "tcp" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag {
+				t.Fatal("CONNECT lost selected final-routed TCP DNS", err)
+			}
+			profile.DNSProtocol = "udp"
+			exit, err := standardExitFromExternalProfile(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
+			if err == nil || changed != nil {
+				t.Fatal("CONNECT silently changed selected UDP DNS or borrowed entry DNS")
+			}
+			if profile.DNSProtocol != "udp" || original.external.physical.Validate() != nil {
+				t.Fatal("refusal modified saved DNS or original native graph")
+			}
+		})
 	}
 }

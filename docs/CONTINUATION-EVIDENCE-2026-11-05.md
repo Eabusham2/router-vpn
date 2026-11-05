@@ -734,6 +734,36 @@ GUI closure rejection. These are host-independent harness checks; the actual
 Windows compiled mutants, native GUI execution and separate observed drain
 utility startup timeouts still require current native CI evidence.
 
+## Linux retained WG entry to HTTP and HTTPS CONNECT finals
+
+The shipping host and shared compiler now admit these Local, Start Layers Off,
+On-connect/Always graphs through the existing owned Node lifecycle. Both imports
+and revisions remain independent; physical authority belongs only to the entry.
+The final proxy owns its username/password, HTTPS CA/server name, selected TCP
+DNS, connection identity, MTU, Stop and complete temporary-test restoration.
+The peer fixture places the final endpoint at a distinct virtual address behind
+WireGuard while its real listener stays loopback-only. A physical route shortcut
+cannot satisfy the installed acceptance. Selected UDP DNS is rejected explicitly
+without changing the saved policy.
+
+An isolated committed `38fd5669` source plus the six graph Go files passes focused
+client and shared-policy race suites (51.032s/3.428s). The prepared native physical
+startup suite passes all three WG-entry SS/HTTP/HTTPS cases (1.316s). Real TLS
+handshakes prove captured success, wrong hostname and wrong trust. An initial
+fixture classifier missed Go's permanent-error wrapper around genuine alerts;
+the corrected bounded unary-unwrapping classifier accepts the certificate alert only
+when its inner alert is a leaf. Its final race suite passes (1.226s), including
+direct, singly/doubly wrapped timeout, cancel, EOF and outer/inner joined-error
+negative cases. These checks use the supported `with_purego` local build option.
+
+All 28 installed runner checks pass. The mandatory inventory is now 417 cases:
+399 retained cases plus 18 new CONNECT cases, covering independent entry and
+proxy identities, selected DNS, public controls, cancellation and full lifecycle.
+Wrong HTTPS SNI/trust requires an actual certificate refusal witness; a failed
+connection alone is insufficient. The new privileged namespace cases were not
+executed locally. Their exact-SHA CI, other graph families, Server/Compare,
+Start Layers and physical-device acceptance remain separate requirements.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

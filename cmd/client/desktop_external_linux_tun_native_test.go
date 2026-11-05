@@ -270,6 +270,9 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" || len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0].Host != "11.77.0.2" || capture.PhysicalRoots[0].Destinations[0].Network != "udp" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag || proof.EntryID != "installed-linux-entry" {
 			return host, proof, errors.Join(err, errors.New("composed host gave final DNS or exit a physical root"))
 		}
+		if (physical.Protocol == "http-connect" || physical.Protocol == "https-connect") && (capture.SelectedDNS.Type != "tcp" || capture.SelectedDNS.Host != "203.0.113.53" || capture.SelectedDNS.Port != 5353) {
+			return host, proof, errors.New("composed CONNECT substituted its selected final-routed TCP resolver")
+		}
 	}
 	if physical.Protocol == "socks5" {
 		capture, err := host.external.Capture()
@@ -409,6 +412,10 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 		foreign.Profile.External.Hysteria2.Password += "-different-observed-source"
 	} else if foreign.Profile.External.SOCKS5 != nil {
 		foreign.Profile.External.SOCKS5.Password += "-different-observed-source"
+	} else if foreign.Profile.External.HTTPConnect != nil {
+		foreign.Profile.External.HTTPConnect.Password += "-different-observed-source"
+	} else if foreign.Profile.External.HTTPSConnect != nil {
+		foreign.Profile.External.HTTPSConnect.TLSServerName += ".different"
 	} else {
 		foreign.Profile.External.Shadowsocks.Password += "-different-observed-source"
 	}

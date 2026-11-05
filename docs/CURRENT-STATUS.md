@@ -128,6 +128,26 @@ Start Layers remain separate requirements. The native service MTU grant and
 retirement correction below is locally verified. Replacement startup now also
 retains the original operation context; native acceptance remains separate.
 
+## Linux WireGuard entry to HTTP(S) CONNECT final
+
+The retained Linux host also admits independently imported HTTP and HTTPS CONNECT
+finals behind its captured WireGuard entry, for Local execution, Start Layers Off
+and On-connect/Always protection. Only the entry owns physical egress. The final
+proxy keeps its separate username/password, HTTPS trust and server name, selected
+TCP DNS, profile identity and complete temporary-test restoration. Selected UDP
+DNS remains an explicit unsupported transport for this CONNECT composition; it
+is never silently rewritten.
+
+Focused client/shared-policy races pass (51.032s/3.428s), as do actual prepared
+physical-startup checks for WG to SS/HTTP/HTTPS (1.316s) and real TLS captured,
+hostname and trust handshakes (1.226s). The latter rejects timeout, cancellation,
+EOF and joined errors as certificate evidence. All 28 runner tests pass. The
+installed acceptance inventory preserves its existing 399 cases and adds 18
+CONNECT cases, including independent entry keys, proxy credentials, TLS identity,
+DNS failure, cancellation, public controls and joined restoration. Those new
+namespace cases require privileged CI; local checks do not establish their
+network acceptance, package publication or full graph/platform completion.
+
 ## Original native service MTU authority
 
 The fixed service child now grants MTU replacement authority to its exact

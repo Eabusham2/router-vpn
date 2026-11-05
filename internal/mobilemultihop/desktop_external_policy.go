@@ -58,7 +58,7 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
 // Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer), SOCKS5, WireGuard or AmneziaWG graph.
-// Linux admits the bounded Local WireGuard entry -> SS2022 final without layers.
+// Linux admits bounded Local WireGuard entry -> SS2022 or HTTP(S) CONNECT finals without layers.
 // Darwin also admits an ordinary Local SS2022 entry -> SS2022 or HTTP(S) CONNECT final without layers.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
@@ -77,7 +77,8 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		// Other entry/final/layer compositions retain their separate host gates.
 		if targetOS == "linux" {
 			final, _ := original.capture.Profile["external"].(map[string]any)
-			if entryKind != "wireguard" || capture.Protocol != "shadowsocks" || capture.StartLayer != "" || !desktopExternalSS2022Import(final) {
+			supportedFinal := capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect"
+			if entryKind != "wireguard" || capture.StartLayer != "" || !supportedFinal {
 				entryKind = ""
 			}
 		}

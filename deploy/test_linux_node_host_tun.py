@@ -103,6 +103,7 @@ EXTERNAL_CASES = ('external-ss-on-connect', 'external-http-on-connect', 'externa
                   'external-ss-always', 'external-http-always', 'external-https-always',
                   'external-ss-cancelled', 'external-ss-replacement', 'external-ss-source', 'external-ss-dns-failure', 'external-ss-public')
 EXTERNAL_WG_ENTRY_CASES = ('external-wgss-on-connect', 'external-wgss-always', 'external-wgss-public', 'external-wgss-cancelled', 'external-wgss-wrong-entry-public', 'external-wgss-dns-failure')
+EXTERNAL_WG_CONNECT_CASES = tuple('external-wg' + protocol + '-' + action for protocol in ('http','https') for action in ('on-connect','always','public','cancelled','wrong-entry-public','wrong-proxy-password','wrong-proxy-username','dns-failure')) + ('external-wghttps-wrong-proxy-sni','external-wghttps-wrong-proxy-trust')
 EXTERNAL_PROXY_CASES = EXTERNAL_CASES
 EXTERNAL_HYSTERIA2_CASES = ('external-hy2-on-connect', 'external-hy2-always', 'external-hy2-public', 'external-hy2-cancelled',
                            'external-hy2-wrong-key', 'external-hy2-wrong-trust', 'external-hy2-dns-failure')
@@ -119,7 +120,7 @@ EXTERNAL_SOCKS_CASES = tuple('external-socks-' + action for action in
                               'relay-domain', 'control-eof', 'dns-failure', 'replacement', 'source'))
 EXTERNAL_HYSTERIA2_LAYER_CASES = tuple('external-' + mode + '-' + action for mode in ('hy2aes', 'hy2xor')
     for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-trust', 'dns-failure', 'wrong-layer-key', 'source', 'replacement')) + ('external-hy2xor-wrong-whitening',)
-EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES + EXTERNAL_HYSTERIA2_LAYER_CASES + EXTERNAL_WG_ENTRY_CASES
+EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES + EXTERNAL_HYSTERIA2_LAYER_CASES + EXTERNAL_WG_ENTRY_CASES + EXTERNAL_WG_CONNECT_CASES
 CASES += EXTERNAL_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
@@ -213,6 +214,19 @@ def check_layer_peer_verdict(output, authority=False):
             raise ValueError('Installed layer reference omitted or duplicated its actual encrypted case: ' + case)
 
 
+CONNECT_TLS_CASES = tuple('TestRouterVPNDesktopExternalCONNECTCertificateRefusal/' + case
+                          for case in ('captured', 'sni', 'trust'))
+
+
+def check_connect_tls_verdict(output):
+    if any(value in output for value in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:', 'fatal error:', '[build failed]')):
+        raise ValueError('Installed CONNECT reference did not complete its actual TLS certificate checks')
+    required = (('', 'TestRouterVPNDesktopExternalCONNECTCertificateRefusal'), *(('    ', case) for case in CONNECT_TLS_CASES))
+    for indent, case in required:
+        if len(re.findall(r'^' + indent + '--- PASS: ' + re.escape(case) + r' \([^\r\n]*\)$', output, re.MULTILINE)) != 1:
+            raise ValueError('Installed CONNECT reference omitted or duplicated its actual TLS case: ' + case)
+
+
 def check_verdict(output, case=None):
     cases = CASES if case is None else (case,)
     if any(value not in CASES for value in cases) or '--- FAIL:' in output or '--- SKIP:' in output:
@@ -266,6 +280,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its exact UDP AWG2 peer, complete native parameters and owned lifecycle: ' + value)
         if value in SIP003_CASES and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted independent SIP003 TCP/HY2 UDP identity, selected DNS or retained lifecycle: ' + value)
+        if value in EXTERNAL_WG_CONNECT_CASES and 'verified installed host independent WireGuard entry and CONNECT final: ' + value + '\n' not in receipts:
+            raise ValueError('Installed Linux CONNECT graph lacks its separate entry/final TLS/authentication and joined lifecycle')
         if value in EXTERNAL_WG_ENTRY_CASES and 'verified installed host independent WireGuard entry and SS final: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux WG entry lacks its independent entry/final native proof and joined lifecycle')
         if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in receipts:
@@ -401,6 +417,13 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Installed layer encrypted reference failed:\n' + layer_output[-16384:])
         check_layer_peer_verdict(layer_output)
         print(layer_output, end='' if layer_output.endswith('\n') else '\n')
+        status, connect_tls_output = NODE.run([str(peer), '-test.v', '-test.timeout=30s',
+                                              '-test.run=^TestRouterVPNDesktopExternalCONNECTCertificateRefusal$'],
+                                             cwd=source, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed CONNECT TLS reference failed:\n' + connect_tls_output[-16384:])
+        check_connect_tls_verdict(connect_tls_output)
+        print(connect_tls_output, end='' if connect_tls_output.endswith('\n') else '\n')
         logs = []
         for case in CASES:
             command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary), '--peer-binary', str(peer),
@@ -428,6 +451,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
                                 (('installed-controller-test', binary), ('independent-wg-awg2-ss2022-and-hysteria2-peers', peer), ('shipping-whitening-relay', whitening))},
                   'layer_authority_cases': list(LAYER_AUTHORITY_CASES), 'layer_authority_output_sha256': hashlib.sha256(authority_output.encode()).hexdigest(),
+                  'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)

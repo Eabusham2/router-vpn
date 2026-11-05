@@ -1798,6 +1798,7 @@ var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerSer
 var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string, string, uint16) desktopExternalInstalledPacketEntryPeer
 
 type desktopExternalInstalledPeerRequest struct {
+	HTTPSFault           string                                `json:"https_fault,omitempty"`
 	ShadowsocksEntry     *desktopExternalInstalledSSRequest    `json:"shadowsocks_entry,omitempty"`
 	ShadowsocksMethod    string                                `json:"shadowsocks_method,omitempty"`
 	AmneziaEntry         *desktopExternalInstalledAWGRequest   `json:"amnezia_entry,omitempty"`
@@ -1833,6 +1834,7 @@ var desktopExternalInstalledOpenVPNEntry func(*testing.T, *desktopNodeLayerServe
 var desktopExternalInstalledOpenVPN func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
 
 type desktopExternalInstalledPeerReply struct {
+	TLSCertificateRefusals  uint32                                      `json:"tls_certificate_refusals,omitempty"`
 	ShadowsocksEntry        *desktopExternalInstalledSSReceipt          `json:"shadowsocks_entry,omitempty"`
 	PacketEntry             *desktopExternalInstalledPacketEntryReceipt `json:"packet_entry,omitempty"`
 	OpenVPNUsername         string                                      `json:"openvpn_username,omitempty"`
@@ -2101,6 +2103,91 @@ func desktopExternalInstalledPeerCertificate(t *testing.T, latency bool) (tls.Ce
 		t.Fatal(err)
 	}
 	return tls.Certificate{Certificate: [][]byte{leafDER, rootDER}, PrivateKey: leafKey}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
+}
+
+// Only a remote certificate alert proves the client rejected this proxy's TLS
+// identity. Timeout, cancellation and cleanup EOF cannot satisfy that evidence.
+func desktopExternalCONNECTCertificateRefused(err error) bool {
+	// crypto/tls retains a permanentError wrapper around the remote net error.
+	// Follow unary wrappers only; a joined observation/transport failure cannot
+	// be relabelled as this exact peer's certificate alert.
+	for depth := 0; err != nil && depth < 8; depth++ {
+		if _, joined := err.(interface{ Unwrap() []error }); joined {
+			return false
+		}
+		if remote, ok := err.(*net.OpError); ok {
+			if remote.Op != "remote error" || remote.Err == nil {
+				return false
+			}
+			switch remote.Err.(type) {
+			case interface{ Unwrap() error }, interface{ Unwrap() []error }:
+				return false
+			}
+			switch remote.Err.Error() {
+			case "tls: bad certificate", "tls: unknown certificate authority", "tls: unknown certificate":
+				return true
+			}
+			return false
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
+}
+
+func TestRouterVPNDesktopExternalCONNECTCertificateRefusal(t *testing.T) {
+	certificate, ca := desktopExternalInstalledPeerCertificate(t, false)
+	foreignCertificate, _ := desktopExternalInstalledPeerCertificate(t, false)
+	for _, fault := range []string{"captured", "sni", "trust"} {
+		t.Run(fault, func(t *testing.T) {
+			root := x509.NewCertPool()
+			if !root.AppendCertsFromPEM([]byte(ca)) {
+				t.Fatal("lost captured root")
+			}
+			name := "captured-external.example"
+			proxyCertificate := certificate
+			if fault == "sni" {
+				name = "foreign-proxy.example"
+			}
+			if fault == "trust" {
+				proxyCertificate = foreignCertificate
+			}
+			serverSocket, clientSocket := net.Pipe()
+			defer serverSocket.Close()
+			defer clientSocket.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			_ = serverSocket.SetDeadline(deadline)
+			_ = clientSocket.SetDeadline(deadline)
+			server := tls.Server(serverSocket, &tls.Config{Certificates: []tls.Certificate{proxyCertificate}, MinVersion: tls.VersionTLS12})
+			client := tls.Client(clientSocket, &tls.Config{RootCAs: root, ServerName: name, MinVersion: tls.VersionTLS12})
+			joined := make(chan error, 1)
+			go func() { joined <- server.HandshakeContext(ctx) }()
+			clientError := client.HandshakeContext(ctx)
+			serverError := <-joined
+			if fault == "captured" {
+				if clientError != nil || serverError != nil {
+					t.Fatal(clientError, serverError)
+				}
+			} else {
+				var hostname x509.HostnameError
+				var authority x509.UnknownAuthorityError
+				if !desktopExternalCONNECTCertificateRefused(serverError) || fault == "sni" && !errors.As(clientError, &hostname) || fault == "trust" && !errors.As(clientError, &authority) {
+					t.Fatal("TLS refusal lacked original certificate evidence", clientError, serverError)
+				}
+			}
+		})
+	}
+	for _, err := range []error{nil, io.EOF, context.Canceled, context.DeadlineExceeded, &net.OpError{Op: "read", Err: context.DeadlineExceeded}, &net.OpError{Op: "remote error", Err: io.EOF},
+		&net.OpError{Op: "remote error", Err: errors.Join(errors.New("tls: bad certificate"))},
+		&net.OpError{Op: "remote error", Err: fmt.Errorf("%w", errors.Join(errors.New("tls: bad certificate")))},
+		errors.Join(context.DeadlineExceeded, &net.OpError{Op: "remote error", Err: errors.New("tls: bad certificate")})} {
+		for _, wrapped := range []error{err, fmt.Errorf("outer: %w", err), fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", err))} {
+			if desktopExternalCONNECTCertificateRefused(wrapped) {
+				t.Fatal("ordinary timeout or cleanup fabricated certificate refusal", wrapped)
+			}
+		}
+	}
 }
 
 // The external profile has the captured plain Hysteria2 TLS/password contract.
@@ -2389,9 +2476,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	// The Linux installed fixture admits only the same bounded WG -> SS pair
+	// The Linux installed fixture admits only the same bounded WG -> SS/CONNECT pairs
 	// as its shipping host; other entry graphs keep their platform gate.
-	linuxWGEntry := !latency && capturedAddress == "11.77.0.2" && request.Protocol == "shadowsocks" && request.WireGuardEntry != nil && request.AmneziaEntry == nil && request.Layer == nil
+	linuxWGEntry := !latency && capturedAddress == "11.77.0.2" && (request.Protocol == "shadowsocks" || request.Protocol == "http-connect" || request.Protocol == "https-connect") && request.WireGuardEntry != nil && request.AmneziaEntry == nil && request.Layer == nil
 	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" || request.Layer != nil && request.Protocol != "hysteria2" || !latency && !linuxWGEntry ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
@@ -2410,12 +2497,19 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			t.Fatal("packet final lost its separate original cryptographic owner")
 		}
 	}
+	if request.HTTPSFault != "" && (!linuxWGEntry || request.Protocol != "https-connect" || request.HTTPSFault != "untrusted-ca") {
+		t.Fatal("uncaptured CONNECT TLS failure")
+	}
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
+	proxyCertificate := cert
+	if request.HTTPSFault == "untrusted-ca" {
+		proxyCertificate, _ = desktopExternalInstalledPeerCertificate(t, false)
+	}
 	var benchmark *desktopExternalInstalledLatencyPeer
 	if latency {
 		benchmark = newDesktopExternalInstalledLatencyPeerWithMTU(t, cert, request.Protocol == "wireguard" || entryRequested && request.Protocol == "amneziawg")
 	}
-	var dnsQueries, publicAttempts, publicReplies, authFailures atomic.Uint32
+	var dnsQueries, publicAttempts, publicReplies, authFailures, tlsCertificateRefusals atomic.Uint32
 	var failDNS atomic.Bool
 	proofGate := make(chan struct{})
 	var release sync.Once
@@ -2598,8 +2692,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		} else {
 			serve = func(connection net.Conn) error {
 				if request.Protocol == "https-connect" {
-					secured := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+					secured := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{proxyCertificate}, MinVersion: tls.VersionTLS12})
 					if err := secured.HandshakeContext(ctx); err != nil {
+						if linuxWGEntry && desktopExternalCONNECTCertificateRefused(err) {
+							tlsCertificateRefusals.Add(1)
+						}
 						return err
 					}
 					connection = secured
@@ -2713,7 +2810,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	respond := func() {
 		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
 			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Packets: server.plainUDP.Load(),
-			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
+			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load(), TLSCertificateRefusals: tlsCertificateRefusals.Load()}
 		if entryPeer.stats != nil {
 			value := entryPeer.stats()
 			reply.PacketEntry = &value

@@ -162,9 +162,16 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 				}
 				for _, target := range []string{"linux", "windows"} {
 					p, e := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), target)
-					if target == "linux" && variant == "wireguard" && protocol == "shadowsocks" && layer == "" {
+					if target == "linux" && variant == "wireguard" && (protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect") && layer == "" {
 						if e != nil || p == nil || p.Validate() != nil {
-							t.Fatal("Linux lost its exact imported WG/SS pair", e)
+							t.Fatal("Linux lost its exact imported WG/final pair", e)
+						}
+						linux := externalTestRead(t, p.Config())
+						if p.Metadata().TargetOS != "linux" || p.OriginalPolicy() != original ||
+							!reflect.DeepEqual(externalTestFind(t, linux, "external-entry"), entry) ||
+							!reflect.DeepEqual(externalTestFind(t, linux, ExternalFinalTag), exit) ||
+							!reflect.DeepEqual(linux["dns"], derived["dns"]) {
+							t.Fatal("Linux changed captured entry keys, final credentials/TLS or selected DNS")
 						}
 					} else if e == nil || p != nil {
 						t.Fatal("another native host acquired unimplemented entry", target)
