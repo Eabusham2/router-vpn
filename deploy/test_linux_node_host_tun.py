@@ -99,6 +99,9 @@ LAYER_CASES += tuple(case for case in SIP003_CASES if not case.startswith('ss-v2
 WHITENING_CASES += tuple(case for case in SIP003_CASES if case.startswith('ss-v2ray-whitening-'))
 ACTIVE_CASES += tuple(case for case in SIP003_CASES if case.endswith('-active-network-change') or case in MTU_CASES or case in RESTORE_CASES or case in PUBLIC_CASES)
 ORIGINAL_CASES = CASES
+TRANSFER_CASES = ('service-transfer', 'service-transfer-lost-reply', 'service-transfer-longer-deadline')
+PUBLIC_CASES += TRANSFER_CASES
+ACTIVE_CASES += TRANSFER_CASES
 EXTERNAL_CASES = ('external-ss-on-connect', 'external-http-on-connect', 'external-https-on-connect',
                   'external-ss-always', 'external-http-always', 'external-https-always',
                   'external-ss-cancelled', 'external-ss-replacement', 'external-ss-source', 'external-ss-dns-failure', 'external-ss-public')
@@ -122,6 +125,7 @@ EXTERNAL_HYSTERIA2_LAYER_CASES = tuple('external-' + mode + '-' + action for mod
     for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-trust', 'dns-failure', 'wrong-layer-key', 'source', 'replacement')) + ('external-hy2xor-wrong-whitening',)
 EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES + EXTERNAL_HYSTERIA2_LAYER_CASES + EXTERNAL_WG_ENTRY_CASES + EXTERNAL_WG_CONNECT_CASES
 CASES += EXTERNAL_CASES
+CASES += TRANSFER_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -139,7 +143,7 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
+    required = {'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
@@ -239,13 +243,20 @@ def check_verdict(output, case=None):
     # Index once so exhaustive missing-line controls stay within the build
     # gate as the real installed scenario inventory grows.
     receipts = set()
+    transfer_receipts = []
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith("original service transfer: "):
+                transfer_receipts.append(suffix.removeprefix("original service transfer: "))
     if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
     for value in cases:
+        if value in TRANSFER_CASES:
+            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
+            if transfer_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+                raise ValueError('Installed service transfer omitted or duplicated original native completion: ' + value)
         if prefix + '/' + value + ' (' not in passed or 'verified installed host native lifecycle: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its actual complete owned lifecycle: ' + value)
         if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in receipts:

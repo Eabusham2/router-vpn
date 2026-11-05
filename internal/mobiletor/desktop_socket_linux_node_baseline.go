@@ -36,6 +36,7 @@ type DesktopLinuxNodeBaseline struct {
 	successor                 *DesktopLinuxNodeBaseline
 	homeLAN                   bool
 	standard                  bool
+	crossTransfer             string
 	complete, removed, closed bool
 	uncertain, closeErr       error
 }
@@ -397,7 +398,7 @@ func (b *DesktopLinuxNodeBaseline) Release(ctx context.Context) error {
 		return err
 	}
 	defer func() { b.gate <- struct{}{} }()
-	if !b.complete || b.successor != nil {
+	if !b.complete || b.successor != nil || b.crossTransfer != "" {
 		return errors.New("Linux Node release cannot replace an incomplete or pending succession")
 	}
 	runtime.LockOSThread()
@@ -438,7 +439,7 @@ func (b *DesktopLinuxNodeBaseline) supersede(ctx context.Context, successor *Des
 		return err
 	}
 	defer func() { second.gate <- struct{}{} }()
-	if !b.complete || !successor.complete || b.standard != successor.standard || prepared == b.standard || prepared && (b.prepared == nil || successor.prepared == nil) || b.successor != nil && b.successor != successor ||
+	if b.crossTransfer != "" || successor.crossTransfer != "" || !b.complete || !successor.complete || b.standard != successor.standard || prepared == b.standard || prepared && (b.prepared == nil || successor.prepared == nil) || b.successor != nil && b.successor != successor ||
 		successor.removed || successor.successor != nil || !os.SameFile(b.namespaceInfo, successor.namespaceInfo) {
 		return errors.New("Linux Node succession lost its exact prepared owners or pending candidate")
 	}
@@ -499,6 +500,9 @@ func (b *DesktopLinuxNodeBaseline) Close(ctx context.Context) error {
 	defer func() { b.gate <- struct{}{} }()
 	if b.closed {
 		return b.closeErr
+	}
+	if b.crossTransfer != "" {
+		return errors.New("native close retains its original cross-adapter reservation")
 	}
 	if err := b.netlink.close(); err != nil {
 		b.closeErr = errors.Join(b.closeErr, err)

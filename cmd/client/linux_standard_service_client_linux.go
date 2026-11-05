@@ -31,6 +31,7 @@ type linuxStandardServiceLaunch struct {
 	dnsProved                                   bool
 	mtuExit                                     *standardExit
 	mtuExitRaw                                  string
+	transfer                                    *linuxStandardServiceNodeTransfer
 	mtuOwner                                    *linuxStandardServiceMTUOwner
 }
 
@@ -235,6 +236,10 @@ func linuxStandardServiceExchange(ctx context.Context, channel *net.UnixConn, im
 	}
 	if response.Startup != nil && (request.Action != "start" || !response.Complete) || response.Complete && request.Action == "start" && response.Startup == nil {
 		return response, errors.New("standard service response changed original startup ledger scope")
+	}
+	transferAction := standardTransferAction(request.Action)
+	if response.Transfer != nil && !transferAction || transferAction && (response.MTU != nil || response.Startup != nil || response.Protection != nil || response.Complete && response.Transfer == nil) {
+		return response, errors.New("standard response changed original transfer scope")
 	}
 	mtuAction := strings.HasPrefix(request.Action, "mtu-")
 	if response.MTU != nil && !mtuAction || mtuAction && (response.Startup != nil || response.Protection != nil || response.Complete && response.MTU == nil) {

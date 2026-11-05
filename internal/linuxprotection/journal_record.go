@@ -55,15 +55,16 @@ type JournalIntent struct {
 }
 
 type JournalRecord struct {
-	Schema         int            `json:"schema"`
-	Kind           string         `json:"kind"`
-	JournalID      string         `json:"journal_id"`
-	Sequence       uint64         `json:"sequence"`
-	PreviousSHA256 string         `json:"previous_sha256"`
-	Controller     ParentRecord   `json:"controller"`
-	Phase          string         `json:"phase"`
-	Committed      JournalState   `json:"committed"`
-	Intent         *JournalIntent `json:"intent"`
+	Schema         int                   `json:"schema"`
+	Kind           string                `json:"kind"`
+	JournalID      string                `json:"journal_id"`
+	Sequence       uint64                `json:"sequence"`
+	PreviousSHA256 string                `json:"previous_sha256"`
+	Controller     ParentRecord          `json:"controller"`
+	Phase          string                `json:"phase"`
+	Committed      JournalState          `json:"committed"`
+	Intent         *JournalIntent        `json:"intent"`
+	Transfer       *StandardNodeTransfer `json:"standard_transfer,omitempty"`
 }
 
 func profileID(value string) bool {
@@ -101,7 +102,7 @@ func (s JournalState) Validate() error {
 func (r JournalRecord) Validate() error {
 	if r.Schema != JournalRecordSchema || r.Kind != JournalRecordKind || !lowerHex(r.JournalID, 32) || r.Sequence == 0 ||
 		(r.Sequence == 1 && r.PreviousSHA256 != "") || (r.Sequence > 1 && !lowerHex(r.PreviousSHA256, 64)) ||
-		r.Controller.Validate() != nil || r.Committed.Validate() != nil {
+		r.Controller.Validate() != nil || r.Committed.Validate() != nil || r.Transfer != nil && r.Transfer.Validate() != nil {
 		return errors.New("Linux journal lost its bounded record, retained creator or committed state")
 	}
 	if r.Committed.Engine != nil && !processBelongsToParent(*r.Committed.Engine, r.Controller) {
@@ -178,6 +179,10 @@ func CloneState(s JournalState) JournalState {
 }
 func CloneRecord(r JournalRecord) JournalRecord {
 	r.Committed = CloneState(r.Committed)
+	if r.Transfer != nil {
+		copy := *r.Transfer
+		r.Transfer = &copy
+	}
 	if r.Intent != nil {
 		copy := *r.Intent
 		copy.Candidate = CloneState(copy.Candidate)
@@ -243,7 +248,8 @@ func JournalRecordSHA256(body []byte) (string, error) {
 // a successful kernel removal alone does not authorize clearing that intent.
 func CheckJournalTransition(previous, next JournalRecord) error {
 	if previous.Validate() != nil || next.Validate() != nil || previous.Sequence == math.MaxUint64 || next.Sequence != previous.Sequence+1 ||
-		next.JournalID != previous.JournalID || next.Controller != previous.Controller {
+		next.JournalID != previous.JournalID || next.Controller != previous.Controller ||
+		!validTransferCheckpoint(previous, next) {
 		return errors.New("Linux journal transition changed its retained creator or sequence")
 	}
 	body, err := CanonicalJournalRecord(previous)

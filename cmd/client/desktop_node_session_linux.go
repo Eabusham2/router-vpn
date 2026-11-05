@@ -136,13 +136,18 @@ func (s *desktopLinuxNodeSession) startWithVerifier(ctx context.Context, host *d
 	// Even cancellation after a partial result leaves a specific Stop owner.
 	s.active = host
 	if s.journal == nil {
-		s.journal, s.journalErr = createDesktopLinuxNodeJournal(ctx, s.parent)
+		s.journal, s.journalErr = createDesktopLinuxNodeJournalTransfer(ctx, s.parent, host.standardTransfer)
 		if s.journalErr != nil {
 			return s.journalErr
 		}
 	}
 	if s.journal == nil || !sameDesktopLinuxParentCapture(s.parent, s.journal.parent) {
 		return errors.New("Linux Node session lost its original open journal")
+	}
+	if host.standardTransfer != nil {
+		if err := s.journal.bindStandardTransfer(ctx, host.standardTransfer); err != nil {
+			return err
+		}
 	}
 	if _, err := s.selectedPredecessorLocked(ctx, s.predecessor); err != nil {
 		return err
@@ -166,6 +171,9 @@ func (s *desktopLinuxNodeSession) selectedPredecessorLocked(ctx context.Context,
 	if selected.Record.Committed.Target == nil {
 		if !reflect.DeepEqual(selected.Record.Committed, linuxprotection.JournalState{}) {
 			return nil, errors.New("Linux Node empty session retained another private identity")
+		}
+		if transfer := s.journal.transfer; transfer != nil && !transfer.committed.Load() {
+			return nil, transfer.current(ctx, false)
 		}
 		return nil, mobiletor.ReadDesktopLinuxProtectionAbsence(ctx)
 	}

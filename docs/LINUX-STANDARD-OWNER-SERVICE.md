@@ -105,6 +105,25 @@ separate scoped observer proves the generic table and every standard-prefix
 table absent; it does not claim Node-family or TUN absence. The Node's own
 original transaction still performs its full final release verification.
 
+## Protected service-to-Node succession
+
+The controller reserves an authenticated, immutable transfer before stopping
+the original installed service. The reservation captures the source session and
+configuration, destination Node selection/profile revision, HomeLAN policy and
+original startup deadline. The service keeps its original native creator; the
+controller pins its actual prepared Node creator. After the source engine joins,
+the service verifies both exact inventories in one stable native generation and
+removes only its original table. Serialized receipts are comparison evidence,
+not replacement creator capabilities.
+
+The original operation and durable intent survive cancellation and lost replies.
+Before removal, cleanup preserves the service guard; after removal, a failed
+Node connection retains its destination guard. A known completed native Finish
+is preserved across subsequent partial descriptor/state cleanup so retries join
+the original remaining work. No request can lengthen admission. Native nft and
+installed service-to-Node tests remain mandatory; local protocol/race results
+are not privileged network acceptance.
+
 ## Boot and installation
 
 `router-vpn-standard-owner.service` is a distinct notify service so an older
@@ -163,8 +182,9 @@ native gate inventory and the remaining kernel and older-bus boundaries.
 The following are still separate unfinished requirements, not closed by this
 unit's refusals:
 
-- Transfer of a retained protected standard owner to a different adapter or
-  Node-parent graph, including generic legacy boot protection.
+- Reverse retained Node-to-standard transfer and other adapter/generic legacy
+  boot-owner succession. The service-to-Node direction above is implemented;
+  its actual installed/native acceptance remains separate.
 - Active Always service/image upgrade with authenticated live authority
   handoff. This unit completes the proved-idle/Off upgrade path.
 - Same-boot service crash continuation for orphaned protection. A replacement

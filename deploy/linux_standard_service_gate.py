@@ -5,6 +5,11 @@ import re
 PREFIX = 'TestLinuxStandardService'
 MTU_PREFIX = 'TestLinuxStandardMTU'
 CORE = {
+    'TransferKeepsOriginalStartupBudget': ('earlier-startup', 'earlier-transfer', 'cancelled-startup'),
+    'TransferResumesFinishedNativeCleanup': ('native-close', 'saved-close'),
+    'TransferRequiresNativeAndDurableSettlement': ('reserved', 'entered', 'committed', 'aborted-before-native-finish', 'aborted-pending-write', 'settled-pending-write', 'aborted', 'settled'),
+    'TransferSerializesOriginalRecovery': ('held-current', 'held-resolve', 'held-commit', 'concurrent-resolve'),
+    'TransferRejectsUnadmittedReplay': ('history-full', 'cancelled-full-history', 'longer-inner-deadline', 'late-original-deadline'),
     'MTUPeerObservationExpiry': (),
     'OriginalPeerAndForeignPIDFD': (),
     'NetworkShippingDNSRepeatsRealOriginalExchange': (),
@@ -145,6 +150,9 @@ MTU_NATIVE = {
 # These package gates are part of service MTU acceptance, not renamed client
 # tests. Each is executed and checked before the captured service binary runs.
 AUXILIARY = {
+    'standard-node-journal': ('./internal/linuxprotection', {
+        'TestLinuxStandardNodeTransferJournalKeepsOriginalIntent': ('original', 'changed-deadline', 'changed-source', 'changed-destination', 'new-idle-request', 'active-replacement'),
+    }),
     'retirement-bound': ('./internal/desktopnetwork', {
         'TestDesktopNetworkRetirementKeepsSeparateBound': ('complete-history', 'oversized-writer', 'oversized-parser', 'ready-stays-bounded'),
     }),
@@ -157,6 +165,7 @@ AUXILIARY = {
     }),
 }
 AUXILIARY_TESTS = {
+    'internal/linuxprotection/standard_node_transfer_test.go': 'standard-node-journal',
     'internal/desktopnetwork/desktop_network_retirement_limit_test.go': 'retirement-bound',
     'internal/desktopnetwork/routing_history_retirement_linux_test.go': 'routing-history',
     'internal/dnsmeasure/addresses_test.go': 'public-dns',
@@ -207,6 +216,16 @@ SOURCE.update({
     'internal/mobilemultihop/external_public_proof.go',
     'internal/hopmeasure/public.go', 'internal/hopmeasure/measure.go', 'internal/hopmeasure/activity.go',
 })
+SOURCE.update({'cmd/client/linux_standard_service_transfer_' + name for name in (
+    'client_linux.go', 'linux_test.go', 'namespace_native_test.go', 'peer_native_test.go', 'protocol_linux.go', 'service_linux.go')})
+SOURCE.update({'internal/linuxprotection/standard_node_transfer.go', 'internal/linuxprotection/standard_node_transfer_test.go',
+    'internal/linuxprotection/journal_record.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go',
+    'internal/mobiletor/desktop_standard_node_transfer_linux_test.go', 'internal/mobiletor/desktop_standard_node_transfer_native_linux_test.go',
+    'internal/mobiletor/desktop_socket_linux_node_baseline.go', 'cmd/client/desktop_node_connection_linux.go',
+    'cmd/client/desktop_node_connection_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux.go',
+    'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_linux_journal.go',
+    'cmd/client/desktop_node_linux_transaction.go', 'cmd/client/desktop_node_linux_transaction_retire.go',
+    'cmd/client/desktop_node_session_linux.go', 'cmd/client/desktop_node_host_linux_transition.go', 'cmd/client/legacy_standard_exit_protection_linux.go'})
 NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
                       'cmd/client/linux_standard_service_mtu_namespace_native_test.go'}
 
@@ -249,7 +268,7 @@ def validate_inventory(root):
     if missing:
         raise ValueError('Standard service original source inventory is incomplete: ' + ', '.join(sorted(missing)))
     actual_mtu_sources = {path.relative_to(root).as_posix()
-                          for path in (root / 'cmd/client').glob('linux_standard_service_mtu_*.go')}
+                          for path in (root / 'cmd/client').glob('linux_standard_service_*.go') if ('_mtu_' in path.name or '_transfer_' in path.name)}
     if actual_mtu_sources - SOURCE:
         raise ValueError('Service MTU source was not bound to the mandatory inventory: ' +
                          repr(sorted(actual_mtu_sources - SOURCE)))

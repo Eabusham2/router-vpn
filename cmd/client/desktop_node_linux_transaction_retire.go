@@ -160,6 +160,12 @@ func (t *desktopLinuxNodeTransaction) settleJoined(ctx context.Context) error {
 	if !t.engineJoined || t.retirement == nil || t.pending != nil {
 		return errors.New("Linux Node durable settlement preceded actual source and engine joining")
 	}
+	if t.standardTransfer != nil {
+		if err := t.standardTransfer.resolve(ctx); err != nil {
+			return err
+		}
+		t.nativeCommitted = t.standardTransfer.committed.Load()
+	}
 	head := t.head.Record
 	if head.Phase == "intent" && head.Intent.Action == "prepare" {
 		if t.baseline != nil {

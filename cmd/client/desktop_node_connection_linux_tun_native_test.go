@@ -36,6 +36,31 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 			return errors.New("public cover selection did not reach its actual runtime option handler")
 		}
 	}
+	var standardSource *linuxStandardServiceLaunch
+	if linuxHostTUNTransferCase(scenario) {
+		standardSource, err = linuxHostTUNStartStandardTransferSource(ctx, a)
+		if err != nil {
+			return err
+		}
+	}
+	if standardSource != nil && scenario != "service-transfer" {
+		fired := linuxHostTUNTransferFault(standardSource, scenario)
+		rejected := httptest.NewRecorder()
+		a.connect(rejected, httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"`+linuxHostTUNMode(scenario)+`"}`)).WithContext(ctx))
+		if !*fired || rejected.Code == http.StatusOK || standardSource.transfer == nil || !standardSource.transfer.resolved.Load() || standardSource.transfer.committed.Load() != (scenario == "service-transfer-lost-reply") {
+			return errors.New("faulted actual transfer omitted original joined resolution")
+		}
+		if scenario == "service-transfer-longer-deadline" {
+			raw, present := linuxStandardServiceOwners.Load(a)
+			if !present || raw != standardSource || !standardSource.joined {
+				return errors.New("rejected renewal discarded original held service")
+			}
+		} else if err := linuxHostTUNTransferredSource(standardSource, standardSource.transfer.host); err != nil {
+			return err
+		}
+		standardSource.exchange = nil
+	}
+	expectedUsage := a.profiles.Profiles[0].UseCount + 1
 	request := httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"`+linuxHostTUNMode(scenario)+`"}`)).WithContext(ctx)
 	response := httptest.NewRecorder()
 	a.connect(response, request)
@@ -57,6 +82,11 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 		return errors.Join(err, errors.New("installed public Connect used a legacy or unproved runtime"))
 	}
 	host, session, journal := path.host, path.session, path.journal
+	if standardSource != nil {
+		if err := linuxHostTUNTransferredSource(standardSource, host); err != nil {
+			return err
+		}
+	}
 	var monitor *desktopLinuxNodeMonitor
 	defer func() {
 		if failure != nil {
@@ -72,7 +102,7 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 			host.activation.operation.Err() == nil || host.activation.lifetime.Err() != nil || host.monitor == nil || host.monitor.Load() == nil ||
 			host.policy == nil || host.ready == nil || host.ready.MTU != 1376 || host.policy.Metadata().RestoredMTU != 0 ||
 			a.cmd != command || !a.state.Connected || a.state.Phase != "connected" ||
-			a.profiles.Profiles[0].UseCount != 1 || a.daitaCancel != nil || a.state.DAITA != cover ||
+			a.profiles.Profiles[0].UseCount != expectedUsage || a.daitaCancel != nil || a.state.DAITA != cover ||
 			host.options[0] != cover || host.savedOptions[0] || a.profiles.Profiles[0].DAITAEnabled ||
 			(host.ready.CoverServices == 1) != cover || (host.ready.CoverSHA256 != "") != cover {
 			return errors.New("public Connect omitted its completed request, independent monitor, usage or actual fixed MTU")
@@ -97,7 +127,7 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 		return err
 	}
 	result := linuxHostTUNResult{Stage: "ready", Scenario: scenario, SessionID: path.selection.SessionID,
-		Outcome: "proved", Ready: &path.ready, Activation: "retained-after-request", DNSProof: &dns, MTUView: &view, Public: true}
+		Transfer: standardSource != nil, Outcome: "proved", Ready: &path.ready, Activation: "retained-after-request", DNSProof: &dns, MTUView: &view, Public: true}
 	result.StartLayer, result.Physical, err = linuxHostTUNLayerSource(ctx, host, scenario)
 	if err != nil {
 		return err
@@ -181,7 +211,7 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 	store, err := readPrivateRegular(filepath.Join(linuxOwnedControllerRoot, "routers.json"), 64<<10)
 	var persisted common.RouterProfileStore
 	if err != nil || json.Unmarshal(store, &persisted) != nil || len(persisted.Profiles) != 1 ||
-		persisted.SelectedID != path.launch.profileID || persisted.Profiles[0].ID != path.launch.profileID || persisted.Profiles[0].UseCount != 1 {
+		persisted.SelectedID != path.launch.profileID || persisted.Profiles[0].ID != path.launch.profileID || persisted.Profiles[0].UseCount != expectedUsage {
 		return errors.Join(err, errors.New("public Connect did not persist its original node usage"))
 	}
 	if err := parent.parent.Close(ctx); err != nil {

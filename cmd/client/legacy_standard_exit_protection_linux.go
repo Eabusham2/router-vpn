@@ -55,15 +55,16 @@ type legacyExitProtectionMarker struct {
 	Receipt mobiletor.DesktopLinuxStandardProtectionReceipt `json:"creation"`
 }
 type legacyExitProtectionState struct {
-	Policy          string                     `json:"policy"`
-	ProfileID       string                     `json:"profile_id"`
-	PolicyProfileID string                     `json:"policy_profile_id"`
-	Endpoint        string                     `json:"endpoint"`
-	EndpointIPs     []string                   `json:"endpoint_ips"`
-	HomeLAN         bool                       `json:"home_lan_access"`
-	Platform        string                     `json:"platform"`
-	Enforced        bool                       `json:"enforced"`
-	Owner           legacyExitProtectionMarker `json:"linux_standard_owner"`
+	Policy          string                                `json:"policy"`
+	ProfileID       string                                `json:"profile_id"`
+	PolicyProfileID string                                `json:"policy_profile_id"`
+	Endpoint        string                                `json:"endpoint"`
+	EndpointIPs     []string                              `json:"endpoint_ips"`
+	HomeLAN         bool                                  `json:"home_lan_access"`
+	Platform        string                                `json:"platform"`
+	Enforced        bool                                  `json:"enforced"`
+	Transfer        *linuxStandardServiceTransferResponse `json:"standard_node_transfer,omitempty"`
+	Owner           legacyExitProtectionMarker            `json:"linux_standard_owner"`
 }
 type legacyExitProtectionSlot struct {
 	app                                                            *app

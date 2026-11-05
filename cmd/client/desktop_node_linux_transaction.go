@@ -9,6 +9,7 @@ import (
 	"errors"
 	"reflect"
 	"sync/atomic"
+	"time"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
@@ -44,6 +45,7 @@ type desktopLinuxNodeTransaction struct {
 	options       [3]bool
 	savedOptions  [3]bool
 
+	standardTransfer       *linuxStandardServiceNodeTransfer
 	predecessor, successor *desktopLinuxNodeTransaction
 	previous               linuxprotection.JournalState
 	head                   linuxprotection.JournalSelection
@@ -198,7 +200,15 @@ func finishDesktopLinuxNodeTransaction(t *desktopLinuxNodeTransaction) (*desktop
 		t.head.Record.Controller != parent.record {
 		return t, errors.Join(err, errors.New("Linux Node transaction requires its exact settled joined journal"))
 	}
-	if predecessor == nil {
+	if predecessor == nil && journal.transfer != nil && !journal.transfer.committed.Load() {
+		t.standardTransfer = journal.transfer
+		if t.standardTransfer.request.Destination != selection || !reflect.DeepEqual(t.head.Record.Transfer, t.standardTransfer.intent.Load()) {
+			return t, errors.New("Node transaction changed its actual service reservation")
+		}
+		if err := t.standardTransfer.current(operation, true); err != nil {
+			return t, err
+		}
+	} else if predecessor == nil {
 		if t.head.Record.Committed.Target != nil || mobiletor.ReadDesktopLinuxProtectionAbsence(operation) != nil {
 			return t, errors.New("Linux Node initial transaction has no independent native absence")
 		}
@@ -444,6 +454,11 @@ func (t *desktopLinuxNodeTransaction) admitSource(ctx context.Context, prepared 
 			return err
 		}
 	}
+	if t.standardTransfer != nil {
+		if err := t.standardTransfer.commit(ctx, t, prepared); err != nil {
+			return err
+		}
+	}
 	t.nativeCommitted = true
 	next = t.nextRecord()
 	next.Phase, next.Intent, next.Committed = "settled", nil, candidate
@@ -478,6 +493,10 @@ func (t *desktopLinuxNodeTransaction) startupCall(parent context.Context) (conte
 	}
 	if t == nil || t.startup == nil {
 		ctx, cancel := context.WithCancel(parent)
+		if t != nil && t.standardTransfer != nil {
+			cancel()
+			ctx, cancel = context.WithDeadline(parent, time.Unix(0, t.standardTransfer.request.DeadlineNS))
+		}
 		if err := ctx.Err(); err != nil {
 			cancel()
 			return nil, nil, err
@@ -490,6 +509,11 @@ func (t *desktopLinuxNodeTransaction) startupCall(parent context.Context) (conte
 	deadline, ok := t.startup.Deadline()
 	if !ok {
 		return nil, nil, errors.New("native admission lost original startup deadline")
+	}
+	if t.standardTransfer != nil {
+		if transferDeadline := time.Unix(0, t.standardTransfer.request.DeadlineNS); transferDeadline.Before(deadline) {
+			deadline = transferDeadline
+		}
 	}
 	ctx, cancel := context.WithDeadline(parent, deadline)
 	stop := context.AfterFunc(t.startup, func() {

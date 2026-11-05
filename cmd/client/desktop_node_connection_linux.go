@@ -66,6 +66,13 @@ func (capture *desktopLinuxNodeConnectPreflight) current(ctx context.Context) er
 			prior.command != capture.command || prior.currentApp(capture.command, false) != nil {
 			return errors.New("Linux Connect preflight replaced its captured previous source")
 		}
+	} else if h.standardTransfer != nil {
+		if err := h.standardTransfer.current(ctx, true); err != nil {
+			return err
+		}
+		if s.active != nil || s.predecessor != nil {
+			return errors.New("service transfer cannot replace a Node predecessor")
+		}
 	} else {
 		if capture.command != nil || capture.state.Connected || capture.state.Mode != "" && capture.state.Mode != "off" {
 			return errors.New("Linux Connect cannot inherit an unrelated running or unfinished legacy connection")
@@ -176,6 +183,9 @@ func (a *app) startDesktopLinuxNodeConnection(operation context.Context, profile
 	if err != nil {
 		return true, err
 	}
+	if _, err = captureLinuxStandardServiceNodeTransfer(ctx, host); err != nil {
+		return true, err
+	}
 	if err := capture.current(ctx); err != nil {
 		return true, err
 	}
@@ -244,16 +254,32 @@ func (capture *desktopLinuxNodeConnectPreflight) cleanup(ctx context.Context, st
 	if s == nil {
 		return h.Close(ctx)
 	}
+	if !stopped && h.standardTransfer != nil {
+		if err := h.standardTransfer.resolve(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.enter(ctx); err != nil {
 		return err
 	}
 	active := s.active
 	s.gate <- struct{}{}
 	if active == h {
-		return s.Retire(ctx, h, !hold)
+		// A transfer failure is not an explicit Disconnect. Once native source
+		// removal committed, retain the destination guard for this original
+		// retry; before commit, settlement retains the original service guard.
+		return s.Retire(ctx, h, !hold && h.standardTransfer == nil)
+	}
+	if h.standardTransfer != nil {
+		if err := h.standardTransfer.resolve(ctx); err != nil {
+			return err
+		}
 	}
 	if err := h.Close(ctx); err != nil {
 		return err
+	}
+	if h.standardTransfer != nil {
+		return nil
 	}
 	// A staged failure after the old Stop still owns its joined predecessor.
 	// Only that same idle request may release On-connect; Always stays closed.

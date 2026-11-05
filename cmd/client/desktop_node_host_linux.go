@@ -37,6 +37,7 @@ type desktopLinuxNodeHost struct {
 	selection                 linuxprotection.NodeSelection
 	launch                    *desktopNodeLaunch
 	process                   *desktopLinuxNodeProcess
+	standardTransfer          *linuxStandardServiceNodeTransfer
 	transaction               *desktopLinuxNodeTransaction
 	source                    []byte
 	network                   string

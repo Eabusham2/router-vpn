@@ -41,10 +41,22 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:15: verified installed host layered WireGuard: ' + case for case in cases if case in G.WIREGUARD_LAYER_CASES),
                           *('    native_test.go:16: verified installed host layered AWG2: ' + case for case in cases if case in G.AMNEZIA_LAYER_CASES),
                           *('    native_test.go:17: verified installed host captured SIP003 lanes: ' + case for case in cases if case in G.SIP003_CASES),
+                          *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
                           *('    native_test.go:21: verified installed host independent WireGuard entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_WG_CONNECT_CASES),
                           *('    native_test.go:20: verified installed host independent WireGuard entry and SS final: ' + case for case in cases if case in G.EXTERNAL_WG_ENTRY_CASES),
                           *('    native_test.go:19: verified installed host retained layered Hysteria2: ' + case for case in cases if case in G.EXTERNAL_HYSTERIA2_LAYER_CASES)]) + '\n'
+
+    def test_service_transfer_requires_original_completion_and_exact_verdict(self):
+        good = self.completed()
+        G.check_verdict(good)
+        for case in G.TRANSFER_CASES:
+            lines = [line for line in good.splitlines(True) if ('original service transfer: ' + case + '\n') in line or ('KernelNodeHostTUN/' + case + ' (') in line]
+            self.assertEqual(len(lines), 2)
+            for line in lines:
+                for changed in (good.replace(line, ''), good + line):
+                    with self.assertRaises(ValueError):
+                        G.check_verdict(changed)
 
     def test_connect_tls_requires_actual_captured_and_rejected_certificates(self):
         lines = ['--- PASS: TestRouterVPNDesktopExternalCONNECTCertificateRefusal (0.01s)',
@@ -152,10 +164,10 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
         self.assertEqual(len(G.EXTERNAL_CASES), 118)
-        self.assertEqual(len(G.CASES), 417)
+        self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES))
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
-        self.assertEqual(G.CASES[299:], G.EXTERNAL_CASES)
+        self.assertEqual(G.CASES[299:417], G.EXTERNAL_CASES)
         self.assertEqual(len(G.CASES), len(set(G.CASES)))
         self.assertEqual(set(G.EXTERNAL_CASES) & set(G.ORIGINAL_CASES), set())
         for case in G.EXTERNAL_CASES:
@@ -291,7 +303,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_wireguard_connect_keeps_captured_credentials_tls_and_prior_inventory(self):
         expected = tuple('external-wg' + protocol + '-' + action for protocol in ('http','https') for action in ('on-connect','always','public','cancelled','wrong-entry-public','wrong-proxy-password','wrong-proxy-username','dns-failure')) + ('external-wghttps-wrong-proxy-sni','external-wghttps-wrong-proxy-trust')
         self.assertEqual(G.EXTERNAL_WG_CONNECT_CASES, expected)
-        self.assertEqual(G.CASES[399:], expected)
+        self.assertEqual(G.CASES[399:417], expected)
         for case in expected:
             output = self.completed((case,))
             G.check_verdict(output, case)

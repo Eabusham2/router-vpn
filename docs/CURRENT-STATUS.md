@@ -10,10 +10,21 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`38fd5669`, the integrated observation change in `a94cde9d`, and the installed
+`2873d854`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
+
+Protected Linux installed standard-service to Node succession now captures its
+reservation before the original Stop. The service and controller retain their
+own actual creators; exact destination/profile inventories and a stable native
+generation precede removal of the original service table. Durable intent and
+bounded resolve retries retain the correct guard across cancellation, lost
+replies and partial cleanup. The exact source passes focused client/native/
+journal race tests. Six native nft cases and three installed transfer cases are
+mandatory but have not executed locally; the installed inventory is 420 cases.
+Reverse Node-to-standard transfer, generic boot-owner succession, active Always
+upgrades and same-boot crash continuation remain separate source requirements.
 
 Original caller deadlines now reach native manager, graph, network, physical,
 PT/broker, selected-proof and OpenVPN observations. Pure observation expiry

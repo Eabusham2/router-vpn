@@ -819,6 +819,45 @@ Native MTU integration at `efe29d9d` subsequently passed its Ubuntu job
 observation. This is a platform-specific result for that exact source, not a
 complete native matrix or release publication.
 
+## Protected installed standard service to retained Node
+
+The shipping Linux connection route now reserves the original installed service
+before StopBegun, joins its original engine, and transfers protection to the
+actual prepared Node creator. The authenticated reservation captures the source
+session/configuration, destination selection/profile revision, HomeLAN policy
+and original admission deadline. The service retains its original creator and
+the controller pins its prepared destination. A stable native generation and
+both exact inventories precede removal of only the original source table.
+Received receipts and journal records cannot reconstruct either authority.
+
+Durable intent, joined cleanup and bounded resolve retries preserve the outcome
+of lost replies. Before removal, failure retains the service guard; after
+removal, failed Node startup retains the destination guard. Admission cannot
+extend the captured deadline. Completed native Finish is retained separately
+from later descriptor or saved-file cleanup, so a retry does not reobserve
+deliberately retired handles. Capacity is checked before reserving a creator;
+an aborted durable phase is terminal only after the original native pin joins.
+
+The isolated exact 33-file source overlay on `efe29d9d` passes race tests with
+both privileged build tags: client 10.674s, native inventory 1.194s and journal
+1.049s. Strict parsing verifies 26 service transfer, 14 native inventory/refusal
+and seven journal parent/leaf verdicts; selected original startup-budget cases
+also pass. Post-Finish retry tests model the acknowledged native milestone while
+using actual peers, files, process Stop, saved-state removal and cleanup retries.
+All 29 installed Node runner checks, eight service inventory/verdict checks and
+guardian verdict mutation controls pass. The unchanged heavy worker control was
+not repeated for this unit.
+
+The installed inventory preserves 417 scenarios and adds three, for 420 total:
+public service-to-Node succession, lost-reply resolution and a refused longer
+deadline followed by original cleanup/retry. Six real native nft transfer cases
+and the three installed cases compile and remain mandatory in CI. They were not
+executed locally because NET_ADMIN is unavailable. Only public Internet
+reachability is modeled in the installed source-start fixture; selected DNS,
+installed service/TUN, peer-bound RPC, Node proof, mutation and Stop use their
+actual implementations. Reverse Node-to-standard transfer, generic boot-owner
+succession, active Always upgrades and same-boot crash continuation remain open.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -826,7 +865,7 @@ complete native matrix or release publication.
 | Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor admission is now integrated and locally verified; installed-service mutation and public controls are now integrated; successful installed native/network acceptance remains separate. |
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
-| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. | Published ledger also lists protected cross-adapter transfer, active Always upgrades and same-boot service-crash continuation. This observation change does not implement those features. |
+| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected installed service-to-Node transfer now retains both original creators, durable intent and bounded resolution. | The new transfer requires privileged installed/native acceptance. Reverse Node-to-standard transfer, other/generic boot-owner succession, active Always upgrades and same-boot service-crash continuation remain unfinished. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 

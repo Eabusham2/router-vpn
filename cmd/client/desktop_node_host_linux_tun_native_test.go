@@ -30,7 +30,7 @@ import (
 	"router-vpn/internal/mobiletor"
 )
 
-var linuxHostTUNCases = []string{"on-connect", "home-lan", "wrong-node", "resolver-failure", "wrong-key", "stale-ready", "cancelled-proof",
+var linuxHostTUNCases = []string{"service-transfer", "service-transfer-lost-reply", "service-transfer-longer-deadline", "on-connect", "home-lan", "wrong-node", "resolver-failure", "wrong-key", "stale-ready", "cancelled-proof",
 	"replaced-host", "request-ended", "shutdown", "always", "active-request-ended", "cancel-adoption", "active-profile-change",
 	"active-network-change", "active-command-change", "mtu-rollback", "mtu-commit", "mtu-stale-profile", "mtu-stale-network", "mtu-hold", "mtu-retire-undrained", "restore-sealed", "public-connect",
 	"cover-connect", "cover-replies-lost", "cover-wrong-node", "cover-no-replies", "cover-restore", "public-off", "public-off-save-retry",
@@ -59,7 +59,7 @@ func linuxHostTUNRestoreCase(scenario string) bool {
 
 func linuxHostTUNPublicCase(scenario string) bool {
 	scenario = linuxHostTUNAction(scenario)
-	return scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario) ||
+	return linuxHostTUNTransferCase(scenario) || scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario) ||
 		scenario == "layer-aes-connect" || scenario == "layer-whitening-connect"
 }
 
@@ -183,6 +183,7 @@ func linuxHostTUNMTUCase(scenario string) bool {
 }
 
 type linuxHostTUNResult struct {
+	Transfer          bool                                   `json:"transfer,omitempty"`
 	Stage             string                                 `json:"stage"`
 	Scenario          string                                 `json:"scenario"`
 	SessionID         string                                 `json:"session_id"`
@@ -806,6 +807,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			peer := linuxHostTUNStartPeer(t, scenario)
 			linuxHostTUNDirectHealth(t, peer)
 			linuxHostTUNInstallProfile(t, peer, scenario)
+			if linuxHostTUNTransferCase(scenario) {
+				linuxHostTUNTransferService(t, installed, peer)
+			}
 			if linuxHostTUNResolverFailureCase(scenario) {
 				peer.observe(t, "fail-dns")
 			}
@@ -1017,6 +1021,12 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			}
 			if result.Public != linuxHostTUNPublicCase(scenario) {
 				t.Fatal("installed public handler evidence belongs to another scenario")
+			}
+			if result.Transfer != linuxHostTUNTransferCase(scenario) {
+				t.Fatal("installed transfer evidence belongs to another scenario")
+			}
+			if result.Transfer {
+				t.Log("verified installed host original service transfer:", scenario)
 			}
 			if result.Public {
 				t.Log("verified installed host public Connect and Disconnect:", scenario)

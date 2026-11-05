@@ -20,37 +20,39 @@ const linuxStandardServiceSocket = linuxStandardServiceDirectory + "/control.soc
 const linuxStandardServicePacketLimit = 64 << 10
 
 type linuxStandardServiceRequest struct {
-	Schema          int                             `json:"schema"`
-	Action          string                          `json:"action"`
-	Session         string                          `json:"session"`
-	BudgetMS        int64                           `json:"budget_ms"`
-	DeadlineNS      int64                           `json:"deadline_ns"`
-	Directory       string                          `json:"directory,omitempty"`
-	ConfigSHA256    string                          `json:"config_sha256,omitempty"`
-	ProfileID       string                          `json:"profile_id,omitempty"`
-	ProfileSHA256   string                          `json:"profile_sha256,omitempty"`
-	NetworkID       string                          `json:"network_id,omitempty"`
-	RouterID        string                          `json:"router_id,omitempty"`
-	Endpoint        string                          `json:"endpoint,omitempty"`
-	RuntimeMode     string                          `json:"runtime_mode,omitempty"`
-	Base            string                          `json:"base,omitempty"`
-	Release         bool                            `json:"release,omitempty"`
-	ProfileRevision string                          `json:"profile_revision,omitempty"`
-	ResultRevision  string                          `json:"result_revision,omitempty"`
-	MTU             *linuxStandardServiceMTURequest `json:"mtu,omitempty"`
+	Schema          int                                  `json:"schema"`
+	Action          string                               `json:"action"`
+	Session         string                               `json:"session"`
+	BudgetMS        int64                                `json:"budget_ms"`
+	DeadlineNS      int64                                `json:"deadline_ns"`
+	Directory       string                               `json:"directory,omitempty"`
+	ConfigSHA256    string                               `json:"config_sha256,omitempty"`
+	ProfileID       string                               `json:"profile_id,omitempty"`
+	ProfileSHA256   string                               `json:"profile_sha256,omitempty"`
+	NetworkID       string                               `json:"network_id,omitempty"`
+	RouterID        string                               `json:"router_id,omitempty"`
+	Endpoint        string                               `json:"endpoint,omitempty"`
+	RuntimeMode     string                               `json:"runtime_mode,omitempty"`
+	Base            string                               `json:"base,omitempty"`
+	Release         bool                                 `json:"release,omitempty"`
+	ProfileRevision string                               `json:"profile_revision,omitempty"`
+	ResultRevision  string                               `json:"result_revision,omitempty"`
+	Transfer        *linuxStandardServiceTransferRequest `json:"transfer,omitempty"`
+	MTU             *linuxStandardServiceMTURequest      `json:"mtu,omitempty"`
 }
 
 type linuxStandardServiceResponse struct {
-	Startup             *linuxStandardServiceStartup        `json:"startup,omitempty"`
-	authenticatedPeer   *linuxStandardServicePeer           // local original witness; never decoded
-	transmittedDeadline int64                               // local RPC bound; never decoded from service data
-	Schema              int                                 `json:"schema"`
-	Session             string                              `json:"session"`
-	Action              string                              `json:"action"`
-	Complete            bool                                `json:"complete"`
-	Error               string                              `json:"error,omitempty"`
-	Protection          *linuxStandardServiceProtectionData `json:"protection,omitempty"`
-	MTU                 *linuxStandardServiceMTUResponse    `json:"mtu,omitempty"`
+	Startup             *linuxStandardServiceStartup          `json:"startup,omitempty"`
+	authenticatedPeer   *linuxStandardServicePeer             // local original witness; never decoded
+	transmittedDeadline int64                                 // local RPC bound; never decoded from service data
+	Schema              int                                   `json:"schema"`
+	Session             string                                `json:"session"`
+	Action              string                                `json:"action"`
+	Complete            bool                                  `json:"complete"`
+	Error               string                                `json:"error,omitempty"`
+	Protection          *linuxStandardServiceProtectionData   `json:"protection,omitempty"`
+	Transfer            *linuxStandardServiceTransferResponse `json:"transfer,omitempty"`
+	MTU                 *linuxStandardServiceMTUResponse      `json:"mtu,omitempty"`
 }
 
 func linuxStandardServiceDecode(body []byte, target any) error {

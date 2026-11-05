@@ -53,6 +53,8 @@ type linuxStandardService struct {
 	bootFailure       error
 	readiness         string
 	bootRetryAfter    time.Time
+	transferHistory   map[string]linuxStandardServiceTransferResponse
+	transfer          *linuxStandardServiceTransfer
 	protectionView    *linuxStandardServiceProtection
 	protectionAbsence func(context.Context) error
 	tunAbsent         func() error
@@ -338,7 +340,7 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 }
 
 func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File, startup **linuxStandardServiceStartup) (failure error) {
-	if request.ProfileRevision != "" || request.ResultRevision != "" || request.MTU != nil {
+	if request.ProfileRevision != "" || request.ResultRevision != "" || request.MTU != nil || request.Transfer != nil {
 		return errors.New("runtime request supplied unrelated protection source")
 	}
 	if request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() {
@@ -367,6 +369,9 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 	current, err := os.Stat("/proc/thread-self/ns/net")
 	if err != nil || !os.SameFile(current, s.namespace) {
 		return errors.Join(err, errors.New("standard service left its original network namespace"))
+	}
+	if s.transferPending() && (request.Action == "start" || request.Action == "stop" && request.Release) {
+		return errors.New("original cross-adapter transfer must settle before release or replacement")
 	}
 	if request.Action == "start" {
 		if len(files) != 1 {
@@ -520,9 +525,16 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	var protection *linuxStandardServiceProtectionData
 	var startup *linuxStandardServiceStartup
 	var mtu *linuxStandardServiceMTUResponse
+	var transfer *linuxStandardServiceTransferResponse
 	if upgrade {
 		err = s.handleIdleUpgrade(live, peer, request, files)
 		shutdownAccepted = err == nil
+	} else if standardTransferAction(request.Action) {
+		if len(files) != 0 {
+			err = errors.New("transfer request supplied unexpected descriptors")
+		} else {
+			transfer, err = s.transferRequest(live, peer, request)
+		}
 	} else if strings.HasPrefix(request.Action, "protection-") {
 		if len(files) != 0 {
 			err = errors.New("standard protection request supplied unrelated native authority")
@@ -563,7 +575,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 		startup = nil
 		mtu = nil
 	}
-	response := linuxStandardServiceResponse{Startup: startup, MTU: mtu, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
+	response := linuxStandardServiceResponse{Startup: startup, MTU: mtu, Transfer: transfer, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
 	if err != nil {
 		response.Error = err.Error()
 		if len(response.Error) > 2048 {
@@ -577,7 +589,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 }
 
 func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File) error {
-	if request.Schema != 1 || request.Action != "shutdown-idle" || request.MTU != nil || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
+	if request.Schema != 1 || request.Action != "shutdown-idle" || request.MTU != nil || request.Transfer != nil || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
 		request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileID != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return errors.New("standard service idle-upgrade request changed its fixed scope")
 	}
@@ -592,6 +604,9 @@ func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linu
 	defer func() { s.gate <- struct{}{} }()
 	if s.quiescing {
 		return errors.New("standard service already retired admission")
+	}
+	if s.transferPending() {
+		return errors.New("finish original service-to-Node transfer before upgrade")
 	}
 	if err := s.prepareIdleShutdown(ctx); err != nil {
 		return err

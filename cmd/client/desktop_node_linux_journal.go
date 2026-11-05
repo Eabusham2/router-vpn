@@ -41,6 +41,7 @@ type desktopLinuxNodeJournalAppend struct {
 // can fail, so parent teardown joins even an incompletely opened journal.
 // It does not reconstruct a parent from a header or adopt decoded nft state.
 type desktopLinuxNodeJournal struct {
+	transfer                      *linuxStandardServiceNodeTransfer
 	parent                        *desktopLinuxNodeParentCapture
 	ctx                           context.Context
 	cancel                        context.CancelFunc
@@ -99,7 +100,10 @@ func newDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNodePar
 
 // Creation never derives native absence from private storage. The matching
 // nft reader checks before creation and after the durable initial checkpoint.
-func createDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNodeParentCapture) (_ *desktopLinuxNodeJournal, failure error) {
+func createDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNodeParentCapture) (*desktopLinuxNodeJournal, error) {
+	return createDesktopLinuxNodeJournalTransfer(ctx, parent, nil)
+}
+func createDesktopLinuxNodeJournalTransfer(ctx context.Context, parent *desktopLinuxNodeParentCapture, transfer *linuxStandardServiceNodeTransfer) (_ *desktopLinuxNodeJournal, failure error) {
 	j, err := newDesktopLinuxNodeJournal(ctx, parent)
 	if err != nil {
 		return j, err
@@ -107,7 +111,15 @@ func createDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNode
 	defer func() { j.gate <- struct{}{} }()
 	ctx, stop := j.operation(ctx)
 	defer stop()
-	if err := mobiletor.ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
+	j.transfer = transfer
+	absence := mobiletor.ReadDesktopLinuxProtectionAbsence
+	if transfer != nil {
+		if !sameDesktopLinuxParentCapture(transfer.host.parent, parent) || transfer.intent.Load() == nil {
+			return j, errors.New("journal transfer changed its actual original parent")
+		}
+		absence = func(ctx context.Context) error { return transfer.current(ctx, true) }
+	}
+	if err := absence(ctx); err != nil {
 		return j, err
 	}
 	if err := j.parent.Current(ctx); err != nil {
@@ -156,6 +168,9 @@ func createDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNode
 	}
 	initial := linuxprotection.JournalRecord{Schema: linuxprotection.JournalRecordSchema, Kind: linuxprotection.JournalRecordKind,
 		JournalID: j.header.JournalID, Sequence: 1, Controller: parent.record, Phase: "settled"}
+	if transfer != nil {
+		initial.Transfer = transfer.journalIntent()
+	}
 	body, err := linuxprotection.CanonicalJournalRecord(initial)
 	if err != nil {
 		return j, err
@@ -193,7 +208,7 @@ func createDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNode
 	if err != nil || j.current.Incomplete || j.current.Record.Sequence != 1 {
 		return j, errors.Join(err, errors.New("Linux journal did not read back its exact initial durable state"))
 	}
-	if err := mobiletor.ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
+	if err := absence(ctx); err != nil {
 		return j, err
 	}
 	return j, j.checkParent(ctx)
