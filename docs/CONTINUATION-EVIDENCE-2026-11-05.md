@@ -155,7 +155,8 @@ create either observer's authority.
 
 ### Preserving already-proved service observers after an expired read
 
-The service network observer and controller request observer now distinguish a
+Commit [`d4a37bb4`](https://github.com/Eabusham2/router-vpn/commit/d4a37bb4b7a5866bf7cf7b50631d6fb6a0fe7c2d)
+made the service network observer and controller request observer distinguish a
 pure expired observation from confirmed source, namespace, reader or lifetime
 loss. A pure expired read leaves the same already-proved observer usable for a
 later call. A real failure joined with cancellation remains permanently latched.
@@ -174,9 +175,19 @@ uses the existing explicit model. Reverting the two production files failed five
 intended observation cases. Removing only the final startup failure latch failed
 the final-admission case. The merged mandatory service runner passed four checks.
 
-These tests establish observer behavior. The outer service/controller background
-watchers still require their own expiry/retirement review; a passing inner
-observer test does not certify those callers.
+The following service-watcher correction carries this distinction to the actual
+background caller. It classifies the returned error before canceling its own
+observation context. Pure read expiry keeps the same original engine and reader
+for the next poll; confirmed reader failure joined with expiry still retires the
+original engine and retains its On-connect protection.
+
+The actual shipping watcher passed both cases under race in 13.024s, using real
+child/peer ownership, sealed configuration and selected-DNS exchanges with only
+event delivery modeled. Restoring only the old watcher reproduced unintended
+retirement in the pure-expiry case; the genuine mixed-failure case still passed.
+The regression remains mandatory in the service runner. This does not certify
+every controller-monitor admission or mutex path; those remain separate caller
+integration obligations.
 
 ## Remaining requirement/evidence ledger
 

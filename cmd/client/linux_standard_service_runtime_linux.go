@@ -628,8 +628,12 @@ func (s *linuxStandardService) watch(ctx context.Context) {
 					err = s.networkCurrent(observation, s.session, false)
 				}
 				runtime.UnlockOSThread()
+				// Classify before canceling this observation ourselves. Pure read
+				// expiry cannot retire an otherwise retained, proved engine; real
+				// failure joined with expiry still requires original retirement.
+				expired := common.ObservationContextExpired(observation, err)
 				cancel()
-				if err != nil {
+				if err != nil && !expired {
 					s.session.cleanupPending = true
 					s.session.cleanupError = err.Error()
 				}
