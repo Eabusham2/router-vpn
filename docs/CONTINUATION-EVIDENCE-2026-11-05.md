@@ -2018,6 +2018,45 @@ controls remain mandatory native CI. Local interface discovery fails before
 the external fixture's intended assertion; this patch does not claim a local
 physical-network pass, change production admission or remove a negative case.
 
+## Bounded pinned compiler gateway recovery
+
+The Windows MAX run `41996313287` at `3f9a1c6f` has three observed setup
+failures: AMD64 TLS job `127144833620`, AMD64 controls-2 `127144834161` and
+ARM64 controls-2 `127144834319`. Each fails while opening the pinned LLVM-MinGW
+archive with HTTP 504, before native execution. Sibling jobs obtain the same
+archive and advance to the native stage. This is distinct from a native test
+assertion or a reason to weaken its deadline.
+
+`deploy/install-desktop-windows-toolchain.py` now retries only opening HTTP
+502, 503 and 504 responses. It closes each failed response and uses at most
+three attempts with one- and two-second waits under the same captured
+600-second download deadline. No archive file exists before a successful
+response. The request, release URL, HTTPS rule, exact byte count, digest,
+extraction policy, compiler version and installed inventory checks remain.
+Permanent errors, cancellation, transport errors and body failures propagate;
+the original temporary directory owns and removes any partial file. Successful
+opening and final EOF are checked against the original deadline before their
+data can be accepted.
+
+The frozen installer and test files pass all 12 focused tests in 0.490s; root's
+independent rerun passes the same 12 in 0.312s. A simulated 504 followed by the
+original successful request performs actual ZIP extraction, version checking
+and receipt creation. Controls cover finite retries, permanent errors, the
+original budget across backoff, insufficient budget, late successful opening,
+late EOF and partial-body cancellation/transport failure, alongside existing
+size, checksum, HTTPS, archive, pin and installed-file drift cases. These are
+deterministic HTTP-boundary tests. Recovery from a live GitHub gateway and
+successful execution of the native suites remain CI requirements.
+
+Separately, run `41998274349` at `79df821a` succeeds for both actual Linux
+generated Node/TUN jobs: ARM64 `127146776108` and AMD64 `127146776347`.
+The AWG run `41996830799` at `f9297b8a` succeeds on macOS `127142498001`,
+Windows `127142499093` and Linux `127142498350`. The original macOS comparison
+and Speed Lab cancellation stages pass. The intermittent fixture cleanup issue
+did not recur there; its production cause is not established by a passing rerun.
+No current all-platform release, deployment or physical-device acceptance is
+claimed from these narrower observations.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

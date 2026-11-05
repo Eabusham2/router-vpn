@@ -18,6 +18,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -147,6 +148,34 @@ def check_compilers(directory, system):
             raise ValueError('Installed LLVM-MinGW compiler version changed')
 
 
+def open_archive(request, deadline):
+    """Retry only transient gateway replies, within the original download clock.
+
+    No body/file is opened until a successful response. Transport exceptions,
+    cancellation, permanent HTTP errors and later integrity failures propagate.
+    """
+    for attempt in range(3):
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Pinned compiler download exhausted its original budget')
+        try:
+            response = urllib.request.urlopen(request, timeout=min(60, remaining))
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code not in (502, 503, 504) or attempt == 2:
+                raise
+            remaining = deadline-time.monotonic()
+            delay = attempt+1
+            if remaining <= delay:
+                raise TimeoutError('Pinned compiler download exhausted its original retry budget') from error
+            time.sleep(delay)
+            continue
+        if time.monotonic() >= deadline:
+            response.close()
+            raise TimeoutError('Pinned compiler download exhausted its original budget')
+        return response
+
+
 def install(output, host_arch=None):
     system = platform.system()
     detected = {'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'ARM64': 'arm64', 'arm64': 'arm64'}.get(platform.machine())
@@ -180,12 +209,19 @@ def install(output, host_arch=None):
         deadline = time.monotonic()+600
         url = 'https://github.com/mstorsjo/llvm-mingw/releases/download/'+RELEASE+'/'+filename
         request = urllib.request.Request(url, headers={'User-Agent': 'RouterVPN-pinned-native-build'})
-        with urllib.request.urlopen(request, timeout=60) as response, archive.open('xb') as target:
+        with open_archive(request, deadline) as response, archive.open('xb') as target:
             if not response.geturl().startswith('https://'):
                 raise ValueError('Compiler download must remain on HTTPS')
-            while chunk := response.read(1 << 20):
+            while True:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Pinned compiler download exhausted its original budget')
+                chunk = response.read(1 << 20)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Pinned compiler download exhausted its original budget')
+                if not chunk:
+                    break
                 count += len(chunk)
-                if count > size or time.monotonic() > deadline:
+                if count > size:
                     raise ValueError('Pinned compiler download exceeded its exact size')
                 sha.update(chunk)
                 target.write(chunk)

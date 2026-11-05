@@ -1060,6 +1060,135 @@ def zip_bytes(prefix, entries=None):
 
 
 class VerifiedWindowsInstaller(unittest.TestCase):
+    def test_gateway_retry_installs_only_original_verified_archive(self):
+        prefix = 'llvm-mingw-fixture'
+        raw = zip_bytes(prefix)
+        body = io.BytesIO(b'gateway failure, never an archive')
+        failure = W.urllib.error.HTTPError('https://github.com/pinned', 504, 'Gateway Time-out', {}, body)
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'installed'
+            with patch.object(W.platform, 'system', return_value='Windows'), \
+                 patch.object(W.platform, 'machine', return_value='AMD64'), \
+                 patch.dict(W.ARCHIVES, {('Windows', 'amd64'): (prefix+'.zip', len(raw), hashlib.sha256(raw).hexdigest())}), \
+                 patch.object(W.urllib.request, 'urlopen', side_effect=[failure, Response(raw)]) as download, \
+                 patch.object(W.time, 'sleep') as sleep, \
+                 patch.object(W.subprocess, 'check_output', return_value=W.CLANG+' (fixture)'):
+                self.assertEqual(W.install(output), output/'bin')
+                self.assertTrue(body.closed)
+                self.assertEqual(download.call_count, 2)
+                first, second = download.call_args_list
+                self.assertIs(first.args[0], second.args[0])
+                self.assertEqual(first.args[0].full_url, 'https://github.com/mstorsjo/llvm-mingw/releases/download/'+W.RELEASE+'/'+prefix+'.zip')
+                self.assertEqual(first.kwargs['timeout'], 60)
+                self.assertEqual(second.kwargs['timeout'], 60)
+                sleep.assert_called_once_with(1)
+                self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ['installed'])
+
+    def test_gateway_retry_is_finite_and_preserves_final_error(self):
+        for code in (502, 503, 504, 400, 401, 403, 404, 429, 500):
+            with self.subTest(code=code):
+                errors = [W.urllib.error.HTTPError('https://pinned', code, 'failure', {}, io.BytesIO()) for _ in range(3)]
+                with patch.object(W.urllib.request, 'urlopen', side_effect=errors) as download, \
+                     patch.object(W.time, 'monotonic', return_value=10), patch.object(W.time, 'sleep') as sleep:
+                    with self.assertRaises(W.urllib.error.HTTPError) as caught:
+                        W.open_archive(W.urllib.request.Request('https://pinned'), 610)
+                    retry = code in (502, 503, 504)
+                    self.assertIs(caught.exception, errors[2 if retry else 0])
+                    self.assertEqual(download.call_count, 3 if retry else 1)
+                    self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2] if retry else [])
+                    self.assertTrue(all(error.fp.closed for error in errors[:download.call_count]))
+
+    def test_retry_uses_one_deadline_and_does_not_sleep_past_it(self):
+        request = W.urllib.request.Request('https://pinned')
+        failure = W.urllib.error.HTTPError(request.full_url, 504, 'gateway', {}, io.BytesIO())
+        clock = [0.0]
+        def failed_open(*args, **kwargs):
+            self.assertEqual(kwargs['timeout'], 2)
+            clock[0] = 1.5
+            raise failure
+        with patch.object(W.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(W.urllib.request, 'urlopen', side_effect=failed_open) as download, \
+             patch.object(W.time, 'sleep') as sleep:
+            with self.assertRaises(TimeoutError) as caught:
+                W.open_archive(request, 2)
+            self.assertIs(caught.exception.__cause__, failure)
+            self.assertEqual(download.call_count, 1)
+            sleep.assert_not_called()
+        with patch.object(W.time, 'monotonic', return_value=2), patch.object(W.urllib.request, 'urlopen') as download:
+            with self.assertRaises(TimeoutError):
+                W.open_archive(request, 2)
+            download.assert_not_called()
+
+    def test_partial_download_cancellation_and_transport_failure_never_retry(self):
+        for failure in (KeyboardInterrupt(), TimeoutError('original socket'), W.urllib.error.URLError('transport')):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as tmp:
+                response = Response(b'partial')
+                reads = iter([b'partial', failure])
+                def read(_size):
+                    value = next(reads)
+                    if isinstance(value, BaseException):
+                        raise value
+                    return value
+                with patch.object(W.platform, 'system', return_value='Windows'), \
+                     patch.object(W.platform, 'machine', return_value='AMD64'), \
+                     patch.object(W.urllib.request, 'urlopen', return_value=response) as download, \
+                     patch.object(response, 'read', side_effect=read), \
+                     patch.object(W, 'extract') as extract, patch.object(W, 'check_compilers') as check:
+                    with self.assertRaises(type(failure)) as caught:
+                        W.install(Path(tmp)/'out')
+                    self.assertIs(caught.exception, failure)
+                    self.assertEqual(download.call_count, 1)
+                    self.assertTrue(response.closed)
+                    self.assertEqual(list(Path(tmp).iterdir()), [])
+                    extract.assert_not_called()
+                    check.assert_not_called()
+
+    def test_retry_backoff_never_renews_original_deadline(self):
+        clock = [0.0]
+        response = Response(b'pinned')
+        failure = W.urllib.error.HTTPError('https://pinned', 504, 'gateway', {}, io.BytesIO())
+        calls = []
+        def opened(request, timeout):
+            calls.append(timeout)
+            if len(calls) == 1:
+                clock[0] = 598
+                raise failure
+            return response
+        def sleep(delay):
+            clock[0] += delay
+        with patch.object(W.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(W.time, 'sleep', side_effect=sleep), \
+             patch.object(W.urllib.request, 'urlopen', side_effect=opened):
+            self.assertIs(W.open_archive(W.urllib.request.Request('https://pinned'), 600), response)
+        self.assertEqual(calls, [60, 1])
+        response.close()
+
+    def test_successful_open_or_final_eof_after_deadline_never_publishes(self):
+        for phase in ('open', 'eof'):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as tmp:
+                clock = [0.0]
+                response = Response(b'')
+                def opened(*args, **kwargs):
+                    if phase == 'open':
+                        clock[0] = 600
+                    return response
+                def read(_size):
+                    clock[0] = 600
+                    return b''
+                with patch.object(W.time, 'monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(W.platform, 'system', return_value='Windows'), \
+                     patch.object(W.platform, 'machine', return_value='AMD64'), \
+                     patch.object(W.urllib.request, 'urlopen', side_effect=opened) as download, \
+                     patch.object(response, 'read', side_effect=read), \
+                     patch.object(W, 'extract') as extract, patch.object(W, 'check_compilers') as check:
+                    with self.assertRaises(TimeoutError):
+                        W.install(Path(tmp)/'out')
+                    self.assertEqual(download.call_count, 1)
+                    self.assertTrue(response.closed)
+                    self.assertEqual(list(Path(tmp).iterdir()), [])
+                    extract.assert_not_called()
+                    check.assert_not_called()
+
     def test_official_pin_covers_all_supported_host_architectures(self):
         self.assertEqual(W.RELEASE, '20261006')
         self.assertEqual(set(W.ARCHIVES), {(s,a) for s in ('Windows','Linux') for a in ('amd64','arm64')})

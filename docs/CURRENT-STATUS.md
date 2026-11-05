@@ -138,6 +138,22 @@ and four actual prepared-native baseline verdicts pass under race. Three scoped
 production defects fail their intended assertions. The corrected external
 network-reset control and complete native Windows jobs still require CI.
 
+The pinned Windows compiler downloader now retries only HTTP 502, 503 and 504
+opening failures, at most three times within its original 600-second budget.
+This addresses three observed gateway failures before native MAX execution at
+`3f9a1c6f`; it does not change native deadlines or accept an unverified archive.
+The same request, HTTPS requirement, exact size, checksum and owned temporary
+directory remain mandatory. Permanent HTTP errors, cancellation, transport and
+body-read failures propagate. All 12 focused installer checks pass, including
+actual ZIP extraction after a simulated 504 and rejection of late responses or
+EOF. Live gateway recovery and the remaining native jobs still require CI.
+
+At `79df821a`, both actual Linux generated Node/TUN architecture jobs pass in
+run `41998274349`. At `f9297b8a`, all three AWG comparison jobs pass in run
+`41996830799`, including the macOS comparison and cancellation stages. These
+exact-source passes supersede those narrower earlier observations; they do not
+establish a complete current release or physical-device acceptance.
+
 The observed ARM64 Node/TUN MTU-rollback notification failure is corrected in
 `dc2ad7f5`: a strictly classified automatic IPv6 address waits for the actual
 original socket notification under the unchanged caller deadline. Pending
