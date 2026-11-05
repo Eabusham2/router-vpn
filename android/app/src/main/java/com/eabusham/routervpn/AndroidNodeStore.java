@@ -17,6 +17,7 @@ import java.util.List;
 
 /** App-private bounded Router VPN node store. IDs are locally derived, never trusted path input. */
 final class AndroidNodeStore {
+    private static final Object STORE_LOCK = new Object();
     static final int MAX_NODES = 24;
     static final int MAX_BUNDLE = 32 * 1024 * 1024;
     static final int MAX_PROFILE_SCHEMA = 4;
@@ -55,7 +56,7 @@ final class AndroidNodeStore {
         this.root = new File(this.context.getFilesDir(), STORE_DIR);
     }
 
-    synchronized Node importBundle(byte[] bytes) throws Exception {
+    synchronized Node importBundle(byte[] bytes) throws Exception { synchronized (STORE_LOCK) {
         requireMutable("importing or replacing a Router VPN node");
         if (bytes == null || bytes.length == 0 || bytes.length > MAX_BUNDLE) throw new IllegalArgumentException("Router bundle size is invalid.");
         // Validate original bytes before JSONObject can collapse duplicate
@@ -88,6 +89,7 @@ final class AndroidNodeStore {
             throw failure;
         }
         return describe(id, bundle, target);
+        }
     }
 
     synchronized List<Node> list() throws Exception {
@@ -107,12 +109,13 @@ final class AndroidNodeStore {
         return result;
     }
 
-    synchronized void select(String id) throws Exception {
+    synchronized void select(String id) throws Exception { synchronized (STORE_LOCK) {
         requireSelectable(id);
         selectInternal(id);
+        }
     }
 
-    synchronized void remove(String id) throws Exception {
+    synchronized void remove(String id) throws Exception { synchronized (STORE_LOCK) {
         requireMutable("deleting a Router VPN node");
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
         File nodeFile = nodeFile(id);
@@ -145,19 +148,57 @@ final class AndroidNodeStore {
             }
             throw failure;
         }
+        }
     }
 
     String activeId() { return preferences().getString(ACTIVE_ID, ""); }
 
     File usageFile() { return new File(context.getFilesDir(), "node-usage-v1.json"); }
 
-    synchronized SelectionSnapshot snapshotSelection() throws Exception {
+    synchronized SelectionSnapshot snapshotSelection() throws Exception { synchronized (STORE_LOCK) {
         return new SelectionSnapshot(activeId(), snapshotOptional(activeBundleFile()));
+        }
     }
 
-    synchronized void restoreSelection(SelectionSnapshot snapshot) throws Exception {
+    synchronized void restoreSelection(SelectionSnapshot snapshot) throws Exception { synchronized (STORE_LOCK) {
         if (snapshot == null) throw new IllegalArgumentException("Node selection rollback snapshot is missing.");
         rollbackSelection(activeBundleFile(), snapshot.activeBundle, snapshot.id);
+        }
+    }
+
+    /** Restore only bytes published by this transaction; a newer source stays owned. */
+    synchronized void restoreProfileBundle(String id, byte[] original, byte[] published) throws Exception { synchronized (STORE_LOCK) {
+        requireMutable("restoring a connection profile's Router node");
+        if (!safeId(id) || original == null || published == null || original.length == 0
+                || original.length > MAX_BUNDLE || published.length == 0 || published.length > MAX_BUNDLE) {
+            throw new IllegalArgumentException("Profile rollback lost its bounded original node source.");
+        }
+        File target = nodeFile(id);
+        byte[] current = snapshotOptional(target);
+        if (java.util.Arrays.equals(current, original)) return;
+        if (!java.util.Arrays.equals(current, published)) {
+            throw new IllegalStateException("A concurrent Router-node update prevents safe rollback; its source was preserved.");
+        }
+        JSONObject bundle = new JSONObject(new String(original, StandardCharsets.UTF_8));
+        validateBundle(bundle);
+        if (!id.equals(deriveId(bundle, original))) throw new IllegalStateException("Profile rollback changed the original Router identity.");
+        // Selection is a separate retained publication. Re-importing here would
+        // select this node and overwrite an independently adopted active source.
+        atomicWrite(target, original);
+    } }
+
+    synchronized void restoreProfileSelection(SelectionSnapshot original, List<SelectionSnapshot> attempted) throws Exception { synchronized (STORE_LOCK) {
+        if (original == null || attempted == null) throw new IllegalArgumentException("Profile rollback lost its original selection.");
+        SelectionSnapshot current = snapshotSelection();
+        if (sameSelection(current, original)) return;
+        boolean owned = false;
+        for (SelectionSnapshot candidate : attempted) if (sameSelection(current, candidate)) { owned = true; break; }
+        if (!owned) throw new IllegalStateException("A concurrent Router selection prevents safe rollback; its active source was preserved.");
+        rollbackSelection(activeBundleFile(), original.activeBundle, original.id);
+    } }
+
+    private static boolean sameSelection(SelectionSnapshot left, SelectionSnapshot right) {
+        return right != null && left.id.equals(right.id) && java.util.Arrays.equals(left.activeBundle, right.activeBundle);
     }
 
     File file(String id) {

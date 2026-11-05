@@ -48,14 +48,14 @@ public class Context {
 }''',
     "android/content/MemoryPreferences.java": r'''package android.content;
 public final class MemoryPreferences implements SharedPreferences {
- public final java.util.Map<String,Object> values=new java.util.LinkedHashMap<>();public int writes;public int failures;
+ public final java.util.Map<String,Object> values=new java.util.LinkedHashMap<>();public int writes;public int failures;public Runnable beforeFailure;
  public java.util.Map<String,?> getAll(){return new java.util.LinkedHashMap<>(values);}public String getString(String key,String fallback){return (String)values.getOrDefault(key,fallback);}
  public boolean getBoolean(String key,boolean fallback){return (Boolean)values.getOrDefault(key,fallback);}
  public Editor edit(){return new Editor(){final java.util.Map<String,Object> staged=new java.util.LinkedHashMap<>();
   public Editor putString(String key,String value){staged.put(key,value);return this;}public Editor putBoolean(String key,boolean value){staged.put(key,value);return this;}
   public Editor putInt(String key,int value){staged.put(key,value);return this;}public Editor putLong(String key,long value){staged.put(key,value);return this;}public Editor putFloat(String key,float value){staged.put(key,value);return this;}
   public Editor remove(String key){staged.put(key,null);return this;}public void apply(){commit();}
-  public boolean commit(){writes++;for(java.util.Map.Entry<String,Object> e:staged.entrySet()){if(e.getValue()==null)values.remove(e.getKey());else values.put(e.getKey(),e.getValue());}if(failures>0){failures--;return false;}return true;}
+  public boolean commit(){writes++;for(java.util.Map.Entry<String,Object> e:staged.entrySet()){if(e.getValue()==null)values.remove(e.getKey());else values.put(e.getKey(),e.getValue());}if(failures>0){failures--;Runnable hook=beforeFailure;beforeFailure=null;if(hook!=null)hook.run();return false;}return true;}
  };}
 }''',
     "android/util/Base64.java": r'''package android.util;public final class Base64 {public static final int DEFAULT=0;
@@ -338,6 +338,30 @@ public final class ConnectionProfilesHarness {
    }finally{AndroidVpnMutationGuard.busy=false;AndroidImportedRouterPath.afterValidation=null;}
   }
  }
+ static void profileRollback(Path root)throws Exception{
+  Fixture f=new Fixture(root);var entry=mixedSetup(f,"shadowsocks");var saved=f.store.add("Retained rollback");f.changeNode(f.first);f.otherSelection();
+  final byte[][] successor={null};final Throwable[] editFailure={null};
+  f.prefs.failures=1;f.prefs.beforeFailure=()->{
+   Thread editor=new Thread(()->{try{JSONObject replacement=bundle(f.first);AndroidProfileSelection.selectedRouterProfile(replacement).put("api_token","successor private credential").put("dns_host","192.0.2.53");successor[0]=replacement.toString().getBytes(StandardCharsets.UTF_8);new AndroidNodeStore(f.context).importBundle(successor[0]);}catch(Throwable error){editFailure[0]=error;}},"independent-node-editor");
+   editor.start();try{editor.join(5000);}catch(InterruptedException interrupted){throw new IllegalStateException(interrupted);}if(editor.isAlive()||editFailure[0]!=null)throw new IllegalStateException("successor edit did not join",editFailure[0]);
+  };
+  Exception failure=rejected(()->f.store.load(saved.id),"later selection failure");
+  check(successor[0]!=null&&Arrays.equals(Files.readAllBytes(f.first.file.toPath()),successor[0]),"profile rollback overwrote the successor node credentials");
+  check(f.nodes.activeId().equals(f.first.id)&&Arrays.equals(Files.readAllBytes(new File(f.context.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE).toPath()),successor[0]),"profile rollback overwrote the successor active selection");
+  check(failure.getMessage().contains("rollback is incomplete")&&failure.getSuppressed().length>0,"successor conflict was falsely reported as restored");
+  Fixture retained=new Fixture(root);mixedSetup(retained,"shadowsocks");var retainedRow=retained.store.add("Retain failed rollback");retained.changeNode(retained.first);retained.otherSelection();byte[] originalNode=Files.readAllBytes(retained.first.file.toPath());final byte[][] applied={null};
+  retained.prefs.failures=1;retained.prefs.beforeFailure=()->{try{applied[0]=Files.readAllBytes(retained.first.file.toPath());AndroidPrivateFileStore.beforeWrite=()->{throw new IllegalStateException("original rollback writer unavailable");};}catch(Exception error){throw new IllegalStateException(error);}};
+  try{Exception pending=rejected(()->retained.store.load(retainedRow.id),"rollback writer failure");check(pending.getMessage().contains("rollback is incomplete")&&pending.getSuppressed().length>0,"rollback failure was hidden");check(applied[0]!=null&&!Arrays.equals(originalNode,applied[0])&&Arrays.equals(Files.readAllBytes(retained.first.file.toPath()),applied[0]),"failed rollback lost retained published bytes");}finally{AndroidPrivateFileStore.beforeWrite=null;}
+  Fixture atomic=new Fixture(root);byte[] old=Files.readAllBytes(atomic.first.file.toPath());JSONObject proposed=bundle(atomic.first);AndroidProfileSelection.selectedRouterProfile(proposed).put("api_token","transaction candidate");byte[] ours=proposed.toString().getBytes(StandardCharsets.UTF_8);atomic.nodes.importBundle(ours);
+  JSONObject next=new JSONObject(proposed.toString());AndroidProfileSelection.selectedRouterProfile(next).put("api_token","later independent editor");byte[] newer=next.toString().getBytes(StandardCharsets.UTF_8);
+  var entered=new java.util.concurrent.CountDownLatch(1);var release=new java.util.concurrent.CountDownLatch(1);var editorStarted=new java.util.concurrent.CountDownLatch(1);var once=new java.util.concurrent.atomic.AtomicBoolean(true);final Throwable[] errors=new Throwable[2];
+  AndroidPrivateFileStore.beforeWrite=()->{if(once.compareAndSet(true,false)){entered.countDown();try{if(!release.await(5,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("rollback release missing");}catch(InterruptedException error){throw new IllegalStateException(error);}}};
+  Thread restoring=new Thread(()->{try{atomic.nodes.restoreProfileBundle(atomic.first.id,old,ours);}catch(Throwable error){errors[0]=error;}});
+  Thread editing=new Thread(()->{editorStarted.countDown();try{new AndroidNodeStore(atomic.context).importBundle(newer);}catch(Throwable error){errors[1]=error;}});
+  try{restoring.start();check(entered.await(5,java.util.concurrent.TimeUnit.SECONDS),"restore never reached owned publication");editing.start();check(editorStarted.await(5,java.util.concurrent.TimeUnit.SECONDS),"competing editor did not start");long end=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5);boolean blocked=false;while(editing.isAlive()&&System.nanoTime()<end){StackTraceElement[] stack=editing.getStackTrace();if(editing.getState()==Thread.State.BLOCKED&&stack.length>0&&stack[0].getClassName().equals("com.eabusham.routervpn.AndroidNodeStore")&&stack[0].getMethodName().equals("importBundle")){blocked=true;break;}Thread.yield();}release.countDown();restoring.join(5000);editing.join(5000);check(blocked,"node rollback compare and publication did not exclude the competing store");check(!restoring.isAlive()&&!editing.isAlive()&&errors[0]==null&&errors[1]==null,"atomic rollback/editor did not join");check(Arrays.equals(Files.readAllBytes(atomic.first.file.toPath()),newer),"atomic rollback erased the later committed edit");}finally{release.countDown();restoring.join(5000);if(editing.getState()!=Thread.State.NEW)editing.join(5000);AndroidPrivateFileStore.beforeWrite=null;}
+  Fixture normal=new Fixture(root);mixedSetup(normal,"shadowsocks");var ordinary=normal.store.add("Exact rollback");normal.changeNode(normal.first);normal.otherSelection();State before=new State(normal);normal.prefs.failures=1;
+  Exception restored=rejected(()->normal.store.load(ordinary.id),"ordinary exact rollback");before.same(normal,"original rollback");check(restored.getMessage().contains("prior connection state was restored"),"ordinary rollback was not recognized");
+ }
  static void ordinaryTorRoundtrip(Path root)throws Exception{
   for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn")){
    Fixture f=new Fixture(root);var entry=ordinary(protocol,"ordinary-"+protocol);f.exits.save(entry);var exit=f.exits.get("external-b");exit.startupMode="last";exit.autoConnect=true;exit.torPolicy.put("manual_mtu",1320);f.exits.save(exit);
@@ -597,14 +621,14 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("imported-router")){importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);System.out.println("Android imported-Router actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("imported-router")){importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);System.out.println("Android imported-Router actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "imported-router"), default="all")
+    parser.add_argument("--case-family", choices=("all", "imported-router", "profile-rollback"), default="all")
     args = parser.parse_args()
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
@@ -643,6 +667,25 @@ def main():
         data.mkdir()
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
         # Each complete case family retains the original finite JVM budget.
+        if args.case_family in ("all", "profile-rollback"):
+            subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "profile-rollback"], env=env, check=True, timeout=180)
+            original_node = (app / "AndroidNodeStore.java").read_text()
+            guard = '\n        if (!java.util.Arrays.equals(current, published)) {\n            throw new IllegalStateException("A concurrent Router-node update prevents safe rollback; its source was preserved.");\n        }'
+            if original_node.count(guard) != 1 or original_node.count('synchronized (STORE_LOCK)') != 7:
+                raise AssertionError("Owned node rollback publication boundary changed")
+            controls = (("source", original_node.replace(guard, ""), "profile rollback overwrote the successor node credentials"),
+                        ("atomic", original_node.replace('synchronized (STORE_LOCK)', 'synchronized (new Object())'), "node rollback compare and publication did not exclude the competing store"))
+            for name, changed, witness in controls:
+                negative = work / ("rollback-negative-" + name); shutil.copytree(classes, negative)
+                mutation = work / ("rollback-source-" + name) / "AndroidNodeStore.java"; mutation.parent.mkdir(); mutation.write_text(changed)
+                classpath = str(negative) + os.pathsep + str(jar)
+                subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative), str(mutation)], check=True, timeout=60)
+                result = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "profile-rollback"], env=env, capture_output=True, text=True, timeout=180)
+                if result.returncode == 0 or witness not in result.stderr:
+                    raise AssertionError("Rollback causal control missed its exact defect: " + name + "\n" + result.stderr)
+                print("Android node rollback causal control rejected: " + name)
+            if args.case_family == "profile-rollback":
+                return
         subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "imported-router"], env=env, check=True, timeout=180)
         if args.case_family == "imported-router":
             return

@@ -103,7 +103,7 @@ final class AndroidConnectionProfileStore {
         AndroidNodeStore.SelectionSnapshot originalSelection=nodes.snapshotSelection();
         Map<String,Object> originalPreferences=snapshotPreferences();
         // All validation above is complete before any selection, node-file, preset or preference mutation.
-        List<NodeUpdate> applied=new ArrayList<>();boolean externalAttempted=false,ordinaryAttempted=false,selectionAttempted=false;
+        List<NodeUpdate> applied=new ArrayList<>();List<AndroidNodeStore.SelectionSnapshot> attemptedSelections=new ArrayList<>();boolean externalAttempted=false,ordinaryAttempted=false,selectionAttempted=false;
         try{
             requireIdle("loading a connection profile");
             // Both ordinary sources are captured before either row is written.
@@ -114,13 +114,14 @@ final class AndroidConnectionProfileStore {
                 if(!java.util.Arrays.equals(update.original,readLimited(nodes.file(update.id),AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("A linked Router node changed during profile validation.");
                 applied.add(update);selectionAttempted=true;
                 byte[] updatedBundle=update.updated;
+                attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(update.id,updatedBundle));
                 if(!update.id.equals(nodes.importBundle(updatedBundle).id))throw new IllegalStateException("Router node identity changed during connection-profile apply.");
             }
             if(updatedOrdinary!=null){ordinaryAttempted=true;exits.saveIfUnchanged(updatedOrdinary,AndroidStandardExitStore.snapshot(originalOrdinary));}
             if(updatedExternal!=null){externalAttempted=true;exits.saveIfUnchanged(updatedExternal,AndroidStandardExitStore.snapshot(originalExternal));}
             selectionAttempted=true;
-            if(!external)nodes.select(nodeId);
-            else if(!originalSelection.id.isEmpty())nodes.select(originalSelection.id);
+            if(!external){attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(nodeId,readLimited(nodes.file(nodeId),AndroidNodeStore.MAX_BUNDLE)));nodes.select(nodeId);}
+            else if(!originalSelection.id.isEmpty()){attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(originalSelection.id,readLimited(nodes.file(originalSelection.id),AndroidNodeStore.MAX_BUNDLE)));nodes.select(originalSelection.id);}
             else nodes.restoreSelection(originalSelection);
             SharedPreferences.Editor edit=prefs().edit().putString(SELECTED_KIND,kind).putString(SELECTED_ID,nodeId).putString(MODE_KEY,external?"external":mode)
                     .putBoolean(MULTI_ON,multi).putString(MULTI_ENTRY,entry).putString(MULTI_EXIT,exit).putString(MULTI_MODE,multiMode).putString(MULTI_ENTRY_KIND,entryKind).putString("multihop_execution",execution).putString("multihop_entry_mode",entryMode);
@@ -130,8 +131,8 @@ final class AndroidConnectionProfileStore {
             Exception rollback=null;
             if(externalAttempted)try{restoreExternal(originalExternal,updatedExternal);}catch(Exception error){rollback=append(rollback,error);}
             if(ordinaryAttempted)try{restoreExternal(originalOrdinary,updatedOrdinary);}catch(Exception error){rollback=append(rollback,error);}
-            for(int i=applied.size()-1;i>=0;i--)try{NodeUpdate update=applied.get(i);byte[] originalBundle=update.original;if(!update.id.equals(nodes.importBundle(originalBundle).id))throw new IllegalStateException("Restored Router node identity changed.");}catch(Exception error){rollback=append(rollback,error);}
-            if(selectionAttempted)try{nodes.restoreSelection(originalSelection);}catch(Exception error){rollback=append(rollback,error);}
+            for(int i=applied.size()-1;i>=0;i--)try{NodeUpdate update=applied.get(i);nodes.restoreProfileBundle(update.id,update.original,update.updated);}catch(Exception error){rollback=append(rollback,error);}
+            if(selectionAttempted)try{nodes.restoreProfileSelection(originalSelection,attemptedSelections);}catch(Exception error){rollback=append(rollback,error);}
             try{restorePreferences(originalPreferences);}catch(Exception error){rollback=append(rollback,error);}
             IllegalStateException result=new IllegalStateException(rollback==null?"Could not load the connection profile; prior connection state was restored.":"Could not load the connection profile and rollback is incomplete; inspect the linked nodes before connecting.",failure);
             if(rollback!=null)result.addSuppressed(rollback);throw result;
