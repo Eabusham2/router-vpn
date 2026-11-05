@@ -716,6 +716,24 @@ negative leaves pass against the actual shipping source (10 race verdicts,
 2.199 seconds). This is source-audit repair; it neither changes runtime behavior
 nor establishes native network or release acceptance.
 
+## Windows native harness selects its original semantic tests
+
+The native Windows controller job `127046793491` exposed a stale fixture index:
+adding the original-context process test shifted every positional foundation
+mutant selector. All 29 compiled negative controls now select their existing
+semantic test by exact name; their production mutations, failure witnesses,
+execution deadlines and rejection rules are unchanged. The GUI gate now captures
+the four already-shipping context lock/process source and test files in its
+strict regular-file inventory.
+
+The existing release harness passes all 19 checks, including insertion/reordering
+of the required baseline inventory, every foundation witness in its selected
+native test, and missing/foreign GUI source rejection. Substituting only the prior
+committed harness bodies reproduces 31 selector assertion failures and the old
+GUI closure rejection. These are host-independent harness checks; the actual
+Windows compiled mutants, native GUI execution and separate observed drain
+utility startup timeouts still require current native CI evidence.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

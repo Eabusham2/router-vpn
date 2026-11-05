@@ -8,7 +8,9 @@ With no arguments, exercise that binding and its authoritative workflow edges.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -357,6 +359,70 @@ def check_workflow(candidate: str, build_all: str) -> None:
 
 
 class WindowsReleaseGateTests(unittest.TestCase):
+    def controller_gate(self, name):
+        path = REPOSITORY / ("deploy/test_windows_controller_" + name + ".py")
+        spec = importlib.util.spec_from_file_location("release_controller_" + name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_controller_mutants_keep_exact_tests_when_baseline_inventory_changes(self):
+        gate = self.controller_gate("foundation")
+        original = gate.mutants()
+        self.assertEqual(len(original), 29)
+        for required in (("TestInsertedOwnershipBoundary", *gate.REQUIRED),
+                         tuple(reversed(gate.REQUIRED))):
+            with self.subTest(required=required[0]), patch.object(gate, "REQUIRED", required):
+                self.assertEqual(gate.mutants(), original,
+                                 "baseline inventory change retargeted a compiled negative control")
+
+    def test_foundation_mutants_select_the_test_containing_their_failure_witness(self):
+        declarations = {}
+        for path in (REPOSITORY / "internal/windowscontroller").glob("*_test.go"):
+            source = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"^func (Test\w+)\(t \*testing\.T\)", source, re.M):
+                end = re.search(r"^func ", source[match.end():], re.M)
+                body = source[match.start():match.end() + end.start() if end else len(source)]
+                self.assertNotIn(match.group(1), declarations)
+                declarations[match.group(1)] = body
+        gate = self.controller_gate("foundation")
+        for filename, mutant, selected, witness, changed in gate.mutants():
+            with self.subTest(mutant=mutant):
+                self.assertIn(selected, gate.REQUIRED)
+                self.assertIn(selected, declarations)
+                self.assertIn(witness, declarations[selected],
+                              "compiled mutant selected a different semantic test")
+                self.assertNotEqual(changed, (REPOSITORY / "internal/windowscontroller" / filename).read_text(encoding="utf-8"))
+
+    def test_gui_inventory_requires_each_original_caller_source(self):
+        gate = self.controller_gate("gui")
+        records = gate.sources()
+        required = ("context_lock.go", "context_lock_test.go",
+                    "process_context_windows.go", "process_context_windows_test.go")
+        for name in required:
+            relative = "internal/windowscontroller/" + name
+            self.assertEqual(records[relative], hashlib.sha256((REPOSITORY / relative).read_bytes()).hexdigest())
+        with tempfile.TemporaryDirectory(prefix="controller-source-closure-") as directory:
+            root = Path(directory).resolve()
+            for relative in records:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((REPOSITORY / relative).read_bytes())
+            package = root / "internal/windowscontroller"
+            with patch.object(gate, "ROOT", root), patch.object(gate, "PACKAGE", package):
+                self.assertEqual(gate.sources(), records)
+                for name in required:
+                    with self.subTest(missing=name):
+                        path = package / name
+                        original = path.read_bytes()
+                        path.unlink()
+                        with self.assertRaisesRegex(ValueError, "source/test closure changed"):
+                            gate.sources()
+                        path.write_bytes(original)
+                (package / "unowned_windows.go").write_text("package windowscontroller\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "source/test closure changed"):
+                    gate.sources()
+
     def native_dns_sources(self):
         return ((REPOSITORY / ".github/workflows/desktop-native-runtime.yml").read_text(encoding="utf-8"),
                 (REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8"))
