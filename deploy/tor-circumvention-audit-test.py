@@ -129,8 +129,12 @@ class TorMaintenanceAuditTests(unittest.TestCase):
             ("context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)", "context.WithCancel(ctx)"),
             ("context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)",
              "context.WithTimeout(context.Background(), mobiletor.DesktopBridgeHeartbeatMaxAge)"),
-            ("if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil",
-             "_ = err\n\t\tif ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil"),
+            ("if err != nil || verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil",
+             "_ = err\n\t\tif verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil"),
+            ("defer cancel()", "cancel()"),
+            ("routerVPNTorRefreshReadback(verify, owner, &next)", "routerVPNTorRefreshReadback(ctx, owner, &next)"),
+            ("routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil || verify.Err() != nil",
+             "routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil"),
         ):
             with self.subTest(replacement=replacement):
                 self.reject(WORKER, original, replacement)

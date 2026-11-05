@@ -876,6 +876,15 @@ def execute_baseline_suite(baselines, suite):
                 raise ValueError("Node routing gate omitted or duplicated an actual original-TUN retirement leaf: " + case)
     if name == "mtu-startup-budget":
         require_native_verdicts(output, ["TestRouterVPNMTUStartupReceiptKeepsOriginalOperation"], "MTU startup budget")
+    if name == "tor-mtu-release":
+        root = "TestRouterVPNDesktopTorMTUReleaseWithHeldOwner"
+        require_native_verdicts(output, [root, root + "/ordinary", root + "/inherited-measurement"], "Tor MTU release")
+    if name == "tor-mtu-heartbeat":
+        root = "TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt"
+        names = ["TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback", root]
+        names += [root + "/previous-" + prior + "/" + outcome for prior in ("false", "true")
+                  for outcome in ("network-failure", "cancel-after-readback", "cancel-after-network", "success")]
+        require_native_verdicts(output, names, "Tor MTU heartbeat")
     if name == "native-mtu-transaction":
         require_native_verdicts(output, [NATIVE_MTU_TEST] + [NATIVE_MTU_TEST + "/" + case for case in NATIVE_MTU_CASES], "MTU transaction")
     if name == "mtu-transaction-model":
@@ -923,6 +932,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
+        ("tor-mtu-release", ".", "^TestRouterVPNDesktopTorMTUReleaseWithHeldOwner$",
+         ("TestRouterVPNDesktopTorMTUReleaseWithHeldOwner",)),
+        ("tor-mtu-heartbeat", "./cmd/sing-box", "^TestRouterVPNDesktopTorMTUHeartbeat",
+         ("TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback", "TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt")),
         ("ss-packet", "./protocol/shadowsocks", "^TestRouterVPNShadowsocks",
          ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",

@@ -278,7 +278,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					break
 				}
 			}
-			if routerVPNTorRefreshReadback(owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(owner, &receipt, started, time.Now()) != nil {
+			if routerVPNTorRefreshReadback(parent, owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(owner, &receipt, started, time.Now()) != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}

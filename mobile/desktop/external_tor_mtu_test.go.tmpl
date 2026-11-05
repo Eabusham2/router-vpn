@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -222,13 +224,13 @@ func TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback(t
 		mutate(&bad)
 		owner.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) { return &bad, nil }
 		receipt := initial
-		if routerVPNTorRefreshReadback(owner, &receipt) == nil || receipt.MTUReadback != nil || receipt != initial {
+		if routerVPNTorRefreshReadback(context.Background(), owner, &receipt) == nil || receipt.MTUReadback != nil || receipt != initial {
 			t.Fatal("malformed native interface receipt was adopted", bad, receipt)
 		}
 	}
 	owner.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) { return &valid, nil }
 	receipt := initial
-	if err := routerVPNTorRefreshReadback(owner, &receipt); err != nil {
+	if err := routerVPNTorRefreshReadback(context.Background(), owner, &receipt); err != nil {
 		t.Fatal(err)
 	}
 	retained := *receipt.MTUReadback
@@ -236,18 +238,105 @@ func TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback(t
 	if *receipt.MTUReadback != retained {
 		t.Fatal("published receipt retained a mutable caller pointer")
 	}
-	if routerVPNTorRefreshReadback(owner, &receipt) == nil {
+	if routerVPNTorRefreshReadback(context.Background(), owner, &receipt) == nil {
 		t.Fatal("same interface revision authorized another native reader")
 	}
 	valid = retained
 	valid.Revision--
-	if routerVPNTorRefreshReadback(owner, &receipt) == nil {
+	if routerVPNTorRefreshReadback(context.Background(), owner, &receipt) == nil {
 		t.Fatal("native interface revision regressed")
 	}
 	owner.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) {
 		return nil, errors.New("native readback unavailable")
 	}
-	if routerVPNTorRefreshReadback(owner, &receipt) == nil {
+	if routerVPNTorRefreshReadback(context.Background(), owner, &receipt) == nil {
 		t.Fatal("missing native readback was fabricated as unchanged")
+	}
+}
+
+type desktopTorReceiptCommandFixture struct {
+	*desktopTorMeasuredCommandFixture
+	network func() (string, error)
+}
+
+func (f *desktopTorReceiptCommandFixture) DesktopNetworkReceipt() (string, error) {
+	return f.network()
+}
+
+func TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt(t *testing.T) {
+	for _, prior := range []bool{false, true} {
+		for _, outcome := range []string{"network-failure", "cancel-after-readback", "cancel-after-network", "success"} {
+			t.Run(fmt.Sprintf("previous-%t/%s", prior, outcome), func(t *testing.T) {
+				files := desktopTorAutoFiles(t)
+				base, _ := desktopTorMeasuredCommand(t, files)
+				initial := base.proof
+				initial.NetworkReceipt = "retained original network witness"
+				if prior {
+					initial.MTUReadback = &mobiletor.DesktopBridgeMTUReadback{Generation: 1, RequestID: strings.Repeat("a", 32), Revision: 1,
+						InterfaceName: initial.InterfaceName, InterfaceIndex: initial.InterfaceIndex, EffectiveMTU: initial.EffectiveMTU}
+				}
+				valid := mobiletor.DesktopBridgeMTUReadback{Generation: 2, RequestID: strings.Repeat("b", 32), Revision: 2,
+					InterfaceName: initial.InterfaceName, InterfaceIndex: initial.InterfaceIndex + 1, EffectiveMTU: 1400}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				base.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) {
+					if outcome == "cancel-after-readback" {
+						cancel()
+					}
+					return &valid, nil
+				}
+				network := desktopNetworkReceiptFixture(t, valid.InterfaceIndex, valid.EffectiveMTU, strings.Repeat("d", 32))
+				witness, err := desktopnetwork.ParseDesktopNetworkReceipt(network)
+				if err != nil {
+					t.Fatal(err)
+				}
+				witness.Name = valid.InterfaceName
+				network, err = desktopnetwork.CanonicalDesktopNetworkReceipt(witness)
+				if err != nil {
+					t.Fatal(err)
+				}
+				calls := 0
+				owner := &desktopTorReceiptCommandFixture{desktopTorMeasuredCommandFixture: base, network: func() (string, error) {
+					calls++
+					if outcome == "network-failure" {
+						return "", errors.New("captured network witness lost")
+					}
+					if outcome == "cancel-after-network" {
+						cancel()
+					}
+					return network, nil
+				}}
+				receipt := initial
+				err = routerVPNTorRefreshReadback(ctx, owner, &receipt)
+				if outcome != "success" {
+					if err == nil || receipt != initial {
+						t.Fatal("failed or cancelled network observation partially adopted the MTU/interface receipt", err, initial, receipt)
+					}
+					if strings.HasPrefix(outcome, "cancel-") && !errors.Is(err, context.Canceled) {
+						t.Fatal("cancelled observation lost its cancellation identity", err)
+					}
+					if outcome == "cancel-after-readback" && calls != 0 {
+						t.Fatal("cancelled readback began another network observation")
+					}
+					return
+				}
+				if err != nil || calls != 1 || receipt.MTUReadback == nil || *receipt.MTUReadback != valid ||
+					receipt.InterfaceName != valid.InterfaceName || receipt.InterfaceIndex != valid.InterfaceIndex || receipt.EffectiveMTU != valid.EffectiveMTU || receipt.NetworkReceipt != network {
+					t.Fatal("successful observation did not adopt its complete exact receipt", err, receipt)
+				}
+				retained := *receipt.MTUReadback
+				valid.InterfaceIndex++
+				if *receipt.MTUReadback != retained {
+					t.Fatal("adopted receipt borrowed the mutable observation")
+				}
+				// Only the reader/MTU and its network witness may change. The
+				// source, captured path, padding, proof and timestamp stay exact.
+				receipt.MTUReadback, receipt.InterfaceName, receipt.InterfaceIndex, receipt.EffectiveMTU, receipt.NetworkReceipt =
+					initial.MTUReadback, initial.InterfaceName, initial.InterfaceIndex, initial.EffectiveMTU, initial.NetworkReceipt
+				if receipt != initial {
+					t.Fatal("readback adoption changed captured proof authority")
+				}
+			})
+		}
 	}
 }

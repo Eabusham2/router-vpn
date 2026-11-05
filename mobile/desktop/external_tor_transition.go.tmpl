@@ -176,10 +176,13 @@ func routerVPNTorMaintain(ctx context.Context, owner routerVPNTorOwner, files *r
 	}
 	if result.heartbeat {
 		verify, cancel := context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)
+		defer cancel()
 		err := owner.VerifyCurrentPath(verify)
-		cancel()
-		if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil || routerVPNTorRefreshPadding(owner, &result.proof, result.started, time.Now()) != nil {
+		next := result.proof
+		if err != nil || verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil || routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil || verify.Err() != nil {
 			result.err = routerVPNTorFailure
+		} else {
+			result.proof = next
 		}
 	}
 	return result

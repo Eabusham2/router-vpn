@@ -26,9 +26,9 @@ type RouterVPNDesktopTorMTULease struct {
 	cancel     context.CancelFunc
 	closed     atomic.Bool
 	authority  string
+	active     atomic.Int64
 	generation uint64 // below are protected by owner.mu
 	request    string
-	active     int
 	transition func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error)
 }
 
@@ -167,7 +167,7 @@ func (l *RouterVPNDesktopTorMTULease) SetTransitionHandler(handler func(context.
 	r := l.owner
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if l.transition != nil || l.generation != 0 || l.active != 0 || r.closing || !l.currentLifetime() {
+	if l.transition != nil || l.generation != 0 || l.active.Load() != 0 || r.closing || !l.currentLifetime() {
 		return errors.New("desktop Tor MTU transition admission is already captured or retired")
 	}
 	l.transition = handler
@@ -188,7 +188,7 @@ func (l *RouterVPNDesktopTorMTULease) RegisterOperation(generation uint64, reque
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	policy := r.policy.Metadata()
-	if !l.currentLifetime() || r.closing || l.active != 0 || l.generation == ^uint64(0) || generation != l.generation+1 || !policy.AllowMTUOptimization() || !l.Healthy() {
+	if !l.currentLifetime() || r.closing || l.active.Load() != 0 || l.generation == ^uint64(0) || generation != l.generation+1 || !policy.AllowMTUOptimization() || !l.Healthy() {
 		return errors.New("desktop Tor MTU request is stale or another operation is still draining")
 	}
 	l.generation, l.request = generation, request
@@ -223,7 +223,7 @@ func (l *RouterVPNDesktopTorMTULease) Lifetime(parent context.Context) (context.
 		return nil, nil, errors.New("desktop Tor MTU owner is closing")
 	}
 	r.workers.Add(1)
-	l.active++
+	l.active.Add(1)
 	r.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
 	stop := context.AfterFunc(l.ctx, cancel)
@@ -232,12 +232,14 @@ func (l *RouterVPNDesktopTorMTULease) Lifetime(parent context.Context) (context.
 		once.Do(func() {
 			stop()
 			cancel()
-			r.mu.Lock()
-			l.active--
-			r.mu.Unlock()
 			if releaseActivity != nil {
 				releaseActivity()
 			}
+			// Admission and worker Add still serialize with Close under owner.mu.
+			// Release must not reacquire that lock: a native observation can hold
+			// it after this caller is cancelled. Keep the generation occupied
+			// until the inherited measurement activity has actually released.
+			l.active.Add(-1)
 			r.workers.Done()
 		})
 	}

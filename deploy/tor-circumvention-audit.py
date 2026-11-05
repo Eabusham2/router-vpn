@@ -179,11 +179,11 @@ def need_desktop_tor_maintenance() -> None:
         worker = go_contract_block(worker_source, "func routerVPNTorMaintain(")
         heartbeat = go_contract_block(worker, "if result.heartbeat")
         for marker in ("verify, cancel := context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)",
-                       "err := owner.VerifyCurrentPath(verify)", "cancel()"):
+                       "err := owner.VerifyCurrentPath(verify)", "defer cancel()", "next := result.proof"):
             go_contract_at(heartbeat, marker)
-        invalid = go_contract_block(heartbeat, "if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil")
+        invalid = go_contract_block(heartbeat, "if err != nil || verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil || routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil || verify.Err() != nil")
         go_contract_at(invalid, "result.err = routerVPNTorFailure")
-        if not (go_contract_at(heartbeat, "owner.VerifyCurrentPath(verify)") < go_contract_at(heartbeat, "cancel()") < go_contract_at(heartbeat, "result.err = routerVPNTorFailure")):
+        if not (go_contract_at(heartbeat, "defer cancel()") < go_contract_at(heartbeat, "owner.VerifyCurrentPath(verify)") < go_contract_at(heartbeat, "routerVPNTorRefreshReadback(verify, owner, &next)") < go_contract_at(heartbeat, "result.proof = next")):
             raise ValueError("retained heartbeat must verify before adopting readback")
 
         admission = go_contract_block(command, "if maintenance == nil")

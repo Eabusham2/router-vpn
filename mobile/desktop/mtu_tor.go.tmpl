@@ -27,7 +27,13 @@ type routerVPNTorMeasurementOwner interface {
 
 var _ routerVPNTorMeasurementOwner = (*routerVPNTorNative)(nil)
 
-func routerVPNTorRefreshReadback(owner routerVPNTorOwner, receipt *mobiletor.DesktopBridgeProof) error {
+func routerVPNTorRefreshReadback(ctx context.Context, owner routerVPNTorOwner, receipt *mobiletor.DesktopBridgeProof) error {
+	if ctx == nil || receipt == nil {
+		return routerVPNTorFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	captured, ok := owner.(routerVPNTorMeasurementOwner)
 	if !ok {
 		if receipt.MTUReadback != nil {
@@ -39,14 +45,25 @@ func routerVPNTorRefreshReadback(owner routerVPNTorOwner, receipt *mobiletor.Des
 	if err != nil {
 		return routerVPNTorFailure
 	}
-	if err := routerVPNTorAdoptReadback(receipt, readback); err != nil {
+	// The MTU reader and routing witness form one receipt. Never install the
+	// new interface/MTU before the matching network observation has succeeded;
+	// a failed or late cancelled observation must leave the prior proof intact.
+	next := *receipt
+	if err := routerVPNTorAdoptReadback(&next, readback); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	network, err := routerVPNDesktopNetworkProjection(owner)
 	if err != nil {
 		return routerVPNTorFailure
 	}
-	receipt.NetworkReceipt = network
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	next.NetworkReceipt = network
+	*receipt = next
 	return nil
 }
 

@@ -40,6 +40,36 @@ class NativeRetirementVerdicts(unittest.TestCase):
 
 
 class NativeMTUVerdicts(unittest.TestCase):
+    def test_actual_tor_lease_release_ignores_held_owner_and_rejects_old_lock(self):
+        spec = importlib.util.spec_from_file_location("tor_lease_control", ROOT / "deploy/test_tor_mtu_release.py")
+        control = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(control)
+        control.execute()
+
+    def test_tor_release_and_complete_heartbeat_require_each_original_verdict(self):
+        release = "TestRouterVPNDesktopTorMTUReleaseWithHeldOwner"
+        heartbeat = "TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt"
+        for suite, names in (
+            (("tor-mtu-release", ".", "^" + release + "$", (release,)),
+             [release, release + "/ordinary", release + "/inherited-measurement"]),
+            (("tor-mtu-heartbeat", "./cmd/sing-box", "^TestRouterVPNDesktopTorMTUHeartbeat", (heartbeat,)),
+             ["TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback", heartbeat] +
+             [heartbeat + "/previous-" + prior + "/" + outcome for prior in ("false", "true")
+              for outcome in ("network-failure", "cancel-after-readback", "cancel-after-network", "success")]),
+        ):
+            lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+            baseline = Mock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                baseline.execute.return_value = (0, "".join(lines))
+                NODE.execute_baseline_suite(baseline, suite)
+                for line in lines:
+                    for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line,
+                                    "".join(lines).replace(line, line.replace("TestRouterVPN", "TestForeign"), 1)):
+                        with self.subTest(suite=suite[0], line=line, changed=changed):
+                            baseline.execute.return_value = (0, changed)
+                            with self.assertRaisesRegex(ValueError, "omitted"):
+                                NODE.execute_baseline_suite(baseline, suite)
+
     def test_owned_transaction_and_every_native_leaf_are_mandatory(self):
         suites = (("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NODE.NATIVE_MTU_TEST,)),
                   ("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NODE.NATIVE_MTU_MODEL_TESTS),
