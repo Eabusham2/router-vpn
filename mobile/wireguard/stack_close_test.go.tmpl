@@ -75,7 +75,16 @@ func TestRouterVPNWireGuardStackCloseDrainsOriginalDelivery(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("actual packet delivery did not enter")
 	}
+	// The admitted delivery must already retain its read lock before Close can
+	// acquire the dispatcher lock briefly while detaching the old endpoint.
+	retainedDelivery := !endpoint.dispatcherAccess.TryLock()
+	if !retainedDelivery {
+		endpoint.dispatcherAccess.Unlock()
+	}
 	go func() { closed <- device.Close() }()
+	if !retainedDelivery {
+		t.Fatal("Close did not retain original packet delivery")
+	}
 	select {
 	case <-device.done:
 	case <-time.After(time.Second):
