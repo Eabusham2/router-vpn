@@ -134,7 +134,7 @@ public final class LibboxCommandServer {
     }
 
     public func start() throws { LibboxTestState.shared.started() }
-    public func startOrReloadService(_ text: String, options: LibboxOverrideOptions) throws {}
+    public func startOrReloadService(_ text: String, options: LibboxOverrideOptions) throws { captureConfiguration(text) }
     public func closeService() throws {}
     public func close() { LibboxTestState.shared.stopped() }
     public func pause() {}
