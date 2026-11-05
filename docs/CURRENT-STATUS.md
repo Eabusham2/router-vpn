@@ -207,9 +207,9 @@ only after an original failed cleanup leaves its captured root present. The
 observer registers before the first TempDir, retains the failure, never retries
 deletion and never reads configuration or key contents. Five focused race tests
 pass, and restoring the old fixture call fails the required ordering assertion.
-The macOS nonempty-directory failure remains intermittent: the later `2fc4c8c`
-comparison step passes, but its job is cancelled at a later step. These diagnostics
-do not claim a production writer/lifecycle repair or a complete native job pass.
+The macOS nonempty-directory failure remains intermittent: the later `f9297b8a`
+AWG run passes on all three platforms, including macOS comparison and cancellation.
+These diagnostics do not establish the cause of the earlier cleanup failure.
 
 The macOS native kernel runner now emits bounded captured progress before
 fallible process-group termination. A termination or output-join error retains
@@ -218,6 +218,18 @@ All 27 focused Python checks pass; the original handler fails the intended
 lost-progress control. The original process group and 730-second/10-second
 limits are unchanged. This repairs the diagnostic loss observed in ARM64 job
 `127091651439` at `617c3dd6`; the underlying native timeout remains unresolved.
+
+The same runner now records bounded original-child and exact-executable process
+identities before fallible termination, without reaping the original child.
+It also preserves original, captured and observed route fields when private
+alias retirement fails, reusing the existing readback without extra deletion
+or retry. All 35 selected Python checks pass, including an actual child's
+preserved wait status. The two unchanged Go-launching checks are outside that
+selection. The later `3f9a1c6f` ARM64 full socket/PF job passes both previously
+implicated mutation controls; Intel and the intermittent cause remain separate.
+At `79df821a`, both Windows native bootstrap jobs pass, including the corrected
+external-engine and manager retention controls. Complete current publication
+and device acceptance still require their own evidence.
 
 The Windows external-network delayed-accept fixture now recognizes that the
 original dial and grant can share one clock tick. It requires the exact single

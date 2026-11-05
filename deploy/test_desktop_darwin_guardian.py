@@ -150,9 +150,11 @@ def private_alias_present(output, address):
     return True
 
 
-def private_alias_route(address):
+def private_alias_route(address, evidence=None):
     output, _ = system(['/sbin/route', '-n', 'get', address])
     route = native_route(output)
+    if evidence is not None:
+        evidence.update(route)
     if (route['destination'] != address or route['interface'] != 'lo0' or
             'HOST' not in route['flags'].strip('<>').split(',') or
             route.get('mask', '255.255.255.255') != '255.255.255.255'):
@@ -161,20 +163,37 @@ def private_alias_route(address):
 
 
 def retire_private_alias(address, original, captured):
-    actual, _ = system(['/sbin/ifconfig', '-a'])
-    if private_alias_present(actual, address):
-        route = private_alias_route(address)
-        if captured is not None and route != captured:
-            raise ValueError('Owned private alias route changed before retirement')
-        system(['/sbin/ifconfig', 'lo0', 'inet', address, '-alias'])
-    actual, _ = system(['/sbin/ifconfig', '-a'])
-    if private_alias_present(actual, address):
-        raise ValueError('Owned private alias survived exact retirement')
-    output, _ = system(['/sbin/route', '-n', 'get', address])
-    restored = native_route(output)
-    require_default_route(restored)
-    if restored != original:
-        raise ValueError('Private alias retirement lost its original route identity')
+    observed, phase = {}, 'before-removal'
+    try:
+        actual, _ = system(['/sbin/ifconfig', '-a'])
+        if private_alias_present(actual, address):
+            route = private_alias_route(address, observed)
+            if captured is not None and route != captured:
+                raise ValueError('Owned private alias route changed before retirement')
+            system(['/sbin/ifconfig', 'lo0', 'inet', address, '-alias'])
+        phase, observed = 'after-removal', {}
+        actual, _ = system(['/sbin/ifconfig', '-a'])
+        if private_alias_present(actual, address):
+            raise ValueError('Owned private alias survived exact retirement')
+        output, _ = system(['/sbin/route', '-n', 'get', address])
+        restored = native_route(output)
+        observed.update(restored)
+        require_default_route(restored)
+        if restored != original:
+            raise ValueError('Private alias retirement lost its original route identity')
+    except Exception:
+        # Readback already occurred for ownership checking. Do not query again,
+        # delete a route, or infer ownership from the diagnostic description.
+        def bounded(route):
+            return None if route is None else {key: str(route[key])[:128] for key in
+                ('destination', 'mask', 'gateway', 'interface', 'flags') if key in route}
+        try:
+            diagnostic_line('Darwin private alias retirement evidence', {
+                'address': str(address)[:64], 'phase': phase,
+                'original': bounded(original), 'captured': bounded(captured), 'observed': bounded(observed)})
+        except Exception:
+            pass  # Diagnostic formatting can never replace the original refusal.
+        raise
 
 
 def require_socks_verdicts(output):
@@ -236,7 +255,53 @@ def dispatcher_baselines():
             for lan in (False, True) for owner in (capture, None)]
 
 
-def native_test_output(process):
+def diagnostic_line(label, value):
+    try:
+        print(label+': '+json.dumps(value, sort_keys=True), file=sys.stderr, flush=True)
+    except Exception:
+        pass  # Even a closed diagnostic stream must preserve the original error.
+
+
+def native_timeout_identity(process, binary):
+    """Read only original child state and the captured executable's processes."""
+    # Popen.poll() would reap an exited child and release its PID before the
+    # original killpg below. ps only reads kernel state; Popen retains its wait.
+    # Apple's ps documents -p, empty headers, these four fields and Z (zombie):
+    # https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/ps.1
+    state = {'pid': process.pid, 'cached_returncode': process.returncode}
+    try:
+        observed = subprocess.run(['/bin/ps', '-p', str(process.pid), '-o', 'pid=,ppid=,pgid=,state='],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=2, check=False, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+        if observed.returncode or len(observed.stdout) > 256:
+            raise ValueError('Original process metadata unavailable or oversized')
+        match = re.fullmatch(rb'\s*([0-9]{1,10})[ \t]+([0-9]{1,10})[ \t]+([0-9]{1,10})[ \t]+([A-Za-z+<>=-]{1,16})\s*', observed.stdout)
+        if match is None or int(match[1]) != process.pid:
+            raise ValueError('Original process metadata changed its PID or shape')
+        state.update({'observed_pid': int(match[1]), 'ppid': int(match[2]), 'pgid': int(match[3]),
+                      'state': match[4].decode('ascii')})
+    except Exception as error:
+        state['nonreaping_observation_error'] = type(error).__name__
+    diagnostic_line('Darwin original test process at timeout', state)
+    if binary is None:
+        return
+    try:
+        pids = owned_children(binary)
+        diagnostic_line('Darwin exact executable process inventory', {'count': len(pids), 'reported': min(len(pids), 32)})
+        for pid in pids[:32]:
+            value = {'pid': pid}
+            for name, read in (('pgid', os.getpgid), ('sid', os.getsid)):
+                try:
+                    value[name] = read(pid)
+                except OSError as error:
+                    value[name+'_error'] = type(error).__name__
+                    value[name+'_errno'] = error.errno
+            diagnostic_line('Darwin exact executable process identity', value)
+    except Exception as error:
+        diagnostic_line('Darwin exact executable inventory error', {'type': type(error).__name__})
+
+
+def native_test_output(process, binary=None):
     """Retain the original timeout's evidence before fallible group cleanup."""
     try:
         output, _ = process.communicate(timeout=730)
@@ -247,6 +312,10 @@ def native_test_output(process):
         partial = expired.output or b''
         print('Darwin kernel test timed out; captured partial output (bounded tail):\n' +
               partial[-8192:].decode(errors='replace'), file=sys.stderr, flush=True)
+        try:
+            native_timeout_identity(process, binary)
+        except Exception:
+            pass  # Observation failure grants no cleanup authority or success.
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except OSError as cleanup:
@@ -366,7 +435,7 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
                                    start_new_session=True,
                                    env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C',
                                         'GORACE': 'atexit_sleep_ms=0'})
-        output = native_test_output(process)
+        output = native_test_output(process, binary)
         result = process.returncode
         print(output.decode(errors='replace'), end='', flush=True)
     except BaseException as error:

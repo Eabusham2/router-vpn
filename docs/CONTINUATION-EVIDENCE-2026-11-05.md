@@ -2057,6 +2057,54 @@ did not recur there; its production cause is not established by a passing rerun.
 No current all-platform release, deployment or physical-device acceptance is
 claimed from these narrower observations.
 
+## Nonreaping native process and exact route failure evidence
+
+Darwin run `41991335737` at `87c9940d` exposed two distinct intermittent
+failures. ARM64 job `127124023587` reaches a Go test failure after 33.86s,
+but the Python output join later reaches its 730-second bound and original
+process-group termination fails. Its per-socket retirement control fails at
+socket 50 before the required socket-128 witness, so it is not accepted as
+the intended production defect. Intel job `127124023372` reaches the expected
+SOCKS derived-expiry assertions, then refuses a nondefault route during exact
+private-alias cleanup. Neither original log identifies the remaining process
+state or complete route difference well enough to justify a lifecycle repair.
+
+The runner now uses fixed `/bin/ps` arguments to read only the captured original
+PID, parent, process group and state under a two-second diagnostic timeout.
+The parser accepts one exact-PID row of at most 256 bytes. It never invokes
+the original Popen `poll`, `wait` or `communicate` during this observation:
+reaping that child before the existing signal would release its PID too early.
+At most 32 processes executing the exact captured fixture binary have their
+process-group and session metadata reported. Read failures retain only bounded
+type/errno evidence and confer no new termination or cleanup authority.
+
+Private-alias failures retain only bounded original, captured and observed
+route dictionaries from the already required readback, with the pre/post
+removal phase. No additional route query, retry or inferred route deletion is
+added. Native deadlines, socket-128/expiry witnesses and the requirement for
+successful original cleanup remain unchanged.
+
+The frozen two-file selection passes 35 Python tests in 0.893s; root independently
+repeats all 35 in 1.323s. A real local child retains its original exit-37 wait
+status after observation. Other controls cover zombie/live metadata, exact
+executable selection, bounded/foreign/duplicate rows, denied termination,
+failed diagnostic output and route mismatch with unchanged deletion decisions.
+The two unchanged Go-launching tests are explicitly excluded while another unit
+owns compilation. An initial full discovery failed those two setup cases because
+Go was absent from PATH; that invocation is not reported as a complete pass.
+Actual Darwin process-state diagnostics still require the native runner.
+
+Newer evidence narrows the earlier failures: ARM64 full-socket job
+`127140234223`, run `41996313355` at `3f9a1c6f`, succeeds and explicitly rejects
+the per-socket retirement and native finish-acknowledgment defects. The Intel
+full-socket job is still queued at this observation. Both native Windows
+bootstrap jobs in run `41998274546` at `79df821a` succeed; AMD64 job
+`127146873155` explicitly rejects the corrected original-engine and manager
+retention defects. Its OS permits/TUN remain explicit fixtures; actual WFP and
+device acceptance are separate. The authoritative Tor prerequisite at `79df821a`
+fails at the same old compiler-download HTTP-504 call, before Tor compilation;
+the bounded downloader correction is already published in `ffc25642`.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

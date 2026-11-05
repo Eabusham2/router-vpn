@@ -120,6 +120,120 @@ class DarwinNativeTimeoutDiagnostics(unittest.TestCase):
                  isinstance(node.func, ast.Name) and node.func.id == 'native_test_output']
         self.assertEqual(len(calls), 1)
         self.assertEqual(ast.unparse(calls[0].args[0]), 'process')
+        self.assertEqual(ast.unparse(calls[0].args[1]), 'binary')
+
+    def test_exited_main_and_exact_helper_identity_precede_denied_kill(self):
+        self.process.communicate.side_effect = self.expired
+        binary = Path('/opt/routervpn-darwin-guardian-original/darwin-guardian.test')
+        shown = io.StringIO()
+        def kill(*_args):
+            self.assertIn('"cached_returncode": 0', shown.getvalue())
+            self.assertIn('"pid": 712', shown.getvalue())
+            self.assertIn('"pgid": 710', shown.getvalue())
+            self.assertIn('"sid": 431', shown.getvalue())
+            raise PermissionError(1, 'original group denied')
+        with contextlib.redirect_stderr(shown), \
+             mock.patch.object(self.gate.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'431 400 431 Z\n')) as observe, \
+             mock.patch.object(self.gate, 'owned_children', return_value=[712]) as children, \
+             mock.patch.object(self.gate.os, 'getpgid', return_value=710) as pgid, \
+             mock.patch.object(self.gate.os, 'getsid', return_value=431), \
+             mock.patch.object(self.gate.os, 'killpg', side_effect=kill), \
+             self.assertRaises(RuntimeError) as failed:
+            self.gate.native_test_output(self.process, binary)
+        self.assertIs(failed.exception.__cause__, self.expired)
+        children.assert_called_once_with(binary)
+        pgid.assert_called_once_with(712)
+        self.process.poll.assert_not_called()
+        self.process.wait.assert_not_called()
+        observe.assert_called_once_with(['/bin/ps', '-p', '431', '-o', 'pid=,ppid=,pgid=,state='],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=2, check=False, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+        self.assertIn('"state": "Z"', shown.getvalue())
+
+    def test_failed_identity_observation_never_masks_original_timeout_or_kill(self):
+        self.process.communicate.side_effect = self.expired
+        shown = io.StringIO()
+        with contextlib.redirect_stderr(shown), \
+             mock.patch.object(self.gate.subprocess, 'run', side_effect=OSError('read failure with private text')), \
+             mock.patch.object(self.gate, 'owned_children', side_effect=ValueError('private inventory text')), \
+             mock.patch.object(self.gate.os, 'killpg', side_effect=PermissionError(1, 'original denied')), \
+             self.assertRaisesRegex(RuntimeError, 'original denied') as failed:
+            self.gate.native_test_output(self.process, Path('/captured/original'))
+        self.assertIs(failed.exception.__cause__, self.expired)
+        self.assertIn('"nonreaping_observation_error": "OSError"', shown.getvalue())
+        self.assertIn('"type": "ValueError"', shown.getvalue())
+        self.assertNotIn('private', shown.getvalue())
+
+    def test_identity_inventory_bounds_native_reads_and_keeps_running_state(self):
+        self.process.returncode = None
+        shown = io.StringIO()
+        with contextlib.redirect_stderr(shown), \
+             mock.patch.object(self.gate, 'owned_children', return_value=list(range(100, 200))), \
+             mock.patch.object(self.gate.os, 'getpgid', side_effect=ProcessLookupError(3, 'gone')) as pgid, \
+             mock.patch.object(self.gate.os, 'getsid', return_value=431) as sid, \
+             mock.patch.object(self.gate.os, 'kill') as kill, mock.patch.object(self.gate.os, 'killpg') as killpg:
+            self.gate.native_timeout_identity(self.process, Path('/captured/original'))
+        self.assertEqual(pgid.call_count, 32)
+        self.assertEqual(sid.call_count, 32)
+        self.assertIn('"cached_returncode": null', shown.getvalue())
+        self.assertIn('"count": 100, "reported": 32', shown.getvalue())
+        self.assertIn('"pgid_errno": 3', shown.getvalue())
+        self.assertLess(len(shown.getvalue()), 7000)
+        kill.assert_not_called()
+        killpg.assert_not_called()
+
+    def test_native_inventory_matches_only_exact_captured_executable(self):
+        binary = Path('/opt/routervpn-darwin-guardian-original/darwin-guardian.test')
+        proc = mock.Mock()
+        def pids(values, size):
+            if values is None:
+                return 3
+            values[0], values[1], values[2] = 401, 402, 403
+            return 3
+        def path(pid, buffer, size):
+            value = str(binary) if pid == 402 else '/other/darwin-guardian.test'
+            buffer.value = os.fsencode(value)
+            return len(buffer.value)
+        proc.proc_listallpids.side_effect = pids
+        proc.proc_pidpath.side_effect = path
+        with mock.patch.object(self.gate.ctypes, 'CDLL', return_value=proc), \
+             mock.patch.object(self.gate.os, 'kill') as kill:
+            self.assertEqual(self.gate.owned_children(binary), [402])
+        self.assertEqual(proc.proc_pidpath.call_count, 3)
+        kill.assert_not_called()
+
+    def test_original_child_observation_rejects_foreign_duplicate_and_unbounded_rows(self):
+        for raw in (b'432 400 431 Z\n', b'431 400 431 Z\n431 400 431 Z\n',
+                    b'431 400 431 '+b'Z'*300, b'431 400 431 Z private-command-data\n'):
+            with self.subTest(raw=raw[:30]), contextlib.redirect_stderr(io.StringIO()) as shown, \
+                 mock.patch.object(self.gate.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, raw)):
+                self.gate.native_timeout_identity(self.process, None)
+                self.assertIn('"nonreaping_observation_error": "ValueError"', shown.getvalue())
+                self.assertNotIn('private-command-data', shown.getvalue())
+        self.process.poll.assert_not_called()
+        self.process.wait.assert_not_called()
+        self.process.communicate.assert_not_called()
+
+    def test_actual_exited_child_remains_waitable_after_nonreaping_ps_diagnostic(self):
+        process = subprocess.Popen([sys.executable, '-c', 'import sys; sys.exit(37)'],
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            process.stdout.read()  # EOF observes exit without consuming wait status.
+            shown = io.StringIO()
+            with contextlib.redirect_stderr(shown), \
+                 mock.patch.object(process, 'poll', side_effect=AssertionError('diagnostic reaped original child')), \
+                 mock.patch.object(process, 'wait', side_effect=AssertionError('diagnostic waited original child')), \
+                 mock.patch.object(process, 'communicate', side_effect=AssertionError('diagnostic consumed original output')):
+                self.gate.native_timeout_identity(process, None)
+            self.assertIsNone(process.returncode)
+            self.assertIn('"cached_returncode": null', shown.getvalue())
+            # A sandbox may expose a different process namespace to ps. An
+            # unavailable readback still must not consume the original status.
+            self.assertIn('"pid": '+str(process.pid), shown.getvalue())
+            self.assertEqual(process.wait(timeout=5), 37)
+        finally:
+            process.stdout.close()
+            process.wait(timeout=5)
 
 
 class MacOSNativeVerdicts(unittest.TestCase):
@@ -297,6 +411,36 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         self.assertFalse(any('-alias' in item.args[0] for item in call.call_args_list))
         with mock.patch.object(self.gate, 'system', side_effect=[(self.absent, ''), (self.absent, ''), (self.route(dict(self.before, gateway='192.0.2.2')), '')]), self.assertRaises(ValueError):
             self.gate.retire_private_alias(self.address, self.before, self.owned)
+
+    def test_nondefault_post_removal_route_preserves_exact_evidence_without_delete(self):
+        observed = dict(self.owned, gateway='10.254.77.11', flags='<UP,HOST,DONE,WASCLONED>')
+        shown = io.StringIO()
+        replies = [(self.absent, ''), (self.absent, ''), (self.route(observed), '')]
+        with contextlib.redirect_stderr(shown), mock.patch.object(self.gate, 'system', side_effect=replies) as call, \
+             self.assertRaisesRegex(ValueError, 'nondefault route'):
+            self.gate.retire_private_alias(self.address, self.before, self.owned)
+        evidence = json.loads(shown.getvalue().split(': ', 1)[1])
+        self.assertEqual(evidence, {'address': self.address, 'phase': 'after-removal',
+                         'original': self.before, 'captured': self.owned, 'observed': observed})
+        self.assertEqual(call.call_count, 3)
+        self.assertFalse(any('-alias' in item.args[0] or 'delete' in item.args[0] for item in call.call_args_list))
+
+    def test_changed_pre_removal_route_is_bounded_and_diagnostic_failure_preserves_refusal(self):
+        observed = dict(self.owned, gateway='x'*1000)
+        for broken in (False, True):
+            with self.subTest(broken=broken):
+                shown = io.StringIO()
+                sink = mock.Mock(write=mock.Mock(side_effect=OSError('closed diagnostic'))) if broken else shown
+                with contextlib.redirect_stderr(sink), \
+                     mock.patch.object(self.gate, 'system', side_effect=[(self.present, ''), (self.route(observed), '')]) as call, \
+                     self.assertRaisesRegex(ValueError, 'changed before retirement'):
+                    self.gate.retire_private_alias(self.address, self.before, self.owned)
+                self.assertEqual(call.call_count, 2)
+                if not broken:
+                    evidence = json.loads(shown.getvalue().split(': ', 1)[1])
+                    self.assertEqual(evidence['phase'], 'before-removal')
+                    self.assertEqual(evidence['observed']['gateway'], 'x'*128)
+                    self.assertLess(len(shown.getvalue()), 1200)
 
     def verdicts(self):
         root = self.gate.native_case_name('SOCKSAssociations')
