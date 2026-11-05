@@ -1,0 +1,636 @@
+{
+  "schema": 1,
+  "recorded_at_utc": "2026-11-05T13:11:04Z",
+  "repository": "Eabusham2/router-vpn",
+  "branch": "main",
+  "record_base_commit": "46e7dca7f918c33c74e02ddbea923cfbb98ef8e6",
+  "record_base_tree": "e24c60154642fa239009b498b051448f08e41806",
+  "scope": "Separate mobile/Windows continuation workspace; complements, does not replace, RECOVERY-WORKSPACE-2026-11-05.json",
+  "workspace_last_known": "/workspace/scratch/b31c34e11f09",
+  "workspace_access": "unavailable; exec_command reports No usable execution environment is available",
+  "full_pending_source_preserved": false,
+  "exact_source_recovered": {
+    "unit": "Apple nested packet host/picker fixtures",
+    "files": 6,
+    "method": "Fetched exact 7903b70d originals and replayed retained explicit literal edits; original and frozen output SHA256 verified independently by parent and agent",
+    "production_activated": false,
+    "new_executable_validation": false
+  },
+  "canonical_checkout": {
+    "path": "/workspace/scratch/b31c34e11f09/router-vpn",
+    "last_confirmed_main": "7903b70da6c5a39ccd5d49d7a53aaad499f2058e",
+    "note": "68011cbb was subsequently fetched for other worktrees; canonical main adoption beyond 7903b70d was not confirmed before outage"
+  },
+  "published_mobile_baseline": {
+    "sha": "7903b70da6c5a39ccd5d49d7a53aaad499f2058e",
+    "tree": "7c46e622a46db8a6145dfc15bbf3a18c8d35d6ea",
+    "equivalent_local_commit": "7c60c64dcf58e1c548b1aef591e99defe90e1d00",
+    "scope": "136 imported-entry to paired-final compiler/native fixtures; proxy entries may use packet finals; packet-entry to packet-final remains refused in published source",
+    "proof_last_known": "/workspace/scratch/b31c34e11f09/mobile-packet-final/proof/published.json",
+    "completed_before_publication": [
+      "218 shared race verdicts",
+      "59 actual encrypted native verdicts",
+      "136 compiler and 136 actual Android native composition fixtures, 274 exact combined verdicts",
+      "Corrected native preparation closure and focused profile/permission/startup/ownership suites"
+    ],
+    "limits": "No local Swift/Xcode execution, physical-device acceptance, private deployment or full exact-SHA release was established by this publication"
+  },
+  "units": [
+    {
+      "id": "shared-nested-packet",
+      "state": "unfinished, uncommitted; full source bytes not recovered",
+      "worktree_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/source",
+      "base_commit": "7903b70da6c5a39ccd5d49d7a53aaad499f2058e",
+      "immutable_snapshot_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/proof/host-source-v1",
+      "manifest_sha256": "8ad682c225cd54ce0d17a19f060cd08d954dfe785297396e3f93550358566702",
+      "snapshot_files": [
+        {
+          "path": "internal/awgpolicy/packet_envelope.go",
+          "sha256": "564b105739549fbaa25ec16a7b183603de6900d56382a1ce3c40899d6aee62aa",
+          "bytes_preserved_here": false
+        },
+        {
+          "path": "internal/mobilemtu/policy.go",
+          "sha256": "55990478dec7152c703457f94fb9793a75ad6eec506dfb94f25731a1b23d6c38",
+          "bytes_preserved_here": false
+        },
+        {
+          "path": "internal/mobilemultihop/imported_entry.go",
+          "sha256": "67bcf269ac986243d8690dba6ec1150a9992d757022e091ab2418ef5137f78fe",
+          "bytes_preserved_here": false
+        },
+        {
+          "path": "internal/mobilemultihop/plan.go",
+          "sha256": "ca2bf0e2d20bd8c6072abf43a5f2c85886277c08bd3d183267412a7c7bd301b6",
+          "bytes_preserved_here": false
+        },
+        {
+          "path": "internal/mobilemultihop/node_multihop_packet.go",
+          "sha256": "99e6ae6700837c7a48653b9befff5effa06645086973544a2438d07384ff1ac1",
+          "bytes_preserved_here": false
+        },
+        {
+          "path": "internal/mobilemultihop/imported_nested_packet_test.go",
+          "sha256": "72b15a23664dcae109ba93f326870db160c4e153deba503d73cd303070767409",
+          "bytes_preserved_here": false
+        }
+      ],
+      "inventory_complete": false,
+      "additional_known_change": "deploy/prepare-mobile-mtu.py includes the awgpolicy dependency; additional native/helper test and preparation edits require inspection of the real diff",
+      "design": [
+        "Add 54 nested packet graphs above published136, for190 configured fixtures",
+        "Preserve original imported entry MTU and raw final credentials/settings",
+        "Derive a final Auto endpoint cap before construction from complete data and control envelopes; Fixed overflow rejects",
+        "Include final packet/AWG control sizes, optional Start Layer/address/padding overhead and public carrier address family",
+        "Reject malformed/cyclic/foreign wrappers and preserve actual legacy/MAX compatibility",
+        "Configured-unmeasured metadata is not authenticated physical path MTU evidence",
+        "TUN retune and restore must not mutate either captured endpoint configuration"
+      ],
+      "metadata_fields": [
+        "entry_packet_mtu",
+        "exit_packet_requested_mtu",
+        "exit_packet_effective_mtu",
+        "packet_data_overhead",
+        "packet_control_max",
+        "packet_mtu_state"
+      ],
+      "metadata_state": "configured-unmeasured",
+      "completed_checks": [
+        {
+          "check": "54 new compiler graphs",
+          "result": "passed",
+          "seconds": 0.489
+        },
+        {
+          "check": "focused mobilemultihop suite",
+          "result": "passed",
+          "seconds": 4.68
+        },
+        {
+          "check": "focused mobilemtu suite",
+          "result": "passed",
+          "seconds": 0.016
+        },
+        {
+          "check": "focused awgpolicy suite",
+          "result": "passed",
+          "seconds": 0.043
+        },
+        {
+          "check": "190 exact shared fixture export and strict inventory",
+          "result": "passed"
+        },
+        {
+          "check": "actual prepare-mobile-multihop.py closure",
+          "result": "passed",
+          "source_digest": "207ddad43b16598d5199cc475e9c7a6d9b767020d25be0e5657746ac56df83f3"
+        }
+      ],
+      "pending": [
+        {
+          "session": 12057,
+          "log_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/proof/native-second.jsonl",
+          "status": "native build/result not observed before outage"
+        },
+        {
+          "check": "independent encrypted native peer cases",
+          "status": "no pass confirmed; includes IPv4/IPv6 packet lengths, fragmentation, keys/PSK/AWG, selected DNS/proofs, cancellation and Close"
+        },
+        {
+          "check": "causal omission controls, final native parser and projected-byte checks",
+          "status": "unfinished"
+        },
+        {
+          "check": "complete final owned manifest and commit",
+          "status": "not completed"
+        }
+      ]
+    },
+    {
+      "id": "android-nested-packet",
+      "state": "unfinished, uncommitted; full source bytes not recovered",
+      "worktree_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/android-source",
+      "base_commit": "7903b70da6c5a39ccd5d49d7a53aaad499f2058e",
+      "known_paths": [
+        "android/app/src/main/java/com/eabusham/routervpn/AndroidImportedRouterPath.java",
+        "android/test_android_imported_router.py",
+        "android/test_android_external_permission.py",
+        "android/test_android_runtime_teardown.py",
+        "android/test_android_startup_policy.py"
+      ],
+      "compiled_shared_input": "The immutable six-file host-source-v1 copy was verified before the actual helper launch; compiler-input-hashes.json is last known under mobile-nested-packet/android-proof",
+      "completed_checks": [
+        {
+          "check": "external permission",
+          "checks": 4646,
+          "causal_controls": 9,
+          "result": "passed",
+          "session": 24301
+        },
+        {
+          "check": "full runtime ownership, restoration and retirement with retained controls",
+          "result": "passed",
+          "session": 61005
+        },
+        {
+          "check": "four Python fixture syntax checks",
+          "result": "passed"
+        }
+      ],
+      "pending": [
+        {
+          "session": 79573,
+          "log_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/android-startup.log",
+          "status": "startup result not observed"
+        },
+        {
+          "session": 73430,
+          "log_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/android-helper.log",
+          "status": "actual190 helper/native composition result and exported fixture count not observed",
+          "fixture_directory_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/android-proof/actual-fixtures"
+        }
+      ],
+      "excluded_attempt": {
+        "session": 86641,
+        "result": "cancelled exit130 before actual Java export",
+        "reason": "premature launch after a failed mutable-snapshot copy; not evidence",
+        "log_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/android-helper-before-compiler-copy.log"
+      },
+      "frozen_profile_subset": {
+        "files": [
+          {
+            "path": "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+            "sha256": "5a9918f830a569de6948887dbbafcb7fbef5f17a7784416c0a20f08778fe35d4",
+            "bytes_preserved_here": false
+          },
+          {
+            "path": "android/test_android_connection_profiles.py",
+            "sha256": "7b5e76ebd1fb3e21094dccb050e73b0200f6c4cb08a91c0a8199938b6a992599",
+            "bytes_preserved_here": false
+          },
+          {
+            "path": "android/test_android_connection_profiles_contract.py",
+            "sha256": "402b50da5438bb14c2d4f4da41dadcd225b6d220691d880d8f8ff88e826a61d4",
+            "bytes_preserved_here": false
+          }
+        ],
+        "snapshot_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/android-profile-proof/owned-source",
+        "manifest_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet/android-profile-proof/owned-manifest.json",
+        "manifest_sha256": "781772beff3caa08355d18a05747d21f38c731b64ca7213f73df39360f245f12",
+        "evidence_sha256": "df16c32a919c871ab685b193bfc8a7d485cb0e9633f66972ecefa68345d7e0e0",
+        "patch_sha256": "ea44fe57dc8b69435a75f279f5856a3353771e0b88edd40e7290b6989c637e87",
+        "completed_families": [
+          {
+            "name": "wg",
+            "checks": 547,
+            "cases": 57
+          },
+          {
+            "name": "awg-fast",
+            "checks": 533,
+            "cases": 55
+          },
+          {
+            "name": "awg-strong",
+            "checks": 533,
+            "cases": 55
+          }
+        ],
+        "boundary": "Compiler readiness is doubled in this profile subset; no native envelope proof is claimed. Prior six families, summary and ownership tests remain mandatory for final integration."
+      }
+    },
+    {
+      "id": "apple-nested-packet",
+      "state": "exact six-file recovery payload preserved here; still inactive and not fully verified",
+      "worktree_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet-apple",
+      "proof_manifest_last_known": "/workspace/scratch/b31c34e11f09/mobile-nested-packet-apple-proof/manifest.json",
+      "base_commit": "7903b70da6c5a39ccd5d49d7a53aaad499f2058e",
+      "payload": "apple_exact_recovery",
+      "completed_before_outage": [
+        {
+          "check": "Apple-shaped actual Go compiler nested graphs",
+          "passed": 54
+        },
+        {
+          "check": "associated compiler refusals",
+          "passed": 252
+        },
+        {
+          "check": "original PSK source-identity controls",
+          "passed": 54
+        },
+        {
+          "check": "different raw final MTU with equal effective cap source-identity controls",
+          "passed": 36
+        },
+        {
+          "check": "preserved proxy-to-packet graphs",
+          "passed": 60
+        },
+        {
+          "check": "preserved proxy-to-packet refusals",
+          "passed": 156
+        },
+        {
+          "check": "exact190/191 verdict inventory controls",
+          "passed": 4
+        },
+        {
+          "check": "picker source controls",
+          "passed": 2
+        }
+      ],
+      "limits": [
+        "No local Swift execution, Xcode/native Apple build or physical-device proof for this frozen nested unit",
+        "Exact source recovery proves bytes, not behavior",
+        "The shared compiler/native nested unit and Android integration remain incomplete and unavailable"
+      ]
+    },
+    {
+      "id": "windows-ss-entry",
+      "state": "unfinished, uncommitted; full source bytes and final hashes not recovered",
+      "worktree_last_known": "/workspace/scratch/b31c34e11f09/windows-ss-entry/source",
+      "base_commit": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+      "known_paths": [
+        "internal/mobilemultihop/desktop_external_policy.go",
+        "internal/mobilemultihop/desktop_external_ss_entry_policy_test.go",
+        "cmd/client/desktop_external_owned.go",
+        "cmd/client/desktop_external_owned_dns.go",
+        "cmd/client/desktop_external_owned_stop.go",
+        "cmd/client/desktop_external_native.go",
+        "cmd/client/desktop_node_owned.go",
+        "cmd/client/desktop_external_wg_entry.go",
+        "cmd/client/desktop_protection_selection.go",
+        "cmd/client/desktop_external_windows_entry.go",
+        "cmd/client/desktop_external_windows_entry_test.go"
+      ],
+      "scope": "Local SS2022 entry to SS2022 final, both Start Layers Off; retain independent sources, original physical entry and final application/DNS/journal identity",
+      "initial_check": {
+        "result": "compiled, then existing direct baselines failed Netlink observation before mutation",
+        "error": "operation not permitted",
+        "log_last_known": "/workspace/scratch/b31c34e11f09/windows-ss-entry/host-initial.log"
+      },
+      "pending_modeled_check": {
+        "session": 3924,
+        "status": "result not observed",
+        "log_last_known": "/workspace/scratch/b31c34e11f09/windows-ss-entry/proof/host-ss-v1.log",
+        "overlay_last_known": "/workspace/scratch/b31c34e11f09/windows-ss-entry/proof/host-os-model-overlay.json",
+        "boundary": "Unshipped OS-inventory model enabled only by ROUTERVPN_WINDOWS_HOST_OS_MODEL=1; not native/WFP acceptance"
+      },
+      "known_unapplied_correction": "Test compares selected DNS detour with proxy; actual value is mobilemultihop.ExternalFinalTag (custom-exit). Correction command never executed.",
+      "remaining": [
+        "Read original pending result and correct the detour assertion",
+        "Add dual-source activation causal control",
+        "Execute independent encrypted SS entry/final paths and credential/DNS/proof negatives",
+        "Register and execute actual Windows WFP composition",
+        "Compile actual Windows host/native composition",
+        "Freeze full source and manifest, then commit and publish after focused validation"
+      ],
+      "other_draft": "The separate RECOVERY-WORKSPACE-2026-11-05 record describes an overlapping18-file Windows SS/HTTP/HTTPS draft in another workspace. Compare both actual drafts; do not combine them blindly or overwrite either."
+    }
+  ],
+  "apple_exact_recovery": {
+    "schema": 1,
+    "kind": "guarded-exact-text-recovery",
+    "base_commit": "7903b70da6c5a39ccd5d49d7a53aaad499f2058e",
+    "base_tree": "7c46e622a46db8a6145dfc15bbf3a18c8d35d6ea",
+    "state": "inactive draft; native acceptance incomplete",
+    "instructions": [
+      "Obtain each original file from base_commit, not current main.",
+      "Verify base_sha256 before any replacement.",
+      "Apply ordered literal operations, checking expected_matches each time; false replaces first occurrence, true replaces all.",
+      "Preserve UTF-8 bytes and original newline content; verify final sha256.",
+      "Write only to an isolated recovery checkout. Do not overwrite newer main or activate nested support without the shared native/compiler changes and required validation."
+    ],
+    "files": [
+      {
+        "path": "ios/RouterVPN/App/IOSMultihopExecution.swift",
+        "mode": "100644",
+        "base_blob": "d9ba8e0369e22eef6e6d002774be1c06831e196c",
+        "base_sha256": "9a285135847995917cc87956ad660295915cfd3f892531a870ae71a3fbb1bfb7",
+        "sha256": "4cf19491d212fb9af92e49f3054756e5b894f18b97f2b33b7b97feab002412c7",
+        "operations": [
+          {
+            "before": "return [\"shadowsocks\", \"hysteria2\"].contains(entry) && [\"wg\", \"awg2-fast\", \"awg2-strong\"].contains(final)",
+            "after": "return [\"wireguard\", \"amneziawg\", \"shadowsocks\", \"hysteria2\"].contains(entry) && [\"wg\", \"awg2-fast\", \"awg2-strong\"].contains(final)",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "Shadowsocks 2022 and Hysteria2 entries also support paired WireGuard and AmneziaWG finals; imported packet entries require Shadowsocks or Hysteria2 finals.",
+            "after": "WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU.",
+            "replace_all": true,
+            "expected_matches": 1
+          }
+        ]
+      },
+      {
+        "path": "ios/RouterVPN/App/IOSMultihopView.swift",
+        "mode": "100644",
+        "base_blob": "23bd0f05e4d64cdc6c38145031ff3891bf976617",
+        "base_sha256": "0c00d752a46e561c89db35c9dd70407ba65382a99c8e6488e98d3237667cae90",
+        "sha256": "6aaefd59029ed61c1ac7dc95b5d08ead7c066e2afe2a3f02a9261524d9889d6f",
+        "operations": [
+          {
+            "before": "Shadowsocks 2022 and Hysteria2 entries can use the final node's captured Shadowsocks, Hysteria2, WireGuard or AmneziaWG Fast/Strong transport. Imported WireGuard and AmneziaWG entries require a Shadowsocks or Hysteria2 final.",
+            "after": "Each imported entry can use the final node's captured Shadowsocks, Hysteria2, WireGuard or AmneziaWG Fast/Strong transport when its complete configured packet budget fits.",
+            "replace_all": true,
+            "expected_matches": 1
+          },
+          {
+            "before": "The app owns one TUN, and each WireGuard or AmneziaWG endpoint retains its independent captured packet MTU. Native startup validates the complete MTU policy before Connected.",
+            "after": "The app owns one TUN. A packet entry keeps its original captured MTU. For a packet final, Auto may derive a smaller endpoint MTU before native startup, including its independent Start Layer and handshake limits; a conflicting Fixed value is refused. The raw final settings remain captured. This configured bound does not measure physical path MTU. Native startup and both original proof paths must pass before Connected.",
+            "replace_all": true,
+            "expected_matches": 1
+          }
+        ]
+      },
+      {
+        "path": "deploy/test_ios_tor_profile.py",
+        "mode": "100644",
+        "base_blob": "de0916ef3c7a9af0af5c1beade5ed40ad6c375fa",
+        "base_sha256": "1346a3a323ec65cab8bbf52c42020ac09eacc0f386b077d8ec8cc5534a307b66",
+        "sha256": "3a1b1e882199e5f66df60b3591194a826598e3e5164f323982a6858a3c145a7e",
+        "operations": [
+          {
+            "before": " case \"imported-router\":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a[\"config\"],a[\"capture\"],a[\"mode\"],a[\"files\"],a[\"profile\"],a[\"start\"],\"\");if err==nil{value=plan.Config()}}",
+            "after": " case \"imported-router\",\"imported-router-metadata\",\"imported-router-source\":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a[\"config\"],a[\"capture\"],a[\"mode\"],a[\"files\"],a[\"profile\"],a[\"start\"],\"\");if err==nil{value=plan.Config();if r.Op==\"imported-router-metadata\"{value=plan.Metadata()};if r.Op==\"imported-router-source\"{value=plan.SourceSHA256()};err=plan.Close()}}",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "\"mtu\":1380,\"persistent_keepalive_interval\":29",
+            "after": "\"mtu\":packetFinal ? 1500:1380,\"persistent_keepalive_interval\":29",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "   if packetFinal && [\"wireguard\",\"amneziawg\"].contains(kind) {\n    reject(\"packet entry to packet final requires separate nested MTU proof\"){try IOSImportedEntryMultihop.validate(entry:entry,final:final)}\n    continue\n   }\n",
+            "after": "   let nestedPacket=packetFinal && [\"wireguard\",\"amneziawg\"].contains(kind)\n",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "\"packet entry remains one exact native endpoint\",endpoints.count==1",
+            "after": "\"packet entry remains one exact native endpoint\",endpoints.count==(packetFinal ? 2:1)",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "native[\"mtu\"] as? Int==1380 && inbounds.first",
+            "after": "native[\"mtu\"] as? Int==(packetFinal ? 1500:1380) && inbounds.first",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "    try check(\"paired packet final preserves all native credentials MTU and padding\",try json(normalized)==json(original))\n    try check(\"paired packet final remains native and keeps independent MTU\",native[\"type\"] as? String==(finalMode==\"wg\" ? \"wireguard\":\"routervpn-amneziawg\") && native[\"mtu\"] as? Int==1420 && inbounds.first{$0[\"type\"] as? String==\"tun\"}?[\"mtu\"] as? Int==1280)\n",
+            "after": "    var expected=original\n    if nestedPacket {\n     let metadata=try object(Data(bridge([\"Op\":\"imported-router-metadata\",\"Config\":text(args)]).utf8))\n     let effective=Int(metadata[\"exit_packet_effective_mtu\"] as? String ?? \"\") ?? 0\n     let overhead=Int(metadata[\"packet_data_overhead\"] as? String ?? \"\") ?? 0\n     let control=Int(metadata[\"packet_control_max\"] as? String ?? \"\") ?? 0\n     try check(\"nested packet cap is explicit configured-unmeasured evidence\",metadata[\"packet_mtu_state\"] as? String==\"configured-unmeasured\" && metadata[\"entry_packet_mtu\"] as? String==\"1500\" && metadata[\"exit_packet_requested_mtu\"] as? String==\"1420\" && effective>=1280 && effective<=1420 && overhead>=60 && control>0 && control<=1500)\n     try check(\"derived Auto cap governs actual final endpoint\",native[\"mtu\"] as? Int==effective && ((effective+15)/16)*16+overhead<=1500)\n     expected[\"mtu\"]=effective\n     try check(\"raw final asset still carries original endpoint MTU\",original[\"mtu\"] as? Int==1420)\n     var fixed=final;fixed[\"mtu_policy\"]=\"fixed\";fixed[\"manual_mtu\"]=1500\n     var fixedArgs=args;fixedArgs[\"profile\"]=try text(fixed)\n     reject(\"actual compiler refuses Fixed nested overflow\"){_ = try bridge([\"Op\":\"imported-router\",\"Config\":text(fixedArgs)])}\n     var smallEntry=entry,smallExternal=imported,smallPacket=imported[kind] as! [String:Any]\n     smallPacket[\"mtu\"]=1280;smallExternal[kind]=smallPacket;smallEntry[\"external\"]=smallExternal\n     let small=try RouterVPNExternalExitBuilder.importedRouterSource(profile:smallEntry)\n     var smallArgs=args;smallArgs[\"config\"]=small.config;smallArgs[\"capture\"]=small.capture\n     reject(\"actual compiler refuses entry capacity below nested IPv6 floor\"){_ = try bridge([\"Op\":\"imported-router\",\"Config\":text(smallArgs)])}\n    }\n    try check(\"paired packet final preserves all native credentials and padding\",try json(normalized)==json(expected))\n    try check(\"paired packet final remains native and keeps independent MTU\",native[\"type\"] as? String==(finalMode==\"wg\" ? \"wireguard\":\"routervpn-amneziawg\") && (native[\"mtu\"] as? Int)==(expected[\"mtu\"] as? Int) && inbounds.first{$0[\"type\"] as? String==\"tun\"}?[\"mtu\"] as? Int==1280)\n",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "136 graphs: preserved76 plus60 proxy entries with paired WG/AWG finals and independent layers",
+            "after": "190 graphs: preserved136 plus54 nested packet entries and paired finals with configured MTU bounds",
+            "replace_all": true,
+            "expected_matches": 1
+          },
+          {
+            "before": "     try check(\"raw final asset still carries original endpoint MTU\",original[\"mtu\"] as? Int==1420)\n",
+            "after": "     try check(\"raw final asset still carries original endpoint MTU\",original[\"mtu\"] as? Int==1420)\n     let identity=try bridge([\"Op\":\"imported-router-source\",\"Config\":text(args)])\n     var replacedEntry=entry,replacedExternal=imported,replacedPacket=imported[kind] as! [String:Any]\n     replacedPacket[\"preshared_key\"]=Data(repeating:14,count:32).base64EncodedString();replacedExternal[kind]=replacedPacket;replacedEntry[\"external\"]=replacedExternal\n     let replacedSource=try RouterVPNExternalExitBuilder.importedRouterSource(profile:replacedEntry)\n     var replacedArgs=args;replacedArgs[\"config\"]=replacedSource.config;replacedArgs[\"capture\"]=replacedSource.capture\n     let replacementIdentity=try bridge([\"Op\":\"imported-router-source\",\"Config\":text(replacedArgs)])\n     try check(\"native source identity binds original nested packet credentials\",identity.count==64 && replacementIdentity.count==64 && identity != replacementIdentity)\n",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "     try check(\"native source identity binds original nested packet credentials\",identity.count==64 && replacementIdentity.count==64 && identity != replacementIdentity)\n",
+            "after": "     try check(\"native source identity binds original nested packet credentials\",identity.count==64 && replacementIdentity.count==64 && identity != replacementIdentity)\n     if finalLayer != \"off\" {\n      var changedMaps=finalMaps,changedAssets=finalMaps[finalMode]!\n      let name=finalMode==\"wg\" ? \"wg.conf\":\"awg.conf\"\n      let originalText=String(decoding:Data(base64Encoded:changedAssets[name]!)!,as:UTF8.self)\n      let changedText=originalText.replacingOccurrences(of:\"MTU=1420\",with:\"MTU=1480\")\n      try check(\"raw packet MTU replacement changes exact original asset\",changedText != originalText)\n      changedAssets[name]=Data(changedText.utf8).base64EncodedString();changedMaps[finalMode]=changedAssets\n      let alternate=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:changedMaps)\n      var alternateArgs=args;alternateArgs[\"files\"]=alternate.files\n      let alternateGraph=try object(Data(bridge([\"Op\":\"imported-router\",\"Config\":text(alternateArgs)]).utf8))\n      let alternateIdentity=try bridge([\"Op\":\"imported-router-source\",\"Config\":text(alternateArgs)])\n      try check(\"equal effective caps cannot erase different raw final MTU identity\",try tagged(alternateGraph,\"routervpn-execution-local\")[\"mtu\"] as? Int==effective && alternateIdentity != identity)\n     }\n",
+            "replace_all": false,
+            "expected_matches": 1
+          }
+        ]
+      },
+      {
+        "path": "deploy/test_ios_external_entry_selection.py",
+        "mode": "100644",
+        "base_blob": "db245960a6631de3dbbd278dac87f5cf624d1de6",
+        "base_sha256": "e5fac0bd2c04fe46e73b424ae9e4689f392cd11c0e7f73cf3b77f9fdd3d9a747",
+        "sha256": "81a294edcfb3285d44a72533b7fb2d6e646e57e43a8e72b59027516244a7d824",
+        "operations": [
+          {
+            "before": "for mode in [\"wg\",\"awg2-fast\",\"awg2-strong\"] {for originalEntry in [imported,hysteria] {",
+            "after": "for mode in [\"wg\",\"awg2-fast\",\"awg2-strong\"] {for originalEntry in [imported,hysteria]+packetEntries {",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "   try check(\"actual picker rejects packet entry to packet final\",!model.iosImportedRouterFinalModes(entryMode:\"wireguard\",exitID:paired.id).contains(mode))\n",
+            "after": "   try check(\"actual picker refuses unsupported imported proxy family\",!model.iosImportedRouterFinalModes(entryMode:\"socks5\",exitID:paired.id).contains(mode))\n",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "\"server\",\"auto\",\"packet-entry\"",
+            "after": "\"server\",\"auto\",\"unsupported-entry\"",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "else if fault==\"packet-entry\"{first=packetEntries[0]}",
+            "after": "else if fault==\"unsupported-entry\"{first=try profile(\"unsupported-entry\",\"external\",\"socks5\");first.apiToken=\"\"}",
+            "replace_all": false,
+            "expected_matches": 1
+          },
+          {
+            "before": "fault==\"missing-layer-assets\" || fault==\"packet-entry\"",
+            "after": "fault==\"missing-layer-assets\" || fault==\"unsupported-entry\"",
+            "replace_all": false,
+            "expected_matches": 1
+          }
+        ]
+      },
+      {
+        "path": "deploy/test_ios_imported_router_pinned.py",
+        "mode": "100644",
+        "base_blob": "bf1eaa6e249486e569648844713960b83b79a850",
+        "base_sha256": "d993b4a43425470eb3562ac30e7ae33dccbe6ab15c7aa5a34b424fce3374d509",
+        "sha256": "fcb613c78475661f1610295474eff5e427fd306151092fd1d00e2e9044a55bda",
+        "operations": [
+          {
+            "before": "136",
+            "after": "190",
+            "replace_all": true,
+            "expected_matches": 3
+          },
+          {
+            "before": "137",
+            "after": "191",
+            "replace_all": true,
+            "expected_matches": 3
+          },
+          {
+            "before": "for final in ('shadowsocks', 'hysteria2')",
+            "after": "for final in ('shadowsocks', 'hysteria2', 'wg', 'awg2-fast', 'awg2-strong')",
+            "replace_all": true,
+            "expected_matches": 1
+          }
+        ]
+      },
+      {
+        "path": "deploy/test_ios_imported_router_pinned_contract.py",
+        "mode": "100644",
+        "base_blob": "176e23e31cfd3b7e9c65cd1f04101f180fdbcbcf",
+        "base_sha256": "cc27cffc37bd451e04777539428b301a1f8180bd6db63b215ad20d297131fc35",
+        "sha256": "e2f4dd7fabe796e99f14e87db7760357667878a4bdb5455ac5c789ca34f154b7",
+        "operations": [
+          {
+            "before": "self.assertEqual(G.NAMES, original | packet | packet_final)",
+            "after": "nested = {'packet-'+kind+'--final-'+final+'--'+a+'--'+b+'.json'\n                  for kind in ('wireguard', 'amneziawg') for final in ('wg', 'awg2-fast', 'awg2-strong')\n                  for a in G.LAYERS for b in G.LAYERS}\n        self.assertEqual(len(nested),54)\n        self.assertFalse(nested & (original | packet | packet_final))\n        self.assertEqual(G.NAMES, original | packet | packet_final | nested)",
+            "replace_all": true,
+            "expected_matches": 1
+          },
+          {
+            "before": "len(self.events()), 138",
+            "after": "len(self.events()), 192",
+            "replace_all": true,
+            "expected_matches": 1
+          }
+        ]
+      }
+    ]
+  },
+  "published_corrections": [
+    {
+      "sha": "d06193a61f41537b51c8b530e779a33e77ed95f7",
+      "scope": "Apple startup MTU audit boundaries and20 source controls"
+    },
+    {
+      "sha": "3dcdc4deb3dd8bce1b620253a1098f22239f9f6c",
+      "scope": "Android measured-selection rollback mutation targets captured preference owner and requires exact newer-choice failure"
+    },
+    {
+      "sha": "6a6cd1001b1d9dea6ea4af1aba2aa4dd5bf8eb77",
+      "scope": "Tor whole-owner TUN startup fixture follows shipping Linux-only explicit startup seam"
+    },
+    {
+      "sha": "3e6953a3bb24d6fe2b8ca5f3a0536e30ff5c6438",
+      "scope": "Concurrent deterministic WG delivery retention witness; preserved without replay"
+    },
+    {
+      "sha": "176d1fa1bc44b7427c99a959744e652042348eb7",
+      "scope": "Apple Libbox ordinary-start stub records actual configuration bytes"
+    },
+    {
+      "sha": "46e7dca7f918c33c74e02ddbea923cfbb98ef8e6",
+      "scope": "Concurrent bounded Linux namespace failure diagnostics; does not fix or waive the failure"
+    }
+  ],
+  "observed_ci": {
+    "sha": "176d1fa1bc44b7427c99a959744e652042348eb7",
+    "apple_delivery": {
+      "job": 127255415092,
+      "positive_swift_variants": [
+        1305,
+        1305,
+        1306
+      ],
+      "boundary": "native handles doubled; no network opened",
+      "job_result": "cancelled before remaining variants/negative controls",
+      "full_apple_gate_pass": false
+    },
+    "linux_node_tun": {
+      "run": 42030448497,
+      "arm64_job": 127255254519,
+      "amd64_job": 127255256342,
+      "result": "success; actual generated command/TUN, selected DNS, MTU rollback and joined Stop",
+      "wg_three_causal_verdicts_proven": false
+    },
+    "full_release": "not published; intermediate runs cancelled by later main pushes",
+    "latest_head_at_record": "46e7dca7f918c33c74e02ddbea923cfbb98ef8e6",
+    "newest_apple_runs": {
+      "mtu": 42031949729,
+      "ios": 42031949304,
+      "release": 42031950099,
+      "status": "in progress/pending at observation; not final results"
+    }
+  },
+  "recovery_rules": [
+    "Read current main and the actual returned workspace first; preserve newer unrelated source and normal ancestry.",
+    "Do not replay already published7903b70d or the CI corrections listed here.",
+    "All local paths and old session IDs are last-known evidence, not presently accessible downloads or guaranteed live handles.",
+    "Inspect original pending process results before starting overlapping compilers; unknown completion is not a pass.",
+    "Recover actual shared/Android/Windows bytes and compare every available frozen hash before applying.",
+    "Only the six Apple files have a complete exact recovery payload here; remaining metadata cannot recreate their missing source.",
+    "Apply Apple literal edits only to exact7903b70d files in an isolated recovery checkout; verify base and output hashes.",
+    "Do not activate the recovered Apple UI/runtime admission alone; complete shared nested engine, proof, MTU, lifecycle and native validation first.",
+    "Reconcile both overlapping Windows drafts against latest main; keep physical entry and final policy/credential identity separate.",
+    "Keep source, tests, committed/pushed status, native builds, publication, deployment and device acceptance separate.",
+    "Full356/C1-C7/later32 and subsequent corrections remain binding; no completion percentage or narrowed requirement closure is implied."
+  ],
+  "subsequent_apple_swift_acceptance": {
+    "sha": "46e7dca7f918c33c74e02ddbea923cfbb98ef8e6",
+    "run": 42031949729,
+    "job": 127260687971,
+    "result": "success",
+    "startup_paths": 4,
+    "startup_causal_controls": 20,
+    "mtu_ipc_checks": 24,
+    "libbox_delivery_variants": [
+      1305,
+      1305,
+      1306,
+      1305
+    ],
+    "boundary": "Actual Swift 6 shipping source and executable controls; native handles and OS boundaries doubled; no network opened by these delivery fixtures",
+    "ios_native_smoke": {
+      "run": 42031949304,
+      "job": 127261100906,
+      "status": "in progress at last read"
+    },
+    "does_not_prove": [
+      "Xcode-built package completion",
+      "native encrypted network acceptance",
+      "physical-device acceptance",
+      "unfinished nested190 source acceptance",
+      "full exact-SHA release publication"
+    ]
+  }
+}

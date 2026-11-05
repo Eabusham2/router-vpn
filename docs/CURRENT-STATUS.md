@@ -18,6 +18,13 @@ The last locally adopted published source was `68011cbb`; later remote commits
 require safe adoption when access returns. Full source and release completion
 remain open.
 
+The separate mobile/Windows continuation workspace is recorded in
+[RECOVERY-MOBILE-WINDOWS-2026-11-05.md](RECOVERY-MOBILE-WINDOWS-2026-11-05.md)
+and its [guarded recovery JSON](RECOVERY-MOBILE-WINDOWS-2026-11-05.json).
+Six frozen Apple files have exact hash-verified recovery operations; the shared
+nested engine, Android and Windows drafts still lack complete recoverable bytes
+and final native acceptance. Preserve both workspaces' pending source.
+
 ## Mobile imported entry → paired Router final
 
 Android and Apple source supports ordinary imported Shadowsocks 2022, Hysteria2,
