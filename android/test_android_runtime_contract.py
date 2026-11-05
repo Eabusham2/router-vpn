@@ -235,9 +235,16 @@ for marker in (
     "AndroidPathProbe.prove(prepared.exitBundle",
     "Exit-node private path proof failed",
     'entryMode + " entry → "',
-    "builder.prepare(entry.file, exit.file, exitMode, execution, entryMode)",
+    "final boolean imported=expectedEntry!=null&&expectedEntry.imported();",
+    "final File entryFile=imported?null:entry.file;",
+    "AndroidImportedRouterPath.prepare(context,expectedEntry,exit.file,exitMode,execution,expectedExit)",
+    "builder.prepare(entryFile, exit.file, exitMode, execution, entryMode)",
+    "builder.prepare(entryFile, exit.file, exitMode, execution, entryMode,expectedEntry,expectedExit,expectedPins)",
+    "catch (AndroidImportedRouterPath.PreparationFailure retained)",
+    "pendingPreparedSession=retained.sessionId",
     "activeEntryMode = entryMode",
-    "boolean stopped = !started || stopEmbeddedAndProve();",
+    "boolean stopped = (!started || stopEmbeddedAndProve()) && cleanupPreparedSession();",
+    "if(!LayeredVpnService.discardPreparedSession(context,owned))return false;",
 ):
     assert marker in multihop_runtime, f"AndroidMultihopRuntime missing exit-proof/fail-closed marker: {marker}"
 
