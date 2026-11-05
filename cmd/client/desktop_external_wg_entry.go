@@ -95,3 +95,14 @@ func desktopExternalPathProfileID(launch *desktopNodeLaunch) string {
 	}
 	return launch.profileID
 }
+
+// Linux retains this bounded ordinary pair through its original Node session.
+// The final peer never becomes a physical root or a replacement entry owner.
+func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
+	return desktopExternalPacketEntryOwner(owner) && owner.entry.External.Protocol == "wireguard" &&
+		owner.profile.External.Protocol == "shadowsocks" && desktopExternalSS2022Profile(owner.profile)
+}
+
+func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
+	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner)
+}

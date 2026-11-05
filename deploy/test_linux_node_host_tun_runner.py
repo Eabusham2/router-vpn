@@ -42,6 +42,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:16: verified installed host layered AWG2: ' + case for case in cases if case in G.AMNEZIA_LAYER_CASES),
                           *('    native_test.go:17: verified installed host captured SIP003 lanes: ' + case for case in cases if case in G.SIP003_CASES),
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
+                          *('    native_test.go:20: verified installed host independent WireGuard entry and SS final: ' + case for case in cases if case in G.EXTERNAL_WG_ENTRY_CASES),
                           *('    native_test.go:19: verified installed host retained layered Hysteria2: ' + case for case in cases if case in G.EXTERNAL_HYSTERIA2_LAYER_CASES)]) + '\n'
 
     def test_compiled_layer_authority_requires_both_modes(self):
@@ -136,8 +137,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_external_succession_keeps_all_original_cases_and_real_lifecycle(self):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
-        self.assertEqual(len(G.EXTERNAL_CASES), 94)
-        self.assertEqual(len(G.CASES), 393)
+        self.assertEqual(len(G.EXTERNAL_CASES), 100)
+        self.assertEqual(len(G.CASES), 399)
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
         self.assertEqual(G.CASES[299:], G.EXTERNAL_CASES)
@@ -247,7 +248,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-trust', 'dns-failure', 'wrong-layer-key', 'source', 'replacement')) + ('external-hy2xor-wrong-whitening',)
         self.assertEqual(len(expected), 21)
         self.assertEqual(G.EXTERNAL_HYSTERIA2_LAYER_CASES, expected)
-        self.assertEqual(G.CASES[372:], expected)
+        self.assertEqual(G.CASES[372:393], expected)
         self.assertEqual(G.CASES[:372], G.ORIGINAL_CASES + G.EXTERNAL_PROXY_CASES + G.EXTERNAL_HYSTERIA2_CASES + G.EXTERNAL_WIREGUARD_CASES + G.EXTERNAL_AMNEZIA_CASES + G.EXTERNAL_OPENVPN_CASES + G.EXTERNAL_SOCKS_CASES)
         for case in expected:
             output = self.completed((case,))
@@ -258,6 +259,20 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                 G.check_verdict(output.replace('verified installed host retained layered Hysteria2:', 'generic encrypted peer:'), case)
         with self.assertRaises(ValueError):
             G.check_verdict(self.completed(G.CASES[:372]))
+
+    def test_wireguard_entry_requires_both_proofs_and_original_host_lifecycle(self):
+        expected = ('external-wgss-on-connect', 'external-wgss-always', 'external-wgss-public', 'external-wgss-cancelled', 'external-wgss-wrong-entry-public', 'external-wgss-dns-failure')
+        self.assertEqual(G.EXTERNAL_WG_ENTRY_CASES, expected)
+        self.assertEqual(G.CASES[393:], expected)
+        for case in expected:
+            output = self.completed((case,))
+            G.check_verdict(output, case)
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                G.check_verdict(output.replace('verified installed host retained external succession:', 'generic encrypted peer:'), case)
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed(G.CASES[:393]))
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed().replace('verified installed host independent WireGuard entry and SS final:', 'generic proof:'))
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

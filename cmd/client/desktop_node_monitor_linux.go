@@ -164,7 +164,7 @@ func (m *desktopLinuxNodeMonitor) selectedLocked(ctx context.Context) (bool, err
 	}
 	_, duplicate := desktopNodeOwners.Load(m.app)
 	return !duplicate && m.sessionParent.currentAppLocked(false) == nil && m.app.cmd == m.command &&
-		m.app.state.RouterID == m.launch.profileID && m.app.state.RuntimeMode == m.launch.mode, nil
+		m.app.state.RouterID == desktopExternalPathProfileID(m.launch) && m.app.state.RuntimeMode == m.launch.mode, nil
 }
 
 func (m *desktopLinuxNodeMonitor) observationWait(ctx context.Context) error {
@@ -315,7 +315,7 @@ func (m *desktopLinuxNodeMonitor) publishFailure(stopErr error) {
 	m.app.mu.Lock()
 	_, duplicate := desktopNodeOwners.Load(m.app)
 	selected := !duplicate && m.sessionParent.currentAppLocked(false) == nil &&
-		(m.app.cmd == nil || m.app.cmd == m.command) && m.app.state.RouterID == m.launch.profileID &&
+		(m.app.cmd == nil || m.app.cmd == m.command) && m.app.state.RouterID == desktopExternalPathProfileID(m.launch) &&
 		(m.app.state.RuntimeMode == "" || m.app.state.RuntimeMode == m.launch.mode)
 	if selected {
 		m.app.state.Connected, m.app.state.Phase, m.app.state.LastError = false, "failed", message

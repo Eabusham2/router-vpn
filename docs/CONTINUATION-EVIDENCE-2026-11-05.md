@@ -557,6 +557,39 @@ canonical ledger encodes to 47,867 bytes, and a 256-object ledger encodes to
 43,277 bytes. Both pass WriteResult/ReadResult inside the unchanged 61,440-byte
 FD10 result area. No transport, readiness or native-history limit is unbounded.
 
+## Linux imported WireGuard entry to SS2022 final
+
+The retained Linux host now accepts the independently imported WireGuard entry
+and SS2022 final for Local execution, Start Layers Off and On-connect/Always
+protection. Both imports, credentials, saved revisions and selected options are
+rechecked before preparation, startup publication and activation. Only the
+captured entry receives physical egress authority. The final profile remains
+the identity for publication, selected DNS, monitoring, MTU, Stop and complete
+saved-graph restoration. Host and native policy both retain the SS2022 method
+restriction; a public profile name never grants replacement ownership.
+
+After preserving upstream original-startup admission and the final Windows
+proof-lock correction, focused race tests pass for client (4.580s) and shared
+policy (1.672s). They exercise both-source capture and replacement refusal,
+preflight, final identity, restoration and the original startup admission.
+The actual prepared native physical-socket phase passes its WG-entry/SS case
+(0.038s), and the native encrypted peer package compiles. All 26 installed-host
+runner regressions pass. Its 393 prior cases remain mandatory, alongside six new
+On-connect, Always, public Connect, cancellation, wrong-entry and DNS-failure
+cases. Each requires independent entry/final proof and the original joined
+lifecycle. These six namespace cases require NET_ADMIN and have not executed in
+this local environment. Upstream `6a832cb1` changes retirement bounds and its
+native evidence gate; all 22 frozen graph source hashes remained unchanged when
+that commit was integrated.
+
+Separately, the six existing generated Node TUN cases passed on both AMD64 and
+ARM64 at [`508ce9ed`](https://github.com/Eabusham2/router-vpn/actions/runs/41965518162)
+and [`65167920`](https://github.com/Eabusham2/router-vpn/actions/runs/41965803629).
+They do not stand in for the newly added imported graph or installed-service
+MTU acceptance. Broader graph families, Server/Compare, Start Layers, protected
+cross-adapter transfer, active Always upgrades and same-boot crash continuation
+retain their own source and acceptance obligations.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

@@ -102,6 +102,7 @@ ORIGINAL_CASES = CASES
 EXTERNAL_CASES = ('external-ss-on-connect', 'external-http-on-connect', 'external-https-on-connect',
                   'external-ss-always', 'external-http-always', 'external-https-always',
                   'external-ss-cancelled', 'external-ss-replacement', 'external-ss-source', 'external-ss-dns-failure', 'external-ss-public')
+EXTERNAL_WG_ENTRY_CASES = ('external-wgss-on-connect', 'external-wgss-always', 'external-wgss-public', 'external-wgss-cancelled', 'external-wgss-wrong-entry-public', 'external-wgss-dns-failure')
 EXTERNAL_PROXY_CASES = EXTERNAL_CASES
 EXTERNAL_HYSTERIA2_CASES = ('external-hy2-on-connect', 'external-hy2-always', 'external-hy2-public', 'external-hy2-cancelled',
                            'external-hy2-wrong-key', 'external-hy2-wrong-trust', 'external-hy2-dns-failure')
@@ -118,7 +119,7 @@ EXTERNAL_SOCKS_CASES = tuple('external-socks-' + action for action in
                               'relay-domain', 'control-eof', 'dns-failure', 'replacement', 'source'))
 EXTERNAL_HYSTERIA2_LAYER_CASES = tuple('external-' + mode + '-' + action for mode in ('hy2aes', 'hy2xor')
     for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-trust', 'dns-failure', 'wrong-layer-key', 'source', 'replacement')) + ('external-hy2xor-wrong-whitening',)
-EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES + EXTERNAL_HYSTERIA2_LAYER_CASES
+EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES + EXTERNAL_HYSTERIA2_LAYER_CASES + EXTERNAL_WG_ENTRY_CASES
 CASES += EXTERNAL_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
@@ -141,6 +142,7 @@ def checked_sources(source):
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
+                'cmd/client/desktop_external_wg_entry.go', 'cmd/client/desktop_external_wg_entry_linux_test.go',
                 'cmd/client/desktop_external_retained.go', 'cmd/client/external_profile_connect.go', 'cmd/client/speed_lab_paths.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
                 'cmd/client/desktop_node_host_linux_active.go',
@@ -264,6 +266,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its exact UDP AWG2 peer, complete native parameters and owned lifecycle: ' + value)
         if value in SIP003_CASES and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted independent SIP003 TCP/HY2 UDP identity, selected DNS or retained lifecycle: ' + value)
+        if value in EXTERNAL_WG_ENTRY_CASES and 'verified installed host independent WireGuard entry and SS final: ' + value + '\n' not in receipts:
+            raise ValueError('Installed Linux WG entry lacks its independent entry/final native proof and joined lifecycle')
         if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted actual external DNS/exit, source, cancellation, replacement or exact Router restoration: ' + value)
         if value in EXTERNAL_HYSTERIA2_LAYER_CASES and 'verified installed host retained layered Hysteria2: ' + value + '\n' not in receipts:

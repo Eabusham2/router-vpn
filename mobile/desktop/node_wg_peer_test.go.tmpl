@@ -9,6 +9,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -39,6 +40,9 @@ import (
 
 func init() {
 	desktopExternalInstalledWireGuard = startDesktopExternalInstalledWireGuard
+	desktopExternalInstalledWireGuardEntry = func(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledWGRequest, cert tls.Certificate, exitAddress, exitNetwork string, exitPort uint16) desktopExternalInstalledPacketEntryPeer {
+		return startDesktopDarwinInstalledWGEntry(t, server, request, netip.MustParseAddr("11.77.0.2"), cert, exitAddress, exitNetwork, exitPort)
+	}
 }
 
 // Ordinary external WG retains separate public-exit/selected-DNS proof. This

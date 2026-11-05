@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`65167920`, the integrated observation change in `a94cde9d`, and the installed
+`914153f0`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -49,8 +49,10 @@ inventing an image/namespace mismatch; its actual child/pidfd regression is
 mandatory. External/Tor startup now transports the original accepted deadline
 through the actual native child and Box/TUN composition, with late-result and
 heartbeat regressions. The LinkSetUp address-policy failure observed on both
-architectures at `c2839a15` has a separate source repair in `508ce9ed`; newer
-exact-SHA native acceptance remains required. The current service MTU integration
+architectures at `c2839a15` has a separate source repair in `508ce9ed`. The
+six-case generated Node TUN workflow passed on AMD64 and ARM64 at both
+`508ce9ed` and `65167920`; this does not establish the separate installed-service
+MTU or imported graph cases. The current service MTU integration
 retains its bounded cancellation and native acceptance obligations.
 
 The original native MTU worker now hands an outstanding native call to the
@@ -97,6 +99,25 @@ separate current CI and implementation work. Concurrent upstream HTTP admission/
 `c2241ba1` were preserved. Current exact-SHA release publication,
 physical/device/private acceptance and the other surviving platform/graph work
 remain separate requirements. The older continuation below is retained as history.
+
+## Linux imported WireGuard entry to SS2022 final
+
+The retained Linux host now admits this Local graph with Start Layers Off and
+On-connect or Always protection. It captures both private imports independently,
+rechecks their revisions before startup and activation, and gives physical
+egress authority only to the entry. The final profile owns connection state,
+selected DNS, monitoring, MTU, Stop and complete temporary-test restoration.
+The SS2022 method remains checked by both host and native policy.
+
+Focused client and shared-policy race tests pass in 4.580s and 1.672s on the
+reviewed source. The actual prepared native physical-socket case passes, and the
+encrypted peer fixture compiles. The installed-host runner retains its previous
+393 cases and adds six mandatory WG-entry cases, with separate entry/final proof
+and joined-lifecycle evidence; all 26 runner regressions pass. Those six real
+namespace cases have not run locally because this environment lacks NET_ADMIN.
+Their exact-SHA CI result, other graph families, Server/Compare and broader
+Start Layers remain separate requirements. Native service MTU grant/retirement
+and replacement-startup corrections are being verified separately.
 
 ## Previous implementation continuation — verified through 4d25725c
 

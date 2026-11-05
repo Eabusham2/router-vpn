@@ -473,6 +473,9 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		protocols = append(protocols, "hysteria2")
 	}
+	if runtime.GOOS == "linux" {
+		protocols = append(protocols, "wg-entry-ss")
+	}
 	if runtime.GOOS == "darwin" {
 		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong", "wg-entry-ss", "awg-entry-ss-fast", "awg-entry-ss-strong", "wg-entry-http", "wg-entry-https", "awg-entry-http-fast", "awg-entry-http-strong", "awg-entry-https-fast", "awg-entry-https-strong", "wg-entry-hysteria2", "awg-entry-hysteria2-fast", "awg-entry-hysteria2-strong", "wg-entry-socks5", "awg-entry-socks5-fast", "awg-entry-socks5-strong")
 	}

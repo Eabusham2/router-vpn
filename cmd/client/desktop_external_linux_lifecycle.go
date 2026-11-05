@@ -116,8 +116,8 @@ func (h *desktopLinuxNodeHost) validateExternalProofLocked(ctx context.Context, 
 	if h.external == nil || h.policy != nil || h.launch == nil || h.launch.external == nil ||
 		h.transaction == nil || h.transaction.external != h.external || h.started.IsZero() ||
 		proof.CheckedAt < h.started.Add(-time.Second).UnixMilli() || !proof.Healthy || !proof.DNSProven ||
-		proof.EntryProven || proof.EntryID != "" || proof.Execution != "local" {
-		return errors.New("Linux external proof lost its typed direct source or actual exit proof")
+		proof.EntryProven != !h.launch.external.direct || proof.EntryID != h.launch.external.entry.ID || proof.Execution != "local" {
+		return errors.New("Linux external proof lost its typed original source or actual exit proof")
 	}
 	if err := desktopExternalPhysicalReceiptContext(ctx, h.launch.external, proof.Physical); err != nil {
 		return err
@@ -175,7 +175,7 @@ func (active *desktopLinuxNodeActivation) matchesExternal(h *desktopLinuxNodeHos
 	t, p := active.transaction, active.process
 	if t.policy != nil || t.external != active.external || t.process != p || !sameDesktopLinuxParentCapture(t.parent, active.parent) ||
 		!sameDesktopLinuxParentCapture(p.parent, active.parent) || t.selection != active.selection || t.operation != active.operation ||
-		t.profileID != active.launch.profileID || t.revision != active.revision || t.network != active.network || t.options != active.options ||
+		t.profileID != desktopExternalPathProfileID(active.launch) || t.revision != active.revision || t.network != active.network || t.options != active.options ||
 		t.savedOptions != active.savedOptions || p.ctx == nil || p.ctx.Err() != nil || !p.Started() || p.retiring.Load() || p.joined == nil ||
 		p.command == nil || p.command != active.launch.command {
 		return errors.New("Linux external activation substituted its transaction or original process")
@@ -202,12 +202,15 @@ func (h *desktopLinuxNodeHost) activateExternalLocked(parent context.Context) er
 	a := h.parent.app
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
+	profile, exists := a.profileByIDLocked(desktopExternalPathProfileID(h.launch))
+	if err := h.externalSourcesLocked(a); err != nil {
+		return err
+	}
 	if ctx.Err() != nil || h.parent.currentAppLocked(false) != nil || a.checkCapturedConnectionOperationLocked(h.operation) != nil ||
 		a.connectionCancelIntent == h.operation || physicalNetworkIdentity() != h.network || !exists ||
 		desktopOwnedNodeProfileToken(profile) != h.revision || [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options || a.cmd != h.process.command || a.state.Connected ||
-		a.state.RouterID != h.launch.profileID || a.state.RuntimeMode != h.launch.mode || h.process.ctx.Err() != nil || h.transaction.stopRequested.Load() {
+		a.state.RouterID != desktopExternalPathProfileID(h.launch) || a.state.RuntimeMode != h.launch.mode || h.process.ctx.Err() != nil || h.transaction.stopRequested.Load() {
 		return errors.New("Linux external proof cannot activate a replaced request, profile or runtime")
 	}
 	select {

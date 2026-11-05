@@ -77,7 +77,7 @@ func prepareDesktopPlatformMTUStop(ctx context.Context, a *app, command *exec.Cm
 		_, duplicate := desktopNodeOwners.Load(a)
 		if ctx.Err() != nil || s.parent.currentAppLocked(terminal) != nil || a.closing != terminal ||
 			a.localController != s.parent.controller || a.cmd != command || a.connectionContext != operation ||
-			a.state.RouterID != h.launch.profileID || a.state.RuntimeMode != h.launch.mode ||
+			a.state.RouterID != desktopExternalPathProfileID(h.launch) || a.state.RuntimeMode != h.launch.mode ||
 			!found || raw != outer || duplicate {
 			return errors.New("Linux MTU teardown belongs to a replaced original application operation")
 		}

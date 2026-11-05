@@ -1,6 +1,7 @@
 package mobilemultihop
 
 import (
+	"encoding/base64"
 	"reflect"
 	"router-vpn/internal/multihoprelay"
 	"strings"
@@ -160,7 +161,12 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 					t.Fatal("original two-hop proof was relabelled")
 				}
 				for _, target := range []string{"linux", "windows"} {
-					if p, e := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), target); e == nil || p != nil {
+					p, e := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), target)
+					if target == "linux" && variant == "wireguard" && protocol == "shadowsocks" && layer == "" {
+						if e != nil || p == nil || p.Validate() != nil {
+							t.Fatal("Linux lost its exact imported WG/SS pair", e)
+						}
+					} else if e == nil || p != nil {
 						t.Fatal("another native host acquired unimplemented entry", target)
 					}
 				}
@@ -211,5 +217,36 @@ func TestDesktopExternalDarwinPacketEntryAmneziaRetainsCompletePolicy(t *testing
 func TestDesktopExternalDarwinPacketEntryOpenVPNRetainsCompletePolicy(t *testing.T) {
 	for _, variant := range []string{"wireguard", "fast", "strong"} {
 		t.Run(variant, func(t *testing.T) { desktopExternalPacketEntryExitOwnsPolicy(t, variant, "openvpn") })
+	}
+}
+
+func TestDesktopExternalLinuxWireGuardEntryKeepsCapturedSS2022Methods(t *testing.T) {
+	for _, method := range append(append([]string(nil), desktopSS2022Methods...), "aes-256-gcm") {
+		t.Run(method, func(t *testing.T) {
+			graph, capture := desktopExternalInputFixture(t, "shadowsocks", "wireguard", "strong")
+			capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
+			key := strings.Repeat("e", 32)
+			if method == "2022-blake3-aes-128-gcm" {
+				key = strings.Repeat("e", 16)
+			}
+			// The ordinary parser retains the independently captured final source;
+			// the Linux adapter additionally keeps this tranche's SS2022 boundary.
+			password := base64.StdEncoding.EncodeToString([]byte(key))
+			row := externalTestFind(t, graph, ExternalFinalTag)
+			row["method"], row["password"] = method, password
+			source := capture["profile"].(map[string]any)["external"].(map[string]any)["shadowsocks"].(map[string]any)
+			source["method"], source["password"] = method, password
+			original := externalDesktopCompile(t, graph, capture)
+			plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "linux")
+			if method == "aes-256-gcm" {
+				if err == nil || plan != nil {
+					t.Fatal("Linux adopted an uncaptured legacy cipher family")
+				}
+				return
+			}
+			if err != nil || plan.Validate() != nil {
+				t.Fatal("Linux lost a complete SS2022 source", err)
+			}
+		})
 	}
 }

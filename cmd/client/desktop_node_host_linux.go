@@ -32,6 +32,8 @@ type desktopLinuxNodeHost struct {
 	external                  *mobilemultihop.DesktopExternalPolicy
 	externalProof             *desktopLinuxExternalProof
 	externalPersistedRevision string
+	externalEntryRevision     string
+	externalEntryOptions      [3]bool
 	selection                 linuxprotection.NodeSelection
 	launch                    *desktopNodeLaunch
 	process                   *desktopLinuxNodeProcess

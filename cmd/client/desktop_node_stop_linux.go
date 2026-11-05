@@ -166,7 +166,7 @@ func (captured *desktopNodeStopCapture) currentApp(command *exec.Cmd, retired bo
 		}
 	} else if captured.host.parent == nil || !sameDesktopLinuxParentCapture(captured.host.parent, captured.session.parent) ||
 		captured.host.launch == nil || captured.command != nil && captured.host.launch.command != captured.command ||
-		captured.command != nil && (a.state.RouterID != captured.host.launch.profileID || !retired && a.state.RuntimeMode != captured.host.launch.mode) ||
+		captured.command != nil && (a.state.RouterID != desktopExternalPathProfileID(captured.host.launch) || !retired && a.state.RuntimeMode != captured.host.launch.mode) ||
 		retired && a.state.Connected {
 		return errors.New("Linux Node Stop changed its original host or presentation")
 	}

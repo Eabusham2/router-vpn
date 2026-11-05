@@ -2389,7 +2389,10 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 	}
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
-	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" || request.Layer != nil && request.Protocol != "hysteria2" || !latency ||
+	// The Linux installed fixture admits only the same bounded WG -> SS pair
+	// as its shipping host; other entry graphs keep their platform gate.
+	linuxWGEntry := !latency && capturedAddress == "11.77.0.2" && request.Protocol == "shadowsocks" && request.WireGuardEntry != nil && request.AmneziaEntry == nil && request.Layer == nil
+	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" || request.Layer != nil && request.Protocol != "hysteria2" || !latency && !linuxWGEntry ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
 		request.AmneziaEntry != nil && desktopExternalInstalledAmneziaEntry == nil) {
 		t.Fatal("unrequested or unsupported encrypted entry graph")

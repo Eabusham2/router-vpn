@@ -36,7 +36,7 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 	}
 	raw, err := readPrivateRegular(filepath.Join(linuxOwnedControllerRoot, "routers.json"), 64<<10)
 	var profiles common.RouterProfileStore
-	if err != nil || decodeRelayControlJSON(raw, &profiles) != nil || len(profiles.Profiles) != 2 || profiles.SelectedID != "installed-linux-node" ||
+	if err != nil || decodeRelayControlJSON(raw, &profiles) != nil || len(profiles.Profiles) != linuxHostTUNExternalProfileCount(scenario) || profiles.SelectedID != "installed-linux-node" ||
 		profiles.Profiles[0].ID != "installed-linux-node" || profiles.Profiles[1].ID != "installed-linux-external" || profiles.Profiles[1].External == nil ||
 		profiles.Profiles[1].External.Protocol != linuxHostTUNExternalProtocol(scenario) {
 		return errors.Join(err, errors.New("installed external fixture lost its two original private node identities"))
@@ -213,7 +213,7 @@ func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desk
 	}}
 	response := httptest.NewRecorder()
 	a.externalProfileConnectWithRuntime(response, httptest.NewRequest(http.MethodPost, "/api/external-profile/connect",
-		strings.NewReader(`{"profile_id":"installed-linux-external","direct":true,"execution":"local"}`)).WithContext(ctx), driver)
+		strings.NewReader(linuxHostTUNExternalConnectRequest(a))).WithContext(ctx), driver)
 	a.mu.Lock()
 	a.profiles.Profiles[1] = saved
 	a.mu.Unlock()
@@ -265,6 +265,12 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		return host, proof, err
 	}
 	physical := host.external.Metadata()
+	if !native.external.direct {
+		capture, err := host.external.Capture()
+		if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" || len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0].Host != "11.77.0.2" || capture.PhysicalRoots[0].Destinations[0].Network != "udp" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag || proof.EntryID != "installed-linux-entry" {
+			return host, proof, errors.Join(err, errors.New("composed host gave final DNS or exit a physical root"))
+		}
+	}
 	if physical.Protocol == "socks5" {
 		capture, err := host.external.Capture()
 		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
@@ -332,7 +338,7 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		}
 	}
 	network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
-	if err != nil || network.TargetOS != "linux" || network.MTU != 1376 || proof.EntryID != "" || proof.EntryNodeID != "" || proof.EntryProven ||
+	if err != nil || network.TargetOS != "linux" || network.MTU != 1376 || proof.EntryID != native.external.entry.ID || proof.EntryNodeID != "" || proof.EntryProven != !native.external.direct ||
 		!proof.DNSProven || !proof.Healthy || proof.Execution != "local" || proof.IP != "203.0.113.88" || proof.ExitID != "installed-linux-external" ||
 		proof.SessionID != host.selection.SessionID || proof.SourceSHA256 != physical.OriginalSourceSHA256 || proof.ConfigSHA256 != physical.OriginalConfigSHA256 ||
 		proof.Physical == nil || *proof.Physical != physical || physical.SourceSHA256 != host.selection.SourceSHA256 || physical.ConfigSHA256 != host.selection.ConfigSHA256 {
@@ -349,7 +355,7 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 	gate *os.File, result *linuxExternalTUNResult) (*desktopLinuxNodeHost, error) {
 	response := httptest.NewRecorder()
 	a.externalProfileConnect(response, httptest.NewRequest(http.MethodPost, "/api/external-profile/connect",
-		strings.NewReader(`{"profile_id":"installed-linux-external","direct":true,"execution":"local"}`)).WithContext(ctx))
+		strings.NewReader(linuxHostTUNExternalConnectRequest(a))).WithContext(ctx))
 	var replied struct {
 		OK              bool   `json:"ok"`
 		ProfileID       string `json:"profile_id"`
@@ -432,7 +438,7 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 	}
 	raw, err := readPrivateRegular(a.cfg.ProfilesFile, 64<<10)
 	var persisted common.RouterProfileStore
-	if err != nil || decodeRelayControlJSON(raw, &persisted) != nil || len(persisted.Profiles) != 2 {
+	if err != nil || decodeRelayControlJSON(raw, &persisted) != nil || len(persisted.Profiles) != linuxHostTUNExternalProfileCount(result.Scenario) {
 		return host, errors.Join(err, errors.New("public external Connect failed its original private saved store"))
 	}
 	profile, exists := profileByID(persisted.Profiles, "installed-linux-external")
@@ -492,6 +498,9 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 		return last, errors.New("external test retained the joined Router's private workspace")
 	}
 	query := speedLabRequest{Scope: "temporary", Topology: "external", NodeID: "installed-linux-external", Execution: "local"}
+	if linuxHostTUNExternalWGEntry(result.Scenario) {
+		query.EntryID = "installed-linux-entry"
+	}
 	prepared, err := a.prepareSpeedLabExternalPath(query, nil)
 	if err != nil || prepared == nil || prepared.native == nil {
 		return last, errors.Join(err, errors.New("external test failed actual native graph preparation"))
@@ -662,4 +671,19 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 	result.Restore = &linuxHostTUNRestoreResult{PreviousSession: result.OriginalSession, SourceSHA256: originalSource, RestoredMTU: 1300,
 		FreshSession: fresh.selection.SessionID, Execution: "local", Cleared: true}
 	return last, nil
+}
+
+func linuxHostTUNExternalProfileCount(scenario string) int {
+	if linuxHostTUNExternalWGEntry(scenario) {
+		return 3
+	}
+	return 2
+}
+func linuxHostTUNExternalConnectRequest(a *app) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, exists := a.profileByIDLocked("installed-linux-entry"); exists {
+		return `{"profile_id":"installed-linux-external","entry_id":"installed-linux-entry","direct":false,"execution":"local"}`
+	}
+	return `{"profile_id":"installed-linux-external","direct":true,"execution":"local"}`
 }

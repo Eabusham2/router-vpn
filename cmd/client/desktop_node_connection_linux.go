@@ -95,9 +95,14 @@ func (capture *desktopLinuxNodeConnectPreflight) currentAppLocked() error {
 	a, h := capture.app, capture.host
 	selected := capture.selected
 	if selected == "" {
-		selected = h.launch.profileID
+		selected = desktopExternalPathProfileID(h.launch)
 	}
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
+	profile, exists := a.profileByIDLocked(desktopExternalPathProfileID(h.launch))
+	if h.external != nil {
+		if err := h.externalSourcesLocked(a); err != nil {
+			return err
+		}
+	}
 	_, duplicate := desktopNodeOwners.Load(a)
 	if duplicate || a.localController != capture.controller || a.checkCapturedConnectionOperationLocked(capture.operation) != nil ||
 		a.connectionCancelIntent == capture.operation || h.parent.currentAppLocked(false) != nil ||
@@ -269,7 +274,7 @@ func (capture *desktopLinuxNodeConnectPreflight) publishFailure(failure error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if failure != nil && a.sameConnectionOperationLocked(capture.operation) && h.parent.currentAppLocked(false) == nil &&
-		(a.cmd == nil || a.cmd == h.launch.command && a.state.RouterID == h.launch.profileID && a.state.RuntimeMode == h.launch.mode) {
+		(a.cmd == nil || a.cmd == h.launch.command && a.state.RouterID == desktopExternalPathProfileID(h.launch) && a.state.RuntimeMode == h.launch.mode) {
 		a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", failure.Error()
 	}
 }

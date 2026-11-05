@@ -41,13 +41,13 @@ func captureDesktopLinuxMTUView(ctx context.Context, a *app, request string) (vi
 		}
 		session := sessionTrackerFor(a).snapshot(0)
 		if session.ID == "" || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" ||
-			session.EndedAt != nil || session.RouterID != h.launch.profileID || session.ActualMode != h.launch.mode {
+			session.EndedAt != nil || session.RouterID != desktopExternalPathProfileID(h.launch) || session.ActualMode != h.launch.mode {
 			return errors.New("MTU status lost its original proved connection identity")
 		}
 		if h.mtu != nil && h.mtu.originalLocked() != nil || live.Active && h.mtu == nil {
 			return errors.New("MTU status has no original owner for its pending native lease")
 		}
-		view.identity = mtuViewIdentity{Session: session.ID, Profile: h.launch.profileID}
+		view.identity = mtuViewIdentity{Session: session.ID, Profile: desktopExternalPathProfileID(h.launch)}
 		view.live, view.busy = live, h.mtu != nil || live.Active
 		view.auto = strings.EqualFold(strings.TrimSpace(profile.MTUPolicy), "auto")
 		if operation := lookupMTUViewOperation(a, view.identity, request); operation != nil {
@@ -75,11 +75,11 @@ func captureDesktopLinuxMTUView(ctx context.Context, a *app, request string) (vi
 // private profile, controller, or separately selected runtime option.
 func desktopLinuxMTUViewAppCurrentLocked(a *app, h *desktopLinuxNodeHost, identity mtuViewIdentity) error {
 	if a == nil || h == nil || h.parent == nil || h.parent.app != a || h.process == nil || h.launch == nil ||
-		h.process.command == nil || identity.Session == "" || identity.Profile != h.launch.profileID || identity.Native ||
+		h.process.command == nil || identity.Session == "" || identity.Profile != desktopExternalPathProfileID(h.launch) || identity.Native ||
 		h.parent.currentAppLocked(false) != nil {
 		return errors.New("MTU status lost its original application owner")
 	}
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
+	profile, exists := a.profileByIDLocked(desktopExternalPathProfileID(h.launch))
 	_, duplicate := desktopNodeOwners.Load(a)
 	current := a.state
 	if !exists || desktopOwnedNodeProfileToken(profile) != h.revision ||

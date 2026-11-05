@@ -33,7 +33,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if owner.physical != nil {
 		return errors.New("ordinary physical preparation cannot replace a captured owner")
 	}
-	entry := targetOS == "darwin" && desktopExternalRetainedEntryOwner(owner)
+	entry := desktopExternalRetainedEntryForOS(owner, targetOS)
 	if targetOS != "windows" && targetOS != "linux" && targetOS != "darwin" || !owner.direct && !entry || owner.predecessor != "" {
 		return nil
 	}
@@ -84,7 +84,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 		return nil, nil
 	}
 	physical := owner.physical
-	if physical.Validate() != nil || !owner.direct && !(physical.Metadata().TargetOS == "darwin" && desktopExternalRetainedEntryOwner(owner)) || owner.predecessor != "" {
+	if physical.Validate() != nil || !owner.direct && !(desktopExternalRetainedEntryForOS(owner, physical.Metadata().TargetOS)) || owner.predecessor != "" {
 		return nil, errors.New("ordinary physical capture lost its exact native policy")
 	}
 	meta := physical.Metadata()
@@ -112,7 +112,7 @@ func capturedDesktopExternalPhysicalContext(ctx context.Context, owner *desktopE
 		return nil, nil
 	}
 	physical := owner.physical
-	if physical.Validate() != nil || !owner.direct && !(physical.Metadata().TargetOS == "darwin" && desktopExternalRetainedEntryOwner(owner)) || owner.predecessor != "" {
+	if physical.Validate() != nil || !owner.direct && !(desktopExternalRetainedEntryForOS(owner, physical.Metadata().TargetOS)) || owner.predecessor != "" {
 		return nil, errors.New("ordinary physical capture lost its exact native policy")
 	}
 	meta := physical.Metadata()

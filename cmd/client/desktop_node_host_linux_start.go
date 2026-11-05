@@ -125,7 +125,12 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 		return err
 	}
 	defer a.mu.Unlock()
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
+	profile, exists := a.profileByIDLocked(desktopExternalPathProfileID(h.launch))
+	if h.external != nil {
+		if err := h.externalSourcesLocked(a); err != nil {
+			return err
+		}
+	}
 	if a.checkCapturedConnectionOperationLocked(h.operation) != nil || !exists || a.cmd != nil || a.state.Connected ||
 		desktopOwnedNodeProfileToken(profile) != h.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
@@ -137,7 +142,7 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 	}
 	a.cmd = h.launch.command
 	a.state.Connected, a.state.Phase, a.state.LastError = false, "starting", ""
-	a.state.Mode, a.state.RuntimeMode, a.state.RouterID = h.launch.mode, h.launch.mode, h.launch.profileID
+	a.state.Mode, a.state.RuntimeMode, a.state.RouterID = h.launch.mode, h.launch.mode, desktopExternalPathProfileID(h.launch)
 	a.state.LogicalMode, a.state.Base = "", ""
 	a.state.DAITA, a.state.Jumbo, a.state.Socks = h.options[0], h.options[1], h.options[2]
 	return nil
@@ -277,7 +282,7 @@ func (h *desktopLinuxNodeHost) retireLocked(ctx context.Context, disconnect bool
 	a := h.parent.app
 	a.mu.Lock()
 	if h.launch.command != nil && a.cmd == h.launch.command {
-		if a.state.RouterID != h.launch.profileID || a.state.RuntimeMode != h.launch.mode {
+		if a.state.RouterID != desktopExternalPathProfileID(h.launch) || a.state.RuntimeMode != h.launch.mode {
 			a.mu.Unlock()
 			return errors.New("Linux host retirement cannot change a replacement presentation")
 		}

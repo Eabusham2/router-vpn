@@ -47,6 +47,9 @@ func validateDesktopLinuxProtectedArguments(arguments []string, directory string
 }
 
 func desktopLinuxExternalEligible(launch *desktopNodeLaunch) bool {
+	if launch != nil && launch.ownedNode == nil && launch.tor == nil && desktopExternalLinuxEntryOwner(launch.external) {
+		return launch.profileID == launch.external.entry.ID && launch.policyProfileID == launch.external.profile.ID
+	}
 	if launch == nil || launch.external == nil || launch.tor != nil || !launch.external.direct || launch.external.predecessor != "" ||
 		launch.external.selection != "local" || launch.external.profile.External == nil ||
 		!desktopExternalStartLayerSupported(launch.external.profile.External.Protocol, launch.external.profile.StartLayer) ||
@@ -61,9 +64,18 @@ func desktopLinuxExternalEligible(launch *desktopNodeLaunch) bool {
 }
 
 // Compare the literal launch copy against the saved original by applying only
-// the captured Direct/Local selection and its one frozen outer endpoint. All
+// the captured Local selection and its one frozen outer endpoint. All
 // credentials, selected DNS, MTU and device policy remain in the comparison.
-func validateDesktopLinuxExternalSource(profile common.RouterProfile, launch *desktopNodeLaunch) error {
+func validateDesktopLinuxExternalSource(profile common.RouterProfile, launch *desktopNodeLaunch, entries ...common.RouterProfile) error {
+	if len(entries) > 1 {
+		return errors.New("Linux external source has multiple entry owners")
+	}
+	if launch != nil && desktopLinuxExternalEligible(launch) && desktopExternalLinuxEntryOwner(launch.external) {
+		if len(entries) != 1 {
+			return errors.New("Linux external source omitted its independently captured entry")
+		}
+		return validateDesktopMacOSExternalSources(profile, entries[0], launch)
+	}
 	if !desktopLinuxExternalEligible(launch) || launch.profileID != profile.ID || launch.policyProfileID != profile.ID {
 		return errors.New("Linux external source lost its exact direct saved profile")
 	}
@@ -126,7 +138,7 @@ func (h *desktopLinuxNodeHost) currentExternal(ctx context.Context) error {
 	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
 		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
 	if meta.TargetOS != "linux" || h.selection != selection || h.launch.root != linuxOwnedControllerRoot ||
-		h.launch.profileID != owner.profile.ID || h.launch.mode != "external-"+meta.Protocol ||
+		desktopExternalPathProfileID(h.launch) != owner.profile.ID || h.launch.mode != "external-"+meta.Protocol ||
 		h.launch.configSHA256 != meta.ConfigSHA256 || owner.session != meta.SessionID || h.launch.mtuSession != "" ||
 		!bytes.Equal(h.launch.config, []byte(h.external.Config())) || owner.network != h.network ||
 		!bytes.Equal(h.source, owner.source) || owner.retained == nil {
@@ -137,19 +149,36 @@ func (h *desktopLinuxNodeHost) currentExternal(ctx context.Context) error {
 		return err
 	}
 	defer a.mu.Unlock()
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
-	revision := desktopOwnedNodeProfileToken(profile)
-	if !exists || (revision != h.revision && (h.activation == nil || revision != h.externalPersistedRevision)) ||
-		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
-		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options || validateDesktopLinuxExternalSource(profile, h.launch) != nil {
-		return errors.New("Linux external host belongs to a replaced private profile or selected options")
+	if err := h.externalSourcesLocked(a); err != nil {
+		return err
 	}
 	if h.activation == nil {
 		if a.checkCapturedConnectionOperationLocked(h.operation) != nil || a.connectionCancelIntent == h.operation {
 			return errConnectionOperationCancelled
 		}
-	} else if h.process == nil || a.cmd != h.process.command || a.state.RouterID != h.launch.profileID || a.state.RuntimeMode != h.launch.mode {
+	} else if h.process == nil || a.cmd != h.process.command || a.state.RouterID != desktopExternalPathProfileID(h.launch) || a.state.RuntimeMode != h.launch.mode {
 		return errors.New("Linux external activation belongs to another connection")
+	}
+	return nil
+}
+
+// Caller holds app.mu. Both saved imports and all independent runtime choices
+// remain tied to the actual host; public entry/final names grant no authority.
+func (h *desktopLinuxNodeHost) externalSourcesLocked(a *app) error {
+	if h == nil || h.launch == nil || h.launch.external == nil || a == nil {
+		return errors.New("Linux external source lost its original host")
+	}
+	owner := h.launch.external
+	profile, exists := a.profileByIDLocked(desktopExternalPathProfileID(h.launch))
+	entry, _ := a.profileByIDLocked(owner.entry.ID)
+	if !owner.direct && (desktopOwnedNodeProfileToken(entry) != h.externalEntryRevision || [3]bool{entry.DAITAEnabled, entry.JumboTUN, entry.SocksEnabled} != h.externalEntryOptions) {
+		return errors.New("Linux external host replaced its independently captured entry")
+	}
+	revision := desktopOwnedNodeProfileToken(profile)
+	if !exists || (revision != h.revision && (h.activation == nil || revision != h.externalPersistedRevision)) ||
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
+		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options || validateDesktopLinuxExternalSource(profile, h.launch, entry) != nil {
+		return errors.New("Linux external host belongs to a replaced private profile or selected options")
 	}
 	return nil
 }
@@ -233,26 +262,31 @@ func prepareDesktopLinuxExternalHost(operation context.Context, a *app, launch *
 		return nil, err
 	}
 	a.mu.Lock()
-	profile, exists := a.profileByIDLocked(launch.profileID)
+	profile, exists := a.profileByIDLocked(desktopExternalPathProfileID(launch))
+	entry, _ := a.profileByIDLocked(launch.external.entry.ID)
 	options := [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks}
 	a.mu.Unlock()
-	if !exists || validateDesktopLinuxExternalSource(profile, launch) != nil {
+	if !exists || validateDesktopLinuxExternalSource(profile, launch, entry) != nil {
 		return nil, errors.New("Linux external preparation changed its original saved profile")
 	}
 	meta := policy.Metadata()
 	launch.configSHA256 = meta.ConfigSHA256
 	h := &desktopLinuxNodeHost{gate: make(chan struct{}, 1), parent: parent, operation: operation, external: policy, launch: launch,
 		source: append([]byte(nil), launch.external.source...), network: launch.external.network,
-		revision: desktopOwnedNodeProfileToken(profile), options: options,
+		revision: desktopOwnedNodeProfileToken(profile), externalEntryRevision: desktopOwnedNodeProfileToken(entry),
+		externalEntryOptions: [3]bool{entry.DAITAEnabled, entry.JumboTUN, entry.SocksEnabled}, options: options,
 		savedOptions: [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}, physical: physical,
 		selection: linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
 			ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess},
 		monitor: &atomic.Pointer[desktopLinuxNodeMonitor]{}}
 	// Successful interactive Connect persists exactly this already captured
-	// Direct/Local choice. Its accepted source revision remains in the journal.
+	// Local choice and complete entry/final identity. Its accepted source revision remains in the journal.
 	persisted := cloneRouterProfile(profile)
 	persisted.MultihopEnabled, persisted.MultihopEntryID, persisted.MultihopExitID = false, "", ""
 	persisted.MultihopExecution, persisted.MultihopEntryMode = "local", ""
+	if !launch.external.direct {
+		persisted.MultihopEnabled, persisted.MultihopEntryID, persisted.MultihopExitID = true, entry.ID, profile.ID
+	}
 	h.externalPersistedRevision = desktopOwnedNodeProfileToken(persisted)
 	adapter := &desktopLinuxExternalConnection{host: h, verify: verify}
 	launch.external.retained = adapter
@@ -328,7 +362,7 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 		return nil, errors.New("Linux external transaction lost its original typed source and process")
 	}
 	t := &desktopLinuxNodeTransaction{gate: make(chan struct{}, 1), parent: h.parent, journal: journal, process: h.process,
-		external: h.external, mode: h.launch.mode, operation: h.operation, startup: startup, selection: h.selection, profileID: h.launch.profileID,
+		external: h.external, mode: h.launch.mode, operation: h.operation, startup: startup, selection: h.selection, profileID: desktopExternalPathProfileID(h.launch),
 		revision: h.revision, network: h.network, options: h.options, savedOptions: h.savedOptions, predecessor: predecessor}
 	return finishDesktopLinuxNodeTransaction(t)
 }

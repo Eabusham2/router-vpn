@@ -12,7 +12,7 @@ import (
 // and a resolver receipt cannot construct a retained native session.
 func (h *desktopLinuxNodeHost) matchesDNSObservation(observed observedConnection, runtimeID string, selected dnsSelection) error {
 	if h == nil || h.launch == nil || !observed.Connected || observed.Phase != "connected" ||
-		observed.RouterID != h.launch.profileID || runtimeID != h.launch.mode ||
+		observed.RouterID != desktopExternalPathProfileID(h.launch) || runtimeID != h.launch.mode ||
 		observed.RuntimeMode != "" && observed.RuntimeMode != runtimeID ||
 		desktopOwnedNodeProfileToken(observed.Profile) != h.revision ||
 		[3]bool{observed.Profile.DAITAEnabled, observed.Profile.JumboTUN, observed.Profile.SocksEnabled} != h.savedOptions {
@@ -39,11 +39,12 @@ func (h *desktopLinuxNodeHost) currentDNSObservation(ctx context.Context, s *des
 	a := h.parent.app
 	a.mu.Lock()
 	current := a.state
-	profile, exists := a.profileByIDLocked(h.launch.profileID)
+	profile, exists := a.profileByIDLocked(desktopExternalPathProfileID(h.launch))
 	revision := desktopOwnedNodeProfileToken(profile)
 	exactSource := revision == h.revision
 	if h.external != nil {
-		exactSource = (exactSource || revision == h.externalPersistedRevision) && validateDesktopLinuxExternalSource(profile, h.launch) == nil
+		entry, _ := a.profileByIDLocked(h.launch.external.entry.ID)
+		exactSource = (exactSource || revision == h.externalPersistedRevision) && validateDesktopLinuxExternalSource(profile, h.launch, entry) == nil
 	}
 	_, duplicateOwner := desktopNodeOwners.Load(a)
 	currentPath := !duplicateOwner && s.parent.currentAppLocked(false) == nil && a.cmd == h.process.command &&
@@ -129,7 +130,7 @@ func proveDesktopLinuxNodeDNS(ctx context.Context, a *app, observed observedConn
 	}
 	if h.external != nil {
 		revision := desktopOwnedNodeProfileToken(observed.Profile)
-		if h.launch == nil || h.launch.external == nil || observed.RouterID != h.launch.profileID ||
+		if h.launch == nil || h.launch.external == nil || observed.RouterID != desktopExternalPathProfileID(h.launch) ||
 			runtimeID != h.launch.mode || observed.RuntimeMode != "" && observed.RuntimeMode != runtimeID ||
 			!observed.Connected || observed.Phase != "connected" ||
 			revision != h.revision && revision != h.externalPersistedRevision ||
