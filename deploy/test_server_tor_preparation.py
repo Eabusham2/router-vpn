@@ -56,11 +56,36 @@ class ServerTorPreparation(unittest.TestCase):
                          'process_linux.go','record.go'}.issubset(originals))
         copied={name.removeprefix('routervpn/linuxprocess/'):raw for name,raw in content.items()
                 if name.startswith('routervpn/linuxprocess/')}
-        self.assertEqual(copied,originals)
+        # The shared observation classifier is a declared package dependency.
+        # Independently spell its one import relocation; all other source bytes
+        # and the complete member set must remain identical. Do not use the
+        # shipping rewriter as the expected-value oracle.
+        expected={name:raw.replace(b'"router-vpn/internal/common"',
+                    b'"github.com/sagernet/sing-box/routervpn/common"')
+                  for name,raw in originals.items()}
+        self.assertEqual(copied,expected)
+        self.assertEqual(content['routervpn/common/observation_context.go'],
+                         (ROOT/'internal/common/observation_context.go').read_bytes())
         for name in ('desktop_socket_linux_guardian_process.go','desktop_socket_linux_guardian_record.go'):
             expected=(ROOT/'internal/mobiletor'/name).read_bytes().replace(b'"router-vpn/internal/linuxprocess"',
                 b'"github.com/sagernet/sing-box/routervpn/linuxprocess"')
             self.assertEqual(content['routervpn/mobiletor/'+name],expected)
+
+    def test_linux_process_projection_rejects_substituted_source_or_import(self):
+        original=PREP.TOR.rewrite
+        for change in ('source-bytes','foreign-common-import'):
+            with self.subTest(change=change):
+                def substituted(raw):
+                    projected=original(raw)
+                    if b'package linuxprocess\n' not in raw:
+                        return projected
+                    if change=='source-bytes':
+                        return projected+b'\n// substituted process owner\n'
+                    return projected.replace(b'"github.com/sagernet/sing-box/routervpn/common"',
+                                             b'"github.com/sagernet/sing-box/routervpn/foreign-common"')
+                with mock.patch.object(PREP.TOR,'rewrite',side_effect=substituted):
+                    with self.assertRaises(AssertionError):
+                        self.test_linux_process_owners_are_copied_without_substitution()
 
     def test_unrelocated_dependency_refuses_the_complete_copy(self):
         original=PREP.TOR.rewrite
