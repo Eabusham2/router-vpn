@@ -60,6 +60,9 @@ func proveDesktopWindowsExternalDNS(ctx context.Context, a *app, observed observ
 	if err := owner.current(true); err != nil {
 		return fail(err)
 	}
+	// Keep source and saved-state validation atomic in the same lock order
+	// as CurrentProof; never wait for the source while retaining app.mu.
+	l.external.mu.Lock()
 	a.mu.Lock()
 	current := a.state
 	profile, found := a.profileByIDLocked(l.profileID)
@@ -67,10 +70,11 @@ func proveDesktopWindowsExternalDNS(ctx context.Context, a *app, observed observ
 	currentPath := found && a.cmd == l.command && current.Connected && current.Phase == "connected" &&
 		current.RouterID == observed.RouterID && current.Mode == observed.Mode && current.LogicalMode == observed.LogicalMode &&
 		current.RuntimeMode == runtimeID && current.Base == observed.Base &&
-		(revision == owner.profileToken || revision == owner.persistedToken) && validateDesktopWindowsExternalSource(profile, l) == nil &&
+		(revision == owner.profileToken || revision == owner.persistedToken) && validateDesktopWindowsExternalSourceLocked(profile, l) == nil &&
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == owner.savedOptions &&
 		[3]bool{current.DAITA, current.Jumbo, current.Socks} == owner.options
 	a.mu.Unlock()
+	l.external.mu.Unlock()
 	if !currentPath || ctx.Err() != nil {
 		return fail(errors.New("selected Windows external DNS proof lost its captured connection during readback"))
 	}

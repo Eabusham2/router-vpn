@@ -239,6 +239,9 @@ func validateDesktopWindowsExternalSourceContext(ctx context.Context, profile co
 	return errors.Join(validateDesktopWindowsExternalSourceLocked(profile, launch), ctx.Err())
 }
 func validateDesktopWindowsExternalSourceLocked(profile common.RouterProfile, launch *desktopNodeLaunch) error {
+	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.profileID || profile.ID != launch.policyProfileID {
+		return errors.New("native external source lost its exact saved node")
+	}
 	owner := launch.external
 	selected, err := externalRuntimePolicy(profile)
 	if err == nil {
@@ -384,12 +387,15 @@ func (owner *desktopWindowsExternalRuntime) current(processRequired bool) error 
 	if retiring || retired || closed {
 		return errors.New("native external owner is retired")
 	}
+	// Always acquire the source before app state. A bounded source observer
+	// must not retain app.mu while waiting for another proof reader.
+	l.external.mu.Lock()
 	a.mu.Lock()
 	profile, exists := a.profileByIDLocked(l.profileID)
 	revision := desktopOwnedNodeProfileToken(profile)
 	valid := exists && !a.closing && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owner.options &&
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == owner.savedOptions &&
-		(revision == owner.profileToken || activated && revision == owner.persistedToken) && validateDesktopWindowsExternalSource(profile, l) == nil
+		(revision == owner.profileToken || activated && revision == owner.persistedToken) && validateDesktopWindowsExternalSourceLocked(profile, l) == nil
 	if !activated {
 		valid = valid && a.checkCapturedConnectionOperationLocked(owner.operation) == nil && a.connectionCancelIntent != owner.operation
 	}
@@ -397,6 +403,7 @@ func (owner *desktopWindowsExternalRuntime) current(processRequired bool) error 
 		valid = valid && slot != nil && a.nodeProtection == slot && a.cmd == l.command && a.state.RouterID == l.profileID && a.state.RuntimeMode == l.mode
 	}
 	a.mu.Unlock()
+	l.external.mu.Unlock()
 	if !valid {
 		return errors.New("native external owner belongs to a replaced request, private source or runtime")
 	}
@@ -456,12 +463,25 @@ func (owner *desktopWindowsExternalRuntime) currentContext(ctx context.Context, 
 	if retiring || retired || closed {
 		return errors.New("native external owner is retired")
 	}
-	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
-		return err
+	// Match the source-before-app order used by legacy and DNS observations,
+	// but never poll one mutex while retaining the other. A legacy reader can
+	// block on either mutex and must remain able to finish while we wait.
+	for {
+		if err := mobilemtu.LockContext(ctx, &l.external.mu); err != nil {
+			return err
+		}
+		if a.mu.TryLock() {
+			break
+		}
+		l.external.mu.Unlock()
+		if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+			return err
+		}
+		a.mu.Unlock()
 	}
 	profile, exists := a.profileByIDLocked(l.profileID)
 	revision := desktopOwnedNodeProfileToken(profile)
-	sourceErr := validateDesktopWindowsExternalSourceContext(ctx, profile, l)
+	sourceErr := validateDesktopWindowsExternalSourceLocked(profile, l)
 	valid := exists && !a.closing && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owner.options &&
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == owner.savedOptions &&
 		(revision == owner.profileToken || activated && revision == owner.persistedToken)
@@ -472,6 +492,7 @@ func (owner *desktopWindowsExternalRuntime) currentContext(ctx context.Context, 
 		valid = valid && slot != nil && a.nodeProtection == slot && a.cmd == l.command && a.state.RouterID == l.profileID && a.state.RuntimeMode == l.mode
 	}
 	a.mu.Unlock()
+	l.external.mu.Unlock()
 	if sourceErr != nil {
 		return errors.Join(sourceErr, ctx.Err())
 	}

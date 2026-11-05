@@ -184,3 +184,51 @@ func TestDesktopNodeProcessOwnerContextPreservesOriginalCallback(t *testing.T) {
 		t.Fatal("caller expiry retired original process")
 	}
 }
+
+// Speed Lab and the asynchronous selected-DNS proof can observe the same
+// original source concurrently. A source wait must leave app.mu available to
+// the other reader, including while synctest's clock cannot advance past an
+// ordinary mutex waiter. The replacement case also requires validation of the
+// state after source contention, not adoption of an earlier app snapshot.
+func TestDesktopWindowsExternalProofSourceContentionKeepsAppAvailable(t *testing.T) {
+	for _, scenario := range []string{"original", "replaced-runtime", "app-contention"} {
+		t.Run(scenario, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				owner, proof := windowsExternalContextFixture(t)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				held, availableLock := &owner.launch.external.mu, &owner.app.mu
+				if scenario == "app-contention" {
+					held, availableLock = availableLock, held
+				}
+				held.Lock()
+				done := make(chan error, 1)
+				go func() { done <- owner.CurrentProof(ctx, proof) }()
+				synctest.Wait()
+				available := availableLock.TryLock()
+				if available {
+					if scenario == "replaced-runtime" {
+						owner.app.cmd = exec.Command("replacement-windows-child")
+					}
+					availableLock.Unlock()
+				}
+				held.Unlock()
+				if !available {
+					cancel()
+					<-done
+					t.Fatal("proof observation retained the other mutex and blocked the concurrent DNS/runtime reader")
+				}
+				err := <-done
+				if scenario != "replaced-runtime" && err != nil {
+					t.Fatal("original typed host proof failed after source contention", err)
+				}
+				if scenario == "replaced-runtime" && err == nil {
+					t.Fatal("source wait adopted a replaced runtime")
+				}
+				if owner.retiring || owner.retired || owner.closed {
+					t.Fatal("source observation retired the original owner")
+				}
+			})
+		})
+	}
+}
