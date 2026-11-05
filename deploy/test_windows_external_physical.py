@@ -88,6 +88,10 @@ LATENCY_OBSERVATION_CASES = tuple("TestRouterVPNDesktopExternalPhysicalBoxLatenc
 LATENCY_BOUNDARIES = ("latency-dns", "latency-tls", "latency-partial", "cancel", "network", "native-owner")
 
 
+GRANT_CLOCK_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/delayed-accept-receipt-clock" + suffix for suffix in (
+    "", "/equal-clock", "/distinct-clock", "/future-receipt", "/prior-dial", "/foreign-tuple", "/duplicate-tuple", "/replay"))
+
+
 def baseline_runs(name, selection, required):
     if name != "box":
         return ((name, selection, required),)
@@ -105,10 +109,10 @@ def baseline_runs(name, selection, required):
                          verdicts))
     runs.append(("box/latency-retirement", "^" + parent + "$/^latency50$/^(" + "|".join(LATENCY_BOUNDARIES) + ")$",
                  tuple(parent + "/latency50/" + leaf for leaf in LATENCY_BOUNDARIES)))
-    miscellaneous = ("delayed-accept-retains-prior-grant", "network-reset-during-mtu",
+    miscellaneous = ("delayed-accept-retains-prior-grant", "delayed-accept-receipt-clock", "network-reset-during-mtu",
                      "network-reset-after-native-publication", "network-reset-during-real-proof")
     runs.append(("box/retirement", "^" + parent + "$/^(" + "|".join(miscellaneous) + ")$",
-                 tuple(parent + "/" + leaf for leaf in miscellaneous)))
+                 tuple(parent + "/" + leaf for leaf in miscellaneous) + GRANT_CLOCK_CASES[1:]))
     return tuple(runs)
 
 
@@ -150,6 +154,12 @@ def checked_sources(source):
         records[target.relative_to(source).as_posix()] = hashlib.sha256(expected).hexdigest()
     records["ordinary-runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
+
+
+def control_selection(case):
+    # The native integration parent passes only an explicitly anchored parent
+    # selector to its isolated child. Anchor each component, not the whole path.
+    return "/".join("^" + re.escape(part) + "$" for part in case.split("/"))
 
 
 def mtu_retention_mutants(source):
@@ -298,7 +308,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             status, output = IDENTITY.run(command, cwd=source, env=captured, timeout=600)
             if status:
                 raise ValueError("Ordinary Windows negative control did not compile: " + label + "\n" + output[-16384:])
-            status, output = IDENTITY.run([binary, "-test.run=^" + test + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
+            status, output = IDENTITY.run([binary, "-test.run=" + control_selection(test), "-test.count=1", "-test.timeout=60s", "-test.v"],
                                           cwd=source, env=captured, timeout=75)
             if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or \
                     "--- SKIP:" in output or "DATA RACE" in output or "panic: test timed out" in output:

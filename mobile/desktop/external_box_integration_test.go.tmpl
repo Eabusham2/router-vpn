@@ -274,6 +274,70 @@ func (p *desktopExternalIntegrationKernel) grantedPeer(address net.Addr, accepte
 	return false
 }
 
+// A delayed socket is matched to its one original historical grant. Distinct
+// operations may share one clock tick, so the future-receipt negative uses a
+// strictly earlier time derived from that exact grant, not a guessed tick.
+func (p *desktopExternalIntegrationKernel) acceptRetainedPeer(address net.Addr, beforeDial, acceptedAt time.Time) bool {
+	peer, err := netip.ParseAddrPort(address.String())
+	if err != nil {
+		return false
+	}
+	p.mu.Lock()
+	var at time.Time
+	matches := 0
+	alreadyAccepted := false
+	for _, receipt := range p.issued {
+		if receipt.grant.Local == peer && receipt.grant.Remote == p.remote {
+			matches++
+			at, alreadyAccepted = receipt.at, receipt.accepted
+		}
+	}
+	p.mu.Unlock()
+	if matches != 1 || alreadyAccepted || at.Before(beforeDial) || at.After(acceptedAt) {
+		return false
+	}
+	futureProbe := at.Add(-time.Nanosecond)
+	return !p.grantedPeer(address, futureProbe) && p.grantedPeer(address, acceptedAt) && !p.grantedPeer(address, acceptedAt)
+}
+
+func desktopExternalIntegrationGrantClock(t *testing.T) {
+	at := time.Unix(123, 456)
+	local := netip.MustParseAddrPort("192.0.2.1:12345")
+	remote := netip.MustParseAddrPort("192.0.2.2:443")
+	peer := net.TCPAddrFromAddrPort(local)
+	for _, name := range []string{"equal-clock", "distinct-clock", "future-receipt", "prior-dial", "foreign-tuple", "duplicate-tuple", "replay"} {
+		t.Run(name, func(t *testing.T) {
+			original := &desktopExternalIntegrationGrant{grant: mobiletor.DesktopSocketGrant{Local: local, Remote: remote}, at: at}
+			p := &desktopExternalIntegrationKernel{remote: remote, issued: map[string]*desktopExternalIntegrationGrant{"original": original}}
+			before, accepted, want := at, at, false
+			switch name {
+			case "equal-clock", "replay":
+				want = true
+			case "distinct-clock":
+				before, accepted, want = at.Add(-time.Nanosecond), at.Add(time.Nanosecond), true
+			case "future-receipt":
+				original.at = at.Add(time.Nanosecond)
+			case "prior-dial":
+				original.at = at.Add(-time.Nanosecond)
+			case "foreign-tuple":
+				original.grant.Local = netip.MustParseAddrPort("192.0.2.1:12346")
+			case "duplicate-tuple":
+				duplicate := *original
+				p.issued["other"] = &duplicate
+			}
+			if got := p.acceptRetainedPeer(peer, before, accepted); got != want {
+				t.Fatal("retained original grant clock boundary changed", name, got, want)
+			}
+			if !want && original.accepted {
+				t.Fatal("rejected retained grant observation consumed original receipt")
+			}
+			if name == "replay" && p.acceptRetainedPeer(peer, before, accepted) {
+				t.Fatal("retained original grant was replayed")
+			}
+		})
+	}
+}
+
 // A datagram is usable only while its exact prior socket grant is current.
 // A packet queued before a revoke may arrive later; discard it without treating
 // the historical receipt as permission to resume a retired QUIC connection.
@@ -1302,7 +1366,7 @@ func desktopExternalIntegrationDelayedAccept(t *testing.T) {
 	}
 	defer peer.Close()
 	acceptedAt := time.Now()
-	if kernel.grantedPeer(peer.RemoteAddr(), beforeDial) || !kernel.grantedPeer(peer.RemoteAddr(), acceptedAt) || kernel.grantedPeer(peer.RemoteAddr(), acceptedAt) {
+	if !kernel.acceptRetainedPeer(peer.RemoteAddr(), beforeDial, acceptedAt) {
 		t.Fatal("queued connection lost its one-use prior grant or accepted a future/replayed receipt")
 	}
 	unowned, err := (&net.Dialer{}).DialContext(ctx, "tcp4", kernel.remote.String())
@@ -1710,6 +1774,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	t.Setenv("SSL_CERT_FILE", rootPath)
 	t.Setenv("SSL_CERT_DIR", directory)
 	t.Run("delayed-accept-retains-prior-grant", desktopExternalIntegrationDelayedAccept)
+	t.Run("delayed-accept-receipt-clock", desktopExternalIntegrationGrantClock)
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "darwin" {
@@ -2027,5 +2092,5 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	if t.Failed() {
 		return
 	}
-	t.Log("Original compiler -> derived Box -> real lower sockets -> selected DNS -> verified TLS public proof and actual native-manager MTU rollback passed. OS permit identity and TUN creation remain explicit separate kernel-test boundaries.")
+	t.Log("Selected external composition cases completed; the named test verdicts identify the exercised behavior. OS permit identity and TUN creation remain separate kernel-test boundaries.")
 }

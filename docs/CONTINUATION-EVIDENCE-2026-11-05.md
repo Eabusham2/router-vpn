@@ -1681,6 +1681,38 @@ bootstrap for a hostname behind the closed guard is separate unfinished work.
 The frozen source/evidence manifest is
 `8d34dfb964c17d248803cf32f395e842e8623c57008e7a930406a466e56a7370`.
 
+## Exact historical grant timing in the Windows external fixture
+
+The delayed-accept fixture previously used its pre-dial timestamp to test
+rejection of a future grant. Distinct operations can share a clock tick, making
+that timestamp equal to the actual grant timestamp. The new fixture locates
+exactly one original historical grant for the real socket tuple, requires its
+timestamp within the actual dial-to-accept interval, and derives the negative
+probe strictly before that grant. It still requires one successful acceptance
+and rejection of replay. Future, pre-dial, foreign and duplicate grants cannot
+consume the original receipt. Production `grantedPeer` behavior is unchanged.
+
+Ordinary native preparation and module verification pass. The actual compiled
+native integration command passes all **eight required clock subtree verdicts
+under race (2.387s)**: the parent plus equal-clock, distinct-clock, future,
+pre-dial, foreign-tuple, duplicate-tuple and replay leaves. Restoring the old
+pre-dial probe fails the intended equal-clock false/true assertion (0.479s).
+A compile failure, panic, timeout, race or skipped case cannot satisfy that
+control. All **22 Python runner checks pass (5.285s)**.
+
+Review also found that the ownership negative-control selector anchored a
+complete parent/child string, while the native subprocess preserved a child
+only when the parent itself had an explicit closing anchor. Each component is
+now individually escaped and anchored, keeping the intended control in the
+actual child. The runner requires every clock leaf, and a filtered integration
+run reports only its named case results rather than claiming full networking.
+
+The historical Windows failure did not capture the relevant timestamps. The
+deterministic equal-clock case establishes the fixture defect, not the measured
+cause of that historical failure. These pure clock tests also do not establish
+physical sockets, TUNs, Windows networking or a completed release; those remain
+separate exact-SHA workflow and device evidence.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

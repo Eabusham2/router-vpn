@@ -21,6 +21,17 @@ spec.loader.exec_module(EXTERNAL)
 
 
 class ExternalMTURetentionControls(unittest.TestCase):
+    def test_control_selector_preserves_exact_integration_child_scope(self):
+        parent = "TestRouterVPNDesktopExternalPhysicalIntegration"
+        case = parent + "/network-reset-after-native-publication"
+        selected = EXTERNAL.control_selection(case)
+        self.assertEqual(selected, "^" + parent + "$/^network\\-reset\\-after\\-native\\-publication$")
+        self.assertTrue(selected.startswith("^" + parent + "$/"))
+        for candidate, allowed in ((case, True), (parent + "/network-reset-during-mtu", False),
+                                    ("Other" + parent + "/network-reset-after-native-publication", False)):
+            self.assertEqual(all(re.search(pattern, part) for pattern, part in zip(selected.split("/"), candidate.split("/"))), allowed)
+        self.assertEqual(EXTERNAL.control_selection("ExactParent"), "^ExactParent$")
+
     def test_two_controls_discard_independent_original_owners(self):
         with tempfile.TemporaryDirectory(prefix="external-mtu-retention-") as directory:
             core = Path(directory)
@@ -44,6 +55,21 @@ class ExternalMTURetentionControls(unittest.TestCase):
             (core / "routervpn_desktop_tor_box_mtu.go").write_text("changed source")
             with self.assertRaises(ValueError):
                 EXTERNAL.mtu_retention_mutants(core)
+
+
+class ExternalGrantClockInventory(unittest.TestCase):
+    def test_clock_children_are_mandatory_in_actual_box_retirement_dispatch(self):
+        expected = {"equal-clock", "distinct-clock", "future-receipt", "prior-dial", "foreign-tuple", "duplicate-tuple", "replay"}
+        self.assertEqual({name.rsplit("/", 1)[1] for name in EXTERNAL.GRANT_CLOCK_CASES[1:]}, expected)
+        runs = EXTERNAL.baseline_runs("box", "original", ())
+        retirement = next(required for name, _, required in runs if name == "box/retirement")
+        self.assertTrue(set(EXTERNAL.GRANT_CLOCK_CASES).issubset(retirement))
+        complete = "".join("--- PASS: " + name + " (0.01s)\n" for name in retirement)
+        for name in EXTERNAL.GRANT_CLOCK_CASES:
+            with self.subTest(missing=name), contextlib.redirect_stdout(io.StringIO()):
+                incomplete = complete.replace("--- PASS: " + name + " (0.01s)\n", "")
+                with self.assertRaisesRegex(ValueError, "did not prove its native composition"):
+                    EXTERNAL.report_baseline("clock", retirement, 0, incomplete)
 
 
 class ExternalOutputBoundary(unittest.TestCase):
@@ -130,6 +156,7 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
                 names.update(re.findall(r"^func (Test\w+)\(", path.read_text(), re.MULTILINE))
             # A parent/root PASS never substitutes for its exact native child
             # verdicts at this explicit process boundary.
+            names.update(EXTERNAL.GRANT_CLOCK_CASES)
             names.update(EXTERNAL.HYSTERIA2_BOX_CASES)
             names.update(EXTERNAL.HYSTERIA2_LAYER_BOX_CASES)
             names.update(EXTERNAL.HYSTERIA2_FACTORY_CASES)

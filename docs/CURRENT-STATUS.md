@@ -126,6 +126,16 @@ inventory from 420 to 429; those privileged cases have not executed locally.
 Other graph families, layered Linux paths, Server/Compare and device acceptance
 retain their own unfinished requirements.
 
+The Windows external-network delayed-accept fixture now recognizes that the
+original dial and grant can share one clock tick. It requires the exact single
+historical socket grant within the actual dial-to-accept interval, then tests a
+strictly earlier observation, successful acceptance and replay rejection. Eight
+generated native race verdicts and all 22 runner checks pass; restoring the old
+probe fails the exact equal-clock assertion. Negative-control selectors now
+retain their exact child through the native subprocess. These are fixture and
+dispatch corrections; production grant policy is unchanged. The historical
+Windows failure did not record timestamps, so its clock cause is not established.
+
 The Windows Wintun comparison now prepares its private reference from the full
 original pinned Git tree and runs both required MTU preparation stages. It
 rejects replacement objects and missing inputs without repairing the subject.
