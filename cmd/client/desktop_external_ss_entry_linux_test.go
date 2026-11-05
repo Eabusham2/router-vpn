@@ -94,7 +94,7 @@ func TestDesktopLinuxSSEntryRetainsBothSourcesDNSAndRestoration(t *testing.T) {
 }
 
 func TestDesktopLinuxSSEntryKeepsOtherGraphsClosed(t *testing.T) {
-	for _, fault := range []string{"server", "auto", "off", "entry-layer", "final-layer", "legacy-entry", "legacy-final", "connect-final", "https-final", "same-id", "predecessor"} {
+	for _, fault := range []string{"server", "auto", "off", "entry-layer", "final-layer", "legacy-entry", "legacy-final", "hy2-final", "socks-final", "same-id", "predecessor"} {
 		t.Run(fault, func(t *testing.T) {
 			_, _, launch := desktopSSEntryFixture(t, "always", desktopSSEntryMethods[1], desktopSSEntryMethods[1], "udp")
 			o := launch.external
@@ -111,12 +111,12 @@ func TestDesktopLinuxSSEntryKeepsOtherGraphsClosed(t *testing.T) {
 				o.entry.External.Shadowsocks.Method = "aes-256-gcm"
 			case "legacy-final":
 				o.profile.External.Shadowsocks.Method = "aes-256-gcm"
-			case "connect-final":
-				o.profile.External.Protocol = "http-connect"
-				o.profile.External.HTTPConnect = &common.ExternalHTTPConnectConfig{Host: "198.51.100.240", Port: 8388, Username: "captured", Password: "captured"}
-			case "https-final":
-				o.profile.External.Protocol = "https-connect"
-				o.profile.External.HTTPSConnect = &common.ExternalHTTPConnectConfig{Host: "198.51.100.240", Port: 8388, Username: "captured", Password: "captured", TLSServerName: "captured.example"}
+			case "hy2-final":
+				o.profile.External.Protocol = "hysteria2"
+				o.profile.External.Hysteria2 = &common.ExternalHysteria2Config{}
+			case "socks-final":
+				o.profile.External.Protocol = "socks5"
+				o.profile.External.SOCKS5 = &common.ExternalSOCKS5Config{}
 			case "same-id":
 				o.entry.ID = o.profile.ID
 			case "predecessor":

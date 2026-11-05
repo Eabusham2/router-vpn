@@ -158,6 +158,21 @@ ACTIVE_CASES += BOOT_RESOLVER_CASES
 OFF_CASES += BOOT_RESOLVER_CASES
 CASES += EXTERNAL_SS_ENTRY_CASES
 CASES += BOOT_RESOLVER_CASES
+EXTERNAL_SS_CONNECT_CASES = tuple('external-ss' + method + protocol + '-on-connect'
+    for method in ('128', '256', 'chacha') for protocol in ('http', 'https')) + tuple('external-ss256' + protocol + '-' + action
+    for protocol in ('http', 'https') for action in ('always', 'always-off')) + tuple('external-ss256https-' + action
+    for action in ('public', 'cancelled', 'source', 'entry-source', 'replacement', 'wrong-entry-public', 'wrong-entry-key',
+                   'wrong-entry-method', 'wrong-proxy-username', 'wrong-proxy-password', 'wrong-proxy-sni', 'wrong-proxy-trust', 'dns-failure'))
+EXTERNAL_CASES += EXTERNAL_SS_CONNECT_CASES
+CASES += EXTERNAL_SS_CONNECT_CASES
+SS_CONNECT_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSSCONNECTFixtureKeepsCompiledAuthority'
+SS_CONNECT_AUTHORITY_CASES = (SS_CONNECT_AUTHORITY_ROOT, *(SS_CONNECT_AUTHORITY_ROOT + '/' + method + '/' + protocol
+    for method in ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305')
+    for protocol in ('http-connect', 'https-connect')))
+
+def check_ss_connect_authority_verdict(output):
+    NODE.require_native_verdicts(output, SS_CONNECT_AUTHORITY_CASES, 'installed SS CONNECT entry authority')
+
 SS_ENTRY_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSSEntryFixtureKeepsCompiledAuthority'
 SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT + '/' + entry + '-' + final
     for entry in ('128', '256', 'chacha') for final in ('128', '256', 'chacha')))
@@ -189,7 +204,7 @@ def checked_sources(source):
                 'cmd/client/desktop_external_wg_hysteria_layer_linux_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
                 'cmd/client/desktop_external_wg_entry.go', 'cmd/client/desktop_external_wg_entry_linux_test.go',
-                'cmd/client/desktop_external_ss_entry_linux_test.go', 'cmd/client/desktop_external_ss_entry_linux_tun_native_test.go', 'cmd/client/desktop_external_ss_entry_darwin_native_test.go',
+                'cmd/client/desktop_external_ss_connect_linux_test.go', 'cmd/client/desktop_external_ss_connect_linux_tun_native_test.go', 'cmd/client/desktop_external_ss_entry_linux_test.go', 'cmd/client/desktop_external_ss_entry_linux_tun_native_test.go', 'cmd/client/desktop_external_ss_entry_darwin_native_test.go',
                 'cmd/client/desktop_external_retained.go', 'cmd/client/external_profile_connect.go', 'cmd/client/speed_lab_paths.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
                 'cmd/client/desktop_node_host_linux_active.go',
@@ -332,11 +347,14 @@ def check_verdict(output, case=None):
     hysteria_receipts = []
     layered_entry_receipts = []
     ss_entry_receipts = []
+    ss_connect_receipts = []
     layered_entry_passes = re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"(external-wghy2(?:aes|xor)-[a-z-]+) \([0-9.]+s\)$", output)
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('independent SS2022 entry and CONNECT final: '):
+                ss_connect_receipts.append(suffix.removeprefix('independent SS2022 entry and CONNECT final: '))
             if suffix.startswith('independent SS2022 entry and SS2022 final: '):
                 ss_entry_receipts.append(suffix.removeprefix('independent SS2022 entry and SS2022 final: '))
             if suffix.startswith('independent WireGuard entry and layered Hysteria2 final: '):
@@ -354,6 +372,10 @@ def check_verdict(output, case=None):
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if ss_entry_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed SS2022 graph omitted or duplicated original native completion: ' + value)
+        if value in EXTERNAL_SS_CONNECT_CASES:
+            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
+            if ss_connect_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+                raise ValueError('Installed SS CONNECT graph omitted or duplicated original native completion: ' + value)
         if value in EXTERNAL_WG_HYSTERIA_LAYER_CASES:
             if layered_entry_receipts.count(value) != 1 or layered_entry_passes.count(value) != 1:
                 raise ValueError('Installed layered WG/Hysteria graph omitted or duplicated original native completion: ' + value)
@@ -559,6 +581,20 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Installed SS2022 cipher reference failed:\n' + ss_entry_reference_output[-16384:])
         NODE.require_native_verdicts(ss_entry_reference_output, NODE.SS_ENTRY_REFERENCE_SUITE[3], 'installed SS2022 reference')
         print(ss_entry_reference_output, end='' if ss_entry_reference_output.endswith('\n') else '\n')
+        status, ss_connect_authority_output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
+                                             '-test.run=^' + SS_CONNECT_AUTHORITY_ROOT + '$'],
+                                            cwd=ROOT, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed SS CONNECT authority witness failed:\n' + ss_connect_authority_output[-16384:])
+        check_ss_connect_authority_verdict(ss_connect_authority_output)
+        print(ss_connect_authority_output, end='' if ss_connect_authority_output.endswith('\n') else '\n')
+        status, ss_connect_reference_output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
+                                             '-test.run=' + NODE.SS_CONNECT_REFERENCE_SUITE[2]],
+                                            cwd=source, env=captured, timeout=100)
+        if status:
+            raise ValueError('Installed SS CONNECT cipher reference failed:\n' + ss_connect_reference_output[-16384:])
+        NODE.require_native_verdicts(ss_connect_reference_output, NODE.SS_CONNECT_REFERENCE_SUITE[3], 'installed SS CONNECT reference')
+        print(ss_connect_reference_output, end='' if ss_connect_reference_output.endswith('\n') else '\n')
         status, layer_output = NODE.run([str(peer), '-test.v', '-test.timeout=30s',
                                         '-test.run=^TestRouterVPNDesktopExternalInstalledLayerCarrier$'],
                                        cwd=source, env=captured, timeout=40)
@@ -607,6 +643,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'native_bundle': payloads,
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
                                 (('installed-controller-test', binary), ('independent-wg-awg2-ss2022-and-hysteria2-peers', peer), ('shipping-whitening-relay', whitening))},
+                  'ss_connect_authority_cases': list(SS_CONNECT_AUTHORITY_CASES), 'ss_connect_authority_output_sha256': hashlib.sha256(ss_connect_authority_output.encode()).hexdigest(),
+                  'ss_connect_reference_cases': list(NODE.SS_CONNECT_REFERENCE_SUITE[3]), 'ss_connect_reference_output_sha256': hashlib.sha256(ss_connect_reference_output.encode()).hexdigest(),
                   'ss_entry_authority_cases': list(SS_ENTRY_AUTHORITY_CASES), 'ss_entry_authority_output_sha256': hashlib.sha256(ss_entry_authority_output.encode()).hexdigest(),
                   'ss_entry_reference_cases': list(NODE.SS_ENTRY_REFERENCE_SUITE[3]), 'ss_entry_reference_output_sha256': hashlib.sha256(ss_entry_reference_output.encode()).hexdigest(),
                   'layered_entry_authority_cases': list(LAYERED_ENTRY_AUTHORITY_CASES), 'layered_entry_authority_output_sha256': hashlib.sha256(layered_entry_authority_output.encode()).hexdigest(),

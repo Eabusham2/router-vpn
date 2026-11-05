@@ -44,7 +44,7 @@ func linuxHostTUNExternalSSEntryCase(scenario string) bool {
 	return false
 }
 func linuxHostTUNExternalAnyEntry(scenario string) bool {
-	return linuxHostTUNExternalWGEntry(scenario) || linuxHostTUNExternalSSEntryCase(scenario)
+	return linuxHostTUNExternalWGEntry(scenario) || linuxHostTUNExternalSSEntryCase(scenario) || linuxHostTUNExternalSSCONNECT(scenario)
 }
 
 type linuxExternalTUNSSEntryReceipt struct {
@@ -89,6 +89,10 @@ func linuxHostTUNSSKey(t *testing.T, method string) string {
 }
 func linuxHostTUNPrepareSSEntryPeer(t *testing.T, peer *linuxExternalTUNPeer, scenario string) {
 	t.Helper()
+	if linuxHostTUNExternalSSCONNECT(scenario) {
+		linuxHostTUNPrepareSSCONNECTPeer(t, peer, scenario)
+		return
+	}
 	if !linuxHostTUNExternalSSEntryCase(scenario) {
 		return
 	}
@@ -110,7 +114,7 @@ func linuxHostTUNSSEntryRead(t *testing.T, peer *linuxExternalTUNPeer, reply lin
 		return
 	}
 	e := reply.ShadowsocksEntry
-	if e == nil || reply.PacketEntry != nil || peer.entry != nil || peer.protocol != "shadowsocks" || e.Method != peer.ssEntry.entryMethod || e.PhysicalTCP < 0 || e.PhysicalUDP < 0 || e.Streams < 0 || e.Packets < 0 {
+	if e == nil || reply.PacketEntry != nil || peer.entry != nil || (peer.protocol != "shadowsocks" && peer.protocol != "http-connect" && peer.protocol != "https-connect") || e.Method != peer.ssEntry.entryMethod || e.PhysicalTCP < 0 || e.PhysicalUDP < 0 || e.Streams < 0 || e.Packets < 0 {
 		t.Fatal("lost independent SS entry receipt")
 	}
 	address, err := netip.ParseAddrPort(e.Address)
@@ -124,16 +128,20 @@ func linuxHostTUNInstallSSEntry(t *testing.T, peer *linuxExternalTUNPeer, scenar
 	s := peer.ssEntry
 	action := linuxHostTUNExternalAction(scenario)
 	profile.Endpoint = peer.address.Addr().String()
-	profile.DNSProtocol = "udp"
-	if action == "tcp-dns" {
+	if peer.protocol == "shadowsocks" {
+		profile.DNSProtocol = "udp"
+		if action == "tcp-dns" {
+			profile.DNSProtocol = "tcp"
+		}
+		profile.External.Shadowsocks.Method = s.finalMethod
+		if action == "wrong-key" {
+			profile.External.Shadowsocks.Password = linuxHostTUNSSKey(t, s.finalMethod)
+		}
+		if action == "wrong-final-method" {
+			profile.External.Shadowsocks.Method = "2022-blake3-chacha20-poly1305"
+		}
+	} else {
 		profile.DNSProtocol = "tcp"
-	}
-	profile.External.Shadowsocks.Method = s.finalMethod
-	if action == "wrong-key" {
-		profile.External.Shadowsocks.Password = linuxHostTUNSSKey(t, s.finalMethod)
-	}
-	if action == "wrong-final-method" {
-		profile.External.Shadowsocks.Method = "2022-blake3-chacha20-poly1305"
 	}
 	entry := common.RouterProfile{ID: "installed-linux-entry", Name: "Independent captured SS2022 entry", NodeKind: "external", Endpoint: s.address.Addr().String(), StartLayer: common.StartLayerOff, External: &common.ExternalNodeConfig{Protocol: "shadowsocks", ExpectedPublicIP: "203.0.113.77", Shadowsocks: &common.ExternalShadowsocksConfig{Server: s.address.Addr().String(), Port: int(s.address.Port()), Method: s.entryMethod, Password: s.entryPassword}}}
 	if action == "wrong-entry-public" {
@@ -193,6 +201,9 @@ func linuxHostTUNSSEntryObserved(t *testing.T, peer *linuxExternalTUNPeer, actio
 		}
 		return
 	}
+	if e.AuthTCP != 0 || e.AuthUDP != 0 {
+		t.Fatal("proved SS entry retained unexpected authentication failures", reply)
+	}
 	if e.PhysicalTCP == 0 || e.Streams == 0 || e.PublicReplies == 0 {
 		t.Fatal("SS entry proof bypassed actual independent cipher", reply)
 	}
@@ -202,7 +213,7 @@ func linuxHostTUNSSEntryObserved(t *testing.T, peer *linuxExternalTUNPeer, actio
 		}
 		return
 	}
-	if action == "tcp-dns" {
+	if action == "tcp-dns" || peer.protocol == "http-connect" || peer.protocol == "https-connect" {
 		if e.PhysicalUDP != 0 || e.Packets != 0 || reply.PhysicalUDP != 0 || reply.Packets != 0 {
 			t.Fatal("selected TCP DNS substituted UDP", reply)
 		}
@@ -211,6 +222,9 @@ func linuxHostTUNSSEntryObserved(t *testing.T, peer *linuxExternalTUNPeer, actio
 	}
 }
 func linuxHostTUNExternalSSAuthority(native *desktopNodeLaunch) error {
+	if native != nil && native.external != nil && native.external.profile.External != nil && (native.external.profile.External.Protocol == "http-connect" || native.external.profile.External.Protocol == "https-connect") {
+		return linuxHostTUNExternalSSCONNECTAuthority(native)
+	}
 	bad := errors.New("Linux SS entry lost exact original TCP/UDP root or independent final policy")
 	if native == nil || native.external == nil || !desktopExternalSSEntryOwner(native.external) || !desktopExternalSS2022Profile(native.external.profile) || native.external.physical == nil {
 		return bad

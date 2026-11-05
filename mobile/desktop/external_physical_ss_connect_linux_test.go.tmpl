@@ -1,0 +1,38 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	M "github.com/sagernet/sing/common/metadata"
+	"testing"
+)
+
+// Uses the original explicit kernel-source model. Installed namespace execution
+// separately proves actual socket/TUN/firewall behavior and selected DNS.
+func TestRouterVPNExternalPhysicalLinuxSSCONNECTOwnsOnlyOriginalTCP(t *testing.T) {
+	for _, protocol := range []string{"ss-entry-http", "ss-entry-https"} {
+		t.Run(protocol, func(t *testing.T) {
+			policy := externalPhysicalDeviceFixture(t, protocol, "192.168.50.7", 8443, false, "linux", "off", "always")
+			f := newExternalPhysicalFixture(t, policy)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			ctx := f.start(t, source)
+			if _, err := f.physical.current(ctx, "tcp", M.ParseSocksaddr("192.168.50.7:8443")); err != nil {
+				t.Fatal("CONNECT lost original TCP entry", err)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, address := range []string{"192.168.50.7:8443", "198.51.100.240:8388", "192.168.50.8:8443", "192.168.50.7:8444", "127.0.0.1:8388"} {
+					if network == "tcp" && address == "192.168.50.7:8443" {
+						continue
+					}
+					if _, err := f.physical.current(ctx, network, M.ParseSocksaddr(address)); err == nil {
+						t.Fatal("CONNECT granted UDP or foreign root", network, address)
+					}
+				}
+			}
+			f.network.Cancel()
+			if _, err := f.physical.current(ctx, "tcp", M.ParseSocksaddr("192.168.50.7:8443")); err == nil {
+				t.Fatal("CONNECT retained cancelled physical owner")
+			}
+		})
+	}
+}

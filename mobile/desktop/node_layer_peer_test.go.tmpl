@@ -2632,7 +2632,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	if request.ShadowsocksEntry != nil {
 		finalValid := request.Protocol == "shadowsocks" && desktopSS2022Credentials(request.ShadowsocksMethod, request.Password) ||
 			(request.Protocol == "http-connect" || request.Protocol == "https-connect") && request.ShadowsocksMethod == ""
-		if !finalValid || request.Layer != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || !latency && (capturedAddress != "11.77.0.2" || request.Protocol != "shadowsocks") || desktopExternalInstalledSSEntry == nil || !desktopSS2022Credentials(request.ShadowsocksEntry.Method, request.ShadowsocksEntry.Password) {
+		if !finalValid || request.Layer != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || !latency && (capturedAddress != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect") || desktopExternalInstalledSSEntry == nil || !desktopSS2022Credentials(request.ShadowsocksEntry.Method, request.ShadowsocksEntry.Password) {
 			t.Fatal("unrequested or incomplete ordinary SS entry graph")
 		}
 	} else if request.ShadowsocksMethod != "" {
@@ -2661,6 +2661,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	entryRequested := request.WireGuardEntry != nil || request.AmneziaEntry != nil
 	// The Linux installed fixture admits only the same bounded WG -> SS/CONNECT/HY2 pairs
 	// as its shipping host; other entry graphs keep their platform gate.
+	ssCONNECTEntry := request.ShadowsocksEntry != nil && (request.Protocol == "http-connect" || request.Protocol == "https-connect")
+	linuxSSCONNECTEntry := ssCONNECTEntry && !latency && capturedAddress == "11.77.0.2"
+	// This extra witness belongs to the actual Linux entry and portable
+	// loopback reference only. Darwin retains its existing strict receipt.
+	observeSSCONNECTTLS := linuxSSCONNECTEntry || ssCONNECTEntry && latency && capturedAddress == "127.0.0.1"
 	linuxWGEntry := !latency && capturedAddress == "11.77.0.2" && (request.Protocol == "shadowsocks" || request.Protocol == "http-connect" || request.Protocol == "https-connect" || request.Protocol == "hysteria2") && request.WireGuardEntry != nil && request.AmneziaEntry == nil && (request.Layer == nil || request.Protocol == "hysteria2" && allowLayer)
 	if entryRequested && (request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "socks5" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" || request.Layer != nil && request.Protocol != "hysteria2" || !latency && !linuxWGEntry ||
 		request.WireGuardEntry != nil && (request.AmneziaEntry != nil || desktopExternalInstalledWireGuardEntry == nil) ||
@@ -2680,7 +2685,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			t.Fatal("packet final lost its separate original cryptographic owner")
 		}
 	}
-	if request.HTTPSFault != "" && (!linuxWGEntry || request.Protocol != "https-connect" || request.HTTPSFault != "untrusted-ca") {
+	if request.HTTPSFault != "" && (!(linuxWGEntry || linuxSSCONNECTEntry) || request.Protocol != "https-connect" || request.HTTPSFault != "untrusted-ca") {
 		t.Fatal("uncaptured CONNECT TLS failure")
 	}
 	if request.HysteriaFault != "" && (!linuxWGEntry || request.Protocol != "hysteria2" || request.HysteriaFault != "untrusted-ca") {
@@ -2889,7 +2894,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 				if request.Protocol == "https-connect" {
 					secured := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{proxyCertificate}, MinVersion: tls.VersionTLS12})
 					if err := secured.HandshakeContext(ctx); err != nil {
-						if linuxWGEntry && desktopExternalCONNECTCertificateRefused(err) {
+						if (linuxWGEntry || observeSSCONNECTTLS) && desktopExternalCONNECTCertificateRefused(err) {
 							tlsCertificateRefusals.Add(1)
 						}
 						return err

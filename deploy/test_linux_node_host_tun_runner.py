@@ -31,7 +31,7 @@ class InstalledReverseServiceVerdict(unittest.TestCase):
         G.check_reverse_verdict(self.completed())
         self.assertEqual(G.REVERSE_CASES[:3], ('node-standard-original', 'node-standard-lost-commit-reply', 'node-standard-lost-prepare-reply'))
         self.assertEqual(G.REVERSE_CASES[3:], ('node-standard-lost-start-reply', 'node-standard-cancel-before-remove', 'node-standard-longer-deadline', 'node-standard-post-removal-failure', 'node-standard-always-lost-prepare', 'node-standard-always-cancel-before-remove'))
-        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES))
+        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES))
         self.assertEqual(len(G.REVERSE_CASES), 9)
 
 
@@ -70,6 +70,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:23: verified installed host independent WireGuard entry and Hysteria2 final: ' + case for case in cases if case in G.EXTERNAL_WG_HYSTERIA_CASES),
                           *('    native_test.go:25: verified installed host independent WireGuard entry and layered Hysteria2 final: ' + case for case in cases if case in G.EXTERNAL_WG_HYSTERIA_LAYER_CASES),
                           *('    native_test.go:26: verified installed host independent SS2022 entry and SS2022 final: ' + case for case in cases if case in G.EXTERNAL_SS_ENTRY_CASES),
+                          *('    native_test.go:27: verified installed host independent SS2022 entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_SS_CONNECT_CASES),
                           *('    native_test.go:24: verified installed host original boot service transfer: ' + case for case in cases if case in G.BOOT_TRANSFER_CASES + G.BOOT_RESOLVER_CASES),
                           *('    native_test.go:25: verified installed host captured resolver policy: ' + case for case in cases if case in G.HOSTNAME_CASES),
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),
@@ -102,7 +103,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(G.EXTERNAL_WG_HYSTERIA_CASES, expected)
         self.assertEqual(G.CASES[417:420], G.TRANSFER_CASES)
         self.assertEqual(G.CASES[420:429], expected)
-        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES))
+        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES))
         good = self.completed()
         G.check_verdict(good)
         for case in expected:
@@ -132,9 +133,9 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
 
     def test_boot_resolver_preserves_prior_inventory_and_exact_policy_receipts(self):
         self.assertEqual(G.CASES[:481][-23:], G.EXTERNAL_SS_ENTRY_CASES)
-        self.assertEqual(G.CASES[481:], G.BOOT_RESOLVER_CASES)
+        self.assertEqual(G.CASES[481:484], G.BOOT_RESOLVER_CASES)
         self.assertEqual(G.BOOT_RESOLVER_CASES, ('service-boot-hosts', 'service-boot-hostname-tcp', 'service-boot-hostname-truncated'))
-        self.assertEqual(len(G.CASES), 484)
+        self.assertEqual(len(G.CASES), 484 + len(G.EXTERNAL_SS_CONNECT_CASES))
         good = self.completed()
         G.check_verdict(good)
         for case in G.HOSTNAME_CASES:
@@ -290,11 +291,11 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_external_succession_keeps_all_original_cases_and_real_lifecycle(self):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
-        self.assertEqual(len(G.EXTERNAL_CASES), 152 + len(G.EXTERNAL_SS_ENTRY_CASES))
-        self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_CASES) + len(G.BOOT_TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_LAYER_CASES) + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES))
+        self.assertEqual(len(G.EXTERNAL_CASES), 152 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES))
+        self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_CASES) + len(G.BOOT_TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_LAYER_CASES) + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES))
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
-        self.assertEqual(G.CASES[299:417] + G.CASES[417+len(G.TRANSFER_CASES):429] + G.CASES[433:458] + G.EXTERNAL_SS_ENTRY_CASES, G.EXTERNAL_CASES)
+        self.assertEqual(G.CASES[299:417] + G.CASES[417+len(G.TRANSFER_CASES):429] + G.CASES[433:458] + G.EXTERNAL_SS_ENTRY_CASES + G.EXTERNAL_SS_CONNECT_CASES, G.EXTERNAL_CASES)
         self.assertEqual(len(G.CASES), len(set(G.CASES)))
         self.assertEqual(set(G.EXTERNAL_CASES) & set(G.ORIGINAL_CASES), set())
         for case in G.EXTERNAL_CASES:
@@ -717,6 +718,37 @@ class SS2022EntryVerdicts(unittest.TestCase):
             good+='    native_test.go:1: verified installed host native lifecycle: '+case+'\n'
             good+='    native_test.go:2: verified installed host retained external succession: '+case+'\n'
             line='    native_test.go:3: verified installed host independent SS2022 entry and SS2022 final: '+case+'\n'
+            good+=line
+            G.check_verdict(good,case)
+            verdict='--- PASS: '+prefix+'/'+case+' (0.01s)\n'
+            for required in (line,verdict):
+                for changed in (good.replace(required,'',1),good+required,good.replace(required,required.replace(case,case+'-foreign'),1)):
+                    with self.subTest(case=case),self.assertRaises(ValueError): G.check_verdict(changed,case)
+
+class SSCONNECTVerdicts(unittest.TestCase):
+    def test_inventory_and_original_compiled_authority(self):
+        self.assertEqual(len(G.EXTERNAL_SS_CONNECT_CASES), 23)
+        self.assertEqual(len(set(G.EXTERNAL_SS_CONNECT_CASES)), 23)
+        self.assertEqual(G.CASES[484:], G.EXTERNAL_SS_CONNECT_CASES)
+        self.assertEqual(len(G.CASES), 507)
+        self.assertEqual(len(G.REVERSE_CASES), 9)
+        names = G.SS_CONNECT_AUTHORITY_CASES
+        self.assertEqual(len(names), 7)
+        good = ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in names)
+        G.check_ss_connect_authority_verdict(good)
+        for line in good.splitlines(True):
+            for changed in (good.replace(line, '', 1), good+line, good.replace(line, line.replace('SSCONNECT','ForeignCONNECT'),1)):
+                with self.assertRaises(ValueError): G.check_ss_connect_authority_verdict(changed)
+        for marker in ('--- SKIP:', '--- FAIL:', 'DATA RACE', 'panic:'):
+            with self.assertRaises(ValueError): G.check_ss_connect_authority_verdict(good+marker+' foreign\n')
+
+    def test_each_original_installed_receipt_and_verdict_is_unique(self):
+        prefix='TestDesktopLinuxGuardianKernelNodeHostTUN'
+        for case in G.EXTERNAL_SS_CONNECT_CASES:
+            good='--- PASS: '+prefix+' (0.01s)\n--- PASS: '+prefix+'/'+case+' (0.01s)\n'
+            good+='    native_test.go:1: verified installed host native lifecycle: '+case+'\n'
+            good+='    native_test.go:2: verified installed host retained external succession: '+case+'\n'
+            line='    native_test.go:3: verified installed host independent SS2022 entry and CONNECT final: '+case+'\n'
             good+=line
             G.check_verdict(good,case)
             verdict='--- PASS: '+prefix+'/'+case+' (0.01s)\n'

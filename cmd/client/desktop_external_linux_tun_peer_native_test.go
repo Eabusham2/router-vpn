@@ -36,7 +36,7 @@ var linuxHostTUNExternalWGCONNECTCases = []string{
 	"external-wghttps-on-connect", "external-wghttps-always", "external-wghttps-public", "external-wghttps-cancelled", "external-wghttps-wrong-entry-public", "external-wghttps-wrong-proxy-password", "external-wghttps-wrong-proxy-username", "external-wghttps-dns-failure", "external-wghttps-wrong-proxy-sni", "external-wghttps-wrong-proxy-trust",
 }
 var linuxHostTUNExternalWGHysteriaCases = []string{"external-wghy2-on-connect", "external-wghy2-always", "external-wghy2-public", "external-wghy2-cancelled", "external-wghy2-wrong-entry-public", "external-wghy2-wrong-key", "external-wghy2-wrong-trust", "external-wghy2-wrong-ca", "external-wghy2-dns-failure"}
-var linuxHostTUNExternalCases = append(append(append(append(append([]string{
+var linuxHostTUNExternalCases = append(append(append(append(append(append([]string{
 	"external-ss-on-connect", "external-http-on-connect", "external-https-on-connect",
 	"external-ss-always", "external-http-always", "external-https-always",
 	"external-ss-cancelled", "external-ss-replacement", "external-ss-source", "external-ss-dns-failure",
@@ -70,7 +70,7 @@ var linuxHostTUNExternalCases = append(append(append(append(append([]string{
 	"external-socks-on-connect", "external-socks-always", "external-socks-public", "external-socks-cancelled",
 	"external-socks-wrong-auth", "external-socks-auth-downgrade", "external-socks-relay-domain", "external-socks-control-eof",
 	"external-socks-dns-failure", "external-socks-replacement", "external-socks-source",
-}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...), linuxHostTUNExternalSSEntryCases...)
+}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...), linuxHostTUNExternalSSEntryCases...), linuxHostTUNExternalSSCONNECTCases...)
 
 func linuxHostTUNExternalCase(scenario string) bool {
 	for _, candidate := range linuxHostTUNExternalCases {
@@ -84,6 +84,9 @@ func linuxHostTUNExternalCase(scenario string) bool {
 func linuxHostTUNExternalProtocol(scenario string) string {
 	if !linuxHostTUNExternalCase(scenario) {
 		return ""
+	}
+	if linuxHostTUNExternalSSCONNECT(scenario) {
+		return linuxHostTUNSSCONNECTProtocol(scenario)
 	}
 	if strings.HasPrefix(scenario, "external-https-") || strings.HasPrefix(scenario, "external-wghttps-") {
 		return "https-connect"
@@ -427,7 +430,9 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	request := map[string]any{"schema": 1, "protocol": peer.protocol, "address": "11.77.0.2",
 		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}
 	if peer.ssEntry != nil {
-		request["shadowsocks_method"] = peer.ssEntry.finalMethod
+		if peer.protocol == "shadowsocks" {
+			request["shadowsocks_method"] = peer.ssEntry.finalMethod
+		}
 		request["shadowsocks_entry"] = map[string]any{"method": peer.ssEntry.entryMethod, "password": peer.ssEntry.entryPassword}
 	}
 	if peer.layerMode != "" {
@@ -762,7 +767,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 			action == "control-eof" && (observed.PhysicalUDP == 0 || len(observed.SOCKSRelays) == 0) {
 			t.Fatal("SOCKS rejection did not reach its real selected authentication or association boundary", observed)
 		}
-	} else if linuxHostTUNExternalWGCONNECT(scenario) && strings.HasPrefix(action, "wrong-proxy-") {
+	} else if (linuxHostTUNExternalWGCONNECT(scenario) || linuxHostTUNExternalSSCONNECT(scenario)) && strings.HasPrefix(action, "wrong-proxy-") {
 		auth := action == "wrong-proxy-password" || action == "wrong-proxy-username"
 		if !auth {
 			// The client can report its x509 refusal before the peer consumes the
@@ -901,7 +906,11 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		t.Fatal("retired external proof was adopted after cancellation", end)
 	}
 	if peer.ssEntry != nil {
-		t.Log("verified installed host independent SS2022 entry and SS2022 final:", scenario)
+		if linuxHostTUNExternalSSCONNECT(scenario) {
+			t.Log("verified installed host independent SS2022 entry and CONNECT final:", scenario)
+		} else {
+			t.Log("verified installed host independent SS2022 entry and SS2022 final:", scenario)
+		}
 	} else if peer.entry != nil {
 		if linuxHostTUNExternalWGHysteriaLayerCase(scenario) {
 			t.Log("verified installed host independent WireGuard entry and layered Hysteria2 final:", scenario)

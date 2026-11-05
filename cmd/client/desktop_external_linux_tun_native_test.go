@@ -219,6 +219,10 @@ func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desk
 			owner.profiles.Profiles[index].External.StartLayer.Transport["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
 		} else if owner.profiles.Profiles[index].External.SOCKS5 != nil {
 			owner.profiles.Profiles[index].External.SOCKS5.Password = "changed-after-captured-native-preparation"
+		} else if owner.profiles.Profiles[index].External.HTTPConnect != nil {
+			owner.profiles.Profiles[index].External.HTTPConnect.Password = "changed-after-captured-native-preparation"
+		} else if owner.profiles.Profiles[index].External.HTTPSConnect != nil {
+			owner.profiles.Profiles[index].External.HTTPSConnect.Password = "changed-after-captured-native-preparation"
 		} else {
 			owner.profiles.Profiles[index].External.Shadowsocks.Password = "changed-after-captured-native-preparation"
 		}

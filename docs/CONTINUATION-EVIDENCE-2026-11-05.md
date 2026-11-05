@@ -2338,6 +2338,52 @@ app-level Router proof, physical devices, or full release publication. The
 aggregate release workflow for this SHA was cancelled after newer main work;
 cancellation is not a release pass.
 
+## Linux Local SS2022 entry to HTTP/HTTPS CONNECT final
+
+The client and shared native compiler now admit the existing retained SS entry
+owner for its separately captured HTTP/HTTPS CONNECT final on Linux. Admission
+keeps Local execution, distinct entry/final identities and supported SS2022
+methods, with both Start Layers Off and original On-connect/Always protection.
+The existing graph/compiler retains a TCP-only physical entry and routes the
+final connection and selected DNS behind it; it does not invent UDP support for
+CONNECT. Original source fingerprints, credentials, proof ownership, final TLS
+trust/name and complete Speed Lab restoration remain separate for both nodes.
+
+Native fixtures use real SS2022 cipher/authentication and independent HTTP/HTTPS
+CONNECT references. Wrong SS key/method evidence comes from the actual reference's
+authenticated-connection counter; HTTPS trust/name refusal uses its actual TLS
+alert. The new refusal counter is restricted to the Linux actual-entry loopback
+fixture so the older strict Darwin wire schema is preserved. This is not a new
+claim of Darwin execution. Previously unsupported-final negatives are changed
+only where CONNECT becomes supported; unsupported HY2/SOCKS and other malformed
+or unowned graphs retain rejection coverage.
+
+The frozen runtime preparation is `b9930302` plus 13 owned source files, with all
+2,044 expected native records and module metadata unchanged. Client/shared race
+execution passes 96 named verdicts (26.643 and 5.069 seconds). The native group
+passes seven physical-owner model verdicts in 1.196 seconds and 32 actual
+cipher/CONNECT-reference verdicts in 28.068 seconds. Those groups preserve the
+prior SS-to-SS cases. The old client admission body compiles and rejects 13
+intended verdicts at the new valid-path assertion; the old native policy body
+compiles and rejects three intended physical-policy verdicts. Neither control
+uses a compile failure, timeout, panic or skip as evidence.
+
+The final 17-file source composes that runtime work with the newer packet-peer
+preparer mapping and the published parent/resolver runner changes through
+`782e9f2a`. The physical runner passes 55 tests in 19.201 seconds, including its
+actual bounded worker/ownership fixtures and causal controls. The installed-host
+runner passes 41 tests in 112.397 seconds. Its prior 484 cases retain their exact
+order, followed by 23 CONNECT cases (507 total); the nine reverse-transfer cases
+remain unchanged. Compiled source-authority, native reference and receipt
+inventories remain mandatory, with exact pass/receipt multiplicity and output
+hashes. Later source/gate composition is not relabeled as a rerun of the entire
+older native runtime. Exact-SHA installed kernel execution, platform builds,
+publication, devices and off-LAN behavior remain separate evidence obligations.
+
+Windows retained ordinary entries, other graph families, Server/Compare and
+additional Start Layer compositions remain individual implementation work. No
+original graph/platform requirement is removed by the bounded admission here.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

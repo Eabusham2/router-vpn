@@ -96,6 +96,28 @@ the same strict schema; its portable interoperability check is separate from
 actual macOS execution. See the [November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md)
 for source identity, negative controls and acceptance limits.
 
+## Linux ordinary Shadowsocks entry to HTTP/HTTPS CONNECT final
+
+The retained Linux Local Node path now also admits an independently captured
+SS2022 entry with an HTTP or HTTPS CONNECT final. All three supported SS2022
+methods retain their own credentials. Both Start Layers remain Off. Only the
+entry obtains physical TCP permission; CONNECT's final transport and selected
+DNS stay behind it, with UDP explicitly unavailable for this graph. Separate
+source identities, node proofs, final HTTPS trust/hostname, cancellation and
+complete Speed Lab restoration use the original captured path.
+
+The focused client/shared suite passes 96 verdicts. Prepared native execution
+passes 32 actual cipher/CONNECT-reference verdicts (15 new and 17 preserved) and
+seven physical-owner model verdicts (three new and four preserved). Restoring the
+old client and native admission code produces the intended failures. The composed
+physical runner passes 55 checks, and the installed-host runner passes 41. The
+installed inventory preserves the prior 484 cases and appends 23 CONNECT cases,
+for 507 plus the separate nine reverse-transfer cases. Their actual installed
+namespace execution remains mandatory CI. This increment does not enable the
+Windows retained-entry path, Server/Compare or layered SS entries; their original
+requirements remain open. The [continuation evidence](CONTINUATION-EVIDENCE-2026-11-05.md)
+distinguishes the frozen native runtime source from later upstream and gate work.
+
 ## Linux standard child: idle original-parent retirement
 
 The fixed native standard child now observes its retained original parent while

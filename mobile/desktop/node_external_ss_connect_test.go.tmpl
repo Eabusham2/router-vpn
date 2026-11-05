@@ -235,15 +235,33 @@ func desktopSSCONNECTReference(t *testing.T, child, method, protocol, fault stri
 		t.Fatal(err)
 	}
 	observed := read()
+	// Join the original provider's observation of this handshake. The client
+	// may consume its x509 failure before the server receives the TLS alert.
+	// No new connection or timeout-only result supplies authentication proof.
+	if fault == "server-name" || fault == "trust" || badEntry {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for (badEntry && observed.ShadowsocksEntry.AuthTCP == 0) || (!badEntry && observed.TLSCertificateRefusals == 0) {
+			select {
+			case <-ctx.Done():
+				t.Fatal("original CONNECT rejection had no actual authentication witness", fault, ctx.Err())
+			case <-tick.C:
+				if _, err = io.WriteString(input, "stats\n"); err != nil {
+					t.Fatal(err)
+				}
+				observed = read()
+			}
+		}
+	}
 	if observed.ShadowsocksEntry.PhysicalTCP < 1 || observed.ShadowsocksEntry.PhysicalUDP != 0 || observed.PhysicalUDP != 0 {
 		t.Fatal("CONNECT lost TCP-only original peer path")
 	}
 	if badEntry {
-		if observed.ShadowsocksEntry.Streams != 0 || observed.Connections != 0 || observed.DNSQueries != 0 {
+		if observed.ShadowsocksEntry.AuthTCP == 0 || observed.ShadowsocksEntry.AuthUDP != 0 || observed.ShadowsocksEntry.Streams != 0 || observed.Connections != 0 || observed.DNSQueries != 0 {
 			t.Fatal("wrong entry acquired CONNECT path")
 		}
 	} else if fault == "" {
-		if observed.ShadowsocksEntry.PublicReplies < 1 || observed.Streams < 2 || observed.DNSQueries < 1 || observed.PublicReplies < 1 {
+		if observed.ShadowsocksEntry.AuthTCP != 0 || observed.ShadowsocksEntry.AuthUDP != 0 || observed.AuthFailures != 0 || observed.TLSCertificateRefusals != 0 || observed.ShadowsocksEntry.PublicReplies < 1 || observed.Streams < 2 || observed.DNSQueries < 1 || observed.PublicReplies < 1 {
 			t.Fatal("CONNECT bypassed independent entry/DNS/final proof")
 		}
 	} else {
@@ -255,6 +273,9 @@ func desktopSSCONNECTReference(t *testing.T, child, method, protocol, fault stri
 		}
 		if fault == "final-route" && observed.Connections != 0 {
 			t.Fatal("foreign final route reached provider")
+		}
+		if (fault == "server-name" || fault == "trust") && (observed.TLSCertificateRefusals == 0 || observed.AuthFailures != 0) {
+			t.Fatal("CONNECT negative did not prove actual original TLS refusal")
 		}
 		if (fault == "username" || fault == "password" || fault == "dns-route") && observed.AuthFailures < 1 {
 			t.Fatal("CONNECT refused before actual credential/route boundary")
