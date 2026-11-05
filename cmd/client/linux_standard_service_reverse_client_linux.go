@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+	"os/exec"
 	"reflect"
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
@@ -22,6 +23,13 @@ import (
 // Both original owners retain this object. Before Bind it is only a captured
 // pointer/intent; joining the old engine cannot resolve an unmade reservation.
 type linuxStandardNodeReverseTransfer struct {
+	plannedArgs, plannedEnv                                                    []string
+	plannedRoot                                                                string
+	plannedRootInfo                                                            os.FileInfo
+	command                                                                    *exec.Cmd
+	planning                                                                   *desktopNodeLaunch
+	plannedConfig                                                              string
+	planningAdopted                                                            bool
 	session                                                                    *desktopLinuxNodeSession
 	source                                                                     *desktopLinuxNodeTransaction
 	owner                                                                      *linuxStandardServiceLaunch
@@ -131,6 +139,9 @@ func (t *linuxStandardNodeReverseTransfer) Bind(launch legacyStandardExitLaunch)
 		return err
 	}
 	defer o.mu.Unlock()
+	if err := t.adoptPlanning(ctx, o); err != nil {
+		return err
+	}
 	digest, err := linuxStandardProfileDigest(t.profile)
 	if err != nil || o.request.ProfileID != t.profile.ID || o.request.ProfileSHA256 != digest || o.prepared.protectionPolicy != t.profile.KillSwitchPolicy || o.prepared.protectionLAN != t.profile.HomeLANAccess {
 		return errors.Join(err, errors.New("reverse destination changed captured policy"))

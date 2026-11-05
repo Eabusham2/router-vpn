@@ -1527,6 +1527,50 @@ service coordinator, actual code-promotion journal, readiness/old join and
 installed two-generation acceptance remain required before that product
 requirement is complete.
 
+## Reverse handoff seals the destination before losing its resolver
+
+The current upstream reverse transaction captured the destination profile and
+exit before Stop, but constructed the native command afterward. A hostname
+could then require DNS while the original Node creator retained only closed
+protection. The reverse-only path now prepares that exact command before Stop,
+under the original operation and immutable transfer deadline. Ordinary paths
+retain their existing ordering.
+
+Bind compares the original command pointer, arguments/environment, installed
+root and private-directory identities and config hash before using the existing
+upstream native transfer state machine. The builder hands over its actual
+workspace handle before fallible post-construction observations. Failed planning
+removes only that original workspace; terminal planning cleanup closes its own
+duplicate even if the service owner has already removed the directory.
+
+The three upstream installed reverse cases remain in order and are extended
+with lost actual Start response, cancellation after prepare, longer-deadline
+replay, Start failure after source removal, and Always lost-prepare/cancellation
+cases. The Always cases prove protection before the public saved-Off operation.
+The fixture preserves actual encrypted private proof, selected DNS, native
+ownership and joined teardown. Reverse scenarios now also install the real
+public runtime catalog. All 429 original Node scenarios remain; nine reverse
+scenarios make 438 mandatory installed scenarios.
+
+The exact `783c7888` source plus the frozen ten-file contribution passes
+**65 race verdicts (14 parents/51 leaves, 35.398s)** with no failure or skip.
+This includes planning, reverse ownership/retry, original Start admission,
+immutable-generation source/lease/socketpair and startup source verification.
+All **43 Python checks** pass: 41 runner/inventory checks plus two actual
+shared-clock/worker controls (28.841s), including the 29 original FD11 verdicts
+and rejection of renewed-clock, cleared-settlement and unbounded-join defects.
+The first invocation of those two controls lacked Go on PATH; both exact tests
+passed after correcting the environment. No source failure was waived.
+
+Windows AMD64 and Darwin ARM64 affected-client test binaries compile. Later
+cleanup changes and the generation dependency changes are Linux-only. The
+contribution manifest is
+`a5ab9296541a007cccff7663228e2f97f829a51d81143aefd06d2b446873c409`.
+Newer Wintun and native image-transfer work was preserved during publication.
+Privileged installed execution remains unavailable locally; the nine real
+reverse scenarios require their actual CI runs. This change does not close
+boot-guard hostname bootstrap, unrelated graph families or device acceptance.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

@@ -174,13 +174,24 @@ func (a *app) platformStandardExitConnectCaptured(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	var cmd *exec.Cmd
+	if reverse != nil {
+		defer reverse.DiscardPlanning()
+		cmd, err = reverse.PrepareCommand()
+		if err != nil {
+			tracker.markRequestFailure(err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if err = a.stopModeWithIntent(holdProtection); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	var cmd *exec.Cmd
-	if exit.Protocol == "openvpn" {
+	if reverse != nil {
+		// Use the exact command sealed while the original Node was live.
+	} else if exit.Protocol == "openvpn" {
 		if runtime.GOOS == "windows" {
 			cmd, err = windowsOpenVPNStandardExitCommand(a, control, entry, exit, q.Direct)
 		} else {

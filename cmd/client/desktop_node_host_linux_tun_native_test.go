@@ -59,13 +59,13 @@ func linuxHostTUNRestoreCase(scenario string) bool {
 
 func linuxHostTUNPublicCase(scenario string) bool {
 	scenario = linuxHostTUNAction(scenario)
-	return linuxHostTUNTransferCase(scenario) || scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario) ||
+	return linuxHostTUNReverseCase(scenario) || linuxHostTUNTransferCase(scenario) || scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario) ||
 		scenario == "layer-aes-connect" || scenario == "layer-whitening-connect"
 }
 
 func linuxHostTUNOffCase(scenario string) bool {
 	scenario = linuxHostTUNAction(scenario)
-	return scenario == "public-off" || scenario == "public-off-save-retry"
+	return scenario == "public-off" || scenario == "public-off-save-retry" || linuxHostTUNReverseAlwaysCase(scenario)
 }
 
 func linuxHostTUNFailedReadyCase(scenario string) bool {

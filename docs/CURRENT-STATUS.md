@@ -22,8 +22,8 @@ generation precede removal of the original service table. Durable intent and
 bounded resolve retries retain the correct guard across cancellation, lost
 replies and partial cleanup. The exact source passes focused client/native/
 journal race tests. Six native nft cases and three installed transfer cases are
-mandatory but have not executed locally; the installed inventory is now 429 cases
-including the separately verified Hysteria2 graph addition below.
+mandatory but have not executed locally; the original installed inventory retains
+429 cases, including the separately verified Hysteria2 graph addition below.
 The reverse Node-to-standard path now retains the original closed Node creator,
 durable intent and authenticated service peer. It prepares and pins the service
 guard before source removal, independently proves that removal, then starts the
@@ -34,12 +34,17 @@ pass, while actual installed/native acceptance remains separate. Generic
 boot-owner succession, active Always upgrades and same-boot crash continuation
 remain unfinished source requirements.
 
-Three additional installed namespace cases now require the real reverse
-handoff, lost commit reply and lost prepare reply. They preserve the existing
-429 Node cases and require actual private TUN-routed HTTP identity, encrypted
-DNS/traffic counters, both original guards, durable settlement and joined
-teardown. All 33 runner checks pass and the privileged client binary compiles;
-the actual three scenarios remain mandatory native CI evidence.
+The reverse switch now resolves transport names and seals the exact destination
+command and private config before joining the original Node. Bind rechecks the
+original operation, deadline, command, directory/root identities and config hash;
+failed planning retains only its own workspace cleanup handle. Nine mandatory
+reverse scenarios cover actual handoff, lost prepare/commit/Start replies,
+cancellation, changed deadline, post-removal failure and Always abort/explicit
+Off. They preserve the 429 original cases, for 438 required installed scenarios.
+The final composition passes 65 client race verdicts and all 43 runner checks;
+Windows AMD64 and Darwin ARM64 affected-client test binaries also compile.
+Actual private encrypted traffic, selected DNS, native guards and joined
+teardown remain mandatory installed CI evidence, not local networking claims.
 
 The installed Linux service now executes from a verified immutable code
 image. New discovery uses the selected generation; retained peers keep their

@@ -99,7 +99,9 @@ LAYER_CASES += tuple(case for case in SIP003_CASES if not case.startswith('ss-v2
 WHITENING_CASES += tuple(case for case in SIP003_CASES if case.startswith('ss-v2ray-whitening-'))
 ACTIVE_CASES += tuple(case for case in SIP003_CASES if case.endswith('-active-network-change') or case in MTU_CASES or case in RESTORE_CASES or case in PUBLIC_CASES)
 ORIGINAL_CASES = CASES
-REVERSE_CASES = ('node-standard-original', 'node-standard-lost-commit-reply', 'node-standard-lost-prepare-reply')
+REVERSE_CASES = ('node-standard-original', 'node-standard-lost-commit-reply', 'node-standard-lost-prepare-reply',
+                 'node-standard-lost-start-reply', 'node-standard-cancel-before-remove', 'node-standard-longer-deadline',
+                 'node-standard-post-removal-failure', 'node-standard-always-lost-prepare', 'node-standard-always-cancel-before-remove')
 TRANSFER_CASES = ('service-transfer', 'service-transfer-lost-reply', 'service-transfer-longer-deadline')
 PUBLIC_CASES += TRANSFER_CASES
 ACTIVE_CASES += TRANSFER_CASES
@@ -149,7 +151,7 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
+    required = {'cmd/client/linux_standard_service_reverse_planning_linux.go', 'cmd/client/linux_standard_service_reverse_planning_linux_test.go', 'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',

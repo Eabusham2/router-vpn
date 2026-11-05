@@ -29,6 +29,11 @@ class InstalledReverseServiceVerdict(unittest.TestCase):
 
     def test_exact_native_cases(self):
         G.check_reverse_verdict(self.completed())
+        self.assertEqual(G.REVERSE_CASES[:3], ('node-standard-original', 'node-standard-lost-commit-reply', 'node-standard-lost-prepare-reply'))
+        self.assertEqual(G.REVERSE_CASES[3:], ('node-standard-lost-start-reply', 'node-standard-cancel-before-remove', 'node-standard-longer-deadline', 'node-standard-post-removal-failure', 'node-standard-always-lost-prepare', 'node-standard-always-cancel-before-remove'))
+        self.assertEqual(len(G.CASES), 429)
+        self.assertEqual(len(G.REVERSE_CASES), 9)
+
 
     def test_missing_duplicate_foreign_and_skip(self):
         good = self.completed()

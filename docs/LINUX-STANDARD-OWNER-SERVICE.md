@@ -214,7 +214,14 @@ native gate inventory and the remaining kernel and older-bus boundaries.
 ## Protected Node-to-service succession
 
 The reverse direction captures the original installed Node parent, selected
-policy and private exit before Stop joins the old engine. After that join, it
+policy and private exit before Stop joins the old engine. It resolves transport
+names and seals the exact command and private configuration while that original
+connection still carries traffic. The original operation and transfer deadline
+bound preparation. Bind rechecks the captured command arguments/environment,
+installed-root and private-directory identities and configuration hash; it does
+not repeat hostname selection after Stop. Failed preparation owns only its
+original workspace cleanup handle, which is also closed after owner cleanup.
+After the original engine joins, the reverse path
 reserves the same closed Node creator and records a durable transfer intent.
 The installed service authenticates that original parent and exact native
 inventory, creates its own protected successor without starting an engine,
@@ -241,13 +248,17 @@ with explicit native-effect models. Separate mandatory nft tests exercise both
 actual creators, cancellation, changed/lost successors and repeated completion.
 These tests do not establish installed end-to-end or physical-device acceptance.
 
-The installed Node runner separately requires success, lost commit response and
-lost prepare response through the actual public handlers and service. It reads
+The installed Node runner separately requires success, lost commit/prepare/Start
+responses, cancellation before source removal, changed-deadline rejection,
+post-removal Start failure and two Always abort cases through the actual public
+handlers and service. It reads
 both original native guards, verifies source removal or abort, and checks the
 durable journal and joined teardown. Successful connection must send real DNS
 and private HTTP identity traffic through the captured TUN and encrypted peer;
-independent direct-LAN counters reject bypass. These three namespace scenarios
-compile and are required by CI; local workspace restrictions prevent execution.
+independent direct-LAN counters reject bypass. Always abort must retain its
+original protection until the public saved-Off transaction completes. These
+nine namespace scenarios preserve the original 429-case inventory, compile and
+are required by CI; local workspace restrictions prevent execution.
 
 The following are still separate unfinished requirements, not closed by this
 unit's refusals:

@@ -27,7 +27,14 @@ import (
 	"router-vpn/internal/standardengine"
 )
 
-var linuxHostTUNReverseCases = []string{"node-standard-original", "node-standard-lost-commit-reply", "node-standard-lost-prepare-reply"}
+var linuxHostTUNReverseCases = []string{"node-standard-original", "node-standard-lost-commit-reply", "node-standard-lost-prepare-reply", "node-standard-lost-start-reply", "node-standard-cancel-before-remove", "node-standard-longer-deadline", "node-standard-post-removal-failure", "node-standard-always-lost-prepare", "node-standard-always-cancel-before-remove"}
+
+func linuxHostTUNReverseAlwaysCase(scenario string) bool {
+	return scenario == "node-standard-always-lost-prepare" || scenario == "node-standard-always-cancel-before-remove"
+}
+func linuxHostTUNReverseAbortCase(scenario string) bool {
+	return scenario == "node-standard-lost-prepare-reply" || scenario == "node-standard-cancel-before-remove" || scenario == "node-standard-longer-deadline" || linuxHostTUNReverseAlwaysCase(scenario)
+}
 
 func linuxHostTUNReverseCase(scenario string) bool {
 	for _, candidate := range linuxHostTUNReverseCases {
@@ -45,6 +52,7 @@ type linuxHostTUNReverseResult struct {
 	Source, Destination                                     *mobiletor.DesktopLinuxClosedTransferSnapshot
 	Startup                                                 *linuxStandardServiceStartup
 	Prepared, SourceRemoved, Aborted, Faulted, PrivateProof bool
+	AlwaysReleased                                          bool
 	Journal                                                 *linuxprotection.JournalSelection
 }
 
@@ -140,6 +148,10 @@ func linuxHostTUNReverseConnection(ctx context.Context, a *app, parent *desktopL
 			return nil, errors.New("reverse namespace bypassed installed service")
 		}
 		captured.exchange = func(call context.Context, q linuxStandardServiceRequest, directory *os.File, before func()) (linuxStandardServiceResponse, error) {
+			if scenario == "node-standard-post-removal-failure" && q.Action == "start" && !result.Faulted {
+				result.Faulted = true
+				return linuxStandardServiceResponse{}, errors.New("explicit lost transport before actual Start after native source removal")
+			}
 			response, e := linuxStandardServiceRPC(call, captured.image, captured.prepared.namespaceInfo, &captured.peer, q, directory, before)
 			if e == nil && q.Action == "reverse-prepare" && response.Reverse != nil && response.Reverse.Phase == "prepared" {
 				if q.Reverse == nil || response.Reverse.Destination == nil {
@@ -167,7 +179,32 @@ func linuxHostTUNReverseConnection(ctx context.Context, a *app, parent *desktopL
 				}
 				result.SourceRemoved = true
 			}
-			lose := scenario == "node-standard-lost-commit-reply" && q.Action == "reverse-commit" || scenario == "node-standard-lost-prepare-reply" && q.Action == "reverse-prepare"
+			if e == nil && q.Action == "start" && scenario == "node-standard-lost-start-reply" && !result.Faulted {
+				if response.Startup == nil {
+					return response, errors.New("lost Start control omitted actual native child readiness")
+				}
+				result.Startup = &linuxStandardServiceStartup{Capture: append([]byte(nil), response.Startup.Capture...), Ready: append([]byte(nil), response.Startup.Ready...)}
+				result.Faulted = true
+				return linuxStandardServiceResponse{}, io.ErrUnexpectedEOF
+			}
+			if e == nil && q.Action == "reverse-prepare" && !result.Faulted {
+				if scenario == "node-standard-longer-deadline" {
+					changed := *q.Reverse
+					changed.Intent.DeadlineNS += int64(time.Minute)
+					duplicate := q
+					duplicate.Reverse = &changed
+					if _, changedErr := linuxStandardServiceRPC(call, captured.image, captured.prepared.namespaceInfo, &captured.peer, duplicate, directory, nil); changedErr == nil {
+						return response, errors.New("service accepted changed original immutable deadline")
+					}
+					result.Faulted = true
+					return linuxStandardServiceResponse{}, errors.New("changed deadline rejected; resolve original prepared owner")
+				}
+				if scenario == "node-standard-cancel-before-remove" || scenario == "node-standard-always-cancel-before-remove" {
+					result.Faulted = true
+					a.cancelConnectionOperation()
+				}
+			}
+			lose := scenario == "node-standard-lost-commit-reply" && q.Action == "reverse-commit" || (scenario == "node-standard-lost-prepare-reply" || scenario == "node-standard-always-lost-prepare") && q.Action == "reverse-prepare"
 			if e == nil && lose && !result.Faulted {
 				result.Faulted = true
 				return linuxStandardServiceResponse{}, io.ErrUnexpectedEOF
@@ -207,7 +244,7 @@ func linuxHostTUNReverseConnection(ctx context.Context, a *app, parent *desktopL
 		if standard.Code == http.StatusOK || !result.Faulted || result.PrivateProof || captured.prepared.requestEpoch.startup != nil {
 			return errors.New("lost reverse reply fabricated a started standard engine")
 		}
-		expectedAbort := scenario == "node-standard-lost-prepare-reply"
+		expectedAbort := linuxHostTUNReverseAbortCase(scenario)
 		if result.Aborted != expectedAbort || result.SourceRemoved == expectedAbort {
 			return errors.New("lost reply changed actual native transaction outcome")
 		}
@@ -226,6 +263,13 @@ func linuxHostTUNReverseConnection(ctx context.Context, a *app, parent *desktopL
 	a.disconnect(stop, httptest.NewRequest(http.MethodPost, "/api/disconnect", nil).WithContext(ctx))
 	if stop.Code != http.StatusOK {
 		return fmt.Errorf("reverse public Disconnect failed: %d %s", stop.Code, stop.Body.String())
+	}
+	if linuxHostTUNReverseAlwaysCase(scenario) {
+		off, e := linuxHostTUNPublicProtectionOff(ctx, a, session, host, scenario)
+		if e != nil || off == nil || !off.RetainedAlways || !off.NetworkReleased || !off.ProfileSaved || !off.JournalSettled {
+			return errors.Join(e, errors.New("reverse Always abort did not preserve original until explicit saved Off"))
+		}
+		result.AlwaysReleased = true
 	}
 	a.mu.Lock()
 	appJoined := a.cmd == nil && !a.state.Connected && a.state.Phase == "off"
@@ -316,13 +360,16 @@ func TestDesktopLinuxGuardianKernelNodeStandardServiceReverse(t *testing.T) {
 				if _, err := standardengine.DecodeReady(resolved.Startup.Ready, standardengine.SHA256(resolved.Startup.Capture)); err != nil {
 					t.Fatal(err)
 				}
-			} else if !resolved.Faulted || resolved.Startup != nil || resolved.PrivateProof || resolved.Aborted != (scenario == "node-standard-lost-prepare-reply") {
+			} else if !resolved.Faulted || (resolved.Startup != nil) != (scenario == "node-standard-lost-start-reply") || resolved.PrivateProof || resolved.Aborted != linuxHostTUNReverseAbortCase(scenario) {
 				t.Fatal("reverse reply loss fabricated child or native outcome", resolved)
 			}
 			if _, err := process.gate.Write([]byte{3}); err != nil {
 				t.Fatal(err)
 			}
 			final := readLinuxHostTUNReverse(t, process, scenario, "retired")
+			if final.AlwaysReleased != linuxHostTUNReverseAlwaysCase(scenario) {
+				t.Fatal("reverse Always retirement omitted explicit saved Off", final)
+			}
 			if final.Journal == nil || final.Journal.Incomplete || final.Journal.Record.Validate() != nil || final.Journal.Record.Committed.Target != nil || final.Journal.Record.ReverseTransfer == nil || *final.Journal.Record.ReverseTransfer != *resolved.Intent {
 				t.Fatal("reverse teardown lost original durable settlement", final)
 			}

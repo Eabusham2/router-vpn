@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -299,6 +300,14 @@ func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit
 }
 
 func nativeStandardExitCommandWithBootstrap(a *app, control, entry common.RouterProfile, exit standardExit, direct bool, bootstrap standardExitBootstrap) (*exec.Cmd, error) {
+	return nativeStandardExitCommandContext(a.connectionOperationContextOrBackground(), a, control, entry, exit, direct, bootstrap)
+}
+
+func nativeStandardExitCommandContext(operation context.Context, a *app, control, entry common.RouterProfile, exit standardExit, direct bool, bootstrap standardExitBootstrap) (*exec.Cmd, error) {
+	return nativeStandardExitCommandOwnedContext(operation, a, control, entry, exit, direct, bootstrap, nil)
+}
+
+func nativeStandardExitCommandOwnedContext(operation context.Context, a *app, control, entry common.RouterProfile, exit standardExit, direct bool, bootstrap standardExitBootstrap, owner **desktopNodeLaunch) (_ *exec.Cmd, failure error) {
 	if desktopTorProtocol(exit.Protocol) {
 		// The fixed-exit store excludes Tor. External Connect and Speed Lab
 		// dispatch it to the owned adapter with dynamic Tor proof before reaching
@@ -316,10 +325,23 @@ func nativeStandardExitCommandWithBootstrap(a *app, control, entry common.Router
 			return nil, err
 		}
 	}
-	prepared, err := prepareCapturedStandardExit(a.connectionOperationContextOrBackground(), root, control, entry, exit, direct, bootstrap)
+	prepared, err := prepareCapturedStandardExit(operation, root, control, entry, exit, direct, bootstrap)
 	if err != nil {
 		return nil, err
 	}
+	workspace := &desktopNodeLaunch{}
+	if err := captureDesktopRuntimeDirectory(workspace, prepared.directory); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if failure != nil {
+			failure = errors.Join(failure, cleanupDesktopNodeLaunch(workspace))
+		} else if owner != nil {
+			*owner = workspace
+		} else {
+			_ = workspace.directoryRoot.Close()
+		}
+	}()
 	runtimeDir, tunAlias, endpoint := prepared.directory, prepared.alias, prepared.endpoint
 	var runtimeProfileID string
 	if direct {
