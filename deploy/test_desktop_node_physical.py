@@ -106,12 +106,17 @@ NATIVE_MTU_TEST = "TestRouterVPNNativeLinuxMTUTransactionNamespace"
 LINUX_LAYERED_ENTRY_SUITE = ("linux-layered-external-entry", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot$",
     ("TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot", *("TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot/" + case for case in ("wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor"))))
 STANDARD_MTU_SUITE = ("standard-mtu-original-reader", "./cmd/sing-box",
-                      "^TestRouterVPNStandardMTUActualBox(KeepsOriginalReader|RequiresNativeClaim|RetiresUnstartedReader)$",
+                      "^TestRouterVPNStandardMTUActualBox(KeepsOriginalReader|RequiresNativeClaim)$",
                       ("TestRouterVPNStandardMTUActualBoxKeepsOriginalReader", "TestRouterVPNStandardMTUActualBoxRequiresNativeClaim",
                        *("TestRouterVPNStandardMTUActualBoxRequiresNativeClaim/"+case for case in
-                         ("unstarted-native", "foreign-reader", "cancelled", "unbounded", "guard-loss", "wrong-tag", "invalid-receipt")),
-                       "TestRouterVPNStandardMTUActualBoxRetiresUnstartedReader",
-                       *("TestRouterVPNStandardMTUActualBoxRetiresUnstartedReader/"+case for case in ("original", "cancelled-retry"))))
+                         ("unstarted-native", "foreign-reader", "cancelled", "unbounded", "guard-loss", "wrong-tag", "invalid-receipt"))))
+# FD10 intentionally accepts only a root-owned, size-locked original memfd.
+# Retire the unstarted reader under that real privilege boundary; admission
+# and foreign-reader refusal above remain ordinary unprivileged tests.
+STANDARD_MTU_RETIRE_SUITE = ("standard-mtu-retire-original-reader", "./cmd/sing-box",
+                            "^TestRouterVPNStandardMTUActualBoxRetiresUnstartedReader$",
+                            ("TestRouterVPNStandardMTUActualBoxRetiresUnstartedReader",
+                             *("TestRouterVPNStandardMTUActualBoxRetiresUnstartedReader/"+case for case in ("original", "cancelled-retry"))))
 STANDARD_MTU_NATIVE_SUITE = ("standard-mtu-claim-retirement", "./cmd/sing-box",
                              "^TestRouterVPNStandardMTUNativeClaimFailureNamespace$",
                              ("TestRouterVPNStandardMTUNativeClaimFailureNamespace",
@@ -424,7 +429,7 @@ def routing_fixture_image(binary):
 
 
 def linux_routing_receipt_test(binary, *, cwd, env, duration, selector="^TestRouterVPNNativeLinuxRouting"):
-    if selector not in ("^TestRouterVPNNativeLinuxRouting", "^TestRouterVPNNativeLinuxResolver", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$"):
+    if selector not in ("^TestRouterVPNNativeLinuxRouting", "^TestRouterVPNNativeLinuxResolver", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", STANDARD_MTU_RETIRE_SUITE[2]):
         raise ValueError("Native privilege cannot execute another fixture selector")
     if platform.system() != "Linux" or env.get("GOOS") != "linux":
         raise ValueError("The native routing receipt fixture requires native Linux")
@@ -566,14 +571,14 @@ class BaselineBinaries:
         return self.verify(package)
 
     def execute(self, name, package, selector, duration):
-        privileged = {"native-routing-receipt": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting"), "native-resolver-lifetime": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver"), "native-mtu-transaction": (".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$")}
+        privileged = {"native-routing-receipt": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting"), "native-resolver-lifetime": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver"), "native-mtu-transaction": (".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$"), STANDARD_MTU_RETIRE_SUITE[0]: STANDARD_MTU_RETIRE_SUITE[1:3]}
         if name in privileged and (package, selector) != privileged[name]:
             raise ValueError("Node routing privilege cannot execute another package or selector")
         binary = self.binary(package)
         with stage("execute baseline " + name):
             if name == "native-routing-receipt":
                 status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration)
-            elif name in ("native-resolver-lifetime", "native-mtu-transaction"):
+            elif name in ("native-resolver-lifetime", "native-mtu-transaction", STANDARD_MTU_RETIRE_SUITE[0]):
                 status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration, selector=selector)
             else:
                 status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
@@ -980,7 +985,7 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, [root] + [root + '/' + case for case in ('complete-history', 'oversized-writer', 'oversized-parser', 'ready-stays-bounded')], 'native retirement evidence bound')
     if name == LINUX_LAYERED_ENTRY_SUITE[0]:
         require_native_verdicts(output, required, "Linux original layered entry")
-    if name in (STANDARD_MTU_SUITE[0], STANDARD_MTU_NATIVE_SUITE[0]):
+    if name in (STANDARD_MTU_SUITE[0], STANDARD_MTU_RETIRE_SUITE[0], STANDARD_MTU_NATIVE_SUITE[0]):
         require_native_verdicts(output, required, "standard service original MTU reader")
     if name == "native-address-retirement":
         require_native_verdicts(output, NATIVE_ADDRESS_RETIREMENT_VERDICTS, "native partial address retirement")
@@ -1190,6 +1195,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(("tor-registration-box", ".", "^TestRouterVPNDesktopTorPhysicalRegistrationContext$", ("TestRouterVPNDesktopTorPhysicalRegistrationContext",)))
         suites.append(LINUX_LAYERED_ENTRY_SUITE)
         suites.append(STANDARD_MTU_SUITE)
+        suites.append(STANDARD_MTU_RETIRE_SUITE)
         suites.append(STANDARD_MTU_NATIVE_SUITE)
         suites.append(('native-retirement-bound', 'github.com/sagernet/sing-tun', '^TestDesktopNetworkRetirementKeepsSeparateBound$', ('TestDesktopNetworkRetirementKeepsSeparateBound',)))
         suites.append(("native-startup-command", "./cmd/sing-box", "^TestRouterVPNRawCommandOriginalStartupDeadline$", ("TestRouterVPNRawCommandOriginalStartupDeadline",)))

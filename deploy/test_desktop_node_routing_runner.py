@@ -163,24 +163,24 @@ class LinuxLayeredEntryVerdicts(unittest.TestCase):
 
 class StandardServiceMTUVerdicts(unittest.TestCase):
     def test_actual_standard_reader_verdict_cannot_be_omitted_or_substituted(self):
-        suite = NODE.STANDARD_MTU_SUITE
-        names = suite[3]
-        self.assertEqual(len(names), 12)
-        output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
-        baseline = Mock()
-        baseline.execute.return_value = (0, output)
-        with contextlib.redirect_stdout(io.StringIO()):
-            NODE.execute_baseline_suite(baseline, suite)
-            baseline.execute.assert_called_once_with(*suite[:3], 90)
-            for name in names:
-                for changed in (output.replace("--- PASS: " + name + " (0.01s)\n", "", 1),
-                                output + "--- PASS: " + name + " (0.01s)\n",
-                                output.replace(name, name + "Foreign"),
-                                output.replace("--- PASS: " + name, "--- SKIP: " + name),
-                                output.replace("--- PASS: " + name, "--- FAIL: " + name)):
-                    baseline.execute.return_value = (0, changed)
-                    with self.subTest(name=name, changed=changed), self.assertRaises(ValueError):
-                        NODE.execute_baseline_suite(baseline, suite)
+        for suite, expected in ((NODE.STANDARD_MTU_SUITE, 9), (NODE.STANDARD_MTU_RETIRE_SUITE, 3)):
+            names = suite[3]
+            self.assertEqual(len(names), expected)
+            output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
+            baseline = Mock()
+            baseline.execute.return_value = (0, output)
+            with contextlib.redirect_stdout(io.StringIO()):
+                NODE.execute_baseline_suite(baseline, suite)
+                baseline.execute.assert_called_once_with(*suite[:3], 90)
+                for name in names:
+                    for changed in (output.replace("--- PASS: " + name + " (0.01s)\n", "", 1),
+                                    output + "--- PASS: " + name + " (0.01s)\n",
+                                    output.replace(name, name + "Foreign"),
+                                    output.replace("--- PASS: " + name, "--- SKIP: " + name),
+                                    output.replace("--- PASS: " + name, "--- FAIL: " + name)):
+                        baseline.execute.return_value = (0, changed)
+                        with self.subTest(name=name, changed=changed), self.assertRaises(ValueError):
+                            NODE.execute_baseline_suite(baseline, suite)
 
 
     def test_actual_claim_failure_requires_native_cleanup_and_child_join(self):
@@ -555,6 +555,20 @@ class RoutingNamespaceLauncher(unittest.TestCase):
         self.assertIsNone(options["sudo"])
         self.assertEqual(options["timeout"], 105)
 
+    def test_standard_cleanup_uses_only_original_retirement_selector(self):
+        selector = NODE.STANDARD_MTU_RETIRE_SUITE[2]
+        self.assertEqual(NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env,
+                         duration=90, selector=selector), (0, "actual native fixture output\n"))
+        command, options = self.native.run.call_args
+        self.assertIn("-test.run=" + selector, command[0])
+        self.assertEqual(options["timeout"], 105)
+        self.native.run.reset_mock()
+        for changed in (selector + "|Other", NODE.STANDARD_MTU_SUITE[2]):
+            with self.assertRaisesRegex(ValueError, "another fixture selector"):
+                NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env,
+                                               duration=90, selector=changed)
+        self.native.run.assert_not_called()
+
     def test_missing_trusted_privilege_fails_before_execution(self):
         self.native.privilege_tool.side_effect = ValueError("no trusted native privilege")
         with self.assertRaisesRegex(ValueError, "trusted native privilege"):
@@ -729,6 +743,26 @@ class BaselineRoutingDispatch(unittest.TestCase):
         native.assert_not_called()
         ordinary.assert_called_once_with([self.binary, "-test.run=^OtherCase$", "-test.count=1", "-test.timeout=12s", "-test.v"],
                                          cwd=self.source, env=self.env, timeout=27)
+
+    def test_standard_retirement_uses_privilege_but_admission_stays_ordinary(self):
+        name, package, selector, _ = NODE.STANDARD_MTU_RETIRE_SUITE
+        self.baselines.binaries[package] = self.binary, NODE.retained_binary(self.binary)
+        with patch.object(NODE, "linux_routing_receipt_test", return_value=(0, "native pass")) as native, \
+             patch.object(NODE, "run", return_value=(0, "ordinary pass")) as ordinary:
+            self.assertEqual(self.baselines.execute(name, package, selector, 90), (0, "native pass"))
+            native.assert_called_once_with(self.binary, cwd=self.source, env=self.env, duration=90, selector=selector)
+            ordinary.assert_not_called()
+            native.reset_mock()
+            self.assertEqual(self.baselines.execute(*NODE.STANDARD_MTU_SUITE[:3], 90), (0, "ordinary pass"))
+            native.assert_not_called()
+            ordinary.assert_called_once()
+        for changed_package, changed_selector in (("./foreign", selector), (package, selector + "|Other"), (package, NODE.STANDARD_MTU_SUITE[2])):
+            with patch.object(self.baselines, "binary") as compile_image, \
+                 patch.object(NODE, "linux_routing_receipt_test") as native, \
+                 self.assertRaisesRegex(ValueError, "another package or selector"):
+                self.baselines.execute(name, changed_package, changed_selector, 90)
+            compile_image.assert_not_called()
+            native.assert_not_called()
 
     def test_changed_package_or_selector_cannot_gain_routing_privilege(self):
         for package, selector in (("./unrelated", "^TestRouterVPNNativeLinuxRouting"),
