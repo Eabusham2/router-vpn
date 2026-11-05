@@ -24,7 +24,7 @@ func linuxInterfaceContext(ctx context.Context, index int, dump func(context.Con
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			link, err := linuxLink(row.Data)
+			link, err := decodeLinuxLink(row.Data)
 			if err != nil {
 				return nil, err
 			}
@@ -57,7 +57,7 @@ func linuxInterfaceContext(ctx context.Context, index int, dump func(context.Con
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		address, err := linuxAddress(row.Data)
+		address, err := decodeLinuxAddress(row.Data)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -82,7 +82,7 @@ func linuxInterfaceContext(ctx context.Context, index int, dump func(context.Con
 }
 
 func linuxNativeInterface(data []byte) (*net.Interface, error) {
-	link, err := linuxLink(data)
+	link, err := decodeLinuxLink(data)
 	if err != nil {
 		return nil, err
 	}

@@ -18,11 +18,17 @@ spec = importlib.util.spec_from_file_location('server_tor_modules', ROOT/'deploy
 TOR = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(TOR)
 
+NETWORK_SOURCES = (
+    'desktop_network_lock.go', 'desktop_network_interface.go',
+    'desktop_network_interface_linux.go', 'desktop_network_interface_other.go',
+    'desktop_network_dump_linux.go', 'desktop_network_decode_linux.go',
+)
+
 
 def inputs():
     return sorted(set([Path(__file__).resolve(), ROOT/'deploy/prepare-mobile-tor.py',
         ROOT/'deploy/test_server_tor_preparation.py',
-        ROOT/'internal/desktopnetwork/desktop_network_lock.go',
+        *[ROOT/'internal/desktopnetwork'/name for name in NETWORK_SOURCES],
         ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
         ROOT/'mobile/toroutbound/dns_adapter.go.tmpl',
         *list((ROOT/'internal/mobiletor').glob('*.go')),
@@ -44,12 +50,14 @@ def digest():
 
 
 def copies():
-    # Server control and padding share only the pure bounded mutex helper;
-    # installing desktop route/TUN implementations would widen this closure.
-    lock = ROOT/'internal/desktopnetwork/desktop_network_lock.go'
-    if lock.is_symlink():
-        raise ValueError('Linked server Tor bounded mutex source')
-    content = {'routervpn/desktopnetwork/desktop_network_lock.go': lock.read_bytes()}
+    # The shared Linux creator also needs bounded interface observations.
+    # Copy the exact closed readers; never include tracker/TUN/policy owners.
+    content = {}
+    for name in NETWORK_SOURCES:
+        source = ROOT/'internal/desktopnetwork'/name
+        if source.is_symlink():
+            raise ValueError('Linked server Tor bounded network source')
+        content['routervpn/desktopnetwork/'+name] = source.read_bytes()
     for package in ('common', 'mobiletor', 'linuxprocess'):
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
             if path.name.endswith('_test.go'):
