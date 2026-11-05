@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`0af6c00e`, the integrated observation change in `a94cde9d`, and the installed
+`c2839a15`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -39,7 +39,9 @@ Genuine mixed failures still retire the original engine while retaining its
 protection. Controller-monitor admission now carries the original observation through its
 source and activation locks, preserves exact connection intent, and retains mixed
 loss across rechecks. Its integrated race selection and four causal controls pass.
-The service MTU coordinator retains its separate integration obligation.
+The retained peer checker likewise preserves a pure task-read expiry without
+inventing an image/namespace mismatch; its actual child/pidfd regression is
+mandatory. The service MTU coordinator retains its separate integration obligation.
 
 Native partial-startup retirement now captures exact successful address effects
 and refuses occupied addresses. A retained transition capability preserves both

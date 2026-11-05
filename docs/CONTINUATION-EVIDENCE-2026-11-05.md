@@ -369,7 +369,7 @@ acceptance is claimed by this source regression.
 
 ## Original native startup budget through Node and raw command construction
 
-The real Linux generated Node TUN job at `05800c84` failed because startup used
+Commit [`c2839a15`](https://github.com/Eabusham2/router-vpn/commit/c2839a152ad24f6bc5093645d33d1c9fc2dc09a0) fixes the real Linux generated Node TUN failure at `05800c84`: startup used
 its graph lifetime as native lifecycle admission, without the required original
 deadline. Node preparation now retains its existing 30-second admission from
 compilation through the actual Box/TUN Start. The Box conveys that same context
@@ -393,6 +393,21 @@ this local environment denies. Its true positive and real namespace Node/TUN
 acceptance remain mandatory in CI, rather than being replaced by a modeled pass.
 External/Tor host-to-child startup deadline transport remains a separate active
 shipping-path repair; this unit does not claim that transport is finished.
+
+## Original service peer observation expiry
+
+The service peer checker now returns the original task-observation error before
+comparing a returned identity. An expired read supplies no identity and therefore
+cannot establish that the peer's image or namespace changed. A successful read
+that actually differs from the retained peer remains a genuine failure.
+
+The focused regression uses an actual original child, native pidfd, retained
+task/image/namespace witnesses and command role. An expired read leaves that
+same healthy peer usable for a later bounded observation, while a changed
+original record is rejected. The old error-joining implementation fails this
+same causal witness. The test is mandatory in the installed-service runner.
+This narrow observation repair is separate from the still-unpublished service
+MTU transaction and controller integration.
 
 ## Remaining requirement/evidence ledger
 

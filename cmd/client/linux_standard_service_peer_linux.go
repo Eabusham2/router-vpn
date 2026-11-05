@@ -192,8 +192,11 @@ func (p *linuxStandardServicePeer) Current(ctx context.Context) error {
 		return errors.Join(err, errors.New("standard service original peer retired"))
 	}
 	actual, err := p.task.Current(ctx)
-	if err != nil || actual != p.record {
-		return errors.Join(err, errors.New("standard service original peer image or namespace changed"))
+	if err != nil {
+		return err
+	}
+	if actual != p.record {
+		return errors.New("standard service original peer image or namespace changed")
 	}
 	body := make([]byte, 8193)
 	n, err := p.command.ReadAt(body, 0)
