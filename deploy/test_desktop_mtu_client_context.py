@@ -22,14 +22,18 @@ EXPECTED = {
              'TestDesktopMTUSnapshotRejectsOriginalSessionReplacement',
              'TestDesktopMTUActualWritersKeepCallerDeadline',
              'TestDesktopMTUActualWritersKeepCallerDeadline/retest',
-             'TestDesktopMTUActualWritersKeepCallerDeadline/captured-restore'],
+             'TestDesktopMTUActualWritersKeepCallerDeadline/captured-restore',
+             'TestDesktopMTUViewContextCannotWaitForCapturedProof',
+             'TestDesktopMTURetestContextIncludesHTTPAdmission',
+             *['TestDesktopMTURetestContextIncludesHTTPAdmission/'+leaf
+               for leaf in ('application', 'suspension', 'view')]],
     NETWORK: ['TestNetworkInterfaceInventoryRetainsOriginalObservation',
               *['TestNetworkInterfaceInventoryRetainsOriginalObservation/'+leaf
                 for leaf in ('exact-fields', 'late-cancel', 'duplicate-index')]],
     PROCESS: ['TestProcessObservationExpiryAfterAdmissionPreservesWitness'],
     PROTECTION: ['TestNodeControlOriginalContextGatePreservesAdmission', 'TestNodeControlOriginalContextKeepsRealFailure'],
 }
-SELECTOR = '^Test(DesktopMTU(SnapshotOriginalContextAdmission|RunCreatesCallerContextBeforeSnapshot|ProofObservationRetainsMixedFailure|SnapshotRejectsOriginalSessionReplacement|ActualWritersKeepCallerDeadline)|NetworkInterfaceInventoryRetainsOriginalObservation|ProcessObservationExpiryAfterAdmissionPreservesWitness|NodeControlOriginalContext(GatePreservesAdmission|KeepsRealFailure))$'
+SELECTOR = '^Test(DesktopMTU(SnapshotOriginalContextAdmission|RunCreatesCallerContextBeforeSnapshot|ProofObservationRetainsMixedFailure|SnapshotRejectsOriginalSessionReplacement|ActualWritersKeepCallerDeadline|ViewContextCannotWaitForCapturedProof|RetestContextIncludesHTTPAdmission)|NetworkInterfaceInventoryRetainsOriginalObservation|ProcessObservationExpiryAfterAdmissionPreservesWitness|NodeControlOriginalContext(GatePreservesAdmission|KeepsRealFailure))$'
 
 
 NATIVE_EXPECTED = {

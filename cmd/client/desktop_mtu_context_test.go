@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -59,5 +62,63 @@ func TestDesktopMTUExpiredWriterDoesNotPublish(t *testing.T) {
 	}
 	if _, err := readDesktopRuntimeFile(launch, "mtu-request.json", 4096); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("expired writer published mailbox input", err)
+	}
+}
+
+func TestDesktopMTUViewContextCannotWaitForCapturedProof(t *testing.T) {
+	a, launch := desktopTorMTUControllerFixture(t, "tor-mtu-hold")
+	launch.tor.proofMu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	response := httptest.NewRecorder()
+	go func() {
+		a.writeDesktopMTUViewStatus(response, httptest.NewRequest(http.MethodGet, "/api/mtu/status", nil).WithContext(ctx))
+		close(done)
+	}()
+	select {
+	case <-done:
+		launch.tor.proofMu.Unlock()
+	case <-time.After(time.Second):
+		launch.tor.proofMu.Unlock()
+		<-done
+		t.Fatal("MTU view escaped original observation deadline")
+	}
+	if response.Code == http.StatusOK {
+		t.Fatal("expired MTU view published current proof")
+	}
+	if a.cmd != launch.command {
+		t.Fatal("view expiry discarded its original connection")
+	}
+}
+
+func TestDesktopMTURetestContextIncludesHTTPAdmission(t *testing.T) {
+	a, launch := desktopMTUControllerFixture(t, "mtu-hold")
+	for name, lock := range map[string]*sync.Mutex{"application": &a.mu, "suspension": &mtuSuspensionFor(a).mu, "view": &mtuViewSlotFor(a).mu} {
+		t.Run(name, func(t *testing.T) {
+			lock.Lock()
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+			defer cancel()
+			done := make(chan struct{})
+			response := httptest.NewRecorder()
+			go func() {
+				a.retestMTU(response, httptest.NewRequest(http.MethodPost, "/api/mtu/retest", strings.NewReader(`{}`)).WithContext(ctx))
+				close(done)
+			}()
+			select {
+			case <-done:
+				lock.Unlock()
+			case <-time.After(time.Second):
+				lock.Unlock()
+				<-done
+				t.Fatal("HTTP admission escaped caller budget")
+			}
+			if response.Code == http.StatusOK {
+				t.Fatal("expired request admitted a native measurement")
+			}
+			if a.cmd != launch.command {
+				t.Fatal("HTTP expiry retired its healthy original connection")
+			}
+		})
 	}
 }

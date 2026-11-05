@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/mobilemtu"
@@ -276,6 +277,9 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 	query := r.URL.Query()
 	request, session := query.Get("request_id"), query.Get("session_id")
 	if len(query["request_id"]) > 1 || len(query["session_id"]) > 1 || request != "" && !desktopMTURequestPattern.MatchString(request) || len(session) > 128 {
@@ -285,7 +289,7 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 	if a.writeDesktopPlatformMTUViewStatus(w, r, request, session) {
 		return
 	}
-	identity, err := currentMTUViewIdentity(a)
+	identity, err := currentMTUViewIdentityContext(ctx, a)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -294,18 +298,35 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "MTU connection was replaced", http.StatusConflict)
 		return
 	}
-	operation := lookupMTUViewOperation(a, identity, request)
+	operation := lookupMTUViewOperationContext(ctx, a, identity, request)
+	if err := ctx.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if operation != nil && identity.Native {
-		operation.mu.Lock()
+		if err := mobilemtu.LockContext(ctx, &operation.mu); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		running := operation.status.Running
 		operation.mu.Unlock()
 		// A later automatic measurement can start without creating a manual
 		// view record. A retained completed view must not conceal that owner.
 		if !running {
-			if launch := desktopExternalMTULaunch(a); launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
-				owner := desktopMeasurementMTUSession(launch)
+			if launch, launchErr := desktopExternalMTULaunchContext(ctx, a); launchErr != nil {
+				http.Error(w, launchErr.Error(), http.StatusConflict)
+				return
+			} else if launch != nil && desktopMeasurementSessionMatchesContext(ctx, launch, identity.Session) {
+				owner, ownerErr := desktopMeasurementMTUSessionContext(ctx, launch)
+				if ownerErr != nil {
+					http.Error(w, ownerErr.Error(), http.StatusConflict)
+					return
+				}
 				if owner != nil {
-					owner.mu.Lock()
+					if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+						http.Error(w, err.Error(), http.StatusConflict)
+						return
+					}
 					active := owner.active
 					owner.mu.Unlock()
 					if active != "" && active != operation.request {
@@ -313,7 +334,7 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 					}
 				}
 				if operation != nil {
-					if record, err := readDesktopMTURecord(launch); err == nil && record.Status.Request != "" && record.Status.Request != operation.request {
+					if record, err := readDesktopMTURecordContext(ctx, launch); err == nil && record.Status.Request != "" && record.Status.Request != operation.request {
 						operation = nil
 					}
 				}
@@ -321,14 +342,20 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if operation != nil {
-		operation.mu.Lock()
+		if err := mobilemtu.LockContext(ctx, &operation.mu); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		status := operation.status
 		operation.mu.Unlock()
 		waiting := false
 		optimizationAllowed := !identity.Native // Legacy capture already validated Router-node Auto.
 		if identity.Native {
-			if launch := desktopExternalMTULaunch(a); launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
-				if record, err := readDesktopMTURecord(launch); err == nil {
+			if launch, launchErr := desktopExternalMTULaunchContext(ctx, a); launchErr != nil {
+				http.Error(w, launchErr.Error(), http.StatusConflict)
+				return
+			} else if launch != nil && desktopMeasurementSessionMatchesContext(ctx, launch, identity.Session) {
+				if record, err := readDesktopMTURecordContext(ctx, launch); err == nil {
 					optimizationAllowed = record.Requested
 					if status.Running && record.Status.Request == operation.request {
 						pendingPhase := status.Phase
@@ -341,18 +368,32 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		writeMTUViewStatus(w, identity, true, waiting, optimizationAllowed, status)
 		return
 	}
-	if launch := desktopExternalMTULaunch(a); identity.Native && launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
-		record, err := readDesktopMTURecord(launch)
+	if launch, launchErr := desktopExternalMTULaunchContext(ctx, a); launchErr != nil {
+		http.Error(w, launchErr.Error(), http.StatusConflict)
+		return
+	} else if identity.Native && launch != nil && desktopMeasurementSessionMatchesContext(ctx, launch, identity.Session) {
+		record, err := readDesktopMTURecordContext(ctx, launch)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		owner := desktopMeasurementMTUSession(launch)
+		owner, ownerErr := desktopMeasurementMTUSessionContext(ctx, launch)
+		if ownerErr != nil {
+			http.Error(w, ownerErr.Error(), http.StatusConflict)
+			return
+		}
 		if owner != nil {
-			owner.mu.Lock()
+			if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
 			active := owner.active
 			owner.mu.Unlock()
 			if active != "" {
@@ -366,6 +407,10 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		}
 		if request != "" && request != record.Status.Request {
 			http.Error(w, "MTU request has not started or was replaced", http.StatusNotFound)
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		writeMTUViewStatus(w, identity, record.Requested, record.WaitingCommit, record.Requested, record.Status)
@@ -413,4 +458,42 @@ func cancelMTUViewOperation(a *app, w http.ResponseWriter, request mtuViewReques
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": request.Request, "session_id": operation.identity.Session, "phase": "canceling", "note": "Cancellation is pending until the captured rollback finishes."})
 	return true
+}
+
+func currentMTUViewIdentityContext(ctx context.Context, a *app) (mtuViewIdentity, error) {
+	launch, err := desktopExternalMTULaunchContext(ctx, a)
+	if err != nil {
+		return mtuViewIdentity{}, err
+	}
+	if launch != nil {
+		if err := a.desktopMeasurementCurrentProofContext(ctx, launch); err != nil && !errors.Is(err, errDesktopTorMTUTransitionPending) {
+			return mtuViewIdentity{}, err
+		}
+		return desktopMeasurementViewIdentityContext(ctx, launch)
+	}
+	if err := ctx.Err(); err != nil {
+		return mtuViewIdentity{}, err
+	}
+	snapshot, err := captureMTURetestSnapshot(a)
+	if err != nil {
+		return mtuViewIdentity{}, err
+	}
+	return mtuViewIdentity{Session: snapshot.SessionID, Profile: snapshot.Profile.ID}, nil
+}
+
+func lookupMTUViewOperationContext(ctx context.Context, a *app, identity mtuViewIdentity, request string) *mtuViewOperation {
+	raw, ok := mtuViewSlots.Load(a)
+	if !ok {
+		return nil
+	}
+	slot := raw.(*mtuViewSlot)
+	if mobilemtu.LockContext(ctx, &slot.mu) != nil {
+		return nil
+	}
+	defer slot.mu.Unlock()
+	operation := slot.current
+	if operation == nil || operation.identity != identity || request != "" && operation.request != request {
+		return nil
+	}
+	return operation
 }

@@ -95,21 +95,34 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	admission, finishAdmission := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer finishAdmission()
+	r = r.WithContext(admission)
 	request, err := readMTUViewRequest(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	suspended, err := mtuSuspendedContext(r.Context(), a)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusRequestTimeout)
+		return
+	}
 	lock := mtuRetestLockFor(a)
 	if !lock.TryLock() {
-		if mtuSuspended(a) {
+		if suspended {
 			retryHeldAutomaticMTU(r.Context())
 		}
 		http.Error(w, "an MTU Retest is already running for this client", http.StatusConflict)
 		return
 	}
 	defer lock.Unlock()
-	if mtuSuspended(a) {
+	suspended, err = mtuSuspendedContext(r.Context(), a)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusRequestTimeout)
+		return
+	}
+	if suspended {
 		retryHeldAutomaticMTU(r.Context())
 		http.Error(w, "MTU is held by a captured measurement or connection transition", http.StatusConflict)
 		return

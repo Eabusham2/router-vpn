@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"router-vpn/internal/mobilemtu"
 )
 
 // Measurement mailboxes share a wire contract while the ordinary and Tor
@@ -203,4 +205,21 @@ func (a *app) prepareDesktopMeasurementStop(launch *desktopNodeLaunch) error {
 		return prepareDesktopTorStop(a, launch.command)
 	}
 	return prepareDesktopExternalStop(a, launch.command)
+}
+
+func desktopMeasurementMTUSessionContext(ctx context.Context, launch *desktopNodeLaunch) (*desktopMTUSession, error) {
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, launch)
+	if err != nil {
+		return nil, err
+	}
+	if err := mobilemtu.LockContext(ctx, identity.mu); err != nil {
+		return nil, err
+	}
+	defer identity.mu.Unlock()
+	return *identity.mtu, ctx.Err()
+}
+
+func desktopMeasurementSessionMatchesContext(ctx context.Context, launch *desktopNodeLaunch, session string) bool {
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, launch)
+	return err == nil && identity.session == session
 }

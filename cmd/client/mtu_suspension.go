@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"router-vpn/internal/mobilemtu"
 )
 
 // A Speed Lab transaction can stop and restore several connections. Nested
@@ -25,17 +27,28 @@ func mtuSuspensionFor(a *app) *mtuSuspension {
 }
 
 func mtuSuspended(a *app) bool {
-	if a.controllerClosing() {
-		return true
+	suspended, _ := mtuSuspendedContext(context.Background(), a)
+	return suspended
+}
+func mtuSuspendedContext(ctx context.Context, a *app) (bool, error) {
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return true, err
+	}
+	closing := a.controllerClosingLocked()
+	a.mu.Unlock()
+	if closing {
+		return true, nil
 	}
 	value, found := mtuSuspensions.Load(a)
 	if !found {
-		return false
+		return false, ctx.Err()
 	}
 	suspension := value.(*mtuSuspension)
-	suspension.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &suspension.mu); err != nil {
+		return true, err
+	}
 	defer suspension.mu.Unlock()
-	return suspension.users > 0
+	return suspension.users > 0, ctx.Err()
 }
 
 func cancelCapturedMTU(a *app) {
