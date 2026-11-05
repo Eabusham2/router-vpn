@@ -70,6 +70,23 @@ def sources(source):
     return source, records
 
 
+def prospective_box_admission(box, before, after):
+    """Change both exact public registration paths without opening another call site."""
+    signatures = (
+        "func (s *Box) RouterVPNDesktopTorPreparePhysical(policy *mobiletor.DesktopBridgePolicy) error {",
+        "func (s *Box) RouterVPNDesktopTorPreparePhysicalContext(ctx context.Context, policy *mobiletor.DesktopBridgePolicy) error {",
+    )
+    guard = '\tif ' + before + ' {\n\t\treturn errors.New("this native operating system has no installed physical socket factory")\n\t}'
+    replacement = guard.replace(before, after)
+    if box.count(guard) != len(signatures) or box.count(before) != len(signatures):
+        raise ValueError("Prospective Windows bootstrap lost its two exact Box admission guards")
+    for signature in signatures:
+        if box.count(signature) != 1:
+            raise ValueError("Prospective Windows bootstrap lost its original Box registration functions")
+        box = IDENTITY.function_mutant(box, signature, guard, replacement)
+    return box
+
+
 def prospective_admission(bridge, policy, box):
     """Exact, reviewable static predicate change; unknown source is rejected."""
     helper = "func DesktopPhysicalBrokerSupported(targetOS string) bool {\n"
@@ -85,8 +102,10 @@ def prospective_admission(bridge, policy, box):
         policy = IDENTITY.replace_once(policy, before, before[:-2] + ' || targetOS == "windows"\n}')
         if bridge.count("!DesktopPhysicalBrokerSupported(targetOS)") != 1 or bridge.count("DesktopPhysicalBrokerSupported(targetOS) && kill") != 1 or \
                 policy.count("!DesktopPhysicalBrokerSupported(p.metadata.TargetOS)") != 1 or \
-                box.count("!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)") != 1:
+                box.count("!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)") != 2:
             raise ValueError("Prospective Windows bootstrap lost the shared OS admission call sites")
+        box = prospective_box_admission(box, "!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)",
+                                         "!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)")
         return bridge, policy, box
     bridge = IDENTITY.replace_once(bridge, '(targetOS != "linux" || profile["multihop_enabled"] == true)',
                                    '(!DesktopPhysicalBrokerSupported(targetOS) || profile["multihop_enabled"] == true)')
@@ -97,8 +116,8 @@ def prospective_admission(bridge, policy, box):
     anchor = 'const DesktopPhysicalOutboundTag = "routervpn-tor-physical-egress"\n'
     policy = IDENTITY.replace_once(policy, anchor, anchor + '\n' + helper +
                                    '\treturn targetOS == "linux" || targetOS == "windows"\n}\n')
-    box = IDENTITY.replace_once(box, 'runtime.GOOS != "linux"',
-                                '!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)')
+    box = prospective_box_admission(box, 'runtime.GOOS != "linux"',
+                                    '!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)')
     return bridge, policy, box
 
 

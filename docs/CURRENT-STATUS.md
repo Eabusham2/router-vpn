@@ -33,6 +33,13 @@ the former fixture fails exactly its two intended leaves under that condition.
 The fixed graph aliases, original-handle checks and three-attempt cap remain.
 Actual native-PQ/MAX/WFP and Windows ARM64 acceptance remain CI requirements.
 
+The Windows physical-bootstrap prospective test overlay now changes both exact
+Tor Box registration guards, including the bounded caller-context entry point.
+It preserves the original source/deadline checks and refuses missing, moved or
+additional admission predicates. All 19 overlay/source-boundary checks pass;
+the previous overlay reproduces the three reported test failures. This is a
+test-harness correction, not production Windows Tor admission or WFP acceptance.
+
 Original caller deadlines now reach native manager, graph, network, physical,
 PT/broker, selected-proof and OpenVPN observations. Pure observation expiry
 preserves a healthy owner; confirmed identity failure revokes admission without

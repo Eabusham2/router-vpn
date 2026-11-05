@@ -319,6 +319,11 @@ func DNSTransportRegistry() *dns.TransportRegistry {
         self.assertNotIn('targetOS == "darwin"', policy)
         self.assertIn("DesktopPhysicalBrokerSupported(targetOS)", bridge)
         self.assertIn("mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)", box)
+        self.assertEqual(box.count("!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)"), 2)
+        # Apart from the two OS predicates, the real caller deadline, source,
+        # original observer and bounded registration paths stay byte-identical.
+        self.assertEqual(box.replace("!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)",
+                                     'runtime.GOOS != "linux"'), original[2])
         for current in ('targetOS == "linux"', 'targetOS == "linux" || targetOS == "darwin"'):
             with self.subTest(current=current):
                 shared = policy.replace('targetOS == "linux" || targetOS == "windows"', current)
@@ -327,6 +332,29 @@ func DNSTransportRegistry() *dns.TransportRegistry {
         unsafe = policy.replace('return targetOS == "linux" || targetOS == "windows"', 'return true')
         with self.assertRaisesRegex(ValueError, "predicate changed"):
             GATE.prospective_admission(bridge, unsafe, box)
+
+    def test_prospective_admission_requires_both_real_box_guards(self):
+        paths = ("routervpn/mobiletor/desktop_bridge.go", "routervpn/mobiletor/desktop_physical_policy.go",
+                 "routervpn_desktop_tor_box_physical.go")
+        original = [self.core.joinpath(path).read_text() for path in paths]
+        old = 'runtime.GOOS != "linux"'
+        shared = "!mobiletor.DesktopPhysicalBrokerSupported(runtime.GOOS)"
+        for inputs, guard in ((original, old), (GATE.prospective_admission(*original), shared)):
+            for occurrence in (0, 1):
+                with self.subTest(shared=guard == shared, occurrence=occurrence):
+                    start = [match.start() for match in re.finditer(re.escape(guard), inputs[2])][occurrence]
+                    changed = inputs[2][:start] + "false" + inputs[2][start + len(guard):]
+                    with self.assertRaises(ValueError):
+                        GATE.prospective_admission(*inputs[:2], changed)
+                    # A comment carrying the old text is not the missing guard.
+                    with self.assertRaises(ValueError):
+                        GATE.prospective_admission(*inputs[:2], changed + "\n// " + guard + "\n")
+            for changed in (
+                inputs[2].replace("RouterVPNDesktopTorPreparePhysicalContext(", "UnrelatedRegistration("),
+                inputs[2] + "\nfunc extraAdmission() { if " + guard + " { return } }\n",
+            ):
+                with self.subTest(shared=guard == shared, changed=changed[-100:]), self.assertRaises(ValueError):
+                    GATE.prospective_admission(*inputs[:2], changed)
 
 
 class ExternalPacketInventory(unittest.TestCase):

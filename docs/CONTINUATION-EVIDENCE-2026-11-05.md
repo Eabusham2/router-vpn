@@ -1057,6 +1057,30 @@ and `8777ed71d6861c03ee1e11033cf68fe707f8899c1854ddc74c287e1e55a46087`.
 Their integration preserves both the cleanup-only socket refusal and successful
 request-lifetime handling, plus the newer service-to-Node transfer inventory.
 
+## Windows bootstrap overlay retains both original registration guards
+
+Completed Windows physical-bootstrap run `41970020671` at `b88449dc` failed
+its source/overlay step on both architectures. Job `127059380740` identifies
+the exact failure: the prospective test overlay still required one global
+`runtime.GOOS != "linux"` occurrence after the shipping native Box gained its
+separate bounded caller-context registration entry point. Both real functions
+retain OS admission. Their current source and the old overlay were unchanged
+at `5ab593c8`.
+
+The overlay now validates and changes exactly one complete guard in each of
+those two named functions. The shared-helper variant also requires both real
+call sites. Original caller/deadline, source, observer and bounded registration
+code remains byte-identical; no ordinary binary gains prospective admission.
+The focused runner rejects either missing guard, comment decoys, an unrelated
+replacement function and an extra admission site. Read-only source copies,
+native registration, foreign test files and exact required verdict checks remain.
+
+The previous runner reproduced its two errors and one failure in 9.824s.
+The corrected runner passes all 19 tests in 6.070s. These are Python
+overlay/source-boundary results; actual Windows bootstrap, Wintun/WFP,
+socket retirement, Tor circuits and packaged runtime acceptance remain
+separate native CI requirements.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
