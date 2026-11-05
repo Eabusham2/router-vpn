@@ -764,6 +764,32 @@ connection alone is insufficient. The new privileged namespace cases were not
 executed locally. Their exact-SHA CI, other graph families, Server/Compare,
 Start Layers and physical-device acceptance remain separate requirements.
 
+## Server Tor retains the exact bounded mutex dependency
+
+The server Tor preparer now projects the shipping
+`internal/desktopnetwork/desktop_network_lock.go` as the complete server-side
+`desktopnetwork` package. Only the existing pure mutex helper is supplied; no
+desktop TUN or route implementation is added. Its bytes enter the source digest
+and generated ownership receipt. The two existing server callers may use only
+`LockContext`; missing, substituted, foreign or extra package members fail the
+preparation tests without repairing a changed/unowned output.
+
+An isolated `b88449dc` source plus the two preparer/test files generated a fresh
+pinned core with 301 verified outputs. This core had no previous desktop package
+to mask the missing import. Removing only the helper reproduced the exact native
+server dependency failure. With the helper, all ten selected original native
+race-test parents pass without skips: the actual command package in 5.551s and
+server Tor package in 1.041s. All 12 preparation tests pass in 17.472s. This local
+build uses `with_purego`; full static/Xray, packaged standalone Tor, ARM64 images
+and release publication remain their existing CI requirements.
+
+The newer `b88449dc` Windows native job `127057775397` has also completed its
+pinned TLS and actual shipping-handler step successfully with the original cold
+launch checks and unchanged deadlines. That step result supersedes the earlier
+drain-timeout observation for this later attempt; complete native job/log and
+current-commit release verification remain separate. Its earlier controller
+foundation failure predates the named-selector repair in `e90d6f9d`.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

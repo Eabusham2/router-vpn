@@ -22,6 +22,7 @@ spec.loader.exec_module(TOR)
 def inputs():
     return sorted(set([Path(__file__).resolve(), ROOT/'deploy/prepare-mobile-tor.py',
         ROOT/'deploy/test_server_tor_preparation.py',
+        ROOT/'internal/desktopnetwork/desktop_network_lock.go',
         ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
         ROOT/'mobile/toroutbound/dns_adapter.go.tmpl',
         *list((ROOT/'internal/mobiletor').glob('*.go')),
@@ -43,7 +44,12 @@ def digest():
 
 
 def copies():
-    content = {}
+    # Server control and padding share only the pure bounded mutex helper;
+    # installing desktop route/TUN implementations would widen this closure.
+    lock = ROOT/'internal/desktopnetwork/desktop_network_lock.go'
+    if lock.is_symlink():
+        raise ValueError('Linked server Tor bounded mutex source')
+    content = {'routervpn/desktopnetwork/desktop_network_lock.go': lock.read_bytes()}
     for package in ('common', 'mobiletor', 'linuxprocess'):
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
             if path.name.endswith('_test.go'):

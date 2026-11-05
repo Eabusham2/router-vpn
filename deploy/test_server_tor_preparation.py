@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -47,6 +48,43 @@ class ServerTorPreparation(unittest.TestCase):
                 self.assertNotIn(b'"router-vpn/internal/',raw,name)
                 self.assertNotIn(b'"router-vpn/mobile/',raw,name)
         self.assertIn('SERVER_TOR.prepare(vendor)',(ROOT/'deploy/prepare-relay-core.py').read_text())
+
+    def test_server_mutex_dependency_is_exact_and_closed(self):
+        content=PREP.copies()
+        source=ROOT/'internal/desktopnetwork/desktop_network_lock.go'
+        self.assertIn(source,set(PREP.inputs()))
+        supplied={name:raw for name,raw in content.items() if name.startswith('routervpn/desktopnetwork/')}
+        self.assertEqual(supplied,{'routervpn/desktopnetwork/desktop_network_lock.go':source.read_bytes()})
+        expected_import=b'"github.com/sagernet/sing-box/routervpn/desktopnetwork"'
+        users={name:raw for name,raw in content.items() if b'desktopnetwork' in raw and name not in supplied}
+        self.assertEqual(set(users),{'routervpn/mobiletor/padding_lease.go','routervpn/mobiletor/server_client.go'})
+        for name,raw in users.items():
+            self.assertIn(expected_import,raw,name)
+            self.assertEqual(set(re.findall(rb'desktopnetwork\.(\w+)',raw)),{b'LockContext'},name)
+        # This projection is the complete package, and these symbols must be
+        # supplied by its exact shipped bytes rather than another dependency.
+        exports=set(re.findall(rb'func (\w+)\(',source.read_bytes()))
+        self.assertIn(b'LockContext',exports)
+
+    def test_server_mutex_dependency_rejects_missing_foreign_and_substituted_projection(self):
+        original=PREP.copies
+        for change in ('missing','source-bytes','extra-native-file','foreign-import','missing-symbol'):
+            with self.subTest(change=change):
+                def substituted():
+                    content=original()
+                    key='routervpn/desktopnetwork/desktop_network_lock.go'
+                    if change=='missing':del content[key]
+                    elif change=='source-bytes':content[key]+=b'\n// substituted lock\n'
+                    elif change=='extra-native-file':content['routervpn/desktopnetwork/native_tun.go']=b'package desktopnetwork\n'
+                    elif change=='foreign-import':
+                        key='routervpn/mobiletor/padding_lease.go'
+                        content[key]=content[key].replace(b'"github.com/sagernet/sing-box/routervpn/desktopnetwork"',b'"github.com/sagernet/sing-box/routervpn/foreignnetwork"')
+                    else:
+                        key='routervpn/mobiletor/server_client.go'
+                        content[key]=content[key].replace(b'desktopnetwork.LockContext',b'desktopnetwork.UnapprovedContext')
+                    return content
+                with mock.patch.object(PREP,'copies',side_effect=substituted):
+                    with self.assertRaises(AssertionError):self.test_server_mutex_dependency_is_exact_and_closed()
 
     def test_linux_process_owners_are_copied_without_substitution(self):
         content=PREP.copies()
@@ -113,7 +151,7 @@ class ServerTorPreparation(unittest.TestCase):
             record=json.loads(first)
             expected=PREP.copies()
             for name,raw in expected.items():
-                if name.startswith('routervpn/linuxprocess/'):
+                if name.startswith('routervpn/linuxprocess/') or name=='routervpn/desktopnetwork/desktop_network_lock.go':
                     self.assertEqual((vendor/name).read_bytes(),raw)
                     self.assertEqual(record['files'][name],hashlib.sha256(raw).hexdigest())
             self.prepare_fixture(vendor)
@@ -151,6 +189,26 @@ class ServerTorPreparation(unittest.TestCase):
                     self.assertFalse((vendor/PREP.OWNER).exists())
                 else:
                     self.assertEqual((vendor/PREP.OWNER).read_bytes(),receipt)
+
+    def test_changed_missing_or_unowned_mutex_member_is_never_repaired(self):
+        for change in ('changed','missing','unowned'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as temporary:
+                vendor=Path(temporary);(vendor/'dns').mkdir()
+                target=vendor/'routervpn/desktopnetwork/desktop_network_lock.go'
+                if change!='unowned':
+                    self.prepare_fixture(vendor)
+                    receipt=(vendor/PREP.OWNER).read_bytes()
+                else:
+                    target.parent.mkdir(parents=True)
+                    receipt=None
+                if change=='missing':target.unlink()
+                else:target.write_bytes(b'package desktopnetwork\n// foreign original\n')
+                with self.assertRaisesRegex(ValueError,'Changed server Tor generated source|Unowned server Tor generated source'):
+                    self.prepare_fixture(vendor)
+                if change=='missing':self.assertFalse(target.exists())
+                else:self.assertEqual(target.read_bytes(),b'package desktopnetwork\n// foreign original\n')
+                if receipt is None:self.assertFalse((vendor/PREP.OWNER).exists())
+                else:self.assertEqual((vendor/PREP.OWNER).read_bytes(),receipt)
 
     def test_no_tun_worker_retains_exact_control_front_and_proof(self):
         native=(ROOT/'mobile/server_tor/native.go.tmpl').read_text()
