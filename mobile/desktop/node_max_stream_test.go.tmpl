@@ -217,15 +217,14 @@ func nodeMAXTLSFrontCases(t *testing.T) {
 	}{{"packet", packetPort, packetTCP, packetUDP}, {"kem", 51822, nil, nil},
 		{"middle", middlePort, middleTCP, middleUDP}, {"whitening", 8389, nil, nil}} {
 		t.Run("tls-front-"+tc.name, func(t *testing.T) {
-			// A real UDP owner does not reserve the equal TCP port. Force the
-			// original allocator to produce that legal but graph-aliased front.
+			// Packet and middle cases retain equal-port TCP/UDP owners. Fixed
+			// KEM and whitening cases still force the exact TCP graph alias,
+			// while retaining an independent real UDP owner on a proved pair.
+			// The unrelated fixed UDP port is not an allocator prerequisite.
 			peer := tc.peer
 			var err error
 			if peer == nil {
-				peer, err = net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, tc.port)))
-				if err != nil {
-					t.Fatal(err)
-				}
+				_, peer = retain(t, packetPort, middlePort, 51822, 8389)
 			}
 			t.Cleanup(func() { _ = peer.Close() })
 			var rejected, accepted *net.TCPListener
