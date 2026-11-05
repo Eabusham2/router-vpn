@@ -1356,6 +1356,47 @@ creation returns EPERM; their execution is not reported as passed. The frozen
 five-path test contribution manifest is
 `b530d6cb1066cf4e577cf01c22cf5e4df678b5b91279c9756b1faef1ecaa9be2`.
 
+## WireGuard startup retains an opened original bind generation
+
+Windows ARM64 MAX job `127068175058` in run `41972542086`, source
+`efe29d9`, panicked during the `valid-outer-user-control`. The actual trace
+follows `IpcSet` keepalive through `ClientBind.connect` into
+`adapter.ExtendContext(nil)`. The pinned WireGuard device publishes its Up
+state before completing `BindUpdate`/`Open`; the former bind could call its
+dialer with an uninitialized context. That panic is a production defect, not
+an acceptable authenticated-credential control result.
+
+Each successful bind Open now retains its own child of the original context,
+connection and receive callbacks. Work before Open returns `net.ErrClosed`
+without dialing or substituting an ambient context. Close cancels that exact
+generation before joining an in-flight dial, retires its original connection,
+and only then permits reopen. Late successful connected or packet-listener
+results are closed without publication. An old receiver cannot acquire a
+successor's socket, and original pause/retry waits end on generation closure.
+Genuine dial errors and cancellation causes remain available together.
+
+The ordinary checksum-pinned preparer accepts pristine source, the previous
+complete publication correction, and the new complete output; partial or
+unrelated edits remain rejected. The pristine bind blob is
+`b423558e90f6aa2f1d14258ad9ea311c455cd038` in pinned core
+`1ac1a339cb1223e9c70eae14c44411c75033c02d`. On the isolated `0f7c13b2`
+contribution, the normally generated bind and test are supplied through a
+two-file Go overlay against that prepared core. The actual transport package
+passes 13 RUN/PASS verdicts under race in 6.569s, with no skips: three parents
+and ten lifecycle leaves. The original concurrent-publication test remains.
+
+The stock WireGuard `IpcSet`/keepalive/timer test uses real loopback UDP and an
+inert test TUN. After a closed-bind refusal, the unchanged retry emits a native
+initiation packet after reopen (5.38s). Initial pre-Open refusal is tested
+separately; the test does not claim to deterministically reproduce the original
+device-Up scheduling window. Connected and unconnected socket ownership,
+late results, paused receivers, cancellation and mixed genuine failures are
+covered. Three deliberate defects fail their named assertions: pre-Open
+fallback, late result publication and ambient-context substitution. Panic,
+watchdog, compilation and race failures are not accepted as defect witnesses.
+All seven Python preparation checks pass. Actual Windows ARM64 MAX/WFP and
+other native platform acceptance remain exact-source CI obligations.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

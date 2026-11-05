@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`86cc8465`, the integrated observation change in `a94cde9d`, and the installed
+`aacc5d6f`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -53,6 +53,14 @@ used by the retained TLS-front cases. This repairs the observed undefined
 `nodeMAXBoth` compilation failure without removing its original alias or
 behavioural negative controls. The complete runner passes 59 checks on Linux
 with two existing Windows-only skips; actual Windows execution remains required.
+
+The real Windows MAX nil-context failure now has a runtime repair in the pinned
+WireGuard bind. Each Open retains the original context and a separate connection
+generation; pre-Open traffic cannot dial, Close cancels before joining, and old
+receivers or late sockets cannot enter a reopened bind. Thirteen generated native
+race verdicts, real stock keepalive recovery over loopback UDP, three assertion
+controls and seven preparation checks pass. The test TUN is inert; actual Windows
+ARM64 MAX/WFP and packaged native acceptance remain required.
 
 The Windows physical-bootstrap prospective test overlay now changes both exact
 Tor Box registration guards, including the bounded caller-context entry point.

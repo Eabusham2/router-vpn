@@ -79,8 +79,10 @@ class WireGuardPublicationPolicyTests(unittest.TestCase):
         with mock.patch.object(policy,'SOURCE_SHA',policy.blobsha(original.encode())):
             fixed=policy.patch(original)
             self.assertEqual(policy.patch(fixed),fixed)
-            self.assertLess(fixed.index('c.connAccess.Lock()'),fixed.index('serverConn := c.conn'))
-            for broken in (original+'changed',fixed+'changed',fixed.replace('c.connAccess.Lock()','',1)):
+            self.assertLess(fixed.index('g.connAccess.Lock()'),fixed.index('if g.conn != nil'))
+            legacy=original.replace(policy.LEGACY_OLD,policy.LEGACY_NEW,1)
+            self.assertEqual(policy.patch(legacy),fixed)
+            for broken in (original+'changed',fixed+'changed',fixed.replace('g.connAccess.Lock()','',1),fixed.replace('if g == nil {','if false {',1),fixed.replace('g.cancel()','',1)):
                 with self.assertRaises(ValueError):policy.patch(broken)
         with self.assertRaises(ValueError):policy.patch(original)
     def test_build_cache_and_native_test_require_the_owned_fix(self):

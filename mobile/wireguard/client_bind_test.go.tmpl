@@ -2,14 +2,21 @@ package wireguard
 
 import (
 	"context"
+	"errors"
 	"github.com/sagernet/sing-box/log"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service/pause"
+	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/device"
+	wgTun "github.com/sagernet/wireguard-go/tun"
 	"net"
 	"net/netip"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type routerBindDialer struct {
@@ -94,5 +101,468 @@ func TestRouterVPNClientBindConnectionPublication(t *testing.T) {
 	}
 	if d.calls.Load() != 1 {
 		t.Fatal("closed bind opened a fallback socket")
+	}
+}
+
+// This dialer opens real loopback UDP sockets; gates only control when the
+// original dial result is returned, including a success after cancellation.
+type routerLifecycleDialer struct {
+	mu          sync.Mutex
+	contexts    []context.Context
+	connections []*routerLifecycleConn
+	packets     []*routerLifecyclePacketConn
+	entered     chan context.Context
+	release     chan struct{}
+	late        bool
+	failure     error
+	onFailure   func()
+}
+type routerLifecycleConn struct {
+	net.Conn
+	closes atomic.Int64
+}
+
+func (c *routerLifecycleConn) Close() error { c.closes.Add(1); return c.Conn.Close() }
+func (d *routerLifecycleDialer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if ctx == nil {
+		panic("bind passed nil original context")
+	}
+	if d.entered != nil {
+		d.entered <- ctx
+	}
+	if d.release != nil {
+		if d.late {
+			<-ctx.Done()
+			<-d.release
+		} else {
+			select {
+			case <-d.release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+	if d.failure != nil {
+		if d.onFailure != nil {
+			d.onFailure()
+		}
+		return nil, d.failure
+	}
+	connection, err := net.Dial("udp", address.String())
+	if err != nil {
+		return nil, err
+	}
+	owned := &routerLifecycleConn{Conn: connection}
+	d.mu.Lock()
+	d.contexts = append(d.contexts, ctx)
+	d.connections = append(d.connections, owned)
+	d.mu.Unlock()
+	return owned, nil
+}
+
+type routerLifecyclePacketConn struct {
+	net.PacketConn
+	closes atomic.Int64
+}
+
+func (c *routerLifecyclePacketConn) Close() error { c.closes.Add(1); return c.PacketConn.Close() }
+func (d *routerLifecycleDialer) ListenPacket(ctx context.Context, address M.Socksaddr) (net.PacketConn, error) {
+	if ctx == nil {
+		panic("nil listen context")
+	}
+	if d.entered != nil {
+		d.entered <- ctx
+	}
+	if d.release != nil {
+		if d.late {
+			<-ctx.Done()
+			<-d.release
+		} else {
+			select {
+			case <-d.release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+	packet, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	owned := &routerLifecyclePacketConn{PacketConn: packet}
+	d.mu.Lock()
+	d.contexts = append(d.contexts, ctx)
+	d.packets = append(d.packets, owned)
+	d.mu.Unlock()
+	return owned, nil
+}
+func routerLifecycleBind(t *testing.T, d *routerLifecycleDialer) (*ClientBind, context.CancelFunc, *net.UDPConn) {
+	t.Helper()
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), routerLifecycleKey{}, "original"))
+	bind := NewClientBind(pause.WithDefaultManager(ctx), log.NewNOPFactory().Logger(), d, true, listener.LocalAddr().(*net.UDPAddr).AddrPort(), [3]byte{})
+	t.Cleanup(func() { cancel(); bind.Close(); listener.Close() })
+	return bind, cancel, listener
+}
+
+type routerLifecycleKey struct{}
+
+func routerLifecycleReceive(fn conn.ReceiveFunc) error {
+	_, err := fn([][]byte{make([]byte, 64)}, make([]int, 1), make([]conn.Endpoint, 1))
+	return err
+}
+func TestRouterVPNClientBindOriginalLifecycle(t *testing.T) {
+	t.Run("before-open", func(t *testing.T) {
+		d := &routerLifecycleDialer{}
+		b, _, listener := routerLifecycleBind(t, d)
+		if _, err := b.connect(); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("pre-Open connect: %v", err)
+		}
+		if err := b.Send([][]byte{{1, 0, 0, 0}}, remoteEndpoint(b.connectAddr), 0); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("pre-Open Send: %v", err)
+		}
+		if len(d.connections) != 0 {
+			t.Fatal("pre-Open admitted native connection")
+		}
+		if _, _, err := b.Open(0); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := b.Open(0); !errors.Is(err, conn.ErrBindAlreadyOpen) {
+			t.Fatalf("duplicate Open: %v", err)
+		}
+		if err := b.Send([][]byte{{1, 0, 0, 0, 5}}, remoteEndpoint(b.connectAddr), 0); err != nil {
+			t.Fatal(err)
+		}
+		listener.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 64)
+		if n, _, err := listener.ReadFromUDP(buf); err != nil || n != 5 {
+			t.Fatalf("real post-Open send did not recover: %d %v", n, err)
+		}
+		if d.contexts[0].Value(routerLifecycleKey{}) != "original" {
+			t.Fatal("lost original context identity")
+		}
+	})
+	t.Run("original-cancel", func(t *testing.T) {
+		d := &routerLifecycleDialer{}
+		b, cancel, _ := routerLifecycleBind(t, d)
+		fns, _, err := b.Open(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		if _, err = b.connect(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled context admitted: %v", err)
+		}
+		if err = routerLifecycleReceive(fns[0]); !errors.Is(err, net.ErrClosed) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled receiver: %v", err)
+		}
+		b.Close()
+		if _, _, err = b.Open(0); !errors.Is(err, context.Canceled) {
+			t.Fatalf("reopened original cancelled owner: %v", err)
+		}
+		if len(d.connections) != 0 {
+			t.Fatal("cancelled original owner dialed")
+		}
+	})
+	t.Run("close-cancels-dial", func(t *testing.T) {
+		d := &routerLifecycleDialer{entered: make(chan context.Context, 1), release: make(chan struct{})}
+		b, _, _ := routerLifecycleBind(t, d)
+		b.Open(0)
+		result := make(chan error, 1)
+		go func() { _, err := b.connect(); result <- err }()
+		ctx := <-d.entered
+		closed := make(chan error, 1)
+		go func() { closed <- b.Close() }()
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("Close waited on dial before cancelling original context")
+		}
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("dial did not join")
+		}
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Close did not join")
+		}
+	})
+	t.Run("late-dial", func(t *testing.T) {
+		d := &routerLifecycleDialer{entered: make(chan context.Context, 1), release: make(chan struct{}), late: true}
+		b, _, _ := routerLifecycleBind(t, d)
+		old, _, _ := b.Open(0)
+		result := make(chan error, 1)
+		go func() { _, err := b.connect(); result <- err }()
+		ctx := <-d.entered
+		closed := make(chan error, 1)
+		go func() { closed <- b.Close() }()
+		<-ctx.Done()
+		close(d.release)
+		if err := <-result; !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("late dial published: %v", err)
+		}
+		if err := <-closed; err != nil {
+			t.Fatal(err)
+		}
+		if len(d.connections) != 1 || d.connections[0].closes.Load() != 1 {
+			t.Fatal("late physical result was not closed exactly once")
+		}
+		d.entered = nil
+		d.release = nil
+		d.late = false
+		if _, _, err := b.Open(0); err != nil {
+			t.Fatal(err)
+		}
+		if err := routerLifecycleReceive(old[0]); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("old receiver crossed reopen: %v", err)
+		}
+		if len(d.connections) != 1 {
+			t.Fatal("old receiver dialed successor")
+		}
+		if _, err := b.connect(); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.connections) != 2 || d.connections[1].closes.Load() != 0 {
+			t.Fatal("reopen did not retain independent live owner")
+		}
+		b.Close()
+		if d.connections[1].closes.Load() != 1 {
+			t.Fatal("reopened owner not closed once")
+		}
+	})
+	t.Run("paused-close", func(t *testing.T) {
+		d := &routerLifecycleDialer{}
+		b, _, _ := routerLifecycleBind(t, d)
+		b.Open(0)
+		g := b.currentGeneration()
+		b.pauseManager.NetworkPause()
+		joined := make(chan error, 1)
+		go func() { joined <- b.waitRetry(g) }()
+		b.Close()
+		select {
+		case err := <-joined:
+			if !errors.Is(err, net.ErrClosed) {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("closed receiver waited for unrelated owner wake")
+		}
+	})
+	t.Run("native-receiver-close", func(t *testing.T) {
+		d := &routerLifecycleDialer{}
+		b, _, _ := routerLifecycleBind(t, d)
+		fns, _, err := b.Open(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = b.connect(); err != nil {
+			t.Fatal(err)
+		}
+		joined := make(chan error, 1)
+		go func() { joined <- routerLifecycleReceive(fns[0]) }()
+		b.Close()
+		if _, _, err = b.Open(0); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-joined:
+			if !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("old native receiver survived: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("native receiver did not join Close")
+		}
+		if len(d.connections) != 1 || d.connections[0].closes.Load() != 1 {
+			t.Fatal("old receiver opened/reused successor socket")
+		}
+	})
+	t.Run("mixed-dial-failure", func(t *testing.T) {
+		authentication := errors.New("original authentication failed")
+		d := &routerLifecycleDialer{failure: authentication}
+		b, cancel, _ := routerLifecycleBind(t, d)
+		d.onFailure = cancel
+		b.Open(0)
+		err := b.Send([][]byte{{1, 0, 0, 0}}, remoteEndpoint(b.connectAddr), 0)
+		if !errors.Is(err, authentication) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("real dial failure/cancellation was suppressed: %v", err)
+		}
+	})
+	t.Run("listen-packet-reopen", func(t *testing.T) {
+		d := &routerLifecycleDialer{}
+		b, _, listener := routerLifecycleBind(t, d)
+		b.isConnect = false
+		old, _, err := b.Open(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = b.Send([][]byte{{1, 0, 0, 0, 5}}, remoteEndpoint(b.connectAddr), 0); err != nil {
+			t.Fatal(err)
+		}
+		listener.SetReadDeadline(time.Now().Add(time.Second))
+		packet := make([]byte, 64)
+		if n, _, err := listener.ReadFromUDP(packet); err != nil || n != 5 {
+			t.Fatalf("real unconnected send: %d %v", n, err)
+		}
+		b.Close()
+		b.Open(0)
+		if err = routerLifecycleReceive(old[0]); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("old unconnected receiver: %v", err)
+		}
+		if _, err = b.connect(); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.packets) != 2 || d.packets[0].closes.Load() != 1 || d.packets[1].closes.Load() != 0 {
+			t.Fatal("unconnected reopen lost actual owner")
+		}
+		for _, ctx := range d.contexts {
+			if ctx.Value(routerLifecycleKey{}) != "original" {
+				t.Fatal("unconnected socket lost original context")
+			}
+		}
+		b.Close()
+		if d.packets[1].closes.Load() != 1 {
+			t.Fatal("unconnected successor was not closed")
+		}
+	})
+	t.Run("late-listen-packet", func(t *testing.T) {
+		d := &routerLifecycleDialer{entered: make(chan context.Context, 1), release: make(chan struct{}), late: true}
+		b, _, _ := routerLifecycleBind(t, d)
+		b.isConnect = false
+		b.Open(0)
+		result := make(chan error, 1)
+		go func() { _, err := b.connect(); result <- err }()
+		ctx := <-d.entered
+		closed := make(chan error, 1)
+		go func() { closed <- b.Close() }()
+		<-ctx.Done()
+		close(d.release)
+		if err := <-result; !errors.Is(err, net.ErrClosed) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("late packet socket escaped: %v", err)
+		}
+		if err := <-closed; err != nil {
+			t.Fatal(err)
+		}
+		if len(d.packets) != 1 || d.packets[0].closes.Load() != 1 {
+			t.Fatal("late original packet socket not closed exactly once")
+		}
+	})
+	t.Run("concurrent-lifecycle", func(t *testing.T) {
+		d := &routerLifecycleDialer{}
+		b, _, _ := routerLifecycleBind(t, d)
+		var jobs sync.WaitGroup
+		for i := 0; i < 4; i++ {
+			jobs.Add(1)
+			go func() {
+				defer jobs.Done()
+				for j := 0; j < 30; j++ {
+					b.Open(0)
+					b.connect()
+					b.Close()
+				}
+			}()
+		}
+		jobs.Wait()
+		b.Close()
+		for i, c := range d.connections {
+			if c.closes.Load() != 1 {
+				t.Fatalf("physical owner %d closed %d times", i, c.closes.Load())
+			}
+			if d.contexts[i].Value(routerLifecycleKey{}) != "original" {
+				t.Fatal("replacement context used")
+			}
+		}
+	})
+}
+
+// Exercise the stock keepalive/timer engine with a closed original bind. Its
+// nil-generation refusal is also used before first Open; the independent
+// before-open case covers that initial state without a scheduler-dependent race.
+type routerStartupBind struct {
+	*ClientBind
+	firstSend chan error
+}
+
+func (b *routerStartupBind) Send(bufs [][]byte, ep conn.Endpoint, offset int) error {
+	err := b.ClientBind.Send(bufs, ep, offset)
+	select {
+	case b.firstSend <- err:
+	default:
+	}
+	return err
+}
+
+type routerStartupTUN struct {
+	done   chan struct{}
+	events chan wgTun.Event
+	once   sync.Once
+}
+
+func (t *routerStartupTUN) File() *os.File                         { return nil }
+func (t *routerStartupTUN) Read([][]byte, []int, int) (int, error) { <-t.done; return 0, net.ErrClosed }
+func (t *routerStartupTUN) Write(p [][]byte, _ int) (int, error)   { return len(p), nil }
+func (t *routerStartupTUN) MTU() (int, error)                      { return 1420, nil }
+func (t *routerStartupTUN) Name() (string, error)                  { return "routervpn-bind-startup", nil }
+func (t *routerStartupTUN) Events() <-chan wgTun.Event             { return t.events }
+func (t *routerStartupTUN) Close() error {
+	t.once.Do(func() { close(t.done); close(t.events) })
+	return nil
+}
+func (t *routerStartupTUN) BatchSize() int { return 1 }
+func TestRouterVPNClientBindActualKeepaliveAfterClosedBind(t *testing.T) {
+	d := &routerLifecycleDialer{}
+	b, _, listener := routerLifecycleBind(t, d)
+	bind := &routerStartupBind{ClientBind: b, firstSend: make(chan error, 2)}
+	tun := &routerStartupTUN{done: make(chan struct{}), events: make(chan wgTun.Event)}
+	wg := device.NewDevice(b.ctx, tun, bind, &device.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}}, 1)
+	defer wg.Close()
+	if err := wg.Up(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	config := "private_key=" + strings.Repeat("01", 32) + "\npublic_key=09" + strings.Repeat("00", 31) + "\nendpoint=" + listener.LocalAddr().String() + "\nallowed_ip=0.0.0.0/0\npersistent_keepalive_interval=1\n"
+	configured := make(chan error, 1)
+	go func() { configured <- wg.IpcSet(config) }()
+	select {
+	case err := <-configured:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("IpcSet did not survive actual closed-bind keepalive")
+	}
+	select {
+	case err := <-bind.firstSend:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("actual closed-bind keepalive: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("actual IpcSet did not exercise closed-bind Send")
+	}
+	if _, _, err := b.Open(0); err != nil {
+		t.Fatal(err)
+	}
+	// Stock retransmit timer is 5s plus jitter. Its real retry must emit the
+	// native initiation packet; no timer/crypto or peer-state substitution.
+	listener.SetReadDeadline(time.Now().Add(7 * time.Second))
+	packet := make([]byte, 2048)
+	n, _, err := listener.ReadFromUDP(packet)
+	if err != nil {
+		t.Fatalf("stock keepalive did not recover after Open: %v", err)
+	}
+	if n != device.MessageInitiationSize || packet[0] != 1 {
+		t.Fatalf("not actual WireGuard initiation: size=%d type=%d", n, packet[0])
 	}
 }
