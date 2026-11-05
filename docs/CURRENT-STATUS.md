@@ -53,19 +53,27 @@ architectures at `c2839a15` has a separate source repair in `508ce9ed`; newer
 exact-SHA native acceptance remains required. The current service MTU integration
 retains its bounded cancellation and native acceptance obligations.
 
+The original native MTU worker now hands an outstanding native call to the
+bounded Stop cleanup owner when its lifetime is canceled. An expired Stop keeps
+the exact completion channel, reader and eventual transaction for a later Stop
+attempt; unjoined work cannot publish a result or current reader. The mandatory
+cleanup suite and generated native Box composition pass. Service-side Stop
+handoff and final historical routing validation remain a separate integration.
+
 Native partial-startup retirement now captures exact successful address effects
 and refuses occupied addresses. A retained transition capability preserves both
 original observers' independent histories across partial failure and pure expiry;
 stale tokens and unclaimed effects remain rejected. The full shared observer race
-package passed 334 verdicts. These are prerequisites for the installed-service MTU
-phase protocol; that shipping coordination remains unfinished.
+package passed 334 verdicts. These observations are retained by the integrated installed-service MTU
+phase protocol; successful native acceptance remains required.
 Native Linux Stop/Start/update/reset now enter through the original bounded
 caller and recheck identity after admission. Completed retirement receipts retain
 their nonblocking cached-read behavior after cancellation; 15 native race verdicts
 and the source/provenance gate verify both paths.
 
 This is not all-requirement completion. Installed Linux standard-service MTU
-Retest/Cancel remains unimplemented. The accepted native MTU command now has
+Retest/Cancel is integrated; cancellation and original native cleanup still require
+the shipping native acceptance gates. The accepted native MTU command now has
 bounded capture/start/status/cancel/cache and replacement paths, transported
 original deadlines and one shared cleanup allowance. Forty-seven actual prepared
 native race verdicts and both Darwin TUN architecture compilations passed.
@@ -79,7 +87,7 @@ observation helper. The six Linux race packages from the failed CI workflow pass
 after selective preparation alone. Node now carries its existing 30-second startup
 admission through actual native Start; raw Linux command construction enforces
 its top-level ten-second bound. Native caller/lifetime and partial-failure races
-pass. Full namespace acceptance and external/Tor startup transport remain
+pass. Full namespace acceptance and external/Tor pre-start registration budgets remain
 separate current CI and implementation work. Concurrent upstream HTTP admission/status changes in
 `c2241ba1` were preserved. Current exact-SHA release publication,
 physical/device/private acceptance and the other surviving platform/graph work

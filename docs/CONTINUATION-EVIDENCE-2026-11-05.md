@@ -519,6 +519,26 @@ first-link address-policy repair, including a mandatory actual namespace
 witness. That newer source and the current integrated head require their own
 native CI acceptance; transport tests do not establish that result.
 
+## Bounded original native MTU Stop join
+
+The native worker retains its actual outstanding Change completion channel before
+construction. Lifetime cancellation returns its supervisor to the original FD10
+cleanup owner. Retire uses that caller's deadline to join the same native call;
+expiry retains all original authority and never repeats native construction or
+publishes a fabricated joined result. A later authorized Stop can consume the
+actual late transaction, including one returned alongside an error. Current
+reader and retirement/result publication reject unjoined work.
+
+The production worker with a deliberately held backend and real FD11 has three
+new race verdicts. All 81 mandatory cleanup verdicts pass, and nine service-runner
+checks include an exact mutation restoring the old unbounded join; that mutation
+fails the intended FD10 admission witness. The complete prepared native command
+also compiles under race and its existing actual Box original-reader test passes.
+Backend effects in the held-call fixture are modeled; these results do not claim
+installed public Retest/Cancel or physical-network acceptance. The matching
+service-side handoff must still collect actual joined history before final
+routing retirement is accepted.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

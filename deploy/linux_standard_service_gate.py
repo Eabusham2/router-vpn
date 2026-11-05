@@ -82,6 +82,7 @@ STARTUP = {
     'StartupStockGraphs': tuple(protocol+'/'+policy for protocol in ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2') for policy in ('default', 'fixed', 'ipv6-off')),
 }
 CLEANUP = {
+    'TestCleanupOperationWorkerStopRetainsUnjoinedNativeCall': ('held', 'within-budget'),
     'TestCleanupOperationWorkerObservationExpiryRetainsOriginal': ('command', 'cleanup'),
     'TestCleanupOperationWorkerObservationKeepsMixedFailure': ('expired', 'wrapped', 'identity', 'mixed', 'mixed-empty'),
     'TestCleanupOperationCommandRequiresBothOriginalAcknowledgements': (),
@@ -171,7 +172,8 @@ SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go','startup_native_test.go','startup_config_test.go','startup_namespace_test.go','controller_epoch_linux.go','controller_epoch_native_test.go','observation_context_native_test.go','watcher_context_native_test.go','retirement_native_test.go')}
 SOURCE.update({'internal/standardengine/operation.go', 'internal/standardengine/operation_linux.go', 'internal/standardengine/operation_linux_test.go', 'internal/standardengine/protocol.go', 'internal/standardengine/protocol_test.go', 'mobile/desktop/standard_owned_linux.go.tmpl', 'internal/standardengine/cleanup_linux.go', 'internal/standardengine/cleanup_loop_linux.go', 'internal/standardengine/cleanup_linux_test.go', 'internal/standardengine/cleanup_loop_linux_test.go', 'internal/desktopnetwork/desktop_network_retirement.go', 'mobile/desktop/standard_cleanup_linux.go.tmpl', 'cmd/client/linux_standard_engine_linux.go', 'cmd/client/linux_standard_engine_retirement_linux.go', 'cmd/client/legacy_standard_exit_preparation_linux.go', 'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
 SOURCE.add('cmd/client/linux_standard_service_mtu_peer_native_test.go')
-RUNNERS = ('linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
+SOURCE.add('internal/standardengine/worker_stop_linux_test.go')
+RUNNERS = ('test_standard_worker_stop.py', 'linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
 SOURCE.update({'internal/standardengine/operation_command_linux.go', 'internal/standardengine/operation_command_linux_test.go',
                'internal/standardengine/worker_linux.go', 'mobile/desktop/standard_mtu_linux.go.tmpl',
                'mobile/desktop/standard_mtu_linux_test.go.tmpl'})

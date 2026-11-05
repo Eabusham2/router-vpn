@@ -15,6 +15,10 @@ class StandardServiceGateTests(unittest.TestCase):
     def output(self, group):
         return '\n'.join('--- PASS: '+name+' (0.01s)' for name in gate.case_names(group))
 
+    def test_actual_worker_bounded_join_and_causal(self):
+        spec=importlib.util.spec_from_file_location('standard_worker_stop',ROOT/'deploy/test_standard_worker_stop.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.execute()
+
     def test_exact_source_inventory(self):
         gate.validate_inventory(ROOT)
 

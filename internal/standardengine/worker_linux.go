@@ -28,7 +28,13 @@ type NativeMTUBackend interface {
 	Change(context.Context, any, int) (NativeMTUTransaction, error)
 	Retry(context.Context, NativeMTUTransaction) error
 }
+type nativeMTUCompletion struct {
+	transaction NativeMTUTransaction
+	failure     error
+}
+
 type nativeMTUUnit struct {
+	completion      <-chan nativeMTUCompletion
 	command         OperationCommand
 	transaction     NativeMTUTransaction
 	before          any
@@ -42,8 +48,8 @@ type nativeMTUUnit struct {
 }
 
 // NativeMTUWorker has one synchronous supervisor and at most one mutation
-// goroutine. Run joins it before returning; Retire is called only afterward by
-// the original fixed command's cleanup owner. No operation lock spans mutation.
+// goroutine. Lifetime cancellation leaves an unfinished call retained for the
+// original fixed command's bounded Retire caller. No operation lock spans mutation.
 type NativeMTUWorker struct {
 	file              *OperationFile
 	backend           NativeMTUBackend
@@ -162,28 +168,31 @@ func (w *NativeMTUWorker) runUnit(lifetime context.Context, unit *nativeMTUUnit,
 		}
 	}
 	if unit.failure == nil {
-		type completion struct {
-			transaction NativeMTUTransaction
-			failure     error
-		}
-		done := make(chan completion, 1)
+		done := make(chan nativeMTUCompletion, 1)
+		unit.completion = done // Retain before native construction can acquire resources.
 		go func() {
 			tx, err := w.backend.Change(unit.work, unit.before, unit.command.MTU)
-			done <- completion{tx, err}
+			done <- nativeMTUCompletion{tx, err}
 		}()
-		var completed completion
+		var completed nativeMTUCompletion
 		for {
 			select {
 			case completed = <-done:
-				unit.transaction, unit.failure = completed.transaction, errors.Join(unit.failure, completed.failure, unit.work.Err())
+				w.acceptCompletion(unit, completed)
 				goto joined
 			case <-parent.Done():
 				// Cancellation retires admission immediately, but only actual
 				// completion can supply a joined result or release native ownership.
 				stop()
-				completed = <-done
-				unit.transaction, unit.failure = completed.transaction, errors.Join(unit.failure, completed.failure, unit.work.Err())
-				goto joined
+				select {
+				case completed = <-done:
+					w.acceptCompletion(unit, completed)
+					goto joined
+				case <-lifetime.Done():
+					// FD10 owns the next bounded join attempt. The actual call,
+					// original reader and eventual transaction remain in this unit.
+					return nil
+				}
 			case <-ticks:
 				poll, end := nativeMTUObservation(lifetime)
 				cancelled, observeErr := w.file.Cancelled(poll, r)
@@ -214,7 +223,33 @@ joined:
 	return w.publish(ctx, unit)
 }
 
+// Only the supervisor, or Retire after supervisor completion, consumes this
+// exact channel. A late native transaction is retained even when Change failed.
+func (w *NativeMTUWorker) acceptCompletion(unit *nativeMTUUnit, completed nativeMTUCompletion) {
+	unit.transaction = completed.transaction
+	unit.failure = errors.Join(unit.failure, completed.failure, unit.work.Err())
+	unit.completion = nil
+	if unit.transaction != nil {
+		w.current = unit.transaction.Current()
+	}
+}
+func (w *NativeMTUWorker) joinUnit(ctx context.Context, unit *nativeMTUUnit) error {
+	if unit.completion == nil {
+		return ctx.Err()
+	}
+	select {
+	case completed := <-unit.completion:
+		w.acceptCompletion(unit, completed)
+		return ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (w *NativeMTUWorker) publish(ctx context.Context, unit *nativeMTUUnit) error {
+	if unit.completion != nil {
+		return errors.New("native MTU result still retains an unjoined actual call")
+	}
 	r := unit.command.Reservation
 	evidence := [OperationReaders]NativeMTUEvidence{{Reader: unit.before, Ready: unit.beforeReady}}
 	current := unit.before
@@ -337,10 +372,16 @@ func (w *NativeMTUWorker) retryRequested(lifetime context.Context, unit *nativeM
 }
 
 func (w *NativeMTUWorker) Retire(ctx context.Context) error {
-	if w == nil || !w.finished.Load() || ctx == nil || ctx.Err() != nil {
+	if w == nil || !w.finished.Load() || ctx == nil {
 		return errors.New("native MTU cleanup has not joined its original supervisor")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, unit := range w.units {
+		if err := w.joinUnit(ctx, unit); err != nil {
+			return err
+		}
 		if unit.transaction != nil {
 			if err := w.backend.Retry(ctx, unit.transaction); err != nil {
 				return err
@@ -372,6 +413,11 @@ func (w *NativeMTUWorker) CurrentReader() (any, error) {
 	if w == nil || !w.finished.Load() {
 		return nil, errors.New("native MTU reader requested before join")
 	}
+	for _, unit := range w.units {
+		if unit.completion != nil {
+			return nil, errors.New("native MTU reader still retains an unjoined actual call")
+		}
+	}
 	return w.current, nil
 }
 
@@ -383,6 +429,9 @@ func (w *NativeMTUWorker) CurrentRetirement() (string, error) {
 		return "", errors.New("native retirement has no joined empty-current transaction")
 	}
 	unit := w.units[len(w.units)-1]
+	if unit.completion != nil {
+		return "", errors.New("native retirement still retains an unjoined actual call")
+	}
 	if unit.transaction == nil {
 		return "", errors.New("native retirement omitted retained original transaction")
 	}
