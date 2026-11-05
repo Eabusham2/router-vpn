@@ -60,6 +60,11 @@ attempt; unjoined work cannot publish a result or current reader. The mandatory
 cleanup suite and generated native Box composition pass. Service-side Stop
 handoff and final historical routing validation remain a separate integration.
 
+Complete retirement receipts now retain their separate 48 KiB writer/parser
+allowance while readiness stays at 16 KiB. Shared and generated-native gates
+require oversized rejection and unchanged complete histories; actual sealed
+FD10 round trips verify that large histories fit the existing result channel.
+
 Native partial-startup retirement now captures exact successful address effects
 and refuses occupied addresses. A retained transition capability preserves both
 original observers' independent histories across partial failure and pure expiry;

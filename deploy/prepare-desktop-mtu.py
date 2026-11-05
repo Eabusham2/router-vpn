@@ -350,7 +350,7 @@ def prepare(vendor):
     subprocess.run(['go', 'mod', 'edit', '-require=github.com/godbus/dbus/v5@v5.2.2'], cwd=destination, check=True)
     # The wire decoder is identical in the parent and native TUN module. It
     # imports only the standard library and never introduces a module cycle.
-    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_dump_linux.go', 'desktop_network_retirement.go', 'desktop_network_lock.go'):
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_dump_linux.go', 'desktop_network_retirement.go', 'desktop_network_retirement_limit_test.go', 'desktop_network_lock.go'):
         path = ROOT/'internal/desktopnetwork'/name
         raw = path.read_bytes()
         if path.is_symlink() or raw.count(b'package desktopnetwork\n') != 1:

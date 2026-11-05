@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// Retirement evidence may retain partial constructor history larger than Ready.
+// This matches the original FD11 retirement-page bound; Ready remains16KiB.
+const DesktopNetworkRetirementReceiptLimit = 48 << 10
+
 // DesktopNetworkRetirementReceipt describes the original native constructor's
 // completed retirement, including partial startup. It is evidence, never a
 // capability to find, adopt or delete an object. The containing authenticated
@@ -67,7 +71,7 @@ func CanonicalDesktopNetworkRetirementReceipt(r DesktopNetworkRetirementReceipt)
 		return "", err
 	}
 	body, err := json.Marshal(r)
-	if err != nil || len(body) > DesktopNetworkReceiptLimit {
+	if err != nil || len(body) > DesktopNetworkRetirementReceiptLimit {
 		return "", errors.New("native retirement receipt exceeds its original bound")
 	}
 	return string(body), nil
@@ -75,7 +79,7 @@ func CanonicalDesktopNetworkRetirementReceipt(r DesktopNetworkRetirementReceipt)
 
 func ParseDesktopNetworkRetirementReceipt(raw string) (DesktopNetworkRetirementReceipt, error) {
 	var r DesktopNetworkRetirementReceipt
-	if len(raw) == 0 || len(raw) > DesktopNetworkReceiptLimit || json.Unmarshal([]byte(raw), &r) != nil {
+	if len(raw) == 0 || len(raw) > DesktopNetworkRetirementReceiptLimit || json.Unmarshal([]byte(raw), &r) != nil {
 		return r, errors.New("native retirement receipt is unavailable or malformed")
 	}
 	canonical, err := CanonicalDesktopNetworkRetirementReceipt(r)

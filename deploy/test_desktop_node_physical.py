@@ -208,7 +208,7 @@ def checked_sources(source):
             copies["cmd/sing-box/routervpn_" + path.name.removesuffix(".tmpl")] = path.read_bytes()
     for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         copies['routervpn-desktop-tun/routervpn_' + name.removesuffix('.tmpl')] = (ROOT / 'mobile/desktop' / name).read_bytes()
-    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_retirement.go', 'desktop_network_dump_linux.go', 'desktop_network_lock.go'):
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_retirement.go', 'desktop_network_retirement_limit_test.go', 'desktop_network_dump_linux.go', 'desktop_network_lock.go'):
         copies['routervpn-desktop-tun/routervpn_' + name] = (ROOT / 'internal/desktopnetwork' / name).read_bytes().replace(b'package desktopnetwork\n', b'package tun\n', 1)
     for package in PREP.RELAY.PACKAGES:
         for path in sorted((ROOT / "internal" / package).glob("*.go")):
@@ -917,6 +917,9 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name == "native-lifecycle-admission":
         require_native_verdicts(output, NATIVE_LIFECYCLE_ADMISSION_VERDICTS, "native lifecycle admission")
+    if name == 'native-retirement-bound':
+        root = 'TestDesktopNetworkRetirementKeepsSeparateBound'
+        require_native_verdicts(output, [root] + [root + '/' + case for case in ('complete-history', 'oversized-writer', 'oversized-parser', 'ready-stays-bounded')], 'native retirement evidence bound')
     if name == STANDARD_MTU_SUITE[0]:
         require_native_verdicts(output, STANDARD_MTU_SUITE[3], "standard service original MTU reader")
     if name == "native-address-retirement":
@@ -1111,6 +1114,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(("native-startup-transport", "./cmd/sing-box", "^TestRouterVPNDesktop(StartupEnvelopeControlsOriginal(Command|Tor)|HeartbeatKeepsObservationBudget|TorProcessKeepsOriginalStartup)$", tuple(name for name in STARTUP_TRANSPORT_VERDICTS["native-startup-transport"] if "/" not in name)))
         suites.append(("native-startup-codec", "./experimental/libbox/routervpn/mobilemultihop", "^TestDesktopStartupAdmissionKeepsOriginalDeadline$", ("TestDesktopStartupAdmissionKeepsOriginalDeadline",)))
         suites.append(STANDARD_MTU_SUITE)
+        suites.append(('native-retirement-bound', 'github.com/sagernet/sing-tun', '^TestDesktopNetworkRetirementKeepsSeparateBound$', ('TestDesktopNetworkRetirementKeepsSeparateBound',)))
         suites.append(("native-startup-command", "./cmd/sing-box", "^TestRouterVPNRawCommandOriginalStartupDeadline$", ("TestRouterVPNRawCommandOriginalStartupDeadline",)))
         suites.append(("mtu-cleanup-context", "./adapter/inbound", "^TestRouterVPNTunContext(RestoresOnlyWithOriginalCleanupAllowance|ControllerRestoresAfterUnusedCloseCancellation)$", ("TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance", "TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation")))
         suites.append(("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NATIVE_MTU_TEST,)))

@@ -539,6 +539,24 @@ installed public Retest/Cancel or physical-network acceptance. The matching
 service-side handoff must still collect actual joined history before final
 routing retirement is accepted.
 
+## Complete retirement receipt transport
+
+Readiness remains capped at 16 KiB. The canonical retirement writer and parser
+now use their separate 48 KiB limit, matching the original FD11 history and FD10
+cleanup ledger contracts. Four complete route objects with large real netlink
+attribute bodies exceed the readiness allowance and now round-trip without
+truncation. Oversized retirement input/output and oversized readiness remain
+rejected. The old shared 16 KiB bound fails the complete-history witness.
+
+The same test source is projected into the prepared native TUN package with
+only its package declaration changed and runs as a required native suite. Shared
+service verdicts separately require all five codec cases and three actual FD10
+round-trip cases. The original sealed FD10 object, duplicated child descriptor,
+framing and digest are real; the route evidence is constructed. A 47,528-byte
+canonical ledger encodes to 47,867 bytes, and a 256-object ledger encodes to
+43,277 bytes. Both pass WriteResult/ReadResult inside the unchanged 61,440-byte
+FD10 result area. No transport, readiness or native-history limit is unbounded.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
