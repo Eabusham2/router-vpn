@@ -55,12 +55,14 @@ type routerVPNLinuxRetirement struct {
 	history                                                    map[string]DesktopNetworkObject
 	events                                                     []routerVPNLinuxRoutingEvent
 	failure                                                    error
-	receipt                                                    string
-	addresses                                                  map[string]routerVPNLinuxAddressRecord
-	addressObserved                                            map[string]routerVPNLinuxAddressRecord
-	addressDeleted                                             map[string]bool
-	addressSnapshot                                            func(context.Context) ([]routerVPNLinuxAddressRecord, error)
-	addressMode                                                func(context.Context) (routerVPNLinuxAddressPolicy, error)
+	// Diagnostic history only; never grants permission to accept a later event.
+	closedRouteObserved map[string]bool
+	receipt             string
+	addresses           map[string]routerVPNLinuxAddressRecord
+	addressObserved     map[string]routerVPNLinuxAddressRecord
+	addressDeleted      map[string]bool
+	addressSnapshot     func(context.Context) ([]routerVPNLinuxAddressRecord, error)
+	addressMode         func(context.Context) (routerVPNLinuxAddressPolicy, error)
 	// Explicit native-observer models are supplied only by focused tests.
 	original func(context.Context) error
 	snapshot func(context.Context, string) ([]DesktopNetworkObject, error)
@@ -1014,6 +1016,21 @@ func (t *NativeTun) routervpnLinuxReceiptContext(ctx context.Context) (string, e
 	return raw, ctx.Err()
 }
 
+// Keep only bounded classifications in externally reported errors. The exact
+// original objects stay in the retained ledger; addresses and native payloads
+// are never formatted into the diagnostic. This does not change event policy.
+type routerVPNLinuxClosedEventFailure struct {
+	phase                                                string
+	kind                                                 string
+	family, protocol, overlaps                           int
+	deleted, historical, originalIndex, priorCloseDelete bool
+}
+
+func (e *routerVPNLinuxClosedEventFailure) Error() string {
+	return fmt.Sprintf("original native routing changed during final retirement readback (phase=%s kind=%s family=%d delete=%t historical=%t original_index=%t protocol=%d overlaps=%d prior_close_delete=%t)",
+		e.phase, e.kind, e.family, e.deleted, e.historical, e.originalIndex, e.protocol, e.overlaps, e.priorCloseDelete)
+}
+
 func (t *NativeTun) routervpnLinuxClosedEvents(events []routerVPNLinuxRoutingEvent, implicit bool) error {
 	s := &t.routervpnRetirement
 	for _, event := range events {
@@ -1027,19 +1044,32 @@ func (t *NativeTun) routervpnLinuxClosedEvents(events []routerVPNLinuxRoutingEve
 		_, owned := s.history[event.object.Key()]
 		body := routervpnLinuxNativeBody(event.object)
 		if implicit && owned && event.delete && event.object.Kind == "route" && event.object.Index == uint32(t.routervpnOwnedIndex) && len(body) >= 12 && body[5] == unix.RTPROT_KERNEL {
+			if s.closedRouteObserved == nil {
+				s.closedRouteObserved = make(map[string]bool)
+			}
+			s.closedRouteObserved[event.object.Key()] = true
 			continue
 		}
-		disjoint := true
+		overlaps := 0
 		for _, original := range s.history {
 			if !routervpnLinuxDeleteDisjoint(original, event.object) {
-				disjoint = false
-				break
+				overlaps++
 			}
 		}
-		if disjoint {
+		if overlaps == 0 {
 			continue
 		}
-		s.failure = errors.New("original native routing changed during final retirement readback")
+		phase := "final-readback"
+		if implicit {
+			phase = "first-close"
+		}
+		protocol := 0
+		if event.object.Kind == "route" && len(body) >= 12 {
+			protocol = int(body[5])
+		}
+		s.failure = &routerVPNLinuxClosedEventFailure{phase: phase, kind: event.object.Kind, family: event.object.Family,
+			deleted: event.delete, historical: owned, originalIndex: event.object.Index == uint32(t.routervpnOwnedIndex),
+			protocol: protocol, overlaps: overlaps, priorCloseDelete: s.closedRouteObserved[event.object.Key()]}
 		return s.failure
 	}
 	return nil

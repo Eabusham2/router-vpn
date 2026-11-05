@@ -147,6 +147,10 @@ NATIVE_LIFECYCLE_ADMISSION_VERDICTS = [*NATIVE_LIFECYCLE_ADMISSION_TESTS, *[root
 NATIVE_ADDRESS_RETIREMENT_TESTS = ("TestRouterVPNNativeLinuxPartialAddressRetirement", "TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects", "TestRouterVPNNativeLinuxAddressPolicyNetlink")
 NATIVE_ADDRESS_RETIREMENT_VERDICTS = [NATIVE_ADDRESS_RETIREMENT_TESTS[0], *[NATIVE_ADDRESS_RETIREMENT_TESTS[0]+"/"+name for name in ("partial-add-refusal", "cancel-after-add", "link-up-addrconf", "link-up-eui64-random", "dad-completion")], NATIVE_ADDRESS_RETIREMENT_TESTS[1], *[NATIVE_ADDRESS_RETIREMENT_TESTS[1]+"/"+name for name in ("global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up", "eui64-ethernet", "eui64-already-up", "eui64-still-down", "eui64-type-change", "eui64-missing-policy", "eui64-disappeared-policy", "eui64-wrong-address-flags", "eui64-stable-change", "eui64-index-change", "eui64-flags-change", "eui64-token-change", "unchanged-still-down")], NATIVE_ADDRESS_RETIREMENT_TESTS[2], *[NATIVE_ADDRESS_RETIREMENT_TESTS[2]+"/"+name for name in ("eui64-down", "random-up", "none", "absent", "duplicate", "invalid", "truncated", "token", "invalid-token")]]
 
+NATIVE_CLOSED_EVENT_ROOT = "TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics"
+NATIVE_CLOSED_EVENT_CASES = ("first-close", "late-final", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "disjoint")
+NATIVE_CLOSED_EVENT_VERDICTS = (NATIVE_CLOSED_EVENT_ROOT, *(NATIVE_CLOSED_EVENT_ROOT + "/" + case for case in NATIVE_CLOSED_EVENT_CASES))
+
 NATIVE_RETIREMENT_CASES = (
     "complete-original-retirement", "partial-address-before-ready", "foreign-address", "address-aba", "fresh-stop-after-startup-cancel", "definite-add-refusal",
     "persistent-disjoint-route", "same-selector-aba", "foreign-wildcard-match", "replaced-file-object")
@@ -938,6 +942,11 @@ def execute_baseline_suite(baselines, suite):
     if name == "native-address-retirement":
         require_native_verdicts(output, NATIVE_ADDRESS_RETIREMENT_VERDICTS, "native partial address retirement")
     if name == "native-routing-receipt":
+        for full in NATIVE_CLOSED_EVENT_VERDICTS:
+            runs = re.findall(r"(?m)^=== RUN\s+" + re.escape(full) + r"\s*$", output)
+            passed = re.findall(r"(?m)^\s*--- PASS: " + re.escape(full) + r" \([^\n]*\)$", output)
+            if len(runs) != 1 or len(passed) != 1:
+                raise ValueError("Node routing gate omitted or duplicated an original closed-event diagnostic verdict: " + full)
         for case in ("", *NATIVE_DNS_CASES):
             full = "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary" + ("/" + case if case else "")
             if len(re.findall(r"(?m)^\s*--- PASS: " + re.escape(full) + r" \([^\n]*\)$", output)) != 1:

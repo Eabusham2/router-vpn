@@ -1040,3 +1040,120 @@ func TestRouterVPNNativeLinuxUpdateRetainsOriginalLifetimeAndCaller(t *testing.T
 		t.Fatal(err)
 	}
 }
+
+// This observer model schedules exact original notifications at the two real
+// retirement drains. It proves classification and unchanged refusal behavior;
+// it does not claim either schedule was observed in a kernel namespace.
+type retirementClosedEventModel struct {
+	*retirementModel
+	native       *NativeTun
+	first, final []routerVPNLinuxRoutingEvent
+	closedDrains int
+}
+
+func (m *retirementClosedEventModel) drain(ctx context.Context) ([]routerVPNLinuxRoutingEvent, error) {
+	if !m.native.routervpnRetirement.closed {
+		return m.retirementModel.drain(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.closedDrains++
+	switch m.closedDrains {
+	case 1:
+		return m.first, nil
+	case 2:
+		return m.final, nil
+	default:
+		return nil, errors.New("diagnostic model unexpectedly repeated a completed retirement drain")
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics(t *testing.T) {
+	for _, scenario := range []string{"first-close", "late-final", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "disjoint"} {
+		t.Run(scenario, func(t *testing.T) {
+			native, model, file := retirementFixture(t)
+			body := routervpnLinuxNativeBody(retirementRoute(t, 8, 254))
+			body[1], body[5], body[6] = 24, unix.RTPROT_KERNEL, unix.RT_SCOPE_LINK
+			body = append(body, retirementAttribute(1, []byte{192, 0, 2, 0})...)
+			native.options.Inet4Address = []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")}
+			original, err := ParseDesktopLinuxNetworkObject("route", body)
+			if err != nil || !native.routervpnLinuxImplicitRoute(original) {
+				t.Fatal("model lost the original bounded kernel address route", err)
+			}
+			state := &native.routervpnRetirement
+			state.remember(original)
+			watch := &retirementClosedEventModel{retirementModel: model, native: native}
+			state.watch = watch
+			event := routerVPNLinuxRoutingEvent{object: original, delete: true}
+			want := routerVPNLinuxClosedEventFailure{phase: "final-readback", kind: "route", family: 4, deleted: true,
+				historical: true, originalIndex: true, protocol: unix.RTPROT_KERNEL, overlaps: 1}
+			success := false
+			switch scenario {
+			case "first-close":
+				watch.first, success = []routerVPNLinuxRoutingEvent{event}, true
+			case "late-final":
+				watch.final = []routerVPNLinuxRoutingEvent{event}
+			case "duplicate-final":
+				watch.first, watch.final = []routerVPNLinuxRoutingEvent{event}, []routerVPNLinuxRoutingEvent{event}
+				want.priorCloseDelete = true
+			case "owned-add":
+				event.delete, want.deleted = false, false
+				watch.final = []routerVPNLinuxRoutingEvent{event}
+			case "foreign-first", "foreign-final":
+				foreignBody := routervpnLinuxNativeBody(retirementRoute(t, 9, 254))
+				foreignBody[1], foreignBody[5], foreignBody[6] = 24, unix.RTPROT_KERNEL, unix.RT_SCOPE_LINK
+				foreignBody = append(foreignBody, retirementAttribute(1, []byte{192, 0, 2, 0})...)
+				event.object, err = ParseDesktopLinuxNetworkObject("route", foreignBody)
+				want.historical, want.originalIndex = false, false
+				if scenario == "foreign-first" {
+					watch.first, want.phase = []routerVPNLinuxRoutingEvent{event}, "first-close"
+				} else {
+					watch.final = []routerVPNLinuxRoutingEvent{event}
+				}
+			case "changed-native":
+				changed := append([]byte(nil), body...)
+				changed[5] = unix.RTPROT_STATIC
+				event.object, err = ParseDesktopLinuxNetworkObject("route", changed)
+				want.historical, want.protocol = false, unix.RTPROT_STATIC
+				watch.final = []routerVPNLinuxRoutingEvent{event}
+			case "disjoint":
+				event.object = retirementRoute(t, 9, 253)
+				watch.final, success = []routerVPNLinuxRoutingEvent{event}, true
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, failure := native.RouterVPNDesktopNetworkRetire(retirementStop(t))
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal("model did not reach original descriptor closure", err)
+			}
+			if len(state.history) != 1 || state.history[original.Key()] != original || len(model.removes) != 0 {
+				t.Fatal("diagnostics changed original history or invented explicit removal")
+			}
+			if success {
+				if failure != nil || raw == "" || !model.closed || !state.readbackComplete {
+					t.Fatal("diagnostics changed existing accepted retirement", raw, failure)
+				}
+				if scenario == "disjoint" && len(state.closedRouteObserved) != 0 {
+					t.Fatal("foreign disjoint events acquired historical diagnostic ownership")
+				}
+				return
+			}
+			var classified *routerVPNLinuxClosedEventFailure
+			if raw != "" || !errors.As(failure, &classified) || *classified != want {
+				t.Fatalf("original rejected event lost its exact bounded classification: got=%+v want=%+v failure=%v", classified, want, failure)
+			}
+			if model.closed || state.readbackComplete || state.receipt != "" {
+				t.Fatal("diagnostic rejection fabricated joined retirement")
+			}
+			text := failure.Error()
+			if len(text) > 320 || !strings.Contains(text, "phase="+want.phase) || strings.Contains(text, original.Native) || strings.Contains(text, original.Key()) {
+				t.Fatal("routing diagnostic omitted its phase or exposed unbounded native identity", text)
+			}
+			if again, retry := native.RouterVPNDesktopNetworkRetire(retirementStop(t)); again != "" || retry != failure {
+				t.Fatal("later observation replaced the original latched failure", again, retry)
+			}
+		})
+	}
+}

@@ -1397,6 +1397,37 @@ watchdog, compilation and race failures are not accepted as defect witnesses.
 All seven Python preparation checks pass. Actual Windows ARM64 MAX/WFP and
 other native platform acceptance remain exact-source CI obligations.
 
+## Native retirement reports the exact rejected event category
+
+ARM64 generated Node/TUN job `127083138378` at `9ecb0602` failed its
+`mtu-rollback` case with a latched native routing-change error, followed by
+cleanup expiry and a missing joined receipt. The old error could arise in
+either close drain and did not identify the event. Later run `41979367511`
+at `88be1f34` passed both architectures. Neither observation establishes the
+cause of the intermittent failure or justifies extending cleanup time.
+
+The unchanged rejection now reports bounded classifications: first-close or
+final-readback phase, route/rule kind, address family, add/delete, exact
+historical identity and original-index matches, route protocol, overlapping
+selector count, and whether that exact historical close deletion was already
+observed. The diagnostic history is bounded by retained original objects and
+grants no acceptance authority. Addresses and raw native payloads are excluded.
+No acceptance branch, retirement permission, timeout or retry bound changed.
+
+An isolated `0f7c13b2` tree plus exactly four source/test/gate files completed
+normal pinned native preparation and module verification. The actual generated
+sing-tun retirement implementation, with explicit observer models, passes all
+21 required RUN/PASS verdicts under race in 1.068s, with no failures or skips.
+The original generic-error body fails the intended classification assertion in
+all six rejected-event leaves (0.040s); accepted first-close/disjoint cases
+remain successful. The strict gate test rejects missing, duplicate and renamed
+required RUN/PASS records (0.047s).
+
+These tests preserve the existing success and refusal boundaries and verify
+diagnostics. They do not prove kernel event ordering or fix the intermittent
+ARM64 failure. A recurrence must be read at the exact source revision to
+determine which event and phase failed before changing the retirement policy.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

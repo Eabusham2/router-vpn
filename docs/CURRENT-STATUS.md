@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`aacc5d6f`, the integrated observation change in `a94cde9d`, and the installed
+`55d01978`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -161,6 +161,14 @@ changed or torn evidence retains the original guard. Ordinary observations use
 the admitted transition while preserving process, profile and DNS checks. The
 focused native client race suite passes 51 exact verdicts and causal controls
 reject all four former behaviors; privileged TUN acceptance remains separate.
+
+Native Linux retirement failures now identify the rejected event's phase and
+bounded ownership/protocol classification without exposing native addresses.
+The original acceptance policy and deadlines are unchanged. All 21 focused
+generated-observer race verdicts and the strict verdict gate pass; the original
+generic-error control fails its intended classification assertions. The earlier
+ARM64 `9ecb0602` failure remains unclassified despite the later both-architecture
+pass at `88be1f34`; these diagnostics do not claim to fix that intermittent event.
 
 Complete retirement receipts now retain their separate 48 KiB writer/parser
 allowance while readiness stays at 16 KiB. Shared and generated-native gates
