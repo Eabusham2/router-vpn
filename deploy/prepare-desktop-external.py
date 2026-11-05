@@ -52,7 +52,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'external_socks.go.tmpl', 'external_socks_association_test.go.tmpl', 'external_socks_linux_lifecycle_test.go.tmpl',
                 'external_physical_linux.go.tmpl', 'external_physical_darwin.go.tmpl',
                 'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl',
-                'external_physical_linux_test.go.tmpl', 'external_physical_layer_entry_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
+                'external_physical_linux_test.go.tmpl', 'external_physical_layer_entry_linux_test.go.tmpl', 'external_physical_ss_entry_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
                 'external_physical_windows_test.go.tmpl',
                 'linux_physical_lifecycle.go.tmpl', 'external_linux_lifecycle.go.tmpl', 'external_linux_lifecycle_test.go.tmpl',
                 'external_linux_lifecycle_native_test.go.tmpl',
@@ -114,6 +114,7 @@ PEER_TEMPLATES = {
     'node_imported_hysteria_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go',
     'node_imported_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_hysteria_final_test.go',
     'node_external_ss_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_test.go',
+    'node_external_ss_entry_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_linux_test.go',
     'node_external_ss_connect_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_connect_test.go',
     'node_external_openvpn_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_openvpn_installed_test.go',
     'node_external_wireguard_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_wireguard_installed_test.go',
@@ -270,6 +271,7 @@ def pt_copies():
                    'external_physical_windows.go.tmpl': b'//go:build windows\n\n',
                    'external_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'external_physical_layer_entry_linux_test.go.tmpl': b'//go:build linux\n\n',
+                   'external_physical_ss_entry_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'external_socks_association_test.go.tmpl': b'//go:build linux || windows || darwin\n\n',
                    'external_socks_linux_lifecycle_test.go.tmpl': b'//go:build linux && routervpn_linux_external_lifecycle\n\n',
                    'external_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
@@ -701,7 +703,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
         elif name in ('node_external_hysteria_layer_installed_test.go.tmpl', 'node_external_wireguard_installed_test.go.tmpl', 'node_external_amnezia_installed_test.go.tmpl', 'node_external_openvpn_installed_test.go.tmpl'):
             prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix
-        elif name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl'):
+        elif name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl'):
             prefix = b'//go:build linux && !android\n\n' + prefix
         if path.is_symlink():
             raise ValueError('Desktop encrypted peer test is a symlink: ' + name)

@@ -44,6 +44,8 @@ type desktopExternalInstalledSSReceipt struct {
 	Streams       int64  `json:"streams"`
 	Packets       int64  `json:"packets"`
 	PublicReplies uint32 `json:"public_replies"`
+	AuthTCP       uint32 `json:"auth_tcp"`
+	AuthUDP       uint32 `json:"auth_udp"`
 }
 type desktopExternalInstalledSSPeer struct {
 	address string
@@ -67,6 +69,42 @@ func desktopSS2022Credentials(method, password string) bool {
 	return e == nil && len(key) == size
 }
 
+// The pinned AEAD implementations return these exact authentication leaves.
+// Socket EOF, deadline, cancellation, partial header and mixed failures are not
+// authentication witnesses. Never return private provider diagnostics to IPC.
+func desktopSSAuthenticationFailure(err error) bool {
+	for depth := 0; err != nil && depth < 16; depth++ {
+		if _, joined := err.(interface{ Unwrap() []error }); joined {
+			return false
+		}
+		next := errors.Unwrap(err)
+		if next == nil {
+			return err.Error() == "cipher: message authentication failed" || err.Error() == "chacha20poly1305: message authentication failed"
+		}
+		err = next
+	}
+	return false
+}
+func TestRouterVPNDesktopSSEntryAuthenticationWitness(t *testing.T) {
+	for _, text := range []string{"cipher: message authentication failed", "chacha20poly1305: message authentication failed"} {
+		cause := errors.New(text)
+		if desktopSSAuthenticationFailure(fmt.Errorf("wrapped: %w", errors.Join(cause))) {
+			t.Fatal("joined error became a unary authentication leaf")
+		}
+		if !desktopSSAuthenticationFailure(cause) || !desktopSSAuthenticationFailure(fmt.Errorf("provider: %w", cause)) {
+			t.Fatal("original AEAD failure lost")
+		}
+		for _, unrelated := range []error{io.EOF, io.ErrUnexpectedEOF, context.Canceled, context.DeadlineExceeded, os.ErrDeadlineExceeded, errors.New("bad header")} {
+			if desktopSSAuthenticationFailure(unrelated) || desktopSSAuthenticationFailure(errors.Join(cause, unrelated)) {
+				t.Fatal("unrelated or mixed error became authentication proof")
+			}
+		}
+	}
+	if desktopSSAuthenticationFailure(nil) {
+		t.Fatal("success became authentication proof")
+	}
+}
+
 // This constructor owns one original TCP/UDP pair and the exact encrypted
 // server lifetime. Native entry callers separately validate their physical role;
 // a final provider is reachable only over the entry's fixed loopback routes.
@@ -86,6 +124,7 @@ func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method
 		packet.Close()
 		t.Fatal(err)
 	}
+	var authTCP, authUDP atomic.Uint32
 	var once sync.Once
 	closePeer := func() {
 		once.Do(func() {
@@ -122,7 +161,9 @@ func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method
 				defer server.leave(c)
 				_ = c.SetDeadline(time.Now().Add(45 * time.Second))
 				server.rawTCP.Add(1)
-				_ = service.NewConnection(server.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+				if desktopSSAuthenticationFailure(service.NewConnection(server.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})) {
+					authTCP.Add(1)
+				}
 			}()
 		}
 	}()
@@ -137,13 +178,16 @@ func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method
 				return
 			}
 			server.rawUDP.Add(1)
-			if service.NewPacket(server.ctx, reader, body, M.Metadata{Source: source}) != nil {
+			if err := service.NewPacket(server.ctx, reader, body, M.Metadata{Source: source}); err != nil {
+				if desktopSSAuthenticationFailure(err) {
+					authUDP.Add(1)
+				}
 				body.Release()
 			}
 		}
 	}()
 	return desktopExternalInstalledSSPeer{address: listener.Addr().String(), close: closePeer, stats: func() desktopExternalInstalledSSReceipt {
-		return desktopExternalInstalledSSReceipt{Method: method, Address: listener.Addr().String(), PhysicalTCP: server.rawTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Streams: server.plainTCP.Load(), Packets: server.plainUDP.Load()}
+		return desktopExternalInstalledSSReceipt{Method: method, Address: listener.Addr().String(), PhysicalTCP: server.rawTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Streams: server.plainTCP.Load(), Packets: server.plainUDP.Load(), AuthTCP: authTCP.Load(), AuthUDP: authUDP.Load()}
 	}}
 }
 func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, physical netip.Addr) desktopExternalInstalledSSPeer {
@@ -380,6 +424,13 @@ func desktopSSReferenceTwoHop(t *testing.T, entryMethod, finalMethod, fault stri
 		}
 	}
 	firstStats, lastStats := entry.stats(), final.stats()
+	if (fault == "entry-key" || fault == "entry-method") && (firstStats.AuthTCP == 0 || firstStats.AuthUDP == 0) {
+		t.Fatal("wrong entry credential missed actual TCP/UDP AEAD rejection")
+	}
+	if (fault == "final-key" || fault == "final-method") && (lastStats.AuthTCP == 0 || lastStats.AuthUDP == 0) {
+		t.Fatal("wrong final credential missed actual TCP/UDP AEAD rejection")
+	}
+
 	if lower.calls.Load() == 0 || firstStats.PhysicalTCP+firstStats.PhysicalUDP == 0 {
 		t.Fatal("SS two-hop never reached captured entry")
 	}

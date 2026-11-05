@@ -99,6 +99,11 @@ func desktopExternalPathProfileID(launch *desktopNodeLaunch) string {
 // Linux retains this bounded ordinary pair through its original Node session.
 // The final peer never becomes a physical root or a replacement entry owner.
 func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
+	// Linux stream entries retain only the captured SS2022 -> SS2022 pair.
+	// The broader Darwin SS -> CONNECT shape remains a separate capability.
+	if desktopExternalSSEntryOwner(owner) && desktopExternalSS2022Profile(owner.profile) {
+		return true
+	}
 	if !desktopExternalPacketEntryOwner(owner) || owner.entry.External.Protocol != "wireguard" {
 		return false
 	}

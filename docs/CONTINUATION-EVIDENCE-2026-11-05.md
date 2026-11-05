@@ -2180,6 +2180,50 @@ grant expiry, retained lost-creation-acknowledgement cleanup and conditional
 native removal. Those are actual source gaps, separate from installed and
 physical-device acceptance.
 
+## Linux Local ordinary SS2022 entry and final
+
+This unit adds the retained Linux Local SS2022-to-SS2022 path. It preserves the
+upstream mobile imported-to-paired Router work and the newer shared bounded
+network decoder. Each of the three SS2022 ciphers may be used independently at
+entry and final. Both Start Layers remain Off for this increment. Existing
+Darwin SS-to-CONNECT admission and other platforms are not widened.
+
+The shipping client and shared compiler retain one physical SS entry with its
+captured TCP and UDP destinations. The final peer and the selected UDP/TCP DNS
+remain behind that entry. Separate source fingerprints and identity proofs
+reject changed keys, methods, hosts, ports and node identities; cancellation,
+replacement and temporary Speed Lab restoration preserve the complete captured
+graph and MTU. Missing Home DNS pairing remains an explicit missing reference,
+without public-resolver substitution.
+
+The focused client/shared race run reports 109 passing verdicts at the preserved
+source base. The prepared pinned-native tests report 21 passing verdicts for
+real SS2022 cipher/authentication traffic and the separately identified physical
+owner model. The original physical runner reports 51 passing checks and the installed
+host runner 38. Old native and client admission controls compile and fail at the
+intended SS-pair boundaries. Authentication receipts only accept the pinned AEAD
+authentication failures, rejecting EOF, timeout, cancellation, malformed headers
+and mixed failures. The shared receipt producer and Darwin strict decoder are
+covered together; the old decoder fails the added strict-schema assertion.
+
+After the newer imported-entry compiler and bounded network-reader changes,
+the affected 49 client/shared verdicts pass again (client 9.212 seconds, shared
+10.959 seconds), as do all four native physical-owner verdicts (1.089 seconds).
+The complete prepared native source check binds 2,042 files. The two later
+upstream gate changes through `9990e8f1` were merged without replacing their
+separate ordinary/privileged FD10 retirement checks. All 53 checks in that
+merged physical runner pass in 45.570 seconds, including its real small
+heartbeat and held-lease fixtures and their causal controls. The installed-host
+inventory and the runtime Go source are unchanged by that gate-only merge.
+
+The mandatory installed namespace inventory adds 23 cases: nine independent
+cipher pairs and fourteen lifecycle, source, identity, credential and DNS cases.
+It preserves all 458 prior cases, yielding 481 host cases plus the separate nine
+reverse-transfer cases. A host case must supply its exact unique completion
+receipt and passing native verdict. Actual privileged execution, native macOS
+acceptance, packages, physical devices and publication are not established by
+the local runner/model evidence.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

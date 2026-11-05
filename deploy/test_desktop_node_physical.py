@@ -105,6 +105,12 @@ NETWORK_CONTEXT_LEAVES = tuple(NETWORK_CONTEXT_TESTS[0] + "/" + name for name in
 NATIVE_MTU_TEST = "TestRouterVPNNativeLinuxMTUTransactionNamespace"
 LINUX_LAYERED_ENTRY_SUITE = ("linux-layered-external-entry", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot$",
     ("TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot", *("TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot/" + case for case in ("wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor"))))
+LINUX_SS_ENTRY_SUITE = ("linux-ss-external-entry", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysicalLinuxSSEntryOwnsOriginalTCPAndUDP$",
+    ("TestRouterVPNExternalPhysicalLinuxSSEntryOwnsOriginalTCPAndUDP", *("TestRouterVPNExternalPhysicalLinuxSSEntryOwnsOriginalTCPAndUDP/" + case for case in ("tcp", "udp", "cancelled"))))
+SS_ENTRY_REFERENCE_ROOT = "TestRouterVPNDesktopInstalledSSEntryLoopbackTwoHopReference"
+SS_ENTRY_REFERENCE_SUITE = ("ss-entry-two-hop-reference", "./protocol/routervpnamnezia", "^(" + SS_ENTRY_REFERENCE_ROOT + "|TestRouterVPNDesktopSSEntryAuthenticationWitness)$",
+    ("TestRouterVPNDesktopSSEntryAuthenticationWitness", SS_ENTRY_REFERENCE_ROOT, *(SS_ENTRY_REFERENCE_ROOT + "/method%d-method%d" % (entry, final) for entry in range(3) for final in range(3)),
+     *(SS_ENTRY_REFERENCE_ROOT + "/negative/" + fault for fault in ("entry-key", "entry-method", "final-key", "final-method", "final-route", "dns-route"))))
 STANDARD_MTU_SUITE = ("standard-mtu-original-reader", "./cmd/sing-box",
                       "^TestRouterVPNStandardMTUActualBox(KeepsOriginalReader|RequiresNativeClaim)$",
                       ("TestRouterVPNStandardMTUActualBoxKeepsOriginalReader", "TestRouterVPNStandardMTUActualBoxRequiresNativeClaim",
@@ -983,6 +989,8 @@ def execute_baseline_suite(baselines, suite):
     if name == 'native-retirement-bound':
         root = 'TestDesktopNetworkRetirementKeepsSeparateBound'
         require_native_verdicts(output, [root] + [root + '/' + case for case in ('complete-history', 'oversized-writer', 'oversized-parser', 'ready-stays-bounded')], 'native retirement evidence bound')
+    if name in (LINUX_SS_ENTRY_SUITE[0], SS_ENTRY_REFERENCE_SUITE[0]):
+        require_native_verdicts(output, required, "original SS2022 entry and final")
     if name == LINUX_LAYERED_ENTRY_SUITE[0]:
         require_native_verdicts(output, required, "Linux original layered entry")
     if name in (STANDARD_MTU_SUITE[0], STANDARD_MTU_RETIRE_SUITE[0], STANDARD_MTU_NATIVE_SUITE[0]):
@@ -1194,6 +1202,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(("tor-registration-policy", "./routervpn/desktoppt", "^TestRouterVPNLinuxPhysicalPolicyRegistrationContext$", ("TestRouterVPNLinuxPhysicalPolicyRegistrationContext",)))
         suites.append(("tor-registration-box", ".", "^TestRouterVPNDesktopTorPhysicalRegistrationContext$", ("TestRouterVPNDesktopTorPhysicalRegistrationContext",)))
         suites.append(LINUX_LAYERED_ENTRY_SUITE)
+        suites.append(LINUX_SS_ENTRY_SUITE)
+        suites.append(SS_ENTRY_REFERENCE_SUITE)
         suites.append(STANDARD_MTU_SUITE)
         suites.append(STANDARD_MTU_RETIRE_SUITE)
         suites.append(STANDARD_MTU_NATIVE_SUITE)

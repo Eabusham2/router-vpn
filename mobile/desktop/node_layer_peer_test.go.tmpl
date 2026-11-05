@@ -2632,7 +2632,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	if request.ShadowsocksEntry != nil {
 		finalValid := request.Protocol == "shadowsocks" && desktopSS2022Credentials(request.ShadowsocksMethod, request.Password) ||
 			(request.Protocol == "http-connect" || request.Protocol == "https-connect") && request.ShadowsocksMethod == ""
-		if !finalValid || request.Layer != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || !latency || desktopExternalInstalledSSEntry == nil || !desktopSS2022Credentials(request.ShadowsocksEntry.Method, request.ShadowsocksEntry.Password) {
+		if !finalValid || request.Layer != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || !latency && (capturedAddress != "11.77.0.2" || request.Protocol != "shadowsocks") || desktopExternalInstalledSSEntry == nil || !desktopSS2022Credentials(request.ShadowsocksEntry.Method, request.ShadowsocksEntry.Password) {
 			t.Fatal("unrequested or incomplete ordinary SS entry graph")
 		}
 	} else if request.ShadowsocksMethod != "" {
@@ -2785,6 +2785,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	var wgPeer desktopExternalInstalledWGPeer
 	var entryPeer desktopExternalInstalledPacketEntryPeer
 	var ssEntryPeer desktopExternalInstalledSSPeer
+	var ssFinalStats func() desktopExternalInstalledSSReceipt
 	var openvpnProfile string
 	var openvpnPeer desktopExternalInstalledOpenVPNPeer
 	var socksPeer *desktopExternalInstalledSOCKSPeer
@@ -2792,7 +2793,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	if request.ShadowsocksEntry != nil && request.Protocol == "shadowsocks" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		final := desktopStartSSProvider(t, server, request.ShadowsocksMethod, request.Password, netip.MustParseAddr("127.0.0.1"))
-		address, closeTransport = final.address, final.close
+		address, closeTransport, ssFinalStats = final.address, final.close, final.stats
 	} else if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		if request.Protocol == "amneziawg" {
@@ -3012,6 +3013,10 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if entryPeer.stats != nil {
 			value := entryPeer.stats()
 			reply.PacketEntry = &value
+		}
+		if ssFinalStats != nil {
+			value := ssFinalStats()
+			reply.AuthFailures = value.AuthTCP + value.AuthUDP
 		}
 		if ssEntryPeer.stats != nil {
 			value := ssEntryPeer.stats()

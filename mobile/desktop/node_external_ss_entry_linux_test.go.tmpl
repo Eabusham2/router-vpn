@@ -1,0 +1,18 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"crypto/tls"
+	"net/netip"
+	"testing"
+)
+
+// The installed namespace controller owns this disconnected physical alias.
+// Reuse the independent authenticated entry provider, including its fixed
+// final routes and joined TCP/UDP lifetime; no loopback result proves TUN use.
+func init() {
+	desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string) desktopExternalInstalledSSPeer {
+		return desktopStartSSEntry(t, parent, request, cert, final, network, netip.MustParseAddr("11.77.0.2"))
+	}
+}

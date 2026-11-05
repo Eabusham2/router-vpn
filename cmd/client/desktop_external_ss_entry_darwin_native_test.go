@@ -77,6 +77,8 @@ type macOSExternalSSEntryReceipt struct {
 	Streams       int64  `json:"streams"`
 	Packets       int64  `json:"packets"`
 	PublicReplies uint32 `json:"public_replies"`
+	AuthTCP       uint32 `json:"auth_tcp"`
+	AuthUDP       uint32 `json:"auth_udp"`
 }
 
 func macOSExternalNativeSSKey(t *testing.T, method string) string {
@@ -107,6 +109,9 @@ func macOSExternalNativeSSEntryRead(t *testing.T, p *macOSExternalNativePeer, re
 	address, e := netip.ParseAddrPort(entry.Address)
 	if e != nil || address.Addr() != p.physical || address.Port() == 0 || p.entryAddress.IsValid() && p.entryAddress != address {
 		t.Fatal("SS entry changed its original physical tuple")
+	}
+	if entry.PhysicalTCP == 0 && entry.PhysicalUDP == 0 && (entry.AuthTCP != 0 || entry.AuthUDP != 0) {
+		t.Fatal("SS entry claimed authentication before original native traffic")
 	}
 	p.entryAddress = address
 }
@@ -173,7 +178,7 @@ func macOSExternalNativeSSEntryProved(t *testing.T, p *macOSExternalNativePeer, 
 	if p.policy == "always" {
 		dns, ipv6 = "udp", "on"
 	}
-	if entry == nil || entry.PhysicalTCP < 2 || entry.Streams < 2 || entry.PublicReplies < 1 || observed.Connections < 1 || observed.Streams < 1 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.DNSProtocol != dns || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.Network.MTU != 1376 || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") {
+	if entry == nil || entry.AuthTCP != 0 || entry.AuthUDP != 0 || entry.PhysicalTCP < 2 || entry.Streams < 2 || entry.PublicReplies < 1 || observed.Connections < 1 || observed.Streams < 1 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.DNSProtocol != dns || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.Network.MTU != 1376 || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") {
 		t.Fatal("SS chain lost original entry/final proof or device policy")
 	}
 	if dns == "udp" && (entry.PhysicalUDP < 1 || entry.Packets < 1 || observed.PhysicalUDP < 1 || observed.Packets < 1) {
@@ -192,7 +197,7 @@ func macOSExternalNativeSSEntryRefused(t *testing.T, ctx context.Context, client
 	}
 	switch p.fault {
 	case "wrong-entry-key", "wrong-entry-method":
-		if entry.Streams != 0 || entry.PublicReplies != 0 || observed.Connections != 0 || observed.PhysicalUDP != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
+		if entry.AuthTCP == 0 || observed.AuthFailures != 0 || entry.Streams != 0 || entry.PublicReplies != 0 || observed.Connections != 0 || observed.PhysicalUDP != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
 			t.Fatal("SS entry authentication negative acquired final path")
 		}
 	case "wrong-trust":
@@ -204,7 +209,7 @@ func macOSExternalNativeSSEntryRefused(t *testing.T, ctx context.Context, client
 			t.Fatal("SS entry public mismatch acquired final proof")
 		}
 	case "wrong-exit-key", "wrong-exit-method":
-		if entry.PublicReplies < 1 || observed.Connections < 1 || observed.Streams != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
+		if observed.AuthFailures == 0 || entry.AuthTCP != 0 || entry.AuthUDP != 0 || entry.PublicReplies < 1 || observed.Connections < 1 || observed.Streams != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
 			t.Fatal("SS final authentication negative missed original provider")
 		}
 	case "wrong-exit-address":

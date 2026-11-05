@@ -101,8 +101,8 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 	if err := linuxHostTUNRendezvous(gate, 2); err != nil {
 		return err
 	}
-	if linuxHostTUNExternalAction(scenario) == "source" {
-		if err := linuxHostTUNExternalRefuseSource(ctx, a, session, original); err != nil {
+	if linuxHostTUNExternalAction(scenario) == "source" || linuxHostTUNExternalAction(scenario) == "entry-source" {
+		if err := linuxHostTUNExternalRefuseSource(ctx, a, session, original, linuxHostTUNExternalAction(scenario) == "entry-source"); err != nil {
 			return err
 		}
 		result.Stage, result.SourcePreserved = "source-refused", true
@@ -112,7 +112,7 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 		if err := linuxHostTUNRendezvous(gate, 3); err != nil {
 			return err
 		}
-	} else if linuxHostTUNExternalAction(scenario) == "public" {
+	} else if linuxHostTUNExternalAction(scenario) == "public" || linuxHostTUNExternalAction(scenario) == "always-off" {
 		last, err = linuxHostTUNExternalPublic(ctx, a, session, original, gate, &result)
 		if err != nil {
 			return err
@@ -133,6 +133,12 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 	}
 	if err := linuxHostTUNTUNAbsent(nil); err != nil {
 		return err
+	}
+	if linuxHostTUNExternalAction(scenario) == "always-off" {
+		if err := linuxHostTUNSSEntryOff(ctx, a, session, last); err != nil {
+			return err
+		}
+		result.ProtectionOff = true
 	}
 	settled, err := linuxHostTUNJournal(ctx, journal, last.transaction)
 	if err != nil {
@@ -182,9 +188,17 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 
 // Change the actual saved source after the ordinary native preparation. The
 // real public Connect preflight must refuse before stopping the proved Router.
-func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desktopLinuxNodeSession, original *desktopLinuxNodeHost) error {
+func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desktopLinuxNodeSession, original *desktopLinuxNodeHost, entrySource bool) error {
+	index := 1
+	if entrySource {
+		index = 2
+	}
 	a.mu.Lock()
-	saved := cloneRouterProfile(a.profiles.Profiles[1])
+	if len(a.profiles.Profiles) <= index || entrySource && a.profiles.Profiles[index].ID != "installed-linux-entry" {
+		a.mu.Unlock()
+		return errors.New("source refusal lost its captured entry")
+	}
+	saved := cloneRouterProfile(a.profiles.Profiles[index])
 	a.mu.Unlock()
 	calls := 0
 	var candidate *desktopLinuxExternalConnection
@@ -200,13 +214,13 @@ func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desk
 		}
 		calls++
 		owner.mu.Lock()
-		owner.profiles.Profiles[1] = cloneRouterProfile(saved)
-		if owner.profiles.Profiles[1].External.StartLayer != nil {
-			owner.profiles.Profiles[1].External.StartLayer.Transport["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
-		} else if owner.profiles.Profiles[1].External.SOCKS5 != nil {
-			owner.profiles.Profiles[1].External.SOCKS5.Password = "changed-after-captured-native-preparation"
+		owner.profiles.Profiles[index] = cloneRouterProfile(saved)
+		if owner.profiles.Profiles[index].External.StartLayer != nil {
+			owner.profiles.Profiles[index].External.StartLayer.Transport["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+		} else if owner.profiles.Profiles[index].External.SOCKS5 != nil {
+			owner.profiles.Profiles[index].External.SOCKS5.Password = "changed-after-captured-native-preparation"
 		} else {
-			owner.profiles.Profiles[1].External.Shadowsocks.Password = "changed-after-captured-native-preparation"
+			owner.profiles.Profiles[index].External.Shadowsocks.Password = "changed-after-captured-native-preparation"
 		}
 		owner.mu.Unlock()
 		return retained, nil
@@ -215,7 +229,7 @@ func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desk
 	a.externalProfileConnectWithRuntime(response, httptest.NewRequest(http.MethodPost, "/api/external-profile/connect",
 		strings.NewReader(linuxHostTUNExternalConnectRequest(a))).WithContext(ctx), driver)
 	a.mu.Lock()
-	a.profiles.Profiles[1] = saved
+	a.profiles.Profiles[index] = saved
 	a.mu.Unlock()
 	if calls != 1 || candidate == nil || response.Code != http.StatusConflict || candidate.host.process != nil || candidate.host.transaction != nil ||
 		!candidate.host.closed || !candidate.host.released || original.Current(ctx) != nil {
@@ -265,7 +279,11 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		return host, proof, err
 	}
 	physical := host.external.Metadata()
-	if !native.external.direct {
+	if !native.external.direct && desktopExternalSSEntryOwner(native.external) {
+		if err := linuxHostTUNExternalSSAuthority(native); err != nil {
+			return host, proof, err
+		}
+	} else if !native.external.direct {
 		capture, err := host.external.Capture()
 		if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" || len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0].Host != "11.77.0.2" || capture.PhysicalRoots[0].Destinations[0].Network != "udp" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag || proof.EntryID != "installed-linux-entry" {
 			return host, proof, errors.Join(err, errors.New("composed host gave final DNS or exit a physical root"))
@@ -505,7 +523,7 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 		return last, errors.New("external test retained the joined Router's private workspace")
 	}
 	query := speedLabRequest{Scope: "temporary", Topology: "external", NodeID: "installed-linux-external", Execution: "local"}
-	if linuxHostTUNExternalWGEntry(result.Scenario) {
+	if linuxHostTUNExternalAnyEntry(result.Scenario) {
 		query.EntryID = "installed-linux-entry"
 	}
 	prepared, err := a.prepareSpeedLabExternalPath(query, nil)
@@ -681,7 +699,7 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 }
 
 func linuxHostTUNExternalProfileCount(scenario string) int {
-	if linuxHostTUNExternalWGEntry(scenario) {
+	if linuxHostTUNExternalAnyEntry(scenario) {
 		return 3
 	}
 	return 2

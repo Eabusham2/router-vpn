@@ -1,0 +1,37 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	M "github.com/sagernet/sing/common/metadata"
+	"testing"
+)
+
+// Native compiler/physical owner with the explicit original kernel-source
+// model. The installed namespace suite separately proves actual TUN/firewall.
+func TestRouterVPNExternalPhysicalLinuxSSEntryOwnsOriginalTCPAndUDP(t *testing.T) {
+	policy := externalPhysicalDeviceFixture(t, "ss-entry-ss", "192.168.50.7", 8443, false, "linux", "off", "always")
+	f := newExternalPhysicalFixture(t, policy)
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	ctx := f.start(t, source)
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			if _, err := f.physical.current(ctx, network, M.ParseSocksaddr("192.168.50.7:8443")); err != nil {
+				t.Fatal("original SS entry lost captured transport", err)
+			}
+			for _, address := range []string{"198.51.100.240:8388", "192.168.50.7:8444", "192.168.50.8:8443", "127.0.0.1:8388"} {
+				if _, err := f.physical.current(ctx, network, M.ParseSocksaddr(address)); err == nil {
+					t.Fatal("final or foreign socket borrowed original entry", address)
+				}
+			}
+		})
+	}
+	f.network.Cancel()
+	t.Run("cancelled", func(t *testing.T) {
+		for _, network := range []string{"tcp", "udp"} {
+			if _, err := f.physical.current(ctx, network, M.ParseSocksaddr("192.168.50.7:8443")); err == nil {
+				t.Fatal("retired SS entry retained physical authority", network)
+			}
+		}
+	})
+}

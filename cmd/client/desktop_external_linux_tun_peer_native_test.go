@@ -36,7 +36,7 @@ var linuxHostTUNExternalWGCONNECTCases = []string{
 	"external-wghttps-on-connect", "external-wghttps-always", "external-wghttps-public", "external-wghttps-cancelled", "external-wghttps-wrong-entry-public", "external-wghttps-wrong-proxy-password", "external-wghttps-wrong-proxy-username", "external-wghttps-dns-failure", "external-wghttps-wrong-proxy-sni", "external-wghttps-wrong-proxy-trust",
 }
 var linuxHostTUNExternalWGHysteriaCases = []string{"external-wghy2-on-connect", "external-wghy2-always", "external-wghy2-public", "external-wghy2-cancelled", "external-wghy2-wrong-entry-public", "external-wghy2-wrong-key", "external-wghy2-wrong-trust", "external-wghy2-wrong-ca", "external-wghy2-dns-failure"}
-var linuxHostTUNExternalCases = append(append(append(append([]string{
+var linuxHostTUNExternalCases = append(append(append(append(append([]string{
 	"external-ss-on-connect", "external-http-on-connect", "external-https-on-connect",
 	"external-ss-always", "external-http-always", "external-https-always",
 	"external-ss-cancelled", "external-ss-replacement", "external-ss-source", "external-ss-dns-failure",
@@ -70,7 +70,7 @@ var linuxHostTUNExternalCases = append(append(append(append([]string{
 	"external-socks-on-connect", "external-socks-always", "external-socks-public", "external-socks-cancelled",
 	"external-socks-wrong-auth", "external-socks-auth-downgrade", "external-socks-relay-domain", "external-socks-control-eof",
 	"external-socks-dns-failure", "external-socks-replacement", "external-socks-source",
-}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...)
+}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...), linuxHostTUNExternalSSEntryCases...)
 
 func linuxHostTUNExternalCase(scenario string) bool {
 	for _, candidate := range linuxHostTUNExternalCases {
@@ -133,7 +133,7 @@ func linuxHostTUNExternalAction(scenario string) string {
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
 	switch linuxHostTUNExternalAction(scenario) {
-	case "wrong-ca", "wrong-proxy-password", "wrong-proxy-username", "wrong-proxy-sni", "wrong-proxy-trust", "wrong-entry-public", "wrong-layer-key", "wrong-whitening", "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control", "wrong-auth", "auth-downgrade", "relay-domain", "control-eof":
+	case "wrong-entry-key", "wrong-entry-method", "wrong-final-method", "wrong-ca", "wrong-proxy-password", "wrong-proxy-username", "wrong-proxy-sni", "wrong-proxy-trust", "wrong-entry-public", "wrong-layer-key", "wrong-whitening", "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control", "wrong-auth", "auth-downgrade", "relay-domain", "control-eof":
 		return true
 	}
 	return false
@@ -161,6 +161,7 @@ func linuxHostTUNExternalWGCONNECT(scenario string) bool {
 }
 
 type linuxExternalTUNPeerReply struct {
+	ShadowsocksEntry       *linuxExternalTUNSSEntryReceipt     `json:"shadowsocks_entry,omitempty"`
 	TLSCertificateRefusals uint32                              `json:"tls_certificate_refusals,omitempty"`
 	PacketEntry            *linuxExternalTUNPacketEntryReceipt `json:"packet_entry,omitempty"`
 	Layer                  *linuxExternalTUNLayerReceipt       `json:"layer,omitempty"`
@@ -184,6 +185,7 @@ type linuxExternalTUNPeerReply struct {
 }
 
 type linuxExternalTUNPeer struct {
+	ssEntry                               *linuxExternalTUNSSPair
 	entry                                 *common.ExternalWireGuardConfig
 	entryServerPrivate, entryClientPublic string
 	entryAddress                          netip.AddrPort
@@ -220,7 +222,7 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 	}
 	address, err := netip.ParseAddrPort(reply.Address)
 	wantAddress := "11.77.0.2"
-	if peer.entry != nil {
+	if peer.entry != nil || peer.ssEntry != nil {
 		wantAddress = "198.51.100.240"
 	}
 	pool := x509.NewCertPool()
@@ -241,6 +243,7 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 	} else if reply.PacketEntry != nil {
 		t.Fatal("direct peer acquired an unrequested entry")
 	}
+	linuxHostTUNSSEntryRead(t, peer, reply)
 	linuxHostTUNExternalLayerRead(t, peer, reply)
 	if peer.protocol == "amneziawg" {
 		parameters, err := awgpolicy.ParametersUAPI(peer.parameters)
@@ -343,6 +346,7 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	}
 	peer := &linuxExternalTUNPeer{protocol: linuxHostTUNExternalProtocol(scenario), password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
 	clear(key[:])
+	linuxHostTUNPrepareSSEntryPeer(t, peer, scenario)
 	peer.layerMode = linuxHostTUNExternalLayerMode(scenario)
 	if peer.layerMode != "" {
 		if _, err := rand.Read(key[:]); err != nil {
@@ -422,6 +426,10 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	})
 	request := map[string]any{"schema": 1, "protocol": peer.protocol, "address": "11.77.0.2",
 		"password": peer.password, "hold": linuxHostTUNExternalAction(scenario) == "cancelled"}
+	if peer.ssEntry != nil {
+		request["shadowsocks_method"] = peer.ssEntry.finalMethod
+		request["shadowsocks_entry"] = map[string]any{"method": peer.ssEntry.entryMethod, "password": peer.ssEntry.entryPassword}
+	}
 	if peer.layerMode != "" {
 		layer := map[string]any{"mode": peer.layerMode, "password": peer.layerPassword}
 		if linuxHostTUNExternalAction(scenario) == "wrong-whitening" {
@@ -466,6 +474,9 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	}
 	if initial.PacketEntry != nil && (initial.PacketEntry.PhysicalUDP != 0 || initial.PacketEntry.Streams != 0 || initial.PacketEntry.Packets != 0 || initial.PacketEntry.PublicReplies != 0) {
 		t.Fatal("entry reported traffic before captured native client")
+	}
+	if initial.ShadowsocksEntry != nil && (initial.ShadowsocksEntry.PhysicalTCP != 0 || initial.ShadowsocksEntry.PhysicalUDP != 0 || initial.ShadowsocksEntry.Streams != 0 || initial.ShadowsocksEntry.Packets != 0 || initial.ShadowsocksEntry.PublicReplies != 0) {
+		t.Fatal("SS entry reported traffic before captured native client")
 	}
 	if initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
 		t.Fatal("layer reported pre-capture traffic")
@@ -516,7 +527,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		t.Fatal("external fixture lost its original private Router profile", err)
 	}
 	kill := "on-connect"
-	if strings.HasSuffix(scenario, "-always") {
+	if strings.HasSuffix(scenario, "-always") || linuxHostTUNExternalAction(scenario) == "always-off" {
 		kill = "always"
 	}
 	profiles.Profiles[0].KillSwitchPolicy = kill
@@ -618,6 +629,10 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 	default:
 		t.Fatal("external fixture lost its exact protocol")
 	}
+	var independentSS common.RouterProfile
+	if peer.ssEntry != nil {
+		independentSS = linuxHostTUNInstallSSEntry(t, peer, scenario, &profile)
+	}
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		t.Fatal("external fixture rejected by actual saved profile validation", err)
 	}
@@ -635,6 +650,9 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		}
 		profiles.Profiles = append(profiles.Profiles, entry)
 	}
+	if peer.ssEntry != nil {
+		profiles.Profiles = append(profiles.Profiles, independentSS)
+	}
 	raw, err = json.Marshal(profiles)
 	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), raw, 0600) != nil {
 		t.Fatal("external fixture failed to preserve both private profiles", err)
@@ -646,6 +664,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 }
 
 type linuxExternalTUNResult struct {
+	ProtectionOff     bool                              `json:"protection_off,omitempty"`
 	Stage             string                            `json:"stage"`
 	Scenario          string                            `json:"scenario"`
 	OriginalSession   string                            `json:"original_session"`
@@ -705,7 +724,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	stage := "external"
 	if action == "cancelled" {
 		stage = "external-pending"
-	} else if action == "source" {
+	} else if action == "source" || action == "entry-source" {
 		stage = "source-refused"
 	} else if linuxHostTUNExternalFailedProof(scenario) {
 		stage = "proof-refused"
@@ -728,10 +747,12 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if observed.DNSQueries == 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("cancelled external path fabricated proof before its original HTTPS reply", middle, observed)
 		}
-	} else if action == "source" {
+	} else if action == "source" || action == "entry-source" {
 		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
 			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
 		}
+	} else if linuxHostTUNSSEntryFailure(t, peer, action, middle, observed) {
+		// The independent entry/final helper proved the exact failed authentication boundary.
 	} else if peer.protocol == "socks5" && (action == "wrong-auth" || action == "auth-downgrade" || action == "relay-domain" || action == "control-eof") {
 		if !middle.FailedProof || middle.Proof != nil || observed.Connections == 0 || observed.Streams != 0 || observed.Packets != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 {
 			t.Fatal("failed SOCKS control acquired selected DNS or a connected proof", middle, observed)
@@ -795,7 +816,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !middle.FailedProof || observed.DNSQueries == 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("failed selected DNS fabricated an exit proof or Connected", middle, observed)
 		}
-	} else if middle.Proof == nil || !middle.Proof.Healthy || !middle.Proof.DNSProven || middle.Proof.EntryProven != (peer.entry != nil) ||
+	} else if middle.Proof == nil || !middle.Proof.Healthy || !middle.Proof.DNSProven || middle.Proof.EntryProven != (peer.entry != nil || peer.ssEntry != nil) ||
 		middle.MTU != 1376 || (peer.protocol != "hysteria2" && peer.protocol != "wireguard" && peer.protocol != "amneziawg" && peer.protocol != "openvpn" && observed.Connections == 0) || (peer.protocol != "openvpn" && observed.Streams == 0) || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
 		t.Fatal("external succession bypassed its real encrypted/authenticated DNS and exit exchanges", middle, observed)
 	}
@@ -805,7 +826,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	}
 	if peer.entry != nil {
 		entry := observed.PacketEntry
-		if action == "source" {
+		if action == "source" || action == "entry-source" {
 			if entry == nil || entry.PhysicalUDP != 0 || entry.Streams != 0 || entry.Packets != 0 || entry.PublicReplies != 0 {
 				t.Fatal("changed complete graph reached original WireGuard entry", observed)
 			}
@@ -813,6 +834,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 			t.Fatal("entry proof or final flow bypassed its actual encrypted WireGuard owner", observed)
 		}
 	}
+	linuxHostTUNSSEntryObserved(t, peer, action, observed)
 	linuxHostTUNExternalLayerObserved(t, peer, action, observed)
 	// The pinned provider owns its encrypted listener internally. Its decrypted
 	// DNS/HTTPS observations are real upper-layer counters, never substituted
@@ -844,7 +866,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		t.Fatal("installed external lifecycle left its child or real TUN alive", process.waitErr, process.diagnostic.String())
 	}
 	after := original.observe(t, "stats")
-	if action == "source" {
+	if action == "source" || action == "entry-source" {
 		if !final.SourcePreserved || final.FinalSession != final.OriginalSession || after.RouterQueries != before.RouterQueries {
 			t.Fatal("source refusal replaced the original proved Router", final, after)
 		}
@@ -852,7 +874,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !final.ReplacementKept || final.Restore != nil || after.RouterQueries != before.RouterQueries {
 			t.Fatal("old external restore overwrote a replacement connection", final, after)
 		}
-	} else if action == "public" {
+	} else if action == "public" || action == "always-off" {
 		if !final.PublicPersisted || final.FinalSession != final.ExternalSession || final.Restore != nil || after.RouterQueries != before.RouterQueries {
 			t.Fatal("public external Connect lost persistence, retained monitor or its distinct exit", final, after)
 		}
@@ -860,6 +882,9 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		final.Restore.PreviousSession != final.OriginalSession || final.Restore.FreshSession != final.FinalSession || final.FinalSession == final.OriginalSession ||
 		after.RouterQueries <= before.RouterQueries || after.DirectQueries != before.DirectQueries {
 		t.Fatal("external test did not restore and reprove the exact captured Router and observed MTU", final, before, after)
+	}
+	if final.ProtectionOff != (action == "always-off") {
+		t.Fatal("SS Off omitted its original public release or adopted another scenario")
 	}
 	if strings.HasSuffix(scenario, "-always") {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -872,10 +897,12 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	} else if final.Journal.Record.Committed.Target != nil || mobiletor.ReadDesktopLinuxNodeAbsence(context.Background(), final.FinalSession) != nil {
 		t.Fatal("external succession retained an unowned On-connect table")
 	}
-	if end := peer.observe(t, "stats"); (action != "wrong-auth" && action != "wrong-proxy-password" && action != "wrong-proxy-username" && !(linuxHostTUNExternalWGHysteria(scenario) && action == "wrong-key") && end.AuthFailures != 0) || action == "cancelled" && end.PublicReplies != 0 {
+	if end := peer.observe(t, "stats"); (action != "wrong-auth" && action != "wrong-proxy-password" && action != "wrong-proxy-username" && !(linuxHostTUNExternalWGHysteria(scenario) && action == "wrong-key") && !(peer.ssEntry != nil && (action == "wrong-key" || action == "wrong-final-method")) && end.AuthFailures != 0) || action == "cancelled" && end.PublicReplies != 0 {
 		t.Fatal("retired external proof was adopted after cancellation", end)
 	}
-	if peer.entry != nil {
+	if peer.ssEntry != nil {
+		t.Log("verified installed host independent SS2022 entry and SS2022 final:", scenario)
+	} else if peer.entry != nil {
 		if linuxHostTUNExternalWGHysteriaLayerCase(scenario) {
 			t.Log("verified installed host independent WireGuard entry and layered Hysteria2 final:", scenario)
 		} else if linuxHostTUNExternalWGHysteria(scenario) {

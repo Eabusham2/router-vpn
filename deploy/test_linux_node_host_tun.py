@@ -146,6 +146,19 @@ EXTERNAL_WG_HYSTERIA_LAYER_CASES = tuple('external-' + mode + '-' + action
 EXTERNAL_CASES += EXTERNAL_WG_HYSTERIA_LAYER_CASES
 CASES += EXTERNAL_WG_HYSTERIA_LAYER_CASES
 WHITENING_CASES += tuple(case for case in EXTERNAL_WG_HYSTERIA_LAYER_CASES if case.startswith("external-wghy2xor-"))
+EXTERNAL_SS_ENTRY_CASES = tuple('external-ss' + entry + 'ss' + final + '-on-connect'
+    for entry in ('128', '256', 'chacha') for final in ('128', '256', 'chacha')) + tuple('external-ss256ss256-' + action
+    for action in ('always', 'always-off', 'public', 'cancelled', 'source', 'entry-source', 'replacement', 'wrong-entry-public',
+                   'wrong-entry-key', 'wrong-entry-method', 'wrong-key', 'wrong-final-method', 'dns-failure', 'tcp-dns'))
+EXTERNAL_CASES += EXTERNAL_SS_ENTRY_CASES
+CASES += EXTERNAL_SS_ENTRY_CASES
+SS_ENTRY_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSSEntryFixtureKeepsCompiledAuthority'
+SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT + '/' + entry + '-' + final
+    for entry in ('128', '256', 'chacha') for final in ('128', '256', 'chacha')))
+
+def check_ss_entry_authority_verdict(output):
+    NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
+
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -170,6 +183,7 @@ def checked_sources(source):
                 'cmd/client/desktop_external_wg_hysteria_layer_linux_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
                 'cmd/client/desktop_external_wg_entry.go', 'cmd/client/desktop_external_wg_entry_linux_test.go',
+                'cmd/client/desktop_external_ss_entry_linux_test.go', 'cmd/client/desktop_external_ss_entry_linux_tun_native_test.go', 'cmd/client/desktop_external_ss_entry_darwin_native_test.go',
                 'cmd/client/desktop_external_retained.go', 'cmd/client/external_profile_connect.go', 'cmd/client/speed_lab_paths.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
                 'cmd/client/desktop_node_host_linux_active.go',
@@ -311,11 +325,14 @@ def check_verdict(output, case=None):
     boot_transfer_receipts = []
     hysteria_receipts = []
     layered_entry_receipts = []
+    ss_entry_receipts = []
     layered_entry_passes = re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"(external-wghy2(?:aes|xor)-[a-z-]+) \([0-9.]+s\)$", output)
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('independent SS2022 entry and SS2022 final: '):
+                ss_entry_receipts.append(suffix.removeprefix('independent SS2022 entry and SS2022 final: '))
             if suffix.startswith('independent WireGuard entry and layered Hysteria2 final: '):
                 layered_entry_receipts.append(suffix.removeprefix('independent WireGuard entry and layered Hysteria2 final: '))
             if suffix.startswith('independent WireGuard entry and Hysteria2 final: '):
@@ -327,6 +344,10 @@ def check_verdict(output, case=None):
     if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
     for value in cases:
+        if value in EXTERNAL_SS_ENTRY_CASES:
+            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
+            if ss_entry_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+                raise ValueError('Installed SS2022 graph omitted or duplicated original native completion: ' + value)
         if value in EXTERNAL_WG_HYSTERIA_LAYER_CASES:
             if layered_entry_receipts.count(value) != 1 or layered_entry_passes.count(value) != 1:
                 raise ValueError('Installed layered WG/Hysteria graph omitted or duplicated original native completion: ' + value)
@@ -514,6 +535,20 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Installed layered entry authority witness failed:\n' + layered_entry_authority_output[-16384:])
         check_layered_entry_authority_verdict(layered_entry_authority_output)
         print(layered_entry_authority_output, end='' if layered_entry_authority_output.endswith('\n') else '\n')
+        status, ss_entry_authority_output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
+                                             '-test.run=^' + SS_ENTRY_AUTHORITY_ROOT + '$'],
+                                            cwd=ROOT, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed SS2022 authority witness failed:\n' + ss_entry_authority_output[-16384:])
+        check_ss_entry_authority_verdict(ss_entry_authority_output)
+        print(ss_entry_authority_output, end='' if ss_entry_authority_output.endswith('\n') else '\n')
+        status, ss_entry_reference_output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
+                                             '-test.run=' + NODE.SS_ENTRY_REFERENCE_SUITE[2]],
+                                            cwd=source, env=captured, timeout=100)
+        if status:
+            raise ValueError('Installed SS2022 cipher reference failed:\n' + ss_entry_reference_output[-16384:])
+        NODE.require_native_verdicts(ss_entry_reference_output, NODE.SS_ENTRY_REFERENCE_SUITE[3], 'installed SS2022 reference')
+        print(ss_entry_reference_output, end='' if ss_entry_reference_output.endswith('\n') else '\n')
         status, layer_output = NODE.run([str(peer), '-test.v', '-test.timeout=30s',
                                         '-test.run=^TestRouterVPNDesktopExternalInstalledLayerCarrier$'],
                                        cwd=source, env=captured, timeout=40)
@@ -562,6 +597,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'native_bundle': payloads,
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
                                 (('installed-controller-test', binary), ('independent-wg-awg2-ss2022-and-hysteria2-peers', peer), ('shipping-whitening-relay', whitening))},
+                  'ss_entry_authority_cases': list(SS_ENTRY_AUTHORITY_CASES), 'ss_entry_authority_output_sha256': hashlib.sha256(ss_entry_authority_output.encode()).hexdigest(),
+                  'ss_entry_reference_cases': list(NODE.SS_ENTRY_REFERENCE_SUITE[3]), 'ss_entry_reference_output_sha256': hashlib.sha256(ss_entry_reference_output.encode()).hexdigest(),
                   'layered_entry_authority_cases': list(LAYERED_ENTRY_AUTHORITY_CASES), 'layered_entry_authority_output_sha256': hashlib.sha256(layered_entry_authority_output.encode()).hexdigest(),
                   'layer_authority_cases': list(LAYER_AUTHORITY_CASES), 'layer_authority_output_sha256': hashlib.sha256(authority_output.encode()).hexdigest(),
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),

@@ -161,6 +161,27 @@ class LinuxLayeredEntryVerdicts(unittest.TestCase):
                     NODE.execute_baseline_suite(baseline, suite)
 
 
+class LinuxSSEntryVerdicts(unittest.TestCase):
+    def test_original_physical_and_actual_cipher_verdicts_are_mandatory(self):
+        for suite, count in ((NODE.LINUX_SS_ENTRY_SUITE, 4), (NODE.SS_ENTRY_REFERENCE_SUITE, 17)):
+            self.assertEqual(len(suite[3]), count)
+            output = ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in suite[3])
+            baseline = Mock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                baseline.execute.return_value = (0, output)
+                NODE.execute_baseline_suite(baseline, suite)
+                baseline.execute.assert_called_once_with(*suite[:3], 90)
+                for line in output.splitlines(True):
+                    for changed in (output.replace(line, '', 1), output + line, output.replace(line, line.replace('Entry', 'ForeignEntry'), 1)):
+                        baseline.execute.return_value = (0, changed)
+                        with self.subTest(suite=suite[0], verdict=line.strip()), self.assertRaises(ValueError):
+                            NODE.execute_baseline_suite(baseline, suite)
+                for marker in ('--- SKIP:', '--- FAIL:', 'DATA RACE', 'panic:'):
+                    baseline.execute.return_value = (0, output + marker + ' foreign\n')
+                    with self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
+
+
 class StandardServiceMTUVerdicts(unittest.TestCase):
     def test_actual_standard_reader_verdict_cannot_be_omitted_or_substituted(self):
         for suite, expected in ((NODE.STANDARD_MTU_SUITE, 9), (NODE.STANDARD_MTU_RETIRE_SUITE, 3)):

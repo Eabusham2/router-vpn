@@ -70,8 +70,33 @@ func TestDesktopExternalDarwinSSEntryOwnsTwoOriginalSourcesAndPolicy(t *testing.
 								}
 							}
 							for _, target := range []string{"linux", "windows"} {
-								if p, e := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); e == nil || p != nil {
-									t.Fatal("SS entry widened another retained host")
+								p, e := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
+								if target == "windows" {
+									if e == nil || p != nil {
+										t.Fatal("SS entry widened another retained host")
+									}
+									continue
+								}
+								if e != nil || p == nil || p.Validate() != nil {
+									t.Fatal("Linux lost its captured SS2022 pair", e)
+								}
+								linux, e := p.Capture()
+								if e != nil || !reflect.DeepEqual(linux, actual) {
+									t.Fatal("Linux replaced independent source, DNS or device policy", e)
+								}
+								linuxGraph := externalTestRead(t, p.Config())
+								darwinGraph := externalTestRead(t, plan.Config())
+								// The native physical lower binds its own OS-specific source digest.
+								// Both original encrypted owners and the full routed DNS/device graph stay identical.
+								sameGraph := true
+								for _, field := range []string{"dns", "route", "inbounds", "endpoints"} {
+									sameGraph = sameGraph && reflect.DeepEqual(linuxGraph[field], darwinGraph[field])
+								}
+								for _, tag := range []string{"external-entry", ExternalFinalTag} {
+									sameGraph = sameGraph && reflect.DeepEqual(externalTestFind(t, linuxGraph, tag), externalTestFind(t, darwinGraph, tag))
+								}
+								if !sameGraph || len(linuxGraph["outbounds"].([]any)) != 3 || p.OriginalPolicy() != original || p.Metadata().TargetOS != "linux" {
+									t.Fatal("Linux rewrote captured SS credentials or route")
 								}
 							}
 						}
