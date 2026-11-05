@@ -1,0 +1,131 @@
+//go:build with_gvisor
+
+package wireguard
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/gvisor/pkg/tcpip"
+	"github.com/sagernet/gvisor/pkg/tcpip/stack"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type routerVPNPausedWireDelivery struct {
+	stack.NetworkDispatcher
+	stack                   *stack.Stack
+	entered, release, abort chan struct{}
+	calls                   atomic.Int32
+}
+
+func (d *routerVPNPausedWireDelivery) DeliverNetworkPacket(protocol tcpip.NetworkProtocolNumber, packet *stack.PacketBuffer) {
+	d.calls.Add(1)
+	close(d.entered)
+	<-d.release
+	select {
+	case <-d.abort:
+		return
+	default:
+	}
+	// Real stack packet handlers acquire this same lock. A close waiting inside
+	// Stack.Wait would deadlock this original admitted delivery.
+	d.stack.FindNICNameFromID(1)
+	d.NetworkDispatcher.DeliverNetworkPacket(protocol, packet)
+}
+func TestRouterVPNWireGuardStackCloseDrainsOriginalDelivery(t *testing.T) {
+	device, err := newStackDevice(DeviceOptions{Context: context.Background(), MTU: 1400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := (*wireEndpoint)(device)
+	paused := &routerVPNPausedWireDelivery{NetworkDispatcher: device.dispatcher, stack: device.stack, entered: make(chan struct{}), release: make(chan struct{}), abort: make(chan struct{})}
+	endpoint.Attach(paused)
+	packet := make([]byte, 20)
+	packet[0] = 0x45
+	delivered := make(chan error, 1)
+	closed := make(chan error, 1)
+	lookedUp := make(chan struct{})
+	var release sync.Once
+	defer func() {
+		close(paused.abort)
+		release.Do(func() { close(paused.release) })
+		select {
+		case <-delivered:
+		case <-time.After(time.Second):
+			t.Error("original Write did not join")
+		}
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Error("original Close did not join")
+		}
+	}()
+	go func() {
+		n, e := device.Write([][]byte{packet}, 0)
+		if e == nil && n != 1 {
+			e = errors.New("original delivery lost packet count")
+		}
+		delivered <- e
+	}()
+	select {
+	case <-paused.entered:
+	case <-time.After(time.Second):
+		t.Fatal("actual packet delivery did not enter")
+	}
+	go func() { closed <- device.Close() }()
+	select {
+	case <-device.done:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not revoke original write admission")
+	}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for endpoint.dispatcherAccess.TryRLock() {
+		endpoint.dispatcherAccess.RUnlock()
+		select {
+		case <-timer.C:
+			t.Fatal("Close did not retain original packet delivery")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close published completion before original delivery joined")
+	default:
+	}
+	go func() { device.stack.FindNICNameFromID(1); close(lookedUp) }()
+	select {
+	case <-lookedUp:
+	case <-time.After(time.Second):
+		t.Fatal("Close held stack lock while draining original delivery")
+	}
+	release.Do(func() { close(paused.release) })
+	select {
+	case e := <-delivered:
+		delivered <- e
+		if e != nil {
+			t.Fatal(e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("original delivery did not complete")
+	}
+	select {
+	case e := <-closed:
+		closed <- e
+		if e != nil {
+			t.Fatal(e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not join after delivery completed")
+	}
+	endpoint.Attach(paused.NetworkDispatcher)
+	if endpoint.IsAttached() {
+		t.Fatal("late Attach resurrected closed native link")
+	}
+	if n, e := device.Write([][]byte{packet}, 0); n != 0 || !errors.Is(e, os.ErrClosed) || paused.calls.Load() != 1 {
+		t.Fatal("late decrypted packet acquired retired dispatcher", n, e, paused.calls.Load())
+	}
+}

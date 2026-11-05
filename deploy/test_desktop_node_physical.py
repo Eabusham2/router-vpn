@@ -1116,6 +1116,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         if status:
             raise ValueError("Node routing runner checks failed:\n" + output[-16384:])
     if platform.system() == "Linux" and not bootstrap_only:
+        with stage("actual WG/AWG original packet delivery drain"):
+            status, output = run([sys.executable, ROOT / "deploy/test_mobile_wireguard_stack.py", source], cwd=ROOT, env=captured, timeout=600)
+            if status:
+                raise ValueError("WireGuard stack delivery drain failed:\n" + output[-24000:])
         with stage("actual imported entry and paired final native composition"):
             status, output = run([sys.executable, ROOT / "deploy/test_mobile_imported_entry.py", source, "--native-peers"], cwd=ROOT, env=captured, timeout=1200)
             if status:

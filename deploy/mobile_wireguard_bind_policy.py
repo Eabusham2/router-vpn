@@ -1,7 +1,11 @@
 """Retain the pinned WireGuard bind's original context and each Open/Close generation."""
 from pathlib import Path
 import hashlib
+import importlib.util
 ROOT=Path(__file__).resolve().parents[1]
+_stack_spec=importlib.util.spec_from_file_location('routervpn_wireguard_stack',ROOT/'deploy/mobile_wireguard_stack_policy.py')
+STACK=importlib.util.module_from_spec(_stack_spec)
+_stack_spec.loader.exec_module(STACK)
 SOURCE_SHA='b423558e90f6aa2f1d14258ad9ea311c455cd038'
 LEGACY_OLD='''func (c *ClientBind) connect() (*wireConn, error) {
 	serverConn := c.conn
@@ -477,7 +481,7 @@ func (c *ClientBind) Send(bufs [][]byte, ep conn.Endpoint, offset int) error {
 '''
 
 def blobsha(data):return hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
-def inputs():return [Path(__file__).resolve(),ROOT/"mobile/wireguard/client_bind_test.go.tmpl"]
+def inputs():return [Path(__file__).resolve(),ROOT/"mobile/wireguard/client_bind_test.go.tmpl"]+STACK.inputs()
 def patch(source):
     original=source
     if source.count(NEW)==1:
@@ -492,6 +496,7 @@ def patch(source):
     return result
 
 def prepare(vendor):
+    STACK.prepare(vendor)
     file=Path(vendor)/"transport/wireguard/client_bind.go"
     if file.is_symlink():raise ValueError("WireGuard bind source is a symlink")
     result=patch(file.read_text())
