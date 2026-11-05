@@ -148,7 +148,7 @@ NATIVE_ADDRESS_RETIREMENT_TESTS = ("TestRouterVPNNativeLinuxPartialAddressRetire
 NATIVE_ADDRESS_RETIREMENT_VERDICTS = [NATIVE_ADDRESS_RETIREMENT_TESTS[0], *[NATIVE_ADDRESS_RETIREMENT_TESTS[0]+"/"+name for name in ("partial-add-refusal", "cancel-after-add", "link-up-addrconf", "link-up-eui64-random", "dad-completion")], NATIVE_ADDRESS_RETIREMENT_TESTS[1], *[NATIVE_ADDRESS_RETIREMENT_TESTS[1]+"/"+name for name in ("global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up", "eui64-ethernet", "eui64-already-up", "eui64-still-down", "eui64-type-change", "eui64-missing-policy", "eui64-disappeared-policy", "eui64-wrong-address-flags", "eui64-stable-change", "eui64-index-change", "eui64-flags-change", "eui64-token-change", "unchanged-still-down")], NATIVE_ADDRESS_RETIREMENT_TESTS[2], *[NATIVE_ADDRESS_RETIREMENT_TESTS[2]+"/"+name for name in ("eui64-down", "random-up", "none", "absent", "duplicate", "invalid", "truncated", "token", "invalid-token")]]
 
 NATIVE_CLOSED_EVENT_ROOT = "TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics"
-NATIVE_CLOSED_EVENT_CASES = ("first-close", "late-final", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "disjoint")
+NATIVE_CLOSED_EVENT_CASES = ("first-close", "late-final", "late-final-ipv6", "late-final-linklocal", "duplicate-first", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "changed-address-policy", "disjoint")
 NATIVE_CLOSED_EVENT_VERDICTS = (NATIVE_CLOSED_EVENT_ROOT, *(NATIVE_CLOSED_EVENT_ROOT + "/" + case for case in NATIVE_CLOSED_EVENT_CASES))
 
 NATIVE_RETIREMENT_CASES = (
@@ -866,6 +866,21 @@ def mutants(source, windows):
                        'return nil, E.New("no IPv4 server configured and no usable next address in ", o.Inet6Address[0], " for DNS")')))
         retirement = 'routervpn-desktop-tun/routervpn_sing_tun_retirement_linux.go'
         result.extend((
+            ('linux-retirement-delayed-original-close', retirement, 'github.com/sagernet/sing-tun',
+             NATIVE_CLOSED_EVENT_ROOT, 'late-final-ipv6',
+             'original once-only close notification did not complete retirement', changed(retirement,
+             'if s.created && s.closed && s.fileClosed && (s.guard == nil || s.guardClosed) &&',
+             'if implicit && s.created && s.closed && s.fileClosed && (s.guard == nil || s.guardClosed) &&')),
+            ('linux-retirement-duplicate-original-close', retirement, 'github.com/sagernet/sing-tun',
+             NATIVE_CLOSED_EVENT_ROOT, 'duplicate-first',
+             'original rejected event lost its exact bounded classification', changed(retirement,
+             't.routervpnLinuxImplicitRoute(event.object) && !s.closedRouteObserved[key]',
+             't.routervpnLinuxImplicitRoute(event.object)')),
+            ('linux-retirement-changed-address-close', retirement, 'github.com/sagernet/sing-tun',
+             NATIVE_CLOSED_EVENT_ROOT, 'changed-address-policy',
+             'original rejected event lost its exact bounded classification', changed(retirement,
+             't.routervpnLinuxImplicitRoute(event.object) && !s.closedRouteObserved[key]',
+             '!s.closedRouteObserved[key]')),
             ('linux-retirement-wildcard-selector', retirement, 'github.com/sagernet/sing-tun',
              'TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard', 'marked-wildcard-match',
              'ambiguous kernel selector was deleted', changed(retirement,

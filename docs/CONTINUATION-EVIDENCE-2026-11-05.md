@@ -1599,6 +1599,43 @@ pass is claimed; the two controls were not run against a blocked baseline.
 Actual Windows execution remains mandatory. The separate one-use grant timing
 fixture remains a distinct investigation and is not changed by this unit.
 
+## Delayed original IPv6 route deletion during MTU retirement
+
+The new diagnostics captured an actual recurrence in ARM64 job `127103768459`,
+run `41985065149` at `bed21f7e`. MTU rollback rejected a route event with
+`phase=final-readback`, IPv6, delete=true, historical=true, original_index=true,
+kernel protocol 2, one overlapping original selector and prior_close_delete=false.
+The same unchanged routing source later passed both architectures at `ea00b1a0`
+(jobs `127105335188` and `127105335475`). That pass did not repair the ordering
+assumption: the first original deletion could arrive in either post-close drain.
+
+The retirement path now accepts one exact historical implicit address-route
+deletion across those two drains, after the original file and retained guard
+have closed. It still requires the complete original route shape and interface
+identity. The consumed key survives drains and retries. Duplicate deletion,
+addition, changed native data, changed address policy and overlapping foreign
+events remain sticky failures. Final original link and route absence, subscribed
+watch continuity, joined watcher closure and the captured caller remain required.
+No timeout, retry window, address deletion or routing selector was broadened.
+
+The exact two templates were projected onto the normally prepared native TUN
+module after verifying that its pre-change files matched the committed originals.
+All **26 race verdicts pass (1.097s)**, including delayed IPv4, IPv6 and link-local
+notifications, duplicates within the first drain and across drains, retry
+milestones and existing foreign/ABA rejection. Three compiling production
+mutations independently restore first-drain-only acceptance, permit duplicate
+deletion or omit the original implicit-route shape. Each fails its intended
+assertion; build errors, races, panics and timeouts are rejected as controls.
+The strict runner also requires all thirteen closed-event parent/leaf verdicts.
+
+The four-file contribution/evidence manifest is
+`8395bc95c43bf96f784e8139fe3794ef5319ae658e7b148ed9b8f311d39612a5`.
+These local tests use explicit native-observer models with actual descriptor
+closure. Privileged kernel execution is still unavailable here, and the actual
+generated Node/TUN MTU rollback workflow must verify the published correction.
+No claim is made that this classifies the older undiagnosed ARM64 event or
+establishes physical-device acceptance.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

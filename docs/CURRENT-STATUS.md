@@ -204,11 +204,14 @@ reject all four former behaviors; privileged TUN acceptance remains separate.
 
 Native Linux retirement failures now identify the rejected event's phase and
 bounded ownership/protocol classification without exposing native addresses.
-The original acceptance policy and deadlines are unchanged. All 21 focused
-generated-observer race verdicts and the strict verdict gate pass; the original
-generic-error control fails its intended classification assertions. The earlier
-ARM64 `9ecb0602` failure remains unclassified despite the later both-architecture
-pass at `88be1f34`; these diagnostics do not claim to fix that intermittent event.
+Those diagnostics identified a recurrence at `bed21f7e`: the first exact original
+IPv6 kernel-route deletion arrived in the final post-close drain. Retirement
+now accepts that implicit effect once across either drain, only after its
+original descriptors close. Duplicate, added, foreign or changed routes still
+fail; original history, final absence and watcher join remain required. All 26
+focused race verdicts and three compiling defect controls pass. The earlier
+unclassified failure is not retrospectively relabeled; actual native CI must
+verify this source correction against the newly observed category.
 
 Complete retirement receipts now retain their separate 48 KiB writer/parser
 allowance while readiness stays at 16 KiB. Shared and generated-native gates

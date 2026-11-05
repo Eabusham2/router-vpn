@@ -1042,8 +1042,9 @@ func TestRouterVPNNativeLinuxUpdateRetainsOriginalLifetimeAndCaller(t *testing.T
 }
 
 // This observer model schedules exact original notifications at the two real
-// retirement drains. It proves classification and unchanged refusal behavior;
-// it does not claim either schedule was observed in a kernel namespace.
+// retirement drains. It reproduces the delayed original deletion observed in
+// ARM64 CI and tests exact once-only acceptance and foreign-event refusals.
+// Local observer models do not substitute for the actual namespace gate.
 type retirementClosedEventModel struct {
 	*retirementModel
 	native       *NativeTun
@@ -1070,13 +1071,23 @@ func (m *retirementClosedEventModel) drain(ctx context.Context) ([]routerVPNLinu
 }
 
 func TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics(t *testing.T) {
-	for _, scenario := range []string{"first-close", "late-final", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "disjoint"} {
+	for _, scenario := range []string{"first-close", "late-final", "late-final-ipv6", "late-final-linklocal", "duplicate-first", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "changed-address-policy", "disjoint"} {
 		t.Run(scenario, func(t *testing.T) {
 			native, model, file := retirementFixture(t)
 			body := routervpnLinuxNativeBody(retirementRoute(t, 8, 254))
 			body[1], body[5], body[6] = 24, unix.RTPROT_KERNEL, unix.RT_SCOPE_LINK
 			body = append(body, retirementAttribute(1, []byte{192, 0, 2, 0})...)
 			native.options.Inet4Address = []netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")}
+			if scenario == "late-final-ipv6" || scenario == "late-final-linklocal" {
+				address := netip.MustParseAddr("fd10::")
+				if scenario == "late-final-linklocal" {
+					address = netip.MustParseAddr("fe80::")
+				}
+				body = routervpnLinuxNativeBody(retirementRoute(t, 8, 254))
+				body[0], body[1], body[5], body[6] = unix.AF_INET6, 64, unix.RTPROT_KERNEL, unix.RT_SCOPE_UNIVERSE
+				body = append(body, retirementAttribute(1, address.AsSlice())...)
+				native.options.Inet6Address = []netip.Prefix{netip.MustParsePrefix("fd10::1/64")}
+			}
 			original, err := ParseDesktopLinuxNetworkObject("route", body)
 			if err != nil || !native.routervpnLinuxImplicitRoute(original) {
 				t.Fatal("model lost the original bounded kernel address route", err)
@@ -1092,8 +1103,11 @@ func TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics(t *testing.
 			switch scenario {
 			case "first-close":
 				watch.first, success = []routerVPNLinuxRoutingEvent{event}, true
-			case "late-final":
-				watch.final = []routerVPNLinuxRoutingEvent{event}
+			case "late-final", "late-final-ipv6", "late-final-linklocal":
+				watch.final, success = []routerVPNLinuxRoutingEvent{event}, true
+			case "duplicate-first":
+				watch.first = []routerVPNLinuxRoutingEvent{event, event}
+				want.phase, want.priorCloseDelete = "first-close", true
 			case "duplicate-final":
 				watch.first, watch.final = []routerVPNLinuxRoutingEvent{event}, []routerVPNLinuxRoutingEvent{event}
 				want.priorCloseDelete = true
@@ -1117,6 +1131,9 @@ func TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics(t *testing.
 				event.object, err = ParseDesktopLinuxNetworkObject("route", changed)
 				want.historical, want.protocol = false, unix.RTPROT_STATIC
 				watch.final = []routerVPNLinuxRoutingEvent{event}
+			case "changed-address-policy":
+				native.options.Inet4Address = []netip.Prefix{netip.MustParsePrefix("198.51.100.1/24")}
+				watch.final = []routerVPNLinuxRoutingEvent{event}
 			case "disjoint":
 				event.object = retirementRoute(t, 9, 253)
 				watch.final, success = []routerVPNLinuxRoutingEvent{event}, true
@@ -1133,7 +1150,10 @@ func TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics(t *testing.
 			}
 			if success {
 				if failure != nil || raw == "" || !model.closed || !state.readbackComplete {
-					t.Fatal("diagnostics changed existing accepted retirement", raw, failure)
+					t.Fatal("original once-only close notification did not complete retirement", raw, failure)
+				}
+				if scenario != "disjoint" && (len(state.closedRouteObserved) != 1 || !state.closedRouteObserved[original.Key()]) {
+					t.Fatal("original close notification lost its exact one-use record")
 				}
 				if scenario == "disjoint" && len(state.closedRouteObserved) != 0 {
 					t.Fatal("foreign disjoint events acquired historical diagnostic ownership")

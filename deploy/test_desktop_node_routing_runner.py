@@ -145,7 +145,7 @@ class NativeRetirementVerdicts(unittest.TestCase):
         suite = ("native-routing-receipt", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting", (root,))
         lines = ["--- PASS: " + root + " (1s)\n"] + ["    --- PASS: " + root + "/" + case + " (0.1s)\n" for case in NODE.NATIVE_RETIREMENT_CASES]
         lines += ["--- PASS: TestRouterVPNNativeLinuxRoutingDNSAddressBoundary" + ("/" + case if case else "") + " (0.01s)\n" for case in ("", *NODE.NATIVE_DNS_CASES)]
-        self.assertEqual(len(NODE.NATIVE_CLOSED_EVENT_VERDICTS), 9)
+        self.assertEqual(len(NODE.NATIVE_CLOSED_EVENT_VERDICTS), 13)
         lines += [line for name in NODE.NATIVE_CLOSED_EVENT_VERDICTS for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
         baseline = Mock()
         baseline.execute.return_value = (0, "".join(lines))

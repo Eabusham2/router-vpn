@@ -55,7 +55,8 @@ type routerVPNLinuxRetirement struct {
 	history                                                    map[string]DesktopNetworkObject
 	events                                                     []routerVPNLinuxRoutingEvent
 	failure                                                    error
-	// Diagnostic history only; never grants permission to accept a later event.
+	// One observed close notification per exact original implicit route. The
+	// two post-close drains share this bounded history; a duplicate is rejected.
 	closedRouteObserved map[string]bool
 	receipt             string
 	addresses           map[string]routerVPNLinuxAddressRecord
@@ -1043,11 +1044,19 @@ func (t *NativeTun) routervpnLinuxClosedEvents(events []routerVPNLinuxRoutingEve
 		}
 		_, owned := s.history[event.object.Key()]
 		body := routervpnLinuxNativeBody(event.object)
-		if implicit && owned && event.delete && event.object.Kind == "route" && event.object.Index == uint32(t.routervpnOwnedIndex) && len(body) >= 12 && body[5] == unix.RTPROT_KERNEL {
+		// The original descriptor close can deliver an address-route deletion
+		// in either drain. Accept only the first exact implicit effect after
+		// both original descriptors closed; the final absence reads and event
+		// continuity remain required. An add, changed object or repeated delete
+		// cannot acquire authority from the fact that its selector overlaps.
+		key := event.object.Key()
+		if s.created && s.closed && s.fileClosed && (s.guard == nil || s.guardClosed) &&
+			owned && event.delete && event.object.Kind == "route" &&
+			t.routervpnLinuxImplicitRoute(event.object) && !s.closedRouteObserved[key] {
 			if s.closedRouteObserved == nil {
 				s.closedRouteObserved = make(map[string]bool)
 			}
-			s.closedRouteObserved[event.object.Key()] = true
+			s.closedRouteObserved[key] = true
 			continue
 		}
 		overlaps := 0
