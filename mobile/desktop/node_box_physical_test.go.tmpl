@@ -296,3 +296,68 @@ func TestRouterVPNDesktopNodePhysicalBoxRestoresCapturedMTU(t *testing.T) {
 		})
 	}
 }
+
+type desktopStartupBoundTUN struct {
+	desktopTorBoxTUN
+	caller context.Context
+	admit  func(context.Context) error
+}
+
+func (t *desktopStartupBoundTUN) RouterVPNDesktopMTUStartupContext(ctx context.Context) error {
+	t.caller = ctx
+	if t.admit != nil {
+		return t.admit(ctx)
+	}
+	return ctx.Err()
+}
+
+func TestRouterVPNDesktopStartupKeepsCallerAndLifetime(t *testing.T) {
+	for _, mode := range []string{"original", "expired", "late-success", "missing-reader", "no-deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			lifetime, stop := context.WithCancel(context.Background())
+			defer stop()
+			ctx, cancel := context.WithTimeout(lifetime, time.Second)
+			defer cancel()
+			f := &desktopStartupBoundTUN{desktopTorBoxTUN: desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, "original")}}
+			registry := inbound.NewRegistry()
+			inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(context.Context, adapter.Router, log.ContextLogger, string, option.TunInboundOptions) (adapter.Inbound, error) {
+				if mode == "missing-reader" {
+					return &f.desktopTorBoxTUN, nil
+				}
+				return f, nil
+			})
+			manager := inbound.NewManager(nil, registry, nil)
+			if err := manager.Create(lifetime, nil, nil, "original", C.TypeTun, &option.TunInboundOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			b := &Box{ctx: lifetime, inbound: manager}
+			if mode == "expired" {
+				cancel()
+			}
+			if mode == "late-success" {
+				f.admit = func(call context.Context) error { cancel(); return nil }
+			}
+			if mode == "no-deadline" {
+				ctx = lifetime
+			}
+			err := b.RouterVPNDesktopStartupContext(ctx)
+			if mode == "original" {
+				if err != nil || f.caller != ctx {
+					t.Fatal("startup replaced original caller", err)
+				}
+				cancel()
+				if lifetime.Err() != nil || b.ctx != lifetime {
+					t.Fatal("startup canceled or replaced connection lifetime")
+				}
+			} else if err == nil {
+				t.Fatal("invalid or expired startup admitted", mode)
+			}
+			if (mode == "expired" || mode == "late-success") && !errors.Is(err, context.Canceled) {
+				t.Fatal("lost original cancellation", err)
+			}
+			if (mode == "expired" || mode == "no-deadline") && f.caller != nil {
+				t.Fatal("expired or unbounded caller reached admission")
+			}
+		})
+	}
+}

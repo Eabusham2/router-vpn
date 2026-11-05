@@ -20,6 +20,21 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+class NativeStartupContextVerdicts(unittest.TestCase):
+    def test_original_startup_deadlines_are_required(self):
+        self.assertEqual({key:len(value) for key,value in NODE.STARTUP_CONTEXT_VERDICTS.items()}, {"native-startup-inbound":4, "native-startup-box":6, "native-startup-command":4})
+        for family,names in NODE.STARTUP_CONTEXT_VERDICTS.items():
+            suite=(family,"actual-generated-package","original-startup",tuple(name for name in names if "/" not in name))
+            lines=[line for name in names for line in ("=== RUN   "+name+"\n","--- PASS: "+name+" (0.01s)\n")]
+            baseline=Mock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                baseline.execute.return_value=(0,"".join(lines)); NODE.execute_baseline_suite(baseline,suite)
+                for line in lines:
+                    for changed in ("".join(lines).replace(line,"",1),"".join(lines)+line):
+                        baseline.execute.return_value=(0,changed)
+                        with self.assertRaises(ValueError): NODE.execute_baseline_suite(baseline,suite)
+
+
 class NativeLifecycleAdmissionVerdicts(unittest.TestCase):
     def test_original_admission_and_completed_cleanup_are_required(self):
         names = NODE.NATIVE_LIFECYCLE_ADMISSION_VERDICTS

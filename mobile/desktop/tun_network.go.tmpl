@@ -157,10 +157,15 @@ func (t *Inbound) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (st
 // Only an unstarted original inbound accepts its creator's startup budget.
 // The method supplies cancellation to native ledger reads, never ownership.
 func (t *Inbound) RouterVPNDesktopNetworkStartup(ctx context.Context) error {
-	t.routervpnLifecycle.Lock()
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return err
+	}
 	defer t.routervpnLifecycle.Unlock()
 	if ctx == nil || ctx.Err() != nil || t.routervpnReady || t.tunIf != nil || t.platformInterface != nil || t.tunOptions.NetNs != "" || t.tunOptions.EXP_ExternalConfiguration {
 		return errors.New("native routing startup requires its original unstarted inbound")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("native routing startup requires its original deadline")
 	}
 	t.tunOptions.RouterVPNNetworkContext = ctx
 	t.routervpnStandardStartup = true

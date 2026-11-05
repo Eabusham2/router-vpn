@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`619133c5`, the integrated observation change in `a94cde9d`, and the installed
+`0af6c00e`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -64,8 +64,11 @@ final Windows client binaries compiled on both architectures and the complete
 generated Linux native command compiled with the current dependency closure.
 Standalone native MTU preparation now includes and verifies its exact shared
 observation helper. The six Linux race packages from the failed CI workflow pass
-after selective preparation alone; native startup deadline transport remains a
-separate current CI repair. Concurrent upstream HTTP admission/status changes in
+after selective preparation alone. Node now carries its existing 30-second startup
+admission through actual native Start; raw Linux command construction enforces
+its top-level ten-second bound. Native caller/lifetime and partial-failure races
+pass. Full namespace acceptance and external/Tor startup transport remain
+separate current CI and implementation work. Concurrent upstream HTTP admission/status changes in
 `c2241ba1` were preserved. Current exact-SHA release publication,
 physical/device/private acceptance and the other surviving platform/graph work
 remain separate requirements. The older continuation below is retained as history.

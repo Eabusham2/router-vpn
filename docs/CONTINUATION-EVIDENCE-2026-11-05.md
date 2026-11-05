@@ -347,7 +347,7 @@ deadline to native admission; it is not closed by this preparation change.
 
 ## Controller monitor preserves the original observation and intent
 
-The controller's installed-service monitor now carries its supplied observation
+Commit [`0af6c00e`](https://github.com/Eabusham2/router-vpn/commit/0af6c00e73f4d22954571a6564505517255a5d91) carries the controller's installed-service monitor observation
 context through source, application, launch and activation admission. It retains
 the exact original connection-intent object separately from the temporary
 observation context, including a legitimate idle nil intent. Pure observation
@@ -366,6 +366,33 @@ unbounded source lock, and replacing exact intent with a derived context. The
 mandatory service runner includes all three new parent cases. The selected
 network/event fixture boundaries remain explicit; no real installed-device
 acceptance is claimed by this source regression.
+
+## Original native startup budget through Node and raw command construction
+
+The real Linux generated Node TUN job at `05800c84` failed because startup used
+its graph lifetime as native lifecycle admission, without the required original
+deadline. Node preparation now retains its existing 30-second admission from
+compilation through the actual Box/TUN Start. The Box conveys that same context
+through bounded inbound inventory and the original unstarted native reader.
+The graph keeps its separate connection lifetime after startup completes.
+
+The raw Linux command now starts an explicit ten-second admission before native
+construction, using the pinned engine's existing StartTimeout value and honoring
+an earlier caller deadline. The prior timeout diagnostic did not itself cancel
+construction; this change deliberately enforces that top-level bound. No lower
+adapter refreshes it. Installed-service and MTU startup setters retain their
+original supplied deadlines and use bounded lifecycle admission.
+
+Actual prepared protocol/TUN race checks passed in 1.139 seconds, and Box
+manager-to-original-reader checks passed in 1.793 seconds. The generated raw
+command rejects an expired caller before construction (1.440 seconds), while
+its existing partial-construction/dependency retention cases pass (2.055 seconds).
+The runner requires all 14 startup verdicts; parser controls reject missing and
+duplicated results. Full raw successful startup reaches a netlink operation that
+this local environment denies. Its true positive and real namespace Node/TUN
+acceptance remain mandatory in CI, rather than being replaced by a modeled pass.
+External/Tor host-to-child startup deadline transport remains a separate active
+shipping-path repair; this unit does not claim that transport is finished.
 
 ## Remaining requirement/evidence ledger
 

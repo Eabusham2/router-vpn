@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,50 @@ func TestRouterVPNRawCommandOptionsRetirementScope(t *testing.T) {
 				if createErr == nil || owner != nil {
 					t.Fatalf("unsupported graph reached native creation: owner=%v error=%v", owner, createErr)
 				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNRawCommandOriginalStartupDeadline(t *testing.T) {
+	for _, mode := range []string{"cli-bound", "shorter-caller", "expired"} {
+		t.Run(mode, func(t *testing.T) {
+			options := routerVPNRawCommandTestOptions(t, `{"log":{"disabled":true},"inbounds":[{"type":"mixed","tag":"original-loopback","listen":"127.0.0.1","listen_port":0}]}`)
+			var expected time.Time
+			if mode != "cli-bound" {
+				var cancel context.CancelFunc
+				globalCtx, cancel = context.WithTimeout(globalCtx, 5*time.Second)
+				defer cancel()
+				expected, _ = globalCtx.Deadline()
+				if mode == "expired" {
+					cancel()
+				}
+			}
+			before := time.Now()
+			owner := routerVPNRawCommandTestStart(t, options)
+			deadline, ok := owner.startup.Deadline()
+			if !ok {
+				t.Fatal("raw startup remained unbounded")
+			}
+			if mode == "cli-bound" {
+				if deadline.Before(before.Add(C.StartTimeout)) || deadline.After(time.Now().Add(C.StartTimeout)) {
+					t.Fatal("raw startup changed explicit native admission budget")
+				}
+			}
+			if mode != "cli-bound" && !deadline.Equal(expected) {
+				t.Fatal("raw startup extended original caller deadline")
+			}
+			if mode == "expired" {
+				if !errors.Is(owner.startErr, context.Canceled) || owner.native.box != nil {
+					t.Fatal("expired startup constructed or admitted native Box", owner.startErr)
+				}
+				return
+			}
+			if owner.startErr != nil || owner.native.box == nil {
+				t.Fatal("accepted startup failed", owner.startErr)
+			}
+			if globalCtx.Err() != nil {
+				t.Fatal("startup completion canceled original lifetime")
 			}
 		})
 	}

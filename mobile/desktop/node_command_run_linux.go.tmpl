@@ -42,9 +42,9 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 		return err
 	}
 	defer files.root.Close()
-	ctx, stopPreparation := context.WithTimeout(context.Background(), routerVPNNodeAdmissionLimit)
+	ctx, stopPreparation := context.WithTimeout(parent, routerVPNNodeAdmissionLimit)
+	defer stopPreparation()
 	policy, err := control.compile(ctx, files, session, source, config, transfer, mtu)
-	stopPreparation()
 	if err != nil {
 		return err
 	}
@@ -139,6 +139,9 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 		}
 	}()
 	defer func() { close(watchStop); <-watchDone }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	instance, err := box.New(box.Options{Context: graph, Options: parsed})
 	if err != nil {
 		for _, partial := range routerVPNExternalConstructed(graph) {
@@ -153,9 +156,16 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 	if err != nil {
 		return err
 	}
+	if err := instance.RouterVPNDesktopStartupContext(ctx); err != nil {
+		return err
+	}
 	if err := instance.RouterVPNStrategyStart(); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stopPreparation()
 	proof, stopProof := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
 	physical, err := instance.RouterVPNDesktopLinuxNodeActivatePhysical(proof, policy)
 	stopProof()

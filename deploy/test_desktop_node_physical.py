@@ -50,6 +50,11 @@ MTU_CONTEXT_VERDICTS = {
     "mtu-startup-context": ["TestRouterVPNDesktopMTUStartupContextLifecycleDeadline"],
     "mtu-finalization-context": ["TestRouterVPNMTUFinalizationContextPreservesOriginalCleanup", *["TestRouterVPNMTUFinalizationContextPreservesOriginalCleanup/" + name for name in ("readback", "physical-rebind", "mixed-failure", "cleanup-expired")]],
 }
+STARTUP_CONTEXT_VERDICTS = {
+    "native-startup-inbound": ["TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget", *["TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget/" + leaf for leaf in ("held-lock", "deadline", "lifetime")]],
+    "native-startup-box": ["TestRouterVPNDesktopStartupKeepsCallerAndLifetime", *["TestRouterVPNDesktopStartupKeepsCallerAndLifetime/" + leaf for leaf in ("original", "expired", "late-success", "missing-reader", "no-deadline")]],
+    "native-startup-command": ["TestRouterVPNRawCommandOriginalStartupDeadline", *["TestRouterVPNRawCommandOriginalStartupDeadline/" + leaf for leaf in ("cli-bound", "shorter-caller", "expired")]],
+}
 LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
                     if mode in ("shadowsocks", "hysteria2") or layer != "off")
@@ -943,6 +948,8 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, names, "native manager observation")
     if name == "network-context":
         require_native_verdicts(output, NETWORK_CONTEXT_TESTS + NETWORK_CONTEXT_LEAVES, "original network observation")
+    if name in STARTUP_CONTEXT_VERDICTS:
+        require_native_verdicts(output, STARTUP_CONTEXT_VERDICTS[name], "original native startup deadline")
     if name in MTU_CONTEXT_VERDICTS:
         require_native_verdicts(output, MTU_CONTEXT_VERDICTS[name], "original MTU operation and cleanup")
     if name == "mtu-command-context":
@@ -1017,6 +1024,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
+        ("native-startup-inbound", "./protocol/tun", "^TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget$", ("TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget",)),
+        ("native-startup-box", ".", "^TestRouterVPNDesktopStartupKeepsCallerAndLifetime$", ("TestRouterVPNDesktopStartupKeepsCallerAndLifetime",)),
         ("mtu-operation-context", "./experimental/libbox/routervpn/mobilemtu", "^TestContext", tuple(name for name in MTU_CONTEXT_VERDICTS["mtu-operation-context"] if "/" not in name)),
         ("mtu-owner-context", "./cmd/sing-box", "^TestDesktopMTUContext", tuple(name for name in MTU_CONTEXT_VERDICTS["mtu-owner-context"] if "/" not in name)),
         ("mtu-manager-context", "./adapter/inbound", "^TestRouterVPNTunContext(RejectsLatePublicationAfterUnusedClose|AdmissionLocksDoNotConstructLate)$", tuple(name for name in MTU_CONTEXT_VERDICTS["mtu-manager-context"] if "/" not in name)),
@@ -1089,6 +1098,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     suites.append(("native-monitor-context", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeMonitorOriginalContext$", ("TestRouterVPNNativeMonitorOriginalContext",)))
     if platform.system() == "Linux":
         suites.append(STANDARD_MTU_SUITE)
+        suites.append(("native-startup-command", "./cmd/sing-box", "^TestRouterVPNRawCommandOriginalStartupDeadline$", ("TestRouterVPNRawCommandOriginalStartupDeadline",)))
         suites.append(("mtu-cleanup-context", "./adapter/inbound", "^TestRouterVPNTunContext(RestoresOnlyWithOriginalCleanupAllowance|ControllerRestoresAfterUnusedCloseCancellation)$", ("TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance", "TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation")))
         suites.append(("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NATIVE_MTU_TEST,)))
         suites.append(("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NATIVE_MTU_MODEL_TESTS))

@@ -204,3 +204,54 @@ func TestRouterVPNDesktopMTUStartupContextLifecycleDeadline(t *testing.T) {
 		t.Fatal("expired startup adopted original native construction")
 	}
 }
+
+func TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget(t *testing.T) {
+	for _, mode := range []string{"held-lock", "deadline", "lifetime"} {
+		t.Run(mode, func(t *testing.T) {
+			lifetime, stopLifetime := context.WithCancel(context.Background())
+			defer stopLifetime()
+			inbound := &Inbound{ctx: lifetime, tunOptions: native.Options{RouterVPNNetworkLifetime: lifetime}}
+			if mode == "deadline" {
+				if err := inbound.RouterVPNDesktopNetworkStartup(context.Background()); err == nil {
+					t.Fatal("unbounded startup admitted")
+				}
+				if inbound.tunOptions.RouterVPNNetworkContext != nil || inbound.routervpnStandardStartup {
+					t.Fatal("failed admission adopted startup")
+				}
+				return
+			}
+			ctx, cancel := context.WithTimeout(lifetime, 25*time.Millisecond)
+			defer cancel()
+			if mode == "held-lock" {
+				inbound.routervpnLifecycle.Lock()
+				done := make(chan error, 1)
+				go func() { done <- inbound.RouterVPNDesktopNetworkStartup(ctx) }()
+				select {
+				case err := <-done:
+					if !errors.Is(err, context.DeadlineExceeded) {
+						t.Error("lost original expiry", err)
+					}
+				case <-time.After(time.Second):
+					inbound.routervpnLifecycle.Unlock()
+					<-done
+					t.Fatal("startup waited past original caller")
+				}
+				inbound.routervpnLifecycle.Unlock()
+				if inbound.tunOptions.RouterVPNNetworkContext != nil || inbound.routervpnStandardStartup {
+					t.Fatal("late admission mutated original")
+				}
+				return
+			}
+			if err := inbound.RouterVPNDesktopNetworkStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if inbound.tunOptions.RouterVPNNetworkContext != ctx || inbound.tunOptions.RouterVPNNetworkLifetime != lifetime {
+				t.Fatal("startup replaced budget or lifetime")
+			}
+			cancel()
+			if lifetime.Err() != nil {
+				t.Fatal("completed startup canceled connection lifetime")
+			}
+		})
+	}
+}

@@ -22,6 +22,7 @@ import (
 type routerVPNRawCommand struct {
 	native   *routerVPNExternalNative
 	cancel   context.CancelFunc
+	startup  context.Context // original operation budget, distinct from Box lifetime
 	started  chan struct{}
 	startErr error // published only by closing started
 }
@@ -91,9 +92,18 @@ func routerVPNCreateRawCommand(options option.Options) (*routerVPNRawCommand, er
 			return nil, E.New("command context already owns a service")
 		}
 	}
-	owner := &routerVPNRawCommand{native: &routerVPNExternalNative{cancel: cancel}, cancel: cancel, started: make(chan struct{})}
+	// The raw CLI has no supervising host deadline. Admit this original start
+	// once using the pinned native startup contract, before construction. This
+	// is a cancellation bound; the historical task monitor only warned.
+	startup, stopStartup := context.WithTimeout(ctx, C.StartTimeout)
+	owner := &routerVPNRawCommand{native: &routerVPNExternalNative{cancel: cancel}, cancel: cancel, startup: startup, started: make(chan struct{})}
 	go func() {
 		defer close(owner.started)
+		defer stopStartup()
+		if err := startup.Err(); err != nil {
+			owner.startErr = err
+			return
+		}
 		instance, err := box.New(box.Options{
 			Context: ctx, Options: options,
 			NetworkNamespaceHolderArgs: []string{"/proc/self/exe", commandNetnsHolder.Use},
@@ -113,8 +123,14 @@ func routerVPNCreateRawCommand(options option.Options) (*routerVPNRawCommand, er
 		// The pinned public Start closes a failed Box before its caller can
 		// retry native retirement. This existing scoped entry runs those same
 		// startup stages and success log while retaining the failed owner.
+		if err := instance.RouterVPNDesktopStartupContext(startup); err != nil {
+			owner.startErr = E.Cause(err, "admit original startup")
+			return
+		}
 		if err := instance.RouterVPNStrategyStart(); err != nil {
 			owner.startErr = E.Cause(err, "start service")
+		} else if err := startup.Err(); err != nil {
+			owner.startErr = E.Cause(err, "original startup expired")
 		}
 	}()
 	return owner, nil

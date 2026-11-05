@@ -3,6 +3,8 @@ package box
 import (
 	"context"
 	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"runtime"
 )
@@ -121,4 +123,39 @@ func (owner *RouterVPNDesktopNodePhysical) DesktopNetworkReceiptContext(ctx cont
 		return "", err
 	}
 	return raw, ctx.Err()
+}
+
+// RouterVPNDesktopStartupContext binds an accepted caller's original startup
+// budget to the original unstarted TUNs. The Box context remains their separate
+// connection lifetime. No lower layer creates or renews a startup allowance.
+func (s *Box) RouterVPNDesktopStartupContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native startup requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("native startup requires its original deadline")
+	}
+	if s == nil || s.inbound == nil {
+		return errors.New("native startup lost its original Box")
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil {
+		return err
+	}
+	for _, inbound := range inbounds {
+		if inbound.Type() != C.TypeTun {
+			continue
+		}
+		reader, ok := inbound.(interface{ RouterVPNDesktopMTUStartupContext(context.Context) error })
+		if !ok {
+			return errors.New("native startup has no bounded original TUN admission")
+		}
+		if err := reader.RouterVPNDesktopMTUStartupContext(ctx); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
