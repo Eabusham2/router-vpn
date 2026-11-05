@@ -60,7 +60,10 @@ class Tests(unittest.TestCase):
         self.assertIn('.disabled(runDisabled || hopProbe.running)',view)
     def test_android_real_service_owns_callbacks_and_metadata(self):
         service=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java').read_text()
-        self.assertLess(service.index('ownedExecution.run(ownedServer)'),service.index('adoptHopMeasurement(Libbox.newRouterHopMeasurement'))
+        graph=service.split('if(hopMetadata!=null){',1)[1].split('long performanceServices',1)[0]
+        self.assertLess(graph.index('ownedExecution.run(ownedServer)'),graph.index('adoptHopMeasurement('))
+        self.assertIn('adoptHopMeasurement("external".equals(new JSONObject(hopMetadata).optString("entry_kind"))',graph)
+        self.assertIn('?ownedExecution.newHopMeasurement(ownedServer):Libbox.newRouterHopMeasurement(ownedServer,hopMetadata),ownedServer,generation)',graph)
         for marker in ('probe.networkChanged()', 'hopMeasurement.close()', 'synchronized(service.lock)', '"UP".equals(service.state)', 'response.length()>16384',
                        'adoptHopMeasurement(capturedExternal.newHopMeasurement()', 'adoptHopMeasurement(capturedTor.newHopMeasurement()',
                        'static final class HopMeasurementOwner', 'service.hopMeasurement!=probe', 'service.commandServer!=server',

@@ -38,7 +38,9 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 	for _, marker := range []string{
 		"STOP_TIMEOUT_MS = 8000L",
 		"boolean revalidationTeardown",
-		"boolean stopped = stopEmbeddedAndProve();",
+		"boolean stopped = stopEmbeddedAndProve() && cleanupPreparedSession();",
+		"if(!LayeredVpnService.discardPreparedSession(context,owned))return false;",
+		"if(owned.equals(pendingPreparedSession))pendingPreparedSession=\"\";return pendingPreparedSession.isEmpty();",
 		"suppressHome = revalidationTeardown",
 		"boolean disconnectAndDrainCaptured(String session)",
 		"if(stopped&&drain)stopped=drainWorker(task);",
