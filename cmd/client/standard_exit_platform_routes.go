@@ -186,6 +186,13 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 	}
 	if retained != nil {
 		defer retained.Discard()
+		if capture, ok := retained.(interface{ CaptureMTUExit(standardExit) error }); ok {
+			if err := capture.CaptureMTUExit(exit); err != nil {
+				tracker.markRequestFailure(err.Error())
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		cmd = retained.Command()
 	}
 	markOwnedFailure := func(message string) bool {
@@ -393,6 +400,7 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
+	a.startPlatformServiceAutomaticMTU()
 	route := "client TUN -> direct external " + exit.Protocol + " exit -> Internet"
 	entryID, entryName := "", ""
 	if !q.Direct {

@@ -30,6 +30,7 @@ type linuxStandardServiceSession struct {
 	cleanupPending bool
 	cleanupError   string
 	network        *linuxStandardServiceNetwork
+	mtu            *linuxStandardServiceMTU
 }
 
 // The app here is the service's actual process/state owner. Its commands are
@@ -133,6 +134,9 @@ func (s *linuxStandardService) retire(ctx context.Context, release bool) (failur
 	}()
 	finish := s.operation(ctx)
 	defer finish()
+	if err := s.session.mtu.drainForStop(ctx); err != nil {
+		return err
+	}
 	if err := s.closeNetwork(ctx, s.session); err != nil {
 		return err
 	}
@@ -334,7 +338,7 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 }
 
 func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File, startup **linuxStandardServiceStartup) (failure error) {
-	if request.ProfileRevision != "" || request.ResultRevision != "" {
+	if request.ProfileRevision != "" || request.ResultRevision != "" || request.MTU != nil {
 		return errors.New("runtime request supplied unrelated protection source")
 	}
 	if request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() {
@@ -515,6 +519,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	shutdownAccepted := false
 	var protection *linuxStandardServiceProtectionData
 	var startup *linuxStandardServiceStartup
+	var mtu *linuxStandardServiceMTUResponse
 	if upgrade {
 		err = s.handleIdleUpgrade(live, peer, request, files)
 		shutdownAccepted = err == nil
@@ -523,6 +528,12 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 			err = errors.New("standard protection request supplied unrelated native authority")
 		} else {
 			protection, err = s.protectionRequest(live, peer, request)
+		}
+	} else if strings.HasPrefix(request.Action, "mtu-") {
+		if len(files) != 0 {
+			err = errors.New("standard MTU request supplied unrelated native authority")
+		} else {
+			mtu, err = s.mtuRequest(live, peer, request)
 		}
 	} else {
 		err = s.handleWithStartup(live, peer, request, files, &startup)
@@ -550,8 +561,9 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	}
 	if err != nil {
 		startup = nil
+		mtu = nil
 	}
-	response := linuxStandardServiceResponse{Startup: startup, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
+	response := linuxStandardServiceResponse{Startup: startup, MTU: mtu, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
 	if err != nil {
 		response.Error = err.Error()
 		if len(response.Error) > 2048 {
@@ -565,7 +577,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 }
 
 func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File) error {
-	if request.Schema != 1 || request.Action != "shutdown-idle" || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
+	if request.Schema != 1 || request.Action != "shutdown-idle" || request.MTU != nil || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
 		request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileID != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return errors.New("standard service idle-upgrade request changed its fixed scope")
 	}
@@ -625,7 +637,7 @@ func (s *linuxStandardService) watch(ctx context.Context) {
 					err = s.session.owner.legacyDNSCurrent(observation)
 				}
 				if err == nil {
-					err = s.networkCurrent(observation, s.session, false)
+					err = s.watchNetworkCurrent(observation, s.session)
 				}
 				runtime.UnlockOSThread()
 				// Classify before canceling this observation ourselves. Pure read

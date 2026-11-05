@@ -36,6 +36,10 @@ type linuxStandardRequestEpoch struct {
 	profileDigest               string
 	shape                       standardengine.TUN
 	startup                     *linuxStandardServiceStartup
+	mtuReceipt                  string
+	mtuBinding                  standardengine.ReaderBinding
+	mtuSequence                 uint64
+	mtuTransition               *linuxStandardControllerMTUTransition
 }
 
 func openLinuxStandardRequestObserver(operation, lifetime context.Context) (linuxStandardStartupObserver, error) {
@@ -166,7 +170,7 @@ func (n *linuxStandardRequestEpoch) current(ctx context.Context, ready bool) err
 	if err := n.sources(ctx); err != nil {
 		return observationFailure(err)
 	}
-	if ready && !n.ready || n.begun && !n.ready {
+	if ready && !n.ready || n.begun && !n.ready || n.mtuTransition != nil {
 		return errors.New("standard controller has no completed original startup epoch")
 	}
 	observed := n.observer.CurrentContext(ctx)
@@ -229,6 +233,8 @@ func (n *linuxStandardRequestEpoch) admit(ctx context.Context, startup *linuxSta
 		return n.fail(err)
 	}
 	n.ready = true
+	n.mtuReceipt = ready.NetworkReceipt
+	n.mtuBinding = standardengine.InitialReaderBinding(captureSHA, ready.NetworkReceipt)
 	n.startup = &linuxStandardServiceStartup{Capture: append([]byte(nil), startup.Capture...), Ready: append([]byte(nil), startup.Ready...)}
 	return n.fail(n.current(ctx, true))
 }

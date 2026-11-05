@@ -84,6 +84,9 @@ func resetRouterNodeAutomaticMTU(a *app) {
 }
 
 func (a *app) startRouterNodeAutomaticMTU() {
+	if a.startPlatformServiceAutomaticMTU() {
+		return
+	}
 	a.startRouterNodeAutomaticMTUWithRun(a.runRouterNodeAutomaticMTU)
 }
 

@@ -8,6 +8,7 @@ import types
 import unittest
 from unittest import mock
 import linux_standard_service_bundle as B
+import linux_standard_service_gate as G
 
 
 class StandardServiceBundleTests(unittest.TestCase):
@@ -45,6 +46,22 @@ class StandardServiceBundleTests(unittest.TestCase):
                         self.assertEqual((result/'engine').stat().st_mode&0o777,0o500)
                     else:
                         with self.assertRaises(ValueError):B.copy_private(source,root/'private',digest)
+
+    def test_service_mtu_sources_bind_native_bundle_provenance(self):
+        root=Path(__file__).resolve().parents[1]
+        captured={path.relative_to(root).as_posix() for path in B.builder().inputs()}
+        required={name for name in G.SOURCE if '/linux_standard_service_mtu_' in name}
+        required.update(G.AUXILIARY_TESTS)
+        required.update({'internal/desktopnetwork/routing_history_retirement_linux.go',
+                         'internal/dnsmeasure/addresses.go',
+                         'mobile/desktop/standard_mtu_linux.go.tmpl',
+                         'mobile/desktop/standard_mtu_linux_test.go.tmpl',
+                         'deploy/linux_standard_service_gate.py',
+                         'deploy/test_linux_standard_service_runner.py',
+                         'deploy/test_linux_controller_privilege.py'})
+        self.assertTrue(required)
+        self.assertEqual(sorted(required-captured),[],
+                         'native reuse/provenance omitted service MTU implementation or required gate')
 
     def test_shipping_gate_follows_actual_bundle_and_binds_manifest(self):
         root=Path(__file__).resolve().parents[1]

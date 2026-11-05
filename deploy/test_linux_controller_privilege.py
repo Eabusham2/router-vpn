@@ -212,7 +212,7 @@ def execute(go='go', runtime_bundle=None):
                 'internal/linuxprotection/node_control_record.go', 'internal/linuxprotection/node_control_record_test.go',
                 'internal/linuxprotection/node_control_linux.go', 'internal/linuxprotection/node_control_linux_native_test.go',
                 'deploy/test_linux_node_control.py', 'deploy/test_linux_node_control_runner.py'}
-    if not required.issubset(before):
+    if not required.union(SERVICE.SOURCE).issubset(before):
         raise ValueError('The actual controller privilege source/test closure is incomplete')
     env = dict(os.environ, GOWORK='off')
     if env.get('GOOS', 'linux') != 'linux':
@@ -228,6 +228,13 @@ def execute(go='go', runtime_bundle=None):
     UID.run([sys.executable, ROOT/'deploy/test_linux_empty_recovery_runner.py'], cwd=ROOT, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_standard_service_runner.py'], cwd=ROOT, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_standard_service_bundle.py'], cwd=ROOT, env=env)
+    for group, (package, _) in SERVICE.AUXILIARY.items():
+        output = UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', '-v',
+                          '-run=' + SERVICE.auxiliary_pattern(group), package], cwd=ROOT, env=env)
+        SERVICE.check_auxiliary_verdict(output, group)
+        if source_identity() != before:
+            raise ValueError('Original service MTU source changed during its required package gates')
+        print(output, end='' if output.endswith('\n') else '\n')
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_control_runner.py'], cwd=ROOT, env=env)
     CONTROL.execute(compiler, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_transaction_runner.py'], cwd=ROOT, env=env)

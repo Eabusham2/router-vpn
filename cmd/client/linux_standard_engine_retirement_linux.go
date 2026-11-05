@@ -82,24 +82,69 @@ func (n *linuxStandardEngine) routingRetired(ctx context.Context) error {
 			}
 		}
 	}
-	reader, ok := n.tracker.(interface {
-		RoutingAbsent(context.Context, *desktopnetwork.DesktopNetworkRetirementReceipt) error
-	})
-	if !ok {
-		return errors.New("standard native retirement omitted its original routing observer")
-	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := o.namespaceCurrent(); err != nil {
 		return err
 	}
-	if err := reader.RoutingAbsent(ctx, &retirement); err != nil {
-		return err
+	if len(n.mtuRetirements) != 0 {
+		reader, ok := n.tracker.(interface {
+			RoutingHistoryAbsent(context.Context, []desktopnetwork.DesktopNetworkRetirementReceipt) error
+		})
+		if !ok {
+			return errors.New("standard native MTU retirement omitted its original history observer")
+		}
+		history := append([]desktopnetwork.DesktopNetworkRetirementReceipt(nil), n.mtuRetirements...)
+		history = append(history, retirement)
+		if err := reader.RoutingHistoryAbsent(ctx, history); err != nil {
+			return err
+		}
+	} else {
+		reader, ok := n.tracker.(interface {
+			RoutingAbsent(context.Context, *desktopnetwork.DesktopNetworkRetirementReceipt) error
+		})
+		if !ok {
+			return errors.New("standard native retirement omitted its original routing observer")
+		}
+		if err := reader.RoutingAbsent(ctx, &retirement); err != nil {
+			return err
+		}
 	}
 	if err := o.namespaceCurrent(); err != nil {
 		return err
 	}
 	return ctx.Err()
+}
+
+func (n *linuxStandardEngine) retainMTURetirements(report standardengine.OperationReport) error {
+	for _, evidence := range report.Readers {
+		if evidence == nil || len(evidence.Retirement) == 0 {
+			continue
+		}
+		receipt, err := desktopnetwork.ParseDesktopNetworkRetirementReceipt(string(evidence.Retirement))
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, prior := range n.mtuRetirements {
+			if prior.Incarnation != receipt.Incarnation {
+				continue
+			}
+			raw, err := desktopnetwork.CanonicalDesktopNetworkRetirementReceipt(prior)
+			if err != nil || raw != string(evidence.Retirement) {
+				return errors.New("standard MTU changed retained native retirement")
+			}
+			found = true
+			break
+		}
+		if !found {
+			if len(n.mtuRetirements) >= standardengine.OperationTransactions*standardengine.OperationReaders {
+				return errors.New("standard MTU retirement history exceeded original capacity")
+			}
+			n.mtuRetirements = append(n.mtuRetirements, receipt)
+		}
+	}
+	return nil
 }
 
 func (n *linuxStandardEngine) retainRoutingReceipt(receipt desktopnetwork.DesktopNetworkReceipt) {

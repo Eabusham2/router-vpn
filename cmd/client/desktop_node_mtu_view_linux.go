@@ -129,6 +129,9 @@ func writeDesktopLinuxMTUCapturedView(w http.ResponseWriter, view desktopLinuxMT
 }
 
 func (a *app) writeDesktopPlatformMTUViewStatus(w http.ResponseWriter, r *http.Request, request, session string) bool {
+	if a.writeLinuxStandardServiceMTUViewStatus(w, r, request, session) {
+		return true
+	}
 	view, handled, err := captureDesktopLinuxMTUView(r.Context(), a, request)
 	if !handled {
 		return false

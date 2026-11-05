@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`c2839a15`, the integrated observation change in `a94cde9d`, and the installed
+`508ce9ed`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -27,8 +27,13 @@ The installed Linux service and actual fixed native child now retain an original
 FD11 control/history channel, bound by the sealed launch capture and exact Ready
 acknowledgement. Separate work/cancellation lock regions, bounded raw evidence
 pages and non-reusable original keys passed real inherited-child/process-lock
-tests. FD10 retirement remains unchanged. The transport is a foundation for
-active MTU operations; it does not yet run a candidate or expose Retest/Cancel.
+tests. The native worker now executes original-reader transactions. The installed
+service/controller integration wires Auto/Retest/Cancel, joined rollback,
+selected-DNS TUN-bound measurements and separate durable history. Both original
+observers must consume the same actual reader history. Post-retirement Stop
+retains read-only completion evidence and full historical routing absence.
+The bounded allocation reserves complete-test and rollback capacity before
+mutation. Successful installed native/network acceptance remains separate.
 
 Already-proved service/controller network observers preserve their original
 identity after pure read expiry and retain genuine failures, including failures
@@ -185,8 +190,9 @@ validation limits. Changes and test counts are not a requirements denominator.
   causal controls pass. Both actual generated-command/TUN jobs at `2f31dfda`
   pass all six original cases, including MTU rollback and resolver/key refusals;
   they do not establish the three new MTU transactions. The ordinary no-context projection callers still need
-  their own operation-bound integration. Installed service Retest/Cancel,
-  coordinated transition history, cross-adapter protected transfer, active
+  their own operation-bound integration. Installed service Retest/Cancel and coordinated transition history are now
+  integrated with the fixed native worker; successful native/device acceptance
+  remains distinct. Cross-adapter protected transfer, active
   Always upgrades and same-boot service-crash recovery remain unfinished; see
   the [service contract](LINUX-STANDARD-OWNER-SERVICE.md).
 - All legacy standard preparations use the shared captured device policy and

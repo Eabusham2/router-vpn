@@ -58,13 +58,13 @@ func init() {
 // named Unix listeners, kernel peer pidfds, actual installed service/helper
 // processes, readiness and process join. Missing capabilities fail the gate.
 func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *testing.T) {
-	for _, scenario := range []string{"off", "on-connect", "on-connect-failure", "on-connect-network-failure", "on-connect-route-change", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
+	for _, scenario := range []string{"off", "on-connect", "on-connect-mtu", "on-connect-failure", "on-connect-network-failure", "on-connect-route-change", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy := scenario
 			if scenario == "always-off" {
 				policy = "always"
 			}
-			if scenario == "on-connect-route-change" || scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
+			if scenario == "on-connect-mtu" || scenario == "on-connect-route-change" || scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
 				policy = "on-connect"
 			}
 			executable := linuxControllerNamespaceInstall(t)
@@ -73,6 +73,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 			}
 			profile := common.RouterProfile{ID: "control", Name: "Control", KillSwitch: policy != "off", KillSwitchPolicy: policy, Endpoint: "203.0.113.77",
 				DNSMode: "custom", DNSProtocol: "udp", DNSHost: "1.1.1.1", DNSPort: 53}
+			if scenario == "on-connect-mtu" {
+				profile.MTUPolicy = "auto"
+			}
 			applyProfileDefaults(&profile)
 			body, _ := json.Marshal(common.RouterProfileStore{SchemaVersion: 4, SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
 			if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), body, 0600); err != nil {
@@ -140,6 +143,9 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				reader, writer := linuxControllerUserPipe(t, executable)
 				controller := linuxControllerBootstrapCommand(executable, reader)
 				action := "1"
+				if scenario == "on-connect-mtu" {
+					action = "mtu"
+				}
 				if scenario == "always-off" {
 					action = "off"
 				}

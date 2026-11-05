@@ -35,6 +35,7 @@ type linuxStandardEngine struct {
 	cleanupSequence                                                                       uint64
 	cleanupDeadline                                                                       int64
 	cleanupRequests                                                                       map[uint64]int64
+	mtuRetirements                                                                        []desktopnetwork.DesktopNetworkRetirementReceipt
 	routingReceipt                                                                        *desktopnetwork.DesktopNetworkReceipt
 	readyBody                                                                             []byte
 	imageCapability                                                                       *linuxprocess.SealedImage

@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +29,9 @@ type linuxStandardServiceLaunch struct {
 	peer                                        *linuxStandardServicePeer
 	registered, attempted, joined, copiesClosed bool
 	dnsProved                                   bool
+	mtuExit                                     *standardExit
+	mtuExitRaw                                  string
+	mtuOwner                                    *linuxStandardServiceMTUOwner
 }
 
 func prepareLinuxStandardServiceLaunch(a *app, local *linuxLegacyStandardExitOwner) (legacyStandardExitLaunch, error) {
@@ -51,6 +56,25 @@ func prepareLinuxStandardServiceLaunch(a *app, local *linuxLegacyStandardExitOwn
 		Directory: local.launch.directory, ConfigSHA256: local.digest, ProfileID: local.protectionProfileID, ProfileSHA256: digest,
 		Endpoint: local.protectionEndpoint, RuntimeMode: local.runtimeMode, Base: local.base, RouterID: local.routerID, NetworkID: local.dns.networkID}
 	return &linuxStandardServiceLaunch{app: a, prepared: local, request: request, image: image}, nil
+}
+
+// Capture the exact exit that compiled the original native graph, before start.
+func (o *linuxStandardServiceLaunch) CaptureMTUExit(exit standardExit) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.attempted || o.mtuExit != nil || o.prepared == nil || o.prepared.routerID != "standard:"+exit.ID || o.prepared.runtimeMode != "standard-"+exit.Protocol {
+		return errors.New("standard MTU exit does not belong to original launch")
+	}
+	raw, err := json.Marshal(exit)
+	if err != nil {
+		return err
+	}
+	var frozen standardExit
+	if err := json.Unmarshal(raw, &frozen); err != nil {
+		return err
+	}
+	o.mtuExit, o.mtuExitRaw = &frozen, string(raw)
+	return nil
 }
 
 // Command is only the original launch request identity in the controller.
@@ -212,6 +236,10 @@ func linuxStandardServiceExchange(ctx context.Context, channel *net.UnixConn, im
 	if response.Startup != nil && (request.Action != "start" || !response.Complete) || response.Complete && request.Action == "start" && response.Startup == nil {
 		return response, errors.New("standard service response changed original startup ledger scope")
 	}
+	mtuAction := strings.HasPrefix(request.Action, "mtu-")
+	if response.MTU != nil && !mtuAction || mtuAction && (response.Startup != nil || response.Protection != nil || response.Complete && response.MTU == nil) {
+		return response, errors.New("standard service response changed original MTU scope")
+	}
 	response.transmittedDeadline = request.DeadlineNS
 	response.authenticatedPeer = *originalPeer
 	if !response.Complete {
@@ -360,19 +388,34 @@ func (s *linuxStandardServiceStop) Retire(ctx context.Context, command *exec.Cmd
 	if command != s.command || ctx == nil || ctx.Err() != nil {
 		return errors.New("standard service Stop lost its original deadline or command")
 	}
-	if err := o.currentIntent(s.operation, s.command); err != nil {
+	if err := o.currentIntentContext(ctx, s.operation, s.command); err != nil {
+		return err
+	}
+	// The optimizer's original rollback needs the live activation and owner
+	// mutex, so join it before cancelling the monitor or acquiring that mutex.
+	if err := stopLinuxStandardServiceMTUUI(ctx, o); err != nil {
 		return err
 	}
 	if err := o.stopMonitor(ctx); err != nil {
 		return err
 	}
-	o.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
 	defer o.mu.Unlock()
 	if command != s.command || ctx == nil || ctx.Err() != nil {
 		return errors.New("standard service Stop lost its original deadline or command")
 	}
-	if err := o.currentIntent(s.operation, s.command); err != nil {
+	if err := o.currentIntentContext(ctx, s.operation, s.command); err != nil {
 		return err
+	}
+	// Stop joins an already admitted candidate before closing either observer.
+	// Its own bounded teardown context cannot extend the native mutation deadline.
+	if o.mtuOwner != nil && o.mtuOwner.pending != nil {
+		_, drainErr := o.mtuOwner.finishStopLocked(ctx)
+		if o.mtuOwner.pending != nil {
+			return drainErr
+		}
 	}
 	if err := o.prepared.requestEpoch.close(ctx); err != nil {
 		return err
@@ -391,7 +434,7 @@ func (s *linuxStandardServiceStop) Retire(ctx context.Context, command *exec.Cmd
 	if err := o.closeCopies(); err != nil {
 		return err
 	}
-	if err := o.currentIntent(s.operation, s.command); err != nil {
+	if err := o.currentIntentContext(ctx, s.operation, s.command); err != nil {
 		return err
 	}
 	held := o.attempted && (o.prepared.protectionPolicy == "always" || !release && o.prepared.protectionPolicy == "on-connect")
@@ -401,7 +444,9 @@ func (s *linuxStandardServiceStop) Retire(ctx context.Context, command *exec.Cmd
 		}
 		o.peer = nil
 	}
-	o.app.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &o.app.mu); err != nil {
+		return err
+	}
 	defer o.app.mu.Unlock()
 	if o.app.cmd != s.command || o.app.connectionContext != s.operation {
 		return errors.New("standard service completion belongs to a replaced controller")

@@ -62,8 +62,19 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		fmt.Fprintln(os.Stdout, "standard-service-route-joined")
 		return nil
 	}
-	if action != "1" && action != "failure" && action != "network-failure" && action != "route-change" && action != "pre-rpc-network-failure" {
+	if action != "1" && action != "mtu" && action != "failure" && action != "network-failure" && action != "route-change" && action != "pre-rpc-network-failure" {
 		return errors.New("unknown native service fixture action")
+	}
+	// Keep public-Internet Auto outside this private native fixture. The actual
+	// service/worker transitions below use the same original captured owner.
+	if action == "mtu" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		release, err := a.holdCapturedMTU(ctx)
+		cancel()
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
 	body, err = os.ReadFile(filepath.Join(root, "modes.json"))
 	if err != nil {
@@ -139,6 +150,11 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	}
 	if _, err := standardengine.DecodeReady(epoch.startup.Ready, standardengine.SHA256(epoch.startup.Capture)); err != nil {
 		return err
+	}
+	if action == "mtu" {
+		if err := linuxStandardServiceNativeMTUFixture(a, owner); err != nil {
+			return err
+		}
 	}
 	if action == "failure" || action == "network-failure" || action == "route-change" {
 		if err = linuxStandardServiceControllerFailureFixture(a, owner, action); err != nil {

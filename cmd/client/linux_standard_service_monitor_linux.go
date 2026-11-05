@@ -29,6 +29,7 @@ type linuxStandardServiceMonitor struct {
 	tracker      *sessionTracker
 	profileToken string
 	ctx          context.Context
+	operation    context.Context
 	cancel       context.CancelFunc
 	watchDone    chan struct{}
 	finished     chan struct{}
@@ -70,7 +71,7 @@ func (o *linuxStandardServiceLaunch) activateMonitor(operation context.Context, 
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &linuxStandardServiceMonitor{owner: o, app: o.app, prepared: o.prepared, dns: o.prepared.dns,
 		command: o.Command(), request: o.request, tracker: tracker, profileToken: o.prepared.dns.profileToken,
-		ctx: ctx, cancel: cancel, watchDone: make(chan struct{}), finished: make(chan struct{}), probe: probe, stop: stop}
+		ctx: ctx, operation: operation, cancel: cancel, watchDone: make(chan struct{}), finished: make(chan struct{}), probe: probe, stop: stop}
 	if err := desktopnetwork.LockContext(operation, &o.app.mu); err != nil {
 		cancel()
 		return err
@@ -151,6 +152,11 @@ func (m *linuxStandardServiceMonitor) observe(ctx context.Context) (failure erro
 		return err, false
 	}
 	failure = m.sourceLocked(ctx)
+	if failure == nil && m.owner.prepared.requestEpoch != nil && m.owner.prepared.requestEpoch.mtuTransition != nil {
+		// A planned transition retains its original observer. Source checks do not
+		// count as a successful network observation or publish a healthy sample.
+		return errors.Join(m.owner.prepared.requestEpoch.sources(ctx), ctx.Err()), true
+	}
 	if failure == nil {
 		failure = m.probe(ctx)
 	}

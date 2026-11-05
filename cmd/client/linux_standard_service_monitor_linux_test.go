@@ -686,3 +686,108 @@ func TestLinuxStandardServiceMonitorPreservesOnlyPureObservationExpiry(t *testin
 		})
 	}
 }
+
+func TestLinuxStandardServiceMonitorBoundsApplicationMetadataLocks(t *testing.T) {
+	t.Run("observation", func(t *testing.T) {
+		t.Parallel()
+		f := newStandardMonitorFixture(t)
+		lifetime, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		tracker, _ := sessionTrackers.Load(f.a)
+		var probes atomic.Int32
+		m := &linuxStandardServiceMonitor{owner: f.o, app: f.a, prepared: f.o.prepared, dns: f.o.prepared.dns, command: f.o.Command(), request: f.o.request, tracker: tracker.(*sessionTracker), profileToken: f.o.prepared.dns.profileToken, ctx: lifetime, probe: func(context.Context) error { probes.Add(1); return nil }}
+		f.a.mu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				f.a.mu.Unlock()
+			}
+		}()
+		type observed struct {
+			err      error
+			selected bool
+		}
+		done := make(chan observed, 1)
+		observation, stopObservation := context.WithTimeout(lifetime, 4*time.Second)
+		defer stopObservation()
+		go func() { err, selected := m.observe(observation); done <- observed{err, selected} }()
+		select {
+		case result := <-done:
+			if !errors.Is(result.err, context.DeadlineExceeded) || result.selected {
+				t.Fatalf("blocked initial selection lost its original deadline: %+v", result)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("real observation remained queued on application metadata after its four-second budget")
+		}
+		if probes.Load() != 0 || m.observations.Load() != 0 || f.stops.Load() != 0 || !f.a.state.Connected || f.a.state.LastError != "" {
+			t.Fatal("expired metadata read probed, published, disconnected, or claimed success")
+		}
+		f.a.mu.Unlock()
+		locked = false
+		retry, stopRetry := context.WithTimeout(lifetime, time.Second)
+		defer stopRetry()
+		if err, selected := m.observe(retry); err != nil || !selected || m.observations.Load() != 1 {
+			t.Fatalf("same original monitor could not retry: %v %v", err, selected)
+		}
+	})
+	t.Run("retained-watch", func(t *testing.T) {
+		t.Parallel()
+		f := newStandardMonitorFixture(t)
+		resumed := make(chan struct{})
+		var once sync.Once
+		f.start(t, func(context.Context) error { once.Do(func() { close(resumed) }); return nil }, nil)
+		f.finish()
+		f.a.mu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				f.a.mu.Unlock()
+			}
+		}()
+		// The first real periodic observation must exhaust its unchanged four-second
+		// budget while this mutex remains held. Its original watch must survive.
+		select {
+		case <-f.m.finished:
+			t.Fatal("metadata expiry ended the original watch")
+		case <-time.After(5 * time.Second):
+		}
+		if f.stops.Load() != 0 || f.m.observations.Load() != 0 || !f.a.state.Connected || f.a.state.LastError != "" {
+			t.Fatal("blocked metadata read changed activation or counted success")
+		}
+		f.a.mu.Unlock()
+		locked = false
+		awaitStandardMonitor(t, resumed, "original watch did not retry after metadata lock was released")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := f.o.stopMonitor(ctx); err != nil {
+			t.Fatal(err)
+		}
+		awaitStandardMonitor(t, f.m.finished, "original watch did not join")
+		if f.stops.Load() != 0 || !f.a.state.Connected || f.a.state.LastError != "" {
+			t.Fatal("metadata timeout published failure or disconnected original activation")
+		}
+	})
+	t.Run("activation", func(t *testing.T) {
+		f := newStandardMonitorFixture(t)
+		operation, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		f.a.mu.Lock()
+		f.a.connectionContext = operation
+		done := make(chan error, 1)
+		go func() { done <- f.o.activateMonitor(operation, func(context.Context) error { return nil }, f.cleanup) }()
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(time.Second):
+			f.a.mu.Unlock()
+			t.Fatal("activation ignored original caller while waiting for metadata")
+		}
+		f.a.mu.Unlock()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("activation lost deadline: %v", err)
+		}
+		if _, exists := linuxStandardServiceMonitors.Load(f.o); exists {
+			t.Fatal("expired activation published an original monitor")
+		}
+	})
+}

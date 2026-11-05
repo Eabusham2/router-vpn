@@ -394,6 +394,77 @@ acceptance remain mandatory in CI, rather than being replaced by a modeled pass.
 External/Tor host-to-child startup deadline transport remains a separate active
 shipping-path repair; this unit does not claim that transport is finished.
 
+## Installed-service MTU execution and public controls
+
+The fixed native worker is published in
+[`3773ce62`](https://github.com/Eabusham2/router-vpn/commit/3773ce622d8c568baf31b8472928ac42d134dfd1).
+It retains the actual original, candidate and rollback readers, joins native
+mutation before publishing raw evidence, and accepts settlement only after both
+original observers acknowledge the same digest. Explicit cleanup retry cannot
+renew measurement work. Pure idle-observation expiry leaves the retained worker
+alive; mixed identity/protocol failure remains fatal. The complete privileged
+standardengine race suite passed in 9.088 seconds, and the strict parser required
+every named result. The actual prepared Box ownership test passed with the
+supported pure-Go configuration. That test is a negative ownership/composition
+check, not successful TUN mutation or public traffic acceptance.
+
+The service/controller integration implements the original MTU Auto, Fixed,
+Retest and Cancel requirements (historical audit 231–240), including the later
+captured-owner and cancellation corrections. Both preparation-time observers
+retain the exact transition, consume the actual native Ready/retirement pages
+and complete independently. No observer is reconstructed from current topology.
+The service preserves joined evidence when a health observation fails. An
+explicit Stop can read that evidence after autonomous engine retirement, then
+continue original native or detached-protection cleanup without accessing a
+closed FD11 or claiming healthy settlement. Final absence checks include every
+retained candidate and partial-construction routing ledger.
+
+The public service branch uses the original successful monitor lifetime after
+Connect's temporary context is cancelled and cleared. One optimizer persists
+across Retest operations on that launch. Auto begins after selected-DNS proof
+and monitor activation; Fixed/Jumbo views report actual interface readback.
+Cancel addresses its captured request. Pending progress does not present the
+pre-transition MTU as fresh interface evidence. Stop joins the optimizer and
+rollback before closing its original monitor and network observer.
+Delayed automatic callbacks retain that same UI owner and cannot recreate it
+after Stop or borrow a successor. Measurement socket retirement no longer waits
+behind another probe's launch lock; its count clears only after native Close.
+
+External measurements bind TCP sockets to the exact current TUN and re-prove
+the captured public exit. The fixed benchmark hostname is resolved through the
+already-proved selected DNS listener, with matching fresh-question validation;
+the ordinary machine resolver is not substituted. Measurements are HTTPS
+response/throughput evidence and verified interface MTU, not authenticated UDP
+path-MTU proof. Cached values remain historical until retested. A private v3
+sidecar retains at most 64 path entries for 24 hours, using guarded comparison
+and rollback of only the bytes owned by the failed save. The active profile and
+its captured proof identity are not rewritten to save a measurement.
+
+The native history remains bounded to 32 transactions per connection. Retest
+checks capacity for all five possible candidates, winner adoption and rollback
+before changing MTU; an exhausted connection preserves its current MTU and asks
+for reconnect. Unchanged-MTU requests perform fresh readback without replacing
+the reader. This bound is explicit, not an assertion of unlimited repeated
+Retest on one native allocation.
+
+The final focused race selection passed in 11.745 seconds: all 69 required MTU
+verdicts, five native-admission verdicts, original peer-expiry and bounded monitor
+cases passed. It includes real FD11 admission, retained post-retirement Stop,
+public UI, private cache, original activation, raw history and cancellation.
+The frozen source hashes were checked after execution. The broader service run
+encountered original-child startup/socket-transfer timeouts under concurrent
+compiler pressure; its three failing parent groups passed unchanged in a
+separate 33.298-second execution of the same retained race binary. That initial
+broad run remains a failed attempt, not a fabricated aggregate green run.
+Eight runner controls and four package-layout checks also passed.
+
+The new mandatory installed `on-connect-mtu` namespace scenario changes the
+actual native TUN twice, restores its original MTU, repeats the real selected-DNS
+exchange, rejects a cancelled next change and exercises original Stop/absence
+checks. It is compiled here but cannot execute without NET_ADMIN; successful
+installed TUN mutation, public measurements and device acceptance remain
+required separately.
+
 ## Original service peer observation expiry
 
 The service peer checker now returns the original task-observation error before
@@ -406,23 +477,22 @@ task/image/namespace witnesses and command role. An expired read leaves that
 same healthy peer usable for a later bounded observation, while a changed
 original record is rejected. The old error-joining implementation fails this
 same causal witness. The test is mandatory in the installed-service runner.
-This narrow observation repair is separate from the still-unpublished service
-MTU transaction and controller integration.
+This observation repair is retained by the service MTU transaction and
+controller integration described above.
 
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
 |---|---|---|
-| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor admission is now integrated and locally verified; installed-service mutation integration remains unfinished. |
-| MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child mutation loop, joined-worker/two-observer settlement, service/controller phase protocol, public Retest/Cancel branch and durable adoption remain unfinished. Safe refusal or an unused transport does not complete this requirement. |
+| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor admission is now integrated and locally verified; installed-service mutation and public controls are now integrated; successful installed native/network acceptance remains separate. |
+| MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. | Published ledger also lists protected cross-adapter transfer, active Always upgrades and same-boot service-crash continuation. This observation change does not implement those features. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 
-The service-MTU next step retains both original observers (service and controller),
-every actual candidate/rollback transaction and the existing optimizer budgets.
-It must measure through the original current TUN, preserve selected DNS, refuse
-late adoption and make cancellation visible while native work is running.
-The service observer is shared with its native tracker; it must not be duplicated
-or refreshed from topology to hide an invalid epoch.
+The integrated service-MTU path retains both original observers, actual native
+transactions and original optimizer budgets. Its remaining native acceptance
+must exercise the shipping composition and original current TUN, including
+selected DNS, cancellation, rollback and full owned retirement. Protocol-model
+results do not replace that acceptance.

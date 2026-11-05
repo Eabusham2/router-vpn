@@ -15,6 +15,7 @@ import (
 
 const MinMTU = 1280
 const MaxMTU = 9000
+const MaxCandidates = 5
 const ProbePort = 45999
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,96}$`)
@@ -272,7 +273,7 @@ func NewPlan(config string, actual int) (*Plan, error) {
 func (p *Plan) Candidates(cached int) []int {
 	values := []int{p.Original}
 	add := func(n int) {
-		if n < MinMTU || n > p.Ceiling || len(values) >= 5 {
+		if n < MinMTU || n > p.Ceiling || len(values) >= MaxCandidates {
 			return
 		}
 		for _, value := range values {

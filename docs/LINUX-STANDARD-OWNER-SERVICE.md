@@ -169,10 +169,13 @@ unit's refusals:
   handoff. This unit completes the proved-idle/Off upgrade path.
 - Same-boot service crash continuation for orphaned protection. A replacement
   service cannot recover the lost original creator from metadata.
-- Active owned MTU/interface transitions. Both the service's authenticated
-  original-child startup ledger and the controller's preparation-through-Start
-  event continuity are source-implemented. Their actual installed namespace
-  cases remain mandatory; they do not establish active MTU transition ownership.
+- Native acceptance of active MTU/interface transitions. The fixed child,
+  service and controller now retain real candidate/rollback transactions and
+  both original observers, with public Auto/Retest/Cancel, selected-DNS probes,
+  current interface readback and bounded durable history. Explicit Stop also
+  recovers joined evidence after autonomous retirement. The actual installed
+  namespace, successful TUN-bound measurement and device cases remain mandatory;
+  protocol fixtures and compilation do not establish those results.
 - Native retirement acceptance on the actual installed hosts and compatible
   resolver authority on older available system buses. The new exact-selector
   implementation replaces priority-range deletion, but Linux offers no atomic
