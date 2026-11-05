@@ -126,6 +126,26 @@ held-lock/late-publication regressions pass. Concurrent upstream HTTP admission/
 physical/device/private acceptance and the other surviving platform/graph work
 remain separate requirements. The older continuation below is retained as history.
 
+## Installed standard-service Speed Lab
+
+The Linux service path now supports captured current-path Speed Lab and complete
+temporary-test restoration. Measurements use the actual retained TUN dialer,
+normal TLS validation, selected-DNS proof and original request lifetime. The
+private exit and saved policy profile are checked separately. Fixed/Jumbo restore
+reads back the original value; Auto restore applies the captured measured value
+under one original shared MTU run and waits for actual closure before publishing
+its restored UI. It does not rerun Auto or overwrite a replacement connection.
+
+All 94 focused tagged race verdicts and 10 service runner checks pass. Windows
+AMD64 and Darwin ARM64 test binaries compile; execution remains a native gate.
+The wider physical-network tests fail to initialize in this workspace, and
+representative failures reproduce on unchanged `e7d5b43c`; opening a read-only
+NETLINK_ROUTE socket returns EPERM. Those tests remain required. Dedicated
+installed namespace cases now exercise public Retest/Cancel and cancelled
+temporary Speed Lab with actual private TLS transfers, fresh native restoration
+and exact prior nondefault MTU. Their native execution and GTK callbacks still
+require CI, followed by the separately required physical/off-LAN acceptance.
+
 ## Installed service MTU run ownership and cancellation
 
 The controller, installed service and fixed native child now share one accepted

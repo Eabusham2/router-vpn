@@ -124,6 +124,30 @@ the original remaining work. No request can lengthen admission. Native nft and
 installed service-to-Node tests remain mandatory; local protocol/race results
 are not privileged network acceptance.
 
+## Captured measurements and temporary restoration
+
+Current Speed Lab retains the actual installed service, original authenticated
+peer/activation, private exit, saved policy profile and selected-DNS proof. Native
+MTU and routing observations belong to that same original owner. A pending MTU
+transaction, unclosed run or retained measurement socket prevents conflicting
+admission. Read-only capture does not construct an optimizer run.
+
+HTTP latency/transfer requests use the captured TUN dialer and normal TLS
+verification. The original request owns a successful socket beyond its shorter
+dial admission. Redirects, ambient proxies, late completions and fallback to an
+ordinary-network dialer cannot install a result. Current and temporary paths
+preserve their original caller through capture, validation and observation.
+
+A temporary test preserves the complete saved profile store/selection, private
+exit source, physical-network identity and actual prior MTU. Restoration uses
+the ordinary shipping connection handler with the captured restore intent and
+requires a fresh proved native connection. Fixed/Jumbo must read back the exact
+old value. Auto restores the already-measured value under the same shared-run
+protocol and original 30-second parent, waits for actual closure, then installs
+its completed MTU UI after another source/readback check. Suspension prevents an
+automatic optimizer from competing. Failures retain the original cleanup path;
+Disconnect or a replacement connection suppresses stale restoration.
+
 ## Boot and installation
 
 `router-vpn-standard-owner.service` is a distinct notify service so an older
@@ -157,8 +181,16 @@ of the six stock protocols and three device policies must parse in the actual
 built engine. Privileged namespace cases exercise actual installed images,
 the generated engine and native TUN, a real private SOCKS/DNS peer, named
 sockets, peer pidfds, nft creation/readback, original service retirement,
-and boot Always to explicit UI Off followed by idle upgrade. Public-Internet
-proof remains an explicit fixture model. An unexpected
+and boot Always to explicit UI Off followed by idle upgrade. The compatibility
+cases retain their explicit final public-proof model. Dedicated
+`on-connect-public` and `on-connect-public-restore` cases use actual TUN-routed
+HTTPS to an authenticated private SOCKS/DNS/TLS peer, real bytes and elapsed time,
+the public Retest/Cancel/Speed Lab handlers, and exact native MTU readback. The
+restoration case cancels after both original launch and child exit, then requires
+fresh owner/proof identities, complete profile restoration and the prior measured
+1280 MTU despite a different startup MTU. Bounded test shaping delays actual
+payloads only under the matching kernel receipt; it synthesizes no measurement.
+Physical Internet performance remains separate. An unexpected
 actual engine exit must retain the original On-connect creator and saved inode
 until authenticated explicit Stop, followed by proved-idle upgrade. Separate native
 scope cases reject foreign standard/shared tables while preserving the

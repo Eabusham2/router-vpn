@@ -37,6 +37,11 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	for i := range a.profiles.Profiles {
 		applyProfileDefaults(&a.profiles.Profiles[i])
 	}
+	if action == "public-restore" {
+		if err := prepareStandardPublicRestoreProfiles(a); err != nil {
+			return err
+		}
+	}
 	a.state = state{Mode: "off", Phase: "off"}
 	if action == "off" {
 		get := httptest.NewRecorder()
@@ -62,7 +67,7 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 		fmt.Fprintln(os.Stdout, "standard-service-route-joined")
 		return nil
 	}
-	if action != "1" && action != "mtu" && action != "failure" && action != "network-failure" && action != "route-change" && action != "pre-rpc-network-failure" {
+	if action != "1" && action != "public-mtu" && action != "public-restore" && action != "mtu" && action != "failure" && action != "network-failure" && action != "route-change" && action != "pre-rpc-network-failure" {
 		return errors.New("unknown native service fixture action")
 	}
 	// Keep public-Internet Auto outside this private native fixture. The actual
@@ -116,7 +121,12 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	}
 	a.platformStandardExitConnectOwned(response, httptest.NewRequest(http.MethodPost, "/api/standard-exit/connect", bytes.NewReader(request)), platformStandardExitRuntime{
 		prepareLegacy: prepare,
-		prove:         func(*app, string) error { return nil },
+		prove: func(a *app, expected string) error {
+			if action == "public-mtu" || action == "public-restore" {
+				return a.proveStandardExitForOperation(expected)
+			}
+			return nil
+		},
 		proveDNS: func(ctx context.Context, captured legacyStandardExitLaunch) error {
 			// Exercise the shipping service proof and observer installation.
 			// The installed pinned core routes its actual selected resolver
@@ -153,6 +163,17 @@ func linuxStandardServiceControllerRouteFixture(owned *linuxOwnedController, act
 	}
 	if action == "mtu" {
 		if err := linuxStandardServiceNativeMTUFixture(a, owner); err != nil {
+			return err
+		}
+	}
+	if action == "public-mtu" {
+		if err := linuxStandardServiceNativePublicMTUFixture(a, owner); err != nil {
+			return err
+		}
+	}
+	if action == "public-restore" {
+		owner, err = linuxStandardServiceNativePublicRestoreFixture(a, owner)
+		if err != nil {
 			return err
 		}
 	}

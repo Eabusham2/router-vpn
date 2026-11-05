@@ -5,6 +5,11 @@ import re
 PREFIX = 'TestLinuxStandardService'
 MTU_PREFIX = 'TestLinuxStandardMTU'
 CORE = {
+    'SpeedLabRestoreRejectsChangedSource': ('original', 'profile', 'exit', 'selection', 'intent', 'captured-profile', 'mtu', 'held-app', 'cancelled'),
+    'SpeedLabPolicyCapture': ('original', 'profile', 'exit', 'hopped', 'late', 'duplicate', 'cancelled'),
+    'SpeedLabHeldCaptureKeepsCaller': ('capture', 'current', 'dial', 'options'),
+    'SpeedLabRestoreKeepsPolicySelection': (),
+    'SpeedLabSessionKeepsCaller': ('held', 'cancelled', 'missing', 'replaced'),
     'TransferKeepsOriginalStartupBudget': ('earlier-startup', 'earlier-transfer', 'cancelled-startup'),
     'TransferResumesFinishedNativeCleanup': ('native-close', 'saved-close'),
     'TransferRequiresNativeAndDurableSettlement': ('reserved', 'entered', 'committed', 'aborted-before-native-finish', 'aborted-pending-write', 'settled-pending-write', 'aborted', 'settled'),
@@ -63,8 +68,10 @@ CORE = {
     'MonitorRejectsUnprovedOrRepeatedActivation': ('dns', 'joined', 'unattempted', 'wrong-operation', 'foreign-runtime', 'foreign-tracker'),
     'MonitorShippingActivationOrderAndRefusal': ('active', 'monitor-refused', 'persistence-failed'),
 }
-NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-mtu', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-route-change', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
+NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-mtu', 'on-connect-public', 'on-connect-public-restore', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-route-change', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
 STARTUP = {
+    'PublicHTTPSPeer': ('latency', 'download', 'upload', 'foreign-auth', 'foreign-destination', 'tls-hostname'),
+    'SpeedLabCapturesOriginalService': ('original', 'command', 'profile', 'dns', 'activation', 'pending', 'run', 'sockets', 'mtu', 'session', 'exit'),
     'RetirementRejectsUnboundFinalResult': ('absent', 'foreign-source', 'unknown-attempt', 'changed-deadline', 'foreign-tun', 'no-constructor', 'startup-extension'),
     'RetirementRetriesOriginalLiveChild': (),
     'RetirementBoundsOutstandingAttempts': ('unsettled', 'settled-failures', 'complete-retained', 'foreign-failure'),
@@ -168,6 +175,19 @@ MTU_NATIVE = {
 # These package gates are part of service MTU acceptance, not renamed client
 # tests. Each is executed and checked before the captured service binary runs.
 AUXILIARY = {
+    'speedlab-caller': ('./cmd/client', {
+        'TestSpeedLabServiceCallerContextCapture': ('identity', 'expected', 'restore-plan'),
+        'TestSpeedLabServiceObserverJoinsCaller': ('request-cancel', 'explicit-stop'),
+        'TestSpeedLabServiceCallerContextAppGate': ('snapshot', 'temporary-admission', 'owner', 'expected-with-profiles', 'current-handler', 'public-validation'),
+    }),
+    'speedlab-transport': ('./cmd/client', {
+        'TestSpeedLabCapturedTunnelUsesPublicTLSAndActualTransfer': (),
+        'TestSpeedLabCapturedTunnelRejectsForeignTLSAndRedirect': ('foreign-certificate', 'redirect'),
+        'TestSpeedLabCapturedTunnelCancellationJoinsLateDial': ('request-cancel', 'request-deadline', 'owner-cancel', 'late-connection', 'refused-no-fallback', 'missing-dialer'),
+        'TestSpeedLabMeasurementConstructorsUseCapturedTunnel': (),
+        'TestSpeedLabCapturedTunnelRejectsLateHTTPResponse': (),
+        'TestSpeedLabCapturedTunnelSeparatesAdmissionAndSocketLifetime': ('request', 'factory'),
+    }),
     'standard-node-journal': ('./internal/linuxprotection', {
         'TestLinuxStandardNodeTransferJournalKeepsOriginalIntent': ('original', 'changed-deadline', 'changed-source', 'changed-destination', 'new-idle-request', 'active-replacement'),
     }),
@@ -183,6 +203,8 @@ AUXILIARY = {
     }),
 }
 AUXILIARY_TESTS = {
+    'cmd/client/speed_lab_service_caller_linux_test.go': 'speedlab-caller',
+    'cmd/client/speed_lab_tunnel_transport_test.go': 'speedlab-transport',
     'internal/linuxprotection/standard_node_transfer_test.go': 'standard-node-journal',
     'internal/desktopnetwork/desktop_network_retirement_limit_test.go': 'retirement-bound',
     'internal/desktopnetwork/routing_history_retirement_linux_test.go': 'routing-history',
@@ -244,7 +266,16 @@ SOURCE.update({'internal/linuxprotection/standard_node_transfer.go', 'internal/l
     'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_linux_journal.go',
     'cmd/client/desktop_node_linux_transaction.go', 'cmd/client/desktop_node_linux_transaction_retire.go',
     'cmd/client/desktop_node_session_linux.go', 'cmd/client/desktop_node_host_linux_transition.go', 'cmd/client/legacy_standard_exit_protection_linux.go'})
-NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_run_native_test.go', 'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
+SOURCE.update({'cmd/client/' + name for name in (
+    'linux_standard_service_speed_lab_linux.go', 'linux_standard_service_speed_lab_linux_test.go',
+    'linux_standard_service_speed_lab_native_test.go', 'linux_standard_service_speed_lab_other.go',
+    'speed_lab_standard_service.go', 'speed_lab.go', 'speed_lab_paths.go', 'speed_lab_expectation.go',
+    'speed_lab_transaction.go', 'speed_lab_measure.go', 'speed_lab_tunnel_transport.go',
+    'speed_lab_tunnel_transport_test.go', 'desktop_external_path.go', 'speed_lab_service_caller_linux_test.go',
+    'speed_lab_path_context.go', 'connection_launch_order_test.go',
+)})
+SOURCE.update({'client/linux/routervpn-speed-lab-path-v19.inc', 'deploy/test_desktop_speed_lab_forms.py'})
+NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_run_native_test.go', 'cmd/client/linux_standard_service_speed_lab_native_test.go', 'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
                       'cmd/client/linux_standard_service_mtu_namespace_native_test.go'}
 
 
@@ -311,6 +342,10 @@ def check_verdict(output, group):
     _check_exact_verdict(output, case_names(group), 'Standard service ' + group,
                          strict=group.startswith('mtu'))
 
+SOURCE.add('cmd/client/linux_standard_service_public_namespace_native_test.go')
+NATIVE_MTU_SOURCES.add('cmd/client/linux_standard_service_public_namespace_native_test.go')
+SOURCE.add('cmd/client/linux_standard_service_public_restore_namespace_native_test.go')
+NATIVE_MTU_SOURCES.add('cmd/client/linux_standard_service_public_restore_namespace_native_test.go')
 # Shared-clock provider and native admission are exact shipping dependencies.
 SOURCE.update({
     'internal/standardengine/operation_run_clock.go',

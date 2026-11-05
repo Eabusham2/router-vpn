@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/routechoice"
 )
 
@@ -41,6 +42,7 @@ type speedLabRequest struct {
 }
 
 type speedLabPath struct {
+	StandardExitID      string              `json:"standard_exit_id,omitempty"`
 	Scope               string              `json:"scope"`
 	Topology            string              `json:"topology"`
 	Temporary           bool                `json:"temporary"`
@@ -66,6 +68,7 @@ type speedLabPath struct {
 }
 
 type speedLabPathIdentity struct {
+	Standard        speedLabStandardServiceIdentity
 	SessionID       string
 	StateToken      string
 	RouterID        string
@@ -97,6 +100,13 @@ type speedLabTemporarySnapshot struct {
 }
 
 func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error) {
+	return captureSpeedLabIdentityContext(context.Background(), a)
+}
+
+func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathIdentity, speedLabPath, error) {
+	if identity, path, handled, err := captureStandardServiceSpeedLabCallerContext(ctx, a); handled {
+		return identity, path, err
+	}
 	a.mu.Lock()
 	st, command := a.state, a.cmd
 	profile, profileOK := a.profileByIDLocked(strings.TrimSpace(st.RouterID))
@@ -231,13 +241,22 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 			path.Description = "actual captured native Router path with selected DNS, source, process and interface proof"
 		}
 	}
-	if err := validateSpeedLabIdentity(a, identity); err != nil {
+	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
 	return identity, path, nil
 }
 
 func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
+	return validateSpeedLabIdentityContext(context.Background(), a, identity)
+}
+
+func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speedLabPathIdentity) error {
+	if identity.Standard != nil {
+		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		return identity.Standard.current(ctx, a, identity)
+	}
 	if identity.External != nil && (identity.External.external == nil || identity.External.tor != nil || identity.Tor != nil) ||
 		identity.Tor != nil && (identity.Tor.tor == nil || identity.Tor.external != nil || identity.GraphOK || identity.TorEntry != identity.Tor.tor.predecessor || (identity.TorEntry == nil) != (identity.EntryToken == "")) ||
 		identity.Node != nil && (identity.Node.ownedNode == nil || identity.Node.external != nil || identity.Node.tor != nil || identity.External != nil || identity.Tor != nil || identity.GraphOK) {
@@ -321,10 +340,16 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 }
 
 func (a *app) speedLabSnapshotTemporary() (speedLabTemporarySnapshot, error) {
-	a.mu.Lock()
+	return a.speedLabSnapshotTemporaryContext(context.Background())
+}
+
+func (a *app) speedLabSnapshotTemporaryContext(ctx context.Context) (speedLabTemporarySnapshot, error) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return speedLabTemporarySnapshot{}, err
+	}
 	snapshot := speedLabTemporarySnapshot{Profiles: cloneRouterProfileStore(a.profiles), State: a.state, Runtime: a.cmd}
 	a.mu.Unlock()
-	plan, err := a.speedLabCaptureRestorePlan(snapshot)
+	plan, err := a.speedLabCaptureRestorePlanContext(ctx, snapshot)
 	if err != nil {
 		return speedLabTemporarySnapshot{}, err
 	}
@@ -405,16 +430,21 @@ func (a *app) applySpeedLabTemporaryProfile(nodeID string, q speedLabRequest) (c
 }
 
 func waitForSpeedLabConnectedIdentity(a *app, timeout time.Duration) (speedLabPathIdentity, error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		identity, _, err := captureSpeedLabIdentity(a)
+	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), timeout)
+	defer cancel()
+	for ctx.Err() == nil {
+		identity, _, err := captureSpeedLabIdentityContext(ctx, a)
 		if err == nil {
 			return identity, nil
 		}
 		if opErr := a.checkConnectionOperation(); opErr != nil {
 			return speedLabPathIdentity{}, opErr
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return speedLabPathIdentity{}, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	return speedLabPathIdentity{}, errors.New("temporary Speed Lab path connected but typed path proof did not become current")
 }

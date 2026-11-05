@@ -131,9 +131,17 @@ static const char *linux_speed_lab_bind_profiles_v19(LinuxSpeedLabV12 *s, JsonOb
     } else {
         JsonNode *current_node = json_object_get_member(json_node_get_object(s->options), "current");
         JsonObject *current = current_node != NULL && JSON_NODE_HOLDS_OBJECT(current_node) ? json_node_get_object(current_node) : NULL;
-        if (linux_speed_lab_flag_v19(current, "connected") &&
-            (!obj_string(current, "router_id")[0] || !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "router_id")) ||
-             !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "entry_id")) || !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "exit_id")))) return missing;
+        if (linux_speed_lab_flag_v19(current, "connected")) {
+            const char *router = obj_string(current, "router_id"), *standard = obj_string(current, "standard_exit_id"), *policy = obj_string(current, "policy_profile_id");
+            if (standard[0] || policy[0] || g_str_has_prefix(router, "standard:")) {
+                g_autofree char *expected = g_strdup_printf("standard:%s", standard);
+                if (!standard[0] || !policy[0] || strcmp(router, expected) != 0 ||
+                    strcmp(obj_string(current, "mode"), "standard-exit") != 0 ||
+                    strcmp(obj_string(current, "execution"), "local") != 0 || obj_string(current, "entry_id")[0] ||
+                    strcmp(obj_string(current, "exit_id"), standard) != 0 || !linux_speed_lab_add_profile_v19(s, tokens, policy)) return missing;
+            } else if (!router[0] || !linux_speed_lab_add_profile_v19(s, tokens, router) ||
+                       !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "entry_id")) || !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "exit_id"))) return missing;
+        }
     }
     return NULL;
 }

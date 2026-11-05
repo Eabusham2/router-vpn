@@ -87,7 +87,14 @@ func linuxStandardInstallRuntimeFixture(t *testing.T) {
 // A private actual SOCKS5 peer accepts only the selected TCP resolver and
 // exchanges real uncached DNS frames. No outbound or compiled TUN option is
 // replaced. Public Internet reachability is outside this local gate.
-func linuxStandardNativePeerFixture(t *testing.T) *atomic.Int64 {
+func linuxStandardNativePeerFixture(t *testing.T, custom ...func(net.Conn, *atomic.Int64) error) *atomic.Int64 {
+	if len(custom) > 1 {
+		t.Fatal("ambiguous private peer")
+	}
+	serve := linuxStandardNativeSOCKSDNS
+	if len(custom) == 1 {
+		serve = custom[0]
+	}
 	t.Helper()
 	for _, args := range [][]string{{"link", "add", "rvphysical", "type", "dummy"}, {"address", "add", "203.0.113.10/24", "dev", "rvphysical"}, {"link", "set", "rvphysical", "up"}, {"route", "add", "default", "via", "203.0.113.1", "dev", "rvphysical"}} {
 		if output, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
@@ -121,7 +128,7 @@ func linuxStandardNativePeerFixture(t *testing.T) *atomic.Int64 {
 					}
 				}()
 				_ = connection.SetDeadline(time.Now().Add(50 * time.Second))
-				_ = linuxStandardNativeSOCKSDNS(connection, queries)
+				_ = serve(connection, queries)
 			}()
 		}
 	}()

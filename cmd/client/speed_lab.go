@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"router-vpn/internal/desktopnetwork"
 	"runtime"
 	"strings"
 	"time"
@@ -26,7 +27,12 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
-	a.mu.Lock()
+	optionsCtx, cancelOptions := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancelOptions()
+	if err := desktopnetwork.LockContext(optionsCtx, &a.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	selectedID := a.profiles.SelectedID
 	st := a.state
@@ -121,6 +127,15 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	serviceIdentity, err := standardServiceSpeedLabCurrentOptions(optionsCtx, a, st, command)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	for key, value := range serviceIdentity {
+		current[key] = value
+	}
+
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -164,7 +179,7 @@ func (a *app) speedLabSystemDirect(r *http.Request, q speedLabRequest, duration 
 		return speedLabPath{}, speedLabMeasurement{}, err
 	}
 	defer release()
-	if err := a.validateSpeedLabExpectedProfiles(q, nil); err != nil {
+	if err := a.validateSpeedLabExpectedProfilesContext(r.Context(), q, nil); err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, err
 	}
 	a.mu.Lock()
@@ -190,22 +205,27 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 }
 
 func (a *app) speedLabCurrentExpected(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(r.Context(), &a.mu); err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
+	}
 	connected := a.state.Connected
 	a.mu.Unlock()
 	if !connected {
 		path, measurement, err := a.speedLabSystemDirect(r, q, duration, minDuration, maxDuration, "current")
 		return path, measurement, nil, err
 	}
-	identity, path, err := a.captureExpectedSpeedLabIdentity(q)
+	identity, path, err := a.captureExpectedSpeedLabIdentityContext(r.Context(), q)
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
-	pathCtx, stopPath, err := speedLabPathContext(r.Context(), func() error { return validateSpeedLabIdentity(a, identity) })
+	pathCtx, stopPath, err := speedLabPathContextWithCaller(r.Context(), func(ctx context.Context) error { return validateSpeedLabIdentityContext(ctx, a, identity) })
 	if err != nil {
 		return path, speedLabMeasurement{}, nil, err
 	}
 	defer stopPath()
+	if identity.Standard != nil {
+		pathCtx = withSpeedLabTunnelDialer(pathCtx, identity.Standard)
+	}
 	r = r.WithContext(pathCtx)
 	measurement, err := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return verifySpeedLabPath(r.Context(), a, identity) })
 	if err != nil {
@@ -269,7 +289,7 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	default:
 		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("unsupported temporary Speed Lab topology")
 	}
-	operationCtx, snapshot, finish, err := a.beginSpeedLabTemporaryOperationExpected(&q)
+	operationCtx, snapshot, finish, err := a.beginSpeedLabTemporaryOperationExpectedContext(r.Context(), &q)
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
@@ -303,14 +323,16 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 
 	var path speedLabPath
 	var identity speedLabPathIdentity
-	var validate func() error
+	var validate func(context.Context) error
 	if strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct") {
 		path = speedLabPath{Scope: "temporary", Topology: "system-direct", Temporary: true, Description: "temporary system Internet path; the captured previous VPN is restored after measurement"}
-		validate = func() error {
-			if err := a.speedLabCheckOwner(snapshot.Owner); err != nil {
+		validate = func(ctx context.Context) error {
+			if err := a.speedLabCheckOwnerContext(ctx, snapshot.Owner); err != nil {
 				return err
 			}
-			a.mu.Lock()
+			if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+				return err
+			}
 			st, command := a.state, a.cmd
 			a.mu.Unlock()
 			if command != nil || st.Connected || st.Mode != "off" || st.Phase != "off" || physicalNetworkIdentity() != snapshot.Owner.network {
@@ -324,39 +346,42 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 		if startErr != nil {
 			return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, startErr)
 		}
-		identity, _, err = captureSpeedLabIdentity(a)
+		identity, _, err = captureSpeedLabIdentityContext(r.Context(), a)
 		if err != nil {
 			return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 		}
-		validate = func() error {
-			if err := a.speedLabCheckOwner(snapshot.Owner); err != nil {
+		validate = func(ctx context.Context) error {
+			if err := a.speedLabCheckOwnerContext(ctx, snapshot.Owner); err != nil {
 				return err
 			}
-			return validateSpeedLabIdentity(a, identity)
+			return validateSpeedLabIdentityContext(ctx, a, identity)
 		}
 	}
-	if err := validate(); err != nil {
+	if err := validate(r.Context()); err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 	}
 	if err := a.speedLabWriteStore(snapshot.Profiles); err != nil {
 		cause := errors.New("temporary path was proven but prior durable profile state could not be restored before measurement: " + err.Error())
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, cause)
 	}
-	pathCtx, stopPath, err := speedLabPathContext(r.Context(), validate)
+	pathCtx, stopPath, err := speedLabPathContextWithCaller(r.Context(), validate)
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 	}
 	defer stopPath()
+	if identity.Standard != nil {
+		pathCtx = withSpeedLabTunnelDialer(pathCtx, identity.Standard)
+	}
 	verify := func() error {
-		if err := validate(); err != nil {
+		if err := validate(pathCtx); err != nil {
 			return err
 		}
-		if identity.External != nil {
+		if identity.External != nil || identity.Standard != nil {
 			if err := verifySpeedLabPath(pathCtx, a, identity); err != nil {
 				return err
 			}
 		}
-		return validate()
+		return validate(pathCtx)
 	}
 	measurement, measureErr := measureSpeedLab(pathCtx, duration, minDuration, maxDuration, verify)
 	var hops []speedLabHopMeasurement
@@ -406,7 +431,7 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finishMeasurement()
-	if err := a.validateSpeedLabExpectedProfiles(q, nil); err != nil {
+	if err := a.validateSpeedLabExpectedProfilesContext(r.Context(), q, nil); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

@@ -80,7 +80,11 @@ type platformStandardExitRuntime struct {
 }
 
 func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request) {
-	a.platformStandardExitConnectOwned(w, r, platformStandardExitRuntime{
+	a.platformStandardExitConnectOwned(w, r, defaultPlatformStandardExitRuntime())
+}
+
+func defaultPlatformStandardExitRuntime() platformStandardExitRuntime {
+	return platformStandardExitRuntime{
 		prepareLegacy: prepareLegacyStandardExitOwner,
 		prove:         (*app).proveStandardExitForOperation,
 		proveDNS: func(ctx context.Context, owner legacyStandardExitLaunch) error {
@@ -90,7 +94,7 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 			return errors.New("retained standard exit has no original DNS proof capability")
 		},
 		current: func(owner legacyStandardExitLaunch, ctx context.Context) error { return owner.Current(ctx) },
-	})
+	}
 }
 
 func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Request, adapter platformStandardExitRuntime) {
@@ -101,6 +105,16 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer finish()
+	a.platformStandardExitConnectCaptured(w, r, adapter, operation)
+}
+
+// Restoration remains inside its already-owned Speed Lab transaction. It cannot
+// allocate a second intent or rerun a strategy that chooses another exit.
+func (a *app) platformStandardExitConnectCaptured(w http.ResponseWriter, r *http.Request, adapter platformStandardExitRuntime, operation context.Context) {
+	if err := a.checkCapturedConnectionOperation(operation); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -193,6 +207,15 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 				return
 			}
 		}
+		if capture, ok := retained.(interface {
+			CaptureStandardServicePolicy(context.Context, standardExitConnectRequest, common.RouterProfile, standardExit) error
+		}); ok {
+			if err := capture.CaptureStandardServicePolicy(operation, q, control, exit); err != nil {
+				tracker.markRequestFailure(err.Error())
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		cmd = retained.Command()
 	}
 	markOwnedFailure := func(message string) bool {
@@ -212,7 +235,7 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 		}
 		return owned
 	}
-	if err = a.checkConnectionOperation(); err != nil {
+	if err = a.checkCapturedConnectionOperation(operation); err != nil {
 		tracker.markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -221,6 +244,9 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 		err = retained.Start(operation)
 	} else {
 		err = cmd.Start()
+	}
+	if a.ownsConnectionRuntime(cmd) {
+		err = errors.Join(err, a.speedLabOwnRuntime(cmd))
 	}
 	if err != nil {
 		message := err.Error()
@@ -265,7 +291,11 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 	a.state.Phase = "standard-exit:proving-public-exit"
 	a.state.LastError = ""
 	a.mu.Unlock()
-	if err = a.checkConnectionOperation(); err != nil {
+	if err = a.speedLabOwnRuntime(cmd); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err = a.checkCapturedConnectionOperation(operation); err != nil {
 		message, cleanupFailed := a.standardExitStopFailure(cmd, err.Error())
 		if !markOwnedFailure(message) {
 			http.Error(w, "standard exit cleanup lost original history owner; replacement retained", http.StatusConflict)
@@ -290,7 +320,7 @@ func (a *app) platformStandardExitConnectOwned(w http.ResponseWriter, r *http.Re
 	if proofErr == nil && retained != nil {
 		proofErr = adapter.current(retained, operation)
 	}
-	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
+	if cancelErr := a.checkCapturedConnectionOperation(operation); cancelErr != nil {
 		message, cleanupFailed := a.standardExitStopFailure(cmd, cancelErr.Error())
 		if !markOwnedFailure(message) {
 			http.Error(w, "standard exit cleanup lost original history owner; replacement retained", http.StatusConflict)

@@ -59,7 +59,13 @@ func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T)
 	// locked publication helper. Re-reading whichever request is current after
 	// a native callback would let an old start adopt a replacement operation.
 	assertCapturedGuardedProcessStart(t, "main.go", "func (a *app) startModeAttempt", "err = cmd.Start()", "a.publishStartedDesktopNode(startupCtx, native, cmd", "checkCapturedConnectionOperation(startupCtx)")
-	assertGuardedProcessStart(t, "standard_exit_platform_routes.go", "func (a *app) platformStandardExitConnectOwned", "err = cmd.Start()", "a.cmd = cmd")
+	standardWrapper := sourceFunctionForTest(t, "standard_exit_platform_routes.go", "func (a *app) platformStandardExitConnectOwned(")
+	for _, required := range []string{"operation, finish, guardErr := a.beginConnectionOperation()", "defer finish()", "a.platformStandardExitConnectCaptured(w, r, adapter, operation)"} {
+		if !strings.Contains(standardWrapper, required) {
+			t.Fatal("public standard exit lost its original operation", required)
+		}
+	}
+	assertCapturedGuardedProcessStart(t, "standard_exit_platform_routes.go", "func (a *app) platformStandardExitConnectCaptured(", "err = cmd.Start()", "a.cmd = cmd", "checkCapturedConnectionOperation(operation)")
 	wrapper := sourceFunctionForTest(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnect(")
 	for _, required := range []string{"a.nativeMultihopConnectOwned(w, r, nativeMultihopConnectRuntime{", "capture: captureNativeMultihopForApp", "preflight: preflightOwnedNativeMultihopCommand", "stage: stageOwnedNativeMultihopCommand", "proof: (*app).proveNativeMultihop"} {
 		if !strings.Contains(wrapper, required) {

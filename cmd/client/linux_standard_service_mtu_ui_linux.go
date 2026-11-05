@@ -448,6 +448,9 @@ func (a *app) startPlatformServiceAutomaticMTU() bool {
 	}
 	admission, finish := context.WithTimeout(context.Background(), 4*time.Second)
 	defer finish()
+	if suspended, err := mtuSuspendedContext(admission, a); err != nil || suspended {
+		return true
+	}
 	u, err := getLinuxStandardServiceMTUUI(admission, launch)
 	if err != nil {
 		return true

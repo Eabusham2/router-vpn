@@ -18,6 +18,18 @@ import (
 // The public sample must traverse the very TUN whose reader was changed. A
 // localhost SOCKS dial would test the exit while bypassing that interface.
 func (o *linuxStandardServiceMTUOwner) DialThroughTunnel(ctx context.Context, expected mobilemtu.State, network, address string) (net.Conn, error) {
+	return o.dialThroughTunnelLifetime(ctx, expected, network, address, ctx)
+}
+
+// Dial admission may be shorter than the successful socket's original request.
+// Native Close remains owned until that request or the caller closes the socket.
+func (o *linuxStandardServiceMTUOwner) dialThroughTunnelLifetime(ctx context.Context, expected mobilemtu.State, network, address string, lifetime context.Context) (net.Conn, error) {
+	if lifetime == nil {
+		return nil, errors.New("standard probe has no retained socket lifetime")
+	}
+	if err := lifetime.Err(); err != nil {
+		return nil, err
+	}
 	if run := o.run.Load(); run != nil && !run.closed.Load() && mobilemtu.SameOperationContext(ctx, run.operation) {
 		cleanup, err := mobilemtu.OperationCleanupOnly(ctx)
 		if err != nil || cleanup {
@@ -99,7 +111,7 @@ func (o *linuxStandardServiceMTUOwner) DialThroughTunnel(ctx context.Context, ex
 		}
 		o.sockets.Add(1)
 		owned := &linuxStandardMTUConn{Conn: connection, owner: o}
-		context.AfterFunc(ctx, func() { _ = owned.Close() })
+		context.AfterFunc(lifetime, func() { _ = owned.Close() })
 		return owned, nil
 	}
 	return nil, failure

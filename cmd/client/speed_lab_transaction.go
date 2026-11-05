@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
 )
@@ -38,6 +39,7 @@ type speedLabTemporaryOwner struct {
 var speedLabTemporaryOwners sync.Map // map[*app]*speedLabTemporaryOwner
 
 type speedLabRestorePlan struct {
+	standard speedLabStandardServiceRestore
 	profile  common.RouterProfile
 	request  speedLabRequest
 	native   *desktopNodeLaunch
@@ -216,6 +218,13 @@ func (a *app) beginSpeedLabTemporaryOperation() (context.Context, speedLabTempor
 }
 
 func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) (context.Context, speedLabTemporarySnapshot, func(), error) {
+	return a.beginSpeedLabTemporaryOperationExpectedContext(context.Background(), request)
+}
+
+func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context, request *speedLabRequest) (context.Context, speedLabTemporarySnapshot, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, speedLabTemporarySnapshot{}, nil, err
+	}
 	if !a.operationMu.TryLock() {
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
@@ -228,7 +237,9 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 	if err := guardViaEntryDecision(a); err != nil {
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, speedLabTemporarySnapshot{}, nil, err
+	}
 	st := a.state
 	busy := a.closing || st.Connected && st.Phase != "connected" || !st.Connected && profileSettingsBusy(st.Connected, st.Phase) || a.connectionContext != nil
 	var expectedErr error
@@ -245,7 +256,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 	if err := preflightPrivateConnectionRuntime(); err != nil {
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
-	snapshot, err := a.speedLabSnapshotTemporary()
+	snapshot, err := a.speedLabSnapshotTemporaryContext(ctx)
 	if err != nil {
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
@@ -265,7 +276,11 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 		cancelIntent()
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("temporary Speed Lab could not capture the physical network")
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		cancelTest()
+		cancelIntent()
+		return nil, speedLabTemporarySnapshot{}, nil, err
+	}
 	if request != nil {
 		expectedErr = a.validateSpeedLabExpectedProfilesLocked(*request, nil)
 	}
@@ -275,11 +290,11 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 		cancelIntent()
 		return nil, speedLabTemporarySnapshot{}, nil, expectedErr
 	}
-	if a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil {
+	if ctx.Err() != nil || a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil {
 		a.mu.Unlock()
 		cancelTest()
 		cancelIntent()
-		return nil, speedLabTemporarySnapshot{}, nil, errors.New("VPN state changed while capturing the temporary Speed Lab restore point")
+		return nil, speedLabTemporarySnapshot{}, nil, errors.Join(ctx.Err(), errors.New("VPN state changed while capturing the temporary Speed Lab restore point"))
 	}
 	if _, exists := speedLabTemporaryOwners.LoadOrStore(a, owner); exists {
 		a.mu.Unlock()
@@ -389,7 +404,12 @@ func (a *app) speedLabOwnerCurrentLocked(owner *speedLabTemporaryOwner) bool {
 }
 
 func (a *app) speedLabCheckOwner(owner *speedLabTemporaryOwner) error {
-	a.mu.Lock()
+	return a.speedLabCheckOwnerContext(context.Background(), owner)
+}
+func (a *app) speedLabCheckOwnerContext(ctx context.Context, owner *speedLabTemporaryOwner) error {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if !a.speedLabOwnerCurrentLocked(owner) || a.cmd != owner.runtime {
 		return errors.New("temporary Speed Lab owner or runtime changed; refusing to alter the replacement connection")
@@ -478,6 +498,10 @@ func (a *app) speedLabSuspendPreviousWith(snapshot speedLabTemporarySnapshot, sy
 }
 
 func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (speedLabRestorePlan, error) {
+	return a.speedLabCaptureRestorePlanContext(context.Background(), snapshot)
+}
+
+func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot speedLabTemporarySnapshot) (speedLabRestorePlan, error) {
 	if !snapshot.State.Connected {
 		if snapshot.Runtime != nil || snapshot.State.Mode != "" && snapshot.State.Mode != "off" {
 			return speedLabRestorePlan{}, errors.New("a retired runtime still needs cleanup before a temporary Speed Lab test")
@@ -487,9 +511,17 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 	if snapshot.State.Phase != "connected" || snapshot.Runtime == nil {
 		return speedLabRestorePlan{}, errors.New("temporary Speed Lab requires a stable owned connection to restore")
 	}
-	identity, _, err := captureSpeedLabIdentity(a)
+	identity, _, err := captureSpeedLabIdentityContext(ctx, a)
 	if err != nil {
 		return speedLabRestorePlan{}, err
+	}
+	if identity.Standard != nil {
+		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		if err := identity.Standard.current(ctx, a, identity); err != nil {
+			return speedLabRestorePlan{}, err
+		}
+		return identity.Standard.restorePlan(ctx, a)
 	}
 	profile, ok := profileByID(snapshot.Profiles.Profiles, snapshot.State.RouterID)
 	if !ok {
@@ -604,7 +636,7 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 			if err != nil {
 				return plan, err
 			}
-			if err := validateSpeedLabIdentity(a, identity); err != nil {
+			if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 				clearSpeedLabRestorePlan(plan)
 				return speedLabRestorePlan{}, err
 			}
@@ -643,7 +675,7 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 		plan.native = &desktopNodeLaunch{root: launch.root, endpoint: launch.endpoint, profileID: launch.profileID, mode: launch.mode, config: restoredConfig, metadata: restoredMetadata,
 			nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), launch.nodePhysicalEgress...)}
 	}
-	if err := validateSpeedLabIdentity(a, identity); err != nil {
+	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		clearSpeedLabRestorePlan(plan)
 		return speedLabRestorePlan{}, err
 	}
@@ -729,6 +761,9 @@ func (a *app) speedLabRestoreWith(snapshot speedLabTemporarySnapshot, actions sp
 	owner.current = restoreCtx
 	a.connectionContext = restoreCtx
 	a.profiles.SelectedID = snapshot.State.RouterID
+	if snapshot.Plan.standard != nil {
+		a.profiles.SelectedID = snapshot.Plan.profile.ID
+	}
 	a.mu.Unlock()
 	err := actions.restart(snapshot.Plan)
 	if err == nil {
@@ -805,6 +840,8 @@ func (a *app) speedLabRestartPlan(plan speedLabRestorePlan) error {
 func (a *app) speedLabRestartPlanWithTorRuntime(plan speedLabRestorePlan, torDriver desktopTorConnectRuntime) error {
 	var err error
 	switch {
+	case plan.standard != nil:
+		err = plan.standard.restart(a.connectionOperationContextOrBackground(), a)
 	case plan.linux != nil:
 		err = a.restartCapturedDesktopLinuxNode(plan, "speed-lab:restore")
 	case plan.tor != nil:

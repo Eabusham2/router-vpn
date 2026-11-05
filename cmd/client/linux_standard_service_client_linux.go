@@ -33,6 +33,7 @@ type linuxStandardServiceLaunch struct {
 	mtuExitRaw                                  string
 	transfer                                    *linuxStandardServiceNodeTransfer
 	mtuOwner                                    *linuxStandardServiceMTUOwner
+	speedLabPolicy                              *linuxStandardServicePolicy
 }
 
 func prepareLinuxStandardServiceLaunch(a *app, local *linuxLegacyStandardExitOwner) (legacyStandardExitLaunch, error) {

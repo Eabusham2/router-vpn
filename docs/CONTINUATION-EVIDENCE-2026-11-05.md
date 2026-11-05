@@ -988,12 +988,82 @@ The independently tested local native-error alternative was superseded before
 publication by `e7d5b43c`'s broader typed-failure handling; it must not be replayed.
 Its earlier local test results do not certify the newer upstream implementation.
 
+## Installed standard-service Speed Lab and exact restoration
+
+Speed Lab now captures the installed Linux standard service's actual current
+owner, activation, selected-DNS proof, source profile, private exit and native
+MTU readback. The standard exit identity and the policy profile remain distinct;
+the GTK form validates both and submits the actual saved policy revision. A
+constructor/read-only capture does not start an optimizer. Pending native work,
+an unclosed MTU run or retained measurement sockets prevent a conflicting capture.
+
+Latency and transfer clients use the captured TUN dialer. The HTTP transport
+preserves normal TLS hostname/certificate validation, refuses redirects and
+ambient proxies, and cannot fall back to an ordinary-network dialer. The dial's
+short admission and the successful socket's original request lifetime are
+separate. Cancellation and late HTTP/dial completions join only the original
+owner. Caller contexts now pass through current capture, expected-profile
+validation, temporary admission and the original path observer.
+
+Temporary tests retain the complete profile store and selected entry, exact
+private exit source, physical-network identity, current session and effective
+MTU. Restoration enters the ordinary shipping connection handler with its
+captured restoration intent. Fixed/Jumbo reads back the exact prior value. Auto
+restoration uses the original bounded 30-second parent and one shared FD11 run
+to apply and verify the captured measured value; it does not run a new optimizer.
+The completed MTU UI is published only after actual run closure and fresh native,
+source, intent and profile checks. Failure stops only the captured partial
+restoration; explicit Disconnect and replacement owners retain their existing
+precedence. The automatic-start hook respects the temporary-test suspension.
+
+The required installed namespace inventory adds `on-connect-public` and
+`on-connect-public-restore`. These use a real authenticated private SOCKS/DNS/TLS
+peer and the actual public Retest, Cancel and Speed Lab handlers. The first
+requires actual TUN-bound transfer, effective-MTU changes and rollback. The
+second measures a nondefault 1280 winner from real bytes/elapsed time, observes
+both original launch join and native-child pidfd exit, then cancels the temporary
+system-direct HTTP request. Its restored connection must have a fresh child,
+session, observer and selected-DNS proof, the complete original profile store,
+and exactly the prior measured MTU despite a different fresh startup MTU.
+Test-only shaping delays real non-1280 payloads under the exact controller/kernel
+receipt; it returns no synthetic rate or winner. These are private namespace
+acceptance cases; physical/off-LAN performance remains separate.
+
+Root's complete tagged composition passes all 94 focused race verdicts (13.273s)
+without failures or skips, covering original service capture, held caller gates,
+captured TLS/bytes/cancellation, actual private peer/DNS exchanges and shipping
+launch guards. All 10 merged service runner checks pass (30.506s). After preserving
+`e7d5b43c`, the 10 actual source launch/causal verdicts pass again (1.779s).
+Windows AMD64 and Darwin ARM64 test binaries compile with Go1.26.3 and
+`CGO_ENABLED=0`; 1,927 Go/module inputs and two embedded assets remain hash-stable.
+Those cross-platform binaries were not executed.
+
+The wider local Speed Lab run is recorded as failed: 235 passing and 171 failing
+parent/leaf verdicts, with physical-network/native activation setup failures.
+Three representative unchanged `e7d5b43c` parents reproduce the same nine failing
+verdicts before the pending changes (0.502s). A separate read-only NETLINK_ROUTE
+socket open returns EPERM in this workspace. No production network check or
+required CI case was relaxed. The full physical-network suite, both installed
+public namespace scenarios and GTK callbacks still require native CI; GTK/Xvfb
+is unavailable locally.
+
+The frozen public-peer phase1 manifest is SHA256
+`c58d79df55c0e5a69b42b0d9b16c9783e2f35fe9461b378be5bb7debdd0349a9`;
+the four-path restoration addition is
+`f1cb1ce79d35f8ee5c122fc4bf5c4718e8764d3df39d4e8df5b5cee197b02b27`.
+The captured-transport and caller-context contribution manifests are
+`a6bb3508881c6c5a2d8dcac0ea2923bba1eadf2d3c19e4a4fd2993e7a6369861`
+and `8777ed71d6861c03ee1e11033cf68fe707f8899c1854ddc74c287e1e55a46087`.
+Their integration preserves both the cleanup-only socket refusal and successful
+request-lifetime handling, plus the newer service-to-Node transfer inventory.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
 |---|---|---|
 | Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor admission is now integrated and locally verified; installed-service mutation and public controls are now integrated; successful installed native/network acceptance remains separate. |
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
+| Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected installed service-to-Node transfer now retains both original creators, durable intent and bounded resolution. | The new transfer requires privileged installed/native acceptance. Reverse Node-to-standard transfer, other/generic boot-owner succession, active Always upgrades and same-boot service-crash continuation remain unfinished. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |

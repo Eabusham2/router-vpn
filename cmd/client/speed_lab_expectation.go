@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"router-vpn/internal/desktopnetwork"
 	"strings"
 )
 
@@ -41,7 +43,13 @@ func (a *app) validateSpeedLabExpectedProfilesLocked(q speedLabRequest, current 
 			return errSpeedLabSelectionChanged
 		}
 	} else if current != nil {
-		for _, id := range []string{current.NodeID, current.EntryID, current.ExitID} {
+		ids := []string{current.NodeID, current.EntryID, current.ExitID}
+		if current.StandardExitID != "" {
+			// The separately captured standard-exit store is not a linked
+			// RouterProfile. Its private revision belongs to the service path.
+			ids = []string{current.NodeID}
+		}
+		for _, id := range ids {
 			if id != "" {
 				required = append(required, id)
 			}
@@ -62,31 +70,43 @@ func (a *app) validateSpeedLabExpectedProfilesLocked(q speedLabRequest, current 
 }
 
 func (a *app) validateSpeedLabExpectedProfiles(q speedLabRequest, current *speedLabPath) error {
-	a.mu.Lock()
+	return a.validateSpeedLabExpectedProfilesContext(context.Background(), q, current)
+}
+func (a *app) validateSpeedLabExpectedProfilesContext(ctx context.Context, q speedLabRequest, current *speedLabPath) error {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	return a.validateSpeedLabExpectedProfilesLocked(q, current)
 }
 
 func (a *app) captureExpectedSpeedLabIdentity(q speedLabRequest) (speedLabPathIdentity, speedLabPath, error) {
+	return a.captureExpectedSpeedLabIdentityContext(context.Background(), q)
+}
+
+func (a *app) captureExpectedSpeedLabIdentityContext(ctx context.Context, q speedLabRequest) (speedLabPathIdentity, speedLabPath, error) {
 	if !q.hasExpectedProfiles() {
-		return captureSpeedLabIdentity(a)
+		return captureSpeedLabIdentityContext(ctx, a)
 	}
 	// Hold the mutation lock only while binding the requested public revisions
 	// to the actual proved runtime. Release it before any measurement so an
 	// explicit Disconnect can still cancel the existing live-path observer.
+	if err := a.validateSpeedLabExpectedProfilesContext(ctx, q, nil); err != nil {
+		return speedLabPathIdentity{}, speedLabPath{}, err
+	}
 	release, err := a.beginNodeBoundOperation()
 	if err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
 	defer release()
-	if err := a.validateSpeedLabExpectedProfiles(q, nil); err != nil {
+	if err := a.validateSpeedLabExpectedProfilesContext(ctx, q, nil); err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
-	identity, path, err := captureSpeedLabIdentity(a)
+	identity, path, err := captureSpeedLabIdentityContext(ctx, a)
 	if err != nil {
 		return identity, path, err
 	}
-	if err := a.validateSpeedLabExpectedProfiles(q, &path); err != nil {
+	if err := a.validateSpeedLabExpectedProfilesContext(ctx, q, &path); err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
 	}
 	return identity, path, nil

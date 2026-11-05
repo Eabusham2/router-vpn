@@ -12,20 +12,28 @@ const speedLabPathCheckInterval = 50 * time.Millisecond
 // in-flight HTTP work when the observed session/graph changes. This context owns
 // only measurement requests: stopping a test must never disconnect the VPN.
 func speedLabPathContext(parent context.Context, validate func() error) (context.Context, func(), error) {
+	if validate == nil {
+		return nil, nil, errors.New("Speed Lab path validation is required")
+	}
+	return speedLabPathContextWithCaller(parent, func(context.Context) error { return validate() })
+}
+
+func speedLabPathContextWithCaller(parent context.Context, validate func(context.Context) error) (context.Context, func(), error) {
 	if err := context.Cause(parent); err != nil {
 		return nil, nil, err
 	}
 	if validate == nil {
 		return nil, nil, errors.New("Speed Lab path validation is required")
 	}
-	if err := validate(); err != nil {
+	ctx, cancel := context.WithCancelCause(parent)
+	if err := validate(ctx); err != nil {
+		cancel(err)
 		return nil, nil, err
 	}
 	if err := context.Cause(parent); err != nil {
+		cancel(err)
 		return nil, nil, err
 	}
-
-	ctx, cancel := context.WithCancelCause(parent)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -39,7 +47,7 @@ func speedLabPathContext(parent context.Context, validate func() error) (context
 				if ctx.Err() != nil {
 					return
 				}
-				if err := validate(); err != nil {
+				if err := validate(ctx); err != nil {
 					cancel(err)
 					return
 				}

@@ -187,8 +187,8 @@ func computeSpeedLabLatencyStats(values []float64, failed int) (speedLabLatencyS
 }
 
 func measureSpeedLabIdleLatency(ctx context.Context) (speedLabLatencyStats, error) {
-	client := newSpeedLabHTTPClient(3 * time.Second)
-	if transport, ok := client.Transport.(*http.Transport); ok {
+	client := newSpeedLabHTTPClientContext(ctx, 3*time.Second)
+	if transport, ok := client.Transport.(interface{ CloseIdleConnections() }); ok {
 		defer transport.CloseIdleConnections()
 	}
 	values := make([]float64, 0, 10)
@@ -221,8 +221,8 @@ func speedLabLoadedLatencySampler(ctx context.Context) <-chan speedLabLatencySta
 	result := make(chan speedLabLatencyStats, 1)
 	go func() {
 		defer close(result)
-		client := newSpeedLabHTTPClient(2500 * time.Millisecond)
-		if transport, ok := client.Transport.(*http.Transport); ok {
+		client := newSpeedLabHTTPClientContext(ctx, 2500*time.Millisecond)
+		if transport, ok := client.Transport.(interface{ CloseIdleConnections() }); ok {
 			defer transport.CloseIdleConnections()
 		}
 		values := make([]float64, 0, 64)
@@ -443,8 +443,8 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 		return speedLabDirectionResult{}, errors.New("invalid speed-test duration bounds")
 	}
 
-	client := newSpeedLabHTTPClient(maxDuration)
-	if transport, ok := client.Transport.(*http.Transport); ok {
+	client := newSpeedLabHTTPClientContext(ctx, maxDuration)
+	if transport, ok := client.Transport.(interface{ CloseIdleConnections() }); ok {
 		defer transport.CloseIdleConnections()
 	}
 	pattern := make([]byte, 64<<10)

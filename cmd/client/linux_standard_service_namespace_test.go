@@ -58,13 +58,13 @@ func init() {
 // named Unix listeners, kernel peer pidfds, actual installed service/helper
 // processes, readiness and process join. Missing capabilities fail the gate.
 func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *testing.T) {
-	for _, scenario := range []string{"off", "on-connect", "on-connect-mtu", "on-connect-failure", "on-connect-network-failure", "on-connect-route-change", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
+	for _, scenario := range []string{"off", "on-connect", "on-connect-mtu", "on-connect-public", "on-connect-public-restore", "on-connect-failure", "on-connect-network-failure", "on-connect-route-change", "on-connect-pre-rpc-network-failure", "always-off", "always"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy := scenario
 			if scenario == "always-off" {
 				policy = "always"
 			}
-			if scenario == "on-connect-mtu" || scenario == "on-connect-route-change" || scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
+			if scenario == "on-connect-mtu" || scenario == "on-connect-public" || scenario == "on-connect-public-restore" || scenario == "on-connect-route-change" || scenario == "on-connect-network-failure" || scenario == "on-connect-failure" || scenario == "on-connect-pre-rpc-network-failure" {
 				policy = "on-connect"
 			}
 			executable := linuxControllerNamespaceInstall(t)
@@ -73,7 +73,7 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 			}
 			profile := common.RouterProfile{ID: "control", Name: "Control", KillSwitch: policy != "off", KillSwitchPolicy: policy, Endpoint: "203.0.113.77",
 				DNSMode: "custom", DNSProtocol: "udp", DNSHost: "1.1.1.1", DNSPort: 53}
-			if scenario == "on-connect-mtu" {
+			if scenario == "on-connect-mtu" || scenario == "on-connect-public" || scenario == "on-connect-public-restore" {
 				profile.MTUPolicy = "auto"
 			}
 			applyProfileDefaults(&profile)
@@ -94,7 +94,12 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				// No stock script exists in this installed fixture. The controller
 				// captures a request; the service selects the real verified bundle.
 				linuxStandardInstallRuntimeFixture(t)
-				nativeQueries = linuxStandardNativePeerFixture(t)
+				if scenario == "on-connect-public" || scenario == "on-connect-public-restore" {
+					peer := installStandardPublicPeer(t)
+					nativeQueries = linuxStandardNativePeerFixture(t, peer.serve)
+				} else {
+					nativeQueries = linuxStandardNativePeerFixture(t)
+				}
 				profile.DNSMode, profile.DNSProtocol, profile.DNSHost, profile.DNSPort = "custom", "tcp", "203.0.113.53", 5353
 				body, _ = json.Marshal(common.RouterProfileStore{SchemaVersion: 4, SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
 				if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), body, 0600); err != nil {
@@ -146,6 +151,12 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				if scenario == "on-connect-mtu" {
 					action = "mtu"
 				}
+				if scenario == "on-connect-public" {
+					action = "public-mtu"
+				}
+				if scenario == "on-connect-public-restore" {
+					action = "public-restore"
+				}
 				if scenario == "always-off" {
 					action = "off"
 				}
@@ -173,6 +184,12 @@ func TestLinuxStandardServiceNamespaceInstalledIdleUpgradeAndAlwaysRetention(t *
 				}
 				if err = controller.Wait(); err != nil || !strings.Contains(output.String(), "standard-service-route-joined") {
 					t.Fatal("actual controller service route did not complete", err, output.String())
+				}
+				if scenario == "on-connect-public" && !strings.Contains(output.String(), "standard-service-public-retest-cancel-speedlab-joined") {
+					t.Fatal("public native pipeline omitted joined results", output.String())
+				}
+				if scenario == "on-connect-public-restore" && !strings.Contains(output.String(), "standard-service-public-cancelled-speedlab-restored") {
+					t.Fatal("cancelled temporary Speed Lab did not restore original", output.String())
 				}
 				if scenario == "on-connect-pre-rpc-network-failure" && nativeQueries != nil && nativeQueries.Load() != 0 {
 					t.Fatal("rejected pre-RPC epoch still executed selected DNS")

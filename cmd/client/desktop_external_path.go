@@ -353,6 +353,9 @@ func (a *app) retireDesktopPathOwner(launch *desktopNodeLaunch) error {
 }
 
 func verifySpeedLabPath(ctx context.Context, a *app, identity speedLabPathIdentity) error {
+	if identity.Standard != nil {
+		return identity.Standard.verify(ctx, a, identity)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
