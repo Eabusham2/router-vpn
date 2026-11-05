@@ -126,6 +126,14 @@ inventory from 420 to 429; those privileged cases have not executed locally.
 Other graph families, layered Linux paths, Server/Compare and device acceptance
 retain their own unfinished requirements.
 
+The macOS native kernel runner now emits bounded captured progress before
+fallible process-group termination. A termination or output-join error retains
+the original timeout, and a late zero exit cannot turn that expired run green.
+All 27 focused Python checks pass; the original handler fails the intended
+lost-progress control. The original process group and 730-second/10-second
+limits are unchanged. This repairs the diagnostic loss observed in ARM64 job
+`127091651439` at `617c3dd6`; the underlying native timeout remains unresolved.
+
 The Windows external-network delayed-accept fixture now recognizes that the
 original dial and grant can share one clock tick. It requires the exact single
 historical socket grant within the actual dial-to-accept interval, then tests a

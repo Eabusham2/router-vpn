@@ -51,6 +51,77 @@ class DarwinNativeDiagnostics(unittest.TestCase):
                 self.assertEqual(shown.getvalue(), '')
 
 
+class DarwinNativeTimeoutDiagnostics(unittest.TestCase):
+    def setUp(self):
+        self.gate = GATES[0]
+        self.process = mock.Mock(pid=431, returncode=0)
+        self.expired = subprocess.TimeoutExpired(['original-captured-native-test'], 730,
+            output=b'old-prefix:' + b'x' * 10000 + b'\xff\noriginal native case entered\n')
+
+    def test_success_retains_original_output_without_signalling(self):
+        self.process.communicate.return_value = (b'original native result\n', None)
+        with mock.patch.object(self.gate.os, 'killpg') as kill:
+            self.assertEqual(self.gate.native_test_output(self.process), b'original native result\n')
+        self.process.communicate.assert_called_once_with(timeout=730)
+        kill.assert_not_called()
+
+    def test_timeout_progress_precedes_denied_termination_and_both_failures_survive(self):
+        self.process.communicate.side_effect = self.expired
+        shown = io.StringIO()
+        denied = PermissionError(1, 'original group denied')
+        def kill(pid, signal):
+            self.assertEqual((pid, signal), (431, self.gate.signal.SIGKILL))
+            self.assertIn('original native case entered', shown.getvalue())
+            self.assertIn('\ufffd', shown.getvalue())
+            self.assertNotIn('old-prefix:', shown.getvalue())
+            self.assertLess(len(shown.getvalue()), 8500)
+            raise denied
+        with contextlib.redirect_stderr(shown), mock.patch.object(self.gate.os, 'killpg', side_effect=kill), \
+             self.assertRaisesRegex(RuntimeError, 'bounded lifetime; original process-group termination failed: PermissionError') as failed:
+            self.gate.native_test_output(self.process)
+        self.assertIs(failed.exception.__cause__, self.expired)
+        self.assertIn('original group denied', str(failed.exception))
+        self.process.communicate.assert_called_once_with(timeout=730)
+
+    def test_timeout_remains_failure_after_original_group_joins_with_successful_exit(self):
+        self.process.communicate.side_effect = [self.expired, (b'late original output\n', None)]
+        with contextlib.redirect_stderr(io.StringIO()), mock.patch.object(self.gate.os, 'killpg') as kill, \
+             self.assertRaisesRegex(RuntimeError, 'bounded lifetime after its original process group joined: late original output') as failed:
+            self.gate.native_test_output(self.process)
+        kill.assert_called_once_with(431, self.gate.signal.SIGKILL)
+        self.assertEqual(self.process.communicate.call_args_list, [mock.call(timeout=730), mock.call(timeout=10)])
+        self.assertIs(failed.exception.__cause__, self.expired)
+
+    def test_unjoined_output_keeps_original_timeout_and_latest_partial_progress(self):
+        for cleanup in (subprocess.TimeoutExpired(['original-captured-native-test'], 10, output=b'later retained descendant progress'),
+                        OSError('original pipe read failed')):
+            with self.subTest(cleanup=type(cleanup).__name__):
+                self.process.communicate.reset_mock(side_effect=True)
+                self.process.communicate.side_effect = [self.expired, cleanup]
+                shown = io.StringIO()
+                with contextlib.redirect_stderr(shown), mock.patch.object(self.gate.os, 'killpg') as kill, \
+                     self.assertRaisesRegex(RuntimeError, 'bounded lifetime; original process-group output did not join') as failed:
+                    self.gate.native_test_output(self.process)
+                self.assertIn('original native case entered', shown.getvalue())
+                if isinstance(cleanup, subprocess.TimeoutExpired):
+                    self.assertIn('later retained descendant progress', shown.getvalue())
+                self.assertIs(failed.exception.__cause__, self.expired)
+                kill.assert_called_once_with(431, self.gate.signal.SIGKILL)
+                self.assertEqual(self.process.communicate.call_args_list, [mock.call(timeout=730), mock.call(timeout=10)])
+
+    def test_privileged_fixture_uses_original_session_and_timeout_helper(self):
+        tree = ast.parse(Path(self.gate.__file__).read_text())
+        root = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'root_fixture')
+        launches = [node for node in ast.walk(root) if isinstance(node, ast.Call) and
+                    isinstance(node.func, ast.Attribute) and node.func.attr == 'Popen']
+        self.assertEqual(len(launches), 1)
+        self.assertTrue(next(keyword.value.value for keyword in launches[0].keywords if keyword.arg == 'start_new_session'))
+        calls = [node for node in ast.walk(root) if isinstance(node, ast.Call) and
+                 isinstance(node.func, ast.Name) and node.func.id == 'native_test_output']
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(ast.unparse(calls[0].args[0]), 'process')
+
+
 class MacOSNativeVerdicts(unittest.TestCase):
     def setUp(self):
         self.gate = GATES[1]

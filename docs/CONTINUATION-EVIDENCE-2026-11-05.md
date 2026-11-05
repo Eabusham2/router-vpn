@@ -1713,6 +1713,29 @@ cause of that historical failure. These pure clock tests also do not establish
 physical sockets, TUNs, Windows networking or a completed release; those remain
 separate exact-SHA workflow and device evidence.
 
+## Preserve original macOS native timeout evidence
+
+The actual macOS ARM64 kernel job `127091651439`, run `41981265313` at
+`617c3dd6`, exceeded its native process wait. Its handler then raised
+`PermissionError` from `os.killpg` before reporting the partial output already
+captured by `communicate`. The Intel sibling passed. Missing log output did
+not establish that the native test performed no work, and these observations
+did not identify the cause of the underlying ARM64 timeout.
+
+The runner now emits a bounded captured tail before attempting termination.
+Termination and output-join failures retain the original timeout as their
+cause, alongside their own diagnostics. A timed-out run remains a failure even
+if the original process subsequently exits zero. The original captured Popen
+and process group, 730-second wait and 10-second output join remain unchanged;
+no alternate privileged kill path or extra allowance was introduced.
+
+All **27 Python-only runner checks pass (11.369s)**, including denied
+termination, lost output join, bounded invalid-UTF8 output, original timeout
+preservation and late successful exit. Restoring the original timeout/kill
+block fails the exact lost-progress assertion. No Go compilation or native
+Darwin execution is claimed for this unit. The next actual recurrence must
+provide the missing native progress; the ARM64 hang remains an open CI issue.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

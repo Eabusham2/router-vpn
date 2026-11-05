@@ -236,6 +236,35 @@ def dispatcher_baselines():
             for lan in (False, True) for owner in (capture, None)]
 
 
+def native_test_output(process):
+    """Retain the original timeout's evidence before fallible group cleanup."""
+    try:
+        output, _ = process.communicate(timeout=730)
+        return output
+    except subprocess.TimeoutExpired as expired:
+        # communicate retains bytes even when a descendant still owns the
+        # pipe. Losing termination authority must not hide that test progress.
+        partial = expired.output or b''
+        print('Darwin kernel test timed out; captured partial output (bounded tail):\n' +
+              partial[-8192:].decode(errors='replace'), file=sys.stderr, flush=True)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError as cleanup:
+            raise RuntimeError('Darwin kernel test exceeded its bounded lifetime; original process-group termination failed: ' +
+                               repr(cleanup)) from expired
+        try:
+            output, _ = process.communicate(timeout=10)
+        except (OSError, subprocess.SubprocessError) as cleanup:
+            latest = getattr(cleanup, 'output', None) or partial
+            print('Darwin kernel test output join failed; captured partial output (bounded tail):\n' +
+                  latest[-8192:].decode(errors='replace'), file=sys.stderr, flush=True)
+            raise RuntimeError('Darwin kernel test exceeded its bounded lifetime; original process-group output did not join: ' +
+                               repr(cleanup)) from expired
+        # A late successful exit cannot turn the expired original run green.
+        raise RuntimeError('Darwin kernel test exceeded its bounded lifetime after its original process group joined: ' +
+                           output[-8192:].decode(errors='replace')) from expired
+
+
 def root_fixture(source_binary: Path, expected_digest: str, case=None):
     if platform.system() != 'Darwin' or os.geteuid() != 0:
         raise ValueError('The explicit Darwin kernel fixture requires a matching privileged host')
@@ -337,12 +366,7 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
                                    start_new_session=True,
                                    env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C',
                                         'GORACE': 'atexit_sleep_ms=0'})
-        try:
-            output, _ = process.communicate(timeout=730)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            output, _ = process.communicate(timeout=10)
-            raise RuntimeError('Darwin kernel test exceeded its bounded lifetime: '+output[-8192:].decode(errors='replace'))
+        output = native_test_output(process)
         result = process.returncode
         print(output.decode(errors='replace'), end='', flush=True)
     except BaseException as error:
