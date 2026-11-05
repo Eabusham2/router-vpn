@@ -88,6 +88,26 @@ class NativeObservationVerdicts(unittest.TestCase):
                                 NODE.execute_baseline_suite(baseline, suite)
 
 
+class NativePhysicalMutationVerdicts(unittest.TestCase):
+    def test_physical_mutation_context_requires_every_original_verdict(self):
+        parent = "TestRouterVPNPhysicalTunnelOriginalMutationContext"
+        names = [parent] + [parent + "/" + family + "/" + phase + "/" + operation
+            for family in ("tor", "external") for phase in ("admission", "acknowledgement", "native-failure") for operation in ("bind", "retire")]
+        suite = ("physical-mutation-context", "./routervpn/desktoppt", "^" + parent + "$", (parent,))
+        lines = [line for test in names for line in ("=== RUN   " + test + "\n", "--- PASS: " + test + " (0.01s)\n")]
+        baseline = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            baseline.execute.return_value = (0, "".join(lines))
+            NODE.execute_baseline_suite(baseline, suite)
+            for line in lines:
+                for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line,
+                                "".join(lines).replace(line, line.replace("Test", "ForeignTest", 1), 1)):
+                    with self.subTest(line=line):
+                        baseline.execute.return_value = (0, changed)
+                        with self.assertRaisesRegex(ValueError, "omitted"):
+                            NODE.execute_baseline_suite(baseline, suite)
+
+
 class NativeMTUVerdicts(unittest.TestCase):
     def test_actual_tor_lease_release_ignores_held_owner_and_rejects_old_lock(self):
         spec = importlib.util.spec_from_file_location("tor_lease_control", ROOT / "deploy/test_tor_mtu_release.py")

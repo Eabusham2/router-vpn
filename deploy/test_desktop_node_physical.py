@@ -907,6 +907,11 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, names, "native manager observation")
     if name == "network-context":
         require_native_verdicts(output, NETWORK_CONTEXT_TESTS + NETWORK_CONTEXT_LEAVES, "original network observation")
+    if name == "physical-mutation-context":
+        root = "TestRouterVPNPhysicalTunnelOriginalMutationContext"
+        names = [root] + [root + "/" + family + "/" + phase + "/" + operation for family in ("tor", "external")
+                          for phase in ("admission", "acknowledgement", "native-failure") for operation in ("bind", "retire")]
+        require_native_verdicts(output, names, "physical mutation caller context")
     if name == "mtu-startup-budget":
         require_native_verdicts(output, ["TestRouterVPNMTUStartupReceiptKeepsOriginalOperation"], "MTU startup budget")
     if name == "tor-mtu-release":
@@ -968,6 +973,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
+        ("physical-mutation-context", "./routervpn/desktoppt", "^TestRouterVPNPhysicalTunnelOriginalMutationContext$", ("TestRouterVPNPhysicalTunnelOriginalMutationContext",)),
         ("external-lease-observation", "./experimental/libbox/routervpn/mobilemultihop", "^TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation$",
          ("TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation",)),
         ("tor-mtu-release", ".", "^TestRouterVPNDesktopTorMTUReleaseWithHeldOwner$",

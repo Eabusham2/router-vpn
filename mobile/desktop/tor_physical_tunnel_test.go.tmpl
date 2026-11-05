@@ -224,3 +224,114 @@ func TestRouterVPNPhysicalTunnelRejectsMissingControlAdapterAndLateCapture(t *te
 		t.Fatal("late file-control completion acknowledged a retired native generation")
 	}
 }
+
+// Both real native owner adapters must finish admission and acknowledgement
+// under the original operation. The source is the explicit kernel boundary;
+// it cannot release a held owner mutex on behalf of an expired caller.
+func TestRouterVPNPhysicalTunnelOriginalMutationContext(t *testing.T) {
+	for _, family := range []string{"tor", "external"} {
+		for _, phase := range []string{"admission", "acknowledgement", "native-failure"} {
+			for _, retire := range []bool{false, true} {
+				name := family + "/" + phase + "/bind"
+				if retire {
+					name = family + "/" + phase + "/retire"
+				}
+				t.Run(name, func(t *testing.T) {
+					source := physicalTunnelTestSource()
+					var mutex *sync.Mutex
+					var lifetime context.Context
+					var change func(context.Context) error
+					if family == "tor" {
+						n := physicalTunnelNetwork(t, source, source, true)
+						t.Cleanup(func() { _ = n.Close() })
+						mutex, lifetime = &n.mu, n.ctx
+						change = func(ctx context.Context) error { return n.changePhysicalTunnel(ctx, "exact-tun", 77, retire) }
+					} else {
+						policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+						f := newExternalPhysicalFixture(t, policy)
+						n := f.network
+						if err := n.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+							broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observe context.Context) error {
+								return n.MatchesContext(observe, capture.SessionID, capture.SourceSHA256)
+							})
+							return broker, source, err
+						}); err != nil {
+							t.Fatal(err)
+						}
+						for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+							if err := n.Start(stage); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if _, err := n.Activate(policy); err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() { _ = n.Close() })
+						mutex, lifetime = &n.mu, n.ctx
+						change = func(ctx context.Context) error { return n.changePhysicalTunnel(ctx, "exact-tun", 77, nil, retire) }
+					}
+					var ctx context.Context
+					var cancel context.CancelFunc
+					entered, release := make(chan struct{}), make(chan struct{})
+					if phase == "admission" {
+						ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+						mutex.Lock()
+					} else {
+						ctx, cancel = context.WithCancel(context.Background())
+						source.before = func() { mutex.Lock(); close(entered); <-release }
+					}
+					defer cancel()
+					failure := errors.New("original native tunnel policy failure")
+					if phase == "native-failure" {
+						source.err = failure
+					}
+					done := make(chan error, 1)
+					go func() { done <- change(ctx) }()
+					if phase != "admission" {
+						select {
+						case <-entered:
+						case err := <-done:
+							t.Fatal("native policy was not reached", err)
+						case <-time.After(time.Second):
+							t.Fatal("native policy was not reached")
+						}
+						cancel()
+						close(release)
+					}
+					var result error
+					select {
+					case result = <-done:
+						mutex.Unlock()
+					case <-time.After(time.Second):
+						mutex.Unlock()
+						<-done
+						t.Fatal("expired mutation waited for the held original owner")
+					}
+					want := error(context.Canceled)
+					if phase == "admission" {
+						want = context.DeadlineExceeded
+					}
+					if !errors.Is(result, want) {
+						t.Fatal("mutation lost its original context error", result)
+					}
+					if phase == "native-failure" {
+						if !errors.Is(result, failure) || mobiletor.ObservationContextOnly(result) {
+							t.Fatal("native failure was laundered into cancellation", result)
+						}
+					} else if !mobiletor.ObservationContextOnly(result) {
+						t.Fatal("pure expiry gained a fabricated policy failure", result)
+					}
+					if lifetime.Err() != nil {
+						t.Fatal("pure operation expiry retired the connection owner")
+					}
+					source.mu.Lock()
+					calls := len(source.calls)
+					source.mu.Unlock()
+					if phase == "admission" && calls != 0 || phase != "admission" && calls != 1 {
+						t.Fatal("expired mutation changed native policy admission", calls)
+					}
+				})
+			}
+		}
+	}
+}

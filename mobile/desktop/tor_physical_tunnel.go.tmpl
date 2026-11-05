@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -29,26 +30,38 @@ func (n *NetworkOwner) changePhysicalTunnel(ctx context.Context, name string, in
 	return n.changePhysicalTunnelFile(ctx, name, index, retire, nil)
 }
 func (n *NetworkOwner) changePhysicalTunnelFile(ctx context.Context, name string, index uint32, retire bool, file *os.File) error {
-	n.mu.Lock()
+	if n == nil {
+		return errors.New("desktop physical tunnel has no captured native owner")
+	}
+	// Capture is immutable after construction. The ordinary native path does
+	// not acquire a physical-broker requirement merely by reaching this hook.
 	if !n.capture.PhysicalBroker {
-		n.mu.Unlock()
 		return nil
+	}
+	if ctx == nil {
+		return errors.New("desktop physical tunnel lost its original caller")
+	}
+	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := desktopnetwork.LockContext(bounded, &n.mu); err != nil {
+		return err
 	}
 	source, capture := n.physicalSource, n.brokerCapture()
 	current := n.activated && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
 	n.mu.Unlock()
-	if !current || source == nil || ctx == nil || ctx.Err() != nil || name == "" || index == 0 {
+	if !current || source == nil || name == "" || index == 0 {
 		return errors.New("desktop physical tunnel has no captured native reader")
+	}
+	if err := bounded.Err(); err != nil {
+		return err
 	}
 	policy, supported := source.(mobiletor.DesktopSocketTunnelPolicy)
 	if !supported {
 		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 			return errors.New("desktop physical protection lost its actual kernel tunnel owner")
 		}
-		return nil
+		return bounded.Err()
 	}
-	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
 	var err error
 	if retire {
 		err = policy.RetireTunnel(bounded, capture, name, index)
@@ -61,11 +74,13 @@ func (n *NetworkOwner) changePhysicalTunnelFile(ctx context.Context, name string
 	} else {
 		err = policy.BindTunnel(bounded, capture, name, index)
 	}
-	n.mu.Lock()
-	current = n.activated && n.ready && !n.retired && n.ctx.Err() == nil && n.physicalSource == source && n.brokerCapture() == capture
+	if lockErr := desktopnetwork.LockContext(bounded, &n.mu); lockErr != nil {
+		return errors.Join(err, lockErr)
+	}
+	current = n.activated && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil && n.physicalSource == source && n.brokerCapture() == capture
 	n.mu.Unlock()
-	if err != nil || bounded.Err() != nil || !current {
+	if !current {
 		return errors.Join(err, bounded.Err(), errors.New("desktop physical tunnel policy did not acknowledge this exact reader"))
 	}
-	return nil
+	return errors.Join(err, bounded.Err())
 }

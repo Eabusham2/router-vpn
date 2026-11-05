@@ -448,21 +448,33 @@ func (n *ExternalNetworkOwner) RetirePhysicalTunnel(ctx context.Context, name st
 	return n.changePhysicalTunnel(ctx, name, index, nil, true)
 }
 func (n *ExternalNetworkOwner) changePhysicalTunnel(ctx context.Context, name string, index uint32, file *os.File, retire bool) error {
-	if ctx == nil || ctx.Err() != nil || name == "" || index == 0 || !n.Current() {
+	if n == nil || ctx == nil || name == "" || index == 0 {
 		return errors.New("ordinary desktop tunnel lost its active native capture")
-	}
-	n.mu.Lock()
-	source, capture := n.source, n.brokerCapture()
-	n.mu.Unlock()
-	policy, ok := source.(mobiletor.DesktopSocketTunnelPolicy)
-	if !ok {
-		if runtime.GOOS == "linux" && source != nil {
-			return nil
-		}
-		return errors.New("ordinary desktop physical policy cannot attest its actual TUN")
 	}
 	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	if err := n.CurrentContext(bounded); err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(bounded, &n.mu); err != nil {
+		return err
+	}
+	source, capture := n.source, n.brokerCapture()
+	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	n.mu.Unlock()
+	if !current {
+		return errors.New("ordinary desktop tunnel lost its active native capture")
+	}
+	if err := bounded.Err(); err != nil {
+		return err
+	}
+	policy, ok := source.(mobiletor.DesktopSocketTunnelPolicy)
+	if !ok {
+		if runtime.GOOS == "linux" && source != nil {
+			return bounded.Err()
+		}
+		return errors.New("ordinary desktop physical policy cannot attest its actual TUN")
+	}
 	var err error
 	if retire {
 		err = policy.RetireTunnel(bounded, capture, name, index)
@@ -475,8 +487,13 @@ func (n *ExternalNetworkOwner) changePhysicalTunnel(ctx context.Context, name st
 	} else {
 		err = policy.BindTunnel(bounded, capture, name, index)
 	}
-	if err != nil || bounded.Err() != nil || !n.Current() {
+	if lockErr := desktopnetwork.LockContext(bounded, &n.mu); lockErr != nil {
+		return errors.Join(err, lockErr)
+	}
+	current = n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil && n.source == source && n.brokerCapture() == capture
+	n.mu.Unlock()
+	if !current {
 		return errors.Join(err, bounded.Err(), errors.New("ordinary desktop physical policy did not acknowledge the captured TUN"))
 	}
-	return nil
+	return errors.Join(err, n.CurrentContext(bounded))
 }
