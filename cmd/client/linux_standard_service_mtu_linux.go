@@ -78,6 +78,7 @@ func (s *linuxStandardService) mtuOwner(ctx context.Context, peer *linuxStandard
 			return nil, err
 		}
 		session.mtu = &linuxStandardServiceMTU{session: session, native: native, ready: ready, current: standardengine.InitialReaderBinding(native.captureSHA, ready)}
+		native.mtuStopOwner = session.mtu
 	}
 	m := session.mtu
 	if m.session != session || m.native != native || m.ready != "" && m.current.InitialReceiptSHA256 != standardengine.SHA256([]byte(m.ready)) || m.ready == "" && (m.current != (standardengine.ReaderBinding{}) || m.active == nil || !m.active.ended) {
@@ -288,13 +289,14 @@ func (m *linuxStandardServiceMTU) poll(ctx context.Context) error {
 		}
 		op.submitted = true
 	}
-	result, err := m.native.operations.ReadResult(ctx, op.command.Reservation)
+	report, err := m.readOperationReport(ctx, op)
 	if errors.Is(err, standardengine.ErrOperationPending) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	result := report.Result
 	if op.report != nil && op.report.Result.Revision > result.Revision {
 		return errors.New("standard MTU native result went backwards")
 	}
@@ -303,34 +305,6 @@ func (m *linuxStandardServiceMTU) poll(ctx context.Context) error {
 			return errors.New("standard MTU changed evidence after original observer completion")
 		}
 		return nil
-	}
-	report := standardengine.OperationReport{Command: op.command, Result: result}
-	for role := standardengine.OperationRole(0); role < standardengine.OperationReaders; role++ {
-		binding, bindErr := m.native.operations.ReadBinding(ctx, op.command.Reservation, role)
-		if bindErr != nil {
-			return bindErr
-		}
-		if binding == (standardengine.ReaderBinding{}) {
-			continue
-		}
-		entry := &standardengine.OperationReaderEvidence{Binding: binding}
-		if result.ReadyMask&(1<<role) != 0 {
-			entry.Ready, err = m.native.operations.ReadEvidence(ctx, op.command.Reservation, role, standardengine.ReadyEvidence)
-			if err != nil {
-				return err
-			}
-		}
-		if result.RetirementMask&(1<<role) != 0 {
-			entry.Retirement, err = m.native.operations.ReadEvidence(ctx, op.command.Reservation, role, standardengine.RetirementEvidence)
-			if err != nil {
-				return err
-			}
-		}
-		report.Readers[role] = entry
-	}
-	digest, err := standardengine.OperationResultDigest(report)
-	if err != nil || digest != result.Digest {
-		return errors.Join(err, errors.New("standard MTU native evidence changed while being observed"))
 	}
 	op.report = &report // Retain joined partial cleanup evidence as well.
 	if result.Pending {
@@ -645,7 +619,7 @@ func (m *linuxStandardServiceMTU) drainForStop(ctx context.Context) error {
 		return nil
 	}
 	op := m.active
-	if m.session != nil && (m.session.joined || m.session.network != nil && m.session.network.closed || m.native != nil && m.native.closed) {
+	if m.session != nil && (m.session.joined || m.native != nil && m.native.closed || m.session.network != nil && m.session.network.closed && (op.noSubmission || op.historyValid && op.report != nil && op.report.Result.WorkerJoined && !op.report.Result.Pending)) {
 		if m.session.mtu != m || m.native == nil || m.session.owner == nil || m.session.owner.native != m.native {
 			return errors.New("standard MTU retired drain lost its original native owner")
 		}
@@ -667,33 +641,17 @@ func (m *linuxStandardServiceMTU) drainForStop(ctx context.Context) error {
 			return err
 		}
 	}
-	retried := false
-	for {
-		err := m.poll(ctx)
-		if op.ended || op.noSubmission || op.historyValid && op.report != nil && op.report.Result.WorkerJoined && !op.report.Result.Pending {
-			// A failed health observation never grants mutation authority, but
-			// must not prevent the existing owner from stopping its actual reader.
-			// closeNetwork joins the original observer; native FD10 retirement
-			// and complete routing absence still gate protection release.
-			return ctx.Err()
-		}
-		if err != nil {
-			return err
-		}
-		if !retried && op.report != nil && op.report.Result.WorkerJoined && op.report.Result.Pending {
-			if err := m.requestCleanup(ctx); err != nil {
-				return err
-			}
-			retried = true
-		}
-		timer := time.NewTimer(20 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
+	// FD10 owns explicit Stop. An unfinished FD11 call must not prevent that
+	// original child from receiving its cancellation/join request. Keep every
+	// reservation, token and partial result; no healthy settlement is inferred.
+	err := m.poll(ctx)
+	if op.ended || op.noSubmission || op.historyValid && op.report != nil && op.report.Result.WorkerJoined && !op.report.Result.Pending {
+		return ctx.Err()
 	}
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 // During the exact admitted transition the original observer retains events
@@ -701,8 +659,11 @@ func (m *linuxStandardServiceMTU) drainForStop(ctx context.Context) error {
 // mutation. This bounded branch performs no successful connection proof.
 func (s *linuxStandardService) watchNetworkCurrent(ctx context.Context, session *linuxStandardServiceSession) error {
 	if m := session.mtu; m != nil && m.active != nil && !m.active.ended {
-		if m.session != session || session.network == nil || session.network.observer != m.native.tracker || session.network.closed {
+		if s.session != session || m.session != session || m.native == nil || session.owner == nil || session.owner.native != m.native || m.native.owner != session.owner || session.network == nil || session.network.session != session || session.network.owner != session.owner || session.network.observer != m.native.tracker || session.network.closed || session.network.lifetime == nil || session.network.lifetime.Err() != nil {
 			return errors.New("standard MTU watch lost its original transition")
+		}
+		if session.network.failure != nil {
+			return session.network.failure
 		}
 		if err := m.native.current(ctx); err != nil {
 			return err

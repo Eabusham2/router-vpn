@@ -135,6 +135,11 @@ MTU = {
     'CapacityPreservesWholeRetestAndRollback': ('fresh', 'whole-test', 'rollback-reserve', 'unsent-history', 'exhausted', 'full', 'sequence-overflow'),
 }
 MTU_NATIVE = {
+    'StopRejectsHistoryBeforeGuardRelease': ('missing', 'changed-reservation', 'torn-page'),
+    'StopHandsPendingCallToFD10': ('initial', 'retry-closed-observer'),
+    'StopRetainsActualJoinedHistory': ('joined', 'missing', 'changed-reservation', 'torn-page', 'replacement-session', 'expired'),
+    'ControllerStopSignalsBeforeHistory': ('joined-history', 'torn-cached-history'),
+    'OrdinaryObservationUsesOriginalPhase': ('current', 'observe', 'dns-current'),
     'UnsubmittedRecoveryFencesDelayedCommand': ('cancel-before-begin', 'reserved-unsent', 'uncertain-unsent', 'uncertain-published'),
 }
 # These package gates are part of service MTU acceptance, not renamed client
@@ -185,7 +190,7 @@ SOURCE.update({'internal/standardengine/operation_command_linux.go', 'internal/s
                'mobile/desktop/standard_mtu_linux_test.go.tmpl'})
 
 SOURCE.update({'cmd/client/linux_standard_service_mtu_' + name for name in (
-    'linux.go', 'protocol_linux.go', 'client_linux.go', 'client_linux_test.go',
+    'linux.go', 'stop_linux.go', 'stop_native_test.go', 'protocol_linux.go', 'client_linux.go', 'client_linux_test.go',
     'controller_epoch_linux.go', 'controller_epoch_linux_test.go', 'probe_linux.go',
     'dns_linux.go', 'recovery_linux_test.go', 'admission_native_test.go', 'namespace_native_test.go',
     'cache_linux.go', 'cache_linux_test.go', 'capacity_linux.go', 'capacity_linux_test.go', 'ui_linux.go', 'ui_linux_test.go', 'ui_other.go')})
@@ -202,7 +207,7 @@ SOURCE.update({
     'internal/mobilemultihop/external_public_proof.go',
     'internal/hopmeasure/public.go', 'internal/hopmeasure/measure.go', 'internal/hopmeasure/activity.go',
 })
-NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_admission_native_test.go',
+NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
                       'cmd/client/linux_standard_service_mtu_namespace_native_test.go'}
 
 

@@ -642,6 +642,38 @@ first installed MTU mutation, restoration and joined Stop still require their
 NET_ADMIN CI runs. The local prepared build uses `with_purego`; it is not evidence
 for the normal static runtime archive or package publication.
 
+## Original Stop handoff and retained MTU history
+
+The service no longer waits for a held native MTU call before delivering the
+original authenticated Stop. It cancels the captured FD11 reservation, polls
+once, and hands cancellation/join to its existing FD10 owner. The controller
+likewise sends Stop before consuming pending MTU evidence, retaining its exact
+reservation and observer token until that service returns joined history.
+
+Successful native child join and authenticated FD10 completion are insufficient
+by themselves to release protection. The native retirement path re-reads and
+validates the original FD11 result, reader bindings and raw evidence; missing,
+changed or torn history prevents guard release. Verified final and partial
+retirement records remain attached to the original routing owner. This does not
+complete an observation as healthy after the original observer has closed.
+
+Ordinary current, observe and dns-current calls now use the exact admitted MTU
+transition for their network epoch read while preserving their existing process,
+profile, policy, source and measured DNS checks. A genuine latched failure remains
+fatal. An expired or replaced transition cannot supply current-path authority.
+
+The frozen eight-file unit passes 51 exact native client race verdicts in
+22.585 seconds. Root integration on `38fd5669` passes the same 51 verdicts
+in 13.847 seconds; all nine current service runner tests also pass. Four compiling old-behavior controls fail all ten intended
+leaves: waiting before FD10, waiting in the controller before Stop, releasing
+protection without final history, and using the ordinary epoch during an owned
+transition. Five new parents and sixteen leaves are mandatory in the service
+gate. Tests execute actual creating-child/pidfd and sealed FD10/FD11 transports
+with production service/controller retirement methods; routing effects are
+explicit models. Real privileged TUN execution, package publication and device
+acceptance remain separate. The independent shared absolute run cleanup clock
+is still being integrated.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

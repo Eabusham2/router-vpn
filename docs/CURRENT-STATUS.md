@@ -59,8 +59,14 @@ The original native MTU worker now hands an outstanding native call to the
 bounded Stop cleanup owner when its lifetime is canceled. An expired Stop keeps
 the exact completion channel, reader and eventual transaction for a later Stop
 attempt; unjoined work cannot publish a result or current reader. The mandatory
-cleanup suite and generated native Box composition pass. Service-side Stop
-handoff and final historical routing validation remain a separate integration.
+cleanup suite and generated native Box composition pass. The service/controller
+Stop handoff now signals the original FD10 owner before awaiting pending FD11
+history. Actual successful child join and authenticated cleanup still require
+complete unchanged original history before protection can be released; missing,
+changed or torn evidence retains the original guard. Ordinary observations use
+the admitted transition while preserving process, profile and DNS checks. The
+focused native client race suite passes 51 exact verdicts and causal controls
+reject all four former behaviors; privileged TUN acceptance remains separate.
 
 Complete retirement receipts now retain their separate 48 KiB writer/parser
 allowance while readiness stays at 16 KiB. Shared and generated-native gates

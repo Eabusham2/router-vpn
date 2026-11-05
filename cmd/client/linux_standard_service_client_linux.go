@@ -409,23 +409,22 @@ func (s *linuxStandardServiceStop) Retire(ctx context.Context, command *exec.Cmd
 	if err := o.currentIntentContext(ctx, s.operation, s.command); err != nil {
 		return err
 	}
-	// Stop joins an already admitted candidate before closing either observer.
-	// Its own bounded teardown context cannot extend the native mutation deadline.
-	if o.mtuOwner != nil && o.mtuOwner.pending != nil {
-		_, drainErr := o.mtuOwner.finishStopLocked(ctx)
-		if o.mtuOwner.pending != nil {
-			return drainErr
-		}
+	// The original service must receive FD10 Stop before waiting for a held
+	// native call. Retain the controller token until actual joined history is
+	// returned by that same service's retirement-only evidence path.
+	serviceStopped, err := s.stopPendingMTULocked(ctx, release)
+	if err != nil {
+		return err
 	}
 	if err := o.prepared.requestEpoch.close(ctx); err != nil {
 		return err
 	}
-	if o.attempted {
+	if o.attempted && !serviceStopped {
 		request := linuxStandardServiceRequest{Schema: 1, Action: "stop", Session: o.request.Session, Release: release}
 		if err := o.call(ctx, request, nil); err != nil {
 			return err
 		}
-	} else {
+	} else if !o.attempted {
 		if err := o.prepared.discardContext(ctx); err != nil {
 			return err
 		}

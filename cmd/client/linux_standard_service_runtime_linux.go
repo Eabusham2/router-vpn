@@ -413,7 +413,7 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 		if err := s.session.owner.Current(ctx); err != nil {
 			return err
 		}
-		return s.networkCurrent(ctx, s.session, false)
+		return s.observationNetworkCurrent(ctx, s.session, false)
 	case "observe":
 		if request.Release || s.session.joined || s.session.cleanupPending {
 			return errors.New("standard service original runtime is retired or needs cleanup")
@@ -421,13 +421,13 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 		if err := s.loadProfiles(); err != nil {
 			return err
 		}
-		if err := s.networkCurrent(ctx, s.session, true); err != nil {
+		if err := s.observationNetworkCurrent(ctx, s.session, true); err != nil {
 			return err
 		}
 		if err := s.session.owner.legacyDNSCurrent(ctx); err != nil {
 			return err
 		}
-		return s.networkCurrent(ctx, s.session, true)
+		return s.observationNetworkCurrent(ctx, s.session, true)
 	case "prove-dns", "dns-current":
 		if request.Release || s.session.joined || s.session.cleanupPending {
 			return errors.New("standard service DNS has no original live engine")
@@ -440,13 +440,13 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 		if request.Action == "prove-dns" {
 			return s.proveDNSWithNetwork(ctx)
 		}
-		if err := s.networkCurrent(ctx, s.session, true); err != nil {
+		if err := s.observationNetworkCurrent(ctx, s.session, true); err != nil {
 			return err
 		}
 		if err := linuxStandardServiceDNSReceiptCurrent(ctx, s.session.owner); err != nil {
 			return err
 		}
-		return s.networkCurrent(ctx, s.session, true)
+		return s.observationNetworkCurrent(ctx, s.session, true)
 	default:
 		return errors.New("standard service action is unavailable")
 	}

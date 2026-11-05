@@ -64,6 +64,11 @@ func (n *linuxStandardEngine) routingRetired(ctx context.Context) error {
 			return errors.New("native cleanup result has no original issued attempt")
 		}
 	}
+	if n.mtuStopOwner != nil {
+		if err := n.mtuStopOwner.retainStoppedHistory(ctx); err != nil {
+			return err
+		}
+	}
 	retirement, err := desktopnetwork.ParseDesktopNetworkRetirementReceipt(result.Ledger)
 	if err != nil {
 		return err
