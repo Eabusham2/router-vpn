@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`721511bb`, the integrated observation change in `a94cde9d`, and the installed
+`3346fb22`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -45,6 +45,10 @@ original observers' independent histories across partial failure and pure expiry
 stale tokens and unclaimed effects remain rejected. The full shared observer race
 package passed 334 verdicts. These are prerequisites for the installed-service MTU
 phase protocol; that shipping coordination remains unfinished.
+Native Linux Stop/Start/update/reset now enter through the original bounded
+caller and recheck identity after admission. Completed retirement receipts retain
+their nonblocking cached-read behavior after cancellation; 15 native race verdicts
+and the source/provenance gate verify both paths.
 
 This is not all-requirement completion. Installed Linux standard-service MTU
 Retest/Cancel remains unimplemented. The accepted native MTU command now has

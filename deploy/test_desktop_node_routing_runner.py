@@ -20,6 +20,20 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+class NativeLifecycleAdmissionVerdicts(unittest.TestCase):
+    def test_original_admission_and_completed_cleanup_are_required(self):
+        names = NODE.NATIVE_LIFECYCLE_ADMISSION_VERDICTS
+        self.assertEqual(len(names), 15)
+        output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
+        NODE.require_native_verdicts(output, names, "lifecycle admission")
+        for name in names:
+            with self.subTest(missing=name):
+                with self.assertRaises(ValueError):
+                    NODE.require_native_verdicts(output.replace("--- PASS: " + name + " (0.01s)\n", "", 1), names, "lifecycle admission")
+        with self.assertRaises(ValueError):
+            NODE.require_native_verdicts(output+output, names, "lifecycle admission")
+
+
 class NativeAddressRetirementVerdicts(unittest.TestCase):
     def test_partial_and_foreign_address_verdicts_cannot_be_omitted(self):
         names = NODE.NATIVE_ADDRESS_RETIREMENT_VERDICTS

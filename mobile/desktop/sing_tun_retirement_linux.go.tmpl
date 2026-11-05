@@ -42,6 +42,7 @@ type routerVPNLinuxRoutingCall struct {
 }
 
 type routerVPNLinuxRetirement struct {
+	startup                                                    context.Context
 	mu                                                         sync.Mutex
 	watch                                                      routerVPNLinuxRetirementObserver
 	port                                                       uint32
@@ -79,6 +80,7 @@ func routervpnNewLinuxNative(options Options) (Tun, error) {
 	}
 	t := &NativeTun{options: options, tunFd: -1}
 	t.routervpnRetirement.watch, t.routervpnRetirement.port = watch, watch.port
+	t.routervpnRetirement.startup = ctx
 	var nonce [16]byte
 	if _, err = rand.Read(nonce[:]); err != nil {
 		return t, err
@@ -763,7 +765,21 @@ func (t *NativeTun) RouterVPNDesktopNetworkRetire(ctx context.Context) (string, 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	s := &t.routervpnRetirement
-	s.mu.Lock()
+	// Already published evidence remains readable after its caller ends. This
+	// fast path cannot wait, perform cleanup, or publish a new receipt.
+	if s.mu.TryLock() {
+		receipt := s.receipt
+		s.mu.Unlock()
+		if receipt != "" {
+			return receipt, nil
+		}
+	}
+	if err := routervpnLinuxAdmissionContext(ctx); err != nil {
+		return "", err
+	}
+	if err := LockContext(ctx, &s.mu); err != nil {
+		return "", err
+	}
 	defer s.mu.Unlock()
 	if s.receipt != "" {
 		return s.receipt, nil
@@ -771,17 +787,19 @@ func (t *NativeTun) RouterVPNDesktopNetworkRetire(ctx context.Context) (string, 
 	if s.failure != nil {
 		return "", s.failure
 	}
-	if ctx == nil || ctx.Err() != nil {
-		return "", errors.New("native retirement requires the original bounded Stop caller")
-	}
-	if _, bounded := ctx.Deadline(); !bounded {
-		return "", errors.New("native retirement requires its captured Stop deadline")
-	}
 	if s.watch == nil {
 		return "", errors.New("native retirement has no original creation lifetime")
 	}
 	if s.readbackComplete {
 		return t.routervpnLinuxFinishRetirement(ctx)
+	}
+	if s.created && !s.closed {
+		if err := t.routervpnLinuxOriginal(ctx); err != nil {
+			return "", errors.Join(err, ctx.Err())
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 	}
 	if t.interfaceCallback != nil {
 		t.options.InterfaceMonitor.UnregisterCallback(t.interfaceCallback)
@@ -894,6 +912,9 @@ func (t *NativeTun) routervpnLinuxFinishRetirement(ctx context.Context) (string,
 			return "", err
 		}
 		s.watchClosed = true
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	s.receipt = raw
 	return raw, nil
@@ -1079,4 +1100,85 @@ func (t *NativeTun) routervpnLinuxImplicitRoute(object DesktopNetworkObject) boo
 	}
 	return err == nil && object.Family == 6 && prefix.Addr().IsLinkLocalUnicast() &&
 		(object.Table == 255 && body[7] == unix.RTN_LOCAL && prefix.Bits() == 128 || object.Table == 254 && body[7] == unix.RTN_UNICAST && prefix.Bits() == 64)
+}
+
+// Native calls keep their captured constructor/operation context. These locks
+// do not launch a worker and do not create a replacement cleanup allowance.
+func routervpnLinuxAdmissionContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native lifecycle admission has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("native lifecycle admission has no original deadline")
+	}
+	return nil
+}
+func (t *NativeTun) routervpnLinuxMutationContext(ctx context.Context, mutate func() error) error {
+	if err := routervpnLinuxAdmissionContext(ctx); err != nil {
+		return err
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	s := &t.routervpnRetirement
+	if err := LockContext(ctx, &s.mu); err != nil {
+		return err
+	}
+	defer s.mu.Unlock()
+	if s.failure != nil {
+		return s.failure
+	}
+	if !s.created || s.closed || s.readbackComplete || s.receipt != "" {
+		return errors.New("native mutation lost its original active constructor")
+	}
+	if err := t.routervpnLinuxMutationIdentity(ctx); err != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := mutate()
+	// Fixed native syscalls may finish after cancellation. Their partial effects
+	// remain on this reader; no result is accepted after the original deadline.
+	return errors.Join(err, t.routervpnLinuxMutationIdentity(ctx), ctx.Err())
+}
+func (t *NativeTun) Start() error {
+	if t.routervpnRetirement.watch == nil {
+		return t.routervpnLinuxStartOriginal()
+	}
+	return t.routervpnLinuxMutationContext(t.routervpnRetirement.startup, t.routervpnLinuxStartOriginal)
+}
+func (t *NativeTun) UpdateRouteOptions(options Options) error {
+	if t.routervpnRetirement.watch == nil {
+		return t.routervpnLinuxUpdateOriginal(options)
+	}
+	ctx := options.RouterVPNNetworkContext
+	return t.routervpnLinuxMutationContext(ctx, func() error {
+		if options.Name != t.options.Name || options.FileDescriptor != t.options.FileDescriptor || options.NetNs != t.options.NetNs || options.EXP_ExternalConfiguration != t.options.EXP_ExternalConfiguration {
+			return errors.New("native route update cannot replace its original constructor")
+		}
+		originalContext := t.options.RouterVPNNetworkContext
+		originalLifetime := t.options.RouterVPNNetworkLifetime
+		t.options.RouterVPNNetworkContext = ctx
+		defer func() { t.options.RouterVPNNetworkContext = originalContext }()
+		options.RouterVPNNetworkContext = ctx
+		options.RouterVPNNetworkLifetime = originalLifetime
+		return t.routervpnLinuxUpdateOriginal(options)
+	})
+}
+func (t *NativeTun) resetRules() error {
+	if t.routervpnRetirement.watch == nil {
+		return t.routervpnLinuxResetRulesOriginal()
+	}
+	return t.routervpnLinuxMutationContext(t.routervpnRetirement.startup, t.routervpnLinuxResetRulesOriginal)
+}
+
+func (t *NativeTun) routervpnLinuxMutationIdentity(ctx context.Context) error {
+	err := t.routervpnLinuxOriginal(ctx)
+	if lifetime := t.options.RouterVPNNetworkLifetime; lifetime != nil {
+		err = errors.Join(err, lifetime.Err())
+	}
+	return errors.Join(err, ctx.Err())
 }

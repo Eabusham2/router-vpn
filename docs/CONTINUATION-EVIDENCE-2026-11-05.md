@@ -228,7 +228,7 @@ integration obligations.
 
 ## Partial native effects and retained observer transitions
 
-The commit containing this section retains exact addresses from successful native
+Commit [`3346fb22`](https://github.com/Eabusham2/router-vpn/commit/3346fb221b525bc60e3f37a23061837bb7cd25ca) retains exact addresses from successful native
 constructor calls, including a constructor that fails before Ready. An occupied
 address is refused rather than adopted. The original native route socket also
 observes address notifications; foreign changes, missing notifications, address
@@ -261,6 +261,25 @@ Native address tests use explicit operation/event models; they do not establish
 physical TUN acceptance. Privileged namespace cases remain mandatory in platform
 CI. The two-observer test drives two independent actual trackers with modeled
 native events; shipping service/controller phase coordination is still unfinished.
+
+### Native lifecycle admission on the original caller
+
+The following native admission change bounds the original Linux lifecycle lock
+for Stop, Start, route update and rule reset. Start/reset retain the immutable
+constructor context; update uses its supplied caller while preserving original
+constructor identity and lifetime. Original identity and caller validity are
+checked after admission and around native calls. No detached lock waiter or
+renewed work/cleanup deadline is introduced. An already-published retirement
+receipt remains readable after cancellation through a nonblocking cached read;
+that path performs no cleanup or new evidence publication.
+
+All 15 mandatory actual prepared native admission verdicts passed under race in
+1.146 seconds. The combined selection also preserved all 18 address cases and
+successful original Stop/idempotent-retirement behavior. Six exact source
+projection checks and 41 merged routing-runner tests passed. Reintroducing old
+blocking admission failed each of four held-lock cases; removing only the final
+late-close check failed its expected publication witness. These checks bound
+admission and validity around native calls, not hard syscall interruption.
 
 ## Remaining requirement/evidence ledger
 

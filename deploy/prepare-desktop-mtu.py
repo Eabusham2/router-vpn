@@ -129,9 +129,13 @@ def linux_retirement_patch(raw):
     replace(b'\t"os/exec"\n', b'')
     replace(b'\t"github.com/sagernet/sing/common/shell"\n', b'')
     replace(b'\tt.unsetRules()\n\treturn t.setRules()', b'\tif err := t.unsetRules(); err != nil { return err }\n\treturn t.setRules()')
-    # All mutating native entry points serialize with explicit Stop retirement.
-    for signature in (b'func (t *NativeTun) Start() error {', b'func (t *NativeTun) UpdateRouteOptions(tunOptions Options) error {', b'func (t *NativeTun) resetRules() error {'):
-        replace(signature, signature+b'\n\truntime.LockOSThread()\n\tdefer runtime.UnlockOSThread()\n\tt.routervpnRetirement.mu.Lock()\n\tdefer t.routervpnRetirement.mu.Unlock()')
+    # Shipping wrappers admit the original caller and descriptor before these
+    # unchanged native bodies, then reject late results without discarding the
+    # partially mutated reader needed by original Stop.
+    for old, new in ((b'Start', b'routervpnLinuxStartOriginal'),
+                     (b'UpdateRouteOptions', b'routervpnLinuxUpdateOriginal'),
+                     (b'resetRules', b'routervpnLinuxResetRulesOriginal')):
+        replace(b'func (t *NativeTun) '+old+b'(', b'func (t *NativeTun) '+new+b'(')
     # No range, regenerated-route, or by-name address deletion remains.
     for forbidden in (b'netlink.RuleDel(', b'netlink.RouteDel(', b'netlink.AddrDel('):
         if forbidden in raw:
@@ -159,7 +163,7 @@ def verify_linux_retirement_source(vendor, go='go'):
         raise ValueError('Linux retirement differs from the complete prepared native lifecycle')
     # The address history is meaningful only with the exact constructor,
     # notification parser and shared receipt codec that produced it.
-    for name in ('sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl',
+    for name in ('sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl',
                  'sing_tun_address_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux_test.go.tmpl'):
         original = ROOT/'mobile/desktop'/name
         projected = native/('routervpn_'+name.removesuffix('.tmpl'))

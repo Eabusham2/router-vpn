@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -823,4 +824,219 @@ type retirementReadContext struct {
 func (c *retirementReadContext) Err() error {
 	c.calls++
 	return context.Canceled
+}
+
+func retirementAdmissionCall(n *NativeTun, action string, ctx context.Context) error {
+	switch action {
+	case "retire":
+		_, err := n.RouterVPNDesktopNetworkRetire(ctx)
+		return err
+	case "start":
+		return n.Start()
+	case "update":
+		options := n.options
+		options.RouterVPNNetworkContext = ctx
+		options.MTU = 1450
+		return n.UpdateRouteOptions(options)
+	case "reset":
+		return n.resetRules()
+	}
+	return errors.New("unknown native admission action")
+}
+
+func TestRouterVPNNativeLinuxLifecycleAdmissionHeldCaller(t *testing.T) {
+	for _, action := range []string{"retire", "start", "update", "reset"} {
+		t.Run(action, func(t *testing.T) {
+			n, _, file := retirementFixture(t)
+			s := &n.routervpnRetirement
+			work, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			n.options.RouterVPNNetworkContext = work
+			s.startup = work
+			s.mu.Lock()
+			done := make(chan error, 1)
+			go func() { done <- retirementAdmissionCall(n, action, work) }()
+			select {
+			case err := <-done:
+				s.mu.Unlock()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("native admission lost its original deadline", err)
+				}
+			case <-time.After(time.Second):
+				s.mu.Unlock()
+				<-done
+				t.Fatal("native admission waited on a retained lifecycle lock")
+			}
+			if s.closed || s.receipt != "" || s.failure != nil || n.options.MTU != 0 || n.tunFile != file {
+				t.Fatal("expired admission changed the original native reader")
+			}
+			// This is the separately admitted original Stop caller, not a renewed work
+			// context or a per-layer rollback allowance. The exact reader must retire.
+			cleanup := retirementStop(t)
+			raw, err := n.RouterVPNDesktopNetworkRetire(cleanup)
+			if err != nil || raw == "" {
+				t.Fatal("original Stop could not retire the unchanged canceled reader", err)
+			}
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal("successful cleanup did not close original descriptor", err)
+			}
+			if n.options.RouterVPNNetworkContext != work {
+				t.Fatal("Stop replaced original work authority")
+			}
+		})
+	}
+}
+
+type retirementAdmissionEnteredContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *retirementAdmissionEnteredContext) Err() error {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Err()
+}
+
+func TestRouterVPNNativeLinuxLifecycleAdmissionRechecksQueuedIdentity(t *testing.T) {
+	for _, action := range []string{"retire", "start", "update", "reset"} {
+		t.Run(action, func(t *testing.T) {
+			n, _, file := retirementFixture(t)
+			s := &n.routervpnRetirement
+			base, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			call := &retirementAdmissionEnteredContext{Context: base, entered: make(chan struct{})}
+			n.options.RouterVPNNetworkContext = call
+			s.startup = call
+			original := s.original
+			identityLost := errors.New("original native index was replaced while queued")
+			s.original = func(ctx context.Context) error {
+				if n.routervpnOwnedIndex != 8 {
+					return identityLost
+				}
+				return original(ctx)
+			}
+			s.mu.Lock()
+			done := make(chan error, 1)
+			go func() { done <- retirementAdmissionCall(n, action, call) }()
+			<-call.entered
+			n.routervpnOwnedIndex = 9
+			s.mu.Unlock()
+			select {
+			case err := <-done:
+				if !errors.Is(err, identityLost) {
+					t.Fatal("queued admission lost exact identity failure", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("queued native identity was not resolved")
+			}
+			if s.closed || s.receipt != "" || n.options.MTU != 0 {
+				t.Fatal("late replacement admitted native mutation or retirement")
+			}
+			if _, err := file.Stat(); err != nil {
+				t.Fatal("foreign identity failure discarded original descriptor", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxLifecycleAdmissionRejectsLateIdentity(t *testing.T) {
+	for _, action := range []string{"retire", "update"} {
+		t.Run(action, func(t *testing.T) {
+			n, _, file := retirementFixture(t)
+			s := &n.routervpnRetirement
+			base, stop := context.WithTimeout(context.Background(), time.Second)
+			defer stop()
+			work, cancel := context.WithCancel(base)
+			defer cancel()
+			n.options.RouterVPNNetworkContext = work
+			s.startup = work
+			original := s.original
+			s.original = func(context.Context) error { cancel(); return nil }
+			if err := retirementAdmissionCall(n, action, work); !errors.Is(err, context.Canceled) {
+				t.Fatal("late nil identity read admitted native work", err)
+			}
+			if s.closed || s.receipt != "" || n.options.MTU != 0 {
+				t.Fatal("late identity success changed native state")
+			}
+			s.original = original
+			if raw, err := n.RouterVPNDesktopNetworkRetire(retirementStop(t)); err != nil || raw == "" {
+				t.Fatal("original cleanup was lost after observation cancellation", err)
+			}
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxRetirementLateCloseKeepsOriginalMilestone(t *testing.T) {
+	n, m, file := retirementFixture(t)
+	base, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	ctx, cancel := context.WithCancel(base)
+	defer cancel()
+	n.routervpnRetirement.watch = &retirementCancelOnClose{retirementModel: m, cancel: cancel}
+	if raw, err := n.RouterVPNDesktopNetworkRetire(ctx); !errors.Is(err, context.Canceled) || raw != "" {
+		t.Fatal("late close published retirement after caller cancellation", raw, err)
+	}
+	if !n.routervpnRetirement.readbackComplete || !n.routervpnRetirement.watchClosed || n.routervpnRetirement.receipt != "" {
+		t.Fatal("canceled publication discarded original completed cleanup milestones")
+	}
+	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("original descriptor was not actually closed", err)
+	}
+	if raw, err := n.RouterVPNDesktopNetworkRetire(retirementStop(t)); err != nil || raw == "" {
+		t.Fatal("original Stop could not recover completed retirement", raw, err)
+	}
+}
+
+type retirementCancelOnClose struct {
+	*retirementModel
+	cancel context.CancelFunc
+}
+
+func (w *retirementCancelOnClose) close(ctx context.Context) error {
+	err := w.retirementModel.close(ctx)
+	w.cancel()
+	return err
+}
+
+func TestRouterVPNNativeLinuxUpdateRetainsOriginalLifetimeAndCaller(t *testing.T) {
+	n, _, file := retirementFixture(t)
+	original, stopOriginal := context.WithCancel(context.Background())
+	stopOriginal()
+	lifetime, stopLifetime := context.WithCancel(context.Background())
+	defer stopLifetime()
+	n.options.RouterVPNNetworkContext = original
+	n.options.RouterVPNNetworkLifetime = lifetime
+	n.routervpnRetirement.startup = original
+	caller, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	replacement, stopReplacement := context.WithCancel(context.Background())
+	defer stopReplacement()
+	options := n.options
+	options.RouterVPNNetworkContext = caller
+	options.RouterVPNNetworkLifetime = replacement
+	options.MTU = 1440
+	if err := n.UpdateRouteOptions(options); err != nil {
+		t.Fatal("current owned route update ignored supplied caller", err)
+	}
+	if n.options.MTU != 1440 || n.options.RouterVPNNetworkContext != original || n.options.RouterVPNNetworkLifetime != lifetime || n.routervpnRetirement.startup != original {
+		t.Fatal("route update replaced original constructor authority")
+	}
+	stopLifetime()
+	options.MTU = 1460
+	if err := n.UpdateRouteOptions(options); !errors.Is(err, context.Canceled) {
+		t.Fatal("retired owner lifetime admitted native update", err)
+	}
+	if n.options.MTU != 1440 {
+		t.Fatal("retired owner changed configuration")
+	}
+	if raw, err := n.RouterVPNDesktopNetworkRetire(caller); err != nil || raw == "" {
+		t.Fatal("original Stop lost cleanup after owner cancellation", err)
+	}
+	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatal(err)
+	}
 }

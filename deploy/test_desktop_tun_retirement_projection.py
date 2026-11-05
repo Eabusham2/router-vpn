@@ -22,6 +22,18 @@ SOURCE = None
 
 
 class NativeRetirementProjection(unittest.TestCase):
+    def test_pinned_native_entry_points_use_caller_bound_wrappers(self):
+        cache = subprocess.check_output(["go", "env", "GOMODCACHE"], cwd=SOURCE, text=True).strip()
+        raw = (Path(cache)/(PREP.MODULE+"@"+PREP.VERSION)/"tun_linux.go").read_bytes()
+        projected = PREP.linux_retirement_patch(raw)
+        for name in (b"routervpnLinuxStartOriginal", b"routervpnLinuxUpdateOriginal", b"routervpnLinuxResetRulesOriginal"):
+            self.assertEqual(projected.count(b"func (t *NativeTun) "+name+b"("), 1)
+        self.assertNotIn(b"routervpnRetirement.mu.Lock()", projected)
+        self.assertNotIn(b"func (t *NativeTun) Start(", projected)
+        self.assertNotIn(b"func (t *NativeTun) UpdateRouteOptions(", projected)
+        with self.assertRaisesRegex(ValueError, "Pinned Linux native lifecycle source changed"):
+            PREP.linux_retirement_patch(raw.replace(b"func (t *NativeTun) Start(", b"func (t *NativeTun) UnownedStart(", 1))
+
     def test_pinned_constructor_address_calls_cannot_bypass_evidence(self):
         cache = subprocess.check_output(["go", "env", "GOMODCACHE"], cwd=SOURCE, text=True).strip()
         raw = (Path(cache)/(PREP.MODULE+"@"+PREP.VERSION)/"tun_linux.go").read_bytes()
@@ -83,7 +95,7 @@ class NativeRetirementProjection(unittest.TestCase):
             projected = {path.relative_to(vendor): path.read_bytes() for path in vendor.rglob("*") if path.is_file()}
             verified = PREP.verify_linux_retirement_source(vendor)
             self.assertIn('routervpn-desktop-tun/routervpn_sing_tun_address_retirement_linux.go', verified)
-            for name in ('routervpn_sing_tun_address_retirement_linux.go', 'routervpn_sing_tun_retirement_socket_linux.go', 'routervpn_desktop_network_retirement.go'):
+            for name in ('routervpn_sing_tun_address_retirement_linux.go', 'routervpn_sing_tun_retirement_linux_test.go', 'routervpn_sing_tun_retirement_socket_linux.go', 'routervpn_desktop_network_retirement.go'):
                 target = vendor/'routervpn-desktop-tun'/name
                 captured = target.read_bytes()
                 target.write_bytes(captured+b'\n// changed evidence boundary\n')

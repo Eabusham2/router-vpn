@@ -111,6 +111,9 @@ NATIVE_DBUS_CASES = ("invalid-index", "advertised-count", "zero-count", "unrefer
 NATIVE_DNS_CASES = ("ipv4-host-without-dns", "ipv4-host-with-explicit-dns",
                     "ipv6-host-without-dns", "ipv6-fallback")
 
+NATIVE_LIFECYCLE_ADMISSION_TESTS = ("TestRouterVPNNativeLinuxLifecycleAdmissionHeldCaller", "TestRouterVPNNativeLinuxLifecycleAdmissionRechecksQueuedIdentity", "TestRouterVPNNativeLinuxLifecycleAdmissionRejectsLateIdentity", "TestRouterVPNNativeLinuxRetirementLateCloseKeepsOriginalMilestone", "TestRouterVPNNativeLinuxUpdateRetainsOriginalLifetimeAndCaller")
+NATIVE_LIFECYCLE_ADMISSION_VERDICTS = [*NATIVE_LIFECYCLE_ADMISSION_TESTS, *[root+"/"+action for root in NATIVE_LIFECYCLE_ADMISSION_TESTS[:2] for action in ("retire", "start", "update", "reset")], *[NATIVE_LIFECYCLE_ADMISSION_TESTS[2]+"/"+action for action in ("retire", "update")]]
+
 NATIVE_ADDRESS_RETIREMENT_TESTS = ("TestRouterVPNNativeLinuxPartialAddressRetirement", "TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects")
 NATIVE_ADDRESS_RETIREMENT_VERDICTS = [NATIVE_ADDRESS_RETIREMENT_TESTS[0], *[NATIVE_ADDRESS_RETIREMENT_TESTS[0]+"/"+name for name in ("partial-add-refusal", "cancel-after-add", "link-up-addrconf", "dad-completion")], NATIVE_ADDRESS_RETIREMENT_TESTS[1], *[NATIVE_ADDRESS_RETIREMENT_TESTS[1]+"/"+name for name in ("global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up")]]
 
@@ -895,6 +898,8 @@ def execute_baseline_suite(baselines, suite):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
         raise ValueError("Node " + name + " omitted a required native boundary")
+    if name == "native-lifecycle-admission":
+        require_native_verdicts(output, NATIVE_LIFECYCLE_ADMISSION_VERDICTS, "native lifecycle admission")
     if name == "native-address-retirement":
         require_native_verdicts(output, NATIVE_ADDRESS_RETIREMENT_VERDICTS, "native partial address retirement")
     if name == "native-routing-receipt":
@@ -1091,6 +1096,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                         "TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics", "TestRouterVPNNativeLinuxRoutingBoundedInventory",
                         "TestRouterVPNNativeLinuxRoutingInventoryFraming", "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary",
 "TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors","TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes","TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire","TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext","TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones","TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard","TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange","TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt","TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal","TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst","TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed","TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability","TestRouterVPNNativeLinuxRoutingRetirementSocket","TestRouterVPNNativeLinuxRoutingRetirementNamespace", "TestRouterVPNNativeLinuxRoutingReceiptKeepsOriginalLifetimeAndCallerBudget", "TestRouterVPNNativeLinuxRoutingReceiptHeldOperation", "TestRouterVPNNativeLinuxRoutingObserverHeldOperation", "TestRouterVPNNativeLinuxRoutingInterfaceCancelledCaller")))
+        suites.append(("native-lifecycle-admission", "github.com/sagernet/sing-tun", "^("+"|".join(NATIVE_LIFECYCLE_ADMISSION_TESTS)+")$", NATIVE_LIFECYCLE_ADMISSION_TESTS))
         suites.append(("native-address-retirement", "github.com/sagernet/sing-tun", "^("+"|".join(NATIVE_ADDRESS_RETIREMENT_TESTS)+")$", NATIVE_ADDRESS_RETIREMENT_TESTS))
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
