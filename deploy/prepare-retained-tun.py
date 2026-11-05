@@ -8,6 +8,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 MANAGER = 'adapter/inbound/manager.go'
+OBSERVATION_TEMPLATE = ROOT / 'mobile/strategy/observation.go.tmpl'
+OBSERVATION_TARGET = 'adapter/routervpn_observation.go'
 # Exact previous published preparation, accepted only for this bounded upgrade.
 PREVIOUS_TEMPLATES = {
     'routervpn_mtu_native_linux_test.go': ('c357330566e837ebab6e084db5072f21c896d5c08248163d31ec226d2711c7c7',),
@@ -79,6 +81,11 @@ def verify(vendor):
             raise ValueError('Native manager lost its captured transaction source: ' + target)
         records[path.relative_to(vendor).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
         records['gate/' + template.relative_to(ROOT).as_posix()] = hashlib.sha256(template.read_bytes()).hexdigest()
+    observation = vendor / OBSERVATION_TARGET
+    if OBSERVATION_TEMPLATE.is_symlink() or observation.is_symlink() or not observation.is_file() or observation.read_bytes() != OBSERVATION_TEMPLATE.read_bytes():
+        raise ValueError('Native manager lost its original caller observation helper.')
+    records[OBSERVATION_TARGET] = hashlib.sha256(observation.read_bytes()).hexdigest()
+    records['gate/' + OBSERVATION_TEMPLATE.relative_to(ROOT).as_posix()] = hashlib.sha256(OBSERVATION_TEMPLATE.read_bytes()).hexdigest()
     records['gate/deploy/prepare-retained-tun.py'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return records
 
@@ -103,11 +110,17 @@ def prepare(vendor):
     # teardown proof installed after this TUN transaction in the first run.
     if current in (original_checked, expected_checked, prior_checked):
         expected = expected_checked
+    if OBSERVATION_TEMPLATE.is_symlink():
+        raise ValueError('Linked native manager observation helper.')
     outputs = {
         manager: expected,
         manager.parent / 'routervpn_mtu.go': (ROOT / 'mobile/mtu/manager.go.tmpl').read_text(),
         manager.parent / 'routervpn_mtu_test.go': (ROOT / 'mobile/mtu/manager_test.go.tmpl').read_text(),
         manager.parent / 'routervpn_mtu_native_linux_test.go': (ROOT / 'mobile/mtu/manager_native_linux_test.go.tmpl').read_text(),
+        # Selective mobile MTU preparation does not run the strategy preparer.
+        # Its retained manager still needs the same exact caller-bounded helper;
+        # copying it here also composes byte-for-byte with full preparation.
+        vendor / OBSERVATION_TARGET: OBSERVATION_TEMPLATE.read_text(),
     }
     for target, content in outputs.items():
         if target.is_symlink() or not target.parent.resolve().is_relative_to(vendor):

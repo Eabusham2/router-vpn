@@ -17,7 +17,7 @@ GO_SOURCE_HASHES={
  'LICENSE':'911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad',
 }
 def inputs():
-    paths=[Path(__file__).resolve(),ROOT/'deploy/prepare-retained-tun.py',ROOT/'mobile/mtu/GO-LICENSE']+sorted((ROOT/'mobile/mtu').glob('*.tmpl'))
+    paths=[Path(__file__).resolve(),ROOT/'deploy/prepare-retained-tun.py',RETAINED.OBSERVATION_TEMPLATE,ROOT/'mobile/mtu/GO-LICENSE']+sorted((ROOT/'mobile/mtu').glob('*.tmpl'))
     for package in PACKAGES:paths+=sorted((ROOT/'internal'/package).glob('*.go'))
     return paths
 def digest():

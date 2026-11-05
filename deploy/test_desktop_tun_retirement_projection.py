@@ -61,11 +61,14 @@ class NativeRetirementProjection(unittest.TestCase):
             expected = {path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}
             verified = RETAINED.verify(vendor)
             self.assertIn(RETAINED.MANAGER, verified)
+            self.assertIn(RETAINED.OBSERVATION_TARGET, verified)
+            helper = vendor/RETAINED.OBSERVATION_TARGET
+            self.assertEqual(helper.read_bytes(), RETAINED.OBSERVATION_TEMPLATE.read_bytes())
             self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
             RETAINED.prepare(vendor)
             self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
             self.assertEqual(manager.read_text().count("routervpnMTUPending []*RouterVPNTunTransaction"), 1)
-            for target in (manager, manager.parent/"routervpn_mtu.go", manager.parent/"routervpn_mtu_test.go", manager.parent/"routervpn_mtu_native_linux_test.go"):
+            for target in (manager, manager.parent/"routervpn_mtu.go", manager.parent/"routervpn_mtu_test.go", manager.parent/"routervpn_mtu_native_linux_test.go", helper):
                 original = target.read_bytes()
                 mutant = original + b"\n// unowned source replacement\n"
                 target.write_bytes(mutant)
@@ -76,6 +79,12 @@ class NativeRetirementProjection(unittest.TestCase):
                     RETAINED.prepare(vendor)
                 self.assertEqual(target.read_bytes(), mutant)
                 target.write_bytes(original)
+            original = helper.read_bytes()
+            helper.unlink()
+            with self.assertRaises(ValueError):
+                RETAINED.verify(vendor)
+            self.assertFalse(helper.exists())
+            helper.write_bytes(original)
             RETAINED.prepare(vendor)
             self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
 

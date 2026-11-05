@@ -282,7 +282,7 @@ admission and validity around native calls, not hard syscall interruption.
 
 ## Client MTU snapshot and proof observation closure
 
-The commit containing this section captures the HTTP-derived work context before
+Commit [`0c8b6942`](https://github.com/Eabusham2/router-vpn/commit/0c8b6942379337af46fb0b1b7887f5c2363301c8) captures the HTTP-derived work context before
 MTU snapshot acquisition and carries that same budget through actual runtime,
 proof, workspace, status, final writer and fresh-path observations. Lock admission
 is bounded and original ownership is checked again after each observation. A
@@ -324,6 +324,26 @@ The local physical-network prerequisite for the existing captured-restore fixtur
 remains unavailable; its original requirements were not relaxed. These results do
 not establish installed-service mutation, real Windows handle execution, device
 networking or a published release for this commit.
+
+## Selective native MTU preparation repair
+
+Exact-SHA CI at `05800c84` exposed a missing dependency in the standalone MTU
+preparer: its retained inbound manager called `adapter.RouterVPNLockContext`,
+but only the full strategy preparer installed that helper. The Linux and macOS
+Native MTU integration jobs failed to compile. The selective retained-TUN
+preparer now installs the identical existing observation template and verifies
+its exact bytes and source digest. Full and selective preparation share that
+single implementation; missing, changed or linked inputs remain refused.
+
+A fresh checkout of the exact pinned native core was prepared twice using only
+`prepare-mobile-mtu.py`, matching the failed workflow. All six actual Linux race
+packages passed: inbound manager, mobile MTU, MTU probes, hop measurements,
+OOM profile and libbox. Six projection/re-preparation checks passed, including
+missing-helper and tampered-helper refusal without replacing foreign bytes.
+This repairs the observed missing-source compile failure. Actual macOS execution
+and the later exact-SHA release remain CI obligations. The separate Linux Node
+TUN startup failure at the same SHA requires transporting its original startup
+deadline to native admission; it is not closed by this preparation change.
 
 ## Remaining requirement/evidence ledger
 
