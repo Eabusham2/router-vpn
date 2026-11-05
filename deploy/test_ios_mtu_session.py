@@ -20,6 +20,12 @@ public final class LibboxRouterMTUState:NSObject {
  public var session="",path="",interface="";public var mtu:Int32=0
 }
 public final class LibboxCommandServer:NSObject {}
+public final class LibboxRouterMultihop:NSObject {
+ public var valid=true
+ public func healthy()->Bool{valid}
+ public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
+}
+
 public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
 public final class LibboxRouterTorProofRequest:NSObject { public var valid=true;public var entryJumbo=false;public var entryFixedMTU:Int32=0 }
 public enum FakeOS {
@@ -71,6 +77,11 @@ public final class LibboxRouterMTU:NSObject {
 public func LibboxNewRouterMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ config:String?,_ profile:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  guard platform?.captureMTU() != nil else {error?.pointee=NSError(domain:"fixture",code:1);return nil}
  let core=LibboxRouterMTU();core.closeFailures=FakeOS.newCloseFailures;FakeOS.current=core;return core
+}
+public func LibboxRouterImportedEntryMTUProfile(_ plan:LibboxRouterMultihop?)->String?{plan?.mtuProfile() ?? ""}
+public func LibboxRouterImportedEntryNewMTU(_ plan:LibboxRouterMultihop?,_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
+ guard plan?.healthy()==true else{error?.pointee=NSError(domain:"ImportedMTUFixture",code:1);return nil}
+ return LibboxNewRouterMTU(server,platform,"exact imported graph",plan?.mtuProfile(),error)
 }
 public func LibboxNewRouterExternalMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ proof:LibboxRouterExternalProofRequest?,_ source:String?,_ capture:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  FakeOS.externalArguments=[source ?? "",capture ?? ""];FakeOS.externalProof=proof
@@ -231,6 +242,24 @@ _ = request(held,"mtu-release",id,heldSession)
 check(FakeOS.starts==starts+1,"deferred Auto-MTU did not start after final release")
 check(request(held,"mtu-hold",id,heldSession)?["measurement_ready"] as? Bool == true,"running Auto-MTU was not drained for Speed Lab")
 let stoppedCount=FakeOS.closes;held.stop();check(FakeOS.closes==stoppedCount+1,"native controller not closed on Stop")
+for startupHold in ["",id] {
+ let imported=ready(startupHold),plan=LibboxRouterMultihop(),starts=FakeOS.starts
+ try imported.activateImported(server:LibboxCommandServer(),plan:plan){_ in}
+ check(imported.hasOwner && FakeOS.starts==starts+(startupHold.isEmpty ? 1:0),"imported MTU lost original owner or bypassed startup hold")
+ if !startupHold.isEmpty {
+  let session=imported.captureMTU()!.session
+  check(request(imported,"mtu-start",other,session)?["measurement_hold"] as? Bool==true,"imported Retest bypassed comparison hold")
+  _=request(imported,"mtu-release",id,session)
+  check(FakeOS.starts==starts+1,"imported Auto did not resume after original hold")
+ }
+ let core=FakeOS.current!;try imported.stopChecked()
+ check(core.closed && imported.captureMTU()==nil,"imported MTU Stop forgot exact native owner")
+}
+let invalidImported=ready(),invalidPlan=LibboxRouterMultihop();invalidPlan.valid=false
+let startsBeforeInvalid=FakeOS.starts
+rejects("retired imported plan activated MTU"){try invalidImported.activateImported(server:LibboxCommandServer(),plan:invalidPlan){_ in}}
+check(!invalidImported.hasOwner && FakeOS.starts==startsBeforeInvalid,"unproved imported plan reached native mutation")
+invalidImported.stop()
 for raw in ["{}", "{\"mtu_policy\":\"\"}", "{\"mtu_policy\":\" AUTO \"}"] {
  let alias=ready();let count=FakeOS.starts
  alias.activate(server:LibboxCommandServer(),config:"{}",profile:raw){_ in}

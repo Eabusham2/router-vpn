@@ -76,6 +76,8 @@ def inputs() -> list[Path]:
     java = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
     return [Path(__file__).resolve(), ROOT / 'android/test_android_multihop_layers.py', ROOT / 'android/test_android_multihop_start_layer.py', ROOT / 'android/test_android_multihop_graph.py',
             ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl',
+            ROOT / 'mobile/routervpn_imported_entry_native_test.go.tmpl', ROOT / 'deploy/test_mobile_imported_entry.py', ROOT / 'deploy/test_mobile_imported_entry_runner.py',
+            ROOT / 'android/test_android_imported_router.py', java / 'AndroidImportedRouterPath.java', java / 'AndroidStandardExitStore.java', java / 'AndroidExternalPolicy.java', java / 'AndroidMultihopRuntime.java', java / 'AndroidUnifiedConnectionController.java', java / 'AndroidConnectionProfileStore.java',
             ROOT / 'android/test_android_composite_multihop.py', ROOT / 'android/test_android_max_multihop.py',
             ROOT / 'android/test_android_pq_selection.py', ROOT / 'deploy/testfixtures/composite/main.go',
             ROOT / 'android/max_preparation_test_boundary.py', ROOT / 'android/test_android_max_dns_owner.py',
@@ -188,6 +190,7 @@ def run(vendor: Path) -> None:
                         '-tags', 'with_quic,with_wireguard,with_gvisor',
                         './experimental/libbox', '-run', '^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs|BothStartLayersGeneratedGraphs|AndroidCompositeGeneratedGraphs)$',
                         '-count=1', '-timeout=120s', '-v'], cwd=vendor, env=env, check=True, timeout=600)
+    subprocess.run([sys.executable,str(ROOT/'deploy/test_mobile_imported_entry.py'),str(vendor),'--android'],cwd=ROOT,env=env,check=True,timeout=1200)
     print('All 150 base, 48 entry-layer, 384 both-layer and 837 composite Android graphs passed the pinned native parser; negative controls rejected.')
 
 

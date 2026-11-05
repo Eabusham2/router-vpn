@@ -339,7 +339,11 @@ func (s *trial) Verify(ctx context.Context) error {
 		}
 		return s.checkOpenVPNRemote(ctx)
 	}
-	if _, e := c.prove(ctx, c.meta.EntryTag, c.meta.EntryAPI, c.meta.EntryToken, c.meta.EntryNodeID); e != nil {
+	if c.imported != nil {
+		if err := c.verifyImportedEntry(ctx); err != nil {
+			return err
+		}
+	} else if _, e := c.prove(ctx, c.meta.EntryTag, c.meta.EntryAPI, c.meta.EntryToken, c.meta.EntryNodeID); e != nil {
 		return e
 	}
 	_, e := c.prove(ctx, s.tag, c.meta.ExitAPI, c.meta.ExitToken, c.meta.ExitNodeID)

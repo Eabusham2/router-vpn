@@ -28,12 +28,32 @@ func (s *Box) RouterVPNStrategyStart() error {
 // the owned TUN's inbound metadata. It does not choose another DNS transport,
 // create an underlay socket, or use a platform/default resolver.
 func (s *Box) RouterVPNStrategyDNSProof() error {
+	if s == nil {
+		return errors.New("strategy DNS owner is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	return s.RouterVPNStrategyDNSProofContext(ctx)
+}
+
+// RouterVPNStrategyDNSProofContext retains the original observation deadline.
+func (s *Box) RouterVPNStrategyDNSProofContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("DNS proof needs its original observation")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s == nil || s.dnsRouter == nil || s.inbound == nil {
 		return errors.New("strategy DNS owner is unavailable")
 	}
 	var tunTag string
 	var tunCount int
-	for _, inbound := range s.inbound.Inbounds() {
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil {
+		return err
+	}
+	for _, inbound := range inbounds {
 		if inbound.Type() == C.TypeTun {
 			tunCount++
 			tunTag = inbound.Tag()
@@ -42,8 +62,6 @@ func (s *Box) RouterVPNStrategyDNSProof() error {
 	if tunCount != 1 || tunTag == "" {
 		return errors.New("strategy DNS proof requires exactly one owned tagged TUN")
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-	defer cancel()
 	ctx = adapter.WithContext(ctx, &adapter.InboundContext{
 		Inbound: tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns",
 	})

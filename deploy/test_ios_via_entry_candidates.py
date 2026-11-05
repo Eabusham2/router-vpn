@@ -450,7 +450,7 @@ def main():
     boundaries = P.FIXTURE.split('@MainActor @main struct Tests', 1)[0]
     assert boundaries.count('func refreshTunnelStatus()async{}') == 1
     boundaries = boundaries.replace('func refreshTunnelStatus()async{}', 'func refreshTunnelStatus()async{CandidateFault.refreshHook?(self)}')
-    source_names = ('Models.swift', 'IOSSessionIdentity.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift',
+    source_names = ('IOSMultihopExecution.swift', 'Models.swift', 'IOSSessionIdentity.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift',
                     'IOSSpeedLabRunner.swift', 'IOSViaEntryLatency.swift', 'IOSViaEntryTCP.swift')
     # Preserve the shipping source-file boundaries. Concatenating Models with
     # the caller masks Swift's non-Sendable cross-file actor diagnostics.

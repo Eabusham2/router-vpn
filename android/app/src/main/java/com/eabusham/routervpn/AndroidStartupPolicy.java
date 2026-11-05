@@ -70,7 +70,10 @@ final class AndroidStartupPolicy {
                         AndroidStandardExitStore.Entry ordinaryEntry, String entryMode, String exitMode, String execution, String source, String lastRaw,
                         String selectedID, String activeID, AndroidHomeStateStore.Snapshot idle,
                         Map<String,Object> preferences, Map<String,byte[]> files,String lastExecution,AndroidMultihopRuntime.StartupCapture lastMultihop)throws Exception {
-            if(ordinaryEntry!=null&&(entry!=null||external==null||ordinaryEntry.id.equals(external.id)))throw new IllegalArgumentException("Startup must retain two distinct ordinary path owners.");
+            if(ordinaryEntry!=null&&(entry!=null||external==null&&exit==null
+                    ||external!=null&&ordinaryEntry.id.equals(external.id)||exit!=null&&ordinaryEntry.id.equals(exit.id)
+                    ||external==null&&(!"shadowsocks".equals(entryMode)||!"shadowsocks".equals(exitMode)||!"local".equals(execution))))
+                throw new IllegalArgumentException("Startup must retain two distinct exact path owners.");
             this.mode=mode;this.node=node;this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.exitMode=exitMode;
             this.execution=execution;this.source=source;this.lastRaw=lastRaw;this.lastExecution=lastExecution;this.selectedID=selectedID;this.activeID=activeID;
             this.lastMultihop=lastMultihop;
@@ -157,24 +160,29 @@ final class AndroidStartupPolicy {
         if(!selected.equals(nodes.activeId()))throw new IllegalStateException("The selected Router and active private node disagree; select the node before connecting.");
         Map<String,Object> preferences=selectionPreferences(context);
         Map<String,byte[]> files=new LinkedHashMap<>();files.put(node.id,bytes);
-        AndroidNodeStore.Node entry=null,exit=null;String entryMode="wg",exitMode="",execution="local";
+        AndroidNodeStore.Node entry=null,exit=null;AndroidStandardExitStore.Entry ordinaryEntry=null;String entryMode="wg",exitMode="",execution="local";
         if(prefs.getBoolean("multihop_on",false)){
-            if(!"router-vpn".equals(prefs.getString("multihop_entry_kind","router-vpn")))throw new IllegalStateException("An ordinary startup entry cannot be interpreted as a private Router node.");
-            entry=requiredNode(nodes,prefs.getString("multihop_entry",""));
+            String entryKind=prefs.getString("multihop_entry_kind","router-vpn");
+            if("external".equals(entryKind))ordinaryEntry=AndroidStandardExitStore.copy(new AndroidStandardExitStore(context).get(prefs.getString("multihop_entry","")));
+            else if("router-vpn".equals(entryKind))entry=requiredNode(nodes,prefs.getString("multihop_entry",""));
+            else throw new IllegalStateException("The saved startup entry kind is unsupported.");
             exit=requiredNode(nodes,prefs.getString("multihop_exit",""));
-            if(entry.id.equals(exit.id))throw new IllegalStateException("Saved startup multihop requires two different nodes.");
+            if((entry==null?ordinaryEntry.id:entry.id).equals(exit.id))throw new IllegalStateException("Saved startup multihop requires two different nodes.");
             entryMode=prefs.getString("multihop_entry_mode","wg");exitMode=prefs.getString("multihop_exit_mode","");execution=prefs.getString("multihop_execution","local");
             if(!NativeSingBoxController.nativeMultihopEntry(entryMode)||exitMode.isEmpty()
                     ||!Arrays.asList("local","server","auto").contains(execution))
                 throw new IllegalStateException("The saved multihop startup path is incomplete; it cannot become a single-node connection.");
-            files.putIfAbsent(entry.id,AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE));
+            if(ordinaryEntry!=null){
+                if(!selected.equals(exit.id)||!"shadowsocks".equals(entryMode))throw new IllegalStateException("The imported startup path lost its selected final node or entry transport.");
+                AndroidImportedRouterPath.compile(ordinaryEntry,AndroidImportedRouterPath.finalBundle(exit.file),exitMode,execution);
+            }else files.putIfAbsent(entry.id,AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE));
             files.putIfAbsent(exit.id,AndroidPrivateFileStore.read(exit.file,AndroidNodeStore.MAX_BUNDLE));
         }
         String source=bundle.toString();
-        String last="last".equals(mode)&&entry==null?lastRaw(context,node.id,bundle):"";
+        String last="last".equals(mode)&&entry==null&&ordinaryEntry==null?lastRaw(context,node.id,bundle):"";
         AndroidMultihopRuntime.StartupCapture lastMultihop="last".equals(mode)&&entry!=null&&"auto".equals(execution)
                 ?lastMultihop(context,node.id,bytes,entry,files.get(entry.id),exit,files.get(exit.id),entryMode,exitMode,execution):null;
-        Attempt capture=new Attempt(mode,node,entry,exit,null,null,entryMode,exitMode,execution,source,last,selected,nodes.activeId(),idle,preferences,files,"",lastMultihop);
+        Attempt capture=new Attempt(mode,node,entry,exit,null,ordinaryEntry,entryMode,exitMode,execution,source,last,selected,nodes.activeId(),idle,preferences,files,"",lastMultihop);
         synchronized(AndroidStartupPolicy.class){if(pending!=null)throw new IllegalStateException("Another startup permission request is pending.");pending=capture;}
         try{capture.requireCurrent(context,nodes,connection);return capture;}catch(Exception changed){capture.cancel();throw changed;}
     }

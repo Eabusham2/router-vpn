@@ -33,6 +33,8 @@ XRAY_BRIDGE_SHA=$(python3 "$ROOT/../../deploy/prepare-apple-xray.py" --digest)
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$XRAY_BRIDGE_SHA")
 COMPOSITE_HOST_SHA=$(python3 "$ROOT/../../deploy/test_ios_composite_multihop_pinned.py" --digest)
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$COMPOSITE_HOST_SHA")
+IMPORTED_HOST_SHA=$(python3 "$ROOT/../../deploy/test_ios_imported_router_pinned.py" --digest)
+BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$IMPORTED_HOST_SHA")
 EXPECTED_STAMP="$VERSION+$COMMIT+$GO_TOOLCHAIN+$GOMOBILE_VERSION+ios,iossimulator"
 
 verify_framework() {
@@ -141,6 +143,9 @@ for header in headers:
         for signature in signatures:
             assert owners[0].splitlines().count(signature)==1, 'Tor comparison ownership selector changed: '+declaration+' '+signature
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
+    for symbol in ['LibboxNewRouterImportedEntryMultihop', 'LibboxRouterCompileImportedEntryMultihop',
+                   'LibboxRouterImportedEntryNewHopMeasurement', 'LibboxRouterImportedEntryNewMTU', 'LibboxRouterImportedEntryMTUProfile']:
+        assert symbol in content, 'Imported entry bridge missing: '+symbol+' '+str(header)
     assert 'LibboxNewRouterMultihopWithEntryStartLayer' in header.read_text(), str(header)
     assert "LibboxNewRouterMultihopWithStartLayers" in header.read_text(), str(header)
     assert "LibboxRouterCompileMultihopStartLayers" in header.read_text(), str(header)
@@ -247,6 +252,8 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_external_pinned.sh" "$VENDOR"
   python3 "$ROOT/../../deploy/test_ios_composite_multihop_pinned.py" --vendor "$VENDOR"
+  python3 "$ROOT/../../deploy/test_ios_imported_router_pinned_contract.py"
+  python3 "$ROOT/../../deploy/test_ios_imported_router_pinned.py" --vendor "$VENDOR"
   python3 "$ROOT/../../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
   go test -race ./adapter/inbound -run TestRouterVPN -count=1

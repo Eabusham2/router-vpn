@@ -143,6 +143,11 @@ final class AndroidNodeUsage {
         return new Attempt(Arrays.asList(captureRouter(entry),captureRouter(exit)),"multihop","",entry.id,exit.id,entryMode,"",false);
     }
 
+    static Attempt importedMultihop(Context context,AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit)throws Exception{
+        if(entry==null||exit==null||entry.id.equals(exit.id)||!"shadowsocks".equals(entry.protocol))throw new IllegalArgumentException("The captured mixed usage path changed.");
+        return new Attempt(Arrays.asList(captureExternal(context,entry),captureRouter(exit)),"multihop","",entry.id,exit.id,"shadowsocks","",false);
+    }
+
     static Attempt external(Context context,AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinary,
                             AndroidStandardExitStore.Entry exit,boolean direct,String entryMode)throws Exception{
         if(exit==null||direct&&(entry!=null||ordinary!=null)||!direct&&(entry==null)==(ordinary==null))

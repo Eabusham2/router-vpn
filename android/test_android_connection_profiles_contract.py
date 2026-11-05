@@ -15,7 +15,7 @@ settings = read("AndroidProfileSettingsDialog.java")
 node_store = read("AndroidNodeStore.java")
 
 for marker in (
-    'SCHEMA_VERSION=5',
+    'SCHEMA_VERSION=6',
     'FILE_NAME="connection-profiles-v4.json"',
     'LEGACY_FILE_NAME="connection-profiles-v1.json"',
     'schema < 1 || schema > SCHEMA_VERSION',
@@ -40,6 +40,9 @@ for marker in (
     '"ordinary_entry_policy"', '"ordinary_entry_startup"', 'requireOrdinaryIdentity', 'selectOrdinaryTorPath',
     'return entry==null&&ordinaryEntry==null', 'AndroidTorProfile.compileOrdinary(ordinaryEntry,exit,"selection-validation",execution)',
     'exits.saveIfUnchanged(updatedOrdinary', 'restoreExternal(originalOrdinary,updatedOrdinary)',
+    'currentImportedRouterPath', 'selectImportedRouterPath',
+    'AndroidImportedRouterPath.compile(updatedOrdinary,finalBundle,multiMode,execution)',
+    'routerFinal?schema<6', 'The imported path lost its independent paired final policy.',
     'if(!ours.equals(current))', 'exits.saveIfUnchanged(original,ours)',
     'nodes.importBundle(originalBundle)',
     'requireIdle("saving a connection profile")', 'requireIdle("loading a connection profile")',
@@ -74,6 +77,18 @@ assert 'if(openSelectedExternal(true))return;' in product
 assert 'rememberExternalPath(entry,exit,entryMode)' in activity
 assert 'selectExternalPath(exit,entry,mode,pendingExecution)' in activity
 assert 'if(selectionOnly()){clearPending();' in activity
+assert 'connection.connectImportedMultihop(path.entry,path.exit,path.exitMode,path.execution,callback())' in product
+
+# The imported entry owns only its external credential reference. Its paired
+# final retains independent Router policy, and the original schema-five Tor
+# direction remains readable without being reinterpreted as a private entry.
+rows = store.split('private JSONArray readRows()', 1)[1]
+for marker in ('schema<5', 'AndroidTorProfile.isTor', 'entry_policy', 'entry_profile_id', 'exit_policy', 'exit_profile_id'):
+    assert marker in rows, f"Imported Router migration lost existing typed policy guard {marker!r}"
+select_imported = store.split('synchronized void selectImportedRouterPath(', 1)[1].split('static final class ExternalSelection', 1)[0]
+assert select_imported.index('AndroidImportedRouterPath.compile(') < select_imported.index('nodes.select(last.id)')
+assert 'next.equals(current)||previous.equals(current)' in select_imported
+assert 'last.id.equals(nodes.activeId())' in select_imported
 
 # Only explicitly whitelisted policy fields may be copied; node/dataplane secrets
 # stay in the private linked node stores.

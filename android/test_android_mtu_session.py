@@ -28,6 +28,7 @@ P='io.nekohasekai.libbox'
 stub('com.eabusham.routervpn','AndroidExternalSession','{public org.json.JSONObject mtuProfile()throws Exception{throw new IllegalStateException();}public boolean healthy(){return false;}public io.nekohasekai.libbox.RouterMTU newMTU(io.nekohasekai.libbox.RouterMTUPlatform platform)throws Exception{throw new IllegalStateException();}}')
 STUBS['com/eabusham/routervpn/AndroidTorSession.java'] = STUBS['com/eabusham/routervpn/AndroidExternalSession.java'].replace('AndroidExternalSession', 'AndroidTorSession')
 stub(P,'CommandServer','{}')
+stub(P,'RouterMultihop','{public interface Action{void run()throws Exception;}public boolean valid=true;public int calls;public CommandServer server;public RouterMTUPlatform platform;public RouterMTU owned;public Action after;public RouterMTU newMTU(CommandServer s,RouterMTUPlatform p)throws Exception{calls++;if(!valid)throw new IllegalStateException("Imported native owner retired");server=s;platform=p;owned=new RouterMTU();owned.effectiveMTU=p.captureMTU().getMTU();if(after!=null)after.run();return owned;}}')
 stub(P,'RouterMTUState','''{private String session,path,iface;private int mtu;public void setSession(String s){session=s;}public String getSession(){return session;}public void setPath(String s){path=s;}public String getPath(){return path;}public void setInterface(String s){iface=s;}public String getInterface(){return iface;}public void setMTU(int n){mtu=n;}public int getMTU(){return mtu;}}''')
 stub(P,'RouterMTUPlatform','''{RouterMTUState captureMTU();void beginMTUChange(RouterMTUState s)throws Exception;void endMTUChange()throws Exception;void bindMTUSocket(RouterMTUState s,long fd)throws Exception;String readMTUCache();boolean compareAndSwapMTUCache(String a,String b);void abortMTU(String reason);}''','interface')
 stub(P,'RouterMTU',r'''{
@@ -192,8 +193,18 @@ public class Main {
   }
   android.os.Build.VERSION.SDK_INT=36;
  }
+ static void importedFactory()throws Exception{
+  Fixture f=new Fixture();f.establish();RouterMultihop original=new RouterMultihop();CommandServer core=new CommandServer();int generic=Libbox.created;
+  f.owner.activate(core,"captured-graph","{\"mtu_policy\":\"auto\"}",original);
+  check(original.calls==1&&original.server==core&&original.platform==f.owner&&original.owned.starts==1&&Libbox.created==generic,"imported MTU borrowed untyped metadata factory");
+  f.owner.activate(new CommandServer(),"replacement","{}",new RouterMultihop());check(original.calls==1&&Libbox.created==generic,"duplicate imported activation changed original owner");f.owner.close();check(original.owned.closes==1,"imported native MTU was not closed by original session");
+  Fixture late=new Fixture();late.establish();RouterMultihop closing=new RouterMultihop();closing.after=()->late.owner.close();late.owner.activate(core,"captured","{}",closing);
+  check(closing.calls==1&&closing.owned.closes==1&&closing.owned.starts==0&&Libbox.created==generic,"late imported MTU escaped original constructor shutdown");
+  Fixture retired=new Fixture();retired.establish();RouterMultihop missing=new RouterMultihop();missing.valid=false;retired.owner.activate(core,"captured","{}",missing);
+  check(missing.calls==1&&missing.owned==null&&Libbox.created==generic,"retired imported source fell back to untyped MTU");retired.owner.close();
+ }
  public static void main(String[] args)throws Exception{
-  constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();capturedTelemetry();
+  importedFactory();constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();capturedTelemetry();
   Fixture a=new Fixture();check(a.owner.captureMTU()==null,"missing interface invented");RouterMTUState first=a.establish();check(first!=null&&first.getMTU()==1280,"initial actual readback lost");
   rejects(a.owner::beforeOpen,"unowned reader replacement allowed");
   RouterMTUState wrong=new RouterMTUState();wrong.setSession("other");wrong.setPath(first.getPath());wrong.setInterface(first.getInterface());wrong.setMTU(1280);

@@ -22,6 +22,47 @@ SWIFT = r'''
  static func check(_ text:String,_ value:@autoclosure()->Bool){guard value()else{fatalError("FAIL: "+text)};checks+=1}
  static func reject(_ text:String,_ action:()throws->Void){do{try action();fatalError("FAIL: "+text)}catch{checks+=1}}
  static func digest(_ data:Data)->String{let hash=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",hash),count:4)}
+ static func importedRouter()throws {
+  var config=try source("local","shadowsocks","shadowsocks")
+  var root=try JSONSerialization.jsonObject(with:config["bundle"] as! Data) as! [String:Any]
+  var final=(root["routerProfiles"] as! [[String:Any]])[0]
+  final["node_kind"]="router-vpn";final["node_proof_id"]=String(repeating:"a",count:64)
+  final["router_api"]="http://10.77.0.1:8787";final["api_token"]="original paired final"
+  final["start_layer"]="aes-256-gcm+xor-whitening";final["dns_mode"]="home"
+  root["routerProfiles"]=[final];config["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
+  let entry:[String:Any]=["id":"entry","node_kind":"external","start_layer":"aes-256-gcm","external":["protocol":"shadowsocks","expected_public_ip":"198.51.100.4","shadowsocks":["method":"2022-blake3-aes-256-gcm","server":"198.51.100.4","port":8388,"password":"original imported key"]]]
+  config["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[entry]],options:.sortedKeys)
+  let captured=try IOSMultihopExecution.Source(configuration:config,digest:digest)
+  check("imported entry captures both original bundles",captured.entrySHA256==digest(config["entryBundle"] as! Data) && captured.bundleSHA256==digest(config["bundle"] as! Data))
+  let receipt=try IOSMultihopExecution.Capture(source:captured,execution:"local",session:UUID().uuidString,request:String(repeating:"e",count:32))
+  let restored=try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:captured)
+  check("imported Local restore retains exact source",restored.source==captured && restored.execution=="local")
+  for fault in ["server","auto","fake-proof","fake-api","different-entry","legacy-ss","missing-public-ip","nested-entry","wrong-final","wrong-final-type","null-final-kind","missing-final-proof"] {
+   var a=entry,b=final
+   switch fault {
+   case "server","auto":b["multihop_execution"]=fault
+   case "fake-proof":a["node_proof_id"]=String(repeating:"b",count:64)
+   case "fake-api":a["router_api"]="http://10.88.0.1:8787"
+   case "different-entry":b["multihop_entry_id"]="replacement"
+   case "nested-entry":a["multihop_enabled"]=true
+   case "wrong-final":b["node_kind"]="external"
+   case "wrong-final-type":b["node_kind"]=true
+   case "null-final-kind":b["node_kind"]=NSNull()
+   case "missing-final-proof":b.removeValue(forKey:"node_proof_id")
+   default:
+    var ext=a["external"] as! [String:Any]
+    if fault=="missing-public-ip" {ext["expected_public_ip"]=""}
+    else {var t=ext["shadowsocks"] as! [String:Any];t["method"]="aes-256-gcm";ext["shadowsocks"]=t}
+    a["external"]=ext
+   }
+   reject("imported Router role boundary "+fault){try IOSImportedEntryMultihop.validate(entry:a,final:b)}
+  }
+  var changed=config,a=entry,ext=entry["external"] as! [String:Any]
+  ext["expected_public_ip"]="198.51.100.5";a["external"]=ext
+  changed["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[a]],options:.sortedKeys)
+  let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
+  reject("imported restore rejects replaced proof source"){_ = try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:replacement)}
+ }
  static func source(_ requested:String="auto",_ entry:String="max-quic-awg",_ exit:String="reality-xhttp")throws->[String:Any]{
   let bundle=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":entry,"multihop_exit_mode":exit,"multihop_execution":requested]],"profiles":["private":"exact exit credential bytes"]])
   let predecessor=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry"]],"profiles":["private":"exact entry credential bytes"]])
@@ -204,6 +245,7 @@ SWIFT = r'''
   }}}
  }
  static func main()throws{
+  try importedRouter()
   try torComparedExecutions()
   try torExecutions()
   try ordinaryTorExecutions()

@@ -1,0 +1,136 @@
+package libbox
+
+import (
+	"encoding/json"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestRouterImportedEntryPairedFinalNativeGraphs(t *testing.T) {
+	routerImportedSourceGraphs(t, "ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+}
+func TestRouterImportedEntryAndroidSourceGraphs(t *testing.T) {
+	routerImportedSourceGraphs(t, "ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES")
+}
+func routerImportedSourceGraphs(t *testing.T, environment string) {
+	root := os.Getenv(environment)
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("required original imported/paired source fixtures absent")
+		}
+		t.Skip("exact generated compiler sources supplied by native mobile gate")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 11 {
+		t.Fatal("incomplete original layer matrix", err)
+	}
+	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
+	for _, a := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, b := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			expected[a+"--"+b+".json"] = true
+		}
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			name := entry.Name()
+			if environment == "ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES" {
+				if !strings.HasPrefix(name, "android-") {
+					t.Fatal("foreign Android capture label")
+				}
+				name = strings.TrimPrefix(name, "android-")
+			}
+			if !expected[name] || entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+				t.Fatal("foreign original source capture")
+			}
+
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source []string
+			if json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+				t.Fatal("source capture missing")
+			}
+			plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var metadata map[string]string
+			if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || metadata["entry_kind"] != "external" || metadata["entry_api"] != "" || metadata["entry_node_id"] != "" || metadata["entry_token"] != "" {
+				t.Fatal("imported capture acquired paired identity")
+			}
+			if !strings.HasPrefix(name, "cipher-") {
+				parts := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+				normalize := func(v string) string {
+					if v == "" {
+						return "off"
+					}
+					return v
+				}
+				if len(parts) != 2 || normalize(metadata["entry_start_layer"]) != parts[0] || normalize(metadata["exit_start_layer"]) != parts[1] {
+					t.Fatal("named independent layer capture changed")
+				}
+			}
+			if plan.SourceSHA256() != source[7] || plan.Config() != source[8] {
+				t.Fatal("native constructor changed captured compiler bytes")
+			}
+			if err := CheckConfig(plan.Config()); err != nil {
+				t.Fatal("actual native parser rejected complete imported/paired graph", err)
+			}
+			if _, err := mobilemtu.ReadProfile(plan.MTUProfile()); err != nil {
+				t.Fatal("final MTU source lacks exact private probe authority", err)
+			}
+			if _, err := mobilemtu.NewPlan(plan.Config(), 1280); err != nil {
+				t.Fatal("actual compiled graph lacks retained MTU plan", err)
+			}
+			if plan.Healthy() {
+				t.Fatal("compilation manufactured readiness")
+			}
+			if _, err := plan.NewHopMeasurement(nil); err == nil {
+				t.Fatal("unstarted graph gained measurement authority")
+			}
+			if _, err := plan.NewMTU(nil, nil); err == nil {
+				t.Fatal("unstarted graph gained MTU authority")
+			}
+		})
+	}
+}
+
+func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IOS_IMPORTED_ROUTER_GRAPHS") == "1" {
+			t.Fatal("actual Apple imported source graphs required")
+		}
+		t.Skip("actual Apple graph matrix supplied by mandatory native gate")
+	}
+	expected := map[string]bool{}
+	for _, a := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, b := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			expected[a+"--"+b+"--2022-blake3-aes-256-gcm.json"] = true
+		}
+	}
+	expected["off--off--2022-blake3-aes-128-gcm.json"] = true
+	expected["off--off--2022-blake3-chacha20-poly1305.json"] = true
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete actual Apple matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			if !expected[entry.Name()] || entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+				t.Fatal("foreign Apple graph")
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = CheckConfig(string(raw)); err != nil {
+				t.Fatal("actual native parser rejected Apple constructed graph", err)
+			}
+		})
+	}
+}

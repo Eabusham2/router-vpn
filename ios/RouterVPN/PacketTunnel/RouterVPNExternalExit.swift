@@ -155,6 +155,29 @@ struct RouterVPNExternalExitRuntime {
 enum RouterVPNExternalExitBuilder {
     static let ordinaryProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     static let torEntryModes: Set<String> = Set(RouterVPNMultihopGraph.supportedExitModes).union(IOSNativeMAXProfile.modeIDs)
+    /// Original standalone input, before the shared reverse compiler selects
+    /// final-node DNS. Do not compile the entry as a complete standalone VPN:
+    /// its saved Home DNS is not authority over the paired final's resolver.
+    static func importedRouterSource(profile: [String: Any]) throws -> (config: String, capture: String) {
+        guard profile["node_kind"] as? String == "external", profile["multihop_enabled"] as? Bool != true,
+              let imported = profile["external"] as? [String: Any], imported["protocol"] as? String == "shadowsocks",
+              let id = profile["id"] as? String, !id.isEmpty else { throw error("Imported Router entry lost its original standalone source.") }
+        try IOSStartLayer.validateExternal(profile: profile)
+        let expected = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
+        let outbound = try customExit(external: imported, protocolName: "shadowsocks")
+        let data = try rawConfiguration(external: imported, protocolName: "shadowsocks", endpoints: [], outbounds: [outbound])
+        var original = profile
+        let bootstrap = original.removeValue(forKey: "dns_bootstrap")
+        var capture: [String: Any] = ["schema": 1, "exit_id": id, "protocol": "shadowsocks",
+                                      "expected_public_ip": expected, "profile": original]
+        if let bootstrap {
+            guard let value = bootstrap as? [String: Any], Set(value.keys) == ["server", "query"] else { throw error("Imported DNS capture is malformed.") }
+            capture["dns_bootstrap"] = value
+        }
+        return (String(decoding: data, as: UTF8.self),
+                String(decoding: try JSONSerialization.data(withJSONObject: capture, options: [.sortedKeys]), as: UTF8.self))
+    }
+
     static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil,
                       restoredExecution: String? = nil) throws -> RouterVPNExternalExitRuntime {
         let kind = string(profile["node_kind"]).lowercased()

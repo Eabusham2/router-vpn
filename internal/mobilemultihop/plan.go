@@ -44,6 +44,7 @@ var Targets = []string{"https://1.1.1.1/cdn-cgi/trace", "https://1.0.0.1/cdn-cgi
 // Metadata is captured from the paired entry and exit, never the mutable UI.
 // It contains credentials and must not be returned by a progress/status API.
 type Metadata struct {
+	EntryKind       string `json:"entry_kind,omitempty"`
 	EntryID         string `json:"entry_id"`
 	ExitID          string `json:"exit_id"`
 	EntryNodeID     string `json:"entry_node_id"`
@@ -102,6 +103,7 @@ type Controller struct {
 	ownsLease           bool
 	renewCancel         context.CancelFunc
 	renewDone           chan struct{}
+	imported            *importedEntry
 	external            *ExternalPolicy
 	externalResponseTLS *tls.Config // Unexported loopback-test trust; nil in every host bridge.
 	openvpnTransport    map[string]any
@@ -200,6 +202,9 @@ func New(config, metadata string) (*Controller, error) {
 	var meta Metadata
 	if exactJSON([]byte(metadata), &meta, 16384) != nil {
 		return nil, errors.New("invalid frozen multihop metadata")
+	}
+	if meta.EntryKind != "" {
+		return nil, errors.New("imported entry requires its complete captured source constructor")
 	}
 	if err := validateMetadataIdentityPins(metadata, meta); err != nil {
 		return nil, err

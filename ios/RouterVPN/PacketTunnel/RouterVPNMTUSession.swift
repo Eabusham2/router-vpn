@@ -164,6 +164,15 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         }
     }
 
+    func activateImported(server: LibboxCommandServer, plan: LibboxRouterMultihop,
+                          onAbort: @escaping @Sendable (String) -> Void) throws {
+        let capturedProfile: String? = LibboxRouterImportedEntryMTUProfile(plan)
+        guard let profile = capturedProfile, !profile.isEmpty, profile.utf8.count <= 65536, plan.healthy(),
+              activateOwned(profile: profile, onAbort: onAbort, create: { createError in
+                  LibboxRouterImportedEntryNewMTU(plan, server, self, &createError)
+              }) else { throw failure("Imported MTU could not retain its original proved graph") }
+    }
+
     func activateExternal(server: LibboxCommandServer, proof: LibboxRouterExternalProofRequest,
                           source: String, capture: String,
                           onAbort: @escaping @Sendable (String) -> Void) throws {

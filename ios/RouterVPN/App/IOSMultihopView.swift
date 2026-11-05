@@ -29,6 +29,21 @@ extension RouterVPNModel {
         }
         let entryMode = exit.multihopEntryMode ?? "wg"
         var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
+        if !torExit, entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
+           let imported = entry.routerProfiles.first(where: { $0.id == entryID }), imported.normalizedNodeKind == "external" {
+            let original = try JSONSerialization.jsonObject(with: JSONEncoder().encode(imported)) as! [String: Any]
+            let final = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
+            try IOSImportedEntryMultihop.validate(entry: original, final: final)
+            guard imported.external?.matchesStartLayer(imported.startLayer) == true else { throw IOSImportedEntryMultihop.issue() }
+            if imported.external?.startLayer != nil { try IOSExternalExecution.validateLayerDraft(imported) }
+            _ = try IOSMultihopStartLayer.capture(profile: final, profiles: exitBundle.profiles)
+            _ = try IOSRuntimeSelector.selectRaw(bundle: exitBundle, rawProfileID: "shadowsocks")
+            entry.selectedRouterID = entryID
+            entry.endpoint = imported.endpoint
+            entry.nodeProofID = ""; entry.routerAPI = ""; entry.apiToken = ""
+            entry.adGuardIPv4 = ""; entry.adGuardIPv6 = ""
+            return entry
+        }
         if torExit, entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
            entry.routerProfiles.first(where: { $0.id == entryID })?.normalizedNodeKind == "external" {
             return try iosOrdinaryExternalEntryBundle(for: exitBundle)
@@ -195,7 +210,7 @@ struct IOSMultihopView: View {
     @StateObject private var viaEntry = IOSViaEntryLatency()
     private var nodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
-            ((ordinaryExitProtocol != nil || torExitProtocol != nil) && $0.normalizedNodeKind == "external" && RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "")) }
+            ($0.normalizedNodeKind == "external" && ((ordinaryExitProtocol != nil || torExitProtocol != nil) ? RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "") : ($0.external?.protocolName == "shadowsocks" && IOSImportedEntryMultihop.methods.contains($0.external?.shadowsocks?.method ?? "")))) }
     }
     private var exitNodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
@@ -304,6 +319,12 @@ struct IOSMultihopView: View {
                         Text("The imported exit connects through the selected entry. The native tunnel proves both nodes and the selected DNS before Connected. Home AdGuard requires a paired Router VPN entry; HTTP CONNECT paths require TCP, DoT or DoH DNS.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
+                    if externalEntryProtocol != nil {
+                        LabeledContent("Exit transport", value: "Shadowsocks 2022")
+                        LabeledContent("Execution", value: "Local")
+                        Text("The imported entry keeps its own public-address proof and Start Layer. The paired final node keeps its private identity, DNS and independent Start Layer.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
                     Picker("Exit transport", selection: $exitMode) {
                         Text("WireGuard").tag("wg")
                         Text("AmneziaWG Fast").tag("awg2-fast")
@@ -332,6 +353,7 @@ struct IOSMultihopView: View {
                     }
                     Text("Compare uses (last-node response time + one random external-server response time) / 2. Either timeout rejects the candidate. Server execution explicitly trusts the entry node with the exit tunnel; paired exit credentials must already be provisioned there.")
                         .font(.caption).foregroundStyle(.secondary)
+                    }
                     Text("One PacketTunnel owns both hops. Exit transport traffic goes through the entry, DNS goes through the exit, and each node is proved separately before Connected.")
                         .font(.caption).foregroundStyle(.secondary)
                     }
@@ -375,7 +397,7 @@ struct IOSMultihopView: View {
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save graph") {
-                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: execution, entryMode: externalEntryProtocol ?? entryMode); dismiss() }
+                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? (externalEntryProtocol != nil ? "shadowsocks" : exitMode), execution: (externalEntryProtocol != nil && torExitProtocol == nil && ordinaryExitProtocol == nil ? "local" : execution), entryMode: externalEntryProtocol ?? entryMode); dismiss() }
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || viaEntry.running || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }

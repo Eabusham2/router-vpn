@@ -1102,6 +1102,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                              cwd=ROOT, env=captured, timeout=30)
         if status:
             raise ValueError("Node routing runner checks failed:\n" + output[-16384:])
+    if platform.system() == "Linux" and not bootstrap_only:
+        with stage("actual imported entry and paired final native composition"):
+            status, output = run([sys.executable, ROOT / "deploy/test_mobile_imported_entry.py", source, "--native-peers"], cwd=ROOT, env=captured, timeout=1200)
+            if status:
+                raise ValueError("Imported entry native composition failed:\n" + output[-24000:])
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [

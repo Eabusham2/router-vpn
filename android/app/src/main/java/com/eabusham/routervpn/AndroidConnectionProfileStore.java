@@ -22,7 +22,7 @@ import java.util.Set;
 final class AndroidConnectionProfileStore {
     // Keep the established file location, but old readers must reject ordinary
     // entry references instead of interpreting their IDs as private Router nodes.
-    static final int SCHEMA_VERSION=5, MAX_PROFILES=64, MAX_STORE=512*1024;
+    static final int SCHEMA_VERSION=6, MAX_PROFILES=64, MAX_STORE=512*1024;
     private static final String FILE_NAME="connection-profiles-v4.json", LEGACY_FILE_NAME="connection-profiles-v1.json";
     private static final String PREFS="router-vpn-unified", MODE_KEY="mode", CUSTOM_KEY="custom_presets", SELECTED_KIND="selected_kind", SELECTED_ID="selected_id";
     private static final String MULTI_ON="multihop_on", MULTI_ENTRY="multihop_entry", MULTI_EXIT="multihop_exit", MULTI_MODE="multihop_exit_mode", MULTI_ENTRY_KIND="multihop_entry_kind";
@@ -80,7 +80,7 @@ final class AndroidConnectionProfileStore {
             if(external){if(!exit.equals(nodeId)||!multiMode.equals(originalExternal.protocol))throw new IllegalStateException("Saved external multihop must retain its exact exit protocol.");}
             else if(findNode(exit)==null)throw new IllegalStateException("Saved multihop references a missing Router exit.");
             if(ordinary){
-                if(!external)throw new IllegalStateException("An ordinary entry requires its captured external Tor exit.");
+                if(!external&&(!exit.equals(nodeId)||!"shadowsocks".equals(multiMode)||!"local".equals(execution)))throw new IllegalStateException("An imported Router path must retain its exact Local final node.");
                 originalOrdinary=AndroidStandardExitStore.copy(exits.get(entry));
                 requireOrdinaryIdentity(row,originalOrdinary);
                 updatedOrdinary=AndroidStandardExitStore.copy(originalOrdinary);
@@ -94,6 +94,12 @@ final class AndroidConnectionProfileStore {
         if(!external)stageNode(updates,nodeId,row.optJSONObject("policy"),row.optString("node_profile_id",""));
         if(multi){if(!ordinary)stageNode(updates,entry,row.optJSONObject("entry_policy"),row.optString("entry_profile_id",""));if(!external)stageNode(updates,exit,row.optJSONObject("exit_policy"),row.optString("exit_profile_id",""));}
         if(external)validateExternalGraph(updatedExternal!=null?updatedExternal:originalExternal,multi&&!ordinary?findNode(entry):null,updatedOrdinary,entryMode,execution);
+        else if(multi&&ordinary){
+            if(!"shadowsocks".equals(entryMode))throw new IllegalStateException("The imported entry transport changed.");
+            JSONObject finalBundle=updates.containsKey(exit)?new JSONObject(AndroidTorProfile.strictText(updates.get(exit).updated))
+                    :AndroidImportedRouterPath.finalBundle(nodes.file(exit));
+            AndroidImportedRouterPath.compile(updatedOrdinary,finalBundle,multiMode,execution);
+        }
         AndroidNodeStore.SelectionSnapshot originalSelection=nodes.snapshotSelection();
         Map<String,Object> originalPreferences=snapshotPreferences();
         // All validation above is complete before any selection, node-file, preset or preference mutation.
@@ -148,7 +154,7 @@ final class AndroidConnectionProfileStore {
         if(multi){
             if(entry==null||exit==null||entry.isEmpty()||exit.isEmpty()||entry.equals(exit))throw new IllegalStateException("Current multihop selection is incomplete or references a missing entry.");
             if(external){if(!exit.equals(nodeId)||!p.getString(MULTI_MODE,"").equals(custom.protocol))throw new IllegalStateException("Choose this exact external exit before saving.");}else if(findNode(exit)==null)throw new IllegalStateException("Current multihop exit is missing.");
-            if(ordinary){if(!external)throw new IllegalStateException("An ordinary entry requires its captured external Tor exit.");ordinaryEntry=AndroidStandardExitStore.copy(exits.get(entry));}
+            if(ordinary){if(!external&&(!exit.equals(nodeId)||!"shadowsocks".equals(multiMode)||!"local".equals(execution)))throw new IllegalStateException("The imported Router path changed its Local final node.");ordinaryEntry=AndroidStandardExitStore.copy(exits.get(entry));}
             else requireEntryMode(findNode(entry),entryMode);
         }
         else{entry="";exit="";multiMode=external?custom.protocol:"shadowsocks";}
@@ -163,7 +169,59 @@ final class AndroidConnectionProfileStore {
             if(!external){NodePolicy exitPolicy=routerPolicy(exit);row.put("exit_policy",exitPolicy.choices).put("exit_profile_id",exitPolicy.profileId);}
         }
         if(external){AndroidStandardExitStore.validate(custom);validateExternalGraph(custom,multi&&!ordinary?findNode(entry):null,ordinaryEntry,entryMode,execution);row.put("external_protocol",custom.protocol).put("external_public_ip",custom.expectedPublicIp).put("external_policy",AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(custom.protocol)?custom.torPolicy:custom.policy,custom.protocol)).put("external_startup",AndroidStandardExitStore.startupMetadata(custom));}
+        if(!external&&multi&&ordinary)AndroidImportedRouterPath.compile(ordinaryEntry,AndroidImportedRouterPath.finalBundle(nodes.file(exit)),multiMode,execution);
         return row;
+    }
+
+    static final class ImportedRouterSelection {
+        final AndroidStandardExitStore.Entry entry;
+        final AndroidNodeStore.Node exit;
+        final String exitMode, execution;
+        ImportedRouterSelection(AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit,String mode,String execution){
+            this.entry=entry;this.exit=exit;this.exitMode=mode;this.execution=execution;
+        }
+    }
+
+    synchronized ImportedRouterSelection currentImportedRouterPath()throws Exception{
+        SharedPreferences p=prefs();
+        if(!p.getBoolean(MULTI_ON,false)||!"router-vpn".equals(p.getString(SELECTED_KIND,"router-vpn"))
+                ||!"external".equals(p.getString(MULTI_ENTRY_KIND,"router-vpn")))throw new IllegalStateException("Choose an imported entry and paired Router final node.");
+        String finalId=p.getString(MULTI_EXIT,"");
+        AndroidNodeStore.Node last=findNode(finalId);
+        AndroidStandardExitStore.Entry first=AndroidStandardExitStore.copy(exits.get(p.getString(MULTI_ENTRY,"")));
+        String mode=p.getString(MULTI_MODE,""),execution=normalizeExecution(p.getString("multihop_execution","local"));
+        if(last==null||!finalId.equals(p.getString(SELECTED_ID,""))||!finalId.equals(nodes.activeId())||!"shadowsocks".equals(p.getString("multihop_entry_mode","")))
+            throw new IllegalStateException("The imported path lost its selected final node or entry mode.");
+        AndroidImportedRouterPath.compile(first,AndroidImportedRouterPath.finalBundle(last.file),mode,execution);
+        return new ImportedRouterSelection(first,last,mode,execution);
+    }
+
+    synchronized void selectImportedRouterPath(AndroidStandardExitStore.Entry first,AndroidNodeStore.Node last)throws Exception{
+        requireIdle("choosing an imported entry path");
+        if(last==null)throw new IllegalArgumentException("Choose a paired Router final node.");
+        AndroidStandardExitStore.Entry original=AndroidStandardExitStore.copy(first);
+        String originalEntry=AndroidStandardExitStore.snapshot(original);
+        byte[] originalFinal=readLimited(last.file,AndroidNodeStore.MAX_BUNDLE);
+        AndroidImportedRouterPath.compile(original,new JSONObject(AndroidTorProfile.strictText(originalFinal)),"shadowsocks","local");
+        AndroidNodeStore.SelectionSnapshot selected=nodes.snapshotSelection();Map<String,Object> previous=snapshotPreferences();
+        Map<String,Object> next=new LinkedHashMap<>(previous);
+        next.put(SELECTED_KIND,"router-vpn");next.put(SELECTED_ID,last.id);next.put(MODE_KEY,"shadowsocks");next.put(MULTI_ON,true);
+        next.put(MULTI_ENTRY,original.id);next.put(MULTI_EXIT,last.id);next.put(MULTI_MODE,"shadowsocks");next.put(MULTI_ENTRY_KIND,"external");
+        next.put("multihop_execution","local");next.put("multihop_entry_mode","shadowsocks");
+        requireExternalUnchanged(original);
+        if(!java.util.Arrays.equals(originalFinal,readLimited(last.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("The paired final node changed before selection.");
+        boolean attempted=false;
+        try{
+            requireIdle("choosing an imported entry path");attempted=true;nodes.select(last.id);
+            restorePreferences(next);
+            if(!originalEntry.equals(AndroidStandardExitStore.snapshot(exits.get(original.id)))
+                    ||!java.util.Arrays.equals(originalFinal,readLimited(last.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("A source changed during imported path selection.");
+        }catch(Exception failure){
+            Map<String,Object> current=snapshotPreferences();
+            if(attempted&&last.id.equals(nodes.activeId())&&(next.equals(current)||previous.equals(current))){try{nodes.restoreSelection(selected);}catch(Exception rollback){failure.addSuppressed(rollback);}
+                try{restorePreferences(previous);}catch(Exception rollback){failure.addSuppressed(rollback);}}
+            throw failure;
+        }
     }
 
     static final class ExternalSelection {
@@ -388,14 +446,21 @@ final class AndroidConnectionProfileStore {
             String entryKind=normalizeEntryKind(row.optString(MULTI_ENTRY_KIND,"router-vpn"));
             boolean ordinary="external".equals(entryKind);
             if(ordinary){
-                if(schema<5||!"external".equals(kind)||!row.optBoolean("multihop_enabled",false)||!"local".equals(row.optString("multihop_execution","local"))
-                        ||!row.has("external_policy")||!row.has("external_startup")||!AndroidTorProfile.isTor(row.optString("external_protocol","")))throw new IllegalStateException("Saved ordinary entry lost its complete Local Tor path.");
+                boolean routerFinal="router-vpn".equals(kind);
+                if(!row.optBoolean("multihop_enabled",false)||!"local".equals(row.optString("multihop_execution","local"))
+                        ||(routerFinal?schema<6||!row.getString("node_id").equals(row.optString("multihop_exit_id",""))
+                        ||!"shadowsocks".equals(row.optString("multihop_exit_mode",""))||!"shadowsocks".equals(row.optString("ordinary_entry_protocol",""))
+                        :schema<5||!row.has("external_policy")||!row.has("external_startup")||!AndroidTorProfile.isTor(row.optString("external_protocol",""))))
+                    throw new IllegalStateException("Saved ordinary entry lost its complete Local path.");
                 for(String key:new String[]{"ordinary_entry_protocol","ordinary_entry_public_ip"})if(!(row.get(key) instanceof String))throw new IllegalStateException("Saved ordinary entry lost its source identity.");
                 String protocol=row.getString("ordinary_entry_protocol");
                 if(!AndroidExternalPolicy.supports(protocol)||!normalizeOrdinaryMode(row.optString("multihop_entry_mode","")).equals(AndroidExternalPolicy.protocol(protocol)))throw new IllegalStateException("Saved ordinary entry changed its captured protocol.");
                 AndroidConnectionProfilePolicy.external(row.getJSONObject("ordinary_entry_policy"),protocol);
                 AndroidStandardExitStore.applyStartupMetadata(new AndroidStandardExitStore.Entry(),row.getJSONObject("ordinary_entry_startup"));
-                for(String key:new String[]{"policy","node_profile_id","entry_policy","entry_profile_id","exit_policy","exit_profile_id"})if(row.has(key))throw new IllegalStateException("An ordinary entry cannot restore private Router policy.");
+                for(String key:routerFinal?new String[]{"entry_policy","entry_profile_id"}:new String[]{"policy","node_profile_id","entry_policy","entry_profile_id","exit_policy","exit_profile_id"})
+                    if(row.has(key))throw new IllegalStateException("An ordinary entry cannot restore private Router entry policy.");
+                if(routerFinal&&(!row.has("policy")||!row.has("node_profile_id")||!row.has("exit_policy")||!row.has("exit_profile_id")))
+                    throw new IllegalStateException("The imported path lost its independent paired final policy.");
             }else{
                 normalizeEntryMode(row.optString("multihop_entry_mode","wg"));
                 for(String key:new String[]{"ordinary_entry_protocol","ordinary_entry_public_ip","ordinary_entry_policy","ordinary_entry_startup"})if(row.has(key))throw new IllegalStateException("Saved ordinary source cannot be reinterpreted as a Router entry.");

@@ -40,10 +40,17 @@ import android.content.Context;import java.io.*;import java.util.*;import java.n
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private input required");return b;}}
 // These permission-only callbacks never opt into user usage. The dedicated
 // node-usage fixture compiles the complete shipping recorder and controller.
-final class AndroidNodeUsage {static final class Attempt{void owned(Context c,String s){}String finished(Context c,String request,boolean ok){throw new AssertionError("permission-only fixture opted into usage");}}static Attempt unavailable(){return new Attempt();}static Attempt router(AndroidNodeStore.Node n){return new Attempt();}static Attempt multihop(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode){return new Attempt();}static Attempt external(Context c,AndroidNodeStore.Node a,AndroidStandardExitStore.Entry b,AndroidStandardExitStore.Entry e,boolean direct,String mode){return new Attempt();}}
+final class AndroidNodeUsage {static final class Attempt{void owned(Context c,String s){}String finished(Context c,String request,boolean ok){throw new AssertionError("permission-only fixture opted into usage");}}static Attempt unavailable(){return new Attempt();}static Attempt router(AndroidNodeStore.Node n){return new Attempt();}static Attempt importedMultihop(Context c,AndroidStandardExitStore.Entry a,AndroidNodeStore.Node b){return new Attempt();}static Attempt multihop(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode){return new Attempt();}static Attempt external(Context c,AndroidNodeStore.Node a,AndroidStandardExitStore.Entry b,AndroidStandardExitStore.Entry e,boolean direct,String mode){return new Attempt();}}
 final class AndroidTorProfile {static String compileOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String session,String execution){if(!AndroidExternalPolicy.supports(entry.protocol)||!isTor(exit.protocol)||entry.id.equals(exit.id)||!execution.equals("local"))throw new IllegalArgumentException("invalid ordinary Tor selection");return "{}";}static boolean isTor(String p){return "tor".equals(p)||"tor-bridge".equals(p);}static String strictText(byte[] b)throws Exception{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
 // No comparison is created by this permission-only fixture. Its full owner is
 // executed in test_android_external_node_comparison.py.
+// Runtime and graph construction are verified by their own actual source suites.
+// This boundary validates direction without inventing a paired imported node.
+final class AndroidImportedRouterPath {
+ static void requireEntry(AndroidStandardExitStore.Entry e){if(e==null||!"shadowsocks".equals(e.protocol))throw new IllegalArgumentException("imported SS2022 required");AndroidStandardExitStore.validate(e);}
+ static JSONObject finalBundle(File f)throws Exception{JSONObject b=new JSONObject(AndroidTorProfile.strictText(AndroidPrivateFileStore.read(f,AndroidNodeStore.MAX_BUNDLE)));AndroidNodeStore.validateBundle(b);return b;}
+ static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){requireEntry(e);if(!"shadowsocks".equals(mode)||!"local".equals(execution))throw new IllegalArgumentException("mixed Local SS graph required");}
+}
 final class AndroidExternalNodeComparison {static boolean active;static int cancels;static boolean hasActiveOperation(){return active;}static boolean cancelActiveOperation(){if(active)cancels++;return active;}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context c){return busy;}}
 final class AndroidHomeStateStore {static final class Snapshot{boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}static Snapshot current=new Snapshot();static Snapshot snapshot(Context c){return current;}static long advancePathGeneration(Context c){return ++current.pathGeneration;}}
@@ -68,6 +75,7 @@ final class AndroidExternalPolicy {
 }
 final class AndroidConnectionProfileStore {
  AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}ExternalSelection currentExternalPath(String id){throw new AssertionError("permission UI must cancel before selecting a new path");}
+ static final class ImportedRouterSelection{AndroidStandardExitStore.Entry entry;AndroidNodeStore.Node exit;String exitMode,execution;}ImportedRouterSelection currentImportedRouterPath(){throw new AssertionError("permission UI must cancel before path selection");}
  static final class ExternalSelection{final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry ordinaryEntry,exit;final String entryMode,execution;
  ExternalSelection(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinaryEntry,AndroidStandardExitStore.Entry exit,String mode,String execution){this.entry=entry;this.ordinaryEntry=ordinaryEntry;this.exit=exit;entryMode=mode;this.execution=execution;}boolean direct(){return entry==null&&ordinaryEntry==null;}}
 }
@@ -87,7 +95,9 @@ final class AndroidModeOrchestrator {
  void disconnect(Callback cb){cb.finished(true,"","stopped");}void auto(File f,boolean smart,Callback cb){logical(f,smart?"smart-auto":"auto",cb);}void all(File f,Callback cb){logical(f,"all",cb);}void custom(File f,List<String> l,Callback cb){layers=new ArrayList<>(l);logical(f,"custom",cb);}void logical(File f,String m,Callback cb){starts++;file=f;mode=m;cb.finished(true,m,"proved selected path");}
 }
 final class AndroidMultihopRuntime {
- int starts;
+ int starts;AndroidStandardExitStore.Entry ordinary;AndroidNodeStore.Node importedFinal;String importedMode="",importedExecution="";
+ AndroidStandardExitStore.Entry capturedOrdinaryEntry(AndroidHomeStateStore.Snapshot h){return ordinary==null?null:AndroidStandardExitStore.copy(ordinary);}
+ void connectImported(AndroidStandardExitStore.Entry a,AndroidNodeStore.Node b,String mode,String execution,Callback cb){starts++;ordinary=AndroidStandardExitStore.copy(a);importedFinal=b;importedMode=mode;importedExecution=execution;cb.finished(true,"owned imported entry");}
  // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  String activeExecution(){return "local";}String activeSelectedExecution(){return "local";}void connectLast(AndroidNodeStore.Node a,AndroidNodeStore.Node b,StartupCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){throw new AssertionError("ordinary permission cannot dispatch historical multihop");}void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){}
@@ -116,7 +126,7 @@ final class AndroidRuntimeRegistry {
 // Startup has its own shipping-policy/permission fixture. This suite never
 // creates a startup capture or records a single-Router proof.
 final class AndroidStartupPolicy {
- static final class Attempt {String nonce="",mode="",source="",lastRaw="",lastExecution="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external,ordinaryEntry;AndroidMultihopRuntime.StartupCapture lastMultihop;AndroidHomeStateStore.Snapshot idleOwner(){throw new AssertionError("unexpected startup idle capture");}boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
+ static final class Attempt {String nonce="",mode="",source="",lastRaw="",lastExecution="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external,ordinaryEntry;AndroidMultihopRuntime.StartupCapture lastMultihop;AndroidHomeStateStore.Snapshot idleOwner(){throw new AssertionError("unexpected startup idle capture");}boolean external(){return external!=null;}boolean multihop(){return entry!=null||ordinaryEntry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
  static Attempt restore(String nonce){return null;}static void cancelPending(){}static boolean recordProven(Context c,AndroidNodeStore n,File f,String session,String raw,String source){return false;}
 }
 '''
@@ -231,6 +241,35 @@ public class ExternalPermissionTest {
   }
   for(String execution:List.of("server","auto")){Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,"socks5");f.controller.connectOrdinaryTor(entry,f.exit,execution,f.callback);check(f.runtime().starts==0&&!f.callback.ok&&f.callback.completions==1,"ordinary provider acquired private server authority");}
  }
+ static AndroidStandardExitStore.Entry imported(Fixture f){AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id="independent-imported";entry.protocol="shadowsocks";entry.secret="original-imported-credential";entry.policy="original-imported-policy";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));return entry;}
+ static void importedPaths(Path root)throws Exception{
+  for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);var entry=imported(f);f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",f.callback);
+   Bundle state=new Bundle();f.controller.savePending(state);var original=f.controller;int code=f.activity.permissionRequest;
+   check(AndroidRuntimeRegistry.instance.multihop.starts==0&&f.controller.isPermissionPending(),"imported path ran before original permission");
+   check(!state.values.toString().contains(entry.secret)&&!state.values.toString().contains(entry.policy),"imported permission serialized private source");
+   if(rotate){f.restore(state);original.onActivityResult(code,Activity.RESULT_OK);check(AndroidRuntimeRegistry.instance.multihop.starts==0,"old Activity consumed transferred imported permission");}
+   entry.secret="mutated caller object";f.allow();f.allow();var runtime=AndroidRuntimeRegistry.instance.multihop;
+   check(f.callback.ok&&f.callback.completions==1&&runtime.starts==1&&runtime.ordinary.secret.equals("original-imported-credential")&&runtime.importedFinal==f.entry&&runtime.importedMode.equals("shadowsocks")&&runtime.importedExecution.equals("local"),"imported permission lost exact frozen typed sources or completed twice");
+  }
+  for(String fault:List.of("entry-key","entry-policy","entry-removed","final-bytes","final-removed","final-id","request-digest","entry-mode","server","denied","cancelled"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);var entry=imported(f);f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",f.callback);Bundle state=new Bundle();f.controller.savePending(state);
+   switch(fault){case "entry-key":entry.secret="replacement";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));break;
+    case "entry-policy":entry.policy="replacement-policy";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));break;
+    case "entry-removed":AndroidStandardExitStore.saved.remove(entry.id);break;case "final-bytes":Files.writeString(f.file,Files.readString(f.file)+" ");break;case "final-removed":Files.delete(f.file);break;
+    case "final-id":state.putString("routervpn.pending.exit","foreign-final");break;case "request-digest":state.putString("external_request_digest_pending","0".repeat(64));break;
+    case "entry-mode":state.putString("multihop_entry_mode_pending","wg");break;case "server":state.putString("multihop_execution_pending","server");break;
+   }
+   if(rotate||Set.of("final-id","request-digest","entry-mode","server").contains(fault))f.restore(state);
+   if(fault.equals("cancelled"))check(f.controller.cancelPending(f.callback),"original imported cancellation was refused");
+   if(fault.equals("denied"))f.controller.onActivityResult(f.activity.permissionRequest,0);else f.allow();
+   check(AndroidRuntimeRegistry.instance.multihop.starts==0&&!f.callback.ok,"changed imported permission started a different source: "+fault+"/"+rotate);
+  }
+  Fixture f=new Fixture(root);var entry=imported(f);f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",f.callback);int old=f.activity.permissionRequest;
+  check(!f.controller.cancelPending(new Callback())&&f.controller.isPermissionPending(),"foreign callback cancelled imported permission");
+  check(f.controller.cancelPending(f.callback),"captured imported cancellation failed");Callback next=new Callback();f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",next);int current=f.activity.permissionRequest;
+  f.controller.onActivityResult(old,Activity.RESULT_OK);check(current!=old&&AndroidRuntimeRegistry.instance.multihop.starts==0&&next.completions==0,"late imported permission consumed replacement");f.controller.onActivityResult(current,Activity.RESULT_OK);check(next.ok&&AndroidRuntimeRegistry.instance.multihop.starts==1,"replacement imported owner did not complete");
+ }
  static void savedChoice(Fixture f){Map<String,Object> prefs=android.content.Context.connectionPreferences;prefs.put("selected_kind","router-vpn");prefs.put("selected_id",f.entry.id);prefs.put("mode","custom:Saved");prefs.put("custom_presets","USER_SAVED_CUSTOM_LAYERS_ONLY");prefs.put("multihop_on",false);prefs.put("multihop_entry",f.entry.id);prefs.put("multihop_exit","another-saved-node");prefs.put("multihop_exit_mode","shadowsocks");prefs.put("multihop_entry_mode","wg");prefs.put("multihop_entry_kind","router-vpn");prefs.put("multihop_execution","local");}
  static Bundle request(Fixture f,String shape)throws Exception{
   if(shape.equals("router"))f.controller.connect("custom:Temporary",List.of("wg","shadowsocks"),f.callback);
@@ -290,7 +329,7 @@ public class ExternalPermissionTest {
   try{counter.setInt(null,0xffff);Fixture last=new Fixture(root);last.request("wg",false);check(last.activity.permissionRequest==0xffff,"last safe request code was unavailable");last.controller.cancelPermissionPending();Fixture over=new Fixture(root);over.request("wg",false);check(over.callback.completions==1&&!over.callback.ok&&over.activity.permission==null&&!over.controller.isPermissionPending(),"permission request code exhaustion reused a stale identity");}
   finally{counter.setInt(null,original);}
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
 }
 '''
 
@@ -342,6 +381,8 @@ def main():
         run = ["java", "-cp", os.pathsep.join((str(temp / "classes"), str(jar))), "com.eabusham.routervpn.ExternalPermissionTest", str(data)]
         subprocess.run(run, check=True, timeout=30)
         controls = (
+            ('AndroidUnifiedConnectionController.java', '||!first.equals(externalDigest(exitStore.get(entry.id)))', '', 'changed imported permission started a different source: entry-key'),
+            ('AndroidUnifiedConnectionController.java', '||!last.equals(entryDigest(exit))', '', 'changed imported permission started a different source: final-bytes'),
             ('AndroidConnectionSelection.java', '||!expected.equals(digest(context,nodes))', '', 'changed saved choice started'),
             ('AndroidConnectionSelection.java', 'append(source,"active_node_id",active);', '', 'changed saved choice started'),
             ('AndroidUnifiedConnectionController.java', 'return pendingCallback!=null || disconnecting.get()', 'return disconnecting.get()', 'pending permission did not block mutations'),

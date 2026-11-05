@@ -674,6 +674,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var entryProfile = try selectedRouterProfile(entryRoot)
         var exitProfile = selectedProfile
         guard entryProfile["id"] as? String == entryID else { throw tunnelError(51, "The captured entry bundle belongs to another node.") }
+        if entryProfile["node_kind"] as? String == "external" {
+            try startImportedEntryMultihop(provider: provider, root: root, entryProfile: entryProfile,
+                                          finalProfile: selectedProfile, completionHandler: completionHandler)
+            return
+        }
         let entryProofID = try suppliedNodeProof(root: entryRoot, selectedProfile: entryProfile)
         let exitProofID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         entryProfile["node_proof_id"] = entryProofID
@@ -919,6 +924,79 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 completionHandler(nil)
             }
         }
+        }
+    }
+
+    /// The imported predecessor has a public-address proof, never a fabricated
+    /// private Router identity. The shared plan owns both proofs and exact DNS.
+    private func startImportedEntryMultihop(provider: [String: Any], root: [String: Any],
+                                           entryProfile: [String: Any], finalProfile: [String: Any],
+                                           completionHandler: @escaping (Error?) -> Void) throws {
+        try IOSImportedEntryMultihop.validate(entry: entryProfile, final: finalProfile)
+        guard restoredMultihopExecution == nil || restoredMultihopExecution == "local",
+              let source = multihopExecutionSource, source.requested == "local",
+              let profiles = root["profiles"] as? [String: [String: String]],
+              let assets = profiles["shadowsocks"], !assets.isEmpty else { throw IOSImportedEntryMultihop.issue() }
+        let proofID = try suppliedNodeProof(root: root, selectedProfile: finalProfile)
+        let finalURL = try selectedProofURL(finalProfile)
+        let entry = try RouterVPNExternalExitBuilder.importedRouterSource(profile: entryProfile)
+        _ = try IOSMultihopStartLayer.capture(profile: finalProfile, profiles: profiles)
+        // SS2022 itself is the final AES layer; NewNodeProfile applies its
+        // captured XOR setting to that transport without a second AES owner.
+        let filesJSON = String(decoding: try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys]), as: UTF8.self)
+        let profileJSON = String(decoding: try JSONSerialization.data(withJSONObject: finalProfile, options: [.sortedKeys]), as: UTF8.self)
+        let bootstrap: String
+        if let value = finalProfile["dns_bootstrap"] {
+            guard let object = value as? [String: Any], Set(object.keys) == ["server", "query"] else { throw IOSImportedEntryMultihop.issue() }
+            bootstrap = String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
+        } else { bootstrap = "" }
+        guard entry.config.utf8.count <= 4 * 1024 * 1024,
+              entry.capture.utf8.count <= 8 * 1024 * 1024,
+              filesJSON.utf8.count <= 8 * 1024 * 1024,
+              profileJSON.utf8.count <= 256 * 1024,
+              bootstrap.utf8.count <= 16384 else { throw IOSImportedEntryMultihop.issue() }
+        var failure: NSError?
+        guard let plan = LibboxNewRouterImportedEntryMultihop(entry.config, entry.capture, "shadowsocks",
+                    filesJSON, profileJSON, "", bootstrap, &failure), failure == nil else {
+            throw failure ?? IOSImportedEntryMultihop.issue()
+        }
+        let strict = strictKillSwitchRequested(entryProfile) || strictKillSwitchRequested(finalProfile)
+        let allowLAN = (entryProfile["home_lan_access"] as? Bool ?? true) && (finalProfile["home_lan_access"] as? Bool ?? true)
+        guard !strict || ((protocolConfiguration as? NETunnelProviderProtocol)?.includeAllNetworks == true &&
+                         (protocolConfiguration as? NETunnelProviderProtocol)?.enforceRoutes == true &&
+                         (protocolConfiguration as? NETunnelProviderProtocol)?.excludeLocalNetworks == allowLAN) else {
+            try? plan.close(); throw tunnelError(53, "Imported multihop changed the captured route-lockdown policy.")
+        }
+        let engine = RouterVPNLibboxEngine(tunnel: self)
+        do {
+            try engine.prepareMTUHold(initialMTUHold)
+            libboxEngine = engine
+            try engine.start(files: ["sing-box.json": Data(plan.config().utf8)], strict: strict,
+                             multihopMetadata: nil, importedPlan: plan)
+        } catch { try? plan.close(); engine.stop(); libboxEngine = nil; throw error }
+        let captured = armNetworkProofGuard()
+        engine.completeMultihopExecution { [weak self] error in
+            guard let self else { engine.stop(); completionHandler(IOSImportedEntryMultihop.issue()); return }
+            guard self.libboxEngine === engine, self.currentPathProofGuard() === captured, error == nil else {
+                engine.stop(); completionHandler(error ?? IOSImportedEntryMultihop.issue()); return
+            }
+            // Keep the existing paired final HTTP proof on the compiler-owned
+            // final-only lane. There is deliberately no private entry proof.
+            self.proveSelectedNode(url: finalURL, expectedNodeID: proofID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] error in
+                guard let self else { engine.stop(); completionHandler(IOSImportedEntryMultihop.issue()); return }
+                guard self.libboxEngine === engine, self.currentPathProofGuard() === captured, error == nil, plan.healthy() else {
+                    engine.stop(); completionHandler(error ?? IOSImportedEntryMultihop.issue()); return
+                }
+                do {
+                    try engine.activatePerformance()
+                    try engine.enableHopMeasurement(metadata: plan.metadata())
+                    try engine.activateImportedMTU()
+                    try engine.bindMultihopExecutionSource(source, metadata: plan.metadata())
+                    guard self.libboxEngine === engine, self.currentPathProofGuard() === captured, plan.healthy() else { throw IOSImportedEntryMultihop.issue() }
+                    self.enableForwarding(profileData: Data(profileJSON.utf8), proofID: proofID, captured: captured)
+                    completionHandler(nil)
+                } catch { engine.stop(); completionHandler(error) }
+            }
         }
     }
 

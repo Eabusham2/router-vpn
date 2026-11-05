@@ -84,7 +84,7 @@ required_runtime = [
     "AndroidPathProbe.prove(prepared.exitBundle",
     "if (!AndroidPathProbe.prove",
     "Exit-node private path proof failed; multihop was disconnected.",
-    "boolean stopped = !started || stopEmbeddedAndProve();",
+    "boolean stopped = (!started || stopEmbeddedAndProve()) && cleanupPreparedSession();",
     '"FAILED".equals(state)',
     '"REVOKED".equals(state)',
     "START_TIMEOUT_MS",
@@ -96,13 +96,16 @@ assert '"ERROR".equals(state)' not in runtime, "LayeredVpnService never publishe
 
 # Requesting STOP is not proof of teardown. Cancellation and start failure must
 # both retain ownership when the embedded service does not reach a terminal state.
-assert runtime.count("boolean stopped = !started || stopEmbeddedAndProve();") == 2
+assert runtime.count("boolean stopped = (!started || stopEmbeddedAndProve()) && cleanupPreparedSession();") == 2
 for token in (
     "transitioning = !stopped;",
     "if (stopped) {",
     "clearActiveGraphLocked();",
     "runtime ownership retained",
     "if (!stopped) throw new IllegalStateException",
+    "LayeredVpnService.discardPreparedSession(context,owned)",
+    "pendingPreparedSession=prepared.session.sessionId",
+    "!pendingPreparedSession.isEmpty()",
 ):
     assert token in runtime, f"multihop teardown ownership lost contract: {token}"
 stop = runtime.split("private boolean stopEmbeddedAndProve() {", 1)[1].split("private static boolean terminal", 1)[0]

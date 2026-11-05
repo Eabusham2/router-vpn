@@ -45,9 +45,18 @@ final class AndroidNativeMAXProfile{ // MAX_PREDICATE
 }
 final class AndroidNativeCompositeProfile{ // COMPOSITE_PREDICATE
 }
+final class AndroidStandardExitStore {static final class Entry{String id,name;}}
+final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] data=Files.readAllBytes(f.toPath());if(data.length==0||data.length>max)throw new IllegalArgumentException("bounded source required");return data;}}
 final class AndroidNodeStore {
+ static final int MAX_BUNDLE=32*1024*1024;
  static final class Node{final String id,name;final File file;Node(String id,File file){this.id=id;name=id;this.file=file;}}
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");if(b.getString("node_id").isEmpty())throw new IllegalArgumentException("missing paired node");}
+}
+final class AndroidImportedRouterPath {
+ static final class PreparationFailure extends Exception{final String sessionId="";}
+ static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{throw new IllegalStateException("No imported Router source in paired Last fixture");}
+ static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{throw new IllegalStateException("No imported Router owner in paired Last fixture");}
+ static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{throw new IllegalStateException("No imported Router compiler in paired Last fixture");}
 }
 final class AndroidMultihopController {
  private static final int MAX_BUNDLE=32*1024*1024;
@@ -82,6 +91,7 @@ final class AndroidHomeStateStore {
  static synchronized void disconnected(Context c){current=new Snapshot();}
 }
 final class LayeredVpnService {
+ static boolean discardPreparedSession(Context c,String session){return true;}
  static String selected="",pins="{}";static boolean unhealthy,wrongGeneration;static int nativeGeneration,captures,mtu;
  static volatile Runnable duringCapture,duringMTU;
  static final class CapturedMultihop{
@@ -265,9 +275,9 @@ def main():
             ('actual winner publication', target, 'AndroidStartupPolicy.recordMultihopExecution(context,last,adopted,proved.execution,pins);', '/* mutation: missing actual winner publication */', 'proved manual multihop did not record'),
             ('server identity readback', target, 'if(expectedPins!=null&&!expectedPins.equals(pins))', 'if(false)', 'fresh proof/source/identity failure was adopted: pins'),
             ('native path generation', target, 'if(!proved.matchesHome(adopted)||!homeSession.equals(proved.homeSession)', 'if(!homeSession.equals(proved.homeSession)', 'fresh proof/source/identity failure was adopted: generation'),
-            ('source during native capture', target, 'prepared.entrySource.require(entry.file);prepared.exitSource.require(exit.file);\n                    if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed during source validation.");', 'if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed during source validation.");', 'unretained native capture wrote historical execution'),
+            ('source during native capture', target, 'prepared.entrySource.require(entryFile);prepared.exitSource.require(exit.file);\n                    if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed during source validation.");', 'if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed during source validation.");', 'unretained native capture wrote historical execution'),
             ('native owner after source validation', target, 'if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed during source validation.");', '/* mutation: native owner not revalidated before historical write */', 'unretained native capture wrote historical execution'),
-            ('source after durable write', target, 'prepared.entrySource.require(entry.file);prepared.exitSource.require(exit.file);\n                    if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed while recording Startup Last.");', 'if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed while recording Startup Last.");', 'durable-record interval escaped captured native/source ownership: entry'),
+            ('source after durable write', target, 'prepared.entrySource.require(entryFile);prepared.exitSource.require(exit.file);\n                    if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed while recording Startup Last.");', 'if(!proved.sameOwner(LayeredVpnService.capturedMultihop(homeSession)))throw new IllegalStateException("The native multihop owner changed while recording Startup Last.");', 'durable-record interval escaped captured native/source ownership: entry'),
             ('captured MTU activation', target, 'LayeredVpnService.startMultihopAutomaticMTU(proved);', 'LayeredVpnService.startAutomaticMTU();', 'durable-record interval escaped captured native/source ownership: native-owner-during-mtu'),
             ('provisional proof retirement', target, 'AndroidHomeStateStore.beginPathRevalidation(context,"The captured multihop proof changed before activation.");', ';', 'provisional Home proof survived failed native capture'),
             ('current raw source identity', boundary, 'if (!current.source.digest.equals(sourceDigest(expectedBytes)))', 'if (false)', 'invalid historical capture accepted: swapped source'),

@@ -67,6 +67,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor-server-with-predecessor":value,err=mobiletor.CompileServerProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
  case "tor-server-mtu-authority":var predecessor *mobiletor.PredecessorProof;predecessor,err=mobiletor.NewPredecessorProof(r.Source);if err==nil{value,err=mobiletor.ServerMTUAuthority(r.Config,r.Policy,r.Node,predecessor)}
  case "tor-mtu-authority":var predecessor *mobiletor.PredecessorProof;if r.Source!=""{predecessor,err=mobiletor.NewPredecessorProof(r.Source)};if err==nil{value,err=mobiletor.MTUAuthorityWithPredecessor(r.Config,r.Policy,r.Node,predecessor)}
+ case "imported-router":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],"shadowsocks",a["files"],a["profile"],"","");if err==nil{value=plan.Config()}}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
@@ -701,8 +702,43 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    reject("two fixed sizes for one TUN"){_ = try ProviderPreparation().prepare(provider:provider,selectedProfile:mtu,strict:true)}
   }
  }
+ @MainActor static func importedRouterGraphs()throws {
+  let key=Data(repeating:105,count:32).base64EncodedString()
+  let finalTransport:[String:Any]=["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":key]
+  let base:[String:Any]=["inbounds":[["type":"tun","tag":"tun-in","auto_route":true,"strict_route":true,"mtu":1280]],"outbounds":[finalTransport,["type":"direct","tag":"direct"]],"route":["auto_detect_interface":true,"final":"proxy","rules":[["protocol":"dns","action":"hijack-dns"]]],"dns":["servers":[["type":"udp","tag":"home-dns","server":"10.77.0.1","detour":"proxy"]],"final":"home-dns"]]
+  let assets=["sing-box.json":try json(base).base64EncodedString()]
+  let cases = layers.flatMap { first in layers.map { (first,$0,"2022-blake3-aes-256-gcm") } } + [("off","off","2022-blake3-aes-128-gcm"),("off","off","2022-blake3-chacha20-poly1305")]
+  for (entryLayer,finalLayer,method) in cases {
+   let entryKey=Data(repeating:105,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
+   var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
+   if entryLayer != "off" {imported["start_layer"]=["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"203.0.113.20","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key]]}
+   let entry:[String:Any]=["id":"imported-entry","node_kind":"external","start_layer":entryLayer,"dns_mode":"home","mtu_policy":"auto","external":imported]
+   let final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact paired token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":"shadowsocks","multihop_exit_id":"paired-final","multihop_exit_mode":"shadowsocks","multihop_execution":"local"]
+   try IOSImportedEntryMultihop.validate(entry:entry,final:final)
+   let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry)
+   _ = try IOSMultihopStartLayer.capture(profile:final,profiles:["shadowsocks":assets])
+   let args=["config":raw.config,"capture":raw.capture,"files":String(decoding:try json(assets),as:UTF8.self),"profile":String(decoding:try json(final),as:UTF8.self)]
+   let encoded=try bridge(["Op":"imported-router","Config":String(decoding:try json(args),as:UTF8.self)])
+   let graph=try object(Data(encoded.utf8)),inbounds=graph["inbounds"] as! [[String:Any]],outs=graph["outbounds"] as! [[String:Any]]
+   try check("imported Router owns one TUN",inbounds.filter{$0["type"] as? String=="tun"}.count==1)
+   try check("imported Router owns final proof lane only",inbounds.filter{$0["tag"] as? String=="routervpn-proof" && $0["listen_port"] as? Int==1099}.count==1 && !inbounds.contains{$0["listen_port"] as? Int==1098})
+   try check("imported Router keeps final transport behind entry",outs.contains{$0["detour"] as? String=="entry-wg"} && !outs.contains{$0["type"] as? String=="direct"})
+   let dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]]
+   try check("imported Router keeps paired final Home DNS",servers[0]["server"] as? String=="192.168.50.133" && servers[0]["detour"] as? String=="proxy")
+   let captured=try object(Data(raw.capture.utf8))["profile"] as! [String:Any]
+   try check("entry capture preserves independent original policy",try json(captured)==json(entry))
+   if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
+    try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(entryLayer+"--"+finalLayer+"--"+method+".json"))
+   }
+  }
+ }
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
+  try importedRouterGraphs()
+  if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
+   print("Apple imported Router graph: PASS (11 graphs: 9 independent layers plus AES128/ChaCha20; shipping Swift inputs and actual Go compiler; no native network proof)")
+   return
+  }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {
    try openVPNResponseProbesCreation();try openVPNStartLayersCreation()
    print("Apple OpenVPN remote response map: PASS (\(checks) shipping Swift/real Go checks; storage and FFI boundaries doubled)")
@@ -1289,6 +1325,11 @@ def main():
             raise ValueError('ROUTERVPN_IOS_EXTERNAL_GRAPHS must name an existing empty owned directory')
         if args.entry_only:
             raise ValueError('--entry-only cannot produce final external graphs')
+    imported_output = os.environ.get('ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS')
+    if imported_output is not None:
+        destination = Path(imported_output)
+        if not imported_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS must name an existing empty owned directory')
     for tool in ('go', 'swiftc'):
         if not shutil.which(tool):
             raise RuntimeError(tool + ' is required')

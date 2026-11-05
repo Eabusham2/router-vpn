@@ -82,6 +82,9 @@ public final class LibboxRouterMultihop {
     private let release = DispatchSemaphore(value: 0)
     init(_ text: String, block: Bool, fail: Bool) { self.text = text; self.block = block; self.fail = fail }
     public func config() -> String { text }
+    public func sourceSHA256() -> String { String(repeating:"a",count:64) }
+    public func metadata() -> String { "{}" }
+    public func mtuProfile() -> String { "{}" }
     public func run(_ server: LibboxCommandServer) throws {
         entered.signal()
         if block { _ = release.wait(timeout: .now() + 5) }
@@ -193,6 +196,7 @@ public func LibboxRouterStrategyStartService(_ server: LibboxCommandServer, _ co
 public func LibboxRouterStrategyDNSProof(_ server: LibboxCommandServer, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("dns",failure) }
 public func LibboxRouterStrategyCloseService(_ server: LibboxCommandServer, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("close",failure) }
 
+public func LibboxRouterImportedEntryNewHopMeasurement(_ plan:LibboxRouterMultihop,_ server:LibboxCommandServer,_ failure:UnsafeMutablePointer<NSError?>?)->LibboxRouterHopMeasurement? { plan.healthy() ? LibboxRouterHopMeasurement():nil }
 public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? { LibboxRouterHopMeasurement() }
 
 public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
@@ -384,6 +388,10 @@ final class MTUPlatformDouble {
         drained=true
     }
     func activate(server: LibboxCommandServer, config: String, profile: String, onAbort: @escaping @Sendable (String) -> Void) { hasOwner = true;self.server=server;failures=MTUActivationFixture.shared.failures() }
+    func activateImported(server:LibboxCommandServer,plan:LibboxRouterMultihop,onAbort:@escaping @Sendable(String)->Void)throws {
+        guard plan.healthy() else{throw NSError(domain:"ImportedMTUFixture",code:1)}
+        hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures()
+    }
     func activateExternal(server:LibboxCommandServer,proof:LibboxRouterExternalProofRequest,source:String,capture:String,onAbort:@escaping @Sendable(String)->Void)throws {
         guard proof.healthy() else{throw NSError(domain:"ExternalMTUFixture",code:1)}
         hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures();MTUActivationFixture.shared.record([source,capture],proof:proof)
@@ -456,6 +464,31 @@ final class CompletionState: @unchecked Sendable {
         func check(_ label: String, _ value: @autoclosure () -> Bool) {
             guard value() else { fatalError("FAIL: " + label) }; checks += 1
         }
+        for cancel in [false, true] {
+            state.configure(block: cancel)
+            let exact = "{\"inbounds\":[{\"type\":\"mixed\",\"tag\":\"routervpn-proof\",\"listen\":\"127.0.0.1\",\"listen_port\":1099}],\"outbounds\":[]}"
+            let plan = state.make(exact)
+            let owner = RouterVPNLibboxEngine(tunnel: PacketTunnelProvider())
+            try owner.start(files: ["sing-box.json": Data(exact.utf8)], strict: true, multihopMetadata: nil, importedPlan: plan)
+            check("imported plan starts exact bytes without duplicate proof injection", state.currentServer()?.capturedConfiguration() == exact)
+            let done = CompletionState(); owner.completeMultihopExecution(done.finish)
+            if cancel {
+                check("imported original Run entered", plan.entered.wait(timeout: .now()+2) == .success)
+                owner.stop()
+                check("imported Stop joins original proof cancellation", done.wait() && done.values() == (1, 1) && !plan.healthy())
+            } else {
+                check("imported proof delivery completes once", done.wait() && done.values() == (1, 0))
+                try owner.enableHopMeasurement(metadata: plan.metadata())
+                try owner.activateImportedMTU()
+                owner.stop()
+                check("imported Stop retires original plan", !plan.healthy())
+            }
+            let replaced = RouterVPNLibboxEngine(tunnel: PacketTunnelProvider())
+            var rejected = false
+            do { try replaced.start(files: files, strict: false, multihopMetadata: nil, importedPlan: state.make(exact)) } catch { rejected = true }
+            check("imported graph byte substitution rejected", rejected)
+        }
+        state.configure()
         do {
             let engine = RouterVPNLibboxEngine(tunnel: PacketTunnelProvider())
             let before = state.counts()

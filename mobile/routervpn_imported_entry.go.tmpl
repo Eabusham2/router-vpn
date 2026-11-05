@@ -1,0 +1,90 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func NewRouterImportedEntryMultihop(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*RouterMultihop, error) {
+	controller, err := mobilemultihop.NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterMultihop{controller: controller}, nil
+}
+func RouterCompileImportedEntryMultihop(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (string, error) {
+	plan, err := NewRouterImportedEntryMultihop(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap)
+	if err != nil {
+		return "", err
+	}
+	return plan.Config(), nil
+}
+func (m *RouterMultihop) Metadata() string     { return m.controller.Metadata() }
+func (m *RouterMultihop) SourceSHA256() string { return m.controller.SourceSHA256() }
+func (m *RouterMultihop) MTUProfile() string   { return m.controller.MTUProfile() }
+func (m *RouterMultihop) NewHopMeasurement(server *CommandServer) (*RouterHopMeasurement, error) {
+	if m == nil || !m.Healthy() || server == nil || server.StartedService == nil || server.StartedService.Instance() == nil || server.StartedService.Instance().Box() == nil {
+		return nil, errors.New("imported hop measurement has no successful original native owner")
+	}
+	engine := &routerHopMeasurementEngine{core: &routerMultihopEngine{server: server, instance: server.StartedService.Instance().Box()}}
+	service, err := m.controller.NewImportedHopMeasurement(engine)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterHopMeasurement{service: service}, nil
+}
+func (m *RouterMultihop) NewMTU(server *CommandServer, platform RouterMTUPlatform) (*RouterMTU, error) {
+	if m == nil || !m.Healthy() || m.SourceSHA256() == "" {
+		return nil, errors.New("imported MTU requires its proved captured graph")
+	}
+	if server == nil || server.StartedService == nil || server.StartedService.Instance() == nil || server.StartedService.Instance().Box() == nil {
+		return nil, errors.New("imported MTU native owner missing")
+	}
+	engine := &routerMultihopEngine{server: server, instance: server.StartedService.Instance().Box()}
+	if !m.controller.MatchesEngine(engine) {
+		return nil, errors.New("imported MTU belongs to another native instance")
+	}
+	mtu, err := NewRouterMTU(server, platform, m.Config(), m.MTUProfile())
+	if err != nil {
+		return nil, err
+	}
+	mtu.owner.proofCurrent = m.Healthy
+	if !m.Healthy() {
+		_ = mtu.Close()
+		return nil, errors.New("imported MTU owner retired")
+	}
+	return mtu, nil
+}
+func (e *routerMultihopEngine) DNSProof(ctx context.Context) error {
+	if e.Identity() == "" {
+		return errors.New("imported DNS owner retired")
+	}
+	if err := e.instance.RouterVPNStrategyDNSProofContext(ctx); err != nil {
+		return err
+	}
+	if e.Identity() == "" {
+		return errors.New("imported DNS owner changed")
+	}
+	return ctx.Err()
+}
+
+func RouterImportedEntryNewHopMeasurement(plan *RouterMultihop, server *CommandServer) (*RouterHopMeasurement, error) {
+	if plan == nil {
+		return nil, errors.New("missing imported plan")
+	}
+	return plan.NewHopMeasurement(server)
+}
+func RouterImportedEntryNewMTU(plan *RouterMultihop, server *CommandServer, platform RouterMTUPlatform) (*RouterMTU, error) {
+	if plan == nil {
+		return nil, errors.New("missing imported plan")
+	}
+	return plan.NewMTU(server, platform)
+}
+
+func RouterImportedEntryMTUProfile(plan *RouterMultihop) string {
+	if plan == nil {
+		return ""
+	}
+	return plan.MTUProfile()
+}

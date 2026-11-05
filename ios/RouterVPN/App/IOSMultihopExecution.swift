@@ -91,9 +91,11 @@ enum IOSMultihopExecution {
             let tor = external && ["tor", "tor-bridge"].contains((exitProfile["external"] as? [String: Any])?["protocol"] as? String ?? "")
             let entryKey = tor ? "tor_entry_bundle" : (external ? "external_entry_bundle" : "entryBundle")
             guard let entry = configuration[entryKey] as? Data else { throw issue() }
-            let ordinaryEntry = tor ? try? Self.profile(entry, kind: "external") : nil
+            let ordinaryEntry = (tor || !external) ? try? Self.profile(entry, kind: "external") : nil
             let entryProfile = try ordinaryEntry ?? Self.profile(entry, kind: "router-vpn")
-            if let ordinaryEntry {
+            if let ordinaryEntry, !external {
+                try IOSImportedEntryMultihop.validate(entry: ordinaryEntry, final: exitProfile)
+            } else if let ordinaryEntry {
                 guard IOSMultihopExecution.torSelection(exitProfile) == "local",
                       let transport = ordinaryEntry["external"] as? [String: Any],
                       let kind = transport["protocol"] as? String,
@@ -375,5 +377,43 @@ enum IOSMultihopExecution {
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.MultihopExecution", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "The previous multihop winner is missing, stale, or belongs to another frozen source."])
+    }
+}
+
+
+/// Validation of the two original saved roles. Native compilation and runtime
+/// proof remain separate; this never grants a pairing identity to an import.
+enum IOSImportedEntryMultihop {
+    static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
+    static func validate(entry: [String: Any], final: [String: Any]) throws {
+        guard entry["node_kind"] as? String == "external",
+              final["node_kind"] == nil || final["node_kind"] is String,
+              ["", "router-vpn"].contains(final["node_kind"] as? String ?? ""),
+              let entryID = entry["id"] as? String, !entryID.isEmpty,
+              let finalID = final["id"] as? String, entryID != finalID,
+              final["multihop_enabled"] as? Bool == true,
+              final["multihop_entry_id"] as? String == entryID,
+              final["multihop_exit_id"] as? String == finalID,
+              final["multihop_entry_mode"] as? String == "shadowsocks",
+              final["multihop_exit_mode"] as? String == "shadowsocks",
+              (final["multihop_execution"] as? String ?? "local") == "local",
+              entry["multihop_enabled"] as? Bool != true,
+              let imported = entry["external"] as? [String: Any],
+              imported["protocol"] as? String == "shadowsocks",
+              let transport = imported["shadowsocks"] as? [String: Any],
+              methods.contains(transport["method"] as? String ?? ""),
+              let expected = imported["expected_public_ip"] as? String, !expected.isEmpty,
+              ["node_proof_id", "router_api", "api_token"].allSatisfy({
+                  entry[$0] == nil || entry[$0] is NSNull || entry[$0] as? String == ""
+              }),
+              let proof = final["node_proof_id"] as? String,
+              proof.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+              let api = final["router_api"] as? String, !api.isEmpty,
+              let token = final["api_token"] as? String, !token.isEmpty else { throw issue() }
+    }
+
+    static func issue() -> NSError {
+        NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
+            "Choose a Local Shadowsocks 2022 imported entry and a different paired Router VPN Shadowsocks final node with their original settings."])
     }
 }

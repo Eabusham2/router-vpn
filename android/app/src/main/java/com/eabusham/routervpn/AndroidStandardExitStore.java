@@ -90,6 +90,13 @@ final class AndroidStandardExitStore {
         for (Entry e:list()) if(e.id.equals(id)) return e;
         throw new IllegalArgumentException("Custom standard exit was not found.");
     }
+    /** Immutable source checks may run under a VPN lifecycle lock. Read one
+     * atomically published private snapshot without taking the mutation lock:
+     * a store writer must ask that lifecycle owner before it may publish. */
+    static Entry capturedEntry(Context context,String id)throws Exception{
+        for(Entry entry:new AndroidStandardExitStore(context).readStore())if(entry.id.equals(id))return entry;
+        throw new IllegalArgumentException("The original imported entry is no longer stored.");
+    }
     synchronized Entry save(Entry entry) throws Exception {
         synchronized(STORE_LOCK){
         requireMutable("saving or replacing a custom exit");

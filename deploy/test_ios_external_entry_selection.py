@@ -76,6 +76,31 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
  static func main() { do { try run() } catch { FileHandle.standardError.write(Data(("FAIL after "+String(checks)+" checks at "+latest+": "+error.localizedDescription+"\n").utf8));exit(1) } }
  static func run()throws {
   defer { RouterVPNTorTestClose() }
+  var imported=try profile("imported-first","external","shadowsocks");imported.apiToken="";imported.dnsMode="home"
+  imported.external?.shadowsocks=ExternalShadowsocksConfig(server:"203.0.113.20",port:443,method:"2022-blake3-aes-256-gcm",password:Data(repeating:9,count:32).base64EncodedString())
+  var paired=try profile("paired-final","router-vpn");paired.external=nil;paired.dnsMode="home"
+  var finalBundle=bundle(paired)
+  finalBundle.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:8,count:32).base64EncodedString()]]]).base64EncodedString()]
+  let importedBundle=bundle(imported),mixed=RouterVPNModel();mixed.bundle=finalBundle
+  IOSNodeBundleStore.shared.nodes=[imported.id:try encoded(importedBundle),paired.id:try encoded(finalBundle)]
+  try mixed.saveIOSMultihop(enabled:true,entryID:imported.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:"shadowsocks")
+  let importedCapture=try mixed.iosMultihopEntryBundle(for:mixed.bundle!)
+  try check("imported Router captures complete independent entry policy",importedCapture.routerProfiles==importedBundle.routerProfiles && importedCapture.profiles==importedBundle.profiles && importedCapture.apiToken.isEmpty && importedCapture.routerAPI.isEmpty && importedCapture.nodeProofID.isEmpty)
+  try check("imported Router retains final paired identity and Home DNS",mixed.bundle?.routerProfiles[0].nodeProofID==paired.nodeProofID && mixed.bundle?.routerProfiles[0].dnsMode=="home" && mixed.bundle?.profiles==finalBundle.profiles)
+  let savedMixed=try encoded(mixed.bundle!),mixedWrites=mixed.writes
+  for fault in ["server","auto","wrong-mode","private-token","missing-public-proof","legacy-ss"] {
+   var changed=imported,execution="local",mode="shadowsocks"
+   switch fault {
+   case "server","auto":execution=fault
+   case "wrong-mode":mode="wg"
+   case "private-token":changed.apiToken="invented Router credential"
+   case "missing-public-proof":changed.external?.expectedPublicIP=""
+   default:changed.external?.shadowsocks?.method="aes-256-gcm"
+   }
+   IOSNodeBundleStore.shared.nodes[imported.id]=try encoded(bundle(changed))
+   try reject("imported Router rejects "+fault){try mixed.saveIOSMultihop(enabled:true,entryID:imported.id,exitID:paired.id,exitMode:"shadowsocks",execution:execution,entryMode:mode)}
+   try check("rejected imported selection cannot mutate saved graph",mixed.writes==mixedWrites && encoded(mixed.bundle!)==savedMixed)
+  }
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryProtocol in protocols {for exitProtocol in protocols {
    let entry=bundle(try profile("entry","external",entryProtocol)),model=RouterVPNModel()
@@ -400,7 +425,7 @@ def main():
         library = work / 'Libbox.swift'; library.write_text(T.LIBBOX)
         suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-emit-module', '-emit-library', '-module-name', 'Libbox', str(library), '-emit-module-path', str(work/'Libbox.swiftmodule'), '-o', str(work/('libLibbox'+suffix))], check=True, timeout=90)
-        subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
+        subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopExecution.swift'), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
         subprocess.run([str(work / 'test'), str(compiler)], env=dict(os.environ, ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json')), check=True, timeout=30)
 
 

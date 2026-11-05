@@ -6,6 +6,36 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## Mobile imported entry → paired Router final
+
+The Android and Apple source now supports an ordinary imported Shadowsocks 2022
+entry followed by an independently paired Router Shadowsocks final, using Local
+execution in one VpnService/PacketTunnel. All three SS2022 entry ciphers and all
+nine independent Start Layer combinations retain their original source and proof
+ownership. Selection, permission, saved profiles, restoration, selected DNS, typed
+hop measurement and MTU use the same captured graph. Failed private staging
+retains its exact cleanup owner and blocks replacement until cleanup joins.
+[The implementation and evidence boundary](MOBILE-IMPORTED-ROUTER-PATH.md) records
+the complete call path and its mandatory native gates.
+
+Local evidence includes the actual Android helper's 567 checks and four causal
+controls, permission 3,422/nine controls, usage 182/ten controls, startup
+3,813/eighteen controls, existing Last history 1,503/thirteen controls, and the
+runtime's retained constructor-cleanup cases with three causal controls. The
+shared pinned constructor/parser checks accept all eleven shared and Android
+host-produced graphs. Imported-profile persistence passed 140 checks; the
+original full profile family reached its unchanged 180-second watchdog while
+launching actual Go validators. That full family and its later concurrency
+control remain mandatory exact-SHA CI evidence, not local passes. Swift/Xcode
+and the mandatory Apple-produced eleven-graph native matrix were unavailable
+locally. Source/fixture evidence does not establish APK/IPA delivery, device
+routing, physical-network behavior or release publication.
+
+This closes one source direction, not the broader all-device graph requirement.
+Other imported entry protocols, other paired final families and Server/Compare
+for this direction remain unfinished; no original requirement or default is
+removed.
+
 ## Retained Always guard: transport hostname bootstrap
 
 The installed Linux service now supplies a bounded outer-transport hostname

@@ -66,7 +66,7 @@ final class LayeredVpnService {
     }
     static CapturedMultihop capturedMultihop(String session){return new CapturedMultihop(session);}
     static String capturedMultihopExecution(String session){if(!session.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("stale native graph");return selectedOverride.isEmpty()?(AndroidMultihopController.lastExecution.equals("auto")?"server":AndroidMultihopController.lastExecution):selectedOverride;}
-    static final AtomicInteger discarded=new AtomicInteger();
+    static final AtomicInteger discarded=new AtomicInteger();static boolean failDiscard;
     static volatile java.util.concurrent.CountDownLatch discardEntered,discardRelease;
     static boolean discardPreparedSession(Context context,String session){
         if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");
@@ -76,7 +76,7 @@ final class LayeredVpnService {
             while(true){try{release.await();break;}catch(InterruptedException error){interrupted=true;}}
             if(interrupted)Thread.currentThread().interrupt();
         }
-        discarded.incrementAndGet();return true;
+        discarded.incrementAndGet();return !failDiscard;
     }
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
     static String externalExecutionOverride="";static String externalExecution(String session,String exit){if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external execution");String execution=AndroidStandardExitController.lastExecution;return externalExecutionOverride.isEmpty()?(execution.equals("auto")?"server":execution.isEmpty()?"local":execution):externalExecutionOverride;}
@@ -105,7 +105,9 @@ final class LayeredVpnService {
         mtuStarts.incrementAndGet();
     }
 }
+final class AndroidPrivateFileStore {static byte[] read(File f,int max){return f.getPath().getBytes(java.nio.charset.StandardCharsets.UTF_8);}}
 final class AndroidNodeStore {
+    static final int MAX_BUNDLE=32*1024*1024;
     static final class Node {
         final String id, name; final File file;
         Node(String id) { this.id=id; name=id; file=new File(id); }
@@ -115,12 +117,21 @@ final class AndroidMultihopController {
     static java.util.Set<String> changedSources=new java.util.HashSet<>();static String lastPins="";
     static Source captureSource(File file,byte[] expected){if(expected==null||expected.length==0)throw new IllegalStateException("missing historical source");Source source=new Source(file);source.require(file);return source;}
     static String validatedServerIdentityPins(String execution,String mode,String pins){if(pins==null)throw new IllegalStateException("pins absent");return pins;}
-    static final class Source {final File file;final String digest;Source(File file){this.file=file;digest=file.getPath();}void require(File candidate){if(!file.equals(candidate)||changedSources.contains(file.getPath()))throw new IllegalStateException("changed captured node");}boolean same(Source other){return other!=null&&file.equals(other.file)&&digest.equals(other.digest);}}
+    static final class Source {
+        final File file;final String digest,importedId,importedName;
+        Source(File file){this.file=file;digest=file.getPath();importedId="";importedName="";}
+        Source(AndroidStandardExitStore.Entry e){file=null;digest=AndroidStandardExitStore.snapshot(e);importedId=e.id;importedName=e.name;require(null);}
+        boolean imported(){return file==null;}
+        void require(File candidate){if(imported()){AndroidStandardExitStore.Entry current=AndroidStandardExitStore.saved.get(importedId);if(candidate!=null||current==null||!digest.equals(AndroidStandardExitStore.snapshot(current)))throw new IllegalStateException("changed captured import");}
+            else if(!file.equals(candidate)||changedSources.contains(file.getPath()))throw new IllegalStateException("changed captured node");}
+        boolean same(Source other){return other!=null&&java.util.Objects.equals(file,other.file)&&importedId.equals(other.importedId)&&digest.equals(other.digest);}
+    }
     static final class Prepared {
         final NativeSingBoxController.SessionInfo session = new NativeSingBoxController.SessionInfo();
         final File exitBundle; final String exitMode;
         final Source entrySource,exitSource;
         Prepared(File entry,File exit, String mode) { exitBundle=exit; exitMode=mode;entrySource=new Source(entry);exitSource=new Source(exit); }
+        Prepared(Source entry,File exit,String mode){exitBundle=exit;exitMode=mode;entrySource=entry;exitSource=new Source(exit);}
     }
     Prepared prepare(File entry,File exit,String mode,String execution,String entryMode,Source a,Source b,String pins){a.require(entry);b.require(exit);lastPins=pins;return prepare(entry,exit,mode,execution,entryMode);}
     AndroidMultihopController(Context c, NativeSingBoxController s) {}
@@ -130,6 +141,17 @@ final class AndroidMultihopController {
     Prepared prepare(File entry, File exit, String mode, String execution, String entryMode) {
         lastExecution=execution; lastEntryMode=entryMode; return new Prepared(entry,exit,mode);
     }
+}
+// Pure graph compilation uses the real compiler in test_android_imported_router.py.
+// This lifecycle boundary preserves the exact imported-store owner across workers.
+final class AndroidImportedRouterPath {
+ static int prepared;static Runnable afterPrepare;static boolean failPreparation;
+ static final class PreparationFailure extends Exception{final String sessionId;PreparationFailure(String id){super("retained original private staging");sessionId=id;}}
+ static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{if(!e.protocol.equals("shadowsocks"))throw new IllegalArgumentException("SS2022 entry required");return new AndroidMultihopController.Source(e);}
+ static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{s.require(null);return AndroidStandardExitStore.copy(AndroidStandardExitStore.saved.get(s.importedId));}
+ static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{
+  e.require(null);last.require(x);if(!mode.equals("shadowsocks")||!execution.equals("local"))throw new IllegalArgumentException("mixed Local SS required");prepared++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode="shadowsocks";var result=new AndroidMultihopController.Prepared(e,x,mode);if(failPreparation)throw new PreparationFailure(result.session.sessionId);if(afterPrepare!=null)afterPrepare.run();return result;
+ }
 }
 final class AndroidStandardExitStore {
     static final java.util.Map<String,Entry> saved=new java.util.concurrent.ConcurrentHashMap<>();
@@ -296,9 +318,9 @@ public final class RuntimeTeardownHarness {
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
         final String kind;
         Owner(String kind) {
-            this.kind=kind;AndroidTorCompareRuntime.runs=0;AndroidTorCompareRuntime.closes=0;AndroidTorCompareRuntime.cancels=0;AndroidTorCompareRuntime.failRun=false;AndroidTorCompareRuntime.failClose=false;AndroidTorCompareRuntime.chosen="server";AndroidStandardExitStore.saved.clear();AndroidTorProfile.ordinaryPreparations=0;AndroidTorProfile.lastOrdinary=null;AndroidTorProfile.beforePrepared=null;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
+            this.kind=kind;AndroidImportedRouterPath.prepared=0;AndroidImportedRouterPath.afterPrepare=null;AndroidImportedRouterPath.failPreparation=false;AndroidTorCompareRuntime.runs=0;AndroidTorCompareRuntime.closes=0;AndroidTorCompareRuntime.cancels=0;AndroidTorCompareRuntime.failRun=false;AndroidTorCompareRuntime.failClose=false;AndroidTorCompareRuntime.chosen="server";AndroidStandardExitStore.saved.clear();AndroidTorProfile.ordinaryPreparations=0;AndroidTorProfile.lastOrdinary=null;AndroidTorProfile.beforePrepared=null;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
             LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;LayeredVpnService.externalExecutionOverride="";
-            LayeredVpnService.discarded.set(0);LayeredVpnService.discardEntered=null;LayeredVpnService.discardRelease=null;
+            LayeredVpnService.failDiscard=false;LayeredVpnService.discarded.set(0);LayeredVpnService.discardEntered=null;LayeredVpnService.discardRelease=null;
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
@@ -377,6 +399,53 @@ public final class RuntimeTeardownHarness {
         });
         for(String fault:new String[]{"server","auto","duplicate","wrong-exit","tor-entry"})test("ordinary Tor rejects invalid authority "+fault,()->{
             try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();if(fault.equals("duplicate"))exit.id=entry.id;if(fault.equals("wrong-exit"))exit.protocol="socks5";if(fault.equals("tor-entry"))entry.protocol="tor";Callback cb=new Callback(0);owner.external.connectOrdinary(entry,exit,fault.equals("server")||fault.equals("auto")?fault:"local",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidTorProfile.ordinaryPreparations==0,"ordinary input acquired unavailable path authority");}
+        });
+    }
+    static void importedRouterRuntimeTests(){
+        test("imported Router runtime captures and restores original typed owner",()->{
+            try(Owner owner=new Owner("multihop")){
+                AndroidStandardExitStore.Entry first=ordinary("shadowsocks");AndroidNodeStore.Node last=new AndroidNodeStore.Node("paired-final");Callback connected=new Callback(0);
+                owner.multihop.connectImported(first,last,"shadowsocks","local",connected);connected.awaitDone();check(connected.ok&&owner.engine.starts.get()==1&&AndroidImportedRouterPath.prepared==1,"imported graph did not start once");
+                var home=AndroidHomeStateStore.current;check(home.activeEntryId.equals(first.id)&&home.activeExitId.equals(last.id)&&home.activeEntryMode.equals("shadowsocks"),"imported graph lost typed identity");
+                String source=AndroidStandardExitStore.snapshot(owner.multihop.capturedOrdinaryEntry(home));var caller=owner.multihop.capturedOrdinaryEntry(home);caller.name="caller changed";
+                check(source.equals(AndroidStandardExitStore.snapshot(owner.multihop.capturedOrdinaryEntry(home))),"runtime exposed mutable imported source");
+                var captured=owner.multihop.captureRestore(null,last,home);owner.disconnect();awaitIdle(owner);var idle=AndroidHomeStateStore.current;Callback restored=new Callback(0);
+                owner.multihop.restoreCaptured(null,last,captured,idle,restored);restored.awaitDone();check(restored.ok&&owner.engine.starts.get()==2&&owner.multihop.restoredMatches(captured,null,last,AndroidHomeStateStore.current),"mixed restoration lost original execution and sources");
+                check(AndroidMultihopController.lastExecution.equals("local")&&AndroidStartupPolicy.prepared==0&&AndroidStartupPolicy.writes==0,"mixed restore reran comparison or wrote historical winner");owner.disconnect();awaitIdle(owner);
+            }
+        });
+        for(String changed:new String[]{"import","final","wrong-private-entry","replacement-home"})test("imported Router restoration rejects "+changed,()->{
+            try(Owner owner=new Owner("multihop")){
+                AndroidStandardExitStore.Entry first=ordinary("shadowsocks");AndroidNodeStore.Node last=new AndroidNodeStore.Node("paired-final");Callback cb=new Callback(0);owner.multihop.connectImported(first,last,"shadowsocks","local",cb);cb.awaitDone();check(cb.ok,"initial imported proof failed");
+                var capture=owner.multihop.captureRestore(null,last,AndroidHomeStateStore.current);owner.disconnect();awaitIdle(owner);var idle=AndroidHomeStateStore.current;
+                if(changed.equals("import")){first.name="replaced provider";AndroidStandardExitStore.saved.put(first.id,first);}if(changed.equals("final"))AndroidMultihopController.changedSources.add(last.file.getPath());if(changed.equals("replacement-home"))AndroidHomeStateStore.beginMultihop(owner.context,"another",last.id,"shadowsocks","wg");
+                Callback rejected=new Callback(0);owner.multihop.restoreCaptured(changed.equals("wrong-private-entry")?new AndroidNodeStore.Node(first.id):null,last,capture,idle,rejected);rejected.awaitDone();check(!rejected.ok&&owner.engine.starts.get()==1,"changed mixed capture started a replacement graph");
+            }
+        });
+        test("imported Router late proof rejects replacement source",()->{
+            try(Owner owner=new Owner("multihop")){AndroidStandardExitStore.Entry first=ordinary("shadowsocks");Callback cb=new Callback(3);owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",cb);cb.awaitEntered();
+                try{first.name="changed before adoption";AndroidStandardExitStore.saved.put(first.id,first);}finally{cb.release.countDown();}cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==1&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected&&LayeredVpnService.mtuStarts.get()==0,"late imported result escaped its source owner");awaitIdle(owner);}
+        });
+        test("imported Router prelaunch cancellation cleans only its private staging",()->{
+            try(Owner owner=new Owner("multihop")){Callback cb=new Callback(2);owner.multihop.connectImported(ordinary("shadowsocks"),new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",cb);cb.awaitEntered();try{owner.disconnect();}finally{cb.release.countDown();}cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&LayeredVpnService.discarded.get()==1,"cancelled imported preparation leaked private staging or launched");awaitIdle(owner);}
+        });
+        for(boolean pending:new boolean[]{false,true})test("imported Router constructor failure retains cleanup receipt "+pending,()->{
+            try(Owner owner=new Owner("multihop")){
+                AndroidImportedRouterPath.failPreparation=true;LayeredVpnService.failDiscard=pending;
+                AndroidStandardExitStore.Entry first=ordinary("shadowsocks");Callback failed=new Callback(0);
+                owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",failed);failed.awaitDone();
+                var field=AndroidMultihopRuntime.class.getDeclaredField("active");field.setAccessible(true);((java.util.concurrent.Future<?>)field.get(owner.multihop)).get(3,TimeUnit.SECONDS);
+                check(!failed.ok&&owner.engine.starts.get()==0&&LayeredVpnService.discarded.get()==1,"preparation failure lost cleanup receipt");
+                check(owner.busy()==pending&&!AndroidHomeStateStore.current.connected,"constructor cleanup outcome lost retained ownership");
+                if(pending){Callback replacement=new Callback(0);owner.multihop.connectImported(first,new AndroidNodeStore.Node("replacement-final"),"shadowsocks","local",replacement);replacement.awaitDone();check(!replacement.ok&&AndroidImportedRouterPath.prepared==1,"constructor cleanup permitted a replacement");LayeredVpnService.failDiscard=false;owner.disconnect();awaitIdle(owner);check(LayeredVpnService.discarded.get()==2,"constructor cleanup retry lost original session");}
+                else awaitIdle(owner);
+            }
+        });
+        test("imported Router failed staging cleanup retains retry ownership",()->{
+            try(Owner owner=new Owner("multihop")){AndroidStandardExitStore.Entry first=ordinary("shadowsocks");Callback cb=new Callback(2);owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",cb);cb.awaitEntered();LayeredVpnService.failDiscard=true;
+                try{boolean failed=false;try{owner.disconnect();}catch(IllegalStateException expected){failed=true;}check(failed,"failed staging cleanup reported success");}finally{cb.release.countDown();}cb.awaitDone();check(!cb.ok&&owner.busy()&&owner.engine.starts.get()==0,"failed cleanup lost its original owner");
+                Callback replacement=new Callback(0);owner.multihop.connectImported(first,new AndroidNodeStore.Node("another-final"),"shadowsocks","local",replacement);replacement.awaitDone();check(!replacement.ok&&owner.engine.starts.get()==0,"pending cleanup allowed replacement launch");LayeredVpnService.failDiscard=false;owner.disconnect();awaitIdle(owner);
+            }
         });
     }
     static void torCompareRuntimeTests(){
@@ -772,6 +841,7 @@ public final class RuntimeTeardownHarness {
                 public InputStream getInputStream(){return new ByteArrayInputStream("1.1.1.1".getBytes(StandardCharsets.US_ASCII));}
             };}
         }:null);
+        if(args.length==0||java.util.Arrays.asList(args).contains("multihop"))importedRouterRuntimeTests();
         if(args.length==0){tests("multihop");tests("external");tests("tor");}
         else for(String kind:args)tests(kind);
         if(!failures.isEmpty()){for(String s:failures)System.err.println(s);System.exit(1);}
@@ -832,6 +902,21 @@ with tempfile.TemporaryDirectory(prefix='routervpn-runtime-teardown-') as tmp:
     classes=base/'classes';classes.mkdir()
     subprocess.run([javac,'-encoding','UTF-8','-d',str(classes),*[str(p) for p in base.rglob('*.java')]],check=True,timeout=30)
     subprocess.run([java,'-cp',str(classes),'com.eabusham.routervpn.RuntimeTeardownHarness',*TARGETS],check=True,timeout=90)
+    if not TARGETS or 'multihop' in TARGETS:
+        target=pkg/'AndroidMultihopRuntime.java';original=target.read_text()
+        controls=(
+            ('private prepared directory', 'if(!LayeredVpnService.discardPreparedSession(context,owned))return false;', '/* mutation: original private preparation leaked */', 'cancelled imported preparation leaked private staging or launched'),
+            ('canonical Local ownership', '"shadowsocks",first,last,"{}",null,', '"shadowsocks",first,last,"",null,', 'imported graph did not start once'),
+            ('constructor cleanup receipt', 'pendingPreparedSession=retained.sessionId;', '/* mutation: lost failed constructor session */', 'preparation failure lost cleanup receipt'),
+        )
+        for label,old,new,expected in controls:
+            assert original.count(old)==1,(label,'missing exact production mutation')
+            target.write_text(original.replace(old,new))
+            subprocess.run([javac,'-encoding','UTF-8','-d',str(classes),*[str(p) for p in base.rglob('*.java')]],check=True,timeout=30,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            broken=subprocess.run([java,'-cp',str(classes),'com.eabusham.routervpn.RuntimeTeardownHarness','multihop'],timeout=90,capture_output=True,text=True)
+            target.write_text(original)
+            assert broken.returncode and expected in broken.stdout+broken.stderr,(label,'missed intended ownership failure',broken.stdout,broken.stderr)
+            print('Android imported runtime causal rejected: '+label)
     if not TARGETS or 'tor' in TARGETS:
         target=pkg/'AndroidStandardExitRuntime.java';original=target.read_text()
         controls=(

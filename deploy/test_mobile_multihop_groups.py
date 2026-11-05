@@ -16,9 +16,15 @@ PHASES = (
     ('mandatory PQ', r'^TestPQ'),
     ('Start Layers and composites', r'^Test(?:Composite|EntryStartLayer|EntryLayer|BothStartLayers|ExitLayer|NativeBaseStartLayer)'),
     ('complete MAX chains', r'^Test(?:CompleteMAX|MAX|ExportMAX|ExportPinnedCoreMAX)'),
-    ('external paths and OpenVPN', r'^Test(?:External|OpenVPN)'),
+    ('external paths and OpenVPN', r'^Test(?:External|OpenVPN|ImportedEntry)'),
 )
 REQUIRED = frozenset((
+    'TestImportedEntryPairedFinalCompleteLayers',
+    'TestImportedEntryPairedFinalRejectsChangedAuthority',
+    'TestImportedEntryRuntimeDistinctProofsAndSelectedDNS',
+    'TestImportedEntryPairedFinalPolicyAndCipherOwnership',
+    'TestImportedEntryLegacyPairedFinalKeepsOriginalSource',
+    'TestImportedEntryRuntimeLocalSelectionRetiresWithOriginalOwner',
     'TestNodeMultihopEveryCompleteNativeEntryAndExit',
     'TestRealSharedControllerRequestsScoresSelectsAndCleans',
     'TestExternalExecutionRunsOwnedLeaseExactScoreRepeatAndPolicyProof',

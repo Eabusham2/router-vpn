@@ -18,6 +18,25 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
+## November 5 mobile imported-entry source increment
+
+The original August 19 Router/custom choice for each hop now has a first mobile
+reverse direction: imported SS2022 entry → independently paired Router
+Shadowsocks final, Local execution. The source preserves distinct public-entry
+and private-final proof, independent Start Layers, complete captured policy,
+selected DNS, typed measurements/MTU, permission ownership and exact restoration.
+See [MOBILE-IMPORTED-ROUTER-PATH.md](MOBILE-IMPORTED-ROUTER-PATH.md) for source paths,
+mandatory actual graph/peer gates and the separation of local evidence from
+Apple/device/package acceptance.
+
+The remaining graph ledger is unchanged in scope: other imported protocols,
+other paired final transports, Server/Compare and complete requested-platform
+coverage still need implementation and verification. Local Android/helper and
+pinned native graph results do not close the original full profile regression
+that hit its unchanged local watchdog, Apple native execution, exact-SHA mobile
+packages, physical/off-LAN/visual acceptance, signing or deployment. Those remain
+separate gates; this increment does not reduce the original requirement set.
+
 ## Implementation reconciliation through 14dc92e3
 
 The verified source cutoff is [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a).

@@ -188,9 +188,17 @@ final class AndroidExternalPolicy {
         if(exit.responseProbe.length()!=0)Libbox.routerValidateExternalResponseProbe(exit.server,exit.responseProbe.toString());
     }
 
-    private static final class Captured {
+    static final class Captured {
         final String source,capture;
         Captured(String source,String capture){this.source=source;this.capture=capture;}
+    }
+
+    /** Original ordinary entry transport; its DNS policy never replaces the final node's. */
+    static Captured captureImportedEntry(AndroidStandardExitStore.Entry entry) throws Exception {
+        if (entry == null || !"shadowsocks".equals(entry.protocol)) {
+            throw new IllegalArgumentException("Choose an imported Shadowsocks 2022 entry.");
+        }
+        return capture(AndroidStandardExitStore.copy(entry), null, "external", null, "local");
     }
 
     /** Original ordinary source for a Tor predecessor, before policy compilation. */

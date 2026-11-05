@@ -51,16 +51,36 @@ final class AndroidMultihopController {
     static final class Source {
         final File file;
         final String digest;
+        final String importedId, importedName;
+        interface OriginalImport { void require() throws Exception; }
+        private final OriginalImport imported;
         private Source(File file, byte[] bytes) throws Exception {
             this.file = file.getCanonicalFile(); this.digest = sourceDigest(bytes);
+            this.importedId = ""; this.importedName = ""; this.imported = null;
         }
+        Source(String id, String name, byte[] bytes, OriginalImport imported) throws Exception {
+            if (id == null || id.isEmpty() || name == null || imported == null) throw new IllegalArgumentException("An imported source needs its retained original checker.");
+            this.file = null; this.importedId = id; this.importedName = name; this.imported = imported;
+            this.digest = sourceDigest(bytes);
+            require(null);
+        }
+        boolean imported() { return imported != null; }
         void require(File candidate) throws Exception {
+            if (imported != null) {
+                if (candidate != null) throw new IllegalStateException("An imported source cannot borrow a Router bundle.");
+                imported.require();
+                return;
+            }
             if (candidate == null || !file.equals(candidate.getCanonicalFile())
                     || !digest.equals(sourceDigest(readBundleBytes(candidate)))) {
                 throw new IllegalStateException("The captured multihop node source changed.");
             }
         }
-        boolean same(Source other) { return other != null && file.equals(other.file) && digest.equals(other.digest); }
+        boolean same(Source other) {
+            return other != null && imported() == other.imported()
+                    && java.util.Objects.equals(file, other.file) && digest.equals(other.digest)
+                    && importedId.equals(other.importedId);
+        }
     }
 
     private static final class LoadedBundle {
@@ -399,7 +419,7 @@ final class AndroidMultihopController {
             if (names == null) throw new IllegalStateException("Exit profile is empty.");
             for (int i = 0; i < names.length(); i++) {
                 String name = names.getString(i);
-                if("routervpn-multihop.json".equals(name)||"routervpn-mtu.json".equals(name)||AndroidMultihopStartLayer.SESSION_FILE.equals(name)||AndroidMultihopStartLayer.EXIT_SESSION_FILE.equals(name)||AndroidMAXProfilePreparation.SESSION_FILE.equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
+                if("routervpn-imported-router.json".equals(name)||"routervpn-multihop.json".equals(name)||"routervpn-mtu.json".equals(name)||AndroidMultihopStartLayer.SESSION_FILE.equals(name)||AndroidMultihopStartLayer.EXIT_SESSION_FILE.equals(name)||AndroidMAXProfilePreparation.SESSION_FILE.equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
                 if (!safeFileName(name)) throw new IllegalStateException("Unsafe exit profile filename: " + name);
                 byte[] data;
                 if ("sing-box.json".equals(name)) data = patched;

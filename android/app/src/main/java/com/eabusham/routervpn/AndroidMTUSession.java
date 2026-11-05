@@ -196,6 +196,9 @@ final class AndroidMTUSession implements RouterMTUPlatform {
 
     // The service executor invokes this after final selection, not each SMART trial.
     void activate(CommandServer core, String config, String metadata) {
+        activate(core,config,metadata,null);
+    }
+    void activate(CommandServer core, String config, String metadata, io.nekohasekai.libbox.RouterMultihop imported) {
         synchronized (lifecycle) {
             if (closed || invalid) return;
             if (activated) { resumeDeferredAutomatic(); return; }
@@ -209,7 +212,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
                 long end = android.os.SystemClock.elapsedRealtime() + 2500;
                 while (!closed && !invalid && captureMTU() == null && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
                 if (closed || invalid) return;
-                RouterMTU created = Libbox.newRouterMTU(core, this, config, metadata);
+                RouterMTU created = imported==null?Libbox.newRouterMTU(core, this, config, metadata):imported.newMTU(core,this);
                 if (created == null) throw new IllegalStateException("Native MTU owner was not created.");
                 // Publish even a stale result before retiring it. close() must
                 // neither miss an in-flight constructor nor lose a failed drain.

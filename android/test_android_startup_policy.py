@@ -114,6 +114,8 @@ ORCHESTRATOR=r'''final class AndroidModeOrchestrator {
 MULTIHOP=r'''final class AndroidMultihopRuntime {
  // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
+ AndroidStandardExitStore.Entry ordinary;AndroidStandardExitStore.Entry capturedOrdinaryEntry(AndroidHomeStateStore.Snapshot h){return ordinary==null?null:AndroidStandardExitStore.copy(ordinary);}
+ void connectImported(AndroidStandardExitStore.Entry a,AndroidNodeStore.Node b,String mode,String execution,Callback cb){starts++;ordinary=AndroidStandardExitStore.copy(a);entryID=a.id;exitID=b.id;entryMode="shadowsocks";exitMode=mode;this.execution=execution;cb.owned(AndroidHomeStateStore.beginMultihop(new Context(),a.id,b.id,mode,"shadowsocks"));AndroidHomeStateStore.connectedMultihop(new Context(),a.id,b.id,mode,"shadowsocks");cb.finished(true,"proved captured imported graph");}
  int starts,lastStarts;String entryID="",exitID="",entryMode="",exitMode="",execution="",selected="",pins="";
  void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){starts++;entryID=a.id;exitID=b.id;entryMode=entry;exitMode=mode;this.execution=execution;cb.owned(AndroidHomeStateStore.beginMultihop(new Context(),a.id,b.id,mode,entry));AndroidHomeStateStore.connectedMultihop(new Context(),a.id,b.id,mode,entry);cb.finished(true,"proved captured graph");}
  String activeExecution(){return execution;}String activeSelectedExecution(){return execution.equals("auto")?"server":execution;}
@@ -400,7 +402,35 @@ public final class StartupTest {
    boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0,"invalid ordinary startup acquired private authority: "+invalid);
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);routerLastReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
+ static AndroidStandardExitStore.Entry importedRouter(Fixture f,String mode)throws Exception{
+  f.policy(mode,true);AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id=ENTRY;entry.protocol="shadowsocks";entry.secret="IMPORTED_SOURCE_SECRET";entry.policy="IMPORTED_POLICY";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));
+  f.prefs().edit().putBoolean("multihop_on",true).putString("multihop_entry_kind","external").putString("multihop_entry",ENTRY).putString("multihop_exit",FIRST).putString("multihop_entry_mode","shadowsocks").putString("multihop_exit_mode","shadowsocks").putString("multihop_execution","local").apply();return entry;
+ }
+ static void importedRouterStartup(Path root)throws Exception{
+  for(String mode:List.of("smart-auto","auto","last"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=importedRouter(f,mode);String collidingPrivate=Files.readString(f.nodes.file(ENTRY).toPath());Bundle state=f.request();
+   check(f.captured.multihop()&&!f.captured.external()&&f.captured.entry==null&&f.captured.ordinaryEntry!=null&&f.captured.ordinaryEntry!=entry&&f.captured.exit.id.equals(FIRST),"mixed startup fabricated private entry or external final");
+   check(f.captured.lastMultihop==null&&f.captured.lastRaw.isEmpty(),"Local mixed startup acquired historical comparison or single-node mode");
+   check(!state.values.toString().contains(entry.secret)&&!state.values.toString().contains(entry.policy),"mixed private source leaked into Activity state");
+   if(rotate){state.putString("multihop_execution_pending","server");state.putString("multihop_entry_mode_pending","wg");f.restore(state);}f.allow();AndroidMultihopRuntime runtime=AndroidRuntimeRegistry.instance.multihop;
+   check(f.cb.ok&&runtime.starts==1&&runtime.ordinary!=null&&runtime.ordinary.secret.equals(entry.secret)&&runtime.entryID.equals(ENTRY)&&runtime.exitID.equals(FIRST)&&runtime.entryMode.equals("shadowsocks")&&runtime.exitMode.equals("shadowsocks")&&runtime.execution.equals("local")&&runtime.lastStarts==0,"mixed startup changed captured runtime or graph: "+mode+"/"+rotate);
+   check(AndroidRuntimeRegistry.instance.orchestrator.starts==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0&&Files.readString(f.nodes.file(ENTRY).toPath()).equals(collidingPrivate),"mixed startup borrowed colliding private Router");f.allow();check(runtime.starts==1,"mixed permission replay started twice");
+  }
+  for(String change:List.of("entry-key","entry-policy","entry-protocol","entry-removed","captured-key","final-bytes","entry-kind","entry-id","exit-id","execution","mode","idle","foreign-vpn","cancel"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=importedRouter(f,"last");Bundle state=f.request();
+   if(change.equals("entry-key"))entry.secret="replacement";if(change.equals("entry-policy"))entry.policy="replacement";if(change.equals("entry-protocol"))entry.protocol="socks5";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));
+   if(change.equals("entry-removed"))AndroidStandardExitStore.saved.remove(entry.id);if(change.equals("captured-key"))f.captured.ordinaryEntry.secret="forged capture";if(change.equals("final-bytes"))Files.writeString(f.nodes.file(FIRST).toPath(),f.root().put("changed-source",true).toString());
+   if(change.equals("entry-kind"))f.prefs().edit().putString("multihop_entry_kind","router-vpn").apply();if(change.equals("entry-id"))f.prefs().edit().putString("multihop_entry",EXIT).apply();if(change.equals("exit-id"))f.prefs().edit().putString("multihop_exit",EXIT).apply();if(change.equals("execution"))f.prefs().edit().putString("multihop_execution","auto").apply();if(change.equals("mode"))f.prefs().edit().putString("multihop_exit_mode","wg").apply();
+   if(change.equals("idle"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(change.equals("foreign-vpn"))Context.connectivity.vpn=true;if(change.equals("cancel"))f.controller.cancelStartupPending();
+   if(rotate)f.restore(state);f.allow();check(!f.cb.ok&&f.starts()==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0,"stale imported Router startup launched: "+change+"/"+rotate);
+  }
+  for(String invalid:List.of("server","auto","entry-mode","final-mode","wrong-selected-final","same-id","non-SS")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=importedRouter(f,"auto");
+   if(invalid.equals("server")||invalid.equals("auto"))f.prefs().edit().putString("multihop_execution",invalid).apply();if(invalid.equals("entry-mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();if(invalid.equals("final-mode"))f.prefs().edit().putString("multihop_exit_mode","wg").apply();if(invalid.equals("wrong-selected-final"))f.prefs().edit().putString("multihop_exit",EXIT).apply();if(invalid.equals("same-id"))f.prefs().edit().putString("multihop_entry",FIRST).apply();if(invalid.equals("non-SS")){entry.protocol="socks5";AndroidStandardExitStore.saved.put(entry.id,entry);}
+   boolean refused=false;try{f.capture();}catch(Exception expected){refused=true;}check(refused&&f.starts()==0,"invalid imported Router startup was accepted: "+invalid);
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){switch(args[1]){case "private-last":routerLastReceipts(root);break;case "strict":strictReceipts(root);break;case "external-last":externalLastReceipts(root);break;case "missing-external-last":missingExternalLast(root);break;case "changed":changes(root);break;case "ordinary":ordinaryStartup(root);break;case "imported":importedRouterStartup(root);break;default:throw new AssertionError("unknown causal group");}return;}defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);routerLastReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);importedRouterStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
 }
 '''
 
@@ -492,9 +522,11 @@ def main():
             ('AndroidUnifiedConnectionController.java','startup.requireCurrent(activity,nodeStore,this);startup.dispatched();','startup.dispatched();','stale startup capture started'),
             ('AndroidStartupPolicy.java','if(!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','if(false&&!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','stale startup capture started'),
             ('AndroidStartupPolicy.java','if(ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','if(false&&ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','stale ordinary startup capture started: captured-key'),
+            ('AndroidStartupPolicy.java','if(ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','if(false&&ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','stale imported Router startup launched: captured-key'),
         )
         for name,old,new,assertion in controls:
-            target=app/name;original=target.read_text();assert original.count(old)==1,(name,old);target.write_text(original.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE);broken=subprocess.run(run,timeout=60,capture_output=True,text=True);target.write_text(original)
+            target=app/name;original=target.read_text();assert original.count(old)==1,(name,old);target.write_text(original.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE);group=("missing-external-last" if assertion=="external Last without a source-bound winner reran Compare" else "private-last" if "private Last" in assertion or "Router Last" in assertion else "strict" if "single-node Last" in assertion else "external-last" if "external Last" in assertion else "ordinary" if "stale ordinary" in assertion else "imported" if "stale imported" in assertion else "changed")
+            broken=subprocess.run([*run,group],timeout=60,capture_output=True,text=True);target.write_text(original)
             assert broken.returncode and assertion in broken.stderr,'startup negative control was not rejected at the intended assertion: '+name+'\n'+broken.stdout+broken.stderr
             print('Android startup negative control rejected: '+name)
 

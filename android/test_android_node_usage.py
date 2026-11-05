@@ -49,6 +49,10 @@ final class NativeUsageBoundary {
   String session=AndroidHomeStateStore.beginMultihop(context,a.id,b.id,mode,entry);if(!omitOwned)cb.owned(session);cb.progress("Comparing captured Local and Server candidates");
   pending=()->{if(fail){AndroidHomeStateStore.failed(context,"controlled graph proof failure");cb.finished(false,"proof failed");return;}AndroidHomeStateStore.connectedMultihop(context,a.id,b.id,mode,entry);alter();cb.finished(true,"proved final multihop winner");};
  }
+ static void imported(AndroidStandardExitStore.Entry a,AndroidNodeStore.Node b,String mode,AndroidMultihopRuntime.Callback cb){
+  String session=AndroidHomeStateStore.beginMultihop(context,a.id,b.id,mode,"shadowsocks");if(!omitOwned)cb.owned(session);
+  pending=()->{if(fail){AndroidHomeStateStore.failed(context,"controlled imported proof failure");cb.finished(false,"proof failed");return;}AndroidHomeStateStore.connectedMultihop(context,a.id,b.id,mode,"shadowsocks");alter();cb.finished(true,"proved imported Router path");};
+ }
  static void external(File f,AndroidStandardExitStore.Entry a,AndroidStandardExitStore.Entry e,String entry,AndroidStandardExitRuntime.Callback cb){
   String id=a!=null?a.id:f==null?"":AndroidHomeStateStore.nodeIdFromBundleFile(f);boolean tor=AndroidTorProfile.isTor(e.protocol);
   String session=tor?AndroidHomeStateStore.beginTorExternal(context,e.id,e.name,e.protocol,id,entry):AndroidHomeStateStore.beginPolicyExternal(context,e.id,e.name,e.protocol,e.expectedPublicIp,id,entry);
@@ -63,6 +67,9 @@ final class AndroidModeOrchestrator {
  String captureSource(File f,String session,String raw)throws Exception{return Files.readString(f.toPath());}void restoreCaptured(File f,String raw,String logical,String fallback,String source,Callback cb){logical(f,logical,cb);}void disconnectCaptured(String session,Callback cb){AndroidHomeStateStore.disconnected(NativeUsageBoundary.context);cb.finished(true,"","stopped");}void disconnect(Callback cb){disconnectCaptured("",cb);}
 }
 final class AndroidMultihopRuntime {
+ AndroidStandardExitStore.Entry ordinary;
+ AndroidStandardExitStore.Entry capturedOrdinaryEntry(AndroidHomeStateStore.Snapshot h){return ordinary;}
+ void connectImported(AndroidStandardExitStore.Entry a,AndroidNodeStore.Node b,String mode,String execution,Callback cb){starts++;ordinary=a;NativeUsageBoundary.imported(a,b,mode,cb);}
  int starts;
  // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
@@ -149,11 +156,12 @@ public final class NodeUsageTest{
  }
  static void ordinary(Path root)throws Exception{
   try(Fixture f=new Fixture(root)){byte[] source=f.read(f.a.file),active=f.read(new File(f.activity.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE));f.connect();check(!f.usage().exists(),"launch or progress counted before proof");f.finish();check(f.callback.ok&&f.count("router-vpn",f.a.id)==6,"successful shipping user connection did not increment imported baseline");check(Arrays.equals(source,f.read(f.a.file))&&Arrays.equals(active,f.read(new File(f.activity.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE))),"usage mutated private Router bundle");byte[] receipt=f.read(f.usage());NativeUsageBoundary.last.run();check(Arrays.equals(receipt,f.read(f.usage())),"duplicate native callback incremented usage");check(new AndroidUnifiedNodeCatalog(new AndroidNodeStore(f.activity),new AndroidStandardExitStore(f.activity)).list(AndroidUnifiedNodeCatalog.SORT_MOST_USED).get(0).useCount==6,"fresh catalog did not merge durable sidecar");check(!Files.readString(f.usage().toPath()).contains("private-api-token"),"usage stored Router secret");f.idle();f.connect();f.finish();check(f.count("router-vpn",f.a.id)==7,"imported count was repeatedly added instead of maximum");}
-  for(String shape:List.of("custom","multi","external","direct","ordinary"))try(Fixture f=new Fixture(root)){
+  for(String shape:List.of("custom","multi","external","direct","ordinary","imported"))try(Fixture f=new Fixture(root)){
    if(shape.equals("custom"))f.controller.connectNode(f.b,"custom:Saved",List.of("wg","shadowsocks"),f.callback);
    else if(shape.equals("multi"))f.controller.connectMultihop(f.a,f.b,"shadowsocks","auto","wg",f.callback);
    else if(shape.equals("external"))f.controller.connectExternal(f.a,f.x,false,"wg","auto",f.callback);
    else if(shape.equals("direct"))f.controller.connectExternal(null,f.x,true,"wg","local",f.callback);
+   else if(shape.equals("imported"))f.controller.connectImportedMultihop(f.x,f.b,"shadowsocks","local",f.callback);
    else f.controller.connectOrdinaryTor(f.x,f.y,"local",f.callback);
    check(!f.usage().exists(),"candidate/trial counted before final proof: "+shape);f.finish();check(f.callback.ok&&!f.callback.message.contains("could not be saved"),"shipping usage failed: "+shape+" "+f.callback.message);
    if(shape.equals("custom"))check(f.count("router-vpn",f.b.id)==2&&f.count("router-vpn",f.a.id)==0,"CUSTOM used selected rather than requested node");
@@ -161,6 +169,7 @@ public final class NodeUsageTest{
    if(shape.equals("external"))check(f.count("router-vpn",f.a.id)==6&&f.count("external",f.x.id)==1,"final external graph did not count both nodes");
    if(shape.equals("direct"))check(f.count("router-vpn",f.a.id)==0&&f.count("external",f.x.id)==1,"direct external inherited unrelated Router usage");
    if(shape.equals("ordinary"))check(f.count("external",f.x.id)==1&&f.count("external",f.y.id)==1,"ordinary Tor graph did not count distinct external nodes");
+   if(shape.equals("imported"))check(f.count("external",f.x.id)==1&&f.count("router-vpn",f.b.id)==2&&f.count("router-vpn",f.a.id)==0,"imported multihop did not count both original typed nodes");
    check(!Files.readString(f.usage().toPath()).contains("private-external-secret"),"usage stored external secret");
   }
  }
@@ -179,6 +188,26 @@ public final class NodeUsageTest{
   try(Fixture f=new Fixture(root)){f.connect();f.finish();byte[] prior=f.read(f.usage());AndroidUnifiedConnectionController.RestorePoint point=f.controller.captureRestorePoint();f.idle();AndroidHomeStateStore.Snapshot idle=f.controller.captureIdle();f.controller.restoreCaptured(point,idle,f.callback);f.finish();check(f.callback.ok&&Arrays.equals(prior,f.read(f.usage())),"proved temporary restoration counted another use");}
   try(Fixture f=new Fixture(root)){android.net.VpnService.needsPermission=true;Callback temporary=new Callback(f.activity,false);f.controller.connect("wg",List.of(),temporary);Bundle state=new Bundle();f.controller.savePending(state);int code=f.activity.permissionRequest;f.controller.close();f.controller=new AndroidUnifiedConnectionController(f.activity,f.store);f.controller.restorePending(state,f.callback);f.controller.onActivityResult(code,android.app.Activity.RESULT_OK);f.finish();check(f.callback.ok&&!f.usage().exists(),"Activity recreation promoted temporary receipt into user usage");}
   try(Fixture f=new Fixture(root)){android.net.VpnService.needsPermission=true;f.connect();Bundle state=new Bundle();f.controller.savePending(state);int code=f.activity.permissionRequest;f.controller.close();f.controller=new AndroidUnifiedConnectionController(f.activity,f.store);Callback temporary=new Callback(f.activity,false);f.controller.restorePending(state,temporary);f.controller.onActivityResult(code,android.app.Activity.RESULT_OK);f.finish();check(temporary.ok&&f.count("router-vpn",f.a.id)==6,"Activity recreation lost original user usage intent");}
+ }
+ static void importedExclusions(Path root)throws Exception{
+  try(Fixture f=new Fixture(root)){
+   var imported=AndroidStandardExitStore.copy(f.x);imported.id=f.a.id;f.exits.save(imported);
+   f.controller.connectImportedMultihop(imported,f.b,"shadowsocks","local",f.callback);f.finish();
+   check(f.callback.ok&&f.count("external",f.a.id)==1&&f.count("router-vpn",f.a.id)==0&&f.count("router-vpn",f.b.id)==2,"imported usage conflated same text IDs across original node kinds");
+   byte[] receipt=f.read(f.usage());NativeUsageBoundary.last.run();check(Arrays.equals(receipt,f.read(f.usage())),"duplicate imported completion counted both nodes again");
+  }
+  for(String fault:List.of("failed","owner","omit-owned","entry-source","final-source","cancelled","temporary"))try(Fixture f=new Fixture(root)){
+   if(fault.equals("failed"))NativeUsageBoundary.fail=true;
+   if(fault.equals("owner"))NativeUsageBoundary.fault="owner";
+   if(fault.equals("omit-owned"))NativeUsageBoundary.omitOwned=true;
+   if(fault.equals("entry-source"))NativeUsageBoundary.beforeFinish=()->{try{File original=new File(f.activity.getFilesDir(),"standard-exits.json");AndroidPrivateFileStore.write(original,(Files.readString(original.toPath())+" ").getBytes(java.nio.charset.StandardCharsets.UTF_8),512*1024);}catch(Exception e){throw new AssertionError(e);}};
+   if(fault.equals("final-source"))NativeUsageBoundary.beforeFinish=()->{try{AndroidPrivateFileStore.write(f.b.file,(Files.readString(f.b.file.toPath())+" ").getBytes(java.nio.charset.StandardCharsets.UTF_8),AndroidNodeStore.MAX_BUNDLE);}catch(Exception e){throw new AssertionError(e);}};
+   if(fault.equals("cancelled"))android.net.VpnService.needsPermission=true;
+   Callback callback=fault.equals("temporary")?new Callback(f.activity,false):f.callback;
+   f.controller.connectImportedMultihop(f.x,f.b,"shadowsocks","local",callback);
+   if(fault.equals("cancelled"))f.controller.cancelPermissionPending();else f.finish();
+   check(!f.usage().exists(),"unproved or replaced imported graph recorded usage: "+fault);
+  }
  }
  static void stableIdentity(Path root)throws Exception{
   for(String change:List.of("name","dns","mtu","client-key","endpoint","api-token"))try(Fixture f=new Fixture(root)){f.connect();f.finish();f.idle();JSONObject b=new JSONObject(Files.readString(f.a.file.toPath()));JSONObject p=AndroidProfileSelection.selectedRouterProfile(b);if(change.equals("client-key"))b.getJSONObject("profiles").getJSONObject("wg").put("wg.conf",android.util.Base64.encodeToString("[Interface]\nPrivateKey = changed-client\n".getBytes(java.nio.charset.StandardCharsets.UTF_8),0));else p.put(change.equals("api-token")?"api_token":change,change.equals("mtu")?1376:"changed-"+change);AndroidPrivateFileStore.write(f.a.file,b.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),AndroidNodeStore.MAX_BUNDLE);f.connect();f.finish();check(f.callback.ok&&f.count("router-vpn",f.a.id)==(change.equals("api-token")?6:7),"stable Router identity mixed or reset usage: "+change);}
@@ -236,7 +265,7 @@ public final class NodeUsageTest{
    e.latitude=null;e.longitude=null;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.isEmpty()&&f.activity.nodeButton.getText().toString().contains("Chicago"),"clearing coordinates retained the old pin or removed its independent label");
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalMap(root);ordinary(root);excluded(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -256,6 +285,10 @@ def sources():
     ui['org/amnezia/awg/backend/Tunnel.java'] = 'package org.amnezia.awg.backend;public interface Tunnel{enum State{UP,DOWN}}'
     ui['io/nekohasekai/libbox/Libbox.java'] = S.PRIVATE_JSON_JAVA
     boundaries = P.BOUNDARIES
+    # This fixture uses the actual checked-exception store API, while the
+    # permission fixture doubles that store. Keep the compiler seam explicit.
+    boundaries = boundaries.replace('static void requireEntry(AndroidStandardExitStore.Entry e){', 'static void requireEntry(AndroidStandardExitStore.Entry e)throws Exception{')
+    boundaries = boundaries.replace('static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){', 'static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution)throws Exception{')
     for name in ('AndroidPrivateFileStore', 'AndroidNodeUsage', 'AndroidHomeStateStore', 'AndroidNodeStore', 'AndroidStandardExitStore', 'AndroidModeOrchestrator', 'AndroidMultihopRuntime', 'AndroidStandardExitRuntime'):
         boundaries = S.replace_class(boundaries, name, '')
     boundaries = boundaries.replace('throw new AssertionError("unexpected startup capture");', '')
@@ -317,6 +350,7 @@ def main():
         subprocess.run(compile, check=True, timeout=45)
         subprocess.run(run, check=True, timeout=60)
         controls = (
+            ('AndroidNodeUsage.java', 'Arrays.asList(captureExternal(context,entry),captureRouter(exit))', 'Collections.singletonList(captureRouter(exit))', 'imported multihop did not count both original typed nodes'),
             ('UsageActivity.java', '(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0))', '!(m.latitude==0&&m.longitude==0)', 'valid explicit zero coordinates disappeared from shipping map'),
             ('AndroidUnifiedNodeCatalog.java', 'exit.protocol,exit.expectedPublicIp,exit.location,exit.latitude,exit.longitude,null,null,0,', 'exit.protocol,exit.expectedPublicIp,"",null,null,null,null,0,', 'external catalog lost explicit coordinates/location or invented latency'),
             ('AndroidNodeUsage.java', 'for(Node node:nodes)node.source.requireCurrent();', '/* broken: no source binding */', 'invalid adoption recorded usage: source'),

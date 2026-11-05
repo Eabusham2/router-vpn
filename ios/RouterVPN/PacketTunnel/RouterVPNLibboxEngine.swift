@@ -13,6 +13,7 @@ final class RouterVPNLibboxEngine {
     private var configContent = ""
     private var runtimeRoot: URL?
     private var multihop: LibboxRouterMultihop?
+    private var importedMultihop = false
     private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var hopMeasurement: LibboxRouterHopMeasurement?
     private var hopMeasurementExitID: String?
@@ -62,7 +63,7 @@ final class RouterVPNLibboxEngine {
         try start(files: files, strict: strict, multihopMetadata: nil, externalPolicy: externalPolicy)
     }
 
-    func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil, exitStartLayerSource: String? = nil, externalPolicy: RouterVPNExternalPolicy? = nil) throws {
+    func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil, exitStartLayerSource: String? = nil, externalPolicy: RouterVPNExternalPolicy? = nil, importedPlan: LibboxRouterMultihop? = nil) throws {
         try Self.torRetirement.requireAvailable()
         try Self.torServerRetirement.requireAvailable()
         try Self.externalRetirement.requireAvailable()
@@ -87,7 +88,18 @@ final class RouterVPNLibboxEngine {
         // create independent protocol handles only under this captured runtime.
         try RouterVPNPQFactory.install()
         guard externalPolicy == nil || (multihopMetadata == nil && entryStartLayerSource == nil && exitStartLayerSource == nil) else { throw error("External policy cannot replace another native graph owner") }
-        var safeFiles = try validateAndInjectProof(files, externalPolicy: externalPolicy)
+        guard importedPlan == nil || (multihopMetadata == nil && externalPolicy == nil && entryStartLayerSource == nil && exitStartLayerSource == nil) else { throw error("Imported entry cannot replace another graph owner") }
+        var safeFiles: [String: Data]
+        if let importedPlan {
+            guard files.count == 1, let compiled = files["sing-box.json"], !compiled.isEmpty, compiled.count <= 4 * 1024 * 1024,
+                  compiled == Data(importedPlan.config().utf8),
+                  importedPlan.sourceSHA256().range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw error("Imported graph lost its exact compiler source") }
+            safeFiles = files
+            ownershipLock.lock()
+            guard ownershipGeneration == generation else { ownershipLock.unlock(); try? importedPlan.close(); throw error("Imported startup was cancelled") }
+            multihop = importedPlan; importedMultihop = true
+            ownershipLock.unlock()
+        } else { safeFiles = try validateAndInjectProof(files, externalPolicy: externalPolicy) }
         let execution = try prepareTorState(safeFiles)
         let tor = execution != nil
         guard !tor || multihopMetadata == nil else { throw error("Tor owns its complete native graph and cannot adopt another comparison controller") }
@@ -172,7 +184,7 @@ final class RouterVPNLibboxEngine {
             pendingTorCleanup = torCleanup
             Self.torServerRetirement.retain(torCleanup!)
         }
-        hopMeasurement = nil; hopMeasurementExitID = nil; multihop = nil; multihopExecutionSource = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
+        hopMeasurement = nil; hopMeasurementExitID = nil; multihop = nil; importedMultihop = false; multihopExecutionSource = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         torProofDelivery = nil
         self.torHealth = nil
         externalProofDelivery = nil; self.externalHealth = nil; externalPolicy = nil
@@ -810,6 +822,19 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock(); let current = server === owned && ownershipGeneration == generation; ownershipLock.unlock()
         if !current { platform.mtu.stop() }
     }
+    func activateImportedMTU() throws {
+        ownershipLock.lock()
+        let plan = multihop, owned = server, generation = ownershipGeneration
+        let available = importedMultihop && !starting && !permanentlyStopped
+        ownershipLock.unlock()
+        guard available, let plan, let owned, plan.healthy() else { throw error("Imported MTU lost its proved native plan") }
+        let delivery = MTUFailureDelivery(owner: self, generation: generation)
+        try platform.mtu.activateImported(server: owned, plan: plan) { message in delivery.fail(message) }
+        ownershipLock.lock()
+        let current = multihop === plan && server === owned && ownershipGeneration == generation && !permanentlyStopped
+        ownershipLock.unlock()
+        guard current, plan.healthy() else { platform.mtu.stop(); throw error("Imported MTU belongs to a retired native generation") }
+    }
     func activateExternalMTU() throws {
         ownershipLock.lock()
         let delivery = externalProofDelivery
@@ -981,7 +1006,12 @@ final class RouterVPNLibboxEngine {
         defer { ownershipLock.unlock() }
         guard let server, !starting, hopMeasurement == nil else { throw error("Hop measurement owner is unavailable") }
         var failure: NSError?
-        guard let probe = LibboxNewRouterHopMeasurement(server, metadata, &failure), failure == nil else {
+        let captured: LibboxRouterHopMeasurement?
+        if importedMultihop {
+            guard let plan = multihop, plan.metadata() == metadata, plan.healthy() else { throw error("Imported measurement lost its original plan") }
+            captured = LibboxRouterImportedEntryNewHopMeasurement(plan, server, &failure)
+        } else { captured = LibboxNewRouterHopMeasurement(server, metadata, &failure) }
+        guard let probe = captured, failure == nil else {
             throw failure ?? error("Cannot bind hop measurement to the native tunnel")
         }
         hopMeasurement = probe

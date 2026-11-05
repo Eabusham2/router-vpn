@@ -108,7 +108,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 // The service executor serializes native setup/teardown. Even
                 // a late stop retains these exact old objects; no replacement
                 // core, configuration or MTU session is read after the check.
-                captured.activate(owner.server,owner.config,metadata);
+                try {
+                    if("external".equals(new JSONObject(owner.metadata).optString("entry_kind")))
+                        captured.activate(owner.server,owner.config,metadata,owner.plan);
+                    else captured.activate(owner.server,owner.config,metadata);
+                } catch(Exception invalid) { service.shutdown("FAILED","The captured multihop MTU source is invalid."); }
             });
         }
     }
@@ -454,6 +458,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             String requested=metadata.optString("execution","local");
             if(!home.runtimeMode.equals(metadata.getString("exit_mode"))||!home.activeEntryMode.equals(metadata.optString("entry_mode","wg")))throw new IllegalStateException("The original multihop transport changed.");
             io.nekohasekai.libbox.RouterMultihop plan=service.executionController;
+            if("external".equals(metadata.optString("entry_kind"))&&plan==null)
+                throw new IllegalStateException("The imported entry lost its original source-bound native owner.");
             String selected="local",pins="{}";
             if(plan==null){if(!"local".equals(requested))throw new IllegalStateException("The multihop comparison owner is missing.");}
             else{
@@ -751,6 +757,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             return;
         }
         AndroidMAXProfilePreparation.Adopted preparedMAX = null;
+        io.nekohasekai.libbox.RouterMultihop preparedExecution=null;
+        boolean executionAdopted=false;
         try {
             if (VpnService.prepare(this) != null) throw new RevokedException("Android VPN permission is missing or was revoked.");
             if (!safeToken(sessionId) || !safeToken(modeId)) throw new IllegalArgumentException("Invalid layered session metadata.");
@@ -819,11 +827,15 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             // The immutable factory owns no peer or network. Each compiled PQ
             // endpoint creates its own protocol under this service's VPN owner.
             RouterPQNative.install();
-            io.nekohasekai.libbox.RouterMultihop preparedExecution=null;
             String hopMetadata=null;
             File executionFile=new File(session,"routervpn-multihop.json").getCanonicalFile();
             File entryLayerFile=new File(session,AndroidMultihopStartLayer.SESSION_FILE).getCanonicalFile();
             File exitLayerFile=new File(session,AndroidMultihopStartLayer.EXIT_SESSION_FILE).getCanonicalFile();
+            File importedEntryFile=new File(session,AndroidImportedRouterPath.SESSION_FILE).getCanonicalFile();
+            if(importedEntryFile.exists()&&(!importedEntryFile.isFile()||!importedEntryFile.getParentFile().equals(session)
+                    ||!executionFile.isFile()||!"multihop-imported-shadowsocks".equals(modeId)
+                    ||entryLayerFile.exists()||exitLayerFile.exists()))throw new IllegalStateException("Imported entry sources have no exclusive original multihop owner.");
+            if(modeId.startsWith("multihop-imported-")&&!importedEntryFile.isFile())throw new IllegalStateException("The imported entry lost its original private sources.");
             if(exitLayerFile.exists()&&(!executionFile.isFile()||!exitLayerFile.getParentFile().equals(session)))throw new IllegalStateException("Exit Start Layer has no owned multihop session.");
             if (entryLayerFile.exists() && (!executionFile.isFile() || !entryLayerFile.getParentFile().equals(session))) {
                 throw new IllegalStateException("Entry Start Layer has no owned multihop session.");
@@ -853,7 +865,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                         .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                         .decode(java.nio.ByteBuffer.wrap(raw)).toString();
                 }
-                preparedExecution=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,capturedExit);
+                if(importedEntryFile.isFile()){
+                    String original=AndroidTorProfile.strictText(readLimited(importedEntryFile,AndroidImportedRouterPath.MAX_INPUT));
+                    AndroidExternalProtection.requireSession(new File(session,AndroidKillSwitchPolicy.SESSION_MARKER).isFile(),
+                            AndroidImportedRouterPath.requiresProtection(original),Build.VERSION.SDK_INT,
+                            Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q&&isAlwaysOn(),Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q&&isLockdownEnabled());
+                    preparedExecution=AndroidImportedRouterPath.prepareExecution(config,metadata,original);
+                }else preparedExecution=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,capturedExit);
                 if(preparedExecution!=null)config=preparedExecution.config();
             }
             String capturedMTU="";
@@ -892,7 +910,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 mtuSession=new AndroidMTUSession(this,owner->executor.execute(()->{
                     if(mtuSession==owner)shutdown("FAILED","MTU transaction could not retain the verified VPN interface.");
                 }));
-                executionController=preparedExecution;executionProved=false;
+                executionController=preparedExecution;executionAdopted=true;executionProved=false;
                 multihopMetadata=hopMetadata;multihopHomeOwner=hopMetadata==null?null:AndroidHomeStateStore.snapshot(this);
                 torPhysicalNetwork = torPhysical;
                 externalPhysicalNetwork = externalPhysical;
@@ -964,7 +982,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 if(executionNetwork.isEmpty())throw new IllegalStateException("Underlying network identity is unavailable.");
                 executionHandler.post(executionWatch);
                 if(ownedExecution!=null)ownedExecution.run(ownedServer);
-                adoptHopMeasurement(Libbox.newRouterHopMeasurement(ownedServer,hopMetadata),ownedServer,generation);
+                adoptHopMeasurement("external".equals(new JSONObject(hopMetadata).optString("entry_kind"))
+                        ?ownedExecution.newHopMeasurement(ownedServer):Libbox.newRouterHopMeasurement(ownedServer,hopMetadata),ownedServer,generation);
                 executionHandler.removeCallbacks(executionWatch);executionHandler.post(executionWatch);
             }
             long performanceServices = Libbox.routerStartPerformance(ownedServer);
@@ -986,6 +1005,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(capturedComparison!=null)capturedComparison.finished(false,safeMessage(error));
             shutdown("FAILED", safeMessage(error));
         } finally {
+            if(preparedExecution!=null&&!executionAdopted)try{preparedExecution.close();}
+                catch(Exception invalid){Log.w(TAG,"Unstarted multihop preparation did not close",invalid);}
             if (preparedMAX != null && maxSession != preparedMAX) preparedMAX.cancel();
             AndroidMAXProfilePreparation.discardPrepared(sessionId,maxOwner);
             // This requested directory is retained only after actual runtime
