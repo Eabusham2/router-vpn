@@ -140,16 +140,45 @@ import NetworkExtension
  }
 }
 """
-def verify_startup_holds(provider):
-    sections=(('startMultihop(', 'multihopWireGuardEndpoint('),
-              ('startLibbox(', 'performanceFiles('),
-              ('startExternalLibbox(', 'selectedRouterProfile('))
-    for start, end in sections:
+STARTUP_SECTIONS=(('startMultihop(', 'startImportedEntryMultihop('),
+                  ('startImportedEntryMultihop(', 'multihopWireGuardEndpoint('),
+                  ('startLibbox(', 'performanceFiles('),
+                  ('startExternalLibbox(', 'selectedRouterProfile('))
+STARTUP_HOLD='try engine.prepareMTUHold(initialMTUHold)'
+
+
+def startup_sections(provider):
+    for start, end in STARTUP_SECTIONS:
         begin=provider.index('    private func '+start)
         finish=provider.index('    private func '+end,begin)
-        body=provider[begin:finish]
-        assert body.count('try engine.prepareMTUHold(initialMTUHold)')==1, start+' lost startup MTU hold'
-        assert body.index('try engine.prepareMTUHold(initialMTUHold)') < body.index('engine.start('), start+' starts before holding MTU'
+        yield start, begin, finish, provider[begin:finish]
+
+
+def verify_startup_holds(provider):
+    for start, _, _, body in startup_sections(provider):
+        assert body.count(STARTUP_HOLD)==1, start+' lost its one original startup MTU hold'
+        assert body.index(STARTUP_HOLD) < body.index('engine.start('), start+' starts before holding MTU'
+
+
+def verify_startup_hold_controls(provider):
+    controls=0
+    for start, begin, finish, body in startup_sections(provider):
+        closing=body.rindex('\n    }')
+        late=body[:closing]+'\n        '+STARTUP_HOLD+body[closing:]
+        late=late.replace(STARTUP_HOLD,'// moved original hold after native start',1)
+        replacements={
+            'missing':body.replace(STARTUP_HOLD,'// missing comparison hold',1),
+            'late':late,
+            'wrong-owner':body.replace(STARTUP_HOLD,'try RouterVPNLibboxEngine(tunnel: self).prepareMTUHold(initialMTUHold)',1),
+            'wrong-lease':body.replace(STARTUP_HOLD,'try engine.prepareMTUHold(nil)',1),
+            'duplicate':body.replace(STARTUP_HOLD,STARTUP_HOLD+'; '+STARTUP_HOLD,1),
+        }
+        for defect, replacement in replacements.items():
+            mutant=provider[:begin]+replacement+provider[finish:]
+            try:verify_startup_holds(mutant)
+            except AssertionError:controls+=1
+            else:raise AssertionError('Startup-hold negative control was accepted: '+start+defect)
+    return controls
 
 provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
 client=(ROOT/'ios/RouterVPN/App/IOSMTUClient.swift').read_text()
@@ -159,14 +188,9 @@ raw=provider[provider.index('        let requestedMode ='):provider.index('    p
 assert raw.index('!RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile)') < raw.index('WireGuardAdapter(with: self)')
 
 verify_startup_holds(provider)
-for index in range(3):
-    marker='try engine.prepareMTUHold(initialMTUHold)'
-    before, after=provider.split(marker,index+1)[:-1],provider.split(marker,index+1)[-1]
-    mutant=marker.join(before)+'// missing comparison hold'+after
-    try:verify_startup_holds(mutant)
-    except AssertionError:pass
-    else:raise AssertionError('Startup-hold negative control was accepted: '+str(index))
-print('Every native Apple startup holds MTU before launch; all three missing-hold controls rejected.')
+controls=verify_startup_hold_controls(provider)
+assert controls==20, 'Every captured startup path needs its own hold controls'
+print('All four native Apple startup paths hold the original engine before launch; 20 missing/late/owner/lease/duplicate controls rejected.')
 
 with tempfile.TemporaryDirectory(prefix='routervpn-mtu-control-') as directory:
  tmp=Path(directory);(tmp/'NetworkExtension.swift').write_text(STUB);(tmp/'Harness.swift').write_text(TEST)
