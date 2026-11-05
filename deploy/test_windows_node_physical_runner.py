@@ -415,7 +415,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
             "missing-durable-intent": ("always", "actual SOCKS source skipped its durable WFP intent"),
             "missing-socket-release": ("reject/relay-other-private", "native retirement bypassed exact socket release or grant join"),
             "missing-endpoint-readback": ("reject/relay-other-private", "native retirement bypassed independent endpoint readback"),
-            "missing-grant-removal": ("reject/relay-other-private", "native retirement did not reach exact socket release and grant join"),
+            "missing-grant-removal": ("reject/relay-other-private", "completed native refusal retained its original grant and exact WFP filters"),
         }
 
         def run(command, **kwargs):
@@ -454,6 +454,14 @@ class OrdinarySOCKSScope(unittest.TestCase):
                 return 1, output + "panic: test timed out\n"
             if fault == "witness":
                 return 1, output.replace(witness, "unrelated failure")
+            if label == "missing-grant-removal" and fault in (
+                    "grant-old-completion", "grant-old-timeout", "grant-observation-error"):
+                refused = {
+                    "grant-old-completion": "native retirement bypassed exact socket release or grant join",
+                    "grant-old-timeout": "native retirement did not reach exact socket release and grant join",
+                    "grant-observation-error": "native retirement grant observation failed: native read refused",
+                }[fault]
+                return 1, output.replace(witness, refused)
             if fault == "prefixed-failure":
                 return 1, "displayed expectation: " + output
             if fault == "duplicate-failure":
@@ -480,6 +488,8 @@ class OrdinarySOCKSScope(unittest.TestCase):
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
                                ("missing-socket-release", "exact defect"), ("missing-endpoint-readback", "exact defect"),
                                ("missing-grant-removal", "exact defect"),
+                               ("grant-old-completion", "exact defect"), ("grant-old-timeout", "exact defect"),
+                               ("grant-observation-error", "exact defect"),
                                ("timeout", "exact defect"), ("witness", "exact defect"),
                                ("prefixed-failure", "exact defect"), ("duplicate-failure", "exact defect"),
                                ("fatal", "exact defect")):

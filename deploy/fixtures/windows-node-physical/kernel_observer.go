@@ -199,6 +199,7 @@ type DesktopWindowsNodeSocketRetirement struct {
 	grant              DesktopSocketGrant
 	endpoints          []uint64
 	rules              []syscall.GUID
+	originalRules      []desktopWFPRule
 	original, returned DesktopSocketNative
 	io                 *desktopWindowsSocket
 	held               DesktopSocketNative
@@ -247,6 +248,14 @@ func DesktopWindowsNodeCompositionCaptureSocketRetirement(ctx context.Context, g
 			scope:  append([]byte(nil), p.fixtureScope...)}
 		for _, rule := range permit.rules {
 			captured.rules = append(captured.rules, rule.Key)
+			// Retain the complete original native rule, not a later permit map's
+			// replacement definition, for independent defect classification.
+			rule.Metadata = append([]byte(nil), rule.Metadata...)
+			rule.Conditions = append([]desktopWFPCondition(nil), rule.Conditions...)
+			for i := range rule.Conditions {
+				rule.Conditions[i].Bytes = append([]byte(nil), rule.Conditions[i].Bytes...)
+			}
+			captured.originalRules = append(captured.originalRules, rule)
 		}
 		if len(captured.rules) == 0 {
 			return nil, errors.New("socket retirement capture lacks native permit keys")
@@ -376,6 +385,56 @@ func (r *DesktopWindowsNodeSocketRetirement) ReadyToRelease(ctx context.Context)
 			return false, err
 		}
 		return ready, nil
+	})
+}
+
+// RetainedGrant classifies a completed refusal using the original grant and
+// independent native filter readback. An observation error cannot witness the
+// missing-revocation defect, and this reader grants no retirement authority.
+func (r *DesktopWindowsNodeSocketRetirement) RetainedGrant(ctx context.Context) (bool, error) {
+	if r == nil || ctx == nil || len(r.originalRules) == 0 {
+		return false, errors.New("socket retirement lacks its original grant observation")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	desktopWindowsNodeComposition.Lock()
+	same := desktopWindowsNodeComposition.owner == r.policy
+	desktopWindowsNodeComposition.Unlock()
+	if !same {
+		return false, errors.New("socket retirement observation replaced its original policy")
+	}
+	p := r.policy
+	return desktopWindowsPolicyCall(p, ctx, true, func() (retained bool, failure error) {
+		if p.capture != r.grant.Capture || p.owner != r.grant.Binding.Owner ||
+			p.identity != r.identity || r.identity == nil || !bytes.Equal(p.fixtureScope, r.scope) ||
+			!r.target.matches(p.capture, p.options.KillSwitchPolicy, p.metadata) {
+			return false, errors.New("socket retirement observation changed its original owner")
+		}
+		if err := p.assertBaseline(); err != nil {
+			return false, err
+		}
+		permit := p.permits[desktopWindowsPermitKey(r.grant)]
+		if permit == nil {
+			return false, nil
+		}
+		creation, exists := p.bindings[r.creation.SocketID]
+		if !exists || creation != r.creation || !desktopSocketSOCKSControlMatches(permit.request, r.grant) {
+			return false, errors.New("socket retirement observation lost its original grant binding")
+		}
+		reader, err := desktopWFPOpen(false)
+		if reader != nil {
+			defer func() { failure = errors.Join(failure, reader.Close()) }()
+		}
+		if err != nil {
+			return false, err
+		}
+		for _, rule := range r.originalRules {
+			if err := reader.Assert(rule); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
 	})
 }
 

@@ -936,6 +936,18 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 					}
 					select {
 					case <-done:
+						// Classify the original state after completion, within this
+						// same release deadline. A timeout or failed native read is
+						// never accepted as evidence of the intended grant defect.
+						observeCtx, stopObserve := context.WithDeadline(context.Background(), deadline)
+						retainedGrant, observationErr := nativeRetirement.RetainedGrant(observeCtx)
+						stopObserve()
+						if observationErr != nil {
+							t.Fatal("native retirement grant observation failed", observationErr)
+						}
+						if retainedGrant {
+							t.Fatal("completed native refusal retained its original grant and exact WFP filters")
+						}
 						t.Fatal("native retirement bypassed exact socket release or grant join")
 					default:
 					}

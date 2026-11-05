@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Execute the exact native observer and call gates with OS readback doubled.
 
-This checks post-close observation and reader lifetime on a portable Go host.
+This checks post-close observation, exact retained-grant classification, and
+reader lifetime on a portable Go host.
 The scoped Windows kernel/descriptor tests remain required independently.
 """
 from pathlib import Path
@@ -37,11 +38,21 @@ func (t target) matches(c, p string, m []byte) bool {return t.capture==c && t.po
 type grant struct {Capture,SocketID string; Binding struct{Owner string}}
 type creation struct {SocketID string}
 type permit struct {request grant}
+type desktopWFPRule struct {Key string; ID uint64}
+func desktopWindowsPermitKey(g grant)string{return g.SocketID}
+func desktopSocketSOCKSControlMatches(a,b grant)bool{return a==b}
 type native struct {closed bool}
 func (n *native) SyscallConn()(syscall.RawConn,error){if n.closed{return nil,net.ErrClosed};return nil,nil}
 type socket struct {mu sync.Mutex;closed bool}
 type engine struct {handle uintptr;closed atomic.Bool;done chan struct{}}
 func (e *engine) Absent(key string)error{if e!=observed.reader{return errors.New("read used production engine")};observed.filters=append(observed.filters,key);return observed.filterErr}
+func (e *engine) Assert(rule desktopWFPRule)error{
+ if e!=observed.reader||e.closed.Load(){return errors.New("grant read used production or closed engine")}
+ observed.asserted=append(observed.asserted,rule)
+ if observed.entered!=nil{close(observed.entered);<-observed.release}
+ if rule!=observed.originalRule{return errors.New("grant read adopted replacement filter")}
+ return observed.filterErr
+}
 func (e *engine) Close()error{if e.closed.CompareAndSwap(false,true){close(e.done)};return observed.closeErr}
 type api struct{}
 func (*api) endpointProperties(handle uintptr,id uint64)(int,[]byte,error){
@@ -57,17 +68,18 @@ type DesktopWindowsSocketPolicy struct {
  options struct{KillSwitchPolicy string}
  identity *DesktopWindowsSocketIdentity
  closed,locked,installed,baselineDone bool
- permits map[string]*permit;bindings map[string]bool;tunnel []bool
+ permits map[string]*permit;bindings map[string]creation;tunnel []bool
  baselineEngine *engine
 }
 func (p *DesktopWindowsSocketPolicy) assertBaseline()error{if !p.locked || p.baselineEngine.handle==0{return errors.New("Windows physical baseline has no native session lock")};return observed.activeErr}
 type DesktopWindowsNodeSocketRetirement struct {
  policy *DesktopWindowsSocketPolicy;identity *DesktopWindowsSocketIdentity;target target;scope []byte
- creation creation;grant grant;rules []string;endpoints []uint64;original,returned *native;io *socket
+ creation creation;grant grant;rules []string;originalRules []desktopWFPRule;endpoints []uint64;original,returned *native;io *socket
 }
 var desktopWindowsNodeComposition struct{sync.Mutex;owner *DesktopWindowsSocketPolicy}
 var desktopWindowsEndpointNotFound=errors.New("native endpoint absent")
 var observed struct{
+ originalRule desktopWFPRule;asserted []desktopWFPRule
  reader *engine;filterErr,endpointErr,openErr,closeErr,activeErr,retainedErr error
  target target;scope []byte;retained int;filters []string;endpoints []uint64;entered,release chan struct{}
 }
@@ -85,7 +97,7 @@ import("context";"errors";"strings";"testing";"time")
 func fixture(closed bool)*DesktopWindowsNodeSocketRetirement{
  observed.reader=&engine{handle:77,done:make(chan struct{})};observed.filterErr=nil;observed.endpointErr=desktopWindowsEndpointNotFound
  observed.openErr=nil;observed.closeErr=nil;observed.activeErr=nil;observed.retainedErr=nil;observed.retained=0;observed.filters=nil;observed.endpoints=nil;observed.entered=nil;observed.release=nil
- p:=&DesktopWindowsSocketPolicy{ctx:context.Background(),gate:make(chan struct{},1),capture:"source",owner:"owner",metadata:[]byte("exact baseline"),fixtureScope:[]byte("original executable"),closed:closed,locked:!closed,installed:true,baselineDone:closed,permits:map[string]*permit{},bindings:map[string]bool{},baselineEngine:&engine{}}
+ p:=&DesktopWindowsSocketPolicy{ctx:context.Background(),gate:make(chan struct{},1),capture:"source",owner:"owner",metadata:[]byte("exact baseline"),fixtureScope:[]byte("original executable"),closed:closed,locked:!closed,installed:true,baselineDone:closed,permits:map[string]*permit{},bindings:map[string]creation{},baselineEngine:&engine{}}
  p.gate<-struct{}{};p.options.KillSwitchPolicy="always"
  p.identity=&DesktopWindowsSocketIdentity{ctx:context.Background(),gate:make(chan struct{},1),closed:closed,sockets:map[string]bool{},api:&api{}}
  p.identity.gate<-struct{}{}
@@ -113,7 +125,7 @@ func TestRetirementRejectsUnprovedAbsence(t *testing.T){
  "missing baseline":func(r *DesktopWindowsNodeSocketRetirement){r.policy.installed=false},
  "unfinished baseline":func(r *DesktopWindowsNodeSocketRetirement){r.policy.baselineDone=false},
  "retained tunnel":func(r *DesktopWindowsNodeSocketRetirement){r.policy.tunnel=[]bool{true}},
- "binding":func(r *DesktopWindowsNodeSocketRetirement){r.policy.bindings["socket"]=true},
+ "binding":func(r *DesktopWindowsNodeSocketRetirement){r.policy.bindings["socket"]=r.creation},
  "grant":func(r *DesktopWindowsNodeSocketRetirement){r.policy.permits["original"]=&permit{r.grant}},
  "native baseline mismatch":func(r *DesktopWindowsNodeSocketRetirement){observed.retainedErr=errors.New("kernel baseline replaced")},
  "unclosed identity":func(r *DesktopWindowsNodeSocketRetirement){r.identity.closed=false},
@@ -130,6 +142,60 @@ func TestRetirementRejectsUnprovedAbsence(t *testing.T){
  for name,change:=range tests{t.Run(name,func(t *testing.T){r:=fixture(true);change(r);if err:=r.RequireRetired(context.Background());err==nil{t.Fatal("unproved native retirement accepted",name)}})}
  r:=fixture(false);r.policy.locked=false
  if err:=r.RequireRetired(context.Background());err==nil||!strings.Contains(err.Error(),"no native session lock"){t.Fatal("missing active lock became successful retirement",err)}
+}
+func grantFixture()*DesktopWindowsNodeSocketRetirement{
+ r:=fixture(false)
+ r.policy.bindings[r.creation.SocketID]=r.creation
+ r.policy.permits[desktopWindowsPermitKey(r.grant)]=&permit{r.grant}
+ observed.originalRule=desktopWFPRule{"captured-filter",42};observed.asserted=nil
+ r.originalRules=[]desktopWFPRule{observed.originalRule}
+ return r
+}
+func TestCompletedRefusalClassifiesExactRetainedGrant(t *testing.T){
+ r:=grantFixture()
+ retained,err:=r.RetainedGrant(context.Background())
+ if !retained||err!=nil{t.Fatal("original retained grant not witnessed",retained,err)}
+ if len(observed.asserted)!=1||observed.asserted[0]!=observed.originalRule||!observed.reader.closed.Load(){t.Fatal("missing independent exact native read and join")}
+ // A completed socket-release mutant has already removed its grant. Its
+ // unchanged generic witness must never count as a missing-revocation defect.
+ r=grantFixture();delete(r.policy.permits,desktopWindowsPermitKey(r.grant))
+ retained,err=r.RetainedGrant(context.Background())
+ if retained||err!=nil||len(observed.asserted)!=0{t.Fatal("removed grant misclassified",retained,err)}
+}
+func TestRetainedGrantRejectsUnrelatedOrFailedEvidence(t *testing.T){
+ tests:=map[string]func(*DesktopWindowsNodeSocketRetirement){
+ "different policy":func(r *DesktopWindowsNodeSocketRetirement){desktopWindowsNodeComposition.owner=&DesktopWindowsSocketPolicy{}},
+ "capture":func(r *DesktopWindowsNodeSocketRetirement){r.policy.capture="replacement"},
+ "owner":func(r *DesktopWindowsNodeSocketRetirement){r.policy.owner="replacement"},
+ "identity":func(r *DesktopWindowsNodeSocketRetirement){r.policy.identity=&DesktopWindowsSocketIdentity{}},
+ "scope":func(r *DesktopWindowsNodeSocketRetirement){r.policy.fixtureScope=[]byte("replacement")},
+ "target":func(r *DesktopWindowsNodeSocketRetirement){r.policy.metadata=[]byte("replacement")},
+ "baseline":func(r *DesktopWindowsNodeSocketRetirement){observed.activeErr=errors.New("native baseline missing")},
+ "binding absent":func(r *DesktopWindowsNodeSocketRetirement){delete(r.policy.bindings,r.creation.SocketID)},
+ "binding changed":func(r *DesktopWindowsNodeSocketRetirement){r.policy.bindings[r.creation.SocketID]=creation{"replacement"}},
+ "grant changed":func(r *DesktopWindowsNodeSocketRetirement){r.policy.permits[r.grant.SocketID].request.Capture="replacement"},
+ "rules absent":func(r *DesktopWindowsNodeSocketRetirement){r.originalRules=nil},
+ "rule changed":func(r *DesktopWindowsNodeSocketRetirement){r.originalRules[0].ID++},
+ "filter absent":func(r *DesktopWindowsNodeSocketRetirement){observed.filterErr=errors.New("filter absent")},
+ "reader open":func(r *DesktopWindowsNodeSocketRetirement){observed.openErr=errors.New("reader open refused")},
+ "reader close":func(r *DesktopWindowsNodeSocketRetirement){observed.closeErr=errors.New("reader close failed")},
+ }
+ for name,change:=range tests{t.Run(name,func(t *testing.T){r:=grantFixture();change(r);retained,err:=r.RetainedGrant(context.Background());if retained&&err==nil{t.Fatal("unrelated evidence classified as exact retained grant")};if err==nil{t.Fatal("invalid observation became successful absence")}})}
+ r:=grantFixture();ctx,cancel:=context.WithCancel(context.Background());cancel()
+ retained,err:=r.RetainedGrant(ctx)
+ if retained||!errors.Is(err,context.Canceled)||len(observed.asserted)!=0{t.Fatal("expired original deadline was not preserved",retained,err)}
+}
+func TestGrantObservationTimeoutRetainsEnteredIndependentReader(t *testing.T){
+ r:=grantFixture();observed.entered=make(chan struct{});observed.release=make(chan struct{});reader:=observed.reader
+ ctx,cancel:=context.WithCancel(context.Background());defer cancel();done:=make(chan error,1)
+ go func(){retained,err:=r.RetainedGrant(ctx);if retained&&err==nil{err=errors.New("cancelled grant observation accepted")};done<-err}()
+ select{case<-observed.entered:case<-time.After(time.Second):t.Fatal("grant query not entered")}
+ cancel()
+ select{case err:=<-done:if !errors.Is(err,context.Canceled){t.Fatal("caller cancellation lost",err)};case<-time.After(time.Second):t.Fatal("caller cancellation blocked")}
+ if reader.closed.Load(){t.Fatal("timeout closed reader during entered grant query")}
+ close(observed.release)
+ select{case<-reader.done:case<-time.After(time.Second):t.Fatal("reader not closed after grant query joined")}
+ <-r.policy.gate;r.policy.gate<-struct{}{}
 }
 func TestRetirementTimeoutRetainsEnteredIndependentReader(t *testing.T){
  r:=fixture(true);observed.entered=make(chan struct{});observed.release=make(chan struct{});reader:=observed.reader
@@ -156,6 +222,7 @@ def execute(observer=OBSERVER):
     identity = (ROOT / 'internal/mobiletor/desktop_socket_windows_identity.go').read_text()
     selected = [function(source, 'func (r *DesktopWindowsNodeSocketRetirement) originalClosed()'),
                 function(source, 'func (r *DesktopWindowsNodeSocketRetirement) RequireRetired('),
+                function(source, 'func (r *DesktopWindowsNodeSocketRetirement) RetainedGrant('),
                 function(policy, 'func desktopWindowsPolicyCall['),
                 function(identity, 'func (p *DesktopWindowsSocketIdentity) call('),
                 function(identity, 'func desktopWindowsIdentityContextError(')]
