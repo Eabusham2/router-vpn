@@ -289,7 +289,7 @@ def captured_tor_dns_policy() -> None:
              "policy := selection.policy",
              "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)",
              "selection.current(a)", "a.validateExternalProfileExpectedProfiles(q, profile)",
-             "if err := check(); err != nil", "a.stopModeWithIntent(true)", "prelaunch.start(check)")
+             "if err := check(); err != nil", "a.stopModeWithIntent(true)", "prelaunch.startContext(operation, check)")
     ordered(connect, "torBridgeConnectSelectionOwned",
             "lookup := driver.lookup", "lookup = desktopTorEndpointLookup",
             "capturedRequest := cloneDesktopTorConnectRequest(q)",
@@ -297,7 +297,7 @@ def captured_tor_dns_policy() -> None:
             "capturedRequest.Execution = driver.startupExecution",
             "captureDesktopTorSelection(a, profile, capturedRequest, lookup)",
             "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)",
-            "if err := check(); err != nil", "a.stopModeWithIntent(true)", "prelaunch.start(check)")
+            "if err := check(); err != nil", "a.stopModeWithIntent(true)", "prelaunch.startContext(operation, check)")
     function("cmd/client/desktop_tor_comparison_driver.go", "newDesktopTorComparisonDriver",
              "request = cloneDesktopTorConnectRequest(request)", "profile = cloneRouterProfile(profile)",
              "[]routechoice.Execution{routechoice.Local, routechoice.Server}",
@@ -322,17 +322,25 @@ def captured_tor_dns_policy() -> None:
              "launch.tor.predecessor != predecessor",
              "captureTorBridgePrelaunch(a, profile.ID, prepared.RuntimeDir, launch)",
              "preflightDesktopTorLaunch(a.connectionOperationContextOrBackground(), prepared.NativeBinary, launch, environment, driver.preflight)")
-    start = function("cmd/client/tor_bridge_prelaunch.go", "start",
+    function("cmd/client/tor_bridge_prelaunch.go", "start",
+             "if owner != nil && owner.app != nil",
+             "operation = owner.app.connectionOperationContextOrBackground()",
+             "return owner.startContext(operation, check)")
+    start = function("cmd/client/tor_bridge_prelaunch.go", "startContext",
              "if err := check(); err != nil", "if err := owner.validate(); err != nil",
              "desktopTorSourceIdentityToken(profile) == launch.tor.profileToken",
              "launch.tor.entryCurrent(owner.app)",
              "desktopNodeOwners.LoadOrStore(owner.app, launch)",
              "registerActiveDNSRuntimeConfig(owner.app, owner.dns.ProfileID, owner.dns.RuntimeID, owner.dns.Config)",
+             "captureDesktopNativeStartup(operation, owner.workspace)",
+             "desktopNativeStartupEnvironment(startup, owner.workspace, owner.command.Env)",
              "owner.command.Start()")
-    ordered(start, "torBridgePrelaunch.start",
+    ordered(start, "torBridgePrelaunch.startContext",
             "desktopNodeOwners.LoadOrStore(owner.app, launch)",
             "if err := check(); err != nil", "launch.tor.entryCurrent(owner.app)",
             "registerActiveDNSRuntimeConfig(owner.app, owner.dns.ProfileID, owner.dns.RuntimeID, owner.dns.Config)",
+            "captureDesktopNativeStartup(operation, owner.workspace)",
+            "desktopNativeStartupEnvironment(startup, owner.workspace, owner.command.Env)",
             "owner.command.Start()")
     function("internal/mobiletor/desktop_dns.go", "SelectDesktopBridgeDNS",
              "desktopBridgeProfile(source)", '(profile["multihop_enabled"] == true) != (entryJSON != "")',

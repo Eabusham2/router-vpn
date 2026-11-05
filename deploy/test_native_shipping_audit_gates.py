@@ -494,6 +494,11 @@ class CapturedTorDNSAuditTests(unittest.TestCase):
             ("cmd/client/desktop_tor_prepare.go", "driver.runtime = prepareTorBridgeRuntimeWithPredecessor", "driver.runtime = unrelatedRuntime"),
             ("cmd/client/desktop_tor_prepare.go", "launch.tor.predecessor != predecessor", "false"),
             ("cmd/client/desktop_tor_prepare.go", "preflightDesktopTorLaunch(a.connectionOperationContextOrBackground(), prepared.NativeBinary, launch, environment, driver.preflight)", "unrelatedPreflight()"),
+            ("cmd/client/tor_bridge_routes.go", "prelaunch.startContext(operation, check)", "prelaunch.startContext(context.Background(), check)"),
+            ("cmd/client/tor_bridge_prelaunch.go", "operation = owner.app.connectionOperationContextOrBackground()", "operation = context.Background()"),
+            ("cmd/client/tor_bridge_prelaunch.go", "return owner.startContext(operation, check)", "return unrelatedStart(operation, check)"),
+            ("cmd/client/tor_bridge_prelaunch.go", "captureDesktopNativeStartup(operation, owner.workspace)", "captureDesktopNativeStartup(context.Background(), owner.workspace)"),
+            ("cmd/client/tor_bridge_prelaunch.go", "desktopNativeStartupEnvironment(startup, owner.workspace, owner.command.Env)", "unrelatedStartupEnvironment(startup, owner.workspace, owner.command.Env)"),
             ("cmd/client/tor_bridge_prelaunch.go", "desktopTorSourceIdentityToken(profile) == launch.tor.profileToken", "true"),
             ("cmd/client/tor_bridge_prelaunch.go", "launch.tor.entryCurrent(owner.app)", "unrelatedEntryCheck(owner.app)"),
             ("cmd/client/tor_bridge_prelaunch.go", "if err := check(); err != nil {\n\t\t\tdesktopNodeOwners.CompareAndDelete(owner.app, launch)", "if err := unrelatedCheck(); err != nil {\n\t\t\tdesktopNodeOwners.CompareAndDelete(owner.app, launch)"),
@@ -525,6 +530,9 @@ class CapturedTorDNSAuditTests(unittest.TestCase):
              "\tselection.policy = policy"),
             ("cmd/client/desktop_tor_predecessor_external.go",
              "\tcopyDNSPolicy(&runtimeProfile, policy)\n", "\tif launch == nil"),
+            ("cmd/client/tor_bridge_prelaunch.go",
+             "\t\tstartup, err := captureDesktopNativeStartup(operation, owner.workspace)\n",
+             "\t\tif err := registerActiveDNSRuntimeConfig(owner.app, owner.dns.ProfileID, owner.dns.RuntimeID, owner.dns.Config); err != nil {"),
         ):
             with self.subTest(path=relative, reordered=block):
                 original = (ROOT / relative).read_text(encoding="utf-8")
@@ -533,7 +541,7 @@ class CapturedTorDNSAuditTests(unittest.TestCase):
                 changes.clear(); errors.clear()
                 changes[relative] = original.replace(block, "").replace(later, block + later)
                 scope["captured_tor_dns_policy"]()
-                self.assertTrue(errors, "DNS selection after ordinary transport compilation passed the real product audit")
+                self.assertTrue(errors, "Reordered captured DNS or startup admission passed the real product audit")
 
 
 if __name__ == "__main__":
