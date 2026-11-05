@@ -128,6 +128,18 @@ func (t *Inbound) routervpnDesktopInterface() (string, int, int, error) {
 
 // Suppress reset callbacks until all native reader startup stages finish.
 func (t *Inbound) Start(stage adapter.StartStage) error {
+	if t.routervpnDesktopFresh && t.RouterVPNDesktopMTUBoundedTransaction() {
+		// The shared mobile template cannot name desktop-only native Options.
+		// The prepared desktop capability keeps this reader's original work or
+		// rollback context through every startup stage and ready observation.
+		bounded, ok := any(t).(interface {
+			routervpnDesktopReplacementStart(adapter.StartStage) error
+		})
+		if !ok {
+			return errors.New("native MTU replacement omitted bounded startup capability")
+		}
+		return bounded.routervpnDesktopReplacementStart(stage)
+	}
 	if t.routervpnDesktopFresh && stage == adapter.StartStateStart {
 		if t.routervpnDesktopGuard == nil || !t.routervpnDesktopGuard() {
 			return errors.New("desktop MTU path retired before reader startup")

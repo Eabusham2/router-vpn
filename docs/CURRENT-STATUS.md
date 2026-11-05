@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`914153f0`, the integrated observation change in `a94cde9d`, and the installed
+`38fd5669`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -125,8 +125,8 @@ and joined-lifecycle evidence; all 26 runner regressions pass. Those six real
 namespace cases have not run locally because this environment lacks NET_ADMIN.
 Their exact-SHA CI result, other graph families, Server/Compare and broader
 Start Layers remain separate requirements. The native service MTU grant and
-retirement correction below is locally verified; replacement startup retains
-its separate original-context correction and native acceptance obligation.
+retirement correction below is locally verified. Replacement startup now also
+retains the original operation context; native acceptance remains separate.
 
 ## Original native service MTU authority
 
@@ -147,6 +147,16 @@ post-grant failure/cancellation cases. The latter compile but require privileged
 CI execution. Local preparation uses the supported pure-Go build option; the
 normal native package, first successful TUN mutation, rollback and final Stop
 still require the shipping native and installed-host gates.
+
+Fresh Linux MTU candidate and rollback Start now use the exact installed work or
+cleanup context for their guard, interface-alias inventory, lifecycle lock and
+ready readback. No new deadline or Box-lifetime substitution is introduced.
+The privileged transaction fixture now claims its reader with the matching
+Context API. Actual prepared TUN and Box race tests pass (1.048s and 1.139s);
+restoring the old Start makes the new original-caller assertion fail. The
+namespace fixture compiles but requires privileged execution. Separately, all
+six generated Node TUN cases pass on both architectures at `a01be3f5`; that run
+does not cover the newer service-MTU or replacement-startup changes.
 
 ## Previous implementation continuation — verified through 4d25725c
 

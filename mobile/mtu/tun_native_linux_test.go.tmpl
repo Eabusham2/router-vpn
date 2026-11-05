@@ -5,6 +5,7 @@ package tun
 import (
 	"context"
 	"errors"
+	"github.com/sagernet/sing-box/adapter"
 	native "github.com/sagernet/sing-tun"
 	"sync/atomic"
 	"testing"
@@ -13,8 +14,9 @@ import (
 
 type mtuStartupNativeFixture struct {
 	*native.NativeTun
-	read      func(context.Context) (string, error)
-	unbounded atomic.Int32
+	read          func(context.Context) (string, error)
+	interfaceRead func(context.Context) (string, int, int, error)
+	unbounded     atomic.Int32
 }
 
 func (f *mtuStartupNativeFixture) RouterVPNDesktopNetworkReceipt() (string, error) {
@@ -75,5 +77,102 @@ func TestRouterVPNMTUStartupReceiptKeepsOriginalOperation(t *testing.T) {
 	f.read = func(context.Context) (string, error) { t.Fatal("canceled startup reopened its reader"); return "", nil }
 	if _, err := owner.RouterVPNDesktopNetworkStartupReceipt(startup, func() bool { return true }); err == nil || f.unbounded.Load() != 0 {
 		t.Fatal("canceled startup acquired native read", err)
+	}
+	verifyMTUReplacementStartupContext(t)
+}
+
+func (f *mtuStartupNativeFixture) RouterVPNDesktopNetworkInterfaceContext(ctx context.Context) (string, int, int, error) {
+	return f.interfaceRead(ctx)
+}
+
+func verifyMTUReplacementStartupContext(t *testing.T) {
+	t.Helper()
+	lifetime, stopLifetime := context.WithCancel(context.Background())
+	defer stopLifetime()
+	work, cancelWork := context.WithTimeout(lifetime, time.Second)
+	defer cancelWork()
+	legacyCalls := 0
+	owner := &Inbound{ctx: lifetime, routervpnDesktop: true, routervpnDesktopFresh: true,
+		tunOptions: native.Options{Name: "rvpn-mtu", MTU: 1280, RouterVPNNetworkContext: work, RouterVPNNetworkLifetime: lifetime}}
+	owner.routervpnDesktopGuard = func() bool { legacyCalls++; return false }
+	entered := make(chan struct{})
+	owner.routervpnDesktopGuardContext = func(ctx context.Context) error {
+		if ctx != work {
+			return errors.New("candidate startup substituted the Box lifetime")
+		}
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() { done <- owner.Start(adapter.StartStateStart) }()
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatal("candidate did not enter its original bounded guard", err)
+	case <-time.After(time.Second):
+		t.Fatal("candidate startup guard did not enter")
+	}
+	cancelWork()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || legacyCalls != 0 || lifetime.Err() != nil || owner.tunIf != nil {
+			t.Fatal("candidate cancellation escaped its exact startup caller", err, legacyCalls)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("candidate guard outlived its original cancellation")
+	}
+	cleanup, stopCleanup := context.WithTimeout(lifetime, time.Second)
+	defer stopCleanup()
+	if err := owner.RouterVPNDesktopMTUStartupContext(cleanup); err != nil {
+		t.Fatal("original unstarted rollback rejected cleanup caller", err)
+	}
+	sentinel := errors.New("original rollback guard reached")
+	owner.routervpnDesktopGuardContext = func(ctx context.Context) error {
+		if ctx != cleanup {
+			return errors.New("rollback startup substituted its original cleanup caller")
+		}
+		return sentinel
+	}
+	if err := owner.Start(adapter.StartStateStart); !errors.Is(err, sentinel) || legacyCalls != 0 {
+		t.Fatal("rollback startup lost its installed original context", err)
+	}
+	// Started is a real no-op stage in the pinned native inbound. The shipping
+	// wrapper must still read the actual reader through its bounded capability.
+	f := &mtuStartupNativeFixture{}
+	owner.tunIf = f
+	reads := 0
+	owner.routervpnDesktopGuardContext = func(ctx context.Context) error {
+		if ctx != cleanup {
+			return errors.New("ready guard changed original cleanup caller")
+		}
+		return ctx.Err()
+	}
+	f.interfaceRead = func(ctx context.Context) (string, int, int, error) {
+		reads++
+		if ctx != cleanup {
+			return "", 0, 0, errors.New("ready read changed original cleanup caller")
+		}
+		return "rvpn-mtu", 7, 1280, nil
+	}
+	if err := owner.Start(adapter.StartStateStarted); err != nil || reads != 1 || legacyCalls != 0 || !owner.routervpnReady || owner.routervpnDesktopFresh || owner.routervpnDesktopIndex != 7 {
+		t.Fatal("native ready startup bypassed original bounded readback", err, reads, legacyCalls)
+	}
+	owner.routervpnDesktopFresh = true
+	f.interfaceRead = func(ctx context.Context) (string, int, int, error) {
+		stopCleanup()
+		return "rvpn-mtu", 7, 1280, nil
+	}
+	if err := owner.Start(adapter.StartStateStarted); !errors.Is(err, context.Canceled) || !owner.routervpnDesktopFresh || owner.tunIf != f {
+		t.Fatal("late ready read adopted or discarded the original partial reader", err)
+	}
+	locked, stopLocked := context.WithTimeout(lifetime, 20*time.Millisecond)
+	defer stopLocked()
+	owner.tunOptions.RouterVPNNetworkContext = locked
+	owner.routervpnLifecycle.Lock()
+	err := owner.Start(adapter.StartStateStarted)
+	owner.routervpnLifecycle.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || owner.tunIf != f || lifetime.Err() != nil {
+		t.Fatal("replacement startup lock escaped its original deadline", err)
 	}
 }

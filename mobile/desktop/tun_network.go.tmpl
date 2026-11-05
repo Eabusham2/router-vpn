@@ -3,6 +3,7 @@ package tun
 import (
 	"context"
 	"errors"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"runtime"
 )
@@ -349,4 +350,67 @@ func (t *Inbound) RouterVPNDesktopMTUReceiptContext(ctx context.Context) (ready,
 		return "", "", err
 	}
 	return raw, "", ctx.Err()
+}
+
+// Only Linux MTU replacement readers enter this path. The manager installed
+// either the original transaction context or its original cleanup capability
+// before Start; the Box lifetime and mobile/non-Linux startup stay unchanged.
+func (t *Inbound) routervpnDesktopReplacementStart(stage adapter.StartStage) error {
+	ctx := t.tunOptions.RouterVPNNetworkContext
+	if ctx == nil {
+		return errors.New("native MTU startup omitted its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("native MTU startup requires its original deadline")
+	}
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return err
+	}
+	guard := t.routervpnDesktopGuardContext
+	valid := t.routervpnDesktopFresh && t.routervpnDesktop && t.RouterVPNDesktopMTUBoundedTransaction() && guard != nil
+	t.routervpnLifecycle.Unlock()
+	if !valid {
+		return errors.New("native MTU startup lost its captured context guard")
+	}
+	if stage == adapter.StartStateStart {
+		if err := guard(ctx); err != nil {
+			return err
+		}
+		// A failed inventory is not evidence that the original alias is free.
+		interfaces, err := desktopnetwork.InterfacesContext(ctx)
+		if err != nil {
+			return err
+		}
+		for _, current := range interfaces {
+			if current.Name == t.tunOptions.Name {
+				return errors.New("desktop TUN alias is already owned")
+			}
+		}
+		if err := guard(ctx); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := t.routervpnStart(stage); err != nil {
+		return err
+	}
+	if stage == adapter.StartStateStarted {
+		if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+			return err
+		}
+		defer t.routervpnLifecycle.Unlock()
+		t.routervpnReady = true
+		_, index, _, err := t.routervpnDesktopInterfaceContext(ctx)
+		if err != nil {
+			return err
+		}
+		t.routervpnDesktopIndex = index
+		t.routervpnDesktopFresh = false
+	}
+	return ctx.Err()
 }

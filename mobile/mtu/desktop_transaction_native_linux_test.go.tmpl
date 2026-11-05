@@ -168,15 +168,36 @@ func TestRouterVPNNativeLinuxMTUTransactionNamespace(t *testing.T) {
 		var cancelOnGap atomic.Bool
 		work, stopWork := context.WithCancel(ctx)
 		defer stopWork()
-		guard := func() bool {
-			iface, err := net.InterfaceByName("rvpn-mtu-test")
-			if cancelOnGap.Load() && err != nil {
-				stopWork()
-				return true
+		guard := func(caller context.Context) error {
+			if caller == nil {
+				return errors.New("native transaction guard omitted its caller")
 			}
-			return !(err == nil && iface.MTU == 1500 && reject.CompareAndSwap(true, false))
+			if _, bounded := caller.Deadline(); !bounded {
+				return errors.New("native transaction guard substituted an unbounded lifetime")
+			}
+			if err := caller.Err(); err != nil {
+				return err
+			}
+			interfaces, err := desktopnetwork.InterfacesContext(caller)
+			if err != nil {
+				return err
+			}
+			var iface *net.Interface
+			for i := range interfaces {
+				if interfaces[i].Name == "rvpn-mtu-test" {
+					iface = &interfaces[i]
+				}
+			}
+			if cancelOnGap.Load() && iface == nil {
+				stopWork()
+				return caller.Err()
+			}
+			if iface != nil && iface.MTU == 1500 && reject.CompareAndSwap(true, false) {
+				return errors.New("captured candidate rejected by its original guard")
+			}
+			return caller.Err()
 		}
-		if _, _, mtu, err := initial.RouterVPNDesktopMTU(guard); err != nil || mtu != 1360 {
+		if _, _, mtu, err := initial.RouterVPNDesktopMTUContext(ctx, guard); err != nil || mtu != 1360 {
 			t.Fatal("actual original MTU capture", err)
 		}
 		receipt := func(reader adapter.Inbound) desktopnetwork.DesktopNetworkReceipt {

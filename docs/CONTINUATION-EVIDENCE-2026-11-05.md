@@ -674,6 +674,34 @@ explicit models. Real privileged TUN execution, package publication and device
 acceptance remain separate. The independent shared absolute run cleanup clock
 is still being integrated.
 
+## Original caller through Linux MTU replacement startup
+
+Fresh Linux candidate and rollback readers now delegate from the shared Start
+method to the desktop bounded-start capability. It uses the exact installed
+`RouterVPNNetworkContext` for the captured guard, alias-availability inventory,
+lifecycle lock and native ready-interface read. It creates no new deadline and
+preserves the Box/native stack lifetime. Mobile and non-Linux startup keep their
+existing path. The actual privileged transaction fixture now uses the Context
+claim and an explicitly bounded guard, matching its later Context receipt reads.
+
+An isolated committed `a7b8adca` snapshot plus only these four source files was
+projected through the shipping preparer, including the committed graph, Tor and
+retirement dependencies. Unpublished CONNECT edits were excluded. The actual
+TUN startup regression passes under race (1.048s), covering cancellation of the
+original candidate caller, rollback cleanup authority, ready readback, late
+cancellation and held lifecycle-lock expiry. The actual Box stale-reader test
+also passes (1.139s), compiling the updated namespace fixture. The unchanged
+strict verdict parser accepts both required parents with no skips or extras.
+Restoring only the prior shared Start body makes the original-caller regression
+fail cleanly (0.175s). Privileged namespace execution remains required.
+
+The repaired diagnostic projection also opened the real generated Node gate:
+[`a01be3f5` run 41968607618](https://github.com/Eabusham2/router-vpn/actions/runs/41968607618)
+passes all six On-connect, Always, captured-MTU, rollback, resolver-failure and
+wrong-key cases with original TUN retirement on AMD64 (23.99s) and ARM64 (24.39s).
+That earlier source identity does not establish acceptance of the later native
+service grant or replacement-startup correction.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
