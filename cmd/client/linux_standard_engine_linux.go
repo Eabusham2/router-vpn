@@ -31,6 +31,7 @@ type linuxStandardStartupObserver interface {
 
 type linuxStandardEngine struct {
 	cleanup                                                                               *standardengine.CleanupFile
+	operations                                                                            *standardengine.OperationFile
 	cleanupSequence                                                                       uint64
 	cleanupDeadline                                                                       int64
 	cleanupRequests                                                                       map[uint64]int64
@@ -219,7 +220,7 @@ func (n *linuxStandardEngine) environment(original []string) []string {
 }
 
 func (n *linuxStandardEngine) prepareStart(ctx context.Context) error {
-	if n == nil || n.owner == nil || n.tracker == nil || n.parent != nil || n.capture != nil || ctx == nil || ctx.Err() != nil {
+	if n == nil || n.owner == nil || n.tracker == nil || n.parent != nil || n.capture != nil || n.cleanup != nil || n.operations != nil || ctx == nil || ctx.Err() != nil {
 		return errors.New("standard native startup was reused or lost its observer")
 	}
 	if err := n.sourcesCurrent(); err != nil {
@@ -240,12 +241,20 @@ func (n *linuxStandardEngine) prepareStart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	n.operations, err = standardengine.NewOperationFile()
+	if err != nil {
+		return err
+	}
+	operationDevice, operationInode := n.operations.Identity()
 	device, inode := n.cleanup.Identity()
-	body, err := (standardengine.Capture{Schema: 1, Session: n.owner.session, ConfigSHA256: n.owner.digest, Mode: n.owner.runtimeMode, DeadlineNS: deadline.UnixNano(), CleanupDevice: device, CleanupInode: inode}).Canonical()
+	body, err := (standardengine.Capture{Schema: 1, Session: n.owner.session, ConfigSHA256: n.owner.digest, Mode: n.owner.runtimeMode, DeadlineNS: deadline.UnixNano(), CleanupDevice: device, CleanupInode: inode, OperationDevice: operationDevice, OperationInode: operationInode, OperationSize: standardengine.OperationSize, OperationLayout: standardengine.OperationLayout}).Canonical()
 	if err != nil {
 		return err
 	}
 	n.captureSHA = standardengine.SHA256(body)
+	if err := n.operations.BindCapture(ctx, n.captureSHA); err != nil {
+		return err
+	}
 	n.capture, err = sealLegacyExitFile("standard-original-startup", strings.NewReader(string(body)), 2048)
 	if err != nil {
 		return err
@@ -268,7 +277,7 @@ func (n *linuxStandardEngine) prepareStart(ctx context.Context) error {
 	}
 	command := n.owner.command
 	command.Args = []string{n.imagePath, "routervpn-standard", "--capture-sha256", n.captureSHA}
-	command.ExtraFiles = []*os.File{n.owner.image, n.owner.config, n.owner.directory, n.library, n.childChannel, n.parentDirectory, n.capture, n.cleanup.File()}
+	command.ExtraFiles = []*os.File{n.owner.image, n.owner.config, n.owner.directory, n.library, n.childChannel, n.parentDirectory, n.capture, n.cleanup.File(), n.operations.File()}
 	if err := n.tracker.Begin(ctx, nil); err != nil {
 		return err
 	}
@@ -321,6 +330,9 @@ func (n *linuxStandardEngine) finishStart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := n.operations.VerifyLaunch(ctx, ready.NetworkReceipt); err != nil {
+		return err
+	}
 	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(ready.NetworkReceipt)
 	if err != nil || receipt.TargetOS != "linux" || receipt.Name != n.shape.Name || receipt.MTU != n.shape.MTU {
 		return errors.New("standard startup ledger changed its captured native TUN policy")
@@ -359,6 +371,9 @@ func (n *linuxStandardEngine) current(ctx context.Context) error {
 		return errors.New("standard engine replaced its original executable capability")
 	}
 	if err := n.sourcesCurrent(); err != nil {
+		return err
+	}
+	if err := n.operations.Current(); err != nil {
 		return err
 	}
 	return n.bootstrap.CheckCapture(ctx, n.captureSHA)
@@ -405,6 +420,11 @@ func (n *linuxStandardEngine) close(ctx context.Context) error {
 	}
 	for _, file := range []*os.File{n.manifest, n.imageSource, n.librarySource, n.library, n.capture, n.parentDirectory, n.childChannel} {
 		if err := n.closeFile(file); err != nil {
+			return err
+		}
+	}
+	if n.operations != nil {
+		if err := n.operations.Close(ctx); err != nil {
 			return err
 		}
 	}

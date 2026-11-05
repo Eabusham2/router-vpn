@@ -9,9 +9,10 @@ completion of the current commit's packages, physical devices or deployment.
 ## November 5 continuation — original caller ownership
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
-original-source reconciliation, the four individually verified pushes through
-`36175ae5`, and the integrated observation change in the commit containing this
-section. The lost November 4 patch was reconstructed and tested against current
+original-source reconciliation, individually verified pushes through
+`eed2c44a`, the integrated observation change in `a94cde9d`, and the installed
+Linux service operation-channel foundation in the commit containing this section.
+The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
 
 Original caller deadlines now reach native manager, graph, network, physical,
@@ -21,6 +22,13 @@ blocking on cleanup. Original Stop can interrupt a held command observation.
 Tor MTU heartbeat adopts a complete matching receipt/revision, and Windows
 identity reads avoid the publication mutex. Focused actual-source races and
 causal controls are recorded in the evidence, with explicit native-fixture limits.
+
+The installed Linux service and actual fixed native child now retain an original
+FD11 control/history channel, bound by the sealed launch capture and exact Ready
+acknowledgement. Separate work/cancellation lock regions, bounded raw evidence
+pages and non-reusable original keys passed real inherited-child/process-lock
+tests. FD10 retirement remains unchanged. The transport is a foundation for
+active MTU operations; it does not yet run a candidate or expose Retest/Cancel.
 
 This is not all-requirement completion. Installed Linux standard-service MTU
 Retest/Cancel remains unimplemented, and broader MTU operation admission still

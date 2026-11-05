@@ -51,10 +51,15 @@ an expected-head guarded reference update and a fresh remote reference read.
 | [`1278cc49`](https://github.com/Eabusham2/router-vpn/commit/1278cc496569adb254a59ae3f2f8d23dbcc31056) | Windows negative fixture observes the exact original retained WFP grant after an early refusal. Expired, absent, replaced or erroneous observations cannot count. Thirty-four checks, actual observer race controls and complete Box compilation on AMD64/ARM64 passed. | Production grant/protection policy and original test budgets were unchanged. Native WFP runtime remains a platform gate. |
 | [`40b5a364`](https://github.com/Eabusham2/router-vpn/commit/40b5a364dd2e970b937ce2d89551ced6f62f5495) | Tor MTU activity release no longer reacquires the owner mutex. Admission remains serialized; inherited activity is released before decrement. Heartbeat adoption stages a complete receipt. Actual command race and causal controls passed; 42 audit checks passed. | Full local Box setup was denied by netlink permissions. The exact lease-method portable control models the native owner explicitly; the actual native test remains mandatory. |
 | [`36175ae5`](https://github.com/Eabusham2/router-vpn/commit/36175ae51647d5139bdd91d5e142e389fbf260c2) | The five pinned native managers expose caller-bound observation APIs and explicit capability checks. All five actual manager packages passed under race. | This foundation commit alone did not wire every application caller; the integrated change below does that. |
+| [`a94cde9d`](https://github.com/Eabusham2/router-vpn/commit/a94cde9db08035bba6506053e030f6a20d378555) | Integrated original-caller observations described below, including the shipping native composition and strict verdict gates. | Does not implement installed-service MTU operations. |
+| [`1a6e3877`](https://github.com/Eabusham2/router-vpn/commit/1a6e387761c5f176e292ff67fbb0bc1b03b7b03a) | Linux diagnostic extraction includes the actual shared receipt dependency. All 18 runner checks passed. | Extraction repair, not a native networking acceptance claim. |
+| [`1704b4f2`](https://github.com/Eabusham2/router-vpn/commit/1704b4f24cc5b19980caaf1f9b52b8296be0cdca) | Each Node heartbeat has one original two-second observation deadline, capped by its parent and tied to original Stop. Six extracted shipping-loop race cases and the old-caller causal control passed; 36 routing checks passed. | The exact-SHA Linux generated Node command/TUN workflow subsequently passed on AMD64 and ARM64. Other workflows remain separate. |
+| [`83297f71`](https://github.com/Eabusham2/router-vpn/commit/83297f711c0a8bd62a0f3fdc039d2776a12616e0) | Physical tunnel bind/retire admission and acknowledgement retain the caller deadline. Twelve native PT mutation leaves and eight existing lifecycle cases passed under race; old-lock/error-laundering controls failed as intended. | Original protection and genuine failure handling remain required. |
+| [`eed2c44a`](https://github.com/Eabusham2/router-vpn/commit/eed2c44a32ef829e584f7130a826d93fbac7b9ab) | Windows policy admission rechecks the original owner after acquiring the gate and preserves pure cancellation separately from genuine owner loss. Four new leaves, existing identity/retirement races and both native mobiletor architecture compilations passed. | An entered native call retains the gate until its actual join. No native WFP runtime pass is inferred from compilation. |
 
 ## Integrated original-caller observations
 
-The commit containing this record connects the original observation context
+Commit `a94cde9d` connects the original observation context
 through shipping command projections, native Box identity, inbound and network
 receipts, physical owner/broker/PT observations, selected graph/cover proofs,
 server leases and the actual pinned OpenVPN client/endpoint state.
@@ -107,15 +112,55 @@ physical fixtures and the live OpenVPN TLS fixture therefore could not exercise
 their runtime assertions here. Their platform CI gates remain mandatory; no
 assertion was disabled and no unsuccessful setup is recorded as a pass.
 
+## Installed Linux service: original operation channel foundation
+
+The commit containing this section adds FD11 to the actual service launch and
+fixed native child. The original sealed capture binds its device, inode, size
+and layout. Startup verifies the child's acknowledgement against the exact
+authenticated Ready receipt. Original FD10 retirement remains unchanged.
+
+FD11 has a fixed 12,648,448-byte layout: a 64-KiB control region and 32 bounded
+transaction records, each with separate Ready and retirement pages for the
+original, candidate and rollback readers. A record reserves capacity before
+construction; later reader bindings must describe the actual retained readers.
+A failed partial reader can have retirement evidence without an invented Ready.
+Raw evidence pages preserve the existing 16-KiB native receipt parser limit.
+
+Work and cancellation use separate local locks and original process-level file
+lock regions. Cancellation remains available when the work deadline has expired
+or another process holds the work region. Shared inherited open-file-description
+locks cannot substitute for those process locks. Stable reads, canonical frame
+digests, original keys, non-reusable sequence/slots and exact retained descriptors
+reject torn, replayed or substituted evidence. The native child closes FD11 only
+after retiring its original native resources; the service joins its original
+child before closing its copy.
+
+Focused validation passed 59 standardengine race verdicts, including ten new
+operation-channel parent tests, six original startup-fixture leaves and four
+mandatory service-runner checks. The actual inherited child and process lock
+tests execute real descriptor inheritance and interprocess locking. Replacing
+only the process lock with an open-file-description lock failed the intended
+cross-process exclusion assertion. The complete generated Linux AMD64 command
+composition compiled with the five changed shipping inputs. Startup routing
+effects in the fixture are explicitly modeled; this is not a real TUN mutation
+or installed-service acceptance result.
+
+This foundation exposes no public MTU action and performs no candidate mutation.
+It deliberately has no reset/reuse operation: future settlement must join the
+worker and receive acknowledgements from both original observers before another
+request can be admitted. The service observer and native tracker are the same
+object; the controller request observer is the second one. FD11 evidence cannot
+create either observer's authority.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
 |---|---|---|
 | Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs and exact tests above cover observations, original Stop and receipt adoption. | Separate MTU Capture/start/status and mutation-admission paths still contain contextless reads. The next unit must wire bounded operations through actual callers. |
-| MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist and have focused tests. | Installed Linux standard service has no active MTU control/history FD, fixed-child operation loop, service/controller phase protocol, public Retest/Cancel branch or durable adoption. Safe refusal does not complete this requirement. |
+| MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child mutation loop, joined-worker/two-observer settlement, service/controller phase protocol, public Retest/Cancel branch and durable adoption remain unfinished. Safe refusal or an unused transport does not complete this requirement. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. | Published ledger also lists protected cross-adapter transfer, active Always upgrades and same-boot service-crash continuation. This observation change does not implement those features. |
-| Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. At the recorded `36175ae5` query, 14 workflows succeeded and 10 were queued/pending/running, with no completed failure. | The integrated source requires its own exact-SHA native/build/publication result. Historical release success is not current release evidence. |
+| Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 
 The service-MTU next step retains both original observers (service and controller),

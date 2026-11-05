@@ -51,6 +51,7 @@ func linuxStandardStartupChildFixture(scenario, expected string) (failure error)
 	if err != nil {
 		return err
 	}
+	var operations *standardengine.OperationFile
 	var retirement = desktopnetwork.DesktopNetworkRetirementReceipt{Schema: 1, TargetOS: "linux", Objects: []desktopnetwork.DesktopNetworkObject{}}
 	defer func() {
 		if scenario == "exit-error" {
@@ -70,11 +71,20 @@ func linuxStandardStartupChildFixture(scenario, expected string) (failure error)
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
+			if operations != nil {
+				if err := operations.Close(ctx); err != nil {
+					return "", err
+				}
+			}
 			return desktopnetwork.CanonicalDesktopNetworkRetirementReceipt(retirement)
 		})
 	}()
 	ctx, cancel := context.WithDeadline(lifetime, time.Unix(0, capture.DeadlineNS))
 	defer cancel()
+	operations, err = standardengine.CaptureOperationFile(os.NewFile(standardengine.OperationFD, "original-fixture-operations"), capture.OperationDevice, capture.OperationInode, capture.OperationSize, capture.OperationLayout, expected)
+	if err != nil {
+		return err
+	}
 	channel, err := linuxprocess.CaptureChannel(os.NewFile(7, "channel"))
 	if err != nil {
 		return err
@@ -123,6 +133,9 @@ func linuxStandardStartupChildFixture(scenario, expected string) (failure error)
 	readyExpected := expected
 	if scenario == "wrong-source" {
 		readyExpected = strings.Repeat("a", 64)
+	}
+	if err := operations.AcknowledgeLaunch(ctx, ledger); err != nil {
+		return err
 	}
 	body, err := (standardengine.Ready{Schema: 1, CaptureSHA256: readyExpected, NetworkReceipt: ledger}).Canonical()
 	if err != nil {

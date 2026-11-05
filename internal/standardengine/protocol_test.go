@@ -6,7 +6,7 @@ import (
 )
 
 func TestCapturedStandardFramesRejectChangedScope(t *testing.T) {
-	c := Capture{1, strings.Repeat("a", 32), strings.Repeat("b", 64), "standard-socks5", 1234, 1, 2}
+	c := Capture{1, strings.Repeat("a", 32), strings.Repeat("b", 64), "standard-socks5", 1234, 1, 2, 1, 3, OperationSize, OperationLayout}
 	raw, err := c.Canonical()
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +28,14 @@ func TestCapturedStandardFramesRejectChangedScope(t *testing.T) {
 				t.Fatal("changed captured standard scope accepted")
 			}
 		})
+	}
+
+	for _, mutate := range []func(*Capture){func(c *Capture) { c.OperationDevice = 0 }, func(c *Capture) { c.OperationInode = 0 }, func(c *Capture) { c.OperationSize-- }, func(c *Capture) { c.OperationLayout++ }} {
+		changed := c
+		mutate(&changed)
+		if _, err := changed.Canonical(); err == nil {
+			t.Fatal("capture omitted or changed exact FD11 descriptor layout")
+		}
 	}
 	if _, err := DecodeCapture(raw, strings.Repeat("c", 64)); err == nil {
 		t.Fatal("another source accepted")

@@ -69,25 +69,37 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	}
 	result, err := standardengine.CaptureCleanupFile(os.NewFile(standardengine.CleanupFD, "original-standard-cleanup"), capture.CleanupDevice, capture.CleanupInode)
 	defer func() { failure = errors.Join(failure, result.Close()) }()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	cleanup := &routerVPNStandardCleanup{result: result, capture: expected}
 	defer func() {
-		deadline := time.Now().Add(4*time.Second)
+		deadline := time.Now().Add(4 * time.Second)
 		startupFailed := failure != nil
-		if startupFailed && deadline.After(time.Unix(0,capture.DeadlineNS)) { deadline = time.Unix(0,capture.DeadlineNS) }
+		if startupFailed && deadline.After(time.Unix(0, capture.DeadlineNS)) {
+			deadline = time.Unix(0, capture.DeadlineNS)
+		}
 		// Missing/rejected Ready still fails the parent's startup exchange. A
 		// zero child exit here reports only successful original cleanup.
 		failure = standardengine.RetireOriginal(result, expected, deadline, startupFailed, cleanup.retire)
 	}()
+	operations, err := standardengine.CaptureOperationFile(os.NewFile(standardengine.OperationFD, "original-standard-operations"), capture.OperationDevice, capture.OperationInode, capture.OperationSize, capture.OperationLayout, expected)
+	cleanup.operations = operations // Retained even when capture fails, before construction.
+	if err != nil {
+		return err
+	}
 	remaining := time.Until(time.Unix(0, capture.DeadlineNS))
 	if remaining <= 0 || remaining > 2*time.Minute {
 		return errors.New("standard startup lost its original deadline")
 	}
 	startup, cancel := context.WithDeadline(lifetime, time.Unix(0, capture.DeadlineNS))
 	defer cancel()
+
 	channel, err := linuxprocess.CaptureChannel(os.NewFile(standardengine.ChannelFD, "original-standard-channel"))
 	cleanup.channel = channel
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	imageFile := os.NewFile(3, "original-sealed-executable")
 	defer imageFile.Close()
 	if err := linuxprocess.SetCloseOnExec(imageFile); err != nil {
@@ -100,7 +112,9 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	peer, err := linuxprocess.BindInheritedSealedParent(startup, channel, parentFile, expected, image)
 	channel, parentFile, cleanup.channel = nil, nil, nil
 	cleanup.peer = peer
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	raw, err = standardengine.ReadSealed(configFile, standardengine.MaxConfig)
 	if err != nil || standardengine.SHA256(raw) != capture.ConfigSHA256 {
 		return errors.New("standard command lost its original sealed configuration")
@@ -152,6 +166,9 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(ledger)
 	if err != nil || receipt.Name != shape.Name || receipt.Index < 1 || receipt.MTU != shape.MTU {
 		return errors.New("standard ledger differs from its actual captured inbound")
+	}
+	if err := operations.AcknowledgeLaunch(startup, ledger); err != nil {
+		return err
 	}
 	body, err := (standardengine.Ready{Schema: 1, CaptureSHA256: expected, NetworkReceipt: ledger}).Canonical()
 	if err != nil {
