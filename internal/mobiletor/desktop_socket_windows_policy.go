@@ -208,13 +208,32 @@ func desktopWindowsInterfaceLUID(index uint32) (uint64, error) {
 // and are removed by its separately bounded/retryable cleanup.
 func desktopWindowsPolicyCall[T any](p *DesktopWindowsSocketPolicy, ctx context.Context, cleanup bool, operation func() (T, error)) (T, error) {
 	var zero T
-	if p == nil || ctx == nil || ctx.Err() != nil || !cleanup && (p.ctx.Err() != nil || p.retired.Load()) {
+	if p == nil || ctx == nil {
 		return zero, net.ErrClosed
+	}
+	callerErr := ctx.Err()
+	if !cleanup && (p.ctx == nil || p.ctx.Err() != nil || p.retired.Load()) {
+		return zero, errors.Join(callerErr, net.ErrClosed)
+	}
+	if callerErr != nil {
+		return zero, callerErr
 	}
 	select {
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	case <-p.gate:
+	}
+	// Gate release and caller/owner cancellation can become ready together.
+	// Recheck admission before creating a native operation; already entered
+	// work below still retains this same gate until its real owner joins.
+	callerErr = ctx.Err()
+	if !cleanup && (p.ctx == nil || p.ctx.Err() != nil || p.retired.Load()) {
+		p.gate <- struct{}{}
+		return zero, errors.Join(callerErr, net.ErrClosed)
+	}
+	if callerErr != nil {
+		p.gate <- struct{}{}
+		return zero, callerErr
 	}
 	type result struct {
 		value T

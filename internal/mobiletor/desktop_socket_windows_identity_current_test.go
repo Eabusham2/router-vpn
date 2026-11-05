@@ -7,9 +7,85 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestWindowsPolicyAdmissionPreservesOriginalCancellation(t *testing.T) {
+	for _, retired := range []bool{false, true} {
+		name := "healthy-owner"
+		if retired {
+			name = "confirmed-owner-loss"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			p := &DesktopWindowsSocketPolicy{ctx: context.Background(), gate: make(chan struct{}, 1)}
+			p.retired.Store(retired)
+			p.gate <- struct{}{}
+			called := false
+			_, err := desktopWindowsPolicyCall(p, ctx, false, func() (struct{}, error) { called = true; return struct{}{}, nil })
+			if !errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) != retired || called || len(p.gate) != 1 {
+				t.Fatal("expired original caller changed admission or owner-loss evidence", err, called)
+			}
+		})
+	}
+}
+
+type windowsPolicyGateContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *windowsPolicyGateContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestWindowsPolicyAdmissionRechecksOriginalOwnerAfterGate(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		name := "work"
+		if cleanup {
+			name = "owned-cleanup"
+		}
+		t.Run(name, func(t *testing.T) {
+			p := &DesktopWindowsSocketPolicy{ctx: context.Background(), gate: make(chan struct{}, 1)}
+			ctx := &windowsPolicyGateContext{Context: t.Context(), entered: make(chan struct{})}
+			called := make(chan struct{}, 1)
+			done := make(chan error, 1)
+			go func() {
+				_, err := desktopWindowsPolicyCall(p, ctx, cleanup, func() (struct{}, error) { called <- struct{}{}; return struct{}{}, nil })
+				done <- err
+			}()
+			select {
+			case <-ctx.entered:
+			case <-time.After(time.Second):
+				t.Fatal("original policy did not wait for its gate")
+			}
+			p.retired.Store(true)
+			p.gate <- struct{}{}
+			select {
+			case err := <-done:
+				if cleanup {
+					if err != nil || len(called) != 1 {
+						t.Fatal("original retired policy lost its owned cleanup", err)
+					}
+				} else if !errors.Is(err, net.ErrClosed) || len(called) != 0 {
+					t.Fatal("retired owner admitted new native work after gate wait", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("original policy did not finish gate admission")
+			}
+			select {
+			case <-p.gate:
+			case <-time.After(time.Second):
+				t.Fatal("rejected or joined operation lost the original gate")
+			}
+		})
+	}
+}
 
 func identityCurrentFixture(t *testing.T) (*DesktopWindowsSocketIdentity, DesktopSocketKernelOwner) {
 	t.Helper()
