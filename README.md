@@ -116,33 +116,37 @@ CI also compiles supported controller/package targets for Linux ARMv7, BSD and i
 
 ### Windows
 
-Source includes native raw WireGuard, full-device layered TUN/DNS paths, Windows firewall kill-switch handling, real multihop where supported and validated custom exits. WireGuard/SOCKS5/Shadowsocks/Hysteria2 custom exits are supported. The native OpenVPN 2.7 Windows import/helper/adapter work remains in source because Windows OpenVPN is still a project target, but the current product capability intentionally reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. WSL is not counted as the native Windows VPN implementation.
+Source includes native raw WireGuard, full-device layered TUN/DNS paths, Windows firewall ownership, supported multihop graphs and validated custom exits. The retained native external path includes direct Local OpenVPN for the validated inline-profile subset, with Start Layer Off and On-connect or Always protection. It preserves the original ordered TCP/UDP remotes, TLS material, credentials and selected DNS. Availability requires the verified bundled runtime and the captured profile/graph checks; the older OpenVPN 2.7 executable/helper path has separate capability checks. Actual Windows WFP/Wintun execution, packaged delivery and physical leak/network-transition acceptance remain distinct evidence gates. WSL is not counted as the native Windows VPN implementation.
 
 ### macOS
 
-Native routing, PF kill switch, real multihop and standard custom exits are source-implemented. OpenVPN 2.7 supports direct and safe TCP-over-entry cases; unsupported combinations fail closed. Signing/notarization and physical networking/visual validation remain release gates.
+The native AppKit application includes routing, PF protection, supported multihop graphs and validated custom exits. The bundled OpenVPN endpoint preserves the validated inline profile and supported captured entry/final graph; legacy OpenVPN 2.7 executable helpers retain their own transport limits. Signing/notarization and physical networking/visual validation remain release gates. See [current implementation status](docs/CURRENT-STATUS.md) for the separate source, native and delivery evidence.
 
 ### Linux
 
-Native GTK app with broad native runtime coverage, nftables kill switch, real multihop and validated custom exits including native OpenVPN 2.7 direct/safe TCP-over-entry support. Live distro/integration/leak-negative validation remains a release gate.
+The native GTK application includes nftables protection, supported multihop graphs and validated custom exits, including the bundled native OpenVPN endpoint for its bounded inline-profile subset. Each entry/final composition retains its own host and protection checks. Live distribution, desktop-integration and leak tests remain separate from source and native CI.
 
 ### Android
 
-Android is a real native `VpnService` implementation with WireGuard, AmneziaWG and the pinned combined libbox/Xray runtime for supported layered modes. AUTO/SMART/CUSTOM, strict-policy handling, exact selected-node proof and a narrow real multihop subset are source-implemented. WireGuard/SOCKS5/Shadowsocks/Hysteria2 custom exits are supported; OpenVPN and unsupported mixed-engine/AWG-entry multihop remain unavailable rather than simulated.
+Android uses one owned `VpnService` with WireGuard, AmneziaWG and the pinned combined Libbox/Xray runtime. Source includes AUTO/SMART/CUSTOM, Tor, supported layered/MAX and multihop graphs, selected-node/DNS proofs and validated external imports. OpenVPN uses the real bundled endpoint for the [documented inline-profile subset](docs/MOBILE-OPENVPN.md). Imported SS2022 or Hysteria2 entries can reach paired SS2022 or Hysteria2 finals through the [captured Local path](docs/MOBILE-IMPORTED-ROUTER-PATH.md). Other graph and execution combinations retain their individual readiness checks and unfinished requirements. APK builds, signing and physical VPN/lockdown/leak/transition tests are separate acceptance evidence.
 
 ### iOS / iPadOS
 
-The PacketTunnel uses pinned WireGuardKit for real raw WireGuard and the pinned Libbox Apple bridge for supported Router VPN layered profiles. Strict mode uses NetworkExtension route-lockdown controls and fails closed if they are not active. External WireGuard/SOCKS5/Shadowsocks/Hysteria2 use the Libbox PacketTunnel path with exact expected-public-exit proof. OpenVPN, AmneziaWG-only paths and full desktop-equivalent multihop remain unavailable until real pinned Apple dataplanes exist for those capabilities.
+The SwiftUI application uses its owned PacketTunnel, pinned WireGuardKit for applicable raw WireGuard paths and the pinned Libbox/Xray integration for supported native graphs. Source includes imported AmneziaWG, bounded [OpenVPN](docs/MOBILE-OPENVPN.md), Tor, layered/MAX and multihop paths. Strict sessions require the selected NetworkExtension route-lockdown and LAN policy; ordinary external paths require selected DNS and expected-public-exit proof. Imported SS2022/Hysteria2 entries support the [captured Local paired-final path](docs/MOBILE-IMPORTED-ROUTER-PATH.md). Per-graph readiness, Xcode builds, signing/distribution and physical iPhone/iPad networking remain separate checks; these implementations do not establish every requested combination or device acceptance.
 
 ## Custom standard-protocol exits
 
-Custom exits are separate from Router VPN `CUSTOM` transport selection and Setup Center Methods. Current product capability:
+Custom exits are separate from Router VPN `CUSTOM` transport selection and Setup Center Methods. The native source contains these import families on Windows, macOS, Linux, Android and iOS/iPadOS; actual availability also requires the packaged runtime, valid imported profile and supported captured graph:
 
 - WireGuard — Windows/macOS/Linux/Android/iOS
+- AmneziaWG — Windows/macOS/Linux/Android/iOS, preserving supplied parameters
 - SOCKS5 — Windows/macOS/Linux/Android/iOS
+- HTTP CONNECT / HTTPS CONNECT — Windows/macOS/Linux/Android/iOS, with captured TLS identity for HTTPS
 - Shadowsocks — Windows/macOS/Linux/Android/iOS
 - Hysteria2 — Windows/macOS/Linux/Android/iOS
-- OpenVPN 2.7 — Linux/macOS where the required runtime and requested direct/hop policy are safely supported; Windows import/helper/adapter source exists but remains unavailable until native strict lifecycle/leak validation passes
+- OpenVPN — bundled native endpoint for the validated inline-profile subset on all five platforms; desktop OpenVPN 2.7 executable/helper compatibility is a separate path
+
+Source presence does not certify every direct/hop/Start Layer combination, a current release or physical-device acceptance. [Current status](docs/CURRENT-STATUS.md) records the bounded implementations and remaining evidence.
 
 Private external-profile credentials stay in platform-private storage. Public list/status/profile APIs expose redacted summaries only. Connected requires exact selected-node/private-exit proof or exact expected-public-exit proof; generic Internet reachability is insufficient.
 

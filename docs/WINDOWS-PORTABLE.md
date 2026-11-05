@@ -68,7 +68,7 @@ Windows source includes native raw WireGuard, full-device layered TUN/DNS paths,
 
 ## Custom standard exits
 
-Validated Windows custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. OpenVPN 2.7 profile import and native helper/adapter source are implemented as the Windows OpenVPN target, but the current product capability deliberately reports OpenVPN unavailable until strict Windows lifecycle cleanup passes native leak tests. Connected is withheld until the exact expected public exit is proven for every supported exit.
+The retained native external path includes validated WG/AWG, SOCKS5, HTTP(S) CONNECT, SS2022, Hysteria2 and direct Local OpenVPN imports. OpenVPN uses the bundled native endpoint for its bounded inline-profile subset, with Start Layer Off and On-connect or Always protection. It preserves the ordered TCP/UDP remotes, original TLS material, credentials and selected DNS. The older OpenVPN 2.7 executable/helper path has separate capability checks. Availability requires the verified packaged runtime and the selected graph's readiness; Connected also requires its exact expected public exit and selected DNS proof. Native WFP/Wintun, Portable execution/relocation and physical-device leak/transition acceptance remain separate evidence gates.
 
 ## Logical modes
 

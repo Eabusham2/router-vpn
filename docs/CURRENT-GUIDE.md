@@ -303,31 +303,31 @@ CI also compiles supported ARMv7/BSD/illumos controller targets where documented
 
 ### Windows
 
-The daily-use app is native WPF. Raw/native WireGuard, native full-device layered TUN paths, Router VPN DNS policy, Windows firewall kill-switch handling and real multihop source paths are implemented. WSL is not counted as the native Windows VPN implementation. Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. OpenVPN 2.7 profile import and native helper/adapter source remain implemented because Windows OpenVPN is still a project target, but current product capability reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. Expected public exit must be proven before Connected for every supported exit.
+The daily-use app is native WPF. It includes native WireGuard, layered TUN paths, Router VPN DNS policy, Windows firewall ownership and supported multihop graphs. The retained native external path supports direct Local OpenVPN for the validated inline-profile subset with Start Layer Off and On-connect or Always protection, preserving ordered TCP/UDP remotes, TLS material, credentials and selected DNS. Its capability checks the verified bundled runtime; the older OpenVPN 2.7 executable/helper path has separate checks. Other imported families include WG/AWG, SOCKS5, HTTP(S) CONNECT, SS2022 and Hysteria2, subject to their captured graph checks. Expected public exit and selected DNS must be proved before Connected. WSL is not counted as native Windows execution.
 
-**Release gate:** physical Windows full-device routing, DNS/IPv4/IPv6, leak-negative behavior, reconnect/network change, custom exits and installed/Portable package variants. Windows OpenVPN remains unavailable until its native strict lifecycle/leak gate passes.
+**Release gate:** exact-SHA native WFP/Wintun and package checks, followed by physical Windows routing, DNS/IPv4/IPv6, leak-negative behavior, reconnect/network change, supported custom exits and installed/Portable variants. Source admission alone does not establish those results.
 
 ### macOS
 
-The daily-use app is native AppKit/MapKit. Native routing, PF kill switch, real multihop and validated custom exits are source-implemented. WireGuard/SOCKS5/Shadowsocks/Hysteria2 are supported custom exits; OpenVPN 2.7 is supported for direct and the safe TCP-over-entry case, with unsupported DNS/hop combinations failing closed.
+The daily-use app is native AppKit/MapKit. Native routing, PF protection, supported multihop graphs and validated custom exits are implemented in source. The bundled OpenVPN endpoint preserves its validated inline profile and supported captured entry/final graph; the older OpenVPN 2.7 executable helpers retain their own transport limits. See [current status](CURRENT-STATUS.md) for the individual retained graph and native evidence boundaries.
 
 **Release gate:** physical macOS networking/custom-exit/visual validation plus signing/notarization.
 
 ### Linux
 
-The daily-use app is native GTK. Linux has broad native runtime coverage, nftables kill switch, real multihop, validated external-node import/direct/hopped paths, measured node sorting and native OpenVPN 2.7 direct/safe TCP-over-entry support with expected-public-exit proof.
+The daily-use app is native GTK. Linux has native runtime coverage, nftables protection, supported multihop graphs, validated external imports, measured node sorting and a bundled OpenVPN endpoint for its bounded inline-profile subset. Each direct or hopped graph must preserve its actual native owner, selected DNS and expected-public-exit proof; the [current status](CURRENT-STATUS.md) identifies the implemented combinations and unfinished work.
 
 **Release gate:** live distro/runtime/desktop integration and leak-negative/custom-exit validation.
 
 ### Android
 
-Android is a native `VpnService` application. It has real WireGuard and AmneziaWG paths plus the pinned combined libbox/Xray path for supported layered modes, AUTO/SMART/CUSTOM orchestration, strict-policy handling, exact selected-node proof and a deliberately narrow real multihop subset. External WireGuard, SOCKS5, Shadowsocks and Hysteria2 exits use one full-device path and exact expected-public-exit proof. OpenVPN and unsupported mixed-engine/AWG-entry multihop stay unavailable rather than simulated.
+Android uses one owned `VpnService` with WireGuard, AmneziaWG and the pinned combined Libbox/Xray runtime. Source includes AUTO/SMART/CUSTOM, Tor, supported layered/MAX and multihop graphs, selected-node/DNS proofs and validated external imports, including the [native OpenVPN inline-profile subset](MOBILE-OPENVPN.md). Imported SS2022 or Hysteria2 entries can use the [captured Local paired SS2022/Hysteria2 final](MOBILE-IMPORTED-ROUTER-PATH.md). Other graph or execution choices retain their own readiness and remaining implementation obligations.
 
 **Release gate:** physical Android VPN permission, lockdown, reconnect/network-change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests.
 
 ### iOS / iPadOS
 
-The SwiftUI app uses a real pinned WireGuardKit PacketTunnel for raw WireGuard and a pinned Libbox Apple bridge for supported Router VPN layered profiles. Strict mode uses NetworkExtension route-lockdown controls and fails closed if those controls are not active. External WireGuard, SOCKS5, Shadowsocks and Hysteria2 use the Libbox PacketTunnel path and exact expected-public-IP proof. External OpenVPN, AmneziaWG-only paths and full desktop-equivalent multihop remain unavailable unless a real pinned Apple dataplane exists; MAX/ALL names do not grant readiness.
+The SwiftUI app uses one owned PacketTunnel, pinned WireGuardKit for applicable raw WireGuard paths and the pinned Libbox/Xray integration for supported graphs. Source includes imported AmneziaWG, the [native OpenVPN inline-profile subset](MOBILE-OPENVPN.md), Tor, layered/MAX and multihop paths. Strict sessions require the captured NetworkExtension route-lockdown and LAN policy; ordinary external exits require selected DNS and expected-public-exit proof. Imported SS2022/Hysteria2 entries support the [captured Local paired-final path](MOBILE-IMPORTED-ROUTER-PATH.md). Every graph still requires its real credentials, engine and proof; a MAX/ALL label does not grant readiness.
 
 **Release gate:** physical iPhone/iPad permission, route lockdown, reconnect/network change, DNS/IPv4/IPv6, Libbox/external-exit traffic, leak-negative behavior and signing validation.
 

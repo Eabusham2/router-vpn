@@ -4755,9 +4755,11 @@ Hysteria2 and OpenVPN paths exposed by native hosts. Ordinary external exits
 prove the saved expected public IP. Tor uses its separate owned public-exit
 proof. Plain proxies are not labeled authenticated encrypted VPNs.
 
-Windows OpenVPN capability checks its installed native runtime/helper; it is
-not unconditionally disabled. Mobile OpenVPN uses the pinned userspace TLS
-client and documented inline-profile subset. Exact transport, authentication,
+The current Windows external-profile API checks its verified bundled native
+OpenVPN runtime; the older OpenVPN 2.7 executable/helper path has separate
+capability checks. Retained direct Local OpenVPN supports the validated inline
+subset with Start Layer Off and On-connect/Always protection. Mobile OpenVPN
+uses the pinned userspace TLS client and documented inline-profile subset. Exact transport, authentication,
 certificate and hop requirements still apply; see [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md).
 
 ## Server and private production
