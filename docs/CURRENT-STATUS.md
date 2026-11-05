@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`2873d854`, the integrated observation change in `a94cde9d`, and the installed
+`e7d5b43c`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -25,6 +25,13 @@ journal race tests. Six native nft cases and three installed transfer cases are
 mandatory but have not executed locally; the installed inventory is 420 cases.
 Reverse Node-to-standard transfer, generic boot-owner succession, active Always
 upgrades and same-boot crash continuation remain separate source requirements.
+
+The MAX TLS reference now retains actual native TCP/UDP pairs for its variable
+packet and middle endpoints instead of assuming fixed ports are available.
+All 21 port-pair leaves and their parent pass under race while TCP51820 is held;
+the former fixture fails exactly its two intended leaves under that condition.
+The fixed graph aliases, original-handle checks and three-attempt cap remain.
+Actual native-PQ/MAX/WFP and Windows ARM64 acceptance remain CI requirements.
 
 Original caller deadlines now reach native manager, graph, network, physical,
 PT/broker, selected-proof and OpenVPN observations. Pure observation expiry

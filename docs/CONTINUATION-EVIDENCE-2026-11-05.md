@@ -953,6 +953,41 @@ native whole-owner fixture failure, reproduced unchanged without the patch; that
 local environment result is retained rather than claimed repaired. Actual ARM64
 execution, the full native matrix and release publication remain CI obligations.
 
+## MAX fixture retains native paired variable endpoints
+
+Windows ARM64 TLS MAX job `127051958617` at `a7b8adc` failed the packet-alias
+and exhausted-front leaves because its fixed TCP `127.0.0.1:51820` bind returned
+an access-permissions error. The corresponding fixture source was still
+unchanged at `e7d5b43c`. A successful UDP bind does not prove the same TCP port
+is available. The packet and middle roles now use the existing bounded native
+TCP/UDP pair allocator and retain both actual handles. The first forced alias
+returns that original TCP listener; the test proves it closes before another
+candidate is selected. Exhaustion retains its own original pair and still
+requires exactly three attempts on the captured port. Fixed KEM/whitening,
+foreign/missing/error and ownership assertions remain intact.
+
+The exact contiguous fixture declarations, including the unchanged complete
+port-pair test, pass under race in 1.057s: the parent and all 21 required leaves.
+A separate actual TCP listener holds port 51820 throughout this check. Under
+that same condition, the previous source fails only the two intended TLS-front
+leaves (plus their parent) in 0.042s; the other 19 leaves pass. This is a real
+local socket conflict, not a modeled Winsock return or a Windows runtime pass.
+All 13 existing runner checks pass. The complete native-PQ/MAX/WFP suites and
+actual Windows ARM64 execution remain required by CI.
+
+The later completed Windows native job `127057775397` at `b88449dc` passes all
+14 pinned drain command/wrapper cases, installed/Portable Session, socket/WFP
+ownership and its subsequent protection/UI steps with unchanged deadlines.
+Its two failed steps are the old foundation and GUI harness checks addressed
+in `e90d6f9d`; this historical job is not a full successful current release.
+
+Before publication, the expected-head guard detected concurrent `d532d29e`
+and `e7d5b43c`. Both complete upstream changes were preserved by normal ancestry,
+and 32 pending graph/reverse-transfer/fixture files were verified unchanged.
+The independently tested local native-error alternative was superseded before
+publication by `e7d5b43c`'s broader typed-failure handling; it must not be replayed.
+Its earlier local test results do not certify the newer upstream implementation.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

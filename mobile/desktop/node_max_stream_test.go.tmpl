@@ -193,17 +193,39 @@ func (p *nodeMAXPairCloseFailure) Close() error {
 
 func nodeMAXTLSFrontCases(t *testing.T) {
 	ip := netip.MustParseAddr("127.0.0.1")
-	const packetPort, middlePort = uint16(51820), uint16(31001)
+	// Packet and middle destinations are captured dynamically by the actual
+	// complete MAX fixture. Prove both native protocols here too: a successful
+	// UDP bind alone cannot establish that Windows permits the equal TCP port.
+	retain := func(t *testing.T, excluded ...uint16) (*net.TCPListener, *net.UDPConn) {
+		t.Helper()
+		tcp, udp := nodeMAXBoth(t, ip, excluded...)
+		original, ok := tcp.(*net.TCPListener)
+		if !ok {
+			t.Fatal("TLS alias fixture lost its actual retained TCP owner")
+		}
+		return original, udp
+	}
+	packetTCP, packetUDP := retain(t, 51822, 8389)
+	packetPort := packetUDP.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+	middleTCP, middleUDP := retain(t, packetPort, 51822, 8389)
+	middlePort := middleUDP.LocalAddr().(*net.UDPAddr).AddrPort().Port()
 	for _, tc := range []struct {
-		name string
-		port uint16
-	}{{"packet", packetPort}, {"kem", 51822}, {"middle", middlePort}, {"whitening", 8389}} {
+		name     string
+		port     uint16
+		original *net.TCPListener
+		peer     *net.UDPConn
+	}{{"packet", packetPort, packetTCP, packetUDP}, {"kem", 51822, nil, nil},
+		{"middle", middlePort, middleTCP, middleUDP}, {"whitening", 8389, nil, nil}} {
 		t.Run("tls-front-"+tc.name, func(t *testing.T) {
 			// A real UDP owner does not reserve the equal TCP port. Force the
 			// original allocator to produce that legal but graph-aliased front.
-			peer, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, tc.port)))
-			if err != nil {
-				t.Fatal(err)
+			peer := tc.peer
+			var err error
+			if peer == nil {
+				peer, err = net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, tc.port)))
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			t.Cleanup(func() { _ = peer.Close() })
 			var rejected, accepted *net.TCPListener
@@ -214,6 +236,10 @@ func nodeMAXTLSFrontCases(t *testing.T) {
 					t.Fatal("TLS front replaced its captured allocation request")
 				}
 				if calls == 1 {
+					if tc.original != nil {
+						rejected = tc.original
+						return rejected, nil
+					}
 					rejected, err = net.ListenTCP(network, net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, tc.port)))
 					return rejected, err
 				}
@@ -259,15 +285,21 @@ func nodeMAXTLSFrontCases(t *testing.T) {
 		})
 	}
 	t.Run("tls-front-exhausted", func(t *testing.T) {
+		first, peer := retain(t, packetPort, middlePort, 51822, 8389)
+		capturedPacketPort := peer.LocalAddr().(*net.UDPAddr).AddrPort().Port()
 		var original *net.TCPListener
 		calls := 0
-		front, err := nodeMAXTLSFront(ip, packetPort, middlePort, func(network string, _ *net.TCPAddr) (*net.TCPListener, error) {
+		front, err := nodeMAXTLSFront(ip, capturedPacketPort, middlePort, func(network string, _ *net.TCPAddr) (*net.TCPListener, error) {
 			calls++
 			if original != nil && original.SetDeadline(time.Now()) == nil {
 				t.Fatal("exhausted front retained its previous alias")
 			}
+			if calls == 1 {
+				original = first
+				return original, nil
+			}
 			var err error
-			original, err = net.ListenTCP(network, net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, packetPort)))
+			original, err = net.ListenTCP(network, net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, capturedPacketPort)))
 			return original, err
 		})
 		if front != nil {
