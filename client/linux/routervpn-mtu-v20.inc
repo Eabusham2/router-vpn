@@ -13,7 +13,7 @@ typedef struct {
     gboolean job_after_run[LINUX_MTU_JOBS_V20];
     RVHttpJobV16 *jobs[LINUX_MTU_JOBS_V20];
     char *session, *profile, *request, *message, *details, *post_error;
-    gboolean seen, own, cancelled, cancel_ack, terminal, retired, closing, detaching, run_done, optimization_allowed;
+    gboolean seen, own, cancelled, cancel_ack, committed, terminal, retired, closing, detaching, run_done, optimization_allowed;
     gint64 next_poll, deadline;
 } LinuxMTUV20;
 
@@ -120,6 +120,7 @@ static gboolean linux_mtu_receive_v20(LinuxMTUV20 *s,JsonObject *reply,gboolean 
         else if(failure!=NULL&&failure[0]){char *text=g_strdup_printf("MTU test failed: %.512s",failure);linux_mtu_message_v20(s,text);g_free(text);}
         else linux_mtu_message_v20(s,"The test ended without a new MTU measurement.");
     }else if(candidate){linux_mtu_message_v20(s,"The controller is finishing this test. Waiting for its final captured status.");g_clear_pointer(&s->details,g_free);}
+    else if(s->committed)linux_mtu_message_v20(s,"The measured MTU is already applied. Waiting for this test to finish.");
     else if(s->cancelled)linux_mtu_message_v20(s,"Cancelling; waiting for this test to finish its restoration.");
     else if(waiting)linux_mtu_message_v20(s,"Saving the verified MTU...");
     else if(running){char *text=g_strdup_printf("MTU test: %.128s",phase!=NULL&&phase[0]?phase:"measuring the captured path");linux_mtu_message_v20(s,text);g_free(text);}
@@ -145,7 +146,7 @@ static gboolean linux_mtu_start_v20(LinuxMTUV20 *s) {
     if(s->app!=NULL&&linux_async_busy_v16(s->app)){linux_mtu_message_v20(s,"Another Router VPN action is running. Wait for it to finish.");return FALSE;}
     rv_http_cancel_v16(s->jobs[LINUX_MTU_POLL_V20]);s->generation++;
     char *uuid=g_uuid_string_random();GString *id=g_string_new(NULL);for(char *p=uuid;*p;p++)if(*p!='-')g_string_append_c(id,*p);g_free(uuid);
-    g_free(s->request);s->request=g_string_free(id,FALSE);s->seen=FALSE;s->own=TRUE;s->terminal=FALSE;s->cancelled=FALSE;s->cancel_ack=FALSE;s->run_done=FALSE;
+    g_free(s->request);s->request=g_string_free(id,FALSE);s->seen=FALSE;s->own=TRUE;s->terminal=FALSE;s->cancelled=FALSE;s->cancel_ack=FALSE;s->committed=FALSE;s->run_done=FALSE;
     g_clear_pointer(&s->post_error,g_free);g_clear_pointer(&s->details,g_free);s->next_poll=0;s->deadline=g_get_monotonic_time()+180*G_USEC_PER_SEC;
     linux_mtu_message_v20(s,"Submitting Retest for this connection...");char *body=linux_mtu_body_v20(s,TRUE);
     gboolean ok=linux_mtu_start_job_v20(s,LINUX_MTU_RUN_V20,"/api/mtu/retest",body,150000,FALSE);g_free(body);
@@ -191,7 +192,13 @@ static gboolean linux_mtu_tick_v20(gpointer data) {
             }else if(kind==LINUX_MTU_CANCEL_V20){
                 s->completion++;s->terminal=s->retired;rv_http_cancel_v16(s->jobs[LINUX_MTU_POLL_V20]);
                 const char *id=linux_mtu_string_v20(reply,"request_id"),*phase=linux_mtu_string_v20(reply,"phase");
-                if(code==200&&g_strcmp0(id,s->request)==0&&g_strcmp0(phase,"canceling")==0)s->cancel_ack=TRUE;
+                gboolean committed=FALSE,ok=FALSE;
+                if(code==200&&g_strcmp0(id,s->request)==0&&g_strcmp0(linux_mtu_string_v20(reply,"session_id"),s->session)==0&&
+                   g_strcmp0(phase,"finishing")==0&&linux_mtu_bool_v20(reply,"ok",&ok)&&ok&&
+                   linux_mtu_bool_v20(reply,"committed",&committed)&&committed){
+                    s->cancel_ack=TRUE;s->committed=TRUE;
+                    linux_mtu_message_v20(s,"The measured MTU is already applied. Waiting for this test to finish.");
+                }else if(code==200&&g_strcmp0(id,s->request)==0&&g_strcmp0(phase,"canceling")==0)s->cancel_ack=TRUE;
                 else if(code==409)linux_mtu_message_v20(s,"Cancellation raced a completed or changed operation. Checking only the captured request.");
                 else if(code!=404||s->seen){if(s->own)rv_http_cancel_v16(s->jobs[LINUX_MTU_RUN_V20]);linux_mtu_message_v20(s,"Cancellation was not confirmed. Waiting for captured status; Cancel can be retried.");}
                 s->next_poll=0;

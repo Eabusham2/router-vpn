@@ -19,6 +19,10 @@ class StandardServiceGateTests(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('standard_worker_stop',ROOT/'deploy/test_standard_worker_stop.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.execute()
 
+    def test_actual_shared_run_clock_and_causals(self):
+        spec=importlib.util.spec_from_file_location('standard_run_clock',ROOT/'deploy/test_standard_run_clock.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.execute()
+
     def test_exact_source_inventory(self):
         gate.validate_inventory(ROOT)
 

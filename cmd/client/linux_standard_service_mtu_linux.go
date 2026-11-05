@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"router-vpn/internal/desktopnetwork"
@@ -16,17 +17,23 @@ import (
 // The installed service owns this state beside its actual child. No RPC can
 // acquire another child, interface, observer or protection creator from a name.
 type linuxStandardServiceMTU struct {
-	session   *linuxStandardServiceSession
-	native    *linuxStandardEngine
-	current   standardengine.ReaderBinding
-	ready     string
-	sequence  uint64
-	active    *linuxStandardServiceMTUOperation
-	seen      map[string]struct{}
-	exhausted bool
+	run                  *standardengine.OperationRun
+	rejectedRuns         map[string]standardengine.OperationRun
+	runCleanupDeadlineNS int64
+	session              *linuxStandardServiceSession
+	native               *linuxStandardEngine
+	current              standardengine.ReaderBinding
+	ready                string
+	sequence             uint64
+	active               *linuxStandardServiceMTUOperation
+	seen                 map[string]struct{}
+	exhausted            bool
 }
 
 type linuxStandardServiceMTUOperation struct {
+	runBound     bool
+	run          *standardengine.OperationRun
+	cleanupOnly  bool
 	command      standardengine.OperationCommand
 	transition   *desktopnetwork.Transition
 	original     string
@@ -42,7 +49,7 @@ type linuxStandardServiceMTUOperation struct {
 
 func (s *linuxStandardService) mtuOwner(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest) (*linuxStandardServiceMTU, error) {
 	session := s.session
-	recovery := request.Action == "mtu-status" || request.Action == "mtu-cancel" || request.Action == "mtu-evidence" || request.Action == "mtu-ack" || request.Action == "mtu-cleanup"
+	recovery := request.Action == "mtu-status" || request.Action == "mtu-cancel" || request.Action == "mtu-evidence" || request.Action == "mtu-ack" || request.Action == "mtu-cleanup" || request.Action == "mtu-run-cleanup" || request.Action == "mtu-run-status" || request.Action == "mtu-run-close" || request.Action == "mtu-reject-ack"
 	if session == nil || session.peer == nil || peer == nil || session.peer.record != peer.record || session.request.Session != request.Session ||
 		session.joined || session.cleanupPending && !recovery || session.owner == nil || session.owner.native == nil || session.network == nil {
 		return nil, errors.New("standard MTU lost its original live service session")
@@ -122,6 +129,9 @@ func (m *linuxStandardServiceMTU) matches(request *linuxStandardServiceMTUReques
 	if request == nil || m.active == nil {
 		return errors.New("standard MTU request has no retained original operation")
 	}
+	if m.active.run != nil && (request.Run == nil || *request.Run != *m.active.run) {
+		return errors.New("standard MTU transaction changed original run")
+	}
 	key := m.active.command.Reservation.Key
 	if request.Reservation != nil {
 		if *request.Reservation != m.active.command.Reservation || request.ID != "" || request.Expected != nil || request.DeadlineNS != 0 {
@@ -154,6 +164,9 @@ func (m *linuxStandardServiceMTU) begin(ctx context.Context, request *linuxStand
 			return errors.New("standard MTU still retains its original unsettled transaction")
 		}
 	}
+	if err := m.bindRunCommand(ctx, request); err != nil {
+		return err
+	}
 	if _, used := m.seen[request.ID]; used {
 		return errors.New("standard MTU operation identity was already retired")
 	}
@@ -173,6 +186,11 @@ func (m *linuxStandardServiceMTU) begin(ctx context.Context, request *linuxStand
 	m.sequence++
 	key := standardengine.OperationKey{CaptureSHA256: m.native.captureSHA, ID: request.ID, Sequence: m.sequence, DeadlineNS: request.DeadlineNS, Original: m.current}
 	op := &linuxStandardServiceMTUOperation{command: standardengine.OperationCommand{Reservation: standardengine.OperationReservation{Key: key}, MTU: request.MTU}, original: m.ready, noSubmission: true}
+	if m.run != nil {
+		copy := *m.run
+		op.run = &copy
+		op.cleanupOnly = request.CleanupOnly
+	}
 	m.active = op
 	m.remember(request.ID)
 	if m.exhausted {
@@ -194,6 +212,10 @@ func (m *linuxStandardServiceMTU) begin(ctx context.Context, request *linuxStand
 	if transition == nil {
 		op.rejection = "standard MTU observer admission was not submitted"
 		return errors.New("standard MTU did not retain its original observer transition")
+	}
+	if err := m.native.operations.BindOperationRun(ctx, op.command, *m.run, request.CleanupOnly); err != nil {
+		op.rejection = "standard MTU run binding was not submitted"
+		return err
 	}
 	op.noSubmission = false // A failed write can still have published its frame.
 	if err := m.native.operations.SubmitCommand(ctx, op.command); err != nil {
@@ -220,6 +242,9 @@ func (m *linuxStandardServiceMTU) remember(id string) {
 // A cancellation/status can overtake a lost begin packet. Retain that exact
 // never-submitted intent so the delayed begin cannot execute after rejection.
 func (m *linuxStandardServiceMTU) rejectUnknown(ctx context.Context, q *linuxStandardServiceMTURequest) error {
+	if q == nil || q.Run == nil || m.run == nil || *q.Run != *m.run {
+		return errors.New("standard MTU cancellation lost original run")
+	}
 	if q == nil || q.Reservation != nil || !desktopMTURequestPattern.MatchString(q.ID) || q.Expected == nil || *q.Expected != m.current || q.DeadlineNS <= 0 || q.DeadlineNS > time.Now().Add(120*time.Second).UnixNano() || m.ready == "" {
 		return errors.New("standard MTU unknown intent cannot acquire cancellation authority")
 	}
@@ -231,7 +256,7 @@ func (m *linuxStandardServiceMTU) rejectUnknown(ctx context.Context, q *linuxSta
 	}
 	m.remember(q.ID)
 	key := standardengine.OperationKey{CaptureSHA256: m.native.captureSHA, ID: q.ID, DeadlineNS: q.DeadlineNS, Original: *q.Expected}
-	m.active = &linuxStandardServiceMTUOperation{command: standardengine.OperationCommand{Reservation: standardengine.OperationReservation{Key: key}}, original: m.ready, noSubmission: true, rejection: "standard MTU request was cancelled before native submission"}
+	m.active = &linuxStandardServiceMTUOperation{command: standardengine.OperationCommand{Reservation: standardengine.OperationReservation{Key: key}}, original: m.ready, run: q.Run, noSubmission: true, rejection: "standard MTU request was cancelled before native submission"}
 	return m.poll(ctx)
 }
 
@@ -260,7 +285,25 @@ func (m *linuxStandardServiceMTU) finishRejection(ctx context.Context, op *linux
 	if err != nil {
 		return err
 	}
-	op.ended, op.settled = true, true
+	if op.reserved {
+		if op.run == nil {
+			return errors.New("standard MTU unsubmitted reservation lost original run")
+		}
+		run, cleanup, bound, e := m.native.operations.CommandOperationRun(ctx, op.command)
+		if e != nil {
+			return e
+		}
+		if bound {
+			if run != *op.run || cleanup != op.cleanupOnly {
+				return errors.New("standard MTU unsubmitted run binding changed")
+			}
+			if err = m.native.operations.AcknowledgeUnsubmitted(ctx, op.command.Reservation, standardengine.ServiceObserver); err != nil {
+				return err
+			}
+		}
+		op.runBound = bound
+	}
+	op.ended, op.settled = true, !op.runBound
 	if op.rejection == "" {
 		op.rejection = "standard MTU request did not submit native work"
 	}
@@ -417,7 +460,14 @@ func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStanda
 		return nil, err
 	}
 	q := request.MTU
-	if request.Action == "mtu-ack" {
+	if strings.HasPrefix(request.Action, "mtu-run-") {
+		response, err := m.runRequest(ctx, request.Action, q)
+		return response, errors.Join(err, ctx.Err(), peer.Current(ctx))
+	}
+	if q.Run != nil && (m.run == nil || *q.Run != *m.run) {
+		return nil, errors.New("standard MTU follow-up changed original run")
+	}
+	if request.Action == "mtu-ack" || request.Action == "mtu-reject-ack" {
 		if err := m.native.current(ctx); err != nil {
 			return nil, err
 		}
@@ -437,8 +487,8 @@ func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStanda
 		err = s.networkCurrent(ctx, m.session, true)
 	case "mtu-begin":
 		err = m.begin(ctx, q)
-	case "mtu-status", "mtu-cancel", "mtu-evidence", "mtu-ack", "mtu-cleanup":
-		if q.Retiring && request.Action == "mtu-ack" || request.Action == "mtu-cleanup" && !q.Retiring {
+	case "mtu-status", "mtu-cancel", "mtu-evidence", "mtu-ack", "mtu-cleanup", "mtu-reject-ack":
+		if q.Retiring && (request.Action == "mtu-ack" || request.Action == "mtu-reject-ack") || request.Action == "mtu-cleanup" && !q.Retiring {
 			return nil, errors.New("standard MTU retirement cannot acknowledge a healthy successor")
 		}
 		if err := validateLinuxStandardMTUFollowup(request.Action, q); err != nil {
@@ -462,6 +512,8 @@ func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStanda
 			}
 		} else if request.Action == "mtu-ack" {
 			err = m.acknowledge(ctx, q)
+		} else if request.Action == "mtu-reject-ack" {
+			err = m.acknowledgeRejection(ctx, q)
 		} else if request.Action == "mtu-cleanup" {
 			err = m.requestCleanup(ctx)
 		} else {
@@ -475,7 +527,7 @@ func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStanda
 			return response, errors.Join(err, ctx.Err(), peer.Current(ctx))
 		}
 	case "mtu-resolve":
-		if q.Expected == nil || *q.Expected != m.current || q.ID != "" || q.MTU != 0 || q.DeadlineNS != 0 || q.Reservation != nil || q.Digest != "" || q.Role != 0 || q.Phase != 0 || q.Offset != 0 || q.Retiring || m.active != nil && !m.active.settled {
+		if q.Expected == nil || *q.Expected != m.current || q.ID != "" || q.MTU != 0 || q.DeadlineNS != 0 || q.Reservation != nil || q.Digest != "" || q.Role != 0 || q.Phase != 0 || q.Offset != 0 || q.Retiring || q.CleanupOnly || m.active != nil && !m.active.settled {
 			return nil, errors.New("standard MTU resolver changed its original settled TUN")
 		}
 		addresses, failure := s.resolveMTUPublicHost(ctx, m.session)
@@ -491,7 +543,7 @@ func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStanda
 	if err != nil {
 		return nil, err
 	}
-	if request.Action == "mtu-ack" {
+	if request.Action == "mtu-ack" || request.Action == "mtu-reject-ack" {
 		if err := m.native.current(ctx); err != nil {
 			return nil, err
 		}
@@ -509,7 +561,7 @@ func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStanda
 }
 
 func validateLinuxStandardMTUFollowup(action string, q *linuxStandardServiceMTURequest) error {
-	if q == nil || q.MTU != 0 || q.Role > standardengine.RollbackReader || q.Phase > standardengine.RetirementEvidence || action != "mtu-evidence" && (q.Role != 0 || q.Phase != 0 || q.Offset != 0) ||
+	if q == nil || q.MTU != 0 || q.CleanupOnly || q.Role > standardengine.RollbackReader || q.Phase > standardengine.RetirementEvidence || action != "mtu-evidence" && (q.Role != 0 || q.Phase != 0 || q.Offset != 0) ||
 		action != "mtu-evidence" && action != "mtu-ack" && q.Digest != "" {
 		return errors.New("standard MTU follow-up supplied another operation's fields")
 	}
@@ -672,10 +724,7 @@ func (s *linuxStandardService) watchNetworkCurrent(ctx context.Context, session 
 			return err
 		}
 		if !m.active.ended {
-			if time.Now().UnixNano() > m.active.command.Reservation.Key.DeadlineNS+int64(8*time.Second) {
-				return errors.New("standard MTU original work and cleanup deadline expired")
-			}
-			return ctx.Err()
+			return m.runObservationCurrent(ctx)
 		}
 	}
 	return s.networkCurrent(ctx, session, false)

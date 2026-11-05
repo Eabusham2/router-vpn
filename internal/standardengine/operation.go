@@ -11,7 +11,7 @@ import (
 // FD11 carries bounded evidence and operation identity, never authority to
 // construct a reader, change MTU, or adopt an observer from serialized text.
 const OperationFD = 11
-const OperationLayout = 2
+const OperationLayout = 3
 const OperationControlSize = 64 << 10
 
 // Pages carry raw bounded evidence. They do not relax the native receipt
@@ -28,7 +28,7 @@ const operationHeadersOffset = operationRecordsOffset + OperationTransactions*op
 const operationKeySize = 136
 const operationBindingSize = 72
 const operationEnvelopeSize = 48
-const operationRecordBodySize = 424
+const operationRecordBodySize = 464
 
 var ErrNoOperation = errors.New("no new original operation")
 var ErrOperationPending = errors.New("original operation worker has not published joined evidence")
@@ -48,6 +48,8 @@ type OperationCommand struct {
 }
 
 type OperationResult struct {
+	RunSHA256                     string
+	CleanupOnly                   bool
 	CurrentRole                   OperationRole
 	Failed, Pending, WorkerJoined bool
 	ReadyMask, RetirementMask     uint8
@@ -75,7 +77,10 @@ func OperationResultDigest(report OperationReport) (string, error) {
 	if err != nil || r.Slot >= OperationTransactions || report.Command.MTU < 576 || report.Command.MTU > 9000 || !result.WorkerJoined || result.Revision == 0 || result.CurrentRole > RollbackReader && result.CurrentRole != NoReader || result.ReadyMask&^uint8(7) != 0 || result.RetirementMask&^uint8(7) != 0 {
 		return "", errors.New("operation report omitted bounded joined identity")
 	}
-	frame := make([]byte, 160)
+	if result.RunSHA256 != "" && !digest(result.RunSHA256, 32) || result.CleanupOnly && result.RunSHA256 == "" {
+		return "", errors.New("operation report changed original run binding")
+	}
+	frame := make([]byte, 200)
 	copy(frame, key)
 	binary.LittleEndian.PutUint32(frame[136:], r.Slot)
 	binary.LittleEndian.PutUint32(frame[140:], uint32(report.Command.MTU))
@@ -86,6 +91,13 @@ func OperationResultDigest(report OperationReport) (string, error) {
 	}
 	if result.Pending {
 		frame[156] = 1
+	}
+	if result.RunSHA256 != "" {
+		raw, _ := hex.DecodeString(result.RunSHA256)
+		copy(frame[160:192], raw)
+	}
+	if result.CleanupOnly {
+		frame[192] = 1
 	}
 	hash := sha256.New()
 	_, _ = hash.Write(frame)

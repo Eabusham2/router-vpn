@@ -87,6 +87,20 @@ STARTUP = {
     'StartupStockGraphs': tuple(protocol+'/'+policy for protocol in ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2') for policy in ('default', 'fixed', 'ipv6-off')),
 }
 CLEANUP = {
+    'TestCleanupSharedRunWorkerClosureKeepsOriginalDeadline': (),
+    'TestCleanupSharedRunUnsubmittedRequiresBothOriginalObservers': (),
+    'TestCleanupSharedRunWorkerClosesWithoutMutation': (),
+    'TestCleanupSharedRunAdmissionHistoryIsBounded': (),
+    'TestCleanupSharedRunClockIndependentAndSingle': (),
+    'TestCleanupSharedRunClockCancellationAndHeldLock': (),
+    'TestCleanupSharedRunClosureAndStaleClock': (),
+    'TestCleanupSharedRunBindsCommandAndRestore': (),
+    'TestCleanupSharedRunShortAdmissionAndOriginalBounds': (),
+    'TestCleanupSharedRunPreviousLayoutRefused': (),
+    'TestCleanupSharedRunClockInheritedProcess': (),
+    'TestCleanupSharedRunSettlementKeepsClock': (),
+    'TestCleanupSharedRunWorkerOneClockAndOriginalRestore': (),
+    'TestCleanupSharedRunWorkerExpiredWorkRejectsConstructor': (),
     'TestCleanupCompleteRetirementFitsOriginalFD10': ('large-attributes', 'many-objects'),
     'TestCleanupOperationWorkerStopRetainsUnjoinedNativeCall': ('held', 'within-budget'),
     'TestCleanupOperationWorkerObservationExpiryRetainsOriginal': ('command', 'cleanup'),
@@ -140,6 +154,10 @@ MTU = {
     'CapacityPreservesWholeRetestAndRollback': ('fresh', 'whole-test', 'rollback-reserve', 'unsent-history', 'exhausted', 'full', 'sequence-overflow'),
 }
 MTU_NATIVE = {
+    'RunPublicCancelKeepsCommit': ('before-commit', 'committed', 'expired-observation'),
+    'RunOwnerUsesOriginalWireAndChild': ('original', 'lost-begin-ack', 'repeat-run', 'cancel-during-finalizer'),
+    'RunServiceKeepsOriginalClock': ('original', 'changed-reader', 'changed-MTU', 'expired-admission', 'one-clock', 'cleanup-only', 'child-closure', 'lost-begin-fence', 'failed-admission-recovery'),
+    'RunProviderRetainsOriginalAuthority': ('held-launch-lock', 'native-clock-first', 'foreign-token', 'changed-clock', 'cancelled-finalizer', 'expired-while-closing', 'unjoined-close', 'pending-observer'),
     'StopRejectsHistoryBeforeGuardRelease': ('missing', 'changed-reservation', 'torn-page'),
     'StopHandsPendingCallToFD10': ('initial', 'retry-closed-observer'),
     'StopRetainsActualJoinedHistory': ('joined', 'missing', 'changed-reservation', 'torn-page', 'replacement-session', 'expired'),
@@ -193,13 +211,13 @@ SOURCE.update({'internal/standardengine/operation.go', 'internal/standardengine/
 SOURCE.add('cmd/client/linux_standard_service_mtu_peer_native_test.go')
 SOURCE.update({'internal/desktopnetwork/desktop_network_retirement_limit_test.go', 'internal/standardengine/cleanup_retirement_bound_linux_test.go'})
 SOURCE.add('internal/standardengine/worker_stop_linux_test.go')
-RUNNERS = ('test_standard_worker_stop.py', 'linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
+RUNNERS = ('test_standard_run_clock.py', 'test_standard_worker_stop.py', 'linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
 SOURCE.update({'internal/standardengine/operation_command_linux.go', 'internal/standardengine/operation_command_linux_test.go',
                'internal/standardengine/worker_linux.go', 'mobile/desktop/standard_mtu_linux.go.tmpl',
                'mobile/desktop/standard_mtu_linux_test.go.tmpl'})
 
 SOURCE.update({'cmd/client/linux_standard_service_mtu_' + name for name in (
-    'linux.go', 'stop_linux.go', 'stop_native_test.go', 'protocol_linux.go', 'client_linux.go', 'client_linux_test.go',
+    'linux.go', 'run_linux.go', 'run_client_linux.go', 'run_native_test.go', 'stop_linux.go', 'stop_native_test.go', 'protocol_linux.go', 'client_linux.go', 'client_linux_test.go',
     'controller_epoch_linux.go', 'controller_epoch_linux_test.go', 'probe_linux.go',
     'dns_linux.go', 'recovery_linux_test.go', 'admission_native_test.go', 'namespace_native_test.go',
     'cache_linux.go', 'cache_linux_test.go', 'capacity_linux.go', 'capacity_linux_test.go', 'ui_linux.go', 'ui_linux_test.go', 'ui_other.go')})
@@ -226,7 +244,7 @@ SOURCE.update({'internal/linuxprotection/standard_node_transfer.go', 'internal/l
     'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_linux_journal.go',
     'cmd/client/desktop_node_linux_transaction.go', 'cmd/client/desktop_node_linux_transaction_retire.go',
     'cmd/client/desktop_node_session_linux.go', 'cmd/client/desktop_node_host_linux_transition.go', 'cmd/client/legacy_standard_exit_protection_linux.go'})
-NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
+NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_run_native_test.go', 'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
                       'cmd/client/linux_standard_service_mtu_namespace_native_test.go'}
 
 
@@ -292,3 +310,16 @@ def validate_inventory(root):
 def check_verdict(output, group):
     _check_exact_verdict(output, case_names(group), 'Standard service ' + group,
                          strict=group.startswith('mtu'))
+
+# Shared-clock provider and native admission are exact shipping dependencies.
+SOURCE.update({
+    'internal/standardengine/operation_run_clock.go',
+    'internal/standardengine/operation_run_clock_linux.go',
+    'internal/standardengine/operation_run_clock_linux_test.go',
+    'internal/standardengine/worker_run_linux.go',
+    'internal/standardengine/worker_run_linux_test.go',
+    'internal/mobilemtu/cleanup_provider.go',
+    'internal/mobilemtu/cleanup_provider_test.go',
+})
+
+SOURCE.update({'client/linux/routervpn-mtu-v20.inc', 'client/linux/test-mtu-v20.c', 'deploy/test_desktop_mtu.py'})

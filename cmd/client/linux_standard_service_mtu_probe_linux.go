@@ -18,6 +18,13 @@ import (
 // The public sample must traverse the very TUN whose reader was changed. A
 // localhost SOCKS dial would test the exit while bypassing that interface.
 func (o *linuxStandardServiceMTUOwner) DialThroughTunnel(ctx context.Context, expected mobilemtu.State, network, address string) (net.Conn, error) {
+	if run := o.run.Load(); run != nil && !run.closed.Load() && mobilemtu.SameOperationContext(ctx, run.operation) {
+		cleanup, err := mobilemtu.OperationCleanupOnly(ctx)
+		if err != nil || cleanup {
+			return nil, errors.Join(err, errors.New("standard MTU cleanup cannot admit a measurement socket"))
+		}
+	}
+
 	if network != "tcp" && network != "tcp4" {
 		return nil, errors.New("standard MTU supports bounded IPv4 public TCP probes")
 	}

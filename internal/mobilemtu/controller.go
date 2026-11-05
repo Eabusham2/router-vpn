@@ -570,7 +570,7 @@ func (e *probeEngine) dial(ctx context.Context, network, address string) (net.Co
 }
 func (c *Controller) Cancel(request string) {
 	c.mu.Lock()
-	if c.status.Request == request && c.cancel != nil {
+	if c.status.Request == request && c.cancel != nil && !c.status.Measured {
 		c.cancel()
 	}
 	c.mu.Unlock()

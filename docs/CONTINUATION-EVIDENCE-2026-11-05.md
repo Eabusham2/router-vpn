@@ -858,6 +858,69 @@ installed service/TUN, peer-bound RPC, Node proof, mutation and Stop use their
 actual implementations. Reverse Node-to-standard transfer, generic boot-owner
 succession, active Always upgrades and same-boot crash continuation remain open.
 
+## One captured service MTU run and shared cleanup deadline
+
+The installed Linux service now keeps one optimizer run across its controller,
+service and actual fixed native child. The original accepted work deadline is
+bounded to 45 seconds; candidate commands cannot restart it. Either original
+process can activate the same absolute cleanup deadline once, within the retained
+eight-second allowance. Cleanup commands may restore only the run's captured
+original MTU. The separate original Stop budget remains unchanged.
+
+FD11 layout 3 binds each command and raw result to that exact run. The old layout
+is rejected. Run closure requires both original observers to settle the actual
+transaction history and the original child to observe and acknowledge its current
+reader. A transaction cancelled before submission retains a permanent tombstone:
+both real observer acknowledgements settle it without inventing a native result.
+Lost Begin acknowledgements, delayed packets and closed runs cannot admit another
+candidate or renew the cleanup clock. The existing 32 transaction slots and 32
+retained run identifiers remain bounded and are never recycled on a live connection.
+
+The optimizer's existing verified winner adoption under its controller mutex is
+now the explicit completion boundary for Cancel. Cancellation accepted before
+adoption performs the exact original-MTU rollback. After adoption, Cancel reports
+that the committed result is finishing; it does not promise a rollback or cancel
+another owner. A later request cancellation preserves that already-applied value
+only after the original run joins successfully. Stop, invalidation, changed
+ownership and closure failure still prevent a measured-success result.
+
+The frozen lower contribution has 18 paths and manifest SHA256
+`856db1df3448498b041658465c2481e5cc8670dd216471f3251a3c52e9f3e449`.
+Its complete shared race packages pass (9.292s/3.722s), and the exact shared-clock
+runner passes 29 positive verdicts plus two causal controls. Root independently
+ran that same runner after integrating onto `2873d854`; it again rejected a renewed
+cleanup deadline and settlement that overwrites the retained clock. The generated
+native command compiled and passed 12 actual Box/grant/retirement cases before the
+narrow final deltas; the final native package projection passed 20 cases and checked
+all 12 final production paths byte-for-byte. These checks use real inherited
+FD11/process boundaries where stated, while worker OS mutations are explicitly
+modeled. The public privileged namespace, native GTK, packaged release and physical
+network acceptance remain separate gates.
+
+The frozen upper contribution has 15 owned paths and manifest SHA256
+`73629717d5e40198b7fdc1c85ca1254102dd08a0449556feed35b51f2fdad440`.
+Its full native-tagged MTU race suite passes 123 verdicts in 32.655s with no skips
+or failures. Root's complete integrated native-tagged MTU race run also passes all
+123 verdicts with no skips or failures (28.162s). Four production-only causal
+mutations fail at their intended witnesses: renewing a native-started cleanup clock, inventing Closed from Closing,
+hiding cancellation during finalization, and bypassing the committed-Cancel
+decision. The combined service runner independently passes all 10 checks after
+root integration (22.885s), including the actual worker-join and shared-clock
+causal controls.
+
+The final integration preserves `b4310375`'s protected service-to-Node transfer,
+including its strict RPC scope and complete source/verdict inventory. A focused
+race run of the 28 shared-run and 26 transfer verdicts passes all 54 cases without
+failures or skips (23.848s); all 10 combined runner checks pass again (20.037s).
+
+The native GTK panel recognizes only a well-typed committed response belonging
+to its captured session and request. It keeps the original Retest POST alive,
+disables repeat Cancel, and waits for a fresh observation after POST completion.
+The new callback cases cover that complete sequence and seven malformed/foreign
+responses. GTK and Xvfb dependencies are unavailable in this workspace, so these
+actual native callbacks remain part of the mandatory Linux UI CI rather than a
+claimed local execution.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

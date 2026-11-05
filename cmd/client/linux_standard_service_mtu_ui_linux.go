@@ -182,6 +182,24 @@ func (u *linuxStandardServiceMTUUI) run(parent context.Context, operation *mtuVi
 	ctx, cancel := context.WithCancel(parent)
 	stopLifetime := context.AfterFunc(u.lifetime, cancel)
 	done := make(chan struct{})
+	canceller, canCancel := u.controller.(interface {
+		CancelContext(context.Context, string) error
+	})
+	if !canCancel {
+		u.mu.Unlock()
+		stopLifetime()
+		cancel()
+		return result, errors.New("standard MTU controller lacks captured cancellation")
+	}
+	operation.mu.Lock()
+	operation.cancelCaptured = func(call context.Context) error {
+		err := canceller.CancelContext(call, operation.request)
+		if errors.Is(err, mobilemtu.ErrOperationNotCurrent) {
+			return nil
+		}
+		return err
+	}
+	operation.mu.Unlock()
 	u.running, u.active, u.cancel, u.done = true, operation, cancel, done
 	if operation.automatic {
 		u.autoAttempted = true
@@ -192,6 +210,9 @@ func (u *linuxStandardServiceMTUUI) run(parent context.Context, operation *mtuVi
 		cancel()
 		u.mu.Lock()
 		u.running = false
+		if u.stopped {
+			failure = errors.Join(failure, errors.New("standard MTU original service was stopped"))
+		}
 		u.cancel = nil
 		if failure != nil {
 			result.Measured = false
@@ -219,7 +240,14 @@ func (u *linuxStandardServiceMTUUI) run(parent context.Context, operation *mtuVi
 			u.resumeAutomatic()
 		}
 	}()
-	failure = u.controller.RunContext(ctx, operation.request, force)
+	runner, ok := u.controller.(interface {
+		RunContextWithCleanupProvider(context.Context, context.Context, string, bool, mobilemtu.CleanupDeadlineProvider, func(context.Context) error, ...func(context.Context) error) error
+	})
+	if !ok || u.owner == nil {
+		failure = errors.New("standard MTU controller lacks original shared cleanup capability")
+	} else {
+		failure = runner.RunContextWithCleanupProvider(ctx, ctx, operation.request, force, u.owner.cleanupDeadlineContext, u.owner.beginRunContext, u.owner.finishRunContext)
+	}
 	// The synchronous worker has joined. A separate bounded observation can
 	// report its rollback after the HTTP caller leaves, but cannot admit a winner.
 	observation, finish := context.WithTimeout(context.WithoutCancel(parent), 2*time.Second)
@@ -242,6 +270,9 @@ func (u *linuxStandardServiceMTUUI) run(parent context.Context, operation *mtuVi
 			operation.mu.Unlock()
 		} else {
 			pending := u.owner.pending != nil || u.owner.sockets.Load() != 0
+			if run := u.owner.run.Load(); run != nil && !run.closed.Load() {
+				pending = true
+			}
 			u.launch.mu.Unlock()
 			if pending {
 				operation.mu.Lock()
@@ -254,8 +285,19 @@ func (u *linuxStandardServiceMTUUI) run(parent context.Context, operation *mtuVi
 	if failure != nil {
 		return result, failure
 	}
-	if err := parent.Err(); err != nil {
+	if err := mobilemtu.LockContext(observation, &u.mu); err != nil {
 		return result, err
+	}
+	stopped := u.stopped
+	u.mu.Unlock()
+	if stopped {
+		return result, errors.New("standard MTU original service was stopped")
+	}
+	if err := parent.Err(); err != nil {
+		run := u.owner.run.Load()
+		if run == nil || !run.closed.Load() || !result.Measured || !result.Complete || result.Running || result.Request != operation.request {
+			return result, err
+		}
 	}
 	if !result.Complete || result.Running || !result.Measured || result.Request != operation.request {
 		return result, errors.New("MTU operation ended without fresh measured evidence")

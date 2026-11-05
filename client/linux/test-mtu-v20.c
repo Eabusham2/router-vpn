@@ -118,6 +118,37 @@ static void run_state_tests(App *app){
     advance(s);Record *during_cancel=last();ack=g_strdup_printf("{\"request_id\":\"%s\",\"phase\":\"canceling\"}",id);reply(cancel,200,parse_json(ack));g_free(ack);(void)linux_mtu_tick_v20(s);
     check(during_cancel->cancelled&&!s->terminal,"Cancel completion revokes older in-flight poll");reply(during_cancel,200,status(id,FALSE,TRUE,TRUE));(void)linux_mtu_tick_v20(s);check(!s->terminal,"old pre-Cancel GET cannot attest restoration");
     poll=last();reply(poll,200,status(id,FALSE,TRUE,TRUE));(void)linux_mtu_tick_v20(s);check(s->terminal&&strcmp(s->message,"Previous MTU restored.")==0,"fresh post-Cancel GET confirms rollback");dispose_view(s);g_free(id);
+    for(int fault=0;fault<8;fault++){
+        s=open_view(app);freeze_timer(s);idle(s);gtk_button_clicked(GTK_BUTTON(s->retest));run=last();id=g_strdup(s->request);
+        advance(s);poll=last();reply(poll,200,status(id,TRUE,FALSE,FALSE));(void)linux_mtu_tick_v20(s);
+        gtk_button_clicked(GTK_BUTTON(s->cancel));cancel=last();
+        JsonNode *committed_reply=parse_json("{\"ok\":true,\"committed\":true,\"session_id\":\"captured-session\",\"phase\":\"finishing\"}");
+        JsonObject *committed_object=json_node_get_object(committed_reply);json_object_set_string_member(committed_object,"request_id",id);
+        if(fault==1)json_object_set_string_member(committed_object,"session_id","foreign-session");
+        if(fault==2)json_object_set_string_member(committed_object,"request_id","ffffffffffffffffffffffffffffffff");
+        if(fault==3)json_object_set_boolean_member(committed_object,"committed",FALSE);
+        if(fault==4)json_object_set_string_member(committed_object,"committed","true");
+        if(fault==5)json_object_remove_member(committed_object,"ok");
+        if(fault==6)json_object_set_boolean_member(committed_object,"ok",FALSE);
+        if(fault==7)json_object_set_string_member(committed_object,"phase","complete");
+        reply(cancel,200,committed_reply);(void)linux_mtu_tick_v20(s);
+        if(fault==0){
+            check(s->committed&&s->cancel_ack&&!s->terminal&&!run->cancelled&&!gtk_widget_is_sensitive(s->cancel)&&!gtk_widget_is_sensitive(s->retest),"committed Cancel keeps original POST and waits for joined result");
+            poll=last();reply(poll,200,status(id,TRUE,FALSE,FALSE));(void)linux_mtu_tick_v20(s);
+            check(strstr(s->message,"already applied")!=NULL&&strstr(s->message,"restoration")==NULL,"committed progress does not promise rollback");
+            advance(s);Record *old_result=last();code(run,200);(void)linux_mtu_tick_v20(s);
+            check(old_result->cancelled&&!s->terminal,"committed result still joins POST before final observation");
+            JsonNode *measured=status(id,FALSE,TRUE,FALSE);JsonObject *result=linux_mtu_object_v20(json_node_get_object(measured),"status");
+            json_object_set_boolean_member(result,"measured",TRUE);json_object_set_int_member(result,"effective_mtu",1280);json_object_set_string_member(result,"source","measured-public-system-tun-transfer");
+            reply(old_result,200,measured);(void)linux_mtu_tick_v20(s);check(!s->terminal,"committed Cancel cannot adopt a pre-POST result");
+            poll=last();measured=status(id,FALSE,TRUE,FALSE);result=linux_mtu_object_v20(json_node_get_object(measured),"status");
+            json_object_set_boolean_member(result,"measured",TRUE);json_object_set_int_member(result,"effective_mtu",1280);json_object_set_string_member(result,"source","measured-public-system-tun-transfer");
+            reply(poll,200,measured);(void)linux_mtu_tick_v20(s);
+            check(s->terminal&&!s->retired&&strstr(s->message,"Measured MTU: 1280")!=NULL&&strstr(s->message,"finished before cancellation")!=NULL,"fresh joined status retains actual committed winner");
+            gtk_button_clicked(GTK_BUTTON(s->retest));check(!s->committed&&!s->cancel_ack&&strcmp(id,s->request)!=0,"next Retest clears only prior completion metadata");
+        }else check(!s->committed&&!s->cancel_ack&&run->cancelled,"foreign or malformed committed Cancel cannot adopt completion");
+        dispose_view(s);g_free(id);
+    }
     for(long error=404;error<=409;error+=5){s=open_view(app);freeze_timer(s);receive(s,status("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",TRUE,FALSE,FALSE));advance(s);poll=last();code(poll,error);(void)linux_mtu_tick_v20(s);check(s->retired&&strcmp(s->request,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")==0,"missing observed request retires without replacement adoption");dispose_view(s);}
     const char *fields[]={"session_id","profile_id"};
     for(guint i=0;i<G_N_ELEMENTS(fields);i++){s=open_view(app);freeze_timer(s);idle(s);JsonNode *n=status("",FALSE,FALSE,FALSE);json_object_set_string_member(json_node_get_object(n),fields[i],"replacement");receive(s,n);check(s->retired,"replaced session/profile retires the view");dispose_view(s);}

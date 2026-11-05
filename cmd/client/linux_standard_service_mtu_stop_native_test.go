@@ -19,6 +19,14 @@ func standardMTUStopHistoryFixture(t *testing.T, publish bool) (context.Context,
 	t.Helper()
 	ctx, m, child := standardMTUAdmissionPair(t)
 	report, ready := standardMTUReportFixture(t)
+	if err := child.AcknowledgeLaunch(ctx, ready); err != nil {
+		t.Fatal(err)
+	}
+	limit, _ := ctx.Deadline()
+	run := standardengine.OperationRun{CaptureSHA256: m.native.captureSHA, ID: strings.Repeat("d", 32), WorkDeadlineNS: limit.UnixNano(), CleanupBudgetNS: int64(standardengine.OperationRunCleanupLimit), Original: m.current, OriginalMTU: 1500}
+	if _, err := m.runRequest(ctx, "mtu-run-begin", &linuxStandardServiceMTURequest{Run: &run}); err != nil {
+		t.Fatal(err)
+	}
 	key := report.Command.Reservation.Key
 	deadline, _ := ctx.Deadline()
 	key.DeadlineNS = deadline.UnixNano()
@@ -27,10 +35,13 @@ func standardMTUStopHistoryFixture(t *testing.T, publish bool) (context.Context,
 		t.Fatal(err)
 	}
 	report.Command.Reservation = reservation
+	if err = m.native.operations.BindOperationRun(ctx, report.Command, run, false); err != nil {
+		t.Fatal(err)
+	}
 	if err = m.native.operations.SubmitCommand(ctx, report.Command); err != nil {
 		t.Fatal(err)
 	}
-	m.active = &linuxStandardServiceMTUOperation{command: report.Command, original: ready, reserved: true, submitted: true}
+	m.active = &linuxStandardServiceMTUOperation{command: report.Command, original: ready, run: &run, reserved: true, submitted: true}
 	owner := &linuxLegacyStandardExitOwner{native: m.native}
 	m.native.owner = owner
 	m.session = &linuxStandardServiceSession{owner: owner, mtu: m}
@@ -157,7 +168,7 @@ func TestLinuxStandardMTUControllerStopSignalsBeforeHistory(t *testing.T) {
 			prepared.requestEpoch = epoch
 			a := &app{cmd: prepared.command, connectionContext: ctx}
 			launch := &linuxStandardServiceLaunch{app: a, prepared: prepared, peer: peer, attempted: true, request: linuxStandardServiceRequest{Session: m.session.request.Session}}
-			owner := &linuxStandardServiceMTUOwner{launch: launch, pending: &linuxStandardServiceMTURequest{ID: m.active.command.Reservation.Key.ID, MTU: m.active.command.MTU, DeadlineNS: m.active.command.Reservation.Key.DeadlineNS, Expected: &m.active.command.Reservation.Key.Original, Reservation: &m.active.command.Reservation}}
+			owner := &linuxStandardServiceMTUOwner{launch: launch, pending: &linuxStandardServiceMTURequest{Run: m.active.run, ID: m.active.command.Reservation.Key.ID, MTU: m.active.command.MTU, DeadlineNS: m.active.command.Reservation.Key.DeadlineNS, Expected: &m.active.command.Reservation.Key.Original, Reservation: &m.active.command.Reservation}}
 			launch.mtuOwner = owner
 			linuxStandardServiceOwners.Store(a, launch)
 			defer linuxStandardServiceOwners.Delete(a)
@@ -251,19 +262,33 @@ func TestLinuxStandardMTUOrdinaryObservationUsesOriginalPhase(t *testing.T) {
 			}
 			n := s.session.owner.native
 			report, ready := standardMTUReportFixture(t)
+			ready, err := desktopnetwork.CanonicalDesktopNetworkReceipt(*n.routingReceipt)
+			if err != nil {
+				t.Fatal(err)
+			}
 			key := report.Command.Reservation.Key
 			key.CaptureSHA256 = n.captureSHA
+			key.Original = standardengine.InitialReaderBinding(n.captureSHA, ready)
+			report.Readers[standardengine.OriginalReader].Ready = []byte(ready)
+			report.Readers[standardengine.OriginalReader].Binding = key.Original
 			deadline, _ := ctx.Deadline()
 			key.DeadlineNS = deadline.UnixNano()
+			run := standardengine.OperationRun{CaptureSHA256: n.captureSHA, ID: strings.Repeat("d", 32), WorkDeadlineNS: deadline.UnixNano(), CleanupBudgetNS: int64(standardengine.OperationRunCleanupLimit), Original: key.Original, OriginalMTU: n.routingReceipt.MTU}
+			if err = n.operations.BeginOperationRun(ctx, run); err != nil {
+				t.Fatal(err)
+			}
 			reservation, err := n.operations.Reserve(ctx, key)
 			if err != nil {
 				t.Fatal(err)
 			}
 			report.Command.Reservation = reservation
+			if err = n.operations.BindOperationRun(ctx, report.Command, run, false); err != nil {
+				t.Fatal(err)
+			}
 			if err = n.operations.SubmitCommand(ctx, report.Command); err != nil {
 				t.Fatal(err)
 			}
-			m := &linuxStandardServiceMTU{session: s.session, native: n, active: &linuxStandardServiceMTUOperation{command: report.Command, original: ready, submitted: true, reserved: true}}
+			m := &linuxStandardServiceMTU{session: s.session, native: n, run: &run, active: &linuxStandardServiceMTUOperation{run: &run, command: report.Command, original: ready, submitted: true, reserved: true}}
 			s.session.mtu = m
 			observer.failure = errors.New("ordinary observer must not read armed native transition")
 			err = s.handle(ctx, peer, linuxStandardServiceRequest{Schema: 1, Action: action, Session: request.Session, BudgetMS: 12000, DeadlineNS: deadline.UnixNano()}, nil)
@@ -307,19 +332,33 @@ func TestLinuxStandardMTUStopRejectsHistoryBeforeGuardRelease(t *testing.T) {
 			}
 			n := s.session.owner.native
 			report, ready := standardMTUReportFixture(t)
+			ready, err := desktopnetwork.CanonicalDesktopNetworkReceipt(*n.routingReceipt)
+			if err != nil {
+				t.Fatal(err)
+			}
 			key := report.Command.Reservation.Key
 			key.CaptureSHA256 = n.captureSHA
+			key.Original = standardengine.InitialReaderBinding(n.captureSHA, ready)
+			report.Readers[standardengine.OriginalReader].Ready = []byte(ready)
+			report.Readers[standardengine.OriginalReader].Binding = key.Original
 			deadline, _ := ctx.Deadline()
 			key.DeadlineNS = deadline.UnixNano()
+			run := standardengine.OperationRun{CaptureSHA256: n.captureSHA, ID: strings.Repeat("d", 32), WorkDeadlineNS: deadline.UnixNano(), CleanupBudgetNS: int64(standardengine.OperationRunCleanupLimit), Original: key.Original, OriginalMTU: n.routingReceipt.MTU}
+			if err = n.operations.BeginOperationRun(ctx, run); err != nil {
+				t.Fatal(err)
+			}
 			r, err := n.operations.Reserve(ctx, key)
 			if err != nil {
 				t.Fatal(err)
 			}
 			report.Command.Reservation = r
+			if err = n.operations.BindOperationRun(ctx, report.Command, run, false); err != nil {
+				t.Fatal(err)
+			}
 			if err = n.operations.SubmitCommand(ctx, report.Command); err != nil {
 				t.Fatal(err)
 			}
-			m := &linuxStandardServiceMTU{session: s.session, native: n, active: &linuxStandardServiceMTUOperation{command: report.Command, original: ready, settled: true}}
+			m := &linuxStandardServiceMTU{session: s.session, native: n, run: &run, active: &linuxStandardServiceMTUOperation{run: &run, command: report.Command, original: ready, settled: true}}
 			s.session.mtu, n.mtuStopOwner = m, m
 			if scenario == "changed-reservation" {
 				m.active.command.Reservation.Key.ID = strings.Repeat("f", 32)

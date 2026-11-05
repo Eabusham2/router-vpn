@@ -34,6 +34,7 @@ type mtuViewOperation struct {
 	identity       mtuViewIdentity
 	request        string
 	cancel         context.CancelFunc
+	cancelCaptured func(context.Context) error
 	status         mobilemtu.Status
 	automatic      bool
 	cleanupPending bool
@@ -432,20 +433,41 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 	writeMTUViewStatus(w, identity, false, false, true, mobilemtu.Status{Phase: "idle", EffectiveMTU: snapshot.Profile.EffectiveMTU, Source: source, Candidates: []mobilemtu.Candidate{}})
 }
 
-func cancelMTUViewOperation(a *app, w http.ResponseWriter, request mtuViewRequest) bool {
+func cancelMTUViewOperation(ctx context.Context, a *app, w http.ResponseWriter, request mtuViewRequest) bool {
 	raw, found := mtuViewSlots.Load(a)
 	if !found {
 		return false
 	}
 	slot := raw.(*mtuViewSlot)
-	slot.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &slot.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return true
+	}
 	operation := slot.current
 	slot.mu.Unlock()
 	if operation == nil || operation.request != request.Request {
 		return false
 	}
-	operation.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &operation.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return true
+	}
 	matches := operation.cancel != nil && operation.status.Running && (request.Session == "" || request.Session == operation.identity.Session) && (request.Profile == "" || request.Profile == operation.identity.Profile)
+	if matches && operation.cancelCaptured != nil {
+		err := operation.cancelCaptured(ctx)
+		if errors.Is(err, mobilemtu.ErrOperationCommitted) {
+			operation.status.Phase = "finishing"
+			operation.mu.Unlock()
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "committed": true, "request_id": request.Request, "session_id": operation.identity.Session, "phase": "finishing", "note": "The measured MTU is already applied. Finishing this test."})
+			return true
+		}
+		if err != nil {
+			operation.mu.Unlock()
+			http.Error(w, err.Error(), http.StatusConflict)
+			return true
+		}
+	}
 	if matches {
 		operation.status.Phase = "canceling"
 		operation.cancel()

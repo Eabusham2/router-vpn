@@ -55,6 +55,9 @@ type NativeMTUWorker struct {
 	backend           NativeMTUBackend
 	guard             func(context.Context) error
 	operation         func(context.Context, time.Duration) (context.Context, context.CancelFunc, error)
+	runFactory        NativeMTURunFactory
+	runCleanup        func(context.Context) (context.Context, error)
+	run               *nativeMTURun
 	current           any
 	ready             string
 	binding           ReaderBinding
@@ -101,6 +104,9 @@ func (w *NativeMTUWorker) Run(lifetime context.Context) (failure error) {
 				return err
 			}
 		}
+		if err := w.closeRequestedRun(lifetime); err != nil {
+			return err
+		}
 		poll, end := nativeMTUObservation(lifetime)
 		command, err := w.file.ReadCommand(poll, w.lastSequence)
 		pending := nativeMTUReadPending(poll, err)
@@ -136,6 +142,13 @@ func (w *NativeMTUWorker) runUnit(lifetime context.Context, unit *nativeMTUUnit,
 	parent, stop := context.WithDeadline(lifetime, deadline)
 	defer stop()
 	unit.cancel = stop
+	if w.runFactory != nil {
+		if err := w.admitRunUnit(lifetime, unit); err != nil {
+			return err
+		}
+		parent, stop = unit.work, unit.cancel
+		defer stop()
+	}
 	if r.Key.Original != w.binding || w.current == nil || len(w.units) > OperationTransactions {
 		return errors.New("native command replaced its original retained reader")
 	}
@@ -148,9 +161,11 @@ func (w *NativeMTUWorker) runUnit(lifetime context.Context, unit *nativeMTUUnit,
 		return w.publish(ctx, unit)
 	}
 	var err error
-	unit.work, unit.finish, err = w.operation(parent, time.Until(deadline))
-	if err != nil {
-		return err
+	if w.runFactory == nil {
+		unit.work, unit.finish, err = w.operation(parent, time.Until(deadline))
+		if err != nil {
+			return err
+		}
 	}
 	if err = w.guard(unit.work); err != nil {
 		unit.failure = err
@@ -404,6 +419,9 @@ func (w *NativeMTUWorker) Retire(ctx context.Context) error {
 			unit.finish()
 			unit.finish = nil
 		}
+	}
+	if w.run != nil {
+		w.run.finish()
 	}
 	return ctx.Err()
 }

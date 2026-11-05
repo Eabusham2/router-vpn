@@ -16,8 +16,20 @@ type ContextOwner interface {
 }
 type boundedOperationKey struct{}
 type operationAuthorityKey struct{}
+type operationCleanupOnlyKey struct{}
+
+// ErrOperationCommitted means the original winner was already adopted under
+// the controller mutex. A later Cancel cannot promise to restore that winner.
+var ErrOperationCommitted = errors.New("MTU operation already committed its measured winner")
+
+// ErrOperationNotCurrent does not grant cancellation of another generation.
+var ErrOperationNotCurrent = errors.New("MTU cancellation lost its original operation")
+
 type operationAuthority struct {
 	cleanupBudget time.Duration
+	workDeadline  time.Time
+	provider      CleanupDeadlineProvider
+	provided      atomic.Pointer[providedOperationCleanup]
 	cleanup       atomic.Pointer[operationCleanup]
 	closed        atomic.Bool
 }
@@ -30,6 +42,9 @@ type operationCleanup struct {
 // Cleanup starts at most once, after a mutation needs finalization or rollback.
 // Its deadline is shared by every layer and never renewed by another read.
 func WithOperationContext(parent context.Context, budget, cleanupBudget time.Duration) (context.Context, context.CancelFunc, error) {
+	return withOperationContextProvider(parent, budget, cleanupBudget, nil)
+}
+func withOperationContextProvider(parent context.Context, budget, cleanupBudget time.Duration, provider CleanupDeadlineProvider) (context.Context, context.CancelFunc, error) {
 	if parent == nil || budget <= 0 || cleanupBudget <= 0 {
 		return nil, nil, errors.New("MTU operation requires bounded work and cleanup")
 	}
@@ -37,15 +52,14 @@ func WithOperationContext(parent context.Context, budget, cleanupBudget time.Dur
 		return nil, nil, err
 	}
 	work, stop := context.WithTimeout(parent, budget)
-	authority := &operationAuthority{cleanupBudget: cleanupBudget}
+	deadline, _ := work.Deadline()
+	authority := &operationAuthority{cleanupBudget: cleanupBudget, workDeadline: deadline, provider: provider}
 	work = context.WithValue(work, operationAuthorityKey{}, authority)
 	work = context.WithValue(work, boundedOperationKey{}, true)
 	finish := func() {
 		authority.closed.Store(true)
 		stop()
-		if cleanup := authority.cleanup.Load(); cleanup != nil {
-			cleanup.cancel()
-		}
+		authority.finishCleanup()
 	}
 	return work, finish, nil
 }
@@ -60,9 +74,13 @@ func OperationCleanupContext(original context.Context) (context.Context, error) 
 	if !ok || authority == nil || authority.closed.Load() {
 		return nil, errors.New("MTU cleanup authority is absent or complete")
 	}
+	if authority.provider != nil {
+		return authority.providedCleanup(original)
+	}
 	retained := authority.cleanup.Load()
 	if retained == nil {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(original), authority.cleanupBudget)
+		ctx = context.WithValue(ctx, operationCleanupOnlyKey{}, authority)
 		candidate := &operationCleanup{ctx: ctx, cancel: cancel}
 		if authority.cleanup.CompareAndSwap(nil, candidate) {
 			retained = candidate
@@ -192,7 +210,10 @@ func (c *Controller) CancelContext(ctx context.Context, request string) error {
 	}
 	defer c.mu.Unlock()
 	if c.status.Request != request || c.cancel == nil {
-		return errors.New("MTU cancellation lost its original operation")
+		return ErrOperationNotCurrent
+	}
+	if c.status.Measured {
+		return ErrOperationCommitted
 	}
 	c.cancel()
 	return nil
@@ -295,9 +316,7 @@ func WithCleanupContext(parent context.Context, budget time.Duration) (context.C
 	ctx := context.WithValue(parent, operationAuthorityKey{}, authority)
 	finish := func() {
 		authority.closed.Store(true)
-		if cleanup := authority.cleanup.Load(); cleanup != nil {
-			cleanup.cancel()
-		}
+		authority.finishCleanup()
 	}
 	return ctx, finish, nil
 }

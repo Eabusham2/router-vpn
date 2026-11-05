@@ -22,11 +22,13 @@ import (
 // This adapter retains the installed launch and its original controller observer.
 // A new service response never creates a replacement capture or connection intent.
 type linuxStandardServiceMTUOwner struct {
+	run                              atomic.Pointer[linuxStandardMTUClientRun]
 	launch                           *linuxStandardServiceLaunch
 	connection                       context.Context
 	activation                       *linuxStandardServiceMonitor
 	config, authority, path, exitRaw string
 	pending                          *linuxStandardServiceMTURequest
+	pendingRejected                  *linuxStandardServiceMTURejected
 	sockets                          atomic.Int32
 	retained                         bool
 }
@@ -39,6 +41,11 @@ func newLinuxStandardServiceMTUOwner(ctx context.Context, launch *linuxStandardS
 		return nil, err
 	}
 	defer launch.mu.Unlock()
+	if launch.mtuOwner != nil {
+		if run := launch.mtuOwner.run.Load(); run != nil && !run.closed.Load() {
+			return nil, errors.New("standard MTU prior run has not joined closure")
+		}
+	}
 	if launch.mtuOwner != nil && (launch.mtuOwner.pending != nil || launch.mtuOwner.sockets.Load() != 0) {
 		return nil, errors.New("standard MTU prior operation still owns native work")
 	}
@@ -92,6 +99,7 @@ func (o *linuxStandardServiceMTUOwner) rpcLocked(ctx context.Context, action str
 	wire := *mtu
 	if action != "mtu-begin" && action != "mtu-capture" && action != "mtu-resolve" {
 		wire.MTU = 0
+		wire.CleanupOnly = false
 		if wire.Reservation != nil {
 			wire.ID = ""
 			wire.Expected = nil
@@ -169,6 +177,22 @@ func (o *linuxStandardServiceMTUOwner) intentLocked(ctx context.Context) error {
 	return nil
 }
 func (o *linuxStandardServiceMTUOwner) currentLocked(ctx context.Context) (mobilemtu.State, error) {
+	if run := o.run.Load(); run != nil && !run.closed.Load() {
+		if failure := run.failure.Load(); failure != nil {
+			return mobilemtu.State{}, failure.err
+		}
+		if mobilemtu.SameOperationContext(ctx, run.operation) {
+			cleanup, e := mobilemtu.OperationCleanupOnly(ctx)
+			if e != nil {
+				return mobilemtu.State{}, e
+			}
+			if !cleanup {
+				if _, e = o.requireRunWorkLocked(ctx, false); e != nil {
+					return mobilemtu.State{}, e
+				}
+			}
+		}
+	}
 	if err := o.intentLocked(ctx); err != nil {
 		return mobilemtu.State{}, err
 	}
@@ -239,6 +263,17 @@ func (o *linuxStandardServiceMTUOwner) ChangeMTU(ctx context.Context, expected m
 	if !ok {
 		return mobilemtu.State{}, errors.New("standard MTU requires bounded original operation")
 	}
+	cleanupOnly, err := mobilemtu.OperationCleanupOnly(ctx)
+	if err != nil {
+		return mobilemtu.State{}, err
+	}
+	run, err := o.requireRunWorkLocked(ctx, cleanupOnly)
+	if err != nil {
+		return mobilemtu.State{}, err
+	}
+	if cleanupOnly && mtu != run.wire.OriginalMTU {
+		return mobilemtu.State{}, errors.New("standard MTU cleanup changed captured original restore MTU")
+	}
 	if mtu == expected.MTU {
 		return expected, ctx.Err() // Fresh actual readback above; no native mutation.
 	}
@@ -257,7 +292,7 @@ func (o *linuxStandardServiceMTUOwner) ChangeMTU(ctx context.Context, expected m
 		}
 		return mobilemtu.State{}, errors.Join(err, n.abandonUnsentMTU(cleanup, key))
 	}
-	o.pending = &linuxStandardServiceMTURequest{ID: key.ID, MTU: mtu, DeadlineNS: key.DeadlineNS, Expected: &key.Original}
+	o.pending = &linuxStandardServiceMTURequest{ID: key.ID, MTU: mtu, DeadlineNS: key.DeadlineNS, Expected: &key.Original, Run: &run.wire, CleanupOnly: cleanupOnly}
 	response, beginErr := o.rpcLocked(ctx, "mtu-begin", o.pending)
 	if beginErr == nil && response.Rejected != nil {
 		err := o.rejectLocked(ctx, response, false)
@@ -317,6 +352,7 @@ func (o *linuxStandardServiceMTUOwner) finishOperationLocked(ctx context.Context
 	followup := func() *linuxStandardServiceMTURequest {
 		request := *o.pending
 		request.Retiring = explicitStop
+		request.CleanupOnly = false
 		return &request
 	}
 	if o.pending == nil {
@@ -364,6 +400,12 @@ func (o *linuxStandardServiceMTUOwner) finishOperationLocked(ctx context.Context
 			return mobilemtu.State{}, errors.New("standard MTU result lost its native reservation")
 		}
 		report := standardengine.OperationReport{Command: *response.Command, Result: *response.Result}
+		if o.pending.Run != nil {
+			sum, e := o.pending.Run.SHA256()
+			if e != nil || report.Result.RunSHA256 != sum || report.Result.CleanupOnly != o.pending.CleanupOnly {
+				return mobilemtu.State{}, errors.New("standard MTU result changed original run authority")
+			}
+		}
 		for role := standardengine.OperationRole(0); role < standardengine.OperationReaders; role++ {
 			for phase := standardengine.ReadyEvidence; phase <= standardengine.RetirementEvidence; phase++ {
 				mask := report.Result.ReadyMask
@@ -428,7 +470,7 @@ func (o *linuxStandardServiceMTUOwner) finishOperationLocked(ctx context.Context
 
 func (o *linuxStandardServiceMTUOwner) rejectLocked(ctx context.Context, response *linuxStandardServiceMTUResponse, retiring bool) error {
 	n := o.launch.prepared.requestEpoch
-	if response == nil || response.Rejected == nil || o.pending == nil || response.Pending || !retiring && !response.Settled || response.Command != nil || response.Result != nil ||
+	if response == nil || response.Rejected == nil || o.pending == nil || response.Pending || response.Command != nil || response.Result != nil ||
 		response.CaptureSHA256 != standardengine.SHA256(n.startup.Capture) || response.Current != n.mtuBinding || response.Ready != n.mtuReceipt ||
 		response.Rejected.ID != o.pending.ID || response.Rejected.DeadlineNS != o.pending.DeadlineNS || o.pending.Expected == nil || response.Rejected.Expected != *o.pending.Expected || response.Rejected.Reason == "" || len(response.Rejected.Reason) > 2048 {
 		return errors.New("standard MTU rejection lost its definitively unsubmitted original intent")
@@ -436,15 +478,39 @@ func (o *linuxStandardServiceMTUOwner) rejectLocked(ctx context.Context, respons
 	var err error
 	if retiring {
 		err = n.retireRejectedMTUForStop(ctx, *response.Rejected)
+		if n.mtuTransition == nil {
+			o.pending = nil
+			o.pendingRejected = nil
+		}
+		if err != nil {
+			return err
+		}
 	} else {
-		err = n.rejectMTU(ctx, *response.Rejected)
-	}
-	if n.mtuTransition == nil {
+		if o.pendingRejected == nil {
+			if err = n.rejectMTU(ctx, *response.Rejected); err != nil {
+				return err
+			}
+			copy := *response.Rejected
+			o.pendingRejected = &copy
+		} else if *o.pendingRejected != *response.Rejected {
+			return errors.New("standard MTU rejection changed after controller completion")
+		}
+		if err = n.sources(ctx); err != nil {
+			return err
+		}
+		ack := *o.pending
+		ack.CleanupOnly = false
+		settled, err := o.rpcLocked(ctx, "mtu-reject-ack", &ack)
+		if err != nil {
+			return err
+		}
+		if !settled.Settled || settled.Rejected == nil || *settled.Rejected != *o.pendingRejected {
+			return errors.New("standard MTU unsubmitted observers have not settled")
+		}
 		o.pending = nil
+		o.pendingRejected = nil
 	}
-	if err != nil {
-		return err
-	}
+
 	return errors.New(response.Rejected.Reason)
 }
 

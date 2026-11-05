@@ -16,15 +16,18 @@ import (
 // evidence pages and their bounds are unchanged. Ack bits are evidence that the
 // coordinator finished its two retained observers, never observer authority.
 func validateOperationExtension(b []byte) error {
+	if err := validateRunExtension(b); err != nil {
+		return err
+	}
 	if b[360] == 2 {
 		mtu := binary.LittleEndian.Uint32(b[364:368])
-		if b[140] != 1 || !bytes.Equal(b[361:364], make([]byte, 3)) || mtu != 0 && (mtu < 576 || mtu > 9000) || !bytes.Equal(b[368:], make([]byte, operationRecordBodySize-368)) {
+		if b[140] != 1 || !bytes.Equal(b[361:364], make([]byte, 3)) || mtu != 0 && (mtu < 576 || mtu > 9000) || !bytes.Equal(b[368:373], make([]byte, 5)) || b[373]&^byte(3) != 0 || b[374] > 1 || b[374] == 1 && b[373] != 3 || !bytes.Equal(b[375:424], make([]byte, 424-375)) || b[373] != 0 && recordRunSHA(b) == "" {
 			return errors.New("unsubmitted tombstone gained native evidence")
 		}
 		return nil
 	}
 	if b[360] == 0 {
-		if !bytes.Equal(b[360:], make([]byte, operationRecordBodySize-360)) {
+		if !bytes.Equal(b[360:424], make([]byte, 424-360)) {
 			return errors.New("unsubmitted operation has settlement data")
 		}
 		return nil
@@ -75,6 +78,23 @@ func (o *OperationFile) RequestCleanup(ctx context.Context, r OperationReservati
 	key, _ := r.Key.canonical()
 	if err != nil || len(request) != 140 || binary.LittleEndian.Uint32(request) != r.Slot || !bytes.Equal(request[4:], key) {
 		return errors.New("cleanup retry lost original outstanding command")
+	}
+	if run, bound, err := o.boundOperationRun(ctx, r); err != nil {
+		return err
+	} else if bound {
+		deadline, present, err := o.OperationRunCleanupDeadline(ctx, run)
+		if err != nil {
+			return err
+		}
+		if !present || !time.Now().Before(deadline) {
+			return errors.New("cleanup retry has no remaining original run clock")
+		}
+		previous := int64(binary.LittleEndian.Uint64(b[416:424]))
+		if previous != 0 && previous != deadline.UnixNano() {
+			return errors.New("cleanup retry changed original run deadline")
+		}
+		binary.LittleEndian.PutUint64(b[416:424], uint64(deadline.UnixNano()))
+		return o.write(ctx, 4, b, recordOffset(r.Slot), operationRecordSize)
 	}
 	previous := int64(binary.LittleEndian.Uint64(b[416:424]))
 	if time.Now().Before(time.Unix(0, previous)) {
@@ -141,6 +161,9 @@ func (o *OperationFile) AbortUnsubmitted(ctx context.Context, r OperationReserva
 	}
 	if b[368] != 0 || b[140] != 1 {
 		return false, errors.New("native operation evidence prevents unsubmitted abort")
+	}
+	if err := o.unsubmittedPagesAbsent(ctx, r); err != nil {
+		return false, err
 	}
 	if b[360] == 2 {
 		return true, ctx.Err()
@@ -277,7 +300,7 @@ func (o *OperationFile) resultDigest(ctx context.Context, r OperationReservation
 }
 
 func decodeOperationResult(b []byte) OperationResult {
-	return OperationResult{CurrentRole: OperationRole(b[369]), Failed: b[370]&2 != 0, Pending: b[370]&4 != 0, WorkerJoined: b[370]&1 != 0, ReadyMask: b[371], RetirementMask: b[372], Digest: hex.EncodeToString(b[376:408]), Revision: binary.LittleEndian.Uint64(b[408:416])}
+	return OperationResult{RunSHA256: recordRunSHA(b), CleanupOnly: b[456] == 1, CurrentRole: OperationRole(b[369]), Failed: b[370]&2 != 0, Pending: b[370]&4 != 0, WorkerJoined: b[370]&1 != 0, ReadyMask: b[371], RetirementMask: b[372], Digest: hex.EncodeToString(b[376:408]), Revision: binary.LittleEndian.Uint64(b[408:416])}
 }
 
 func (o *OperationFile) PublishResult(ctx context.Context, r OperationReservation, result OperationResult) error {
@@ -292,6 +315,9 @@ func (o *OperationFile) PublishResult(ctx context.Context, r OperationReservatio
 	b, err := o.record(ctx, r)
 	if err != nil {
 		return err
+	}
+	if result.RunSHA256 != "" && result.RunSHA256 != recordRunSHA(b) || result.CleanupOnly && b[456] != 1 {
+		return errors.New("native result replaced captured run binding")
 	}
 	if b[360] != 1 || b[373] != 0 || b[374] != 0 || b[368] != 0 && b[370]&4 == 0 {
 		return errors.New("settled native result cannot be replaced")
@@ -435,7 +461,11 @@ func (o *OperationFile) Settle(ctx context.Context, r OperationReservation, dige
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if n, err := o.file.WriteAt(make([]byte, operationSlotSize), offset); err != nil || n != operationSlotSize {
+		size := operationSlotSize
+		if offset == 2*operationSlotSize {
+			size = operationControlFrameSize
+		} // Preserve the original run clock.
+		if n, err := o.file.WriteAt(make([]byte, size), offset); err != nil || n != size {
 			return errors.Join(err, io.ErrShortWrite)
 		}
 	}

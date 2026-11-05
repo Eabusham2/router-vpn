@@ -14,6 +14,14 @@ func (m *linuxStandardServiceMTU) readOperationReport(ctx context.Context, op *l
 		return standardengine.OperationReport{}, err
 	}
 	report := standardengine.OperationReport{Command: op.command, Result: result}
+	if op.run == nil {
+		return standardengine.OperationReport{}, errors.New("standard MTU native result lost original shared run")
+	}
+	sum, e := op.run.SHA256()
+	if e != nil || result.RunSHA256 != sum || result.CleanupOnly != op.cleanupOnly {
+		return standardengine.OperationReport{}, errors.New("standard MTU native result changed original shared run")
+	}
+
 	for role := standardengine.OperationRole(0); role < standardengine.OperationReaders; role++ {
 		binding, bindErr := m.native.operations.ReadBinding(ctx, op.command.Reservation, role)
 		if bindErr != nil {

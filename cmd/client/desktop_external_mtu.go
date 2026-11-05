@@ -839,7 +839,9 @@ func (a *app) cancelDesktopMTURoute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a captured MTU request_id is required", http.StatusBadRequest)
 		return
 	}
-	if cancelMTUViewOperation(a, w, request) {
+	control, finishControl := context.WithTimeout(r.Context(), 4*time.Second)
+	defer finishControl()
+	if cancelMTUViewOperation(control, a, w, request) {
 		return
 	}
 	launch := desktopExternalMTULaunch(a)

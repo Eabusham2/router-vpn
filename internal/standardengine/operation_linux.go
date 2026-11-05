@@ -42,6 +42,7 @@ type OperationFile struct {
 	locks            *operationLocks
 	closed           atomic.Bool
 	lastReadSequence uint64
+	seenRuns         map[string]bool
 }
 
 func (o *OperationFile) register() {
@@ -366,19 +367,19 @@ func (o *OperationFile) AcknowledgeLaunch(ctx context.Context, initialReceipt st
 	if !o.child || !digest(o.capture, 32) || len(initialReceipt) == 0 || len(initialReceipt) > 16<<10 {
 		return errors.New("operation launch omitted actual startup receipt")
 	}
-	existing, err := o.rawRead(ctx, 0, operationSlotSize)
+	existing, err := o.rawRead(ctx, 0, operationControlFrameSize)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(existing, make([]byte, operationSlotSize)) {
+	if !bytes.Equal(existing, make([]byte, operationControlFrameSize)) {
 		return errors.New("operation launch acknowledgement cannot be replaced")
 	}
 	capture, _ := hex.DecodeString(o.capture)
 	receipt := sha256.Sum256([]byte(initialReceipt))
-	return o.write(ctx, 1, append(capture, receipt[:]...), 0, operationSlotSize)
+	return o.write(ctx, 1, append(capture, receipt[:]...), 0, operationControlFrameSize)
 }
 func (o *OperationFile) VerifyLaunch(ctx context.Context, initialReceipt string) error {
-	body, err := o.read(ctx, 1, 0, operationSlotSize)
+	body, err := o.read(ctx, 1, 0, operationControlFrameSize)
 	if err != nil {
 		return err
 	}
@@ -502,6 +503,9 @@ func (o *OperationFile) BindReader(ctx context.Context, r OperationReservation, 
 	if err != nil {
 		return err
 	}
+	if body[360] == 2 {
+		return errors.New("aborted operation cannot acquire a native reader")
+	}
 	if body[140]&(1<<role) != 0 {
 		return errors.New("operation reader binding cannot be replaced")
 	}
@@ -587,6 +591,9 @@ func (o *OperationFile) Cancel(ctx context.Context, r OperationReservation) erro
 	if _, err := o.record(ctx, r); err != nil {
 		return err
 	}
+	if _, _, err := o.boundOperationRun(ctx, r); err != nil {
+		return err
+	}
 	request, err := o.read(ctx, 2, operationSlotSize, operationSlotSize)
 	if err != nil {
 		return err
@@ -595,11 +602,11 @@ func (o *OperationFile) Cancel(ctx context.Context, r OperationReservation) erro
 		return errors.New("operation cancellation does not name the original outstanding request")
 	}
 
-	frame, err := o.rawRead(ctx, 2*operationSlotSize, operationSlotSize)
+	frame, err := o.rawRead(ctx, 2*operationSlotSize, operationControlFrameSize)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(frame, make([]byte, operationSlotSize)) {
+	if !bytes.Equal(frame, make([]byte, operationControlFrameSize)) {
 		body, err := operationBody(frame, 3)
 		if err != nil || len(body) != 140 {
 			return errors.New("operation cancellation history is torn")
@@ -612,20 +619,20 @@ func (o *OperationFile) Cancel(ctx context.Context, r OperationReservation) erro
 	body := make([]byte, 140)
 	binary.LittleEndian.PutUint32(body, r.Slot)
 	copy(body[4:], key)
-	return o.write(ctx, 3, body, 2*operationSlotSize, operationSlotSize)
+	return o.write(ctx, 3, body, 2*operationSlotSize, operationControlFrameSize)
 }
 func (o *OperationFile) Cancelled(ctx context.Context, r OperationReservation) (bool, error) {
 	if _, err := o.record(ctx, r); err != nil {
 		return false, err
 	}
-	frame, err := o.rawRead(ctx, 2*operationSlotSize, operationSlotSize)
+	frame, err := o.rawRead(ctx, 2*operationSlotSize, operationControlFrameSize)
 	if err != nil {
 		return false, err
 	}
-	if bytes.Equal(frame, make([]byte, operationSlotSize)) {
+	if bytes.Equal(frame, make([]byte, operationControlFrameSize)) {
 		return false, nil
 	}
-	body, err := o.read(ctx, 3, 2*operationSlotSize, operationSlotSize)
+	body, err := o.read(ctx, 3, 2*operationSlotSize, operationControlFrameSize)
 	if err != nil {
 		return false, err
 	}
@@ -679,6 +686,9 @@ func (o *OperationFile) publishEvidence(ctx context.Context, r OperationReservat
 	record, err := o.record(ctx, r)
 	if err != nil {
 		return err
+	}
+	if record[360] == 2 {
+		return errors.New("aborted operation cannot acquire native evidence")
 	}
 	if record[140]&(1<<role) == 0 {
 		return errors.New("operation page has no retained reader binding")

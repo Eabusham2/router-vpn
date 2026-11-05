@@ -119,6 +119,31 @@ held-lock/late-publication regressions pass. Concurrent upstream HTTP admission/
 physical/device/private acceptance and the other surviving platform/graph work
 remain separate requirements. The older continuation below is retained as history.
 
+## Installed service MTU run ownership and cancellation
+
+The controller, installed service and fixed native child now share one accepted
+MTU run, its 45-second work deadline and one eight-second cleanup deadline.
+Candidate commands cannot renew either allowance. Both original observers and
+the actual current native reader must acknowledge closure before another run can
+start. An operation cancelled before submission retains its original tombstone
+and needs both real observer acknowledgements; no native result is synthesized.
+The retained history remains bounded to 32 transaction slots and 32 run IDs per
+connection.
+
+Cancel accepted before verified adoption restores the original MTU. Once the
+verified winner is committed, a later Cancel reports that completion is finishing
+without promising a rollback. Only successful original closure and current-source
+readback can retain that winner; Stop, invalidation or failed closure still revoke
+measured success. The shared descriptor, worker and native-source projection
+checks pass, including deliberate renewed-clock and erased-clock negative controls.
+The frozen native-tagged MTU suite passes all 123 verdicts without failures or
+skips; the combined service runner passes all 10 checks. The GTK panel now keeps
+the original Retest request alive after a committed Cancel and waits for fresh
+joined status. Its new callback regressions require the native Linux UI CI because
+GTK/Xvfb dependencies are unavailable in the local workspace.
+The full installed public Retest/Cancel/HTTPS scenario and exact-SHA native release
+still require their separate CI evidence; no physical-device acceptance is claimed.
+
 ## Linux imported WireGuard entry to SS2022 final
 
 The retained Linux host now admits this Local graph with Start Layers Off and

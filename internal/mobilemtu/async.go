@@ -7,11 +7,12 @@ import (
 )
 
 type operation struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	finish context.CancelFunc
-	done   chan struct{}
-	config string
+	ctx      context.Context
+	cancel   context.CancelFunc
+	finish   context.CancelFunc
+	done     chan struct{}
+	config   string
+	finalize func(context.Context) error
 }
 
 // begin publishes the cancellable generation before native IPC can return.
@@ -26,6 +27,9 @@ func (c *Controller) beginContextAdmission(parent context.Context, request strin
 	return c.beginContextAdmissionOn(parent, parent, request, strict, admit)
 }
 func (c *Controller) beginContextAdmissionOn(admission, parent context.Context, request string, strict bool, admit func(context.Context) error) (*operation, error) {
+	return c.beginContextAdmissionProvider(admission, parent, request, strict, nil, admit)
+}
+func (c *Controller) beginContextAdmissionProvider(admission, parent context.Context, request string, strict bool, provider CleanupDeadlineProvider, admit func(context.Context) error) (*operation, error) {
 	if parent == nil || admission == nil {
 		return nil, errors.New("MTU operation has no caller")
 	}
@@ -52,7 +56,7 @@ func (c *Controller) beginContextAdmissionOn(admission, parent context.Context, 
 		return nil, errors.New("MTU request identifiers cannot be reused")
 	}
 	budget, _, _ := c.measurementBudgets()
-	ctx, finish, err := WithOperationContext(parent, budget, 8*time.Second)
+	ctx, finish, err := withOperationContextProvider(parent, budget, 8*time.Second, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -96,11 +100,32 @@ func (c *Controller) beginContextAdmissionOn(admission, parent context.Context, 
 func (c *Controller) execute(op *operation, force bool) error {
 	defer op.cancel()
 	defer op.finish()
-	err := errors.Join(c.run(op.ctx, op.config, force), op.ctx.Err())
+	workErr := c.run(op.ctx, op.config, force)
+	c.mu.Lock()
+	// Adoption already changed the exact native reader/config under this same
+	// mutex. Later cancellation cannot undo it after native run closure starts.
+	committed := workErr == nil && c.status.Measured
+	c.mu.Unlock()
+	err := workErr
+	if !committed {
+		err = errors.Join(err, op.ctx.Err())
+	}
+	var finalizationErr error
+	if op.finalize != nil {
+		finalizationErr = op.finalize(op.ctx)
+		err = errors.Join(err, finalizationErr)
+		if !committed {
+			err = errors.Join(err, op.ctx.Err())
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.status.Running = false
 	c.status.Complete = true
+	if finalizationErr != nil {
+		c.revokeLocked("failed")
+		c.status.Failure = "MTU original run closure did not join both retained observers"
+	}
 	if c.closed {
 		c.revokeLocked("stopped")
 		err = context.Canceled

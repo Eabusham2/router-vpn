@@ -9,6 +9,8 @@ import "router-vpn/internal/standardengine"
 // Identity and result digests bind independent page reads to the same retained
 // transaction; an identifier never creates a native reader or observer.
 type linuxStandardServiceMTURequest struct {
+	Run         *standardengine.OperationRun         `json:"run,omitempty"`
+	CleanupOnly bool                                 `json:"cleanup_only,omitempty"`
 	ID          string                               `json:"id,omitempty"`
 	MTU         int                                  `json:"mtu,omitempty"`
 	DeadlineNS  int64                                `json:"deadline_ns,omitempty"`
@@ -22,21 +24,25 @@ type linuxStandardServiceMTURequest struct {
 }
 
 type linuxStandardServiceMTUResponse struct {
-	CaptureSHA256    string                           `json:"capture_sha256"`
-	Current          standardengine.ReaderBinding     `json:"current"`
-	Ready            string                           `json:"ready,omitempty"`
-	Remaining        int                              `json:"remaining"`
-	Command          *standardengine.OperationCommand `json:"command,omitempty"`
-	Result           *standardengine.OperationResult  `json:"result,omitempty"`
-	Binding          *standardengine.ReaderBinding    `json:"binding,omitempty"`
-	Evidence         []byte                           `json:"evidence,omitempty"`
-	EvidenceSize     int                              `json:"evidence_size,omitempty"`
-	NextOffset       int                              `json:"next_offset,omitempty"`
-	Addresses        []string                         `json:"addresses,omitempty"`
-	Pending          bool                             `json:"pending,omitempty"`
-	Settled          bool                             `json:"settled,omitempty"`
-	Rejected         *linuxStandardServiceMTURejected `json:"rejected,omitempty"`
-	ObservationError string                           `json:"observation_error,omitempty"`
+	Run               *standardengine.OperationRun     `json:"run,omitempty"`
+	RunState          standardengine.OperationRunState `json:"run_state,omitempty"`
+	RunRetained       bool                             `json:"run_retained,omitempty"`
+	CleanupDeadlineNS int64                            `json:"cleanup_deadline_ns,omitempty"`
+	CaptureSHA256     string                           `json:"capture_sha256"`
+	Current           standardengine.ReaderBinding     `json:"current"`
+	Ready             string                           `json:"ready,omitempty"`
+	Remaining         int                              `json:"remaining"`
+	Command           *standardengine.OperationCommand `json:"command,omitempty"`
+	Result            *standardengine.OperationResult  `json:"result,omitempty"`
+	Binding           *standardengine.ReaderBinding    `json:"binding,omitempty"`
+	Evidence          []byte                           `json:"evidence,omitempty"`
+	EvidenceSize      int                              `json:"evidence_size,omitempty"`
+	NextOffset        int                              `json:"next_offset,omitempty"`
+	Addresses         []string                         `json:"addresses,omitempty"`
+	Pending           bool                             `json:"pending,omitempty"`
+	Settled           bool                             `json:"settled,omitempty"`
+	Rejected          *linuxStandardServiceMTURejected `json:"rejected,omitempty"`
+	ObservationError  string                           `json:"observation_error,omitempty"`
 }
 
 const linuxStandardServiceMTUEvidencePart = 8 << 10

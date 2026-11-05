@@ -108,10 +108,36 @@ func routerVPNStandardMTUWorker(ctx context.Context, file *standardengine.Operat
 	if err := routerVPNStandardMTUAdmit(ctx, instance, tag, original, ready, guard); err != nil {
 		return nil, err
 	}
-	return standardengine.NewNativeMTUWorker(file, &routerVPNStandardMTUBackend{instance, tag}, original, ready, guard,
-		func(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc, error) {
-			// Preserve the same eight-second original cleanup allowance as the
-			// shared native MTU operation controller. Each read shares its remainder.
-			return mobilemtu.WithOperationContext(ctx, budget, 8*time.Second)
-		})
+	return standardengine.NewNativeMTUWorkerWithRunCleanup(file, &routerVPNStandardMTUBackend{instance, tag}, original, ready, guard,
+		func(ctx context.Context, deadline time.Time, cleanup time.Duration, provider func(context.Context) (time.Time, error)) (context.Context, context.CancelFunc, error) {
+			// Retain the original admitted optimizer deadline and shared cleanup
+			// clock across all native transactions.
+			return mobilemtu.WithCapturedOperationContextProvider(ctx, deadline, cleanup, provider)
+		}, mobilemtu.OperationCleanupContext)
+}
+
+func (b *routerVPNStandardMTUBackend) Observe(ctx context.Context, expected any) (string, int, error) {
+	current, err := b.Current(ctx)
+	if err != nil || current != expected {
+		return "", 0, errors.Join(err, errors.New("standard run replaced exact original native reader"))
+	}
+	reader, ok := expected.(interface {
+		RouterVPNDesktopMTUReceiptContext(context.Context) (string, string, error)
+	})
+	if !ok {
+		return "", 0, errors.New("standard run lacks original bounded receipt capability")
+	}
+	ready, retired, err := reader.RouterVPNDesktopMTUReceiptContext(ctx)
+	if err != nil || ready == "" || retired != "" {
+		return "", 0, errors.Join(err, errors.New("standard run lost live actual Ready"))
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(ready)
+	if err != nil {
+		return "", 0, err
+	}
+	again, err := b.Current(ctx)
+	if err != nil || again != expected {
+		return "", 0, errors.Join(err, errors.New("standard run changed original native reader during observation"))
+	}
+	return ready, receipt.MTU, ctx.Err()
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -58,11 +59,20 @@ func TestLinuxStandardMTUUnsubmittedRecoveryFencesDelayedCommand(t *testing.T) {
 	for _, scenario := range []string{"cancel-before-begin", "reserved-unsent", "uncertain-unsent", "uncertain-published"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, m, child := standardMTUAdmissionPair(t)
+			if err := child.AcknowledgeLaunch(ctx, m.ready); err != nil {
+				t.Fatal(err)
+			}
+			limit, _ := ctx.Deadline()
+			run := standardengine.OperationRun{CaptureSHA256: m.native.captureSHA, ID: strings.Repeat("d", 32), WorkDeadlineNS: limit.UnixNano(), CleanupBudgetNS: int64(standardengine.OperationRunCleanupLimit), Original: m.current, OriginalMTU: 1500}
+			if _, err := m.runRequest(ctx, "mtu-run-begin", &linuxStandardServiceMTURequest{Run: &run}); err != nil {
+				t.Fatal(err)
+			}
+
 			report, _ := standardMTUReportFixture(t)
 			key := report.Command.Reservation.Key
 			deadline, _ := ctx.Deadline()
 			key.DeadlineNS = deadline.UnixNano()
-			q := &linuxStandardServiceMTURequest{ID: key.ID, DeadlineNS: key.DeadlineNS, Expected: &key.Original}
+			q := &linuxStandardServiceMTURequest{Run: &run, ID: key.ID, DeadlineNS: key.DeadlineNS, Expected: &key.Original}
 			var command standardengine.OperationCommand
 			if scenario == "cancel-before-begin" {
 				if err := m.rejectUnknown(ctx, q); err != nil {
@@ -78,14 +88,33 @@ func TestLinuxStandardMTUUnsubmittedRecoveryFencesDelayedCommand(t *testing.T) {
 					t.Fatal(err)
 				}
 				command = standardengine.OperationCommand{Reservation: reservation, MTU: 1400}
-				m.active = &linuxStandardServiceMTUOperation{command: command, original: m.ready, reserved: true, noSubmission: scenario == "reserved-unsent"}
+				m.active = &linuxStandardServiceMTUOperation{command: command, original: m.ready, run: &run, reserved: true, noSubmission: scenario == "reserved-unsent"}
 				m.remember(key.ID)
+				if err := m.native.operations.BindOperationRun(ctx, command, run, false); err != nil {
+					t.Fatal(err)
+				}
+
 				if scenario == "uncertain-published" {
 					if err := m.native.operations.SubmitCommand(ctx, command); err != nil {
 						t.Fatal(err)
 					}
 				}
 				if err := m.poll(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario != "uncertain-published" {
+				if scenario != "cancel-before-begin" && m.response().Settled {
+					t.Fatal("unsubmitted run settled before controller observer")
+				}
+				// Explicit unchanged controller-observer model; there is no native worker to invent.
+				controller := &linuxStandardStartupObserverFixture{}
+				if err := controller.CurrentContext(ctx); err != nil {
+					t.Fatal(err)
+				}
+				ack := *q
+				ack.MTU = 0
+				if err := m.acknowledgeRejection(ctx, &ack); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -103,6 +132,14 @@ func TestLinuxStandardMTUUnsubmittedRecoveryFencesDelayedCommand(t *testing.T) {
 			if scenario != "cancel-before-begin" && m.native.operations.SubmitCommand(ctx, command) == nil {
 				t.Fatal("delayed native command executed after permanent admission rejection")
 			}
+			closed, e := m.runRequest(ctx, "mtu-run-close", &linuxStandardServiceMTURequest{Run: &run})
+			if e != nil || closed.RunState != standardengine.OperationRunClosing {
+				t.Fatal("both actual unsubmitted observer acks did not permit closure", closed, e)
+			}
+			if e = child.AcknowledgeOperationRunClosure(ctx, run); e != nil {
+				t.Fatal(e)
+			}
+
 		})
 	}
 }
