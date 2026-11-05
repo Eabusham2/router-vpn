@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strings"
 	"time"
 
 	"router-vpn/internal/common"
@@ -141,7 +142,7 @@ func (s *linuxStandardService) bootBootstrapRequest(ctx context.Context, peer *l
 	if !reflect.DeepEqual(plain, expected) || request.BudgetMS < 1 || request.BudgetMS > 120000 {
 		return nil, errors.New("bootstrap request supplied another operation scope")
 	}
-	if _, e := dnsmeasure.TransportBootstrapQuery(q.Hostname, false); e != nil {
+	if _, e := dnsmeasure.TransportBootstrapQuery(strings.TrimSuffix(q.Hostname, "."), false); e != nil {
 		return nil, e
 	}
 	if e := peer.Current(ctx); e != nil {
@@ -262,7 +263,7 @@ func (s *linuxStandardService) bootBootstrapRequest(ctx context.Context, peer *l
 		return &linuxStandardBootBootstrapResponse{ID: q.ID, Clean: true, Addresses: append([]string(nil), t.addresses...)}, work.Err()
 	}
 	if t.resolver == nil {
-		t.resolver, e = captureLinuxBootResolver(work)
+		t.resolver, e = captureLinuxBootResolver(work, q.Hostname)
 		if e != nil {
 			return nil, e
 		}
@@ -271,29 +272,13 @@ func (s *linuxStandardService) bootBootstrapRequest(ctx context.Context, peer *l
 	if !ok || native == nil {
 		return nil, errors.New("bootstrap lacks actual native creator")
 	}
-	var addresses []string
-	for _, ipv6 := range []bool{false, true} {
-		if ipv6 && profile.IPv6Mode == "off" {
-			continue
-		}
-		if e = s.bootstrapCurrentLocked(work, t, lease); e != nil {
-			return nil, e
-		}
-		query, e := dnsmeasure.TransportBootstrapQuery(q.Hostname, ipv6)
-		if e != nil {
-			return nil, e
-		}
-		reply, e := native.BootstrapDNSExchange(work, lease.lock, t.resolver.servers[0], query)
-		if e != nil {
-			return nil, e
-		}
-		answers, e := dnsmeasure.TransportBootstrapAnswers(query, reply)
-		if e != nil {
-			return nil, e
-		}
-		for _, ip := range answers {
-			addresses = append(addresses, ip.String())
-		}
+	resolved, e := t.resolver.policy.ResolveIPv6(work, &linuxBootBootstrapExchange{operation: work, service: s, original: t, lease: lease, native: native}, profile.IPv6Mode != "off")
+	if e != nil {
+		return nil, e
+	}
+	addresses := make([]string, 0, len(resolved.Addresses))
+	for _, address := range resolved.Addresses {
+		addresses = append(addresses, address.String())
 	}
 	if len(addresses) == 0 || len(addresses) > 32 {
 		return nil, errors.New("captured bootstrap produced no bounded usable addresses")

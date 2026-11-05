@@ -2174,11 +2174,12 @@ explicitly model their dependency boundary; they do not certify privileged
 service or nft execution. The affected source remained identical when the
 unrelated Android/Apple additions through `222df0ea` were incorporated.
 
-The native bootstrap still needs complete machine-resolver semantics, faithful
-systemd-resolved routing/security policy, TCP/truncation handling, kernel-bound
-grant expiry, retained lost-creation-acknowledgement cleanup and conditional
-native removal. Those are actual source gaps, separate from installed and
-physical-device acceptance.
+That checkpoint left machine-resolver semantics and TCP/truncation incomplete.
+The captured direct-machine-resolver section below adds its bounded files/dns,
+hosts, search, upstream and transport behavior. Faithful systemd-resolved
+routing/security, other NSS policies, kernel-bound grant expiry, retained
+lost-creation-acknowledgement cleanup and conditional native removal remain actual
+source gaps, separate from installed and physical-device acceptance.
 
 ## Linux Local ordinary SS2022 entry and final
 
@@ -2272,6 +2273,71 @@ The current-status mobile refresh had removed the adjacent, unrelated Linux
 SS2022-entry/SS2022-final evidence section. That section is restored unchanged,
 while the newer mobile packet-entry implementation and its evidence remain.
 
+## Captured direct machine resolver and native TCP bootstrap
+
+The installed service now captures its original NSS/hosts/resolver files, opened
+objects, named symlinks/targets, trusted parent directories and contents. When the
+system hostname supplies the default search domain, that original hostname is
+also retained. The bounded `files`/`dns` policy preserves their actual order;
+files-first success does not read an unreachable resolver. Direct DNS preserves
+search/domain, ndots, attempts, timeout, rotation, selected A/AAAA families,
+configured TCP, truncation fallback and supported wire options. A changed source
+or lost original native/service authority prevents result adoption or another
+query. Unsupported NSS actions/modules and loopback resolver stubs remain explicit
+source gaps; no flattened systemd upstream list supplies their missing authority.
+
+The service adapter exposes only `Current` and one typed original-socket exchange.
+UDP and TCP retain separate original socket objects, physical interface/source,
+mark, UID and exact tuple. TCP's grant is installed and read back inside the dial
+control callback before the SYN. A query may narrow the original operation, but
+retirement uses that original absolute deadline without renewal; timeout fallback
+requires actual grant/socket cleanup and original-owner revalidation first.
+Selected payload DNS, including Home AdGuard, is not replaced by this outer
+endpoint bootstrap. EDNS defaults Off and follows its captured option. The exact
+wire parser accepts a 255-octet encoded QNAME with the bounded empty OPT record
+and rejects longer QNAMEs instead of using a smaller total-packet shortcut.
+
+The isolated client/shared integration, before the final QNAME wire-bound
+correction, reports 129 race-instrumented verdicts with no failures or skips: system policy 1.082 seconds, native protection package
+1.235 seconds and client/service 21.945 seconds. The final prepared-native
+bootstrap family verifies the final correction and reports all 48 declared
+verdicts in 1.303 seconds. Restoring the original 278-byte parser body compiles
+and fails the intended `maximum-edns` and `overlong` assertions (13 RUN, 10 PASS;
+two failing leaves and their parent). The final tests remain unchanged in that
+causal control. These are separate evidence sets, not a rerun of all 129 cases
+after the last correction. All 174 copied
+native-source records match their ordinary pristine preparation, based on
+`1d777a48` plus this unit. The composed publication gate preserves the subsequently
+published original-parent unit; that runner composition is not relabeled as a
+rerun of a newer complete native core. The installed-host runner's 39 checks pass
+in 89.698 seconds, with 481 prior cases plus three new hosts/TCP/truncation cases
+(484 total) and the separate nine reverse-transfer cases retained.
+
+The actual UDP/TCP native cancellation fixtures compile but have no successful
+local privileged execution. Authenticated resolved routing/security capture,
+actual selected DoT and DNSSEC behavior, kernel grant expiry, unknown creation
+acknowledgement recovery and conditional rule removal remain distinct next work.
+No private target, production DNS configuration or device was changed.
+
+## Exact-source generated Linux Node TUN evidence at 356942ca
+
+GitHub run [42019514627](https://github.com/Eabusham2/router-vpn/actions/runs/42019514627)
+completed successfully on both AMD64 (job 127218456915) and ARM64 (job
+127218457499). Their logs show checkout and required-source identity
+`356942ca7c29b90b8f7b0767168bd353fcdde1cd`, followed by all six actual
+`NodeChildCommandTUN` cases: On-connect, Always, captured MTU, MTU rollback,
+resolver failure and wrong key. The six-case native test group took 27.73 and 23.86
+seconds respectively. Both jobs uploaded their architecture-specific source
+receipts and logs. The retrieved logs establish those executions; their uploaded
+artifact bytes were not independently downloaded in this observation.
+
+This is the generated **Node** command/TUN path, including selected DNS, encrypted
+traffic and pre-acknowledgement TUN closure. It does not substitute for the new
+standard-child idle-parent death fixture, the new direct-resolver kernel cases,
+app-level Router proof, physical devices, or full release publication. The
+aggregate release workflow for this SHA was cancelled after newer main work;
+cancellation is not a release pass.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -2280,7 +2346,7 @@ while the newer mobile packet-entry implementation and its evidence remain.
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. Linux Local ordinary WireGuard entry with a captured AES/AES+XOR Hysteria2 final now has source, client/policy, real carrier and native-model evidence described above. | Full static linkage and its 25 new installed namespace cases need exact-SHA CI. Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
-| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node, reverse Node-to-standard and retained prior-boot service-guard transfers use actual original creators, durable intent and bounded resolution. Active Always image upgrades now coordinate the two retained native creators, exact code journal, readiness and process joins. Protected outer-hostname bootstrap is implemented with original peer/profile/resolver capture, exact creator-owned UDP grants and bounded cleanup; [the current implementation and local evidence](CURRENT-STATUS.md#retained-always-guard-transport-hostname-bootstrap) record its limits. | Exact-SHA installed/native and device acceptance remains required, including eleven mandatory two-generation upgrade scenarios and the protected-hostname namespace case. Machine-resolver policy and native grant-lifetime/cleanup gaps described above, other boot-owner paths and same-boot service-crash continuation remain unfinished. Source integration and modeled transactions do not establish private systemd/host acceptance. |
+| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node, reverse Node-to-standard and retained prior-boot service-guard transfers use actual original creators, durable intent and bounded resolution. Active Always image upgrades now coordinate the two retained native creators, exact code journal, readiness and process joins. Protected outer-hostname bootstrap is implemented with original peer/profile/resolver capture, exact creator-owned UDP/TCP grants and bounded cleanup; [the current implementation and local evidence](CURRENT-STATUS.md#retained-always-guard-transport-hostname-bootstrap) record its limits. | Exact-SHA installed/native and device acceptance remains required, including eleven mandatory two-generation upgrade scenarios and the protected-hostname namespace case. Machine-resolver policy and native grant-lifetime/cleanup gaps described above, other boot-owner paths and same-boot service-crash continuation remain unfinished. Source integration and modeled transactions do not establish private systemd/host acceptance. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Actual later evidence includes both Linux generated Node/TUN architecture jobs at `b2a9a3c1`, both Windows Wintun/WFP stages at `bed21f7e`, and all five Windows ARM64 MAX suites at `f041b241`, with their distinct boundaries recorded above. | Each later source change requires its own exact-SHA native/build/publication result. No current full release or remaining device acceptance is established; cancelled workflows are not passes. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 

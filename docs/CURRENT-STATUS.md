@@ -128,13 +128,16 @@ frozen native source, preparation and precise acceptance boundary.
 The installed Linux service now supplies a bounded outer-transport hostname
 bootstrap for public Node Connect while retaining its original prior-boot Always
 guard. The authenticated operation captures the selected profile, physical path,
-trusted root-owned machine resolver files and exact service peer. It uses only the
-**first configured captured upstream over UDP**; it does not provide resolver
-failover, TCP fallback, a public resolver exception or a loopback daemon exemption.
-Selected Home AdGuard and payload DNS are unchanged. Each exact A/AAAA query has
-an original creator-owned socket/tuple/UID/mark/device grant and acknowledged nft
-handle. The grant must be independently absent, with the original baseline and
-all descriptors joined, before lookup evidence can support boot-to-Node transfer.
+trusted root-owned machine resolver files and exact service peer. Its captured
+machine policy now preserves the bounded `files`/`dns` NSS order, exact hosts
+answers, search/domain and ndots selection, direct-upstream retry/rotation, and
+configured query options. A files-first match does not consult an unreachable
+resolver. Each UDP query or TCP query (including truncation fallback) retains its
+own original socket, exact tuple, UID, mark, device and acknowledged nft handle.
+The TCP grant is proved before connect can send a SYN. Selected Home AdGuard and
+payload DNS remain unchanged; this only bootstraps the captured outer endpoint.
+The grant must be independently absent, with the original baseline and all
+descriptors joined, before lookup evidence can support boot-to-Node transfer.
 
 Cancellation and retries retain the same creator. Actual original-controller
 pidfd retirement admits a once-only 30-second cleanup clock; it cannot restart a
@@ -155,17 +158,34 @@ original owner. The focused race family passes all 52 verdicts, including 20 new
 fallback and parent-retirement verdicts. Actual namespace/service acceptance
 remains separate from these local models and native peer-close tests.
 
-Resolver search/NSS/hosts semantics, systemd-resolved per-link routing and
-transport policy, native TCP fallback, kernel grant expiry and cleanup after a
-lost creation acknowledgement remain source work. In particular, reading a
-flattened systemd upstream file does not prove its routing-domain policy.
+Query attempts can narrow the original operation's deadline. Retirement retains
+that same original absolute deadline, allowing a completed cleanup before a
+subsequent captured upstream attempt without extending the operation. Source
+replacement, lost original authority and incomplete cleanup prevent another query
+or result adoption. EDNS is enabled only when configured, and the wire bound
+accepts a maximum legal DNS name with an empty EDNS record while rejecting an
+overlong name.
 
-Local evidence is 77 focused race verdicts across the client, process witness,
+This bounded direct-resolver expansion passes 129 client/shared race verdicts,
+48 exact prepared-native bootstrap verdicts and 39 installed-runner checks. The
+installed inventory preserves 481 prior cases and adds hosts, configured TCP and
+UDP-truncation-to-TCP cases, for 484 plus the separate nine reverse-transfer cases.
+The UDP/TCP native cancellation cases compile and remain mandatory; they were not
+executed against a privileged local kernel. The source preparation and tests are
+recorded separately from exact-SHA CI, packaging and device acceptance.
+
+Authenticated systemd-resolved per-link routing/security and actual selected
+DoT/DNSSEC execution, unsupported NSS actions/modules, kernel grant expiry,
+cleanup after a lost creation acknowledgement and generation-conditioned removal
+remain source work. A flattened systemd upstream file cannot establish its
+routing-domain policy; an explicit refusal does not complete that requirement.
+
+The earlier bounded-UDP increment recorded 77 focused race verdicts across the client, process witness,
 DNS and native parser packages; 27 exact relocated native helper verdicts on the
 pinned core (including completed-close retries); and five causal mutants rejected
 at their intended assertions. The mandatory kernel socket test adds original and
 cancel-after-grant cases, and the installed public `service-boot-hostname` case
-brings the preserved host inventory to 458. The native namespace positives require
+brought that checkpoint's host inventory to 458. The native namespace positives require
 privileged CI: they were compiled here, but this workspace cannot execute the
 required network/mount operations. These source results do not certify a package,
 a physical device or a deployment.

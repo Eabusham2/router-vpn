@@ -113,7 +113,7 @@ func TestLinuxStandardServiceBootTransferRetiredIntentRejectsReplay(t *testing.T
 	}
 }
 
-var linuxHostTUNBootTransferCases = []string{"service-boot-transfer", "service-boot-transfer-cancel", "service-boot-transfer-lost-reply", "service-boot-hostname"}
+var linuxHostTUNBootTransferCases = []string{"service-boot-transfer", "service-boot-transfer-cancel", "service-boot-transfer-lost-reply", "service-boot-hostname", "service-boot-hosts", "service-boot-hostname-tcp", "service-boot-hostname-truncated"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNBootTransferCases...) }
 func linuxHostTUNBootTransferCase(scenario string) bool {
@@ -158,7 +158,7 @@ func linuxHostTUNBootTransferService(t *testing.T, installed string, peer *linux
 }
 
 func linuxHostTUNBootTransferPreflight(ctx context.Context, a *app, scenario string) (failure error) {
-	if !linuxHostTUNBootTransferCase(scenario) || (scenario == "service-boot-transfer" || scenario == "service-boot-hostname") {
+	if !linuxHostTUNBootTransferCase(scenario) || (scenario == "service-boot-transfer" || linuxHostTUNBootHostnameCase(scenario)) {
 		return nil
 	}
 	operation, finish, err := a.beginConnectionTransaction()
@@ -362,4 +362,12 @@ func TestLinuxStandardServiceBootTransferRetriesReleasedOriginal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func linuxHostTUNBootHostnameCase(scenario string) bool {
+	switch scenario {
+	case "service-boot-hostname", "service-boot-hosts", "service-boot-hostname-tcp", "service-boot-hostname-truncated":
+		return true
+	}
+	return false
 }

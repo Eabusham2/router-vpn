@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,13 +15,20 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
 
 func init() {
-	if len(os.Args) == 3 && os.Args[1] == "routervpn-standard-bootstrap-peer" {
-		if e := desktopLinuxBootstrapPeer(os.Args[2]); e != nil {
+	if (len(os.Args) == 3 || len(os.Args) == 4) && os.Args[1] == "routervpn-standard-bootstrap-peer" {
+		var e error
+		if len(os.Args) == 4 {
+			e = desktopLinuxBootstrapTCPPeer(os.Args[2], strings.Contains(os.Args[3], "cancel"))
+		} else {
+			e = desktopLinuxBootstrapPeer(os.Args[2])
+		}
+		if e != nil {
 			fmt.Fprintln(os.Stderr, e)
 			os.Exit(91)
 		}
@@ -84,7 +92,7 @@ func desktopLinuxBootstrapPeer(address string) error {
 	return context.DeadlineExceeded
 }
 func TestDesktopLinuxGuardianKernelStandardBootstrapSocket(t *testing.T) {
-	for _, mode := range []string{"original", "cancel-after-grant"} {
+	for _, mode := range []string{"original", "cancel-after-grant", "tcp-original", "tcp-cancel-after-grant"} {
 		t.Run(mode, func(t *testing.T) { desktopLinuxBootstrapSocketProof(t, mode) })
 	}
 }
@@ -92,6 +100,11 @@ func desktopLinuxBootstrapSocketProof(t *testing.T, mode string) {
 	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 {
 		t.Fatal("bootstrap native proof requires original isolated guardian namespace")
 	}
+	network := "udp"
+	if strings.HasPrefix(mode, "tcp-") {
+		network = "tcp"
+	}
+	cancelled := strings.Contains(mode, "cancel-after-grant")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	notifyR, notifyW, e := os.Pipe()
@@ -109,6 +122,9 @@ func desktopLinuxBootstrapSocketProof(t *testing.T, mode string) {
 		t.Fatal(e)
 	}
 	peer := exec.CommandContext(ctx, "/usr/sbin/ip", "netns", "exec", "rvpn-peer", image, "routervpn-standard-bootstrap-peer", "198.18.0.2")
+	if network == "tcp" {
+		peer.Args = append(peer.Args, mode)
+	}
 	peer.ExtraFiles = []*os.File{notifyW, releaseR}
 	peer.Stderr = os.Stderr
 	if e = peer.Start(); e != nil {
@@ -150,6 +166,14 @@ func desktopLinuxBootstrapSocketProof(t *testing.T, mode string) {
 	}
 	ordinaryBlocked := func() {
 		t.Helper()
+		if network == "tcp" {
+			c, e := net.DialTimeout("tcp", "198.18.0.2:53", 100*time.Millisecond)
+			if e == nil {
+				_ = c.Close()
+				t.Fatal("bootstrap admitted an ordinary TCP socket")
+			}
+			return
+		}
 		c, e := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("198.18.0.2"), Port: 53})
 		if e != nil {
 			t.Fatal(e)
@@ -175,21 +199,21 @@ func desktopLinuxBootstrapSocketProof(t *testing.T, mode string) {
 	work, stopWork := context.WithCancel(ctx)
 	defer stopWork()
 	go func() {
-		b, e := p.BootstrapDNSExchange(work, lease, netip.MustParseAddr("198.18.0.2"), q)
+		b, e := p.BootstrapDNSExchangeNetwork(work, lease, netip.MustParseAddr("198.18.0.2"), network, q)
 		done <- result{b, e}
 	}()
 	if _, e = io.ReadFull(notifyR, signal[:]); e != nil || signal[0] != 'Q' {
 		t.Fatal("actual granted socket did not transmit", e)
 	}
 	ordinaryBlocked()
-	if mode == "cancel-after-grant" {
+	if cancelled {
 		stopWork()
 	}
 	if _, e = releaseW.Write([]byte{'D'}); e != nil {
 		t.Fatal(e)
 	}
 	resultValue := <-done
-	if mode == "cancel-after-grant" {
+	if cancelled {
 		if !errors.Is(resultValue.err, context.Canceled) || resultValue.body != nil {
 			t.Fatal("cancelled original lookup adopted reply", resultValue.err)
 		}
@@ -207,4 +231,59 @@ func desktopLinuxBootstrapSocketProof(t *testing.T, mode string) {
 		t.Fatal(e)
 	}
 	joined = true
+}
+
+func desktopLinuxBootstrapTCPPeer(address string, cancelled bool) error {
+	notice, release := os.NewFile(3, "bootstrap-notice"), os.NewFile(4, "bootstrap-release")
+	defer notice.Close()
+	defer release.Close()
+	listener, e := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(address), Port: 53})
+	if e != nil {
+		return e
+	}
+	defer listener.Close()
+	_ = listener.SetDeadline(time.Now().Add(15 * time.Second))
+	if _, e = notice.Write([]byte{'R'}); e != nil {
+		return e
+	}
+	conn, e := listener.AcceptTCP()
+	if e != nil {
+		return e
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	var length [2]byte
+	if _, e = io.ReadFull(conn, length[:]); e != nil {
+		return e
+	}
+	n := int(binary.BigEndian.Uint16(length[:]))
+	if n < 17 || n > 278 {
+		return errors.New("invalid original TCP DNS frame")
+	}
+	frame := make([]byte, n+2)
+	copy(frame, length[:])
+	if _, e = io.ReadFull(conn, frame[2:]); e != nil {
+		return e
+	}
+	if _, e = notice.Write([]byte{'Q'}); e != nil {
+		return e
+	}
+	var signal [1]byte
+	if _, e = io.ReadFull(release, signal[:]); e != nil {
+		return e
+	}
+	if cancelled {
+		return nil
+	}
+	for len(frame) > 0 {
+		n, e := conn.Write(frame)
+		if e != nil {
+			return e
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		frame = frame[n:]
+	}
+	return nil
 }

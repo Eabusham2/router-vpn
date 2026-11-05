@@ -483,3 +483,34 @@ SOURCE.update({'internal/standardengine/worker_parent_linux_test.go',
                'internal/linuxprocess/bootstrap_current_linux_native_test.go',
                'mobile/desktop/standard_parent_linux_test.go.tmpl',
                'mobile/desktop/standard_parent_native_linux_test.go.tmpl'})
+
+CORE.update({'BootResolverHostsBeforeStub': ('hosts-stub',
+                                 'hosts-missing',
+                                 'dns-first-stub')})
+
+SOURCE.update({'cmd/client/linux_standard_service_boot_resolver_adapter_linux.go',
+ 'internal/systembootstrap/config_linux.go',
+ 'internal/systembootstrap/config_linux_test.go',
+ 'internal/systembootstrap/resolve_linux.go'})
+
+AUXILIARY.update({'system-bootstrap': ('./internal/systembootstrap',
+                      {'TestSystemBootstrapCapturedDNSOptions': (),
+                       'TestSystemBootstrapClosedCaptureCannotReturnHosts': (),
+                       'TestSystemBootstrapDNSOwnerLabelAndNegativeAnswer': ('original',
+                                                                             'embedded-dot',
+                                                                             'nxdomain-address'),
+                       'TestSystemBootstrapEarlierAnswerCannotHideOwnerLoss': (),
+                       'TestSystemBootstrapHostsPrecedence': ('<missing>',
+                                                              'nameserver',
+                                                              'unrecognized',
+                                                              'dns-first-retains-stub-authority',
+                                                              'replacement'),
+                       'TestSystemBootstrapWirePolicy': ('default',
+                                                         'edns',
+                                                         'tcp',
+                                                         'truncated',
+                                                         'search',
+                                                         'retry-server',
+                                                         'source-change')})})
+
+AUXILIARY_TESTS.update({'internal/systembootstrap/config_linux_test.go': 'system-bootstrap'})

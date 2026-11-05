@@ -46,6 +46,7 @@ IMAGE_TRANSFER_PARSER = (*(f'Policy/{case}' for case in ('original','endpoint-or
 BOOTSTRAP_PARSER = ('CloseJoinsOriginalObjects', 'CloseJoinsOriginalObjects/connection', 'CloseJoinsOriginalObjects/file', 'CloseJoinsOriginalObjects/both', 'GrantRequiresExactCreation', *(f'GrantRequiresExactCreation/{case}' for case in ('tuple','mark','uid','interface','handle','duplicate','trailing','foreign-operation')),
  'InventoryRetainsOriginalBaseline', *(f'InventoryRetainsOriginalBaseline/{case}' for case in ('replacement','broader','foreign-extra','baseline-loss','unknown-echo')),
  'HeldGateKeepsOriginalDeadline', 'RejectsArbitraryQuestions', *(f'RejectsArbitraryQuestions/{case}' for case in ('many','extra','txt','compressed','trailing','invalid-label')))
+BOOTSTRAP_PARSER += ('TypedQueryOptions', *(f'TypedQueryOptions/{case}' for case in ('default','ad','edns','ad-edns','edns-payload','edns-version','edns-size','unknown-flag','maximum','maximum-edns','overlong','overlong-edns')), 'QueryCannotRenewOriginal', *(f'QueryCannotRenewOriginal/{case}' for case in ('nil-original','nil-query','unbounded-original','unbounded-query','renewed-query','cancelled-original','cancelled-query')))
 STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_bootstrap.go', 'desktop_standard_linux_bootstrap_test.go', 'desktop_standard_linux_bootstrap_native_test.go', 'desktop_standard_service_transfer_linux.go', 'desktop_standard_service_transfer_linux_test.go', 'desktop_standard_service_transfer_native_linux_test.go', 'desktop_standard_node_reverse_transfer_linux.go', 'desktop_standard_node_reverse_transfer_linux_test.go', 'desktop_standard_node_reverse_transfer_native_linux_test.go', 'desktop_standard_node_transfer_linux.go', 'desktop_standard_node_transfer_linux_test.go', 'desktop_standard_node_transfer_native_linux_test.go', 'desktop_standard_linux_protection.go',
                                   'desktop_standard_linux_protection_test.go',
                                   'desktop_standard_linux_protection_native_test.go', 'desktop_standard_linux_absence_test.go'})
@@ -455,7 +456,7 @@ def execute(source: Path, go='go', *, env=None):
         if any('--- PASS: TestDesktopLinuxGuardianKernel' + name + ' (' not in output for name in KERNEL_CASES) or '--- SKIP:' in output:
             raise ValueError('Linux guardian kernel gate did not execute every required boundary')
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernel', STANDARD_KERNEL_CASES)
-        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapSocket/', ('original', 'cancel-after-grant'))
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapSocket/', ('original', 'cancel-after-grant', 'tcp-original', 'tcp-cancel-after-grant'))
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardImageTransfer/', IMAGE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeStandardTransfer/', REVERSE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardNodeTransfer/', STANDARD_TRANSFER_NATIVE)

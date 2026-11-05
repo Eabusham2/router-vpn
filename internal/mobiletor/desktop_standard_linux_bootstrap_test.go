@@ -218,3 +218,80 @@ func TestLinuxStandardBootstrapCloseJoinsOriginalObjects(t *testing.T) {
 		})
 	}
 }
+
+func TestLinuxStandardBootstrapTypedQueryOptions(t *testing.T) {
+	for _, name := range []string{"default", "ad", "edns", "ad-edns", "edns-payload", "edns-version", "edns-size", "unknown-flag", "maximum", "maximum-edns", "overlong", "overlong-edns"} {
+		t.Run(name, func(t *testing.T) {
+			q := []byte{1, 2, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 4, 'n', 'o', 'd', 'e', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0, 0, 1, 0, 1}
+			if strings.HasPrefix(name, "maximum") || strings.HasPrefix(name, "overlong") {
+				q = q[:12]
+				last := 61
+				if strings.HasPrefix(name, "overlong") {
+					last++
+				}
+				for _, n := range []int{63, 63, 63, last} {
+					q = append(q, byte(n))
+					q = append(q, strings.Repeat("a", n)...)
+				}
+				q = append(q, 0, 0, 1, 0, 1)
+			}
+			if name == "ad" || name == "ad-edns" {
+				q[3] = 0x20
+			}
+			if strings.Contains(name, "edns") {
+				q[11] = 1
+				q = append(q, 0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0)
+			}
+			switch name {
+			case "edns-payload":
+				q[len(q)-1] = 1
+				q = append(q, 0)
+			case "edns-version":
+				q[len(q)-5] = 1
+			case "edns-size":
+				q[len(q)-7] = 209
+			case "unknown-flag":
+				q[3] = 0x10
+			}
+			e := desktopLinuxBootstrapQuestion(q)
+			good := name == "default" || name == "ad" || name == "edns" || name == "ad-edns" || strings.HasPrefix(name, "maximum")
+			if (e == nil) != good {
+				t.Fatalf("%s query admission: %v", name, e)
+			}
+		})
+	}
+}
+func TestLinuxStandardBootstrapQueryCannotRenewOriginal(t *testing.T) {
+	for _, name := range []string{"nil-original", "nil-query", "unbounded-original", "unbounded-query", "renewed-query", "cancelled-original", "cancelled-query"} {
+		t.Run(name, func(t *testing.T) {
+			original, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			query, stop := context.WithTimeout(original, 500*time.Millisecond)
+			defer stop()
+			var first, second context.Context = original, query
+			switch name {
+			case "nil-original":
+				first = nil
+			case "nil-query":
+				second = nil
+			case "unbounded-original":
+				first = context.Background()
+			case "unbounded-query":
+				second = context.Background()
+			case "renewed-query":
+				second = context.Background()
+				var release context.CancelFunc
+				second, release = context.WithTimeout(second, 2*time.Second)
+				defer release()
+			case "cancelled-original":
+				cancel()
+			case "cancelled-query":
+				stop()
+			}
+			p := &DesktopLinuxStandardProtection{}
+			if _, e := p.BootstrapDNSExchangeScoped(first, second, nil, netip.MustParseAddr("192.0.2.53"), "udp", nil); e == nil || p.bootstrap != nil {
+				t.Fatal("changed query context reached native mutation", e)
+			}
+		})
+	}
+}
