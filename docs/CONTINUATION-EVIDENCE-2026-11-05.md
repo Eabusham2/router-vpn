@@ -1328,6 +1328,34 @@ runner tests complete with 59 passes and the same two Windows-only skips on
 Linux (16.103s). These results repair fixture preparation; actual Windows
 MAX/WFP execution remains mandatory CI evidence.
 
+## Installed reverse handoff requires original native effects
+
+The installed Node runner now requires three separate reverse scenarios:
+`node-standard-original`, `node-standard-lost-commit-reply` and
+`node-standard-lost-prepare-reply`. Existing 429 Node/graph scenarios are
+preserved. The new parent uses the actual installed bootstrap, public Node and
+standard connection handlers, service process, generated engine and private
+encrypted peer. It captures both original native guards at authenticated service
+responses, checks the immutable journal intent, and requires joined runtime,
+TUN and protection teardown.
+
+The success case requires real selected-DNS exchanges and an HTTP identity
+proof bound to the captured TUN. Independent encrypted-peer and direct-LAN
+counters reject a bypass. This proves private routed reachability, not public
+Internet identity or TLS for that HTTP endpoint. Reply-loss faults discard only
+an actual authenticated response after its native effect. Lost commit must show
+source absence and successor presence without inventing child Start or proof;
+lost prepare must abort the real prepared successor while retaining the original
+Node guard before explicit Disconnect.
+
+The final full privileged client test binary compiles. All 33 host-runner checks
+pass on the final merged source (17.368s), including omitted, repeated, foreign
+and skipped reverse verdicts. The service source inventory also passes. The
+three actual isolated scenarios remain mandatory CI work because local UID-map
+creation returns EPERM; their execution is not reported as passed. The frozen
+five-path test contribution manifest is
+`b530d6cb1066cf4e577cf01c22cf5e4df678b5b91279c9756b1faef1ecaa9be2`.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

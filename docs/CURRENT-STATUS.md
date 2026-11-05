@@ -34,6 +34,13 @@ pass, while actual installed/native acceptance remains separate. Generic
 boot-owner succession, active Always upgrades and same-boot crash continuation
 remain unfinished source requirements.
 
+Three additional installed namespace cases now require the real reverse
+handoff, lost commit reply and lost prepare reply. They preserve the existing
+429 Node cases and require actual private TUN-routed HTTP identity, encrypted
+DNS/traffic counters, both original guards, durable settlement and joined
+teardown. All 33 runner checks pass and the privileged client binary compiles;
+the actual three scenarios remain mandatory native CI evidence.
+
 The MAX TLS reference now retains actual native TCP/UDP pairs for its variable
 packet and middle endpoints instead of assuming fixed ports are available.
 All 21 port-pair leaves and their parent pass under race while TCP51820 is held;

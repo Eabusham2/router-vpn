@@ -99,6 +99,7 @@ LAYER_CASES += tuple(case for case in SIP003_CASES if not case.startswith('ss-v2
 WHITENING_CASES += tuple(case for case in SIP003_CASES if case.startswith('ss-v2ray-whitening-'))
 ACTIVE_CASES += tuple(case for case in SIP003_CASES if case.endswith('-active-network-change') or case in MTU_CASES or case in RESTORE_CASES or case in PUBLIC_CASES)
 ORIGINAL_CASES = CASES
+REVERSE_CASES = ('node-standard-original', 'node-standard-lost-commit-reply', 'node-standard-lost-prepare-reply')
 TRANSFER_CASES = ('service-transfer', 'service-transfer-lost-reply', 'service-transfer-longer-deadline')
 PUBLIC_CASES += TRANSFER_CASES
 ACTIVE_CASES += TRANSFER_CASES
@@ -148,7 +149,7 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
+    required = {'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
@@ -249,7 +250,25 @@ def check_hysteria_auth_verdict(output):
 
 
 
+def check_reverse_verdict(output, case=None):
+    output = output.replace('\r\n', '\n')
+    cases = REVERSE_CASES if case is None else (case,)
+    if any(value not in REVERSE_CASES for value in cases) or '--- FAIL:' in output or '--- SKIP:' in output:
+        raise ValueError('Reverse installed service did not complete actual native acceptance')
+    parent = 'TestDesktopLinuxGuardianKernelNodeStandardServiceReverse'
+    verdicts = re.findall(r'^\s*--- PASS: (' + parent + r'(?:/[^\s(]+)?) \([0-9.]+s\)$', output, re.M)
+    expected = [parent] * len(cases) + [parent + '/' + value for value in cases]
+    if sorted(verdicts) != sorted(expected):
+        raise ValueError('Reverse installed service omitted, duplicated or substituted an exact native verdict')
+    marker = 'verified installed Node to standard service original creators, DNS, private encrypted proof and joined retirement: '
+    receipts = [line.partition(marker)[2] for line in output.split('\n')[:-1] if marker in line]
+    if sorted(receipts) != sorted(cases):
+        raise ValueError('Reverse installed service omitted actual owned lifecycle evidence')
+
+
 def check_verdict(output, case=None):
+    if case in REVERSE_CASES:
+        return check_reverse_verdict(output, case)
     output = output.replace('\r\n', '\n')
     cases = CASES if case is None else (case,)
     if any(value not in CASES for value in cases) or '--- FAIL:' in output or '--- SKIP:' in output:
@@ -328,7 +347,7 @@ def check_verdict(output, case=None):
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):
-    if case not in CASES:
+    if case not in (*CASES, *REVERSE_CASES):
         raise ValueError('Installed Linux host has no such captured native scenario')
     if CHILD.image_identity(binary)[-1] != image_sha256 or CHILD.image_identity(peer)[-1] != peer_sha256:
         raise ValueError('Installed Linux host lost an exact compiled image')
@@ -350,7 +369,8 @@ def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha25
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:
-        return GUARD.namespace_test(Path(binary), 'NodeHostTUN/' + case, image_sha256)
+        group = 'NodeStandardServiceReverse/' if case in REVERSE_CASES else 'NodeHostTUN/'
+        return GUARD.namespace_test(Path(binary), group + case, image_sha256)
     finally:
         for name, value in previous.items():
             if value is None:
@@ -469,7 +489,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         check_hysteria_auth_verdict(hysteria_auth_output)
         print(hysteria_auth_output, end='' if hysteria_auth_output.endswith('\n') else '\n')
         logs = []
-        for case in CASES:
+        for case in (*CASES, *REVERSE_CASES):
             command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary), '--peer-binary', str(peer),
                        '--bundle', str(bundle), '--namespace-test-sha256', identities[binary][-1], '--peer-sha256', identities[peer][-1],
                        '--bundle-sha256', payloads['NATIVE-RUNTIME.json']['sha256'], '--case', case,
@@ -482,6 +502,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             print(output, end='' if output.endswith('\n') else '\n')
         output = '\n'.join(logs)
         check_verdict(output)
+        check_reverse_verdict(output)
         defect = missing_binding_control(workspace, peer, bundle, compiler, captured, identities[peer][-1],
                                          payloads['NATIVE-RUNTIME.json']['sha256'], sudo)
         if checked_sources(source)[1] != before or bundle_identity(bundle, 'linux/' + architecture, captured) != (receipt, payloads) or any(
@@ -498,7 +519,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
-                  'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
+                  'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
     print('Physical devices, off-LAN interoperability, restart recovery and other graph families remain separate acceptance boundaries.')
@@ -519,7 +540,7 @@ def main(argv=None):
     parser.add_argument('--whitening-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--whitening-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--bundle-sha256', help=argparse.SUPPRESS)
-    parser.add_argument('--case', choices=CASES, help=argparse.SUPPRESS)
+    parser.add_argument('--case', choices=(*CASES, *REVERSE_CASES), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.namespace_test_binary is not None:
         if args.source is not None or args.receipt is not None or args.peer_binary is None:

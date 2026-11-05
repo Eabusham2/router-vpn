@@ -19,6 +19,27 @@ G = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(G)
 
 
+class InstalledReverseServiceVerdict(unittest.TestCase):
+    def completed(self):
+        parent = 'TestDesktopLinuxGuardianKernelNodeStandardServiceReverse'
+        return '\n'.join(line for case in G.REVERSE_CASES for line in (
+            '--- PASS: ' + parent + ' (1.0s)',
+            '    --- PASS: ' + parent + '/' + case + ' (1.0s)',
+            '    fixture.go:1: verified installed Node to standard service original creators, DNS, private encrypted proof and joined retirement: ' + case)) + '\n'
+
+    def test_exact_native_cases(self):
+        G.check_reverse_verdict(self.completed())
+
+    def test_missing_duplicate_foreign_and_skip(self):
+        good = self.completed()
+        for line in good.splitlines(True):
+            with self.subTest(line=line):
+                with self.assertRaises(ValueError): G.check_reverse_verdict(good.replace(line, '', 1))
+                with self.assertRaises(ValueError): G.check_reverse_verdict(good + line)
+        for changed in (good.replace('node-standard-original', 'node-standard-foreign'), good + '--- SKIP: foreign (0.1s)\n', good + '--- FAIL: foreign (0.1s)\n'):
+            with self.assertRaises(ValueError): G.check_reverse_verdict(changed)
+
+
 class InstalledLinuxHostVerdict(unittest.TestCase):
     def completed(self, cases=None):
         cases = G.CASES if cases is None else cases

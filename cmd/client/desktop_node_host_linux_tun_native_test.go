@@ -315,7 +315,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		return linuxHostTUNExternalFixture(controller, scenario)
 	}
 	action, mode := linuxHostTUNAction(scenario), linuxHostTUNMode(scenario)
-	found := false
+	found := linuxHostTUNReverseCase(scenario)
 	for _, candidate := range linuxHostTUNCases {
 		found = found || candidate == scenario
 	}
@@ -356,6 +356,9 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	defer cancel()
+	if linuxHostTUNReverseCase(scenario) {
+		return linuxHostTUNReverseConnection(ctx, a, parent, controller, gate, scenario)
+	}
 	if linuxHostTUNPublicCase(scenario) {
 		return linuxHostTUNPublicConnection(ctx, a, parent, controller, gate, scenario)
 	}

@@ -378,3 +378,5 @@ SOURCE.update({
 })
 
 SOURCE.update({'client/linux/routervpn-mtu-v20.inc', 'client/linux/test-mtu-v20.c', 'deploy/test_desktop_mtu.py'})
+
+SOURCE.add('cmd/client/linux_standard_service_reverse_namespace_native_test.go')

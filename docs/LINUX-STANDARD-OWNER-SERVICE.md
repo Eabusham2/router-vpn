@@ -241,6 +241,14 @@ with explicit native-effect models. Separate mandatory nft tests exercise both
 actual creators, cancellation, changed/lost successors and repeated completion.
 These tests do not establish installed end-to-end or physical-device acceptance.
 
+The installed Node runner separately requires success, lost commit response and
+lost prepare response through the actual public handlers and service. It reads
+both original native guards, verifies source removal or abort, and checks the
+durable journal and joined teardown. Successful connection must send real DNS
+and private HTTP identity traffic through the captured TUN and encrypted peer;
+independent direct-LAN counters reject bypass. These three namespace scenarios
+compile and are required by CI; local workspace restrictions prevent execution.
+
 The following are still separate unfinished requirements, not closed by this
 unit's refusals:
 
