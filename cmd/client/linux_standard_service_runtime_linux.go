@@ -543,7 +543,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	}
 	defer func() {
 		<-s.gate
-		retained := s.session != nil && s.session.peer == peer || s.protectionView != nil && s.protectionView.peer == peer || s.reverse != nil && s.reverse.peer == peer
+		retained := s.session != nil && s.session.peer == peer || s.protectionView != nil && s.protectionView.peer == peer || s.reverse != nil && s.reverse.peer == peer || s.transfer != nil && !s.transfer.terminal() && s.transfer.peer == peer
 		s.gate <- struct{}{}
 		if !retained {
 			_ = peer.Close()

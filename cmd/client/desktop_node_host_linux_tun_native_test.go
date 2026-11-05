@@ -59,13 +59,13 @@ func linuxHostTUNRestoreCase(scenario string) bool {
 
 func linuxHostTUNPublicCase(scenario string) bool {
 	scenario = linuxHostTUNAction(scenario)
-	return linuxHostTUNReverseCase(scenario) || linuxHostTUNTransferCase(scenario) || scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario) ||
+	return linuxHostTUNBootTransferCase(scenario) || linuxHostTUNReverseCase(scenario) || linuxHostTUNTransferCase(scenario) || scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario) ||
 		scenario == "layer-aes-connect" || scenario == "layer-whitening-connect"
 }
 
 func linuxHostTUNOffCase(scenario string) bool {
 	scenario = linuxHostTUNAction(scenario)
-	return scenario == "public-off" || scenario == "public-off-save-retry" || linuxHostTUNReverseAlwaysCase(scenario)
+	return linuxHostTUNBootTransferCase(scenario) || scenario == "public-off" || scenario == "public-off-save-retry" || linuxHostTUNReverseAlwaysCase(scenario)
 }
 
 func linuxHostTUNFailedReadyCase(scenario string) bool {
@@ -810,7 +810,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			peer := linuxHostTUNStartPeer(t, scenario)
 			linuxHostTUNDirectHealth(t, peer)
 			linuxHostTUNInstallProfile(t, peer, scenario)
-			if linuxHostTUNTransferCase(scenario) {
+			if linuxHostTUNBootTransferCase(scenario) {
+				linuxHostTUNBootTransferService(t, installed, peer)
+			} else if linuxHostTUNTransferCase(scenario) {
 				linuxHostTUNTransferService(t, installed, peer)
 			}
 			if linuxHostTUNResolverFailureCase(scenario) {
@@ -1025,10 +1027,12 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if result.Public != linuxHostTUNPublicCase(scenario) {
 				t.Fatal("installed public handler evidence belongs to another scenario")
 			}
-			if result.Transfer != linuxHostTUNTransferCase(scenario) {
+			if result.Transfer != (linuxHostTUNTransferCase(scenario) || linuxHostTUNBootTransferCase(scenario)) {
 				t.Fatal("installed transfer evidence belongs to another scenario")
 			}
-			if result.Transfer {
+			if linuxHostTUNBootTransferCase(scenario) {
+				t.Log("verified installed host original boot service transfer:", scenario)
+			} else if result.Transfer {
 				t.Log("verified installed host original service transfer:", scenario)
 			}
 			if result.Public {

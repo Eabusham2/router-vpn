@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -23,6 +22,7 @@ import (
 // source join, native transfer and any later bounded cleanup. Neither journal
 // records nor service replies can construct this controller-side capability.
 type linuxStandardServiceNodeTransfer struct {
+	boot                *linuxStandardServiceBootTransferSource
 	owner               *linuxStandardServiceLaunch
 	host                *desktopLinuxNodeHost
 	operation           context.Context
@@ -42,7 +42,7 @@ func captureLinuxStandardServiceNodeTransfer(ctx context.Context, h *desktopLinu
 	}
 	raw, exists := linuxStandardServiceOwners.Load(h.parent.app)
 	if !exists {
-		return nil, nil
+		return captureLinuxStandardBootNodeTransfer(ctx, h)
 	}
 	o, ok := raw.(*linuxStandardServiceLaunch)
 	if !ok || o == nil || o.app != h.parent.app {
@@ -89,29 +89,23 @@ func captureLinuxStandardServiceNodeTransfer(ctx context.Context, h *desktopLinu
 }
 
 func (t *linuxStandardServiceNodeTransfer) rpcLocked(ctx context.Context, action string, snapshot *mobiletor.DesktopLinuxNodeTransferSnapshot, prepared *linuxprotection.NodePreparedRecord) (*linuxStandardServiceTransferResponse, error) {
-	o := t.owner
-	raw, ok := linuxStandardServiceOwners.Load(o.app)
-	if !ok || raw != o || o.transfer != t || o.peer == nil {
-		return nil, errors.New("transfer lost its original controller/service owner")
-	}
 	q := t.request
 	q.Snapshot = snapshot
 	q.Prepared = prepared
-	request := linuxStandardServiceRequest{Schema: 1, Action: action, Session: o.request.Session, Transfer: &q}
-	exchange := o.exchange
-	if exchange == nil {
-		exchange = func(ctx context.Context, r linuxStandardServiceRequest, directory *os.File, before func()) (linuxStandardServiceResponse, error) {
-			return linuxStandardServiceRPC(ctx, o.image, o.prepared.namespaceInfo, &o.peer, r, directory, before)
-		}
-	}
-	response, err := exchange(ctx, request, nil, func() { t.attempted = true })
+	response, err := t.exchangeSourceLocked(ctx, action, &q)
 	if response.Reverse != nil {
 		return nil, errors.Join(err, errors.New("forward transfer received reverse authority"))
 	}
 	result := response.Transfer
+	if result != nil && (result.Boot != q.Boot || result.NoBoot && (!q.Boot || result.Phase != "no-boot" || result.Committed || result.DestinationSHA256 != "" || result.Intent != (linuxprotection.StandardNodeTransfer{}))) {
+		return nil, errors.Join(err, errors.New("transfer response changed its original boot source scope"))
+	}
+	if result != nil && result.NoBoot {
+		return result, err
+	}
 	if result != nil {
 		expected := result.Intent
-		if expected.Validate() != nil || expected.ID != q.ID || expected.DeadlineNS != q.DeadlineNS || expected.SourceSession != o.request.Session || expected.SourceConfigSHA256 != o.request.ConfigSHA256 || expected.Destination != q.Destination || expected.ProfileID != q.ProfileID || expected.ProfileRevision != q.ProfileRevision || t.intent.Load() != nil && *t.intent.Load() != expected {
+		if expected.Validate() != nil || expected.ID != q.ID || expected.DeadlineNS != q.DeadlineNS || !t.matchesSourceIntent(expected) || expected.Destination != q.Destination || expected.ProfileID != q.ProfileID || expected.ProfileRevision != q.ProfileRevision || t.intent.Load() != nil && *t.intent.Load() != expected {
 			return nil, errors.Join(err, errors.New("transfer response changed its immutable original intent"))
 		}
 		if t.intent.Load() == nil {
@@ -135,7 +129,7 @@ func (t *linuxStandardServiceNodeTransfer) rpcLocked(ctx context.Context, action
 }
 
 func (t *linuxStandardServiceNodeTransfer) current(ctx context.Context, admission bool) error {
-	if t == nil || t.owner == nil || t.host == nil {
+	if t == nil || t.owner == nil && t.boot == nil || t.host == nil {
 		return errors.New("transfer lost its actual original capture")
 	}
 	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
@@ -148,10 +142,10 @@ func (t *linuxStandardServiceNodeTransfer) current(ctx context.Context, admissio
 	if err := t.host.parent.retirementCurrent(ctx); err != nil {
 		return err
 	}
-	if err := desktopnetwork.LockContext(ctx, &t.owner.mu); err != nil {
+	if err := desktopnetwork.LockContext(ctx, t.sourceMutex()); err != nil {
 		return err
 	}
-	defer t.owner.mu.Unlock()
+	defer t.sourceMutex().Unlock()
 	action := "transfer-held"
 	if admission {
 		action = "transfer-current"
@@ -187,10 +181,10 @@ func (t *linuxStandardServiceNodeTransfer) commit(ctx context.Context, tx *deskt
 		}
 		t.pin = pin
 	}
-	if err := desktopnetwork.LockContext(call, &t.owner.mu); err != nil {
+	if err := desktopnetwork.LockContext(call, t.sourceMutex()); err != nil {
 		return err
 	}
-	defer t.owner.mu.Unlock()
+	defer t.sourceMutex().Unlock()
 	err := t.pin.WithSnapshot(call, func(snapshot mobiletor.DesktopLinuxNodeTransferSnapshot) error {
 		raw, _ := json.Marshal(struct {
 			Snapshot mobiletor.DesktopLinuxNodeTransferSnapshot
@@ -214,12 +208,19 @@ func (t *linuxStandardServiceNodeTransfer) resolveLocked(ctx context.Context) er
 	if t.resolved.Load() {
 		return nil
 	}
+	if t.boot != nil && !t.attempted {
+		if err := t.finishBootSourceLocked(); err != nil {
+			return err
+		}
+		t.resolved.Store(true)
+		return nil
+	}
 	if !t.serviceSettled {
 		result, err := t.rpcLocked(ctx, "transfer-resolve", nil, nil)
 		if err != nil {
 			return err
 		}
-		if result.Phase != "aborted" && result.Phase != "settled" {
+		if result.Phase != "aborted" && result.Phase != "settled" && !(t.boot != nil && result.NoBoot) {
 			return errors.New("transfer cleanup did not settle its original native result")
 		}
 		t.committed.Store(result.Committed)
@@ -230,7 +231,11 @@ func (t *linuxStandardServiceNodeTransfer) resolveLocked(ctx context.Context) er
 			return err
 		}
 	}
-	if t.committed.Load() {
+	if t.boot != nil {
+		if err := t.finishBootSourceLocked(); err != nil {
+			return err
+		}
+	} else if t.committed.Load() {
 		if t.owner.peer != nil {
 			if err := t.owner.peer.Close(); err != nil {
 				return err
@@ -257,10 +262,10 @@ func (t *linuxStandardServiceNodeTransfer) resolve(ctx context.Context) error {
 	if t.resolved.Load() {
 		return nil
 	}
-	if err := desktopnetwork.LockContext(ctx, &t.owner.mu); err != nil {
+	if err := desktopnetwork.LockContext(ctx, t.sourceMutex()); err != nil {
 		return err
 	}
-	defer t.owner.mu.Unlock()
+	defer t.sourceMutex().Unlock()
 	return t.resolveLocked(ctx)
 }
 

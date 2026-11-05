@@ -1636,6 +1636,51 @@ generated Node/TUN MTU rollback workflow must verify the published correction.
 No claim is made that this classifies the older undiagnosed ARM64 event or
 establishes physical-device acceptance.
 
+## Retained prior-boot Always guard to Node reconnect
+
+The original crash/reconnect and Linux protection requirements include safe
+reconnect without a permanent lockout (#197, #200/#203, #206–213 and #337 in
+the recovered historical index, refined by the user's strict kill-switch
+corrections). The implementation label "boot-to-Node transfer" is a decomposition
+of that workflow, not a separately invented original requirement.
+
+The service already reasserted Always protection with its actual `s.boot`
+creator, but no active-engine launch existed in the controller registry. The
+former transfer capture therefore returned no predecessor, and normal Node
+native-absence admission correctly refused the still-present guard. The new
+boot capture retains the authenticated original service conversation before
+sending a request. It never reconstructs an engine or native creator from
+metadata. The service selects its actual boot slot and uses the existing native
+source/successor transfer with exact profile, revision, deadline and request
+identity. Cancellation or abort keeps the original guard; unknown cleanup
+keeps the peer and original result until settlement. Missing service and NoBoot
+still require the ordinary independent native-absence gate.
+
+Review found and fixed a second edge before publication. Cancellation after
+positive native Finish and original slot release could make a later resolve
+mistake the closed slot for NoBoot, or try to select its intentionally removed
+registry entry. The exact retained request now reaches its identity checks
+first. Only positively finished, committed, fully removed settlement can resume
+after closure. It never selects or clears a successor registry entry.
+
+The exact `27bae2f3` base plus twelve frozen files passes **56 tagged client
+race verdicts (11 parents, 24.356s)** with no skips, failures or races. The new
+boot and active retry leaves use actual original peer/process observations,
+private files, descriptor closure and registry removal; native Finish is
+explicitly modeled there. Changed session/deadline requests fail before the
+original retry completes beside an untouched replacement owner. All **38 Python
+runner/inventory checks pass (18.300s)**, including missing/duplicate/renamed/
+skipped/failed verdict rejection.
+
+Three mandatory installed scenarios use actual boot guard creation and public
+Node Connect/Disconnect/Off: success, cancellation while retaining protection,
+and lost cleanup reply with retry. The 429 original host cases remain, giving
+432 host plus nine reverse scenarios. The fixture compiles, but privileged
+execution has not run locally. Its endpoints are deliberately literal; DNS
+bootstrap for a hostname behind the closed guard is separate unfinished work.
+The frozen source/evidence manifest is
+`8d34dfb964c17d248803cf32f395e842e8623c57008e7a930406a466e56a7370`.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -1644,7 +1689,7 @@ establishes physical-device acceptance.
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
-| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node and reverse Node-to-standard transfers retain both original creators, durable intent and bounded resolution. | Both directions require privileged installed/native acceptance. Immutable code generations and retained original-generation peers are integrated and locally tested. Other/generic boot-owner succession, the active Always two-generation handoff and same-boot service-crash continuation remain unfinished. |
+| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node, reverse Node-to-standard and retained prior-boot service-guard transfers use actual original creators, durable intent and bounded resolution. | Actual installed/native acceptance remains required. Protected hostname bootstrap, other boot-owner paths, active Always two-generation coordination and same-boot service-crash continuation remain unfinished. Immutable generations and retained generation peers have separate local/native evidence. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 

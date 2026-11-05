@@ -36,6 +36,9 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 			return errors.New("public cover selection did not reach its actual runtime option handler")
 		}
 	}
+	if err := linuxHostTUNBootTransferPreflight(ctx, a, scenario); err != nil {
+		return err
+	}
 	var standardSource *linuxStandardServiceLaunch
 	if linuxHostTUNTransferCase(scenario) {
 		standardSource, err = linuxHostTUNStartStandardTransferSource(ctx, a)
@@ -82,6 +85,11 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 		return errors.Join(err, errors.New("installed public Connect used a legacy or unproved runtime"))
 	}
 	host, session, journal := path.host, path.session, path.journal
+	if linuxHostTUNBootTransferCase(scenario) {
+		if err := linuxHostTUNTransferredBoot(host); err != nil {
+			return err
+		}
+	}
 	if standardSource != nil {
 		if err := linuxHostTUNTransferredSource(standardSource, host); err != nil {
 			return err
@@ -127,7 +135,7 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 		return err
 	}
 	result := linuxHostTUNResult{Stage: "ready", Scenario: scenario, SessionID: path.selection.SessionID,
-		Transfer: standardSource != nil, Outcome: "proved", Ready: &path.ready, Activation: "retained-after-request", DNSProof: &dns, MTUView: &view, Public: true}
+		Transfer: standardSource != nil || linuxHostTUNBootTransferCase(scenario), Outcome: "proved", Ready: &path.ready, Activation: "retained-after-request", DNSProof: &dns, MTUView: &view, Public: true}
 	result.StartLayer, result.Physical, err = linuxHostTUNLayerSource(ctx, host, scenario)
 	if err != nil {
 		return err

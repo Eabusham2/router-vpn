@@ -26,6 +26,8 @@ type linuxStandardServiceTransfer struct {
 	native         *mobiletor.DesktopLinuxStandardNodeTransfer
 	request        linuxStandardServiceTransferRequest
 	result         linuxStandardServiceTransferResponse
+	requestSession string
+	bootPeerClosed bool
 	nativeFinished bool
 	pendingPhase   string
 	snapshot       *mobiletor.DesktopLinuxNodeTransferSnapshot
@@ -112,6 +114,18 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 	}
 	t := s.transfer
 	if old, exists := s.transferHistory[q.ID]; exists {
+		if q.Boot || old.Boot {
+			original := *q
+			original.Snapshot = nil
+			original.Prepared = nil
+			if !q.Boot || !old.Boot || old.history == nil || old.history.Peer != peer.record || old.history.Session != request.Session || !reflect.DeepEqual(old.history.Request, original) || q.Snapshot != nil || q.Prepared != nil {
+				return nil, errors.New("retired boot transfer changed original peer or intent")
+			}
+			if request.Action != "transfer-resolve" && request.Action != "transfer-held" {
+				return &old, errors.New("boot transfer ID was already retired")
+			}
+			return &old, nil
+		}
 		if old.Intent.SourceSession != request.Session || old.Intent.Destination != q.Destination || old.Intent.ProfileID != q.ProfileID || old.Intent.ProfileRevision != q.ProfileRevision || old.Intent.DeadlineNS != q.DeadlineNS || s.session == nil || s.session.peer.record != peer.record {
 			return nil, errors.New("retired transfer request changed its original intent")
 		}
@@ -122,11 +136,34 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 			return &old, nil
 		}
 	}
-	if t != nil && t.terminal() && t.result.Phase == "aborted" && q.ID != t.request.ID && request.Action == "transfer-reserve" && t.peer.record == peer.record && t.result.Intent.SourceSession == request.Session {
+	if q.Boot && (s.boot == nil || s.boot.closed) && (t == nil || t.request.ID != q.ID) {
+		if s.quiescing {
+			return nil, errors.New("boot service is retiring")
+		}
+		if s.bootFailure != nil {
+			return nil, errors.Join(s.bootFailure, errors.New("boot transfer cannot infer recovery from a failed boot"))
+		}
+		if t != nil && !t.terminal() {
+			return nil, errors.New("original boot transfer remains unresolved")
+		}
+		if raw, exists := legacyStandardProtectionOwners.Load(s.app); exists {
+			if slot, ok := raw.(*legacyExitProtectionSlot); !ok || slot == nil || !slot.closed {
+				return nil, errors.New("service retains another original protection source")
+			}
+		}
+		if s.session != nil && (!s.session.joined || s.session.cleanupPending) {
+			return nil, errors.New("service still owns an original engine")
+		}
+		if q.Snapshot != nil || q.Prepared != nil || request.Action != "transfer-reserve" && request.Action != "transfer-resolve" {
+			return nil, errors.New("missing boot creator cannot settle another phase")
+		}
+		return &linuxStandardServiceTransferResponse{Boot: true, NoBoot: true, Phase: "no-boot"}, nil
+	}
+	if t != nil && t.terminal() && t.result.Phase == "aborted" && q.ID != t.request.ID && request.Action == "transfer-reserve" && (q.Boot && t.request.Boot && t.sourceStillCaptured(s) || !q.Boot && !t.request.Boot && t.peer.record == peer.record && t.sourceRequestSession() == request.Session) {
 		t = nil
 	}
 	if t == nil {
-		if (request.Action != "transfer-reserve" && request.Action != "transfer-resolve") || q.Snapshot != nil || q.Prepared != nil || s.quiescing || s.session == nil || s.session.cleanupPending || s.session.request.Session != request.Session || s.session.peer.record != peer.record {
+		if (request.Action != "transfer-reserve" && request.Action != "transfer-resolve") || q.Snapshot != nil || q.Prepared != nil || s.quiescing || !q.Boot && (s.session == nil || s.session.cleanupPending || s.session.request.Session != request.Session || s.session.peer.record != peer.record) || q.Boot && (s.boot == nil || s.boot.closed || s.bootFailure != nil || s.session != nil && (!s.session.joined || s.session.cleanupPending)) {
 			return nil, errors.New("standard transfer has no live original source to reserve")
 		}
 		if len(s.transferHistory) >= 128 {
@@ -145,7 +182,12 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 				return nil, errors.New("standard transfer destination profile changed")
 			}
 		}
-		slot := s.session.owner.protection
+		var slot *legacyExitProtectionSlot
+		if q.Boot {
+			slot = s.boot
+		} else {
+			slot = s.session.owner.protection
+		}
 		native, ok := func() (*legacyExitNativeProtection, bool) {
 			if slot == nil {
 				return nil, false
@@ -173,14 +215,24 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 			return nil, err
 		}
 		sum := sha256.Sum256(raw)
-		intent := linuxprotection.StandardNodeTransfer{ID: q.ID, DeadlineNS: q.DeadlineNS, SourceSession: request.Session, SourceConfigSHA256: s.session.request.ConfigSHA256, SourceReceiptSHA256: hex.EncodeToString(sum[:]), Destination: q.Destination, ProfileID: q.ProfileID, ProfileRevision: q.ProfileRevision}
+		sourceSession, sourceConfig := receipt.Session, receipt.ConfigSHA256
+		if !q.Boot {
+			sourceSession, sourceConfig = request.Session, s.session.request.ConfigSHA256
+		}
+		intent := linuxprotection.StandardNodeTransfer{ID: q.ID, DeadlineNS: q.DeadlineNS, SourceSession: sourceSession, SourceConfigSHA256: sourceConfig, SourceReceiptSHA256: hex.EncodeToString(sum[:]), Destination: q.Destination, ProfileID: q.ProfileID, ProfileRevision: q.ProfileRevision}
 		if err = intent.Validate(); err != nil {
 			return nil, err
 		}
 		original := *q
 		original.Snapshot = nil
 		original.Prepared = nil
-		t = &linuxStandardServiceTransfer{peer: s.session.peer, session: s.session, slot: slot, request: original, result: linuxStandardServiceTransferResponse{Intent: intent}}
+		t = &linuxStandardServiceTransfer{peer: peer, slot: slot, request: original, requestSession: request.Session, result: linuxStandardServiceTransferResponse{Intent: intent, Boot: q.Boot}}
+		if q.Boot {
+			t.result.history = &linuxStandardServiceTransferHistory{Peer: peer.record, Session: request.Session, Request: original}
+		} else {
+			t.peer = s.session.peer
+			t.session = s.session
+		}
 		if request.Action == "transfer-reserve" {
 			deadline, bounded := ctx.Deadline()
 			if !bounded || q.DeadlineNS > deadline.UnixNano() || time.Now().UnixNano() >= q.DeadlineNS {
@@ -203,6 +255,9 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 				err = t.persist(ctx, lease, "aborted")
 			}
 			if err == nil {
+				err = t.finishBootPeer()
+			}
+			if err == nil {
 				s.transferHistory[q.ID] = t.result
 			}
 			return &t.result, err
@@ -216,7 +271,7 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 	original := *q
 	original.Snapshot = nil
 	original.Prepared = nil
-	if t.session != s.session || t.peer.record != peer.record || request.Session != t.result.Intent.SourceSession || !reflect.DeepEqual(original, t.request) {
+	if !t.sourceStillCaptured(s) || t.peer.record != peer.record || request.Session != t.sourceRequestSession() || !reflect.DeepEqual(original, t.request) {
 		return nil, errors.New("standard transfer request replaced its exact original reservation")
 	}
 	if request.Action == "transfer-reserve" || request.Action == "transfer-current" || request.Action == "transfer-commit" {
@@ -244,7 +299,14 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 	if err = t.slot.scope(lease); err != nil {
 		return &t.result, err
 	}
-	if err = t.slot.selected(); err != nil {
+	// A positively finished original release removes its registry entry and
+	// closes its own descriptors. Retry only the retained cleanup milestone;
+	// do not select a new owner or reread deliberately retired native handles.
+	if t.slot.closed {
+		if request.Action != "transfer-resolve" || !t.nativeFinished || !t.result.Committed || t.result.Phase != "settled" || t.pendingPhase != "" || !t.slot.removed || !t.slot.stateRemoved {
+			return &t.result, errors.New("transfer has no completed original release milestone")
+		}
+	} else if err = t.slot.selected(); err != nil {
 		return &t.result, err
 	}
 	if !t.slot.stateRemoved {
@@ -287,7 +349,7 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 		call, cancel := context.WithDeadline(ctx, time.Unix(0, t.request.DeadlineNS))
 		defer cancel()
 		ctx = call
-		if !s.session.joined || s.session.cleanupPending || !t.slot.detached || q.Snapshot == nil || q.Prepared == nil || q.Prepared.Validate() != nil || q.Prepared.Protection != q.Snapshot.Record || q.Prepared.Policy != q.Destination.Policy || q.Prepared.Guardian.Engine.BootID != peer.record.BootID || q.Prepared.Guardian.Engine.ProcParentID != peer.record.ProcProcessID || q.Prepared.Guardian.Engine.NetworkNamespace != peer.record.NetworkNamespace || q.Prepared.Guardian.Engine.PIDNamespace != peer.record.PIDNamespace || q.Snapshot.Record.Capture.SessionID != q.Destination.SessionID || q.Snapshot.Record.Capture.SourceSHA256 != q.Destination.SourceSHA256 || q.Snapshot.HomeLAN != q.Destination.HomeLAN {
+		if !t.sourceJoined(s) || !t.slot.detached || q.Snapshot == nil || q.Prepared == nil || q.Prepared.Validate() != nil || q.Prepared.Protection != q.Snapshot.Record || q.Prepared.Policy != q.Destination.Policy || q.Prepared.Guardian.Engine.BootID != peer.record.BootID || q.Prepared.Guardian.Engine.ProcParentID != peer.record.ProcProcessID || q.Prepared.Guardian.Engine.NetworkNamespace != peer.record.NetworkNamespace || q.Prepared.Guardian.Engine.PIDNamespace != peer.record.PIDNamespace || q.Snapshot.Record.Capture.SessionID != q.Destination.SessionID || q.Snapshot.Record.Capture.SourceSHA256 != q.Destination.SourceSHA256 || q.Snapshot.HomeLAN != q.Destination.HomeLAN {
 			return &t.result, errors.New("standard transfer preceded source join or changed destination")
 		}
 		if t.snapshot != nil && (!reflect.DeepEqual(*t.snapshot, *q.Snapshot) || !reflect.DeepEqual(*t.prepared, *q.Prepared)) {
@@ -359,9 +421,23 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 			}
 			t.result.Phase = "settled"
 		}
+		// Validate the replying peer before intentionally retiring the original
+		// boot conversation. An overtaken unsent resolve may own this same peer.
+		if err = errors.Join(ctx.Err(), peer.Current(ctx)); err != nil {
+			return &t.result, err
+		}
+		if err = t.finishBootPeer(); err != nil {
+			return &t.result, err
+		}
+		if q.Boot && t.result.Committed && s.boot == t.slot {
+			s.boot = nil
+		}
 		s.transferHistory[q.ID] = t.result
 	default:
 		return nil, errors.New("standard transfer action is unavailable")
+	}
+	if request.Action == "transfer-resolve" && t.request.Boot && t.bootPeerClosed {
+		return &t.result, errors.Join(err, ctx.Err())
 	}
 	return &t.result, errors.Join(err, ctx.Err(), peer.Current(ctx))
 }
@@ -372,5 +448,37 @@ func (s *linuxStandardService) transferPending() bool {
 func standardTransferAction(action string) bool { return strings.HasPrefix(action, "transfer-") }
 
 func (t *linuxStandardServiceTransfer) terminal() bool {
-	return t != nil && t.nativeFinished && t.pendingPhase == "" && (t.result.Phase == "settled" || t.result.Phase == "aborted")
+	return t != nil && (!t.request.Boot || t.bootPeerClosed) && t.nativeFinished && t.pendingPhase == "" && (t.result.Phase == "settled" || t.result.Phase == "aborted")
+}
+
+func (t *linuxStandardServiceTransfer) sourceRequestSession() string {
+	if t.requestSession != "" {
+		return t.requestSession
+	}
+	return t.result.Intent.SourceSession
+}
+func (t *linuxStandardServiceTransfer) sourceStillCaptured(s *linuxStandardService) bool {
+	if t.request.Boot {
+		return t.session == nil && s.boot == t.slot && t.slot != nil
+	}
+	return t.session == s.session
+}
+func (t *linuxStandardServiceTransfer) sourceJoined(s *linuxStandardService) bool {
+	if t.request.Boot {
+		return t.sourceStillCaptured(s) && (s.session == nil || s.session.joined && !s.session.cleanupPending)
+	}
+	return t.session != nil && t.session == s.session && t.session.joined && !t.session.cleanupPending
+}
+func (t *linuxStandardServiceTransfer) finishBootPeer() error {
+	if !t.request.Boot || t.bootPeerClosed {
+		return nil
+	}
+	if t.peer == nil {
+		return errors.New("boot transfer lost retained authenticated peer")
+	}
+	if err := t.peer.Close(); err != nil {
+		return err
+	}
+	t.bootPeerClosed = true
+	return nil
 }

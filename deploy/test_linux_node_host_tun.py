@@ -134,6 +134,11 @@ EXTERNAL_WG_HYSTERIA_CASES = tuple('external-wghy2-' + action for action in (
     'wrong-key', 'wrong-trust', 'wrong-ca', 'dns-failure'))
 EXTERNAL_CASES += EXTERNAL_WG_HYSTERIA_CASES
 CASES += EXTERNAL_WG_HYSTERIA_CASES
+BOOT_TRANSFER_CASES = ('service-boot-transfer', 'service-boot-transfer-cancel', 'service-boot-transfer-lost-reply')
+CASES += BOOT_TRANSFER_CASES
+PUBLIC_CASES += BOOT_TRANSFER_CASES
+ACTIVE_CASES += BOOT_TRANSFER_CASES
+OFF_CASES += BOOT_TRANSFER_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -151,7 +156,7 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/linux_standard_service_reverse_planning_linux.go', 'cmd/client/linux_standard_service_reverse_planning_linux_test.go', 'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
+    required = {'cmd/client/linux_standard_service_boot_transfer_linux.go', 'cmd/client/linux_standard_service_boot_transfer_linux_test.go', 'cmd/client/linux_standard_service_boot_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_reverse_planning_linux.go', 'cmd/client/linux_standard_service_reverse_planning_linux_test.go', 'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
@@ -284,6 +289,7 @@ def check_verdict(output, case=None):
     # gate as the real installed scenario inventory grows.
     receipts = set()
     transfer_receipts = []
+    boot_transfer_receipts = []
     hysteria_receipts = []
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
@@ -291,6 +297,8 @@ def check_verdict(output, case=None):
             receipts.add(marker + suffix + '\n')
             if suffix.startswith('independent WireGuard entry and Hysteria2 final: '):
                 hysteria_receipts.append(suffix.removeprefix('independent WireGuard entry and Hysteria2 final: '))
+            if suffix.startswith("original boot service transfer: "):
+                boot_transfer_receipts.append(suffix.removeprefix("original boot service transfer: "))
             if suffix.startswith("original service transfer: "):
                 transfer_receipts.append(suffix.removeprefix("original service transfer: "))
     if prefix + ' (' not in passed:
@@ -300,6 +308,10 @@ def check_verdict(output, case=None):
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed WG/Hysteria graph omitted or duplicated original native completion: ' + value)
+        if value in BOOT_TRANSFER_CASES:
+            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
+            if boot_transfer_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+                raise ValueError('Installed boot transfer omitted or duplicated original creator completion: ' + value)
         if value in TRANSFER_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if transfer_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:

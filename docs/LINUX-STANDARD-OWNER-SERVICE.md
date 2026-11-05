@@ -211,6 +211,33 @@ Resolver calls retain their original connection and pending reply ownership.
 See [LINUX-NATIVE-RETIREMENT.md](LINUX-NATIVE-RETIREMENT.md) for the implementation,
 native gate inventory and the remaining kernel and older-bus boundaries.
 
+## Prior-boot service protection to Node
+
+When the installed service reasserts Always protection after boot, it retains
+the actual newly created guard as `s.boot`. Node preparation can capture that
+creator through the authenticated service peer without inventing a source
+engine launch. The fixed transfer protocol distinguishes a boot source from an
+active engine source. Original peer/process identity, destination profile and
+revision, request ID and deadline remain immutable through native reservation,
+source removal beside the independently proved Node successor, and cleanup.
+
+Cancellation and lost replies retain the original boot guard or its positively
+acknowledged native result. Missing service or authenticated NoBoot is only
+absence of this capability; normal Node native-absence checks still apply.
+A retained protection-view peer stays with its original immutable generation.
+After an original release closes its descriptors and removes its registry entry,
+cleanup may retry the exact finished milestone without selecting another owner.
+Changed peer/session/deadline requests remain rejected.
+
+Three installed scenarios require successful public Node Connect, cancellation
+with the original boot guard retained, and a lost cleanup reply followed by
+retry. They use actual service reassertion, private encrypted proof, selected
+DNS, Disconnect and explicit saved Off. They preserve the 429 original host
+cases and nine reverse cases. These new scenarios deliberately use literal
+endpoints: resolving a hostname while the boot guard is closed requires its
+separate original-owner bootstrap implementation. Actual privileged installed
+execution remains mandatory and has not run in this workspace.
+
 ## Protected Node-to-service succession
 
 The reverse direction captures the original installed Node parent, selected
@@ -264,8 +291,9 @@ The following are still separate unfinished requirements, not closed by this
 unit's refusals:
 
 - Other adapter/generic legacy boot-owner succession. Both protected Node and
-  installed standard-service directions above are implemented; their actual
-  installed/native acceptance remains separate.
+  installed standard-service directions and the service's own retained
+  prior-boot guard above are implemented; protected hostname bootstrap and
+  actual installed/native acceptance remain separate.
 - Active Always service/image upgrade with authenticated live authority
   handoff. This unit completes the proved-idle/Off upgrade path.
 - Same-boot service crash continuation for orphaned protection. A replacement

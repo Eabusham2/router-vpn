@@ -5,6 +5,9 @@ import re
 PREFIX = 'TestLinuxStandardService'
 MTU_PREFIX = 'TestLinuxStandardMTU'
 CORE = {
+    'BootTransferRetainsExactSource': ('original', 'replacement-boot', 'engine-not-joined', 'cleanup-pending', 'wrong-session', 'peer-close-pending', 'peer-closed'),
+    'BootTransferUnsentAndCancelledCleanup': ('unsent', 'cancelled', 'replacement'),
+    'BootTransferSourceKindsRemainDistinct': (),
     "StartKeepsOriginalAdmission": ("application", "prior-owner", "post-reply"),
     'SpeedLabRestoreRejectsChangedSource': ('original', 'profile', 'exit', 'selection', 'intent', 'captured-profile', 'mtu', 'held-app', 'cancelled'),
     'SpeedLabPolicyCapture': ('original', 'profile', 'exit', 'hopped', 'late', 'duplicate', 'cancelled'),
@@ -81,6 +84,9 @@ CORE = {
 NATIVE = {'NamespaceInstalledIdleUpgradeAndAlwaysRetention': ('off', 'on-connect', 'on-connect-generation', 'on-connect-mtu', 'on-connect-public', 'on-connect-public-restore', 'on-connect-failure', 'on-connect-network-failure', 'on-connect-route-change', 'on-connect-pre-rpc-network-failure', 'always-off', 'always'), 'NamespaceNetworkEpochRejectsAwayAndBack': ('link', 'address', 'route', 'rule')}
 NATIVE.update({'GenerationRetainedPeerSurvivesActivation': (), 'GenerationListenerPreventsAbsence': ('present', 'created-during-readback')})
 STARTUP = {
+    'BootTransferRetriesReleasedOriginal': ('boot', 'active'),
+    'BootTransferAdmissionKeepsOriginalPeer': ('no-boot', 'failed-boot', 'live-engine', 'pending-transfer', 'history-full', 'cancelled'),
+    'BootTransferRetiredIntentRejectsReplay': ('original-result', 'renewed-deadline', 'other-session', 'other-selection', 'other-kind', 'late-reserve'),
     'PublicHTTPSPeer': ('latency', 'download', 'upload', 'foreign-auth', 'foreign-destination', 'tls-hostname'),
     'SpeedLabCapturesOriginalService': ('original', 'command', 'profile', 'dns', 'activation', 'pending', 'run', 'sockets', 'mtu', 'session', 'exit'),
     'RetirementRejectsUnboundFinalResult': ('absent', 'foreign-source', 'unknown-attempt', 'changed-deadline', 'foreign-tun', 'no-constructor', 'startup-extension'),
@@ -385,3 +391,5 @@ SOURCE.update({
 SOURCE.update({'client/linux/routervpn-mtu-v20.inc', 'client/linux/test-mtu-v20.c', 'deploy/test_desktop_mtu.py'})
 
 SOURCE.add('cmd/client/linux_standard_service_reverse_namespace_native_test.go')
+
+SOURCE.update({'cmd/client/linux_standard_service_boot_transfer_' + name for name in ('linux.go', 'linux_test.go', 'namespace_native_test.go')})

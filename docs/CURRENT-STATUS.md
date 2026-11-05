@@ -30,9 +30,10 @@ guard before source removal, independently proves that removal, then starts the
 same service owner under the captured deadline. Lost replies and cancellation
 keep the original result and cleanup authority; unrelated runtime, MTU, policy
 and upgrade requests cannot bypass unresolved transfer. Focused merged tests
-pass, while actual installed/native acceptance remains separate. Generic
-boot-owner succession, active Always upgrades and same-boot crash continuation
-remain unfinished source requirements.
+pass, while actual installed/native acceptance remains separate. The installed
+service's own retained prior-boot Always guard can now succeed to a Node as
+described below. Other boot-owner paths, hostname bootstrap, active Always
+upgrades and same-boot crash continuation retain separate unfinished work.
 
 The reverse switch now resolves transport names and seals the exact destination
 command and private config before joining the original Node. Bind rechecks the
@@ -40,11 +41,23 @@ original operation, deadline, command, directory/root identities and config hash
 failed planning retains only its own workspace cleanup handle. Nine mandatory
 reverse scenarios cover actual handoff, lost prepare/commit/Start replies,
 cancellation, changed deadline, post-removal failure and Always abort/explicit
-Off. They preserve the 429 original cases, for 438 required installed scenarios.
+Off. They preserve the 429 original cases; with the three new boot scenarios
+below, the current inventory is 432 host scenarios plus nine reverse scenarios.
 The final composition passes 65 client race verdicts and all 43 runner checks;
 Windows AMD64 and Darwin ARM64 affected-client test binaries also compile.
 Actual private encrypted traffic, selected DNS, native guards and joined
 teardown remain mandatory installed CI evidence, not local networking claims.
+
+Prior-boot Always service protection now transfers to Node through the actual
+retained boot creator and authenticated service peer. It never fabricates an
+engine launch from saved state. The original request, deadline, profile revision
+and successor proof remain bound through cancellation, lost replies and cleanup.
+An already closed original slot can finish its recorded cleanup without reading
+retired handles or selecting a replacement owner. Final tagged client races pass
+56 exact verdicts, and all 38 focused runner checks pass. Three installed
+scenarios require actual public Connect/Disconnect/Off and preserved boot
+protection; they use literal endpoints and have not executed locally. Protected
+hostname bootstrap and broader boot-owner recovery remain separate work.
 
 The installed Linux service now executes from a verified immutable code
 image. New discovery uses the selected generation; retained peers keep their
