@@ -77,11 +77,15 @@ func (t *routerVPNTorWholeTUN) Start(stage adapter.StartStage) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if stage == adapter.StartStateStarted {
-		if t.startup == nil {
-			return errors.New("whole-owner fixture has no original startup")
-		}
-		if err := t.startup.Err(); err != nil {
-			return err
+		// Linux passes startup admission through the TUN MTU interface.
+		// Other hosts retain the original startup context on the native owner.
+		if runtime.GOOS == "linux" {
+			if t.startup == nil {
+				return errors.New("whole-owner fixture has no original startup")
+			}
+			if err := t.startup.Err(); err != nil {
+				return err
+			}
 		}
 		t.ready = true
 	}
