@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,41 +21,43 @@ const linuxStandardServiceSocket = linuxStandardServiceDirectory + "/control.soc
 const linuxStandardServicePacketLimit = 64 << 10
 
 type linuxStandardServiceRequest struct {
-	Schema          int                                  `json:"schema"`
-	Action          string                               `json:"action"`
-	Session         string                               `json:"session"`
-	BudgetMS        int64                                `json:"budget_ms"`
-	DeadlineNS      int64                                `json:"deadline_ns"`
-	Directory       string                               `json:"directory,omitempty"`
-	ConfigSHA256    string                               `json:"config_sha256,omitempty"`
-	ProfileID       string                               `json:"profile_id,omitempty"`
-	ProfileSHA256   string                               `json:"profile_sha256,omitempty"`
-	NetworkID       string                               `json:"network_id,omitempty"`
-	RouterID        string                               `json:"router_id,omitempty"`
-	Endpoint        string                               `json:"endpoint,omitempty"`
-	RuntimeMode     string                               `json:"runtime_mode,omitempty"`
-	Base            string                               `json:"base,omitempty"`
-	Release         bool                                 `json:"release,omitempty"`
-	ProfileRevision string                               `json:"profile_revision,omitempty"`
-	ResultRevision  string                               `json:"result_revision,omitempty"`
-	Reverse         *linuxStandardServiceReverseRequest  `json:"reverse,omitempty"`
-	Transfer        *linuxStandardServiceTransferRequest `json:"transfer,omitempty"`
-	MTU             *linuxStandardServiceMTURequest      `json:"mtu,omitempty"`
+	ImageUpgrade    *linuxStandardServiceImageUpgradeRequest `json:"image_upgrade,omitempty"`
+	Schema          int                                      `json:"schema"`
+	Action          string                                   `json:"action"`
+	Session         string                                   `json:"session"`
+	BudgetMS        int64                                    `json:"budget_ms"`
+	DeadlineNS      int64                                    `json:"deadline_ns"`
+	Directory       string                                   `json:"directory,omitempty"`
+	ConfigSHA256    string                                   `json:"config_sha256,omitempty"`
+	ProfileID       string                                   `json:"profile_id,omitempty"`
+	ProfileSHA256   string                                   `json:"profile_sha256,omitempty"`
+	NetworkID       string                                   `json:"network_id,omitempty"`
+	RouterID        string                                   `json:"router_id,omitempty"`
+	Endpoint        string                                   `json:"endpoint,omitempty"`
+	RuntimeMode     string                                   `json:"runtime_mode,omitempty"`
+	Base            string                                   `json:"base,omitempty"`
+	Release         bool                                     `json:"release,omitempty"`
+	ProfileRevision string                                   `json:"profile_revision,omitempty"`
+	ResultRevision  string                                   `json:"result_revision,omitempty"`
+	Reverse         *linuxStandardServiceReverseRequest      `json:"reverse,omitempty"`
+	Transfer        *linuxStandardServiceTransferRequest     `json:"transfer,omitempty"`
+	MTU             *linuxStandardServiceMTURequest          `json:"mtu,omitempty"`
 }
 
 type linuxStandardServiceResponse struct {
-	Startup             *linuxStandardServiceStartup          `json:"startup,omitempty"`
-	authenticatedPeer   *linuxStandardServicePeer             // local original witness; never decoded
-	transmittedDeadline int64                                 // local RPC bound; never decoded from service data
-	Schema              int                                   `json:"schema"`
-	Session             string                                `json:"session"`
-	Action              string                                `json:"action"`
-	Complete            bool                                  `json:"complete"`
-	Error               string                                `json:"error,omitempty"`
-	Protection          *linuxStandardServiceProtectionData   `json:"protection,omitempty"`
-	Reverse             *linuxStandardServiceReverseResponse  `json:"reverse,omitempty"`
-	Transfer            *linuxStandardServiceTransferResponse `json:"transfer,omitempty"`
-	MTU                 *linuxStandardServiceMTUResponse      `json:"mtu,omitempty"`
+	ImageUpgrade        *linuxStandardServiceImageUpgradeResponse `json:"image_upgrade,omitempty"`
+	Startup             *linuxStandardServiceStartup              `json:"startup,omitempty"`
+	authenticatedPeer   *linuxStandardServicePeer                 // local original witness; never decoded
+	transmittedDeadline int64                                     // local RPC bound; never decoded from service data
+	Schema              int                                       `json:"schema"`
+	Session             string                                    `json:"session"`
+	Action              string                                    `json:"action"`
+	Complete            bool                                      `json:"complete"`
+	Error               string                                    `json:"error,omitempty"`
+	Protection          *linuxStandardServiceProtectionData       `json:"protection,omitempty"`
+	Reverse             *linuxStandardServiceReverseResponse      `json:"reverse,omitempty"`
+	Transfer            *linuxStandardServiceTransferResponse     `json:"transfer,omitempty"`
+	MTU                 *linuxStandardServiceMTUResponse          `json:"mtu,omitempty"`
 }
 
 func linuxStandardServiceDecode(body []byte, target any) error {
@@ -66,6 +69,16 @@ func linuxStandardServiceDecode(body []byte, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
+	switch v := target.(type) {
+	case *linuxStandardServiceRequest:
+		if v.ImageUpgrade != nil && !strings.HasPrefix(v.Action, "image-") {
+			return errors.New("ordinary request supplied image upgrade scope")
+		}
+	case *linuxStandardServiceResponse:
+		if v.ImageUpgrade != nil && !strings.HasPrefix(v.Action, "image-") {
+			return errors.New("ordinary response supplied image upgrade scope")
+		}
+	}
 	canonical, err := json.Marshal(target)
 	if err != nil || !bytes.Equal(body, canonical) {
 		return errors.Join(err, errors.New("standard owner service packet is not canonical and unambiguous"))
@@ -76,6 +89,12 @@ func linuxStandardServiceDecode(body []byte, target any) error {
 func linuxStandardServiceRead(connection *net.UnixConn) (body []byte, files []*os.File, failure error) {
 	if connection == nil {
 		return nil, nil, errors.New("standard owner service lost its original channel")
+	}
+	return linuxStandardServiceReadFiles(connection, 1)
+}
+func linuxStandardServiceReadFiles(connection *net.UnixConn, maximum int) (body []byte, files []*os.File, failure error) {
+	if connection == nil || maximum < 0 || maximum > 3 {
+		return nil, nil, errors.New("invalid exact descriptor inventory")
 	}
 	packet := make([]byte, linuxStandardServicePacketLimit+1)
 	control := make([]byte, syscall.CmsgSpace(4*4))
@@ -127,7 +146,7 @@ func linuxStandardServiceRead(connection *net.UnixConn) (body []byte, files []*o
 	if failure != nil {
 		return nil, files, failure
 	}
-	if n < 1 || n > linuxStandardServicePacketLimit || flags&(syscall.MSG_TRUNC|syscall.MSG_CTRUNC) != 0 || len(files) > 1 {
+	if n < 1 || n > linuxStandardServicePacketLimit || flags&(syscall.MSG_TRUNC|syscall.MSG_CTRUNC) != 0 || len(files) > maximum {
 		return nil, files, errors.New("standard owner service packet or descriptor inventory was incomplete")
 	}
 	return packet[:n], files, nil

@@ -1781,6 +1781,106 @@ encrypted-runtime job `127115210042` exposes another concrete failure:
 a nonempty temporary directory during cleanup. That writer/lifecycle issue is
 under investigation and has not been waived or described as fixed.
 
+## Active Always service image coordination
+
+The live installer/service protocol now composes the previously published
+immutable-generation and native creator-transfer foundations. It retains the
+old and new actual guards, fixed-role image/peer identities, original lock
+open-file descriptions, canonical private-state inodes and captured profile.
+Only after both same-policy creators are pinned does it yield global source SH
+for exact code-only promotion. Native removal, saved-state publication,
+activation, actual successor READY, original process/listener join and fresh
+successor protection proof are distinct required stages. No stage reconstructs
+a native creator from saved JSON.
+
+Before source removal, abort proves the old creator and restores the exact
+original code inodes before retiring the candidate. After acknowledged removal,
+recovery can only complete the same successor. One absolute work allowance of
+at most 120 seconds and one nonrenewable 30-second cleanup allowance are shared by
+the original participants; these are implementation bounds, not recovered user
+numbers. Lost prepare replies can recover only the same peer-bound reservation.
+Repeated FD3 sequence/body replies preserve the original result and pidfds;
+a receive timeout never queues another copy before Abort. Unknown results and
+exhausted cleanup retain visibly incomplete recovery, without rolling back
+through a removed creator or silently turning protection Off.
+
+The async-start review caught an actual race between systemd's asynchronous
+start and the successor socket binding. The coordinator now retries only the
+initial connection-stage ENOENT/ECONNREFUSED, under the unchanged work deadline,
+while rechecking original generation and old-peer identity. Missing source,
+mixed failures and a previously captured peer's disappearance remain errors.
+
+Final source validation binds 22 exact changed code/test paths to manifest
+`3c4e57a43a094302f561ee2a09605aa0cc4d9e64612b4b83fbc934c50d24ee60`.
+The final combined client passes 65 race parent/leaf verdicts in 5.143 seconds,
+covering 29 image verdicts plus original generation, Start and current Boot
+transfer behavior. Four additional async-listener negative leaves and their
+parent pass under race in 1.186 seconds. The real named-listener positive hits
+AF_UNIX creation EPERM locally and remains mandatory, unskipped CI evidence.
+The complete privileged service test composition, including every installed
+image case, compiles in that same test build.
+The affected client test binaries also compile for Windows AMD64 and Darwin
+ARM64. These checks verify the shared entry-point/stub composition, not native
+OS execution, signing, packaging or physical-device acceptance.
+
+All 50 installer cases pass in 92.338 seconds, with a separate final strict schema
+case. The production installer directly spawns a native Go FD3 fixture with
+real fixed argv, executable/pidfd capture, packet transport and joined completion;
+its service replies remain an explicit model. Seven deliberately broken
+installer variants fail their intended sequence, identity, private-inode,
+readiness, late-promotion and cleanup-clock witnesses. A byte-exact extracted
+service clock method also rejects the independent-caller-clamp defect.
+
+The 12 runner checks passed across the merged run and one focused clock rerun:
+the initial unchanged worker-clock positive reached its own deadline during
+executor contention; that failure was retained, its source was unchanged, and
+the focused rerun passes all 29 clock/provider/worker verdicts and both causal
+controls in 14.221 seconds. Final source/registration checks separately pass all
+four checks after adding the new cases and binding the actual Python installer
+bytes to the mandatory source inventory. No timeout or protection was relaxed.
+
+Eleven installed namespace cases now require actual old/new services and
+coordinator, native nft readback, the shipping generation builder/code journal,
+private-state identity, notify messages, exact pidfds and joined processes:
+success, prepared/promoted abort, lost freeze/commit/READY replies, changed
+sequence, expired preparation, another upgrade after success/abort and native
+guard loss after READY and after old-service join. The success path also sends
+a real authenticated ordinary upgrade request while frozen and requires the
+specific phase-fence refusal. Both repeat cycles share one fixture allowance;
+watchdog group termination and parent-death handling prevent orphan fixtures.
+
+Those actual namespace cases have not executed locally. They remain separate
+privileged CI gates, as do live systemd and installed-host upgrade acceptance.
+The complete contract and compatibility transition are documented in
+[the generation protocol](LINUX-SERVICE-IMAGE-GENERATIONS.md). Generic boot
+owners and same-boot loss of the original native creator remain open work.
+
+## ARM64 original automatic-address notification correction
+
+The exact f041b241 ARM64 Node/TUN run 41986967858, job 127109877704, failed its
+MTU-rollback scenario with `native address add lost its original notification`.
+The automatic IPv6 address was visible before queued DAD work delivered its
+RTM_NEWADDR notification; a GETLINK acknowledgement did not join that work.
+Published and fresh-ref-verified commit
+[`dc2ad7f5`](https://github.com/Eabusham2/router-vpn/commit/dc2ad7f5409203608315ad402c0d6bd80d07edf9)
+now retains only the strictly classified original address and waits on the
+original subscribed socket under the unchanged caller context. Cancellation
+keeps its pending evidence for authorized cleanup. Missing, duplicate, foreign,
+DAD-failed and changed-native evidence remain failures.
+
+The actual prepared native TUN package passes 67 race verdicts in 3.355 seconds.
+Restoring just the old eager-loss call fails the two intended delayed-event and
+cancel-then-retire witnesses. All 46 routing runner tests pass in 75.135 seconds,
+and the complete Linux ARM64 native test binary compiles. The actual kernel
+ARM64 rerun remains an exact-SHA CI result, not a local network claim. Its six
+published files preserve the preceding Windows equal-clock receipt correction
+and normal main ancestry.
+
+A subsequent exact-SHA jobs read found AMD64 job `127122213197` successful and
+ARM64 job `127122213436` failed at step 7 in run `41990774043` for `dc2ad7f5`.
+That current failure requires its own log diagnosis; the component results
+above do not establish kernel acceptance or close the current release gate.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -1789,7 +1889,7 @@ under investigation and has not been waived or described as fixed.
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
-| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node, reverse Node-to-standard and retained prior-boot service-guard transfers use actual original creators, durable intent and bounded resolution. | Actual installed/native acceptance remains required. Protected hostname bootstrap, other boot-owner paths, active Always two-generation coordination and same-boot service-crash continuation remain unfinished. Immutable generations and retained generation peers have separate local/native evidence. |
+| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node, reverse Node-to-standard and retained prior-boot service-guard transfers use actual original creators, durable intent and bounded resolution. Active Always image upgrades now coordinate the two retained native creators, exact code journal, readiness and process joins. | Actual installed/native acceptance remains required, including eleven mandatory two-generation upgrade scenarios. Protected hostname bootstrap, other boot-owner paths and same-boot service-crash continuation remain unfinished. Source integration and modeled transactions do not establish private systemd/host acceptance. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Actual later evidence includes both Linux generated Node/TUN architecture jobs at `b2a9a3c1`, both Windows Wintun/WFP stages at `bed21f7e`, and all five Windows ARM64 MAX suites at `f041b241`, with their distinct boundaries recorded above. | Each later source change requires its own exact-SHA native/build/publication result. No current full release or remaining device acceptance is established; cancelled workflows are not passes. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 

@@ -70,6 +70,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer ownedController.close()
+	if handled, err := linuxStandardServiceImageUpgradeUtility(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if handled, err := linuxStandardServiceUpgradeUtility(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

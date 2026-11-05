@@ -8,6 +8,14 @@ CORE = {
     'BootTransferRetainsExactSource': ('original', 'replacement-boot', 'engine-not-joined', 'cleanup-pending', 'wrong-session', 'peer-close-pending', 'peer-closed'),
     'BootTransferUnsentAndCancelledCleanup': ('unsent', 'cancelled', 'replacement'),
     'BootTransferSourceKindsRemainDistinct': (),
+    'ImageEnvelopeKeepsNativeOrdering': ('numeric-roundtrip', 'lexical-reorder', 'duplicate', 'mapped', 'cross-scope'),
+    'ImageCleanupKeepsOriginalClock': ('lazy', 'once', 'expired-observation', 'same-cross-process-clock', 'outer-clamp'),
+    'ImageControlKeepsExactDescriptors': ('three', 'ordinary-one'),
+    'ImageSourceLeasePinsOriginalInode': (),
+    'ImageControlKeepsOriginalSequence': (),
+    'ImagePromotionRejectsExtraCode': ('exact', 'extra-tree', 'extra-helper', 'private-preserved'),
+    'ImageReservationLookupKeepsOriginalPeer': ('lost-reply', 'foreign-peer', 'deadline', 'generation', 'scope', 'expired-observation'),
+    'ImageSuccessorWaitKeepsOriginalConnect': ('actual-listener', 'source-disappearance', 'mixed-loss', 'captured-peer', 'cancelled'),
     "StartKeepsOriginalAdmission": ("application", "prior-owner", "post-reply"),
     'SpeedLabRestoreRejectsChangedSource': ('original', 'profile', 'exit', 'selection', 'intent', 'captured-profile', 'mtu', 'held-app', 'cancelled'),
     'SpeedLabPolicyCapture': ('original', 'profile', 'exit', 'hopped', 'late', 'duplicate', 'cancelled'),
@@ -245,6 +253,24 @@ def check_cleanup_verdict(output):
 
 
 GROUPS = {'core': CORE, 'startup': STARTUP, 'native': NATIVE, 'mtu': MTU, 'mtu-native': MTU_NATIVE}
+# Each installed transaction keeps the existing per-process watchdog. Repeated
+# upgrades exercise two transactions in one private namespace, not a longer
+# timeout shared with all the other installed cases.
+IMAGE_NATIVE = {
+    'original': 'Original',
+    'abort-prepared': 'AbortPrepared',
+    'abort-promoted': 'AbortPromoted',
+    'lost-freeze-reply': 'LostFreezeReply',
+    'lost-commit-reply': 'LostCommitReply',
+    'lost-ready-reply': 'LostReadyReply',
+    'changed-sequence': 'ChangedSequence',
+    'expired-prepare': 'ExpiredPrepare',
+    'repeat-after-success': 'RepeatAfterSuccess',
+    'repeat-after-abort': 'RepeatAfterAbort',
+    'guard-lost-after-ready': 'GuardLostAfterReady',
+}
+GROUPS.update({'image-native-' + scenario: {'NamespaceImageUpgrade' + suffix: ()}
+               for scenario, suffix in IMAGE_NATIVE.items()})
 GROUP_PREFIXES = {group: (MTU_PREFIX if group.startswith('mtu') else PREFIX) for group in GROUPS}
 SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'peer_linux.go', 'protocol_linux.go', 'runtime_linux.go', 'client_linux.go', 'dns_linux.go',
@@ -254,6 +280,10 @@ SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
 SOURCE.update({'internal/standardengine/operation.go', 'internal/standardengine/operation_linux.go', 'internal/standardengine/operation_linux_test.go', 'internal/standardengine/protocol.go', 'internal/standardengine/protocol_test.go', 'mobile/desktop/standard_owned_linux.go.tmpl', 'internal/standardengine/cleanup_linux.go', 'internal/standardengine/cleanup_loop_linux.go', 'internal/standardengine/cleanup_linux_test.go', 'internal/standardengine/cleanup_loop_linux_test.go', 'internal/desktopnetwork/desktop_network_retirement.go', 'mobile/desktop/standard_cleanup_linux.go.tmpl', 'cmd/client/linux_standard_engine_linux.go', 'cmd/client/linux_standard_engine_retirement_linux.go', 'cmd/client/legacy_standard_exit_preparation_linux.go', 'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
 SOURCE.add('cmd/client/linux_standard_service_mtu_peer_native_test.go')
 SOURCE.add('cmd/client/linux_standard_service_start_admission_native_test.go')
+SOURCE.update({'cmd/client/linux_standard_service_image_' + name for name in (
+    'upgrade_protocol_linux.go', 'upgrade_linux.go', 'dispatch_linux.go',
+    'channel_linux.go', 'successor_linux.go', 'coordinator_linux.go', 'upgrade_test.go',
+    'upgrade_namespace_test.go')})
 SOURCE.update({'internal/desktopnetwork/desktop_network_retirement_limit_test.go', 'internal/standardengine/cleanup_retirement_bound_linux_test.go'})
 SOURCE.add('internal/standardengine/worker_stop_linux_test.go')
 RUNNERS = ('test_standard_run_clock.py', 'test_standard_worker_stop.py', 'linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
@@ -308,6 +338,11 @@ SOURCE.update({'cmd/client/standard_exit_reverse.go', 'cmd/client/standard_exit_
     'cmd/client/legacy_standard_exit_owner_linux.go'})
 NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_run_native_test.go', 'cmd/client/linux_standard_service_speed_lab_native_test.go', 'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
                       'cmd/client/linux_standard_service_mtu_namespace_native_test.go'}
+NATIVE_IMAGE_SOURCES = {'cmd/client/linux_standard_service_image_upgrade_namespace_test.go'}
+# Installed image acceptance imports the actual generation builder and journal.
+# Bind those Python bytes to the same before/after source identity as the Go
+# service candidate, rather than silently reading an uncaptured implementation.
+SOURCE.update({'client/install-linux-native.py', 'deploy/test_linux_native_install.py'})
 
 
 def case_names(group):
@@ -352,6 +387,11 @@ def validate_inventory(root):
     if actual_mtu_sources - SOURCE:
         raise ValueError('Service MTU source was not bound to the mandatory inventory: ' +
                          repr(sorted(actual_mtu_sources - SOURCE)))
+    actual_image_sources = {path.relative_to(root).as_posix()
+                            for path in (root / 'cmd/client').glob('linux_standard_service_image_*.go')}
+    if actual_image_sources - SOURCE:
+        raise ValueError('Service image source was not bound to the mandatory inventory: ' +
+                         repr(sorted(actual_image_sources - SOURCE)))
     actual = []
     for path in (root / 'cmd/client').glob('*standard_service*test.go'):
         actual.extend(re.findall(r'^func (TestLinuxStandard(?:Service|MTU)\w+)\(t \*testing\.T\)', path.read_text(), re.M))
@@ -363,6 +403,9 @@ def validate_inventory(root):
     for name in NATIVE_MTU_SOURCES:
         if not (root / name).read_text().startswith('//go:build linux && routervpn_controller_privileged\n'):
             raise ValueError('Native service MTU case lost its required privileged build tag: ' + name)
+    for name in NATIVE_IMAGE_SOURCES:
+        if not (root / name).read_text().startswith('//go:build linux && routervpn_controller_privileged && routervpn_standard_service_native\n'):
+            raise ValueError('Native service image case lost its required installed build tags: ' + name)
     for name, group in AUXILIARY_TESTS.items():
         actual = re.findall(r'^func (Test\w+)\(t \*testing\.T\)', (root / name).read_text(), re.M)
         if sorted(actual) != sorted(AUXILIARY[group][1]):
@@ -371,7 +414,7 @@ def validate_inventory(root):
 
 def check_verdict(output, group):
     _check_exact_verdict(output, case_names(group), 'Standard service ' + group,
-                         strict=group.startswith('mtu'))
+                         strict=group.startswith(('mtu', 'image-native-')))
 
 SOURCE.add('cmd/client/linux_standard_service_public_namespace_native_test.go')
 NATIVE_MTU_SOURCES.add('cmd/client/linux_standard_service_public_namespace_native_test.go')

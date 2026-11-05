@@ -9,8 +9,8 @@ completion of the current commit's packages, physical devices or deployment.
 ## November 5 continuation — original caller ownership
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
-original-source reconciliation, individually verified pushes through
-`783c7888`, the integrated observation change in `a94cde9d`, and the installed
+original-source reconciliation, individually verified pushes including
+`dc2ad7f5`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -32,8 +32,9 @@ keep the original result and cleanup authority; unrelated runtime, MTU, policy
 and upgrade requests cannot bypass unresolved transfer. Focused merged tests
 pass, while actual installed/native acceptance remains separate. The installed
 service's own retained prior-boot Always guard can now succeed to a Node as
-described below. Other boot-owner paths, hostname bootstrap, active Always
-upgrades and same-boot crash continuation retain separate unfinished work.
+described below. Other boot-owner paths, hostname bootstrap and same-boot crash
+continuation retain separate unfinished work. Active Always image coordination
+is now integrated below; its installed native acceptance remains required.
 
 The reverse switch now resolves transport names and seals the exact destination
 command and private config before joining the original Node. Bind rechecks the
@@ -65,10 +66,23 @@ original image, endpoint, process identity and generation lease for Current,
 Stop and cleanup even after activation changes. Python and Go share the exact
 bounded manifest encoding, including Unicode and HTML escapes. The merged
 source passes 74 focused race verdicts and all 10 mandatory-runner checks;
-installer and causal evidence is recorded below. Both global source and
-generation leases remain required. Active Always upgrade, which needs a live
-two-generation native handoff, is still unfinished; see
-[the generation boundary](LINUX-SERVICE-IMAGE-GENERATIONS.md).
+installer and causal evidence is recorded below. The active upgrade protocol
+now pins two actual same-policy Always creators before yielding the original
+global source lease, promotes only code in place, and publishes/starts ordinary
+admission only after native state, exact readiness and original process join.
+Both generation leases and the original global lock inode remain captured.
+Lost replies keep the same transaction; rollback requires proved source
+presence and removal permits only bounded roll-forward to the same successor.
+Eleven mandatory installed scenarios cover success, abort, lost replies,
+repeated upgrades and guard loss after READY. Actual privileged execution and
+installed-host acceptance remain unproved locally; see
+[the generation protocol and boundary](LINUX-SERVICE-IMAGE-GENERATIONS.md).
+The final merged source passes 65 selected client race verdicts plus four
+async-start negative leaves and their parent. All 50 installer cases and seven
+deliberate installer-defect controls pass; runner/source checks are recorded in
+the continuation evidence, including an unchanged clock test's bounded failure
+and successful focused rerun. The named-listener positive and actual installed
+namespace cases remain mandatory CI evidence, not local passes.
 
 Standard-to-Standard native protection transfer now retains each original
 creator and exact same-policy endpoint inventory, pins the original mutation
@@ -76,8 +90,10 @@ lease inode and conditionally removes only the source. Abort requires the old
 guard to be exclusive before releasing its reservation. Repeated and stale
 acknowledgements preserve the original decision and newer pins. All 54 merged
 repository race verdicts pass, as do the 40-verdict prepared native-module suite
-and two deliberate policy/creator defect controls. Eleven kernel scenarios are
-mandatory; active installer/service coordination remains unfinished.
+and two deliberate policy/creator defect controls. Twelve kernel scenarios are
+mandatory, including the published regression for acknowledged removal followed
+by expired result observation. Installer/service coordination is now integrated;
+neither compilation nor modeled protocol tests close its native acceptance.
 
 The MAX TLS reference now retains actual native TCP/UDP pairs for its variable
 packet and middle endpoints instead of assuming fixed ports are available.
@@ -109,6 +125,15 @@ It preserves the original source/deadline checks and refuses missing, moved or
 additional admission predicates. All 19 overlay/source-boundary checks pass;
 the previous overlay reproduces the three reported test failures. This is a
 test-harness correction, not production Windows Tor admission or WFP acceptance.
+
+The observed ARM64 Node/TUN MTU-rollback notification failure is corrected in
+`dc2ad7f5`: a strictly classified automatic IPv6 address waits for the actual
+original socket notification under the unchanged caller deadline. Pending
+evidence survives observation cancellation for original-owner cleanup; foreign,
+duplicate, DAD-failed or changed-native evidence still refuses. The prepared
+native package passes 67 race verdicts and two defect controls, all 46 routing
+runner checks pass, and its full ARM64 native test binary compiles. Actual
+kernel acceptance still requires the exact-SHA CI result.
 
 The backend transaction audit now follows the exact captured standard-exit
 connection and Speed Lab restoration path introduced in `5ab593c8`. Its old

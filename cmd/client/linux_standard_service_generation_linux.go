@@ -43,6 +43,7 @@ type linuxStandardGenerationObject struct {
 // immutable generation and lease when a later installation selects another one.
 // It cannot construct, recover, or delete a native protection creator.
 type linuxStandardServiceGeneration struct {
+	selection                         linuxStandardGenerationSelection
 	root, imagePath                   string
 	directory, manifest, image, lease *os.File
 	store                             *os.File
@@ -183,11 +184,45 @@ func captureLinuxStandardServiceGeneration(ctx context.Context, root string) (ou
 	if err = linuxStandardGenerationDecode(raw, &selection); err != nil || selection.Schema != 1 || !linuxStandardGenerationHex(selection.Generation) || !linuxStandardGenerationHex(selection.ImageSHA256) {
 		return nil, errors.Join(err, errors.New("service activation lost exact generation selection"))
 	}
+	g, err := captureLinuxStandardServiceGenerationSelection(ctx, root, selection)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if failure != nil {
+			_ = g.Close()
+		}
+	}()
+	// Activation must remain the exact originally read object through discovery.
+	actual, err := os.Lstat(activation)
+	captured, statErr := file.Stat()
+	if err != nil || statErr != nil || !linuxStandardGenerationEqual(activationInfo, captured) || !linuxStandardGenerationEqual(actual, captured) {
+		return nil, errors.Join(err, statErr, errors.New("service activation changed during discovery"))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+// A prospective image is admitted only by the original live upgrade owner.
+// This validates immutable code; it supplies no service/native ownership.
+func captureLinuxStandardServiceGenerationSelection(ctx context.Context, root string, selection linuxStandardGenerationSelection) (out *linuxStandardServiceGeneration, failure error) {
+	if ctx == nil {
+		return nil, errors.New("service generation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !linuxStandardImageSelectionValid(selection) {
+		return nil, errors.New("invalid prospective service generation")
+	}
+	var err error
 	store := root + ".service-generations"
 	if err = ownedDesktopAncestors(store); err != nil {
 		return nil, err
 	}
-	g := &linuxStandardServiceGeneration{root: filepath.Join(store, selection.Generation)}
+	g := &linuxStandardServiceGeneration{root: filepath.Join(store, selection.Generation), selection: selection}
 	g.store, g.storeInfo, err = linuxStandardGenerationOpen(store, true)
 	if err != nil {
 		return nil, err
@@ -313,17 +348,9 @@ func captureLinuxStandardServiceGeneration(ctx context.Context, root string) (ou
 	if err = g.Current(ctx); err != nil {
 		return nil, err
 	}
-	// Activation must remain the exact originally read object through discovery.
-	actual, err := os.Lstat(activation)
-	captured, statErr := file.Stat()
-	if err != nil || statErr != nil || !linuxStandardGenerationEqual(activationInfo, captured) || !linuxStandardGenerationEqual(actual, captured) {
-		return nil, errors.Join(err, statErr, errors.New("service activation changed during discovery"))
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	return g, nil
 }
+
 func (g *linuxStandardServiceGeneration) Current(ctx context.Context) error {
 	if g == nil || ctx == nil || g.directory == nil || g.manifest == nil || g.image == nil || g.lease == nil {
 		return errors.New("service generation lost retained capability")

@@ -63,6 +63,75 @@ class StandardServiceGateTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         gate.check_auxiliary_verdict(mutation, group)
 
+    def test_image_transactions_have_independent_bounded_groups(self):
+        required = {
+            'original': 'Original', 'abort-prepared': 'AbortPrepared',
+            'abort-promoted': 'AbortPromoted', 'lost-freeze-reply': 'LostFreezeReply',
+            'lost-commit-reply': 'LostCommitReply', 'lost-ready-reply': 'LostReadyReply',
+            'changed-sequence': 'ChangedSequence', 'expired-prepare': 'ExpiredPrepare',
+            'repeat-after-success': 'RepeatAfterSuccess',
+            'repeat-after-abort': 'RepeatAfterAbort',
+            'guard-lost-after-ready': 'GuardLostAfterReady',
+        }
+        self.assertEqual({group for group in gate.GROUPS if group.startswith('image-native-')},
+                         {'image-native-' + scenario for scenario in required})
+        for scenario, suffix in required.items():
+            group = 'image-native-' + scenario
+            parent = gate.PREFIX + 'NamespaceImageUpgrade' + suffix
+            self.assertEqual(gate.case_names(group), (parent,))
+            pattern = re.compile(gate.pattern(group))
+            self.assertIsNotNone(pattern.fullmatch(parent))
+            for other in required.values():
+                if other != suffix:
+                    self.assertIsNone(pattern.fullmatch(gate.PREFIX + 'NamespaceImageUpgrade' + other))
+            output = self.output(group)
+            for foreign in ('Unregistered', suffix + '/unregistered'):
+                with self.assertRaises(ValueError):
+                    gate.check_verdict(output + '\n--- PASS: ' + gate.PREFIX +
+                                       'NamespaceImageUpgrade' + foreign + ' (0.01s)', group)
+        runner = (ROOT/'deploy/test_linux_controller_privilege.py').read_text()
+        self.assertIn("'-test.timeout=120s'", runner)
+        self.assertIn('UID.run(service_command, cwd=ROOT, timeout=150, sudo=sudo)', runner)
+
+    def test_each_image_source_and_installed_tag_is_mandatory(self):
+        self.assertTrue({'client/install-linux-native.py', 'deploy/test_linux_native_install.py'}.issubset(gate.SOURCE))
+        with tempfile.TemporaryDirectory() as temporary:
+            copy = Path(temporary)
+            for name in gate.SOURCE:
+                target = copy/name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT/name).read_bytes())
+            gate.validate_inventory(copy)
+            actual = {path.relative_to(ROOT).as_posix() for path in
+                      (ROOT/'cmd/client').glob('linux_standard_service_image_*.go')}
+            self.assertTrue(actual)
+            actual.update({'client/install-linux-native.py', 'deploy/test_linux_native_install.py'})
+            self.assertTrue(actual.issubset(gate.SOURCE))
+            for name in sorted(actual):
+                target = copy/name
+                original = target.read_bytes()
+                target.unlink()
+                with self.assertRaises(ValueError):
+                    gate.validate_inventory(copy)
+                target.write_bytes(original)
+            selected = copy/'cmd/client/linux_standard_service_image_upgrade_namespace_test.go'
+            original = selected.read_text()
+            for tag in (' && routervpn_controller_privileged', ' && routervpn_standard_service_native'):
+                selected.write_text(original.replace(tag, '', 1))
+                with self.assertRaises(ValueError):
+                    gate.validate_inventory(copy)
+                selected.write_text(original)
+            unexpected = copy/'cmd/client/linux_standard_service_image_unregistered_linux.go'
+            unexpected.write_text('//go:build linux\n\npackage main\n')
+            with self.assertRaises(ValueError):
+                gate.validate_inventory(copy)
+            unexpected.unlink()
+            selected.write_text(original.replace(
+                'TestLinuxStandardServiceNamespaceImageUpgradeOriginal',
+                'TestLinuxStandardServiceNamespaceImageUpgradeOmitted', 1))
+            with self.assertRaises(ValueError):
+                gate.validate_inventory(copy)
+
     def test_shipping_runner_executes_same_captured_candidate(self):
         runner=(ROOT/'deploy/test_linux_controller_privilege.py').read_text()
         self.assertIn('required.union(SERVICE.SOURCE).issubset(before)',runner)

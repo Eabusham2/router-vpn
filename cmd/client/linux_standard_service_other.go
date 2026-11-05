@@ -21,3 +21,4 @@ func linuxStandardServiceUtility(arguments []string) (bool, error) {
 	}
 	return false, nil
 }
+func linuxStandardServiceImageUpgradeUtility(arguments []string) (bool, error) { return false, nil }

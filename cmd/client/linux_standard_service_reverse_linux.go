@@ -114,6 +114,9 @@ func (s *linuxStandardService) reverseRequest(ctx context.Context, peer *linuxSt
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
+	if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+		return nil, errors.New("original image handoff freezes ordinary service requests")
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ns, err := os.Stat("/proc/thread-self/ns/net")

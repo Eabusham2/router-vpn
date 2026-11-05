@@ -39,6 +39,8 @@ type linuxStandardServiceSession struct {
 // created, started and waited by this process, never reconstructed from a
 // client's PID or represented by a controller-side exec.Cmd.Process.
 type linuxStandardService struct {
+	imageAuthority       *linuxStandardImageAuthority
+	imageUpgrade         *linuxStandardImageUpgrade
 	gate                 chan struct{}
 	app                  *app
 	root                 string
@@ -408,7 +410,7 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
-	if s.quiescing {
+	if s.quiescing || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
 		return errors.New("standard service is retiring its original idle lifetime")
 	}
 	defer func() {
@@ -514,6 +516,9 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 }
 
 func (s *linuxStandardService) connection(connection *net.UnixConn) {
+	if s.imageConnection(connection) {
+		return
+	}
 	s.connectionWithRoles(connection, []string{filepath.Join(s.root, "router-vpn-client"), linuxOwnedControllerArgument}, []string{filepath.Join(s.root, "router-vpn-client"), linuxStandardServiceUpgradeArgument})
 }
 
@@ -583,7 +588,20 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	var mtu *linuxStandardServiceMTUResponse
 	var transfer *linuxStandardServiceTransferResponse
 	var reverse *linuxStandardServiceReverseResponse
-	if upgrade {
+	select {
+	case <-live.Done():
+		err = live.Err()
+	case <-s.gate:
+		if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+			err = errors.New("original image handoff freezes ordinary service requests")
+		}
+		s.gate <- struct{}{}
+	}
+	if request.ImageUpgrade != nil {
+		err = errors.New("ordinary request supplied image handoff scope")
+	}
+	if err != nil {
+	} else if upgrade {
 		err = s.handleIdleUpgrade(live, peer, request, files)
 		shutdownAccepted = err == nil
 	} else if strings.HasPrefix(request.Action, "reverse-") {
@@ -661,7 +679,7 @@ func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linu
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
-	if s.quiescing {
+	if s.quiescing || s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
 		return errors.New("standard service already retired admission")
 	}
 	if s.transferPending() || s.reversePending() {
@@ -692,6 +710,10 @@ func (s *linuxStandardService) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-s.gate:
+		}
+		if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+			s.gate <- struct{}{}
+			continue
 		}
 		s.retryBoot(ctx)
 		if s.session != nil && (!s.session.joined || s.session.cleanupPending) {

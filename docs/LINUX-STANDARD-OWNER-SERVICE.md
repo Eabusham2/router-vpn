@@ -294,8 +294,12 @@ unit's refusals:
   installed standard-service directions and the service's own retained
   prior-boot guard above are implemented; protected hostname bootstrap and
   actual installed/native acceptance remain separate.
-- Active Always service/image upgrade with authenticated live authority
-  handoff. This unit completes the proved-idle/Off upgrade path.
+- Installed/native acceptance of active Always service/image upgrade. The
+  authenticated two-generation protocol now preserves the actual creators,
+  original source/private-state identities, one work/cleanup allowance and
+  exact readiness/join proof; eleven installed scenarios are mandatory. See
+  [the image protocol](LINUX-SERVICE-IMAGE-GENERATIONS.md). Local fixture and
+  compilation results do not establish its actual nft/systemd/host acceptance.
 - Same-boot service crash continuation for orphaned protection. A replacement
   service cannot recover the lost original creator from metadata.
 - Native acceptance of active MTU/interface transitions. The fixed child,

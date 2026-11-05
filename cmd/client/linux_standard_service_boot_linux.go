@@ -330,8 +330,26 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 	if generation != nil {
 		expectedImage = generation.imageInfo
 	}
-	if err != nil || installedErr != nil || !os.SameFile(image, expectedImage) {
+	if err != nil || installedErr != nil {
 		return true, errors.Join(err, installedErr, errors.New("standard service is not its original installed executable"))
+	}
+	var successor *linuxStandardImageUpgrade
+	var inheritedOwner *os.File
+	runtime.LockOSThread()
+	initialNamespace, namespaceErr := os.Stat("/proc/thread-self/ns/net")
+	runtime.UnlockOSThread()
+	if namespaceErr != nil {
+		return true, namespaceErr
+	}
+	if !os.SameFile(image, expectedImage) {
+		if generation == nil {
+			return true, errors.New("candidate has no original generation service")
+		}
+		generation, successor, inheritedOwner, err = captureLinuxStandardImageSuccessor(startup, linuxOwnedControllerRoot, generation, image, initialNamespace)
+		if err != nil {
+			return true, err
+		}
+		defer generation.Close()
 	}
 	socket := generation.socket(linuxStandardServiceDirectory)
 	if err = os.Mkdir(linuxStandardServiceDirectory, 0700); err != nil && !errors.Is(err, os.ErrExist) {
@@ -344,7 +362,10 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 	if err != nil || info.Mode().Perm() != 0700 {
 		return true, errors.Join(err, errors.New("standard service directory is not private"))
 	}
-	owner, err := ownedDesktopLock(filepath.Join(linuxStandardServiceDirectory, "owner.lock"), true)
+	owner := inheritedOwner
+	if owner == nil {
+		owner, err = ownedDesktopLock(filepath.Join(linuxStandardServiceDirectory, "owner.lock"), true)
+	}
 	if err != nil {
 		return true, err
 	}
@@ -375,6 +396,12 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 	// This service separately retains its immutable generation image and lease.
 	service := newLinuxStandardService(linuxOwnedControllerRoot, installed, namespace)
 	service.readiness = readiness
+	service.imageAuthority, err = captureLinuxStandardImageAuthority(generation, install, owner, linuxOwnedInstallLock)
+	if err != nil {
+		return true, err
+	}
+	defer service.imageAuthority.sourceIdentity.Close()
+	service.imageUpgrade = successor
 	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: socket, Net: "unixpacket"})
 	if err != nil {
 		return true, err
@@ -395,10 +422,19 @@ func runLinuxStandardServiceUtility(arguments []string, observe func(context.Con
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
-	service.bootFailure = service.reassert(startup)
+	if successor != nil {
+		bounded, stop := context.WithDeadline(startup, time.Unix(0, successor.envelope.DeadlineNS))
+		service.bootFailure = service.prepareImageSuccessor(bounded)
+		stop()
+	} else {
+		service.bootFailure = service.reassert(startup)
+	}
 	cancel()
 	notification, finishNotification := context.WithTimeout(context.Background(), 5*time.Second)
-	notifyErr := service.notifyBoot(notification, service.bootFailure)
+	var notifyErr error
+	if successor == nil {
+		notifyErr = service.notifyBoot(notification, service.bootFailure)
+	}
 	finishNotification()
 	if notifyErr != nil {
 		service.bootFailure = errors.Join(service.bootFailure, notifyErr)

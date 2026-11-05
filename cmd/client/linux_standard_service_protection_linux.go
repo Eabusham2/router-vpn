@@ -73,6 +73,9 @@ func (s *linuxStandardService) protectionRequest(ctx context.Context, peer *linu
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
+	if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+		return nil, errors.New("original image handoff freezes ordinary service requests")
+	}
 	if s.transferPending() {
 		return nil, errors.New("standard protection remains reserved for its original Node transfer")
 	}

@@ -438,6 +438,9 @@ func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStanda
 	case <-s.gate:
 	}
 	defer func() { s.gate <- struct{}{} }()
+	if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+		return nil, errors.New("original image handoff freezes ordinary service requests")
+	}
 	if s.quiescing {
 		return nil, errors.New("standard MTU service is quiescing")
 	}

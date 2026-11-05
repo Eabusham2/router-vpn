@@ -103,6 +103,9 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 		}
 		s.gate <- struct{}{}
 	}()
+	if s.imageUpgrade != nil && s.imageUpgrade.phase != "aborted" && s.imageUpgrade.phase != "settled" {
+		return nil, errors.New("original image handoff freezes ordinary service requests")
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ns, err := os.Stat("/proc/thread-self/ns/net")
