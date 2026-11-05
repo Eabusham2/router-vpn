@@ -4,6 +4,7 @@ package mobiletor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"syscall"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestDesktopLinuxGuardianKernelStandardImageTransfer(t *testing.T) {
-	for _, scenario := range []string{"original", "lost-ack-retry", "abort", "cancelled", "changed-successor", "successor-lost", "wrong-lease", "lease-reopen", "successor-lost-after", "changed-native-policy", "abort-before-successor-removal"} {
+	for _, scenario := range []string{"original", "lost-ack-retry", "abort", "cancelled", "changed-successor", "successor-lost", "wrong-lease", "lease-reopen", "successor-lost-after", "changed-native-policy", "abort-before-successor-removal", "cancelled-result-after-removal"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
@@ -139,6 +140,22 @@ func TestDesktopLinuxGuardianKernelStandardImageTransfer(t *testing.T) {
 			}
 			if err = transfer.Commit(ctx, successor, lease); err != nil {
 				t.Fatal("actual conditional source removal", err)
+			}
+			if scenario == "cancelled-result-after-removal" {
+				expired, stop := context.WithCancel(ctx)
+				stop()
+				for _, observe := range []func(context.Context) (bool, error){transfer.Result, transfer.Finish} {
+					committed, e := observe(expired)
+					if committed || !errors.Is(e, context.Canceled) || transfer.finished || source.baseline.crossTransfer != transfer.id {
+						t.Fatal("expired post-removal observation lost retained original result", committed, e)
+					}
+				}
+				// The next bounded read must recover the actual acknowledged
+				// removal, never misclassify an expired read as a safe abort.
+				committed, e := transfer.Result(ctx)
+				if !committed || e != nil || transfer.finished || source.baseline.crossTransfer != transfer.id {
+					t.Fatal("fresh original observation lost acknowledged removal", committed, e)
+				}
 			}
 			if scenario == "successor-lost-after" {
 				if _, err = desktopLinuxNFTCommand(ctx, []string{"delete", "table", "inet", destination.baseline.nft.TableName}, ""); err != nil {
