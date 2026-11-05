@@ -40,6 +40,14 @@ additional admission predicates. All 19 overlay/source-boundary checks pass;
 the previous overlay reproduces the three reported test failures. This is a
 test-harness correction, not production Windows Tor admission or WFP acceptance.
 
+The backend transaction audit now follows the exact captured standard-exit
+connection and Speed Lab restoration path introduced in `5ab593c8`. Its old
+global-cancellation marker failed both UI gates. The replacement checks original
+admission, ordered captured guards, proof and locked publication, plus reuse of
+the existing restoration operation. All 26 shipping-audit tests pass, including
+43 broken-source controls. Both local UI aggregators pass this backend audit;
+their Java/Swift/process-inspection checks remain environment-blocked here.
+
 Original caller deadlines now reach native manager, graph, network, physical,
 PT/broker, selected-proof and OpenVPN observations. Pure observation expiry
 preserves a healthy owner; confirmed identity failure revokes admission without

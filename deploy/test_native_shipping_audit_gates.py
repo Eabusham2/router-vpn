@@ -544,5 +544,131 @@ class CapturedTorDNSAuditTests(unittest.TestCase):
                 self.assertTrue(errors, "Reordered captured DNS or startup admission passed the real product audit")
 
 
+class StandardExitCapturedAuditTests(unittest.TestCase):
+    """Run the actual backend hook against mutated shipping source, never copies of its predicate."""
+
+    def setUp(self):
+        self.paths = ("cmd/client/standard_exit_platform_routes.go",
+                      "cmd/client/linux_standard_service_speed_lab_linux.go")
+        self.sources = {path: (ROOT / path).read_text() for path in self.paths}
+        tree = ast.parse((ROOT / "deploy/backend-session-transaction-audit.py").read_text())
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name in ("standard_exit_captured_chain", "require_standard_exit_captured_chain")]
+        calls = [node for node in tree.body if isinstance(node, ast.Expr)
+                 and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                 and node.value.func.id == "require_standard_exit_captured_chain"]
+        self.assertEqual(len(functions), 2)
+        self.assertEqual(len(calls), 1, "backend must execute the captured-chain audit")
+        self.code = compile(ast.Module(body=functions + calls, type_ignores=[]), "backend-standard-captured", "exec")
+
+    def check(self, changes=None, expected=False):
+        sources = dict(self.sources)
+        sources.update(changes or {})
+        scope = {"read": sources.__getitem__, "errors": [], "_native_module": _NATIVE}
+        exec(self.code, scope)
+        self.assertEqual(not scope["errors"], expected, scope["errors"])
+
+    def mutation(self, path, before, after, occurrence=None):
+        source = self.sources[path]
+        self.assertIn(before, source)
+        if occurrence is None:
+            changed = source.replace(before, after)
+        else:
+            offsets = [m.start() for m in re.finditer(re.escape(before), source)]
+            self.assertLess(occurrence, len(offsets))
+            at = offsets[occurrence]
+            changed = source[:at] + after + source[at + len(before):]
+        # A stale marker outside the shipping function cannot restore closure.
+        self.check({path: changed + "\n/* " + before + " */\n"})
+
+    def test_current_chain_and_formatting_pass(self):
+        self.check(expected=True)
+        path = self.paths[0]
+        self.check({path: self.sources[path].replace("retained.Start(operation)", "retained . Start( /* original */ operation )")}, expected=True)
+
+    def test_owned_admission_cleanup_and_original_delegation_are_required(self):
+        path = self.paths[0]
+        for before, after in (
+            ('h.HandleFunc("/api/standard-exit/connect", a.platformStandardExitConnect)', 'h.HandleFunc("/api/standard-exit/connect", a.unrelatedConnect)'),
+            ("operation, finish, guardErr := a.beginConnectionOperation()", "operation, finish, guardErr := unrelatedOperation()"),
+            ("defer finish()", "unrelatedCleanup()"),
+            ("a.platformStandardExitConnectCaptured(w, r, adapter, operation)", "a.platformStandardExitConnectCaptured(w, r, adapter, context.Background())"),
+            ("a.platformStandardExitConnectOwned(w, r, defaultPlatformStandardExitRuntime())", "a.platformStandardExitConnectCaptured(w, r, defaultPlatformStandardExitRuntime(), context.Background())"),
+        ):
+            with self.subTest(before=before):
+                self.mutation(path, before, after)
+
+    def test_each_original_stage_guard_is_required(self):
+        path = self.paths[0]
+        call = "a.checkCapturedConnectionOperation(operation)"
+        self.assertEqual(self.sources[path].count(call), 4)
+        for stage in range(4):
+            for replacement in ("a.checkConnectionOperation()", "a.checkCapturedConnectionOperation(context.Background())", "unrelatedCheck()"):
+                with self.subTest(stage=stage, replacement=replacement):
+                    self.mutation(path, call, replacement, stage)
+        self.mutation(path, "a.checkCapturedConnectionOperationLocked(operation)", "a.checkCapturedConnectionOperationLocked(context.Background())")
+
+    def test_guard_requires_actual_rejection_not_only_a_call(self):
+        path = self.paths[0]
+        for guard in (
+            "if err := a.checkCapturedConnectionOperation(operation); err != nil {",
+            "if err = a.checkCapturedConnectionOperation(operation); err != nil {",
+            "if cancelErr := a.checkCapturedConnectionOperation(operation); cancelErr != nil {",
+        ):
+            with self.subTest(guard=guard):
+                self.mutation(path, guard, guard.replace("!= nil", "== nil"))
+        before = 'if err := a.checkCapturedConnectionOperation(operation); err != nil {\n\t\thttp.Error(w, err.Error(), http.StatusConflict)\n\t\treturn\n\t}'
+        self.mutation(path, before, before.replace("\n\t\treturn", ""))
+
+    def test_start_proof_and_adoption_keep_original_order_and_context(self):
+        path = self.paths[0]
+        for call in ("retained.Start(operation)", "adapter.proveDNS(operation, retained)", "adapter.current(retained, operation)"):
+            with self.subTest(call=call):
+                self.mutation(path, call, call.replace("operation", "context.Background()"))
+        self.mutation(path, "err = retained.Start(operation)", 'err = errors.New("err = retained.Start(operation)")')
+        self.mutation(path, "proofErr = adapter.proveDNS(operation, retained)", "proofErr = adapter.current(retained, operation)")
+        self.mutation(path, "a.state.Connected = true", "a.state.Connected = false")
+        self.mutation(path, "err = retained.Start(operation)", "if false { err = retained.Start(operation) }")
+
+    def test_nested_or_replaced_intents_are_rejected(self):
+        path = self.paths[0]
+        signature = "func (a *app) platformStandardExitConnectCaptured(w http.ResponseWriter, r *http.Request, adapter platformStandardExitRuntime, operation context.Context) {"
+        for statement in ("a.beginConnectionOperation()", "operation = context.Background()", "operation, cancel := context.WithCancel(operation)", "var operation context.Context"):
+            with self.subTest(statement=statement):
+                self.mutation(path, signature, signature + "\n" + statement)
+
+    def test_prelaunch_guard_cannot_move_after_start(self):
+        path = self.paths[0]
+        block = '\tif err = a.checkCapturedConnectionOperation(operation); err != nil {\n\t\ttracker.markRequestFailure(err.Error())\n\t\thttp.Error(w, err.Error(), http.StatusConflict)\n\t\treturn\n\t}\n'
+        self.assertEqual(self.sources[path].count(block), 1)
+        changed = self.sources[path].replace(block, "")
+        self.assertEqual(changed.count("\tvar proofErr error"), 1)
+        changed = changed.replace("\tvar proofErr error", block + "\tvar proofErr error")
+        self.check({path: changed})
+
+    def test_speed_lab_restore_cannot_create_or_substitute_an_operation(self):
+        path = self.paths[1]
+        call = "a.platformStandardExitConnectCaptured(response, request, defaultPlatformStandardExitRuntime(), ctx)"
+        for replacement in (
+            "a.platformStandardExitConnectOwned(response, request, defaultPlatformStandardExitRuntime())",
+            call.replace(", ctx)", ", context.Background())"),
+            "unrelatedRestore()",
+        ):
+            with self.subTest(replacement=replacement):
+                self.mutation(path, call, replacement)
+        signature = "func (s *linuxStandardServiceSpeedLabRestore) restart(ctx context.Context, a *app) error {"
+        for statement in ("a.beginConnectionOperation()", "ctx, cancel := context.WithCancel(ctx)"):
+            with self.subTest(statement=statement):
+                self.mutation(path, signature, signature + "\n" + statement)
+        self.mutation(path, "http.NewRequestWithContext(ctx,", "http.NewRequestWithContext(context.Background(),")
+        for index in (0, 1):
+            self.mutation(path, "s.sourceCurrent(ctx, a, ctx)", "s.sourceCurrent(ctx, a, context.Background())", index)
+
+    def test_duplicate_shipping_function_is_rejected(self):
+        path = self.paths[0]
+        signature = "func (a *app) platformStandardExitConnectCaptured(w http.ResponseWriter, r *http.Request, adapter platformStandardExitRuntime, operation context.Context)"
+        self.check({path: self.sources[path] + "\n" + signature + " {}\n"})
+
+
 if __name__ == "__main__":
     unittest.main()

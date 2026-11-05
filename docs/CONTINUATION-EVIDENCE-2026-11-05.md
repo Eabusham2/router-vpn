@@ -1081,6 +1081,46 @@ overlay/source-boundary results; actual Windows bootstrap, Wintun/WFP,
 socket retirement, Tor circuits and packaged runtime acceptance remain
 separate native CI requirements.
 
+## Captured standard-exit restoration remains in its original operation
+
+Concurrent upstream `5ab593c86c5b190ea6fb13eb9a1b0274079b6d5d` adds installed
+standard-service Speed Lab paths and restoration. It was preserved by normal
+ancestry. The two overlapping reverse-transfer drafts were merged while all
+35 other backed-up pending files remained byte-identical. Neither draft was
+published as part of that reconciliation.
+
+Both exact-SHA UI workflows failed the old backend audit marker:
+`41977246819` / job `127078861933` and `41977246934` / job `127078862501`.
+They required `checkConnectionOperation()` even though shipping now checks the
+original captured operation. The public handler owns exactly one admission and
+passes it into the captured handler; Speed Lab restoration passes its already
+owned transaction without starting a second operation or reselecting a path.
+
+The updated audit tokenizes the shipping functions and requires the real route,
+admission/deferred release, original operation, four ordered rejection guards,
+Start/DNS/current proof arguments and final locked connected publication.
+Restoration must retain its own source checks and original request context.
+Comments, strings, nested closures, a replaced context, removed/reordered guards,
+nested admission and duplicate functions cannot stand in for that chain.
+
+On an isolated exact `5ab593c8` tree plus only these two audit files, the backend
+audit passes and all 26 shipping-audit tests pass in 3.873s. Nine new parent tests
+exercise 43 negative source mutations and two positive captures. Both actual
+UI aggregators pass this backend stage. Their full local runs fail separate
+environment checks: Java/JDK and Swift are absent, and process inspection cannot
+resolve the sandbox namespace PIDs used by runtime-wrapper tests. These results
+do not claim complete native UI or physical acceptance.
+
+The preserved `e7d5b43c` native cancellation/failure implementation was also
+independently verified after the earlier local alternative was superseded.
+Normal preparation from that exact commit produces six byte-matching command/
+test files. Its actual generated native race run passes in 6.269s with all
+29 expected verdicts (eight parents and 21 leaves), zero failures/skips or
+duplicate/unexpected results. Pure cancellation remains distinct from genuine
+and mixed Start/proof failures. This local run uses `with_purego` and omits the
+unavailable native PQ static archive; full static-link, architecture and
+privileged installed acceptance remain native CI responsibilities.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
