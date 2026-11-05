@@ -400,7 +400,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
         required = ("context_lock.go", "context_lock_test.go",
                     "process_context_windows.go", "process_context_windows_test.go")
         for name in required:
-            relative = "internal/windowscontroller/" + name
+            relative = str(Path("internal") / "windowscontroller" / name)
             self.assertEqual(records[relative], hashlib.sha256((REPOSITORY / relative).read_bytes()).hexdigest())
         with tempfile.TemporaryDirectory(prefix="controller-source-closure-") as directory:
             root = Path(directory).resolve()
