@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -363,29 +364,51 @@ func TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Replacing the path cannot make another session's directory authoritative.
+			// A replaceable pathname must not redirect the retained root. Windows
+			// can prevent the rename while that actual root is open; in that case
+			// prove the sharing fence and keep the foreign Stop in a sibling root.
+			originalInfo, err := files.root.Stat(".")
+			if err != nil {
+				t.Fatal(err)
+			}
 			retained := directory + "-retained"
-			if err := os.Rename(directory, retained); err != nil {
+			originalPath, foreignPath := retained, directory
+			if renameErr := os.Rename(directory, retained); renameErr != nil {
+				if runtime.GOOS != "windows" || !errors.Is(renameErr, syscall.Errno(32)) {
+					t.Fatal(renameErr)
+				}
+				currentInfo, statErr := os.Lstat(directory)
+				if statErr != nil || !os.SameFile(originalInfo, currentInfo) {
+					t.Fatal("denied rename changed the original directory", statErr)
+				}
+				if _, statErr = os.Lstat(retained); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatal("denied rename created a replacement directory", statErr)
+				}
+				originalPath, foreignPath = directory, retained
+				t.Log("original Windows directory sharing fence retained the captured root")
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(retained) })
+			currentInfo, err := files.root.Stat(".")
+			if err != nil || !os.SameFile(originalInfo, currentInfo) {
+				t.Fatal("Stop fixture lost the actual original directory handle", err)
+			}
+			if err := os.Mkdir(foreignPath, 0700); err != nil {
 				t.Fatal(err)
 			}
-			defer os.RemoveAll(retained)
-			if err := os.Mkdir(directory, 0700); err != nil {
-				t.Fatal(err)
-			}
-			writeStop(directory, desktopExternalSession, policy.SourceSHA256())
-			writeStop(retained, strings.Repeat("b", 32), policy.SourceSHA256())
+			writeStop(foreignPath, desktopExternalSession, policy.SourceSHA256())
+			writeStop(originalPath, strings.Repeat("b", 32), policy.SourceSHA256())
 			select {
 			case err := <-done:
 				t.Fatalf("foreign Stop interrupted retained owner: %v", err)
 			case <-time.After(150 * time.Millisecond):
 			}
-			writeStop(retained, desktopExternalSession, strings.Repeat("c", 64))
+			writeStop(originalPath, desktopExternalSession, strings.Repeat("c", 64))
 			select {
 			case err := <-done:
 				t.Fatalf("wrong source interrupted retained owner: %v", err)
 			case <-time.After(150 * time.Millisecond):
 			}
-			writeStop(retained, desktopExternalSession, policy.SourceSHA256())
+			writeStop(originalPath, desktopExternalSession, policy.SourceSHA256())
 			select {
 			case err := <-done:
 				if !errors.Is(err, context.Canceled) {

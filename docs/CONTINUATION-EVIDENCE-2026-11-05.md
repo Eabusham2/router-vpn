@@ -1736,6 +1736,51 @@ block fails the exact lost-progress assertion. No Go compilation or native
 Darwin execution is claimed for this unit. The next actual recurrence must
 provide the missing native progress; the ARM64 hang remains an open CI issue.
 
+## Original Stop observer under Windows directory sharing
+
+Actual Windows AMD64 job `127104587536` and ARM64 job `127104588016`, run
+`41985065261` at `bed21f7e`, failed the external and Tor Stop-observer fixture
+when renaming its open captured directory. Windows returned its sharing
+violation before the intended wrong-owner and original-Stop assertions.
+
+The fixture still attempts the real rename. If it succeeds, the original
+pathname-replacement case is unchanged. Only Windows ERROR_SHARING_VIOLATION
+(32) admits the alternate fixture setup: the original directory must retain
+the captured file identity, the rename target must be absent, and the actual
+open root must still have the same identity. The foreign valid Stop uses a
+sibling directory. Wrong session and wrong source remain in the original
+directory, followed by the original authorized Stop against the held native
+owner lock. The fixture never closes its root to permit the rename and never
+skips the external or Tor case. Production cancellation and identity checks
+are unchanged.
+
+After verifying the normally prepared native command's relevant source against
+the committed original templates, all **12 exact native command race verdicts
+pass (2.421s)**. They cover observation error preservation, external/Tor held
+owner-lock cancellation and external/Tor original Stop. Two separately compiled
+production mutations remove only the session predicate or source predicate;
+each fails its intended wrong-owner assertion (0.694s and 1.772s). A build error,
+panic, timeout, skip or race cannot count as a control. The initial cold
+compilation reached its 600-second bound before running a test; the cached
+rerun completed. These executions used Linux, so the Windows sharing branch
+still requires actual Windows CI.
+
+## New actual native evidence for earlier published fixes
+
+| Published source | Actual observation | Boundary |
+|---|---|---|
+| `bed21f7e`, Windows physical-bootstrap run `41985065261` | Native-bootstrap jobs `127104588036` (AMD64) and `127104587863` (ARM64) report successful actual Wintun IPv4/IPv6 policy, original LUID, stale-reader rejection, exact WFP/adapter retirement and failed-session cleanup, including their required defect controls. | Both jobs later fail the separate external MTU cleanup fixture. This closes the earlier preparation-only Wintun evidence for that source, not the entire job or release. |
+| `b2a9a3c1`, generated Node/TUN run `41987952284` | Jobs `127113513303` (AMD64) and `127113513645` (ARM64) pass On-connect, Always, captured MTU, MTU rollback, resolver failure and wrong key. Both explicitly verify original TUN retirement after MTU rollback. | Actual privileged native CI, separate from the installed service, private target and physical devices. |
+| `f041b241`, actual Windows MAX/WFP run `41986968019` | All five ARM64 suites pass: succession `127109929007`, ownership controls 1 `127109929392`, ownership controls 2 `127109929368`, TLS `127109929417` and QUIC `127109929680`. The ownership-2 log rejects the ordinary-MAX UDP-deny and expired-reference-association defects and publishes receipt artifact `13396379280`. | The `55d01978` WireGuard lifecycle repair and its tests are unchanged at this descendant. This supersedes that older ARM nil-context failure; four AMD64 suites were still running at observation time, and current-head release verification remains separate. |
+
+The new `7a6c92a8` run inventory also reports generated Node/TUN success, but
+the authoritative release run was cancelled after newer pushes. No newer full
+published release is established by these stage-specific results. Its macOS
+encrypted-runtime job `127115210042` exposes another concrete failure:
+`TestDesktopExternalComparisonTorRecordsEveryProvedTransientBeforeClose` leaves
+a nonempty temporary directory during cleanup. That writer/lifecycle issue is
+under investigation and has not been waived or described as fixed.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -1745,7 +1790,7 @@ provide the missing native progress; the ARM64 hang remains an open CI issue.
 | Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node, reverse Node-to-standard and retained prior-boot service-guard transfers use actual original creators, durable intent and bounded resolution. | Actual installed/native acceptance remains required. Protected hostname bootstrap, other boot-owner paths, active Always two-generation coordination and same-boot service-crash continuation remain unfinished. Immutable generations and retained generation peers have separate local/native evidence. |
-| Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |
+| Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Actual later evidence includes both Linux generated Node/TUN architecture jobs at `b2a9a3c1`, both Windows Wintun/WFP stages at `bed21f7e`, and all five Windows ARM64 MAX suites at `f041b241`, with their distinct boundaries recorded above. | Each later source change requires its own exact-SHA native/build/publication result. No current full release or remaining device acceptance is established; cancelled workflows are not passes. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 
 The integrated service-MTU path retains both original observers, actual native

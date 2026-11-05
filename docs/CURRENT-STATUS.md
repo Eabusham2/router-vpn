@@ -97,8 +97,11 @@ WireGuard bind. Each Open retains the original context and a separate connection
 generation; pre-Open traffic cannot dial, Close cancels before joining, and old
 receivers or late sockets cannot enter a reopened bind. Thirteen generated native
 race verdicts, real stock keepalive recovery over loopback UDP, three assertion
-controls and seven preparation checks pass. The test TUN is inert; actual Windows
-ARM64 MAX/WFP and packaged native acceptance remain required.
+controls and seven preparation checks pass. The test TUN is inert. Subsequently,
+all five actual Windows ARM64 MAX/WFP suites passed at `f041b241`, including the
+previously failing ownership-control shard with both required production defects
+rejected. The lifecycle fix and test source were unchanged from `55d01978`.
+Complete AMD64, current-head release and device acceptance remain separate.
 
 The Windows physical-bootstrap prospective test overlay now changes both exact
 Tor Box registration guards, including the bounded caller-context entry point.
@@ -126,6 +129,15 @@ inventory from 420 to 429; those privileged cases have not executed locally.
 Other graph families, layered Linux paths, Server/Compare and device acceptance
 retain their own unfinished requirements.
 
+The native Stop fixture now retains its actual open directory handle when
+Windows refuses directory replacement with ERROR_SHARING_VIOLATION. It verifies
+that exact identity and absence of a replacement before testing the foreign
+directory, wrong session, wrong source and original Stop. Platforms that permit
+the rename retain the original pathname-replacement test. Twelve actual native
+command race verdicts pass, and independently removing the session or source
+check fails its intended assertion. Production Stop behavior is unchanged;
+actual Windows execution of this corrected fixture remains required.
+
 The macOS native kernel runner now emits bounded captured progress before
 fallible process-group termination. A termination or output-join error retains
 the original timeout, and a late zero exit cannot turn that expired run green.
@@ -148,7 +160,11 @@ The Windows Wintun comparison now prepares its private reference from the full
 original pinned Git tree and runs both required MTU preparation stages. It
 rejects replacement objects and missing inputs without repairing the subject.
 All 14 runner tests and actual ordinary comparison of 206 native TUN files pass.
-The local launch adapter is POSIX; actual Windows driver execution remains CI work.
+The local launch adapter is POSIX. Both actual Windows architectures subsequently
+passed the Wintun/WFP stage at `bed21f7e`, including IPv4/IPv6 policy, original
+LUID, stale-reader rejection, exact adapter/filter retirement and failed-session
+cleanup controls. Those jobs then failed a separate external MTU fixture; this
+is stage-specific driver evidence, not a complete bootstrap workflow or release.
 
 The Windows SOCKS missing-grant control now observes original I/O and descriptor
 closure before proof completion, which correctly remains blocked by the retained
@@ -240,9 +256,11 @@ IPv6 kernel-route deletion arrived in the final post-close drain. Retirement
 now accepts that implicit effect once across either drain, only after its
 original descriptors close. Duplicate, added, foreign or changed routes still
 fail; original history, final absence and watcher join remain required. All 26
-focused race verdicts and three compiling defect controls pass. The earlier
-unclassified failure is not retrospectively relabeled; actual native CI must
-verify this source correction against the newly observed category.
+focused race verdicts and three compiling defect controls pass. Both actual
+generated Node/TUN architecture jobs subsequently passed all six cases at
+`b2a9a3c1`, including MTU rollback and original TUN retirement. The earlier
+unclassified failure is not retrospectively relabeled, and installed-service,
+current-release and physical-device acceptance remain separate.
 
 Complete retirement receipts now retain their separate 48 KiB writer/parser
 allowance while readiness stays at 16 KiB. Shared and generated-native gates
