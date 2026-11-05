@@ -3,6 +3,7 @@ package routervpndesktoppt
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,5 +190,105 @@ func TestRouterVPNPhysicalFactoryRequiresOSOwnerBeforeInitialize(t *testing.T) {
 	}
 	if err := n.Close(); err != nil || !source.closed.Load() {
 		t.Fatal("reset did not join the captured source", err)
+	}
+}
+
+type physicalRegistrationContext struct {
+	context.Context
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (c *physicalRegistrationContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.entered) })
+	return err
+}
+
+type physicalRegistrationLifetime struct {
+	context.Context
+	once   sync.Once
+	expire func()
+}
+
+func (c *physicalRegistrationLifetime) Err() error {
+	err := c.Context.Err()
+	c.once.Do(c.expire)
+	return err
+}
+
+func TestRouterVPNPhysicalRegistrationKeepsOriginalCaller(t *testing.T) {
+	for _, mode := range []string{"held-lock", "expired", "no-deadline", "late-publication", "live"} {
+		t.Run(mode, func(t *testing.T) {
+			n := physicalFactoryNetwork(t)
+			var calls atomic.Int32
+			factory := func(context.Context, mobiletor.DesktopSocketCapture, func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				calls.Add(1)
+				return nil, nil, errors.New("registration must not execute factory")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var err error
+			if mode == "held-lock" {
+				n.mu.Lock()
+				entered := make(chan struct{})
+				observed := &physicalRegistrationContext{Context: ctx, entered: entered}
+				done := make(chan error, 1)
+				go func() { done <- n.PreparePhysicalBrokerContext(observed, factory) }()
+				select {
+				case <-entered:
+				case <-time.After(time.Second):
+					n.mu.Unlock()
+					cancel()
+					<-done
+					t.Fatal("registration never entered original caller")
+				}
+				cancel()
+				select {
+				case err = <-done:
+					n.mu.Unlock()
+				case <-time.After(time.Second):
+					n.mu.Unlock()
+					<-done
+					t.Fatal("registration ignored original caller while waiting on owner")
+				}
+			} else if mode == "late-publication" {
+				n.ctx = &physicalRegistrationLifetime{Context: n.ctx, expire: cancel}
+				err = n.PreparePhysicalBrokerContext(ctx, factory)
+			} else if mode == "expired" {
+				cancel()
+				err = n.PreparePhysicalBrokerContext(ctx, factory)
+			} else if mode == "no-deadline" {
+				err = n.PreparePhysicalBrokerContext(context.Background(), factory)
+			} else {
+				err = n.PreparePhysicalBrokerContext(ctx, factory)
+				cancel()
+			}
+			if mode == "live" {
+				if err != nil || n.physicalFactory == nil {
+					t.Fatal("original registration failed", err)
+				}
+			} else {
+				if err == nil || n.physicalFactory != nil {
+					t.Fatal("expired/unbounded registration published factory", err)
+				}
+				if mode != "no-deadline" && !errors.Is(err, context.Canceled) {
+					t.Fatal("registration lost original cancellation", err)
+				}
+			}
+			fresh, stop := context.WithTimeout(context.Background(), time.Second)
+			defer stop()
+			if err := n.MatchesContext(fresh, n.capture.SessionID, n.capture.SourceSHA256); err != nil || n.ctx.Err() != nil || calls.Load() != 0 {
+				t.Fatal("registration canceled healthy lifetime or started native factory", err)
+			}
+			if mode != "live" {
+				if err := n.PreparePhysicalBrokerContext(fresh, factory); err != nil {
+					t.Fatal("expired attempt poisoned original owner", err)
+				}
+			}
+			if err := n.PreparePhysicalBrokerContext(fresh, factory); err == nil {
+				t.Fatal("later caller replaced original registered factory")
+			}
+		})
 	}
 }

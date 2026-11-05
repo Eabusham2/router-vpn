@@ -23,6 +23,25 @@ func (n *NetworkOwner) PreparePhysicalPolicy(policy *mobiletor.DesktopBridgePoli
 	})
 }
 
+func (n *NetworkOwner) PreparePhysicalPolicyContext(ctx context.Context, policy *mobiletor.DesktopBridgePolicy) error {
+	if ctx == nil {
+		return errors.New("physical policy registration has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("physical policy registration has no original deadline")
+	}
+	return n.preparePhysicalLinuxContext(ctx, policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopLinuxSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
 type desktopLinuxPhysicalPolicy interface {
 	mobiletor.DesktopSocketPolicy
 	mobiletor.DesktopSocketSource
@@ -33,10 +52,22 @@ type desktopLinuxPhysicalPolicy interface {
 // with production; no environment or graph option can select another creator.
 func (n *NetworkOwner) preparePhysicalLinux(policy *mobiletor.DesktopBridgePolicy,
 	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error)) error {
+	return n.preparePhysicalLinuxContext(nil, policy, create)
+}
+
+func (n *NetworkOwner) preparePhysicalLinuxContext(ctx context.Context, policy *mobiletor.DesktopBridgePolicy,
+	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error)) error {
 	if policy == nil || !policy.PhysicalBroker() || policy.Metadata().TargetOS != "linux" ||
 		policy.Predecessor() != nil || policy.ServerPolicy() != nil ||
-		!n.Matches(policy.Metadata().SessionID, policy.SourceSHA256()) || create == nil {
+		create == nil {
 		return errors.New("Linux physical sockets require the exact captured direct Tor policy")
+	}
+	if ctx != nil {
+		if err := n.MatchesContext(ctx, policy.Metadata().SessionID, policy.SourceSHA256()); err != nil {
+			return err
+		}
+	} else if !n.Matches(policy.Metadata().SessionID, policy.SourceSHA256()) {
+		return errors.New("Linux physical registration lost its original policy")
 	}
 	destinations, err := policy.PhysicalDestinations()
 	if err != nil {
@@ -65,7 +96,11 @@ func (n *NetworkOwner) preparePhysicalLinux(policy *mobiletor.DesktopBridgePolic
 		// guardian cannot grant a tuple without a captured family binding.
 		options.LANPrefixes = append(options.LANPrefixes, netip.MustParsePrefix("fc00::/7"), netip.MustParsePrefix("fe80::/10"))
 	}
-	return n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+	register := n.PreparePhysicalBroker
+	if ctx != nil {
+		register = func(factory PhysicalBrokerFactory) error { return n.PreparePhysicalBrokerContext(ctx, factory) }
+	}
+	return register(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
 		manager := service.FromContext[adapter.NetworkManager](ctx)
 		if manager == nil || !manager.AutoDetectInterface() || manager.InterfaceMonitor() == nil {
 			return nil, nil, errors.New("Linux physical factory requires the initialized native network monitor")

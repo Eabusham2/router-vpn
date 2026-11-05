@@ -1,9 +1,11 @@
 package box
 
 import (
+	"context"
 	"errors"
 	"runtime"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -37,4 +39,51 @@ func (s *Box) RouterVPNDesktopTorPreparePhysical(policy *mobiletor.DesktopBridge
 		return errors.New("desktop Tor physical factory has another captured network owner")
 	}
 	return observer.PreparePhysicalPolicy(policy)
+}
+
+// RouterVPNDesktopTorPreparePhysicalContext registers only the original Linux
+// source's factory under its accepted startup budget. It does not start it or
+// replace the network owner's separately retained connection lifetime.
+func (s *Box) RouterVPNDesktopTorPreparePhysicalContext(ctx context.Context, policy *mobiletor.DesktopBridgePolicy) error {
+	if ctx == nil {
+		return errors.New("Tor physical registration has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("Tor physical registration has no original deadline")
+	}
+	if s == nil || policy == nil || s.ctx == nil || s.ctx.Err() != nil || s.service == nil {
+		return errors.New("desktop Tor physical preparation requires its native Box")
+	}
+	if !policy.PhysicalBroker() {
+		return ctx.Err()
+	}
+	if runtime.GOOS != "linux" {
+		return errors.New("this native operating system has no installed physical socket factory")
+	}
+	meta := policy.Metadata()
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	if err != nil || meta.TargetOS != runtime.GOOS || routerVPNCapturedOptions(s.ctx, compiled) != s.routerVPNTorOptions || policy.Predecessor() != nil || policy.ServerPolicy() != nil {
+		return errors.New("desktop Tor physical factory does not match its complete native source")
+	}
+	raw, found, err := adapter.RouterVPNServiceContext(ctx, s.service, routervpndesktoppt.NetworkOwnerTag)
+	if err != nil {
+		return err
+	}
+	observer, ok := raw.(*routervpndesktoppt.NetworkOwner)
+	if !found || !ok || observer == nil {
+		return errors.New("desktop Tor physical factory has another captured network owner")
+	}
+	if err := observer.MatchesContext(ctx, meta.SessionID, meta.SourceSHA256); err != nil {
+		return err
+	}
+	registration, ok := any(observer).(interface {
+		PreparePhysicalPolicyContext(context.Context, *mobiletor.DesktopBridgePolicy) error
+	})
+	if !ok {
+		return errors.New("desktop Tor physical factory has no bounded registration")
+	}
+	return registration.PreparePhysicalPolicyContext(ctx, policy)
 }

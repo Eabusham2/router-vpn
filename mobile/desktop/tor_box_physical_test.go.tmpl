@@ -1,10 +1,13 @@
 package box
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -112,6 +115,54 @@ func TestRouterVPNDesktopTorFixedPhysicalBoxRequiresCapturedFactory(t *testing.T
 			}
 			if _, err := f.box.RouterVPNDesktopTorCreate(f.policy); err == nil {
 				t.Fatal("fixed bridge reported a proved path before native initialization")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorPhysicalRegistrationContext(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux isolated socket factory")
+	}
+	for _, mode := range []string{"expired", "no-deadline", "live"} {
+		t.Run(mode, func(t *testing.T) {
+			f := desktopPhysicalBoxFixture(t)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if mode == "expired" {
+				cancel()
+			}
+			var err error
+			if mode == "no-deadline" {
+				err = f.box.RouterVPNDesktopTorPreparePhysicalContext(context.Background(), f.policy)
+			} else {
+				err = f.box.RouterVPNDesktopTorPreparePhysicalContext(ctx, f.policy)
+			}
+			if mode == "live" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				cancel()
+			} else {
+				if err == nil {
+					t.Fatal("Box registered with no original budget")
+				}
+				if mode == "expired" && !errors.Is(err, context.Canceled) {
+					t.Fatal("Box lost original cancellation", err)
+				}
+			}
+			fresh, stop := context.WithTimeout(context.Background(), time.Second)
+			defer stop()
+			if mode != "live" {
+				if err := f.box.RouterVPNDesktopTorPreparePhysicalContext(fresh, f.policy); err != nil {
+					t.Fatal("expired observer poisoned original Box registration", err)
+				}
+			}
+			if err := f.box.RouterVPNDesktopTorPreparePhysicalContext(fresh, f.policy); err == nil {
+				t.Fatal("Box replaced captured factory")
+			}
+			if f.tun.ready || f.tun.claimed {
+				t.Fatal("registration granted native TUN startup")
 			}
 		})
 	}

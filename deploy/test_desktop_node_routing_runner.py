@@ -37,6 +37,23 @@ class NativeStartupTransportVerdicts(unittest.TestCase):
                             NODE.execute_baseline_suite(baseline, suite)
 
 
+class TorRegistrationContextVerdicts(unittest.TestCase):
+    def test_every_original_registration_verdict_is_required(self):
+        self.assertEqual({key: len(value) for key, value in NODE.TOR_REGISTRATION_VERDICTS.items()}, {"tor-registration-owner": 6, "tor-registration-policy": 3, "tor-registration-box": 4})
+        for family, names in NODE.TOR_REGISTRATION_VERDICTS.items():
+            suite = (family, "actual-generated-package", "original-registration", tuple(name for name in names if "/" not in name))
+            lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+            baseline = Mock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                baseline.execute.return_value = (0, "".join(lines))
+                NODE.execute_baseline_suite(baseline, suite)
+                for line in lines:
+                    for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line):
+                        baseline.execute.return_value = (0, changed)
+                        with self.assertRaises(ValueError):
+                            NODE.execute_baseline_suite(baseline, suite)
+
+
 class NativeStartupContextVerdicts(unittest.TestCase):
     def test_original_startup_deadlines_are_required(self):
         self.assertEqual({key:len(value) for key,value in NODE.STARTUP_CONTEXT_VERDICTS.items()}, {"native-startup-inbound":4, "native-startup-box":6, "native-startup-command":4})

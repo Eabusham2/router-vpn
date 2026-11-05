@@ -64,6 +64,11 @@ STARTUP_TRANSPORT_VERDICTS = {
     "native-startup-codec": ["TestDesktopStartupAdmissionKeepsOriginalDeadline", *["TestDesktopStartupAdmissionKeepsOriginalDeadline/" + leaf for leaf in
         ("original", "duplicate", "unknown", "substituted-session", "substituted-source", "substituted-config", "wrong-kind", "expired", "shorter-caller")]],
 }
+TOR_REGISTRATION_VERDICTS = {
+    "tor-registration-owner": ["TestRouterVPNPhysicalRegistrationKeepsOriginalCaller", *["TestRouterVPNPhysicalRegistrationKeepsOriginalCaller/" + leaf for leaf in ("held-lock", "expired", "no-deadline", "late-publication", "live")]],
+    "tor-registration-policy": ["TestRouterVPNLinuxPhysicalPolicyRegistrationContext", *["TestRouterVPNLinuxPhysicalPolicyRegistrationContext/" + leaf for leaf in ("held-policy-owner", "foreign-source")]],
+    "tor-registration-box": ["TestRouterVPNDesktopTorPhysicalRegistrationContext", *["TestRouterVPNDesktopTorPhysicalRegistrationContext/" + leaf for leaf in ("expired", "no-deadline", "live")]],
+}
 LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
                     if mode in ("shadowsocks", "hysteria2") or layer != "off")
@@ -960,6 +965,8 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, names, "native manager observation")
     if name == "network-context":
         require_native_verdicts(output, NETWORK_CONTEXT_TESTS + NETWORK_CONTEXT_LEAVES, "original network observation")
+    if name in TOR_REGISTRATION_VERDICTS:
+        require_native_verdicts(output, TOR_REGISTRATION_VERDICTS[name], "original Tor factory registration")
     if name in STARTUP_TRANSPORT_VERDICTS:
         require_native_verdicts(output, STARTUP_TRANSPORT_VERDICTS[name], "original supervised startup transport")
     if name in STARTUP_CONTEXT_VERDICTS:
@@ -1038,6 +1045,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
+        ("tor-registration-owner", "./routervpn/desktoppt", "^TestRouterVPNPhysicalRegistrationKeepsOriginalCaller$", ("TestRouterVPNPhysicalRegistrationKeepsOriginalCaller",)),
         ("native-startup-inbound", "./protocol/tun", "^TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget$", ("TestRouterVPNDesktopNetworkStartupKeepsOriginalBudget",)),
         ("native-startup-box", ".", "^TestRouterVPNDesktopStartupKeepsCallerAndLifetime$", ("TestRouterVPNDesktopStartupKeepsCallerAndLifetime",)),
         ("mtu-operation-context", "./experimental/libbox/routervpn/mobilemtu", "^TestContext", tuple(name for name in MTU_CONTEXT_VERDICTS["mtu-operation-context"] if "/" not in name)),
@@ -1113,6 +1121,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     if platform.system() == "Linux":
         suites.append(("native-startup-transport", "./cmd/sing-box", "^TestRouterVPNDesktop(StartupEnvelopeControlsOriginal(Command|Tor)|HeartbeatKeepsObservationBudget|TorProcessKeepsOriginalStartup)$", tuple(name for name in STARTUP_TRANSPORT_VERDICTS["native-startup-transport"] if "/" not in name)))
         suites.append(("native-startup-codec", "./experimental/libbox/routervpn/mobilemultihop", "^TestDesktopStartupAdmissionKeepsOriginalDeadline$", ("TestDesktopStartupAdmissionKeepsOriginalDeadline",)))
+        suites.append(("tor-registration-policy", "./routervpn/desktoppt", "^TestRouterVPNLinuxPhysicalPolicyRegistrationContext$", ("TestRouterVPNLinuxPhysicalPolicyRegistrationContext",)))
+        suites.append(("tor-registration-box", ".", "^TestRouterVPNDesktopTorPhysicalRegistrationContext$", ("TestRouterVPNDesktopTorPhysicalRegistrationContext",)))
         suites.append(STANDARD_MTU_SUITE)
         suites.append(('native-retirement-bound', 'github.com/sagernet/sing-tun', '^TestDesktopNetworkRetirementKeepsSeparateBound$', ('TestDesktopNetworkRetirementKeepsSeparateBound',)))
         suites.append(("native-startup-command", "./cmd/sing-box", "^TestRouterVPNRawCommandOriginalStartupDeadline$", ("TestRouterVPNRawCommandOriginalStartupDeadline",)))

@@ -110,9 +110,37 @@ func (n *NetworkOwner) Start(stage adapter.StartStage) error {
 func (n *NetworkOwner) PreparePhysicalBroker(factory PhysicalBrokerFactory) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	return n.preparePhysicalBrokerLocked(nil, factory)
+}
+
+// Registration is a startup mutation. Its caller budget never becomes the
+// factory's connection lifetime, and an expired attempt leaves this owner usable.
+func (n *NetworkOwner) PreparePhysicalBrokerContext(ctx context.Context, factory PhysicalBrokerFactory) error {
+	if n == nil || ctx == nil {
+		return errors.New("physical factory registration has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("physical factory registration has no original deadline")
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	defer n.mu.Unlock()
+	return n.preparePhysicalBrokerLocked(ctx, factory)
+}
+
+func (n *NetworkOwner) preparePhysicalBrokerLocked(ctx context.Context, factory PhysicalBrokerFactory) error {
 	if factory == nil || !n.capture.PhysicalBroker || n.retired || n.activated || n.ready ||
 		n.physicalFactory != nil || n.broker != nil || n.physicalPreparing != nil || n.ctx.Err() != nil {
 		return errors.New("desktop Tor physical factory is missing, replaced or late")
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	n.physicalFactory = factory
 	return nil

@@ -508,9 +508,9 @@ runner checks pass with the existing standard-MTU and Node/raw startup gates
 preserved. An independent mutant that renews the actual child's deadline fails
 both the external and Tor late-success witnesses for that intended reason.
 These are source and executable-composition results, not device acceptance or
-an exact-SHA completed release. Legacy pre-start Box service/NetworkOwner
-registration locks retain a separate caller-budget audit; this unit does not
-claim every constructor or preparation syscall is interruptible.
+an exact-SHA completed release. The subsequent registration repair below covers pre-start Box service and
+NetworkOwner admission. These changes do not claim every constructor or
+preparation syscall is interruptible.
 
 The exact `c2839a15` Linux Node jobs now pass the former missing-startup-deadline
 point but fail at the retained address-generation policy comparison after
@@ -589,6 +589,28 @@ They do not stand in for the newly added imported graph or installed-service
 MTU acceptance. Broader graph families, Server/Compare, Start Layers, protected
 cross-adapter transfer, active Always upgrades and same-boot crash continuation
 retain their own source and acceptance obligations.
+
+## Original Tor physical registration deadline
+
+The actual Linux Tor constructor now carries its accepted startup context into
+Box service lookup, the retained NetworkOwner check and physical-factory
+registration. Registration cannot wait on either service/owner mutex beyond
+that original deadline, and checks that deadline again after validating the
+original owner before publishing a factory. The factory's later activation
+still owns its separate graph lifetime; expiry never replaces a healthy owner.
+Legacy entry points remain available for compatibility, while the shipping path
+uses the explicit bounded capability.
+
+The prepared desktoppt, Box and actual generated command packages pass 22 race
+verdicts. Thirteen registration verdicts are required by the native inventory,
+including held service/owner locks, unbounded/expired callers and late successful
+validation. The old blocking lock and removed-final-check mutations each fail
+their intended executable witness. Three actual constructor fixtures now pass a
+bounded startup context separately from the retained connection lifetime.
+The complete Tor comparison fixture completes its real SAFECOOKIE exchange
+locally, then its actual TUN constructor is denied a netlink socket with
+operation-not-permitted. That privileged positive remains mandatory in native
+CI; no production fallback, skipped assertion or invented connection is added.
 
 ## Remaining requirement/evidence ledger
 

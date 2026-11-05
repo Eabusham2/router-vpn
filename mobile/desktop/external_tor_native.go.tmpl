@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"io"
 	"runtime"
@@ -87,7 +88,11 @@ func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary
 		}
 		return n, routerVPNTorFailure
 	}
-	if err := n.box.RouterVPNDesktopTorPreparePhysical(files.inputs.Policy()); err != nil {
+	if runtime.GOOS == "linux" {
+		if err := n.box.RouterVPNDesktopTorPreparePhysicalContext(n.startup, files.inputs.Policy()); err != nil {
+			return n, errors.Join(routerVPNTorFailure, err)
+		}
+	} else if err := n.box.RouterVPNDesktopTorPreparePhysical(files.inputs.Policy()); err != nil {
 		return n, routerVPNTorFailure
 	}
 	return n, nil

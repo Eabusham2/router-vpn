@@ -69,7 +69,10 @@ func TestRouterVPNDesktopTorServerCommandAdmitsNoLocalExecutable(t *testing.T) {
 func TestRouterVPNDesktopTorServerNativeCancelRetainsBoxForLeaseCleanup(t *testing.T) {
 	f := routerVPNNewServerTorFileFixture(t)
 	files := f.open(t)
-	owner, err := routerVPNNewTorNative(include.Context(context.Background()), files, nil)
+	lifetime := include.Context(context.Background())
+	startup, stopStartup := context.WithTimeout(lifetime, 5*time.Second)
+	defer stopStartup()
+	owner, err := routerVPNNewTorNative(context.WithValue(lifetime, routerVPNStartupCallerKey{}, startup), files, nil)
 	if err != nil || owner == nil {
 		t.Fatal("Server actual native construction failed", err)
 	}

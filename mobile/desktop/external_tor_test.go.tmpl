@@ -425,7 +425,10 @@ func TestRouterVPNDesktopTorNativeConstructionRetainsActualBoxAndCancelsBeforeSp
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, err := routerVPNNewTorNative(include.Context(context.Background()), files, binary)
+	lifetime := include.Context(context.Background())
+	startup, stopStartup := context.WithTimeout(lifetime, 5*time.Second)
+	defer stopStartup()
+	owner, err := routerVPNNewTorNative(context.WithValue(lifetime, routerVPNStartupCallerKey{}, startup), files, binary)
 	if owner == nil {
 		t.Fatal("actual native constructor discarded partial ownership", err)
 	}

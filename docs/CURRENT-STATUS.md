@@ -94,8 +94,10 @@ observation helper. The six Linux race packages from the failed CI workflow pass
 after selective preparation alone. Node now carries its existing 30-second startup
 admission through actual native Start; raw Linux command construction enforces
 its top-level ten-second bound. Native caller/lifetime and partial-failure races
-pass. Full namespace acceptance and external/Tor pre-start registration budgets remain
-separate current CI and implementation work. Concurrent upstream HTTP admission/status changes in
+pass. Full namespace acceptance remains separate current CI work. External/Tor
+pre-start service/owner registration now retains the original startup budget
+and rejects late factory publication; its actual generated composition and
+held-lock/late-publication regressions pass. Concurrent upstream HTTP admission/status changes in
 `c2241ba1` were preserved. Current exact-SHA release publication,
 physical/device/private acceptance and the other surviving platform/graph work
 remain separate requirements. The older continuation below is retained as history.

@@ -58,12 +58,31 @@ type routerVPNTorWholeTUN struct {
 	ready, closed, claimed bool
 	guard                  func() bool
 	guardContext           func(context.Context) error
+	startup                context.Context
+}
+
+func (t *routerVPNTorWholeTUN) RouterVPNDesktopMTUStartupContext(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+		return err
+	}
+	defer t.mu.Unlock()
+	if _, ok := ctx.Deadline(); !ok || t.ready || t.closed {
+		return errors.New("whole-owner fixture lost original startup admission")
+	}
+	t.startup = ctx
+	return nil
 }
 
 func (t *routerVPNTorWholeTUN) Start(stage adapter.StartStage) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if stage == adapter.StartStateStarted {
+		if t.startup == nil {
+			return errors.New("whole-owner fixture has no original startup")
+		}
+		if err := t.startup.Err(); err != nil {
+			return err
+		}
 		t.ready = true
 	}
 	return nil
@@ -199,7 +218,9 @@ func TestRouterVPNDesktopTorComparisonWholeOwnerUnknownCapture(t *testing.T) {
 		return tun, nil
 	})
 	ctx := box.Context(context.Background(), inbounds, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
-	owner, err := routerVPNNewTorNative(ctx, files, binaryOwner)
+	startup, stopStartup := context.WithTimeout(ctx, 5*time.Second)
+	defer stopStartup()
+	owner, err := routerVPNNewTorNative(context.WithValue(ctx, routerVPNStartupCallerKey{}, startup), files, binaryOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
