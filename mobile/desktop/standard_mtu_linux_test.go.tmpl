@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/routervpn/standardengine"
 	SJ "github.com/sagernet/sing/common/json"
 	"golang.org/x/sys/unix"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -173,6 +174,54 @@ func TestRouterVPNStandardMTUActualBoxRetiresUnstartedReader(t *testing.T) {
 	}
 }
 
+// Failure diagnostics never replace the original namespace identity gate or
+// change credentials, namespace ownership, or the runner's security policy.
+func routerVPNStandardClaimNamespaceDiagnostics(t *testing.T, original *os.File, name string) {
+	t.Helper()
+	describe := func(label string, file *os.File) {
+		var stat syscall.Stat_t
+		statErr := syscall.Fstat(int(file.Fd()), &stat)
+		var fs syscall.Statfs_t
+		fsErr := syscall.Fstatfs(int(file.Fd()), &fs)
+		t.Logf("claim namespace %s %s: fstat=%v device=%d inode=%d fstatfs=%v type=%#x", name, label, statErr, stat.Dev, stat.Ino, fsErr, fs.Type)
+	}
+	describe("inherited-original", original)
+	current, err := os.Open("/proc/thread-self/ns/" + name)
+	if err != nil {
+		t.Logf("claim namespace %s current open: %v", name, err)
+	} else {
+		describe("current-opened", current)
+		if err := current.Close(); err != nil {
+			t.Logf("claim namespace %s current close: %v", name, err)
+		}
+	}
+	t.Logf("claim namespace credentials: uid=%d euid=%d gid=%d egid=%d tid=%d", os.Getuid(), os.Geteuid(), os.Getgid(), os.Getegid(), syscall.Gettid())
+	for _, path := range []string{"/proc/thread-self/uid_map", "/proc/thread-self/gid_map", "/proc/thread-self/status", "/proc/thread-self/attr/current"} {
+		file, err := os.Open(path)
+		if err != nil {
+			t.Logf("claim namespace context %s open: %v", path, err)
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, 4097))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil || len(data) > 4096 {
+			t.Logf("claim namespace context %s unavailable: read=%v close=%v bytes=%d", path, readErr, closeErr, len(data))
+			continue
+		}
+		if strings.HasSuffix(path, "/status") {
+			for _, line := range strings.Split(string(data), "\n") {
+				for _, prefix := range []string{"CapInh:", "CapPrm:", "CapEff:", "CapBnd:", "CapAmb:", "NoNewPrivs:", "Seccomp:", "Seccomp_filters:"} {
+					if strings.HasPrefix(line, prefix) {
+						t.Logf("claim namespace status %s", line)
+					}
+				}
+			}
+		} else {
+			t.Logf("claim namespace context %s: %q", path, data)
+		}
+	}
+}
+
 // This mandatory native case creates a real TUN in an original child namespace,
 // grants the shipping worker's native claim, then fails before FD11 readiness.
 // It proves bounded cleanup of that exact claimed reader and actual process
@@ -251,6 +300,7 @@ func TestRouterVPNStandardMTUNativeClaimFailureNamespace(t *testing.T) {
 		after, currentErr := os.Stat("/proc/thread-self/ns/" + name)
 		var fs syscall.Statfs_t
 		if err != nil || currentErr != nil || syscall.Fstatfs(int(file.Fd()), &fs) != nil || fs.Type != 0x6e736673 || os.SameFile(before, after) {
+			routerVPNStandardClaimNamespaceDiagnostics(t, file, name)
 			t.Fatal("native claim child lost original distinct namespace", name, err, currentErr)
 		}
 	}
