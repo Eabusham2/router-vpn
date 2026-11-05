@@ -41,6 +41,12 @@ the former fixture fails exactly its two intended leaves under that condition.
 The fixed graph aliases, original-handle checks and three-attempt cap remain.
 Actual native-PQ/MAX/WFP and Windows ARM64 acceptance remain CI requirements.
 
+The Windows MAX runner now projects the actual TCP/UDP allocator dependencies
+used by the retained TLS-front cases. This repairs the observed undefined
+`nodeMAXBoth` compilation failure without removing its original alias or
+behavioural negative controls. The complete runner passes 59 checks on Linux
+with two existing Windows-only skips; actual Windows execution remains required.
+
 The Windows physical-bootstrap prospective test overlay now changes both exact
 Tor Box registration guards, including the bounded caller-context entry point.
 It preserves the original source/deadline checks and refuses missing, moved or

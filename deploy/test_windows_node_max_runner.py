@@ -97,14 +97,17 @@ class NativeTLSFrontAllocation(unittest.TestCase):
         tls = (ROOT / 'mobile/desktop/node_max_tls_reference_test.go.tmpl').read_text()
         peer = (ROOT / 'mobile/desktop/node_max_peer_test.go.tmpl').read_text()
         self.assertIn('nodeMAXTLS(t, ip, middleDestination, basePort, middleAddress.String(), fault, hooks)', peer)
-        helper = stream[stream.index('func nodeMAXTLSFront('):stream.index('func nodeMAXBoth(')]
+        # Front cases retain real TCP/UDP pairs. Project their original allocator
+        # closure too; omitting nodeMAXBoth turned every Windows matrix into a
+        # compile failure before the alias controls could execute.
+        helper = stream[stream.index('func nodeMAXTLSFront('):stream.index('type nodeMAXPairCloseFailure struct')]
         cases = stream[stream.index('func nodeMAXTLSFrontCases('):stream.index('func TestRouterVPNDesktopNodeMAXPortPair(')]
         allocation = tls[tls.index('\tfront, err :='):tls.index('\tbridge, err :=')]
         # Only the native allocation call is injected. The shipping call site,
         # exact reserved graph ports, retained socket checks and cleanup execute.
         def source(selected):
             return (r'''package front
-import("errors";"net";"net/netip";"testing";"time")
+import("crypto/rand";"errors";"fmt";"io";"net";"net/netip";"runtime";"syscall";"testing";"time")
 func TestRetainedFront(t *testing.T){nodeMAXTLSFrontCases(t)}
 func shippingFront(t *testing.T, ip netip.Addr, packetPort uint16, middle struct{Port uint16}, listen func(string,*net.TCPAddr)(*net.TCPListener,error))*net.TCPListener{
 ''' + selected.replace('net.ListenTCP', 'listen') + r'''

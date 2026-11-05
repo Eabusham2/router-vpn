@@ -1310,6 +1310,24 @@ Frozen contribution manifests are SHA256
 Speed Lab capture/restore and newer graph/fixture changes. The later-clock
 response also rejects unrelated reverse authority.
 
+## Windows MAX allocator projection includes its shipping dependencies
+
+Windows complete-MAX run `41979367792`, job `127086102942` on `88be1f34`,
+failed before native execution with `front_test.go:58:15: undefined: nodeMAXBoth`.
+The fixture extracts the actual TLS-front cases, which now retain a real TCP/UDP
+pair, but its helper slice ended immediately before that allocator. The same
+runner and all three shipping template dependencies remain byte-identical at
+the preserved later source.
+
+The runner now includes the contiguous original allocator dependency closure
+and its required standard-library imports. The actual shipping allocation call,
+alias/foreign-owner/missing-listener/error checks and old-allocator behavioural
+negative control are unchanged. The exact previous source reproduces the
+compiler failure (1.500s); the corrected focused check passes (8.907s). All 61
+runner tests complete with 59 passes and the same two Windows-only skips on
+Linux (16.103s). These results repair fixture preparation; actual Windows
+MAX/WFP execution remains mandatory CI evidence.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
