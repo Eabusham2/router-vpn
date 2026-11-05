@@ -114,3 +114,36 @@ func TestNetworkInterfaceRejectsLateAndChangedRead(t *testing.T) {
 		t.Fatal("expired native interface entered live inventory", err)
 	}
 }
+
+func TestNetworkInterfaceInventoryRetainsOriginalObservation(t *testing.T) {
+	for _, mode := range []string{"exact-fields", "late-cancel", "duplicate-index"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			dump := func(caller context.Context, request int, response uint16) ([]syscall.NetlinkMessage, error) {
+				if caller != ctx || request != syscall.RTM_GETLINK || response != syscall.RTM_NEWLINK {
+					t.Fatal("inventory replaced caller or native query")
+				}
+				rows := []syscall.NetlinkMessage{{Data: interfaceLinkBody("eth0", 1500)}}
+				if mode == "late-cancel" {
+					cancel()
+				}
+				if mode == "duplicate-index" {
+					rows = append(rows, rows[0])
+				}
+				return rows, nil
+			}
+			links, err := linuxInterfacesContext(ctx, dump)
+			if mode == "exact-fields" {
+				if err != nil || len(links) != 1 || links[0].Name != "eth0" || links[0].Index != 7 || links[0].MTU != 1500 || links[0].HardwareAddr.String() != "02:03:04:05:06:07" || links[0].Flags != net.FlagUp|net.FlagRunning|net.FlagMulticast {
+					t.Fatal("inventory altered original native fields", links, err)
+				}
+			} else if err == nil || links != nil {
+				t.Fatal("late or duplicate inventory admitted", links, err)
+			}
+			if mode == "late-cancel" && !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+		})
+	}
+}

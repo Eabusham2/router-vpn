@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemtu"
 	"syscall"
 
 	"router-vpn/internal/linuxprocess"
@@ -327,13 +329,115 @@ func (p *desktopLinuxNodeParent) currentRetainedLocked(published bool) error {
 	return nil
 }
 
+func (p *desktopLinuxNodeParent) currentRetainedLockedContext(ctx context.Context, published bool) error {
+	if p == nil || p.closed || !p.complete || p.ctx == nil || p.ctx.Err() != nil || p.installationAnchor == nil || p.root == nil || p.image == nil || p.imageInfo == nil || p.processWitness == nil ||
+		p.controller == nil || os.Getuid() != 0 || os.Geteuid() != 0 || os.Getpid() != p.record.ProcessID {
+		return errors.New("Linux Node parent has no live complete native capture")
+	}
+	owner := p.controller
+	if owner.processID != p.record.ProcessID || owner.callerUID != p.record.CallerUID || owner.nativeOwner != nil ||
+		owner.input != p.input || owner.installLock != p.installLock || owner.processLock != p.processLock ||
+		owner.ownerDone != p.ownerDone || desktopLinuxNodeCredentials(owner) != p.credentials || published && owner.nodeParent != p {
+		return errors.New("Linux Node parent was replaced by another controller lifetime")
+	}
+	select {
+	case <-p.ownerDone:
+		return errors.New("Linux Node parent lost its original desktop lifetime")
+	default:
+	}
+	anchor, err := p.installationAnchor.Stat(".")
+	if err != nil {
+		return err
+	}
+	anchorID, err := desktopLinuxNodeObjectOf(anchor)
+	anchorPath, pathErr := os.Lstat(filepath.Dir(linuxOwnedControllerRoot))
+	if err != nil || pathErr != nil || !anchor.IsDir() || !ownedDesktopInfo(anchor) || anchorID != p.record.InstallationAnchor ||
+		!anchorPath.IsDir() || !ownedDesktopInfo(anchorPath) || !os.SameFile(anchor, anchorPath) {
+		return errors.Join(err, pathErr, errors.New("Linux Node parent installation ancestry was replaced"))
+	}
+	root, err := p.root.Stat(".")
+	if err != nil {
+		return err
+	}
+	rootID, err := desktopLinuxNodeObjectOf(root)
+	entry, entryErr := os.Lstat(linuxOwnedControllerRoot)
+	if err != nil || entryErr != nil || !root.IsDir() || !ownedDesktopInfo(root) || rootID != p.record.Root ||
+		!entry.IsDir() || !ownedDesktopInfo(entry) || !os.SameFile(root, entry) {
+		return errors.Join(err, entryErr, errors.New("Linux Node parent installation directory was replaced"))
+	}
+	if err := desktopLinuxNodeRetainedObject(p.image, p.record.Image, filepath.Join(linuxOwnedControllerRoot, "router-vpn-client"), true, false); err != nil {
+		return err
+	}
+	image, err := p.image.Stat()
+	if err != nil {
+		return err
+	}
+	running, runErr := os.Stat("/proc/self/exe")
+	before, beforeOK := p.imageInfo.Sys().(*syscall.Stat_t)
+	after, afterOK := image.Sys().(*syscall.Stat_t)
+	if err != nil || runErr != nil || !beforeOK || !afterOK || !os.SameFile(image, running) ||
+		image.Size() != p.imageInfo.Size() || before.Mtim != after.Mtim || before.Ctim != after.Ctim {
+		return errors.Join(err, runErr, errors.New("Linux Node parent executable changed after native capture"))
+	}
+	for _, item := range []struct {
+		file     *os.File
+		identity desktopLinuxNodeObject
+		path     string
+	}{
+		{p.installLock, p.record.InstallLock, linuxOwnedInstallLock}, {p.processLock, p.record.ProcessLock, linuxOwnedProcessLock},
+	} {
+		if err := desktopLinuxNodeRetainedObject(item.file, item.identity, item.path, true, true); err != nil {
+			return err
+		}
+	}
+	if err := desktopLinuxNodeRetainedObject(p.input, p.record.Input, "", false, true); err != nil ||
+		p.record.Input.Mode&syscall.S_IFMT != syscall.S_IFIFO || p.record.Input.UID != p.record.CallerUID || p.record.Input.Mode&0077 != 0 {
+		return errors.Join(err, errors.New("Linux Node parent lost its original user-created anonymous input"))
+	}
+	for _, item := range []struct {
+		file     *os.File
+		identity desktopLinuxNodeObject
+		path     string
+	}{
+		{p.networkNamespace, p.record.NetworkNamespace, "/proc/thread-self/ns/net"}, {p.pidNamespace, p.record.PIDNamespace, "/proc/thread-self/ns/pid"},
+	} {
+		if err := desktopLinuxNodeRetainedObject(item.file, item.identity, "", false, false); err != nil {
+			return err
+		}
+		current, err := os.Stat(item.path)
+		actual, identityErr := desktopLinuxNodeObjectOf(current)
+		if err != nil || identityErr != nil || actual != item.identity {
+			return errors.Join(err, identityErr, errors.New("Linux Node parent changed its native namespace"))
+		}
+	}
+	procPID, start, err := readDesktopLinuxNodeProcessStart()
+	boot, bootErr := readDesktopLinuxNodeBootID()
+	if err != nil || bootErr != nil || procPID != p.record.ProcProcessID || start != p.record.StartTicks || boot != p.record.BootID || p.ctx.Err() != nil {
+		return errors.Join(err, bootErr, errors.New("Linux Node parent lost its original native process start or boot"))
+	}
+	process, err := p.processWitness.Current(ctx)
+	if err != nil {
+		return err
+	}
+	if process.ProcessID != p.record.ProcessID || process.ProcProcessID != p.record.ProcProcessID ||
+		process.StartTicks != p.record.StartTicks || process.BootID != p.record.BootID ||
+		linuxprotection.NativeObject(process.Image) != p.record.Image || linuxprotection.NativeObject(process.NetworkNamespace) != p.record.NetworkNamespace ||
+		linuxprotection.NativeObject(process.PIDNamespace) != p.record.PIDNamespace {
+		return errors.Join(err, errors.New("Linux Node parent lost its original retained task directory"))
+	}
+	return ctx.Err()
+}
+
 func (p *desktopLinuxNodeParent) Current(ctx context.Context) error {
 	return p.observeCurrent(ctx, false)
 }
 
 func (p *desktopLinuxNodeParent) observeCurrent(ctx context.Context, retirement bool) error {
-	if p == nil || ctx == nil || ctx.Err() != nil || p.ctx == nil || p.ctx.Err() != nil || p.gate == nil {
+	if p == nil || ctx == nil || p.ctx == nil || p.ctx.Err() != nil || p.gate == nil {
 		return errors.New("Linux Node parent readback has no live captured caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	select {
 	case <-ctx.Done():
@@ -346,11 +450,13 @@ func (p *desktopLinuxNodeParent) observeCurrent(ctx context.Context, retirement 
 	if p.stopping && !retirement {
 		return errors.New("Linux Node parent has permanently stopped native admission")
 	}
-	if err := p.currentRetainedLocked(true); err != nil {
+	if err := p.currentRetainedLockedContext(ctx, true); err != nil {
 		// A later path restoration cannot revive a parent whose native
 		// identity was observed missing or replaced. Keep its old descriptors
 		// solely for joined teardown; a new bootstrap captures a new parent.
-		p.cancel()
+		if !common.ObservationContextExpired(ctx, err) {
+			p.cancel()
+		}
 		return err
 	}
 	return ctx.Err()
@@ -520,11 +626,22 @@ func (c *desktopLinuxNodeParentCapture) currentAppLocked(retirement bool) error 
 }
 
 func (c *desktopLinuxNodeParentCapture) Current(ctx context.Context) error {
-	if err := c.currentApp(); err != nil {
+	if err := c.currentAppContext(ctx); err != nil {
 		return err
 	}
 	if err := c.parent.Current(ctx); err != nil {
 		return err
 	}
-	return c.currentApp()
+	return c.currentAppContext(ctx)
+}
+
+func (c *desktopLinuxNodeParentCapture) currentAppContext(ctx context.Context) error {
+	if c == nil || c.app == nil {
+		return errors.New("Linux Node parent lost its captured application")
+	}
+	if err := mobilemtu.LockContext(ctx, &c.app.mu); err != nil {
+		return err
+	}
+	defer c.app.mu.Unlock()
+	return errors.Join(c.currentAppLocked(false), ctx.Err())
 }

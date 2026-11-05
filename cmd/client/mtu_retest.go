@@ -114,8 +114,13 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "MTU is held by a captured measurement or connection transition", http.StatusConflict)
 		return
 	}
-	if launch := desktopExternalMTULaunch(a); launch != nil {
-		identity, err := desktopMeasurementViewIdentity(launch)
+	launch, launchErr := desktopExternalMTULaunchContext(r.Context(), a)
+	if launchErr != nil {
+		http.Error(w, launchErr.Error(), http.StatusConflict)
+		return
+	}
+	if launch != nil {
+		identity, err := desktopMeasurementViewIdentityContext(r.Context(), launch)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return

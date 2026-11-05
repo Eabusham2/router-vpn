@@ -116,9 +116,11 @@ func (h *desktopLinuxNodeHost) validateExternalProofLocked(ctx context.Context, 
 	if h.external == nil || h.policy != nil || h.launch == nil || h.launch.external == nil ||
 		h.transaction == nil || h.transaction.external != h.external || h.started.IsZero() ||
 		proof.CheckedAt < h.started.Add(-time.Second).UnixMilli() || !proof.Healthy || !proof.DNSProven ||
-		proof.EntryProven || proof.EntryID != "" || proof.Execution != "local" ||
-		!desktopExternalPhysicalReceipt(h.launch.external, proof.Physical) {
+		proof.EntryProven || proof.EntryID != "" || proof.Execution != "local" {
 		return errors.New("Linux external proof lost its typed direct source or actual exit proof")
+	}
+	if err := desktopExternalPhysicalReceiptContext(ctx, h.launch.external, proof.Physical); err != nil {
+		return err
 	}
 	if err := h.runningPolicyLocked(ctx); err != nil {
 		return err
@@ -127,7 +129,7 @@ func (h *desktopLinuxNodeHost) validateExternalProofLocked(ctx context.Context, 
 	if err != nil || network.TargetOS != "linux" || network.MTU < 1280 {
 		return errors.Join(err, errors.New("Linux external proof has no actual native TUN receipt"))
 	}
-	if err := desktopLinuxNodeTUNCurrent(desktopNodeMTURecord{Interface: network.Name, Index: int(network.Index), MTU: network.MTU}); err != nil {
+	if err := desktopLinuxNodeTUNCurrentContext(ctx, desktopNodeMTURecord{Interface: network.Name, Index: int(network.Index), MTU: network.MTU}); err != nil {
 		return err
 	}
 	if h.activation != nil && (h.externalProof == nil || h.externalProof.result != proof.ExternalProofResult) {
@@ -140,7 +142,7 @@ func (h *desktopLinuxNodeHost) readExternalLocked(ctx context.Context) (desktopE
 	if h.parent == nil || h.parent.app == nil {
 		return desktopExternalProof{}, errors.New("Linux external proof lost its original application")
 	}
-	proof, err := h.parent.app.readDesktopExternalProofRecord(h.launch)
+	proof, err := h.parent.app.readDesktopExternalProofRecordContext(ctx, h.launch)
 	if err == nil {
 		err = h.validateExternalProofLocked(ctx, proof)
 	}
@@ -226,4 +228,14 @@ func (h *desktopLinuxNodeHost) activateExternalLocked(parent context.Context) er
 		activatedAt: now, lifetime: lifetime, cancel: cancelLifetime}
 	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
 	return nil
+}
+
+func (owner *desktopLinuxExternalConnection) ProcessDoneContext(ctx context.Context) (<-chan struct{}, error) {
+	if ctx == nil {
+		return nil, errors.New("process observation requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return owner.ProcessDone(), ctx.Err()
 }

@@ -48,6 +48,39 @@ func capturedDesktopMeasurementRuntime(launch *desktopNodeLaunch) (desktopMeasur
 	return identity, nil
 }
 
+func capturedDesktopMeasurementRuntimeContext(ctx context.Context, launch *desktopNodeLaunch) (desktopMeasurementRuntime, error) {
+	var identity desktopMeasurementRuntime
+	if ctx == nil {
+		return identity, errors.New("native measurement requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return identity, err
+	}
+	if launch == nil || launch.external != nil && launch.tor != nil {
+		return identity, errors.New("native measurement requires one captured runtime owner")
+	}
+	if owner := launch.tor; owner != nil {
+		metadata := owner.expected
+		identity = desktopMeasurementRuntime{session: metadata.SessionID, source: metadata.SourceSHA256, config: metadata.ConfigSHA256, node: metadata.NodeID, entry: metadata.EntryID,
+			network: owner.network, measuredSource: "measured-tor-system-tun-transfer", mu: &owner.mu, mtu: &owner.mtu,
+			pathMu: &owner.pathMu, pathGeneration: &owner.pathGeneration, pathFailed: &owner.pathFailed}
+	} else if owner := launch.external; owner != nil {
+		source, config, err := desktopExternalMeasurementIdentityContext(ctx, owner)
+		if err != nil {
+			return identity, err
+		}
+		identity = desktopMeasurementRuntime{session: owner.session, source: source, config: config, node: owner.expected.ExitID, entry: owner.expected.EntryID,
+			network: owner.network, measuredSource: "measured-public-system-tun-transfer", mu: &owner.mu, mtu: &owner.mtu,
+			pathMu: &owner.pathMu, pathGeneration: &owner.pathGeneration, pathFailed: &owner.pathFailed}
+	} else {
+		return identity, errors.New("native measurement has no captured external or Tor runtime")
+	}
+	if !desktopMTURequestPattern.MatchString(identity.session) || !desktopMTUPathPattern.MatchString(identity.source) || !desktopMTUPathPattern.MatchString(identity.config) || identity.node == "" {
+		return desktopMeasurementRuntime{}, errors.New("native measurement runtime identity is incomplete")
+	}
+	return identity, ctx.Err()
+}
+
 func desktopMeasurementMTUSession(launch *desktopNodeLaunch) *desktopMTUSession {
 	identity, err := capturedDesktopMeasurementRuntime(launch)
 	if err != nil {
@@ -83,6 +116,28 @@ func (a *app) desktopMeasurementCurrentProof(launch *desktopNodeLaunch) error {
 	return err
 }
 
+func (a *app) desktopMeasurementCurrentProofContext(ctx context.Context, launch *desktopNodeLaunch) error {
+	if _, err := capturedDesktopMeasurementRuntimeContext(ctx, launch); err != nil {
+		return err
+	}
+	if launch.tor != nil {
+		_, err := a.readDesktopTorProofContext(ctx, launch)
+		if err != nil {
+			if pending, pendingErr := a.desktopTorMTUTransitionPendingContext(ctx, launch); pendingErr != nil {
+				return errors.Join(err, pendingErr)
+			} else if pending {
+				return errDesktopTorMTUTransitionPending
+			}
+			// A fresh atomic proof can replace the transition's old base
+			// between these reads. It must pass the full strict validator.
+			_, err = a.readDesktopTorProofContext(ctx, launch)
+		}
+		return err
+	}
+	_, err := a.readDesktopExternalProofContext(ctx, launch)
+	return err
+}
+
 func (a *app) waitDesktopMeasurementProof(ctx context.Context, launch *desktopNodeLaunch) error {
 	if ctx == nil {
 		return errors.New("native measurement proof requires a bounded operation context")
@@ -93,9 +148,9 @@ func (a *app) waitDesktopMeasurementProof(ctx context.Context, launch *desktopNo
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := a.desktopMeasurementCurrentProof(launch)
+		err := a.desktopMeasurementCurrentProofContext(ctx, launch)
 		if !errors.Is(err, errDesktopTorMTUTransitionPending) {
-			return err
+			return errors.Join(err, ctx.Err())
 		}
 		select {
 		case <-ctx.Done():
@@ -106,7 +161,11 @@ func (a *app) waitDesktopMeasurementProof(ctx context.Context, launch *desktopNo
 }
 
 func desktopMeasurementViewIdentity(launch *desktopNodeLaunch) (mtuViewIdentity, error) {
-	identity, err := capturedDesktopMeasurementRuntime(launch)
+	return desktopMeasurementViewIdentityContext(context.Background(), launch)
+}
+
+func desktopMeasurementViewIdentityContext(ctx context.Context, launch *desktopNodeLaunch) (mtuViewIdentity, error) {
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, launch)
 	if err != nil {
 		return mtuViewIdentity{}, err
 	}

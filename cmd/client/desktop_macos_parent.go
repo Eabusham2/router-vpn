@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"os"
+	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemtu"
 	"sync/atomic"
 )
 
@@ -97,7 +99,9 @@ func (c *desktopMacOSSessionCapture) Current(ctx context.Context) error {
 	if c == nil || c.app == nil || c.controller == nil || c.parent == nil || c.session == nil || c.retired.Load() {
 		return errors.New("macOS session capture is incomplete")
 	}
-	c.app.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &c.app.mu); err != nil {
+		return err
+	}
 	defer c.app.mu.Unlock()
 	if c.retired.Load() || c.app.localController != c.controller || c.controller.nodeParent != c.parent || c.parent.controller != c.controller || c.session.parent != c.parent {
 		c.retired.Store(true)
@@ -185,7 +189,7 @@ func (p *desktopMacOSParent) Current(ctx context.Context) error {
 	}
 	defer func() { p.gate <- struct{}{} }()
 	if err := p.currentLocked(ctx, true); err != nil {
-		if ctx.Err() == nil {
+		if !common.ObservationContextExpired(ctx, err) {
 			p.cancel()
 		}
 		return err
@@ -199,7 +203,7 @@ func (p *desktopMacOSParent) Session(ctx context.Context) (*desktopMacOSSession,
 	}
 	defer func() { p.gate <- struct{}{} }()
 	if err := p.currentLocked(ctx, true); err != nil {
-		if ctx.Err() == nil {
+		if !common.ObservationContextExpired(ctx, err) {
 			p.cancel()
 		}
 		return nil, err
@@ -221,7 +225,7 @@ func (s *desktopMacOSSession) Current(ctx context.Context) error {
 		return errors.New("macOS session was replaced")
 	}
 	if err := p.currentLocked(ctx, true); err != nil {
-		if ctx.Err() == nil {
+		if !common.ObservationContextExpired(ctx, err) {
 			p.cancel()
 		}
 		return err
@@ -245,7 +249,7 @@ func (s *desktopMacOSSession) Retain(ctx context.Context, child ownedDesktopNode
 		return errors.New("macOS dependent belongs to a replaced session")
 	}
 	if err := p.currentLocked(ctx, true); err != nil {
-		if ctx.Err() == nil {
+		if !common.ObservationContextExpired(ctx, err) {
 			p.cancel()
 		}
 		return err

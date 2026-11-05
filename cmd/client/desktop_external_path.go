@@ -45,12 +45,40 @@ func decodeDesktopPathRecord(launch *desktopNodeLaunch, raw []byte) (desktopPath
 	return record, nil
 }
 
+func decodeDesktopPathRecordContext(ctx context.Context, launch *desktopNodeLaunch, raw []byte) (desktopPathRecord, error) {
+	var record desktopPathRecord
+	bad := errors.New("native fresh-path receipt differs from its captured request or graph")
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, launch)
+	if err != nil || len(raw) == 0 || len(raw) > 4096 || decodeRelayControlJSON(raw, &record) != nil {
+		return record, errors.Join(err, bad)
+	}
+	if record.Schema != 1 || record.Session != identity.session || record.SourceSHA256 != identity.source || record.ConfigSHA256 != identity.config {
+		return record, errors.Join(err, bad)
+	}
+	if record.Generation == 0 {
+		if record.Request != "" || !record.Complete || record.Verified || record.Cancelled || record.CheckedAt != 0 {
+			return record, bad
+		}
+	} else if !desktopMTURequestPattern.MatchString(record.Request) || record.Verified && (!record.Complete || record.Cancelled || record.CheckedAt <= 0) || !record.Verified && record.CheckedAt != 0 {
+		return record, errors.Join(err, bad)
+	}
+	return record, nil
+}
+
 func readDesktopPathRecord(launch *desktopNodeLaunch) (desktopPathRecord, error) {
 	raw, err := readDesktopRuntimeFile(launch, "path-status.json", 4096)
 	if err != nil {
 		return desktopPathRecord{}, err
 	}
 	return decodeDesktopPathRecord(launch, raw)
+}
+
+func readDesktopPathRecordContext(ctx context.Context, launch *desktopNodeLaunch) (desktopPathRecord, error) {
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "path-status.json", 4096)
+	if err != nil {
+		return desktopPathRecord{}, err
+	}
+	return decodeDesktopPathRecordContext(ctx, launch, raw)
 }
 
 // This cleanup-only read may follow a renamed old workspace through its pinned
@@ -124,11 +152,47 @@ func writeDesktopPathRequest(launch *desktopNodeLaunch, name string, request des
 	}
 }
 
+func writeDesktopPathRequestContext(ctx context.Context, launch *desktopNodeLaunch, name string, request desktopPathRequest) error {
+	if name != "path-request.json" && name != "path-cancel.json" {
+		return errors.New("invalid native fresh-path command")
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	err = writeDesktopRuntimeFileContext(ctx, launch, name, raw, true)
+	if err == nil {
+		return nil
+	}
+	// Native completion may consume the exact input before the writer's final
+	// identity check. Only the matching generation and nonce can acknowledge it.
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		record, readErr := readDesktopPathRecordContext(ctx, launch)
+		if readErr == nil && record.desktopPathRequest == request && (name == "path-request.json" || record.Complete && record.Cancelled) {
+			return nil
+		}
+		if desktopExternalDirectoryCurrent(launch) != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return err
+		case <-tick.C:
+		}
+	}
+}
+
 // verifyDesktopExternalCurrentPath is independent of MTU selection and Compare.
 // A fresh nonce forces one synchronous check in the captured native process;
 // cached proof.json health alone cannot authorize a measurement phase or save.
 func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *desktopNodeLaunch) (failure error) {
-	owner, err := capturedDesktopMeasurementRuntime(launch)
+	owner, err := capturedDesktopMeasurementRuntimeContext(parent, launch)
 	if err != nil || parent == nil {
 		return errors.New("fresh path verification has no captured native owner")
 	}
@@ -158,7 +222,7 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return err
 		}
-		record, err := readDesktopPathRecord(launch)
+		record, err := readDesktopPathRecordContext(ctx, launch)
 		if err == nil {
 			if !record.Complete || record.Generation != *owner.pathGeneration || *owner.pathGeneration == ^uint64(0) {
 				return errors.New("native fresh-path generation has another owner")
@@ -191,7 +255,7 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 			failure = errors.Join(failure, err)
 		}
 	}()
-	if err = writeDesktopPathRequest(launch, "path-request.json", request); err != nil {
+	if err = writeDesktopPathRequestContext(ctx, launch, "path-request.json", request); err != nil {
 		return err
 	}
 	for {
@@ -201,7 +265,7 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return err
 		}
-		record, err := readDesktopPathRecord(launch)
+		record, err := readDesktopPathRecordContext(ctx, launch)
 		if err != nil {
 			return err
 		}

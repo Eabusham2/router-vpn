@@ -141,8 +141,7 @@ authorized rollback, late publication, renewed cleanup, held manager/startup
 admission, lost finalization retry and a live worker after late admission.
 
 These results cover the accepted native MTU command and its transport. The
-earlier client snapshot/proof-dispatch chain still has contextless observation
-dependencies; a separate client closure is being implemented and tested. The
+client snapshot/proof-dispatch closure is recorded in the later section below. The
 installed persistent service still needs its actual operation worker and public
 Retest/Cancel integration. Neither requirement is closed by this native unit.
 The original Tor authenticated reply drain retains its separate five-second
@@ -264,7 +263,7 @@ native events; shipping service/controller phase coordination is still unfinishe
 
 ### Native lifecycle admission on the original caller
 
-The following native admission change bounds the original Linux lifecycle lock
+Commit [`05800c84`](https://github.com/Eabusham2/router-vpn/commit/05800c84b07ad06c238f8ea9615a6f9c560f28f3) bounds the original Linux lifecycle lock
 for Stop, Start, route update and rule reset. Start/reset retain the immutable
 constructor context; update uses its supplied caller while preserving original
 constructor identity and lifetime. Original identity and caller validity are
@@ -281,11 +280,56 @@ blocking admission failed each of four held-lock cases; removing only the final
 late-close check failed its expected publication witness. These checks bound
 admission and validity around native calls, not hard syscall interruption.
 
+## Client MTU snapshot and proof observation closure
+
+The commit containing this section captures the HTTP-derived work context before
+MTU snapshot acquisition and carries that same budget through actual runtime,
+proof, workspace, status, final writer and fresh-path observations. Lock admission
+is bounded and original ownership is checked again after each observation. A
+replacement connection with the same saved profile cannot supply the result.
+Tor compares readback before publishing the complete receipt under its original
+owner; no intermediate partial receipt becomes current.
+
+The Linux strict observation chain reaches the retained NodeControl, original
+Bootstrap and CreatedWitness task/pidfd gates. Pure read cancellation leaves the
+same owner usable; genuine native loss, including loss raced with cancellation,
+remains latched. Existing legacy Current methods and authenticated frame
+send/receive/retirement retain their previous semantics and drain allowances.
+Physical-network hashing retains its original fields and address strings while
+its Linux interface inventory observes the supplied context.
+
+Windows proof acquisition now uses the original caller through host/preparation,
+owner/application/source/protection gates and the original process handle. Missing
+strict observation capability is refused. Expiry neither closes the process nor
+fabricates its exit. Legacy connection-intent and Stop ownership remain separate
+from the observation context.
+
+Integrated verification passed all 23 strict client/dependency verdicts and all
+eight native process/control verdicts under race detection. The latter use real
+cloned children, pidfds, task descriptors and authenticated channels; only the
+NodeControl fixture's previously completed admission flag is modeled. The 13
+portable Windows proof/lock verdicts passed, and final complete Windows client
+test binaries compiled for both AMD64 and ARM64. The exact shipping dependency
+relocation of 59 production helper files compiled in the full generated Linux
+native command alongside the published FD11, MTU and partial-retirement code.
+Darwin ARM64 full-client compilation and Windows controller architecture builds
+also passed in the recorded frozen inputs. Four gate-parser checks reject omitted,
+duplicate, foreign, failed and skipped required results.
+
+Causal checks reject all seven old unbounded snapshot locks, capture before the
+work context, cancellation at the actual nested child-task/parent-task waits,
+renewed NodeControl observation and a legacy Windows proof callback. Existing
+privileged guardian/firewall integration remains mandatory in its real namespace.
+The local physical-network prerequisite for the existing captured-restore fixture
+remains unavailable; its original requirements were not relaxed. These results do
+not establish installed-service mutation, real Windows handle execution, device
+networking or a published release for this commit.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
 |---|---|---|
-| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | Earlier client snapshot/proof dispatch still needs its separate complete context dependency closure; controller-monitor and installed-service mutation integration remain distinct. |
+| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor and installed-service mutation integration remain distinct. |
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child mutation loop, joined-worker/two-observer settlement, service/controller phase protocol, public Retest/Cancel branch and durable adoption remain unfinished. Safe refusal or an unused transport does not complete this requirement. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. | Published ledger also lists protected cross-adapter transfer, active Always upgrades and same-boot service-crash continuation. This observation change does not implement those features. |

@@ -17,6 +17,12 @@ on:
       - 'deploy/testfixtures/mtu-owner/**'
       - 'client/Private-RouterVPN-State.ps1'
       - 'cmd/client/mtu_*.go'
+      - 'cmd/client/desktop_*.go'
+      - 'cmd/client/multihop_execution.go'
+      - 'internal/desktopnetwork/**'
+      - 'internal/linuxprocess/**'
+      - 'internal/linuxprotection/node_control*'
+      - 'deploy/test_desktop_mtu_client_context*.py'
       - 'cmd/client/desktop_node_mtu*.go'
       - 'mobile/desktop/mtu_node*.go.tmpl'
       - 'cmd/client/extras.go'
@@ -36,6 +42,12 @@ on:
       - 'client/test-mtu-optimizer-owner.ps1'
       - 'deploy/testfixtures/mtu-owner/**'
       - 'cmd/client/mtu_*.go'
+      - 'cmd/client/desktop_*.go'
+      - 'cmd/client/multihop_execution.go'
+      - 'internal/desktopnetwork/**'
+      - 'internal/linuxprocess/**'
+      - 'internal/linuxprotection/node_control*'
+      - 'deploy/test_desktop_mtu_client_context*.py'
       - 'cmd/client/desktop_node_mtu*.go'
       - 'mobile/desktop/mtu_node*.go.tmpl'
       - 'cmd/client/extras.go'
@@ -97,8 +109,14 @@ jobs:
           assert 'cp -a "$ROOT/modes/." "$dir/modes/"' in package
           print('Unix/macOS MTU optimizer + packaged local Retest fail-closed contract OK')
           PY
+      - name: Exact original caller MTU snapshot and proof observation
+        run: |
+          python3 deploy/test_desktop_mtu_client_context_runner.py
+          python3 deploy/test_desktop_mtu_client_context.py
       - name: Go client MTU Retest and Portable path seam compiles
         run: go test ./cmd/client -count=1
+      - name: Original native process MTU observation contexts
+        run: sudo env PATH="$PATH" GOTOOLCHAIN=local GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" python3 deploy/test_desktop_mtu_client_context.py --native-only --go "$(command -v go)"
 
   windows-contract:
     runs-on: windows-2022

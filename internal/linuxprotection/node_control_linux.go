@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"router-vpn/internal/common"
 	"time"
 
 	"router-vpn/internal/linuxprocess"
@@ -444,4 +445,42 @@ func (c *NodeControl) Retire(ctx context.Context, source *mobiletor.DesktopLinux
 	}
 	c.peerEOF = true
 	return nil
+}
+
+// CurrentContext is a read-only original-caller observation. Authentication,
+// frame send/receive and joined retirement retain their existing owners and
+// drain allowances; this method does not begin a frame or substitute a budget.
+func (c *NodeControl) CurrentContext(ctx context.Context) error {
+	if ctx == nil || c == nil || c.gate == nil {
+		return errors.New("Linux Node observation requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.gate:
+	}
+	defer func() { c.gate <- struct{}{} }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.uncertain != nil {
+		return c.uncertain
+	}
+	if !c.admitted || c.retired != nil || c.closedAck || c.peerEOF {
+		return errors.New("Linux Node control has no live admitted preparation")
+	}
+	parent, engine, err := c.bootstrap.ObservationsContext(ctx, c.commandSHA256)
+	if err != nil {
+		if common.ObservationContextExpired(ctx, err) {
+			return err
+		}
+		return c.fail(err)
+	}
+	if parent != c.parent || engine != c.engine {
+		return c.fail(errors.New("Linux Node control changed its original native participants"))
+	}
+	return ctx.Err()
 }

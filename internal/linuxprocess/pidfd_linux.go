@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"router-vpn/internal/common"
 	"strconv"
 	"strings"
 	"syscall"
@@ -241,4 +242,39 @@ func (w *CreatedWitness) Close(ctx context.Context) error {
 	}
 	w.closed = true
 	return nil
+}
+
+// CurrentContext observes the retained pidfd/task under the caller lifetime.
+// Legacy Current still owns its original admission and frame failure rules.
+func (w *CreatedWitness) CurrentContext(ctx context.Context) (Observation, error) {
+	if err := w.enter(ctx); err != nil {
+		return Observation{}, err
+	}
+	defer func() { w.gate <- struct{}{} }()
+	if !w.complete || w.revoked || w.closed {
+		return Observation{}, errors.New("Linux child native witness is incomplete or retired")
+	}
+	if err := ctx.Err(); err != nil {
+		return Observation{}, err
+	}
+	if err := w.currentDescriptor(); err != nil {
+		w.revoked = true
+		return Observation{}, err
+	}
+	actual, err := w.task.Current(ctx)
+	if err != nil {
+		if !common.ObservationContextExpired(ctx, err) {
+			w.revoked = true
+		}
+		return Observation{}, err
+	}
+	if actual != w.child {
+		w.revoked = true
+		return Observation{}, errors.Join(err, errors.New("Linux child changed its original authenticated task"))
+	}
+	if err := w.currentDescriptor(); err != nil {
+		w.revoked = true
+		return Observation{}, err
+	}
+	return actual, ctx.Err()
 }

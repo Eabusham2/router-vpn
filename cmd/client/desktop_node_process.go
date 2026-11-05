@@ -36,19 +36,20 @@ type desktopNodeProcessWaiter interface {
 // waiter is duplicated from that exact creation handle before publication, so
 // retiring the child's handle cannot turn an unobserved exit into ErrClosed.
 type desktopNodeProcessOwner struct {
-	child        desktopNodeOwnedChild
-	waiter       desktopNodeProcessWaiter
-	controller   func() error
-	pins         []io.Closer
-	started      bool
-	waitDone     chan struct{}
-	waitCode     uint32
-	waitErr      error
-	retiring     atomic.Bool
-	closeGate    chan struct{}
-	childJoined  bool
-	waiterClosed bool
-	closed       bool
+	child             desktopNodeOwnedChild
+	waiter            desktopNodeProcessWaiter
+	controller        func() error
+	controllerContext func(context.Context) error
+	pins              []io.Closer
+	started           bool
+	waitDone          chan struct{}
+	waitCode          uint32
+	waitErr           error
+	retiring          atomic.Bool
+	closeGate         chan struct{}
+	childJoined       bool
+	waiterClosed      bool
+	closed            bool
 }
 
 func newDesktopNodeProcessOwner(controller func() error) *desktopNodeProcessOwner {
@@ -87,6 +88,34 @@ func (owner *desktopNodeProcessOwner) Alive() error {
 		return errors.New("the captured native Node process is retiring")
 	}
 	return owner.controller()
+}
+
+// Strict observations require both original callbacks; legacy Alive remains
+// available to callers that have not admitted a bounded operation.
+func (owner *desktopNodeProcessOwner) AliveContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native process observation omitted original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if owner == nil || !owner.started || owner.child == nil || owner.controllerContext == nil || owner.retiring.Load() {
+		return errors.New("captured native process has no bounded live owner")
+	}
+	child, ok := owner.child.(interface{ AliveContext(context.Context) error })
+	if !ok {
+		return errors.New("captured native child omitted bounded observation")
+	}
+	if err := owner.controllerContext(ctx); err != nil {
+		return err
+	}
+	if err := child.AliveContext(ctx); err != nil {
+		return err
+	}
+	if owner.retiring.Load() {
+		return errors.New("captured native process is retiring")
+	}
+	return errors.Join(owner.controllerContext(ctx), ctx.Err())
 }
 
 func (owner *desktopNodeProcessOwner) Wait(ctx context.Context) (uint32, error) {

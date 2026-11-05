@@ -32,3 +32,19 @@ func sameInterface(first, second *net.Interface) bool {
 	return first != nil && second != nil && first.Index == second.Index && first.Name == second.Name &&
 		first.MTU == second.MTU && first.Flags == second.Flags && bytes.Equal(first.HardwareAddr, second.HardwareAddr)
 }
+
+// InterfacesContext inventories indices and native metadata under one original
+// observation. Callers must recheck each selected interface when reading addresses.
+func InterfacesContext(ctx context.Context) ([]net.Interface, error) {
+	if ctx == nil {
+		return nil, errors.New("interface inventory requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	result, err := interfacesContextNative(ctx)
+	if err != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err())
+	}
+	return result, nil
+}

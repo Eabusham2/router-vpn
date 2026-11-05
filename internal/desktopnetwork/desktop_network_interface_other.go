@@ -28,3 +28,8 @@ func interfaceContextNative(ctx context.Context, index int) (*net.Interface, []n
 	}
 	return current, addresses, nil
 }
+
+func interfacesContextNative(ctx context.Context) ([]net.Interface, error) {
+	result, err := net.Interfaces()
+	return result, errors.Join(err, ctx.Err())
+}

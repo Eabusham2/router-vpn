@@ -91,6 +91,15 @@ func (c *nodeControlCancelEntered) Err() error {
 
 func checkNodeControlEnteredCancellation(t *testing.T, ctx context.Context, control *NodeControl) {
 	t.Helper()
+	strictCaller, strictCancel := context.WithCancel(ctx)
+	defer strictCancel()
+	strictEntered := &nodeControlCancelEntered{Context: strictCaller, cancel: strictCancel, gate: control.gate}
+	if err := control.CurrentContext(strictEntered); !errors.Is(err, context.Canceled) || strictEntered.checks.Load() < 2 || control.uncertain != nil {
+		t.Fatal("strict read changed original caller or retirement authority", err, strictEntered.checks.Load(), control.uncertain)
+	}
+	if err := control.CurrentContext(ctx); err != nil {
+		t.Fatal("strict expiry retired actual admitted native participants", err)
+	}
 	caller, cancel := context.WithCancel(ctx)
 	defer cancel()
 	entered := &nodeControlCancelEntered{Context: caller, cancel: cancel, gate: control.gate}

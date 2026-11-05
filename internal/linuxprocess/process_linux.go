@@ -376,8 +376,11 @@ func (w *Witness) enter(ctx context.Context) error {
 }
 
 func (w *Witness) current(ctx context.Context) (Observation, error) {
-	if ctx.Err() != nil || !w.complete || w.revoked || w.closed {
+	if !w.complete || w.revoked || w.closed {
 		return Observation{}, errors.New("Linux process witness is incomplete or retired")
+	}
+	if err := ctx.Err(); err != nil {
+		return Observation{}, err
 	}
 	actual, err := w.read(w.observation.ProcessID)
 	if err != nil || actual != w.observation {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"router-vpn/internal/mobilemtu"
 	"time"
 )
 
@@ -28,7 +29,7 @@ func (a *app) waitDesktopMTUIdle(ctx context.Context, launch *desktopNodeLaunch)
 		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return desktopMTURecord{}, err
 		}
-		record, err := readDesktopMTURecord(launch)
+		record, err := readDesktopMTURecordContext(ctx, launch)
 		if err == nil {
 			if record.Status.Running || record.WaitingCommit {
 				return record, errors.New("another native MTU operation has not drained")
@@ -50,11 +51,15 @@ func (a *app) waitDesktopMTUIdle(ctx context.Context, launch *desktopNodeLaunch)
 // and MTU measurement hold. The original saved Auto policy remains untouched;
 // one captured value is re-proved through the restored winner, never Compare.
 func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopNodeLaunch) error {
-	identity, err := capturedDesktopMeasurementRuntime(launch)
+	identity, err := capturedDesktopMeasurementRuntimeContext(parent, launch)
 	if err != nil {
 		return err
 	}
-	owner := desktopMeasurementMTUSession(launch)
+	if err := mobilemtu.LockContext(parent, identity.mu); err != nil {
+		return err
+	}
+	owner := *identity.mtu
+	identity.mu.Unlock()
 	if owner == nil || owner.restoreMTU == 0 {
 		return nil
 	}
@@ -74,7 +79,9 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 	if err != nil {
 		return err
 	}
-	owner.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
 	owner.generation = initial.Generation + 1
 	generation, target := owner.generation, owner.restoreMTU
 	owner.mu.Unlock()
@@ -95,7 +102,7 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return err
 		}
-		record, err := readDesktopMTURecord(launch)
+		record, err := readDesktopMTURecordContext(ctx, launch)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -110,7 +117,9 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 				if err := a.waitDesktopTorMTUReadback(ctx, launch, record); err != nil {
 					return err
 				}
-				owner.mu.Lock()
+				if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+					return err
+				}
 				owner.generation--
 				owner.restoreMTU = 0
 				owner.mu.Unlock()
@@ -137,7 +146,9 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			owner.mu.Lock()
+			if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+				return err
+			}
 			owner.restoreMTU = 0
 			owner.mu.Unlock()
 			completed = true

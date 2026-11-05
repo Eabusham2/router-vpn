@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"router-vpn/internal/common"
 )
 
 type bootstrapMessage struct {
@@ -499,4 +500,61 @@ func (b *Bootstrap) Close(ctx context.Context) error {
 	}
 	b.closed = true
 	return nil
+}
+
+func (b *Bootstrap) currentObservation(ctx context.Context) error {
+	if !b.complete || b.revoked || b.closed || b.parent == nil || b.pending != nil || b.channel == nil || b.channel.stopping.Load() {
+		return errors.Join(ctx.Err(), errors.New("Linux child bootstrap is incomplete or retired"))
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := b.channel.currentIdentity(); err != nil {
+		b.revoked = true
+		return err
+	}
+	parent, err := b.parent.Current(ctx)
+	if err != nil {
+		if !common.ObservationContextExpired(ctx, err) {
+			b.revoked = true
+		}
+		return err
+	}
+	if parent != b.parentRecord {
+		b.revoked = true
+		return errors.Join(err, errors.New("Linux child bootstrap lost its original captured parent"))
+	}
+	var child Observation
+	if b.borrowParent {
+		child, err = b.child.CurrentContext(ctx)
+	} else {
+		child, err = b.self.Current(ctx)
+	}
+	if err != nil {
+		if !common.ObservationContextExpired(ctx, err) {
+			b.revoked = true
+		}
+		return err
+	}
+	if child != b.childRecord {
+		b.revoked = true
+		return errors.Join(err, errors.New("Linux child bootstrap lost its original created child"))
+	}
+	return ctx.Err()
+}
+
+// ObservationsContext checks the original capture and both original native
+// participants as one read transaction. It never sends or drains a frame.
+func (b *Bootstrap) ObservationsContext(ctx context.Context, expected string) (Observation, Observation, error) {
+	if err := b.enter(ctx); err != nil {
+		return Observation{}, Observation{}, err
+	}
+	defer func() { b.gate <- struct{}{} }()
+	if !digest(expected) || expected != b.captureSHA256 {
+		return Observation{}, Observation{}, errors.New("Linux child bootstrap belongs to another captured request")
+	}
+	if err := b.currentObservation(ctx); err != nil {
+		return Observation{}, Observation{}, err
+	}
+	return b.parentRecord, b.childRecord, ctx.Err()
 }

@@ -85,6 +85,7 @@ func startDesktopProtectedProcessWithJournal(ctx context.Context, arguments, env
 		return nil, err
 	}
 	owner := newDesktopNodeProcessOwner(guard)
+	owner.controllerContext = func(ctx context.Context) error { return currentDesktopNodeControllerContext(ctx, capture) }
 	var result desktopNodeProcess = owner
 	if journal != nil {
 		journal.desktopNodeProcessOwner = owner
@@ -179,6 +180,30 @@ func currentDesktopNodeController(capture *windowsOwnedController) error {
 		return errors.New("the direct Node engine lost its original controller")
 	}
 	return capture.Alive()
+}
+
+func currentDesktopNodeControllerContext(ctx context.Context, capture *windowsOwnedController) error {
+	if ctx == nil {
+		return errors.New("native controller observation omitted original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if capture == nil || capture != windowsOwnedCapture.Load() || capture.ctx == nil || capture.parent == nil ||
+		capture.selfImage == nil || capture.packageRoot == "" || capture.dataRoot == "" {
+		return errors.New("the direct Node engine requires its authenticated Windows controller")
+	}
+	if err := capture.AliveContext(ctx); err != nil {
+		return err
+	}
+	identity, err := windowscontroller.CurrentIdentityContext(ctx)
+	if err != nil || !identity.Primary || !identity.Elevated || !identity.Administrator || identity != capture.elevated {
+		return errors.Join(err, errors.New("the direct Node engine changed its captured controller token"))
+	}
+	if capture != windowsOwnedCapture.Load() {
+		return errors.New("the direct Node engine lost its original controller")
+	}
+	return capture.AliveContext(ctx)
 }
 
 func captureDesktopNodeRuntime(ctx context.Context, capture *windowsOwnedController, owner *desktopNodeProcessOwner) (*windowscontroller.Image, error) {

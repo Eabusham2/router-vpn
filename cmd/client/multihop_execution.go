@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"router-vpn/internal/desktopnetwork"
 	"sort"
 	"strings"
 	"sync"
@@ -798,4 +799,35 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 	w.Header().Set("Content-Type", "application/json")
 	graph, _ := getActiveMultihopGraph(a)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "execution": result.Winner.Execution, "entry_id": sel.Entry.ID, "exit_id": sel.Exit.ID, "entry_base": sel.Base, "entry_mode": graph.EntryMode, "exit_mode": result.Winner.Transport, "comparison": result, "proof": "both nodes verified through the owned candidate"})
+}
+
+func physicalNetworkIdentityContext(ctx context.Context) (string, error) {
+	interfaces, err := desktopnetwork.InterfacesContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	var values []string
+	for _, in := range interfaces {
+		if len(in.HardwareAddr) == 0 || in.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		low := strings.ToLower(in.Name)
+		if strings.Contains(low, "tun") || strings.Contains(low, "wireguard") || strings.HasPrefix(low, "wg") || strings.Contains(low, "router-vpn") {
+			continue
+		}
+		actual, addresses, e := desktopnetwork.InterfaceContext(ctx, in.Index)
+		if e != nil {
+			return "", e
+		}
+		if actual.Name != in.Name || actual.MTU != in.MTU || actual.Flags != in.Flags || actual.HardwareAddr.String() != in.HardwareAddr.String() {
+			return "", errors.New("physical interface changed during inventory")
+		}
+		values = append(values, fmt.Sprint(in.Index, ":", in.Name, ":", in.Flags, ":", in.HardwareAddr))
+		for _, v := range addresses {
+			values = append(values, in.Name+":"+v.String())
+		}
+	}
+	sort.Strings(values)
+	sum := sha256.Sum256([]byte(strings.Join(values, "\n")))
+	return hex.EncodeToString(sum[:]), ctx.Err()
 }

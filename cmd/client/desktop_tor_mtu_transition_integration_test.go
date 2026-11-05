@@ -122,6 +122,7 @@ func newDesktopTorTransitionChild(t *testing.T, fragmented ...bool) *desktopTorT
 	}
 	launch := prepared.Launch
 	launch.tor.network, launch.tor.networkIdentity = "transition-fixture-network", func() string { return "transition-fixture-network" }
+	launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) { return launch.tor.networkIdentity(), ctx.Err() }
 	control := filepath.Join(t.TempDir(), "transition-publication")
 	expected, _ := json.Marshal(launch.tor.expected)
 	command := exec.Command(os.Args[0], "-test.run=^TestDesktopTorMTUTransitionChildFixture$")

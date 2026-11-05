@@ -509,6 +509,26 @@ func (c *windowsOwnedController) Alive() error {
 	}
 	return c.ctx.Err()
 }
+func (c *windowsOwnedController) AliveContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("captured controller observation omitted caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.Captured() {
+		return windowscontroller.ErrClosed
+	}
+	select {
+	case <-c.ctx.Done():
+		return windowscontroller.ErrClosed
+	default:
+	}
+	if err := c.parent.AliveContext(ctx); err != nil {
+		return err
+	}
+	return errors.Join(c.ctx.Err(), ctx.Err())
+}
 func (c *windowsOwnedController) Close() error {
 	if c == nil {
 		return nil

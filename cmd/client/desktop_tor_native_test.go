@@ -239,6 +239,12 @@ func desktopTorRunningFixture(t *testing.T, kind string, changes ...func(*common
 		t.Fatal(err)
 	}
 	launch := &desktopNodeLaunch{profileID: profile.ID, mode: "external-tor-bridge", tor: &desktopTorRuntime{expected: inputs.Policy().Metadata(), digests: inputs.Digests(), profileToken: desktopTorSourceIdentityToken(profile), network: "fixture-network", networkIdentity: func() string { return "fixture-network" }, inputs: map[string]desktopTorInput{}}}
+	launch.tor.networkIdentityContext = func(ctx context.Context) (string, error) {
+		if launch.tor.networkIdentity == nil {
+			return physicalNetworkIdentityContext(ctx)
+		}
+		return launch.tor.networkIdentity(), ctx.Err()
+	}
 	if err := captureDesktopRuntimeDirectory(launch, directory); err != nil {
 		t.Fatal(err)
 	}

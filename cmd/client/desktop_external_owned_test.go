@@ -441,6 +441,25 @@ func (p *desktopWindowsExternalChild) Alive() error {
 		return nil
 	}
 }
+func (p *desktopWindowsExternalChild) AliveContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.underlying != nil {
+		observer, ok := p.underlying.(interface{ AliveContext(context.Context) error })
+		if !ok {
+			return errors.New("modeled original child omitted contextual observation")
+		}
+		return observer.AliveContext(ctx)
+	}
+	select {
+	case <-p.done:
+		return errors.New("modeled exact child exited")
+	default:
+		return ctx.Err()
+	}
+}
+
 func (p *desktopWindowsExternalChild) Wait(ctx context.Context) (uint32, error) {
 	if p.underlying != nil {
 		return p.underlying.Wait(ctx)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"router-vpn/internal/mobilemtu"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,43 +25,44 @@ import (
 // standalone Tor child, PT workers and TUN have drained. A process exit alone
 // cannot release private inputs or the client's protection policy.
 type desktopTorRuntime struct {
-	mu                    sync.Mutex
-	proofMu               sync.Mutex
-	dnsMu                 sync.Mutex
-	dnsGeneration         uint64
-	dnsFailed             bool
-	latencyMu             sync.Mutex
-	latencyGeneration     uint64
-	latencyFailed         bool
-	pathMu                sync.Mutex
-	pathGeneration        uint64
-	pathFailed            bool
-	comparison            *desktopTorComparisonClient
-	comparisonGeneration  uint64
-	comparisonPrevious    *mobiletor.DesktopTorCompareStatus
-	mtu                   *desktopMTUSession
-	mtuAuthority          desktopTorMTUAuthority
-	mtuReadback           *mobiletor.DesktopBridgeMTUReadback
-	mtuPriorReadback      *mobiletor.DesktopBridgeMTUReadback
-	mtuTransition         *mobiletor.DesktopBridgeMTUTransition
-	mtuRetiredTransition  uint64
-	lastProofHeartbeat    int64
-	paddingReceipt        *mobiletor.PaddingReceipt
-	paddingProof          *mobiletor.DesktopBridgePaddingProof
-	expected              mobiletor.DesktopBridgeMetadata
-	digests               mobiletor.DesktopBridgeInputDigests
-	profileToken          string
-	committedChoice       atomic.Pointer[desktopTorCommittedChoice]
-	predecessor           *desktopTorPredecessorCapture
-	network               string
-	networkIdentity       func() string
-	started               time.Time
-	adopted               *desktopTorProof
-	stopAcknowledged      bool
-	prelaunchAcknowledged bool
-	admissionObserved     bool
-	inputs                map[string]desktopTorInput
-	dataInfo              os.FileInfo
+	mu                     sync.Mutex
+	proofMu                sync.Mutex
+	dnsMu                  sync.Mutex
+	dnsGeneration          uint64
+	dnsFailed              bool
+	latencyMu              sync.Mutex
+	latencyGeneration      uint64
+	latencyFailed          bool
+	pathMu                 sync.Mutex
+	pathGeneration         uint64
+	pathFailed             bool
+	comparison             *desktopTorComparisonClient
+	comparisonGeneration   uint64
+	comparisonPrevious     *mobiletor.DesktopTorCompareStatus
+	mtu                    *desktopMTUSession
+	mtuAuthority           desktopTorMTUAuthority
+	mtuReadback            *mobiletor.DesktopBridgeMTUReadback
+	mtuPriorReadback       *mobiletor.DesktopBridgeMTUReadback
+	mtuTransition          *mobiletor.DesktopBridgeMTUTransition
+	mtuRetiredTransition   uint64
+	lastProofHeartbeat     int64
+	paddingReceipt         *mobiletor.PaddingReceipt
+	paddingProof           *mobiletor.DesktopBridgePaddingProof
+	expected               mobiletor.DesktopBridgeMetadata
+	digests                mobiletor.DesktopBridgeInputDigests
+	profileToken           string
+	committedChoice        atomic.Pointer[desktopTorCommittedChoice]
+	predecessor            *desktopTorPredecessorCapture
+	network                string
+	networkIdentityContext func(context.Context) (string, error)
+	networkIdentity        func() string
+	started                time.Time
+	adopted                *desktopTorProof
+	stopAcknowledged       bool
+	prelaunchAcknowledged  bool
+	admissionObserved      bool
+	inputs                 map[string]desktopTorInput
+	dataInfo               os.FileInfo
 }
 
 type desktopTorInput struct {
@@ -172,6 +174,59 @@ func validateDesktopTorProofAt(raw []byte, owner *desktopTorRuntime, now, paddin
 	return proof, nil
 }
 
+func validateDesktopTorProofAtContext(ctx context.Context, raw []byte, owner *desktopTorRuntime, now, paddingNow time.Time) (desktopTorProof, error) {
+	var proof desktopTorProof
+	bad := errors.New("native Tor proof is stale or differs from its captured policy, process or path")
+	if owner == nil || len(raw) == 0 || len(raw) > 64<<10 || decodeRelayControlJSON(raw, &proof) != nil {
+		return proof, bad
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return proof, err
+	}
+	defer owner.mu.Unlock()
+	expected := owner.expected
+	if proof.Schema != 1 || !proof.Healthy || proof.Policy != expected || proof.SessionID != expected.SessionID || proof.SourceSHA256 != expected.SourceSHA256 || proof.ConfigSHA256 != expected.ConfigSHA256 || proof.Proof.SessionID != expected.SessionID || !proof.Proof.IsTor || !proof.Proof.DNSProven || owner.started.IsZero() || proof.Proof.CheckedAt.Before(owner.started.Add(-time.Second)) || proof.Proof.CheckedAt.After(now.Add(time.Second)) || proof.HeartbeatAt < now.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge).UnixMilli() || proof.HeartbeatAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < proof.Proof.CheckedAt.UnixMilli() {
+		return proof, bad
+	}
+	if ip, err := publicTorExit(proof.Proof.IP); err != nil || ip != proof.Proof.IP {
+		return proof, bad
+	}
+	if !expected.ValidEntryProof(proof.EntryProof, owner.started, now) {
+		return proof, bad
+	}
+	if expected.ValidatePaddingProof(proof.Padding, proof.PaddingProof, owner.started, paddingNow) != nil ||
+		mobiletor.ValidateDesktopPaddingProgress(owner.paddingReceipt, proof.Padding, owner.paddingProof, proof.PaddingProof) != nil {
+		return proof, bad
+	}
+	if proof.InterfaceIndex <= 0 || proof.InterfaceName == "" || len(proof.InterfaceName) > 64 || proof.EffectiveMTU < 1280 || proof.EffectiveMTU > 9000 || expected.InterfaceName != "" && proof.InterfaceName != expected.InterfaceName {
+		return proof, bad
+	}
+	for _, r := range proof.InterfaceName {
+		if r <= 0x20 || r == 0x7f {
+			return proof, bad
+		}
+	}
+	if adopted := owner.adopted; adopted != nil && (proof.Proof.SessionID != adopted.Proof.SessionID || proof.Proof.IP != adopted.Proof.IP || !proof.Proof.CheckedAt.Equal(adopted.Proof.CheckedAt)) {
+		return proof, bad
+	}
+	if adopted := owner.adopted; adopted != nil && expected.EntryID != "" && (adopted.EntryProof == nil || proof.EntryProof.EntryID != adopted.EntryProof.EntryID || proof.EntryProof.EntrySHA256 != adopted.EntryProof.EntrySHA256 || !proof.EntryProof.CheckedAt.Equal(adopted.EntryProof.CheckedAt)) {
+		return proof, bad
+	}
+	if proof.NetworkReceipt != "" {
+		network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
+		if err != nil || network.TargetOS != runtime.GOOS || network.Name != proof.InterfaceName || network.Index != uint32(proof.InterfaceIndex) || network.MTU != proof.EffectiveMTU {
+			return proof, bad
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return proof, err
+	}
+	if !desktopTorProofReadbackObservedLocked(owner, proof) {
+		return proof, bad
+	}
+	return proof, nil
+}
+
 func (a *app) desktopTorCurrent(launch *desktopNodeLaunch) error {
 	if launch == nil || launch.tor == nil || launch.command == nil || launch.command.Process == nil {
 		return errors.New("Tor has no captured native process")
@@ -197,6 +252,39 @@ func (a *app) desktopTorCurrent(launch *desktopNodeLaunch) error {
 		return errors.New("Tor native process exited before its proof could be retained")
 	}
 	return desktopExternalDirectoryCurrent(launch)
+}
+
+func (a *app) desktopTorCurrentContext(ctx context.Context, launch *desktopNodeLaunch) error {
+	if launch == nil || launch.tor == nil || launch.command == nil || launch.command.Process == nil {
+		return errors.New("Tor has no captured native process")
+	}
+	if raw, found := desktopNodeOwners.Load(a); !found || raw != launch {
+		return errors.New("Tor native owner was replaced")
+	}
+	owner := launch.tor
+	network, err := owner.currentNetworkIdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if owner.network == "" || owner.network != network {
+		return errors.New("Tor proof belongs to a retired physical network")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	current, found := a.profileByIDLocked(launch.profileID)
+	valid := a.cmd == launch.command && found && owner.sourceIdentityToken() != "" && desktopTorSourceIdentityToken(current) == owner.sourceIdentityToken() && owner.entryCurrentLocked(a) == nil
+	a.mu.Unlock()
+	if !valid {
+		return errors.New("Tor native session or captured private node changed")
+	}
+	if err := owner.entryCurrentContext(ctx, a); err != nil {
+		return err
+	}
+	if desktopNodeProcessExited(launch) {
+		return errors.New("Tor native process exited before its proof could be retained")
+	}
+	return errors.Join(desktopExternalDirectoryCurrent(launch), ctx.Err())
 }
 
 func (a *app) readDesktopTorProof(launch *desktopNodeLaunch) (desktopTorProof, error) {
@@ -225,6 +313,38 @@ func (a *app) readDesktopTorProof(launch *desktopNodeLaunch) (desktopTorProof, e
 		err = noteDesktopTorStrictHeartbeat(launch.tor, proof)
 	}
 	return proof, err
+}
+
+func (a *app) readDesktopTorProofContext(ctx context.Context, launch *desktopNodeLaunch) (desktopTorProof, error) {
+	if launch == nil || launch.tor == nil {
+		return desktopTorProof{}, errors.New("Tor proof has no captured owner")
+	}
+	// Serialize file read and receipt adoption so an older concurrent reader
+	// cannot regress the retained native interface revision.
+	if err := mobilemtu.LockContext(ctx, &launch.tor.proofMu); err != nil {
+		return desktopTorProof{}, err
+	}
+	defer launch.tor.proofMu.Unlock()
+	if err := a.desktopTorCurrentContext(ctx, launch); err != nil {
+		return desktopTorProof{}, err
+	}
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "proof.json", 64<<10)
+	if err != nil {
+		return desktopTorProof{}, err
+	}
+	if err := mobilemtu.LockContext(ctx, &launch.tor.mu); err != nil {
+		return desktopTorProof{}, err
+	}
+	launch.tor.admissionObserved = true
+	launch.tor.mu.Unlock()
+	proof, err := validateDesktopTorProofAtContext(ctx, raw, launch.tor, time.Now(), time.Now())
+	if err == nil {
+		err = a.desktopTorCurrentContext(ctx, launch)
+	}
+	if err == nil {
+		err = noteDesktopTorStrictHeartbeatContext(ctx, launch.tor, proof)
+	}
+	return proof, errors.Join(err, ctx.Err())
 }
 
 func (a *app) readDesktopTorProgress(launch *desktopNodeLaunch) error {
@@ -699,4 +819,21 @@ func (a *app) monitorDesktopTorRuntime(launch *desktopNodeLaunch) {
 			return
 		}
 	}()
+}
+
+func (owner *desktopTorRuntime) currentNetworkIdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("network observation requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if owner != nil && owner.networkIdentityContext != nil {
+		value, err := owner.networkIdentityContext(ctx)
+		return value, errors.Join(err, ctx.Err())
+	}
+	if owner != nil && owner.networkIdentity != nil {
+		return "", errors.New("captured network observer has no contextual capability")
+	}
+	return physicalNetworkIdentityContext(ctx)
 }

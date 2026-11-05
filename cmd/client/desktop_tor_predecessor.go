@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"router-vpn/internal/mobilemtu"
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
@@ -165,6 +166,32 @@ func (captured *desktopTorPredecessorCapture) current(a *app) error {
 	return captured.currentLocked(a)
 }
 
+func (captured *desktopTorPredecessorCapture) currentContext(ctx context.Context, a *app) error {
+	if captured == nil {
+		return nil
+	}
+	if a == nil {
+		return errors.New("Tor predecessor has no application owner")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	err := captured.currentLocked(a)
+	a.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	assets, err := startupExternalSourceToken(a, captured.entry, captured.mode)
+	if err != nil || assets != captured.assetsSHA256 {
+		return errors.New("Tor predecessor private mode or Start Layer source changed")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	defer a.mu.Unlock()
+	return errors.Join(captured.currentLocked(a), ctx.Err())
+}
+
 func (owner *desktopTorRuntime) entryCurrentLocked(a *app) error {
 	if owner == nil {
 		return errors.New("Tor has no captured runtime owner")
@@ -195,6 +222,21 @@ func (owner *desktopTorRuntime) entryCurrent(a *app) error {
 		return err
 	}
 	return owner.predecessor.current(a)
+}
+
+func (owner *desktopTorRuntime) entryCurrentContext(ctx context.Context, a *app) error {
+	if a == nil {
+		return errors.New("Tor has no application owner")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	err := owner.entryCurrentLocked(a)
+	a.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return owner.predecessor.currentContext(ctx, a)
 }
 
 // Only the nested complete entry capture gets the larger bound. Direct

@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"router-vpn/internal/mobilemtu"
 	"strings"
 
 	"router-vpn/internal/mobilemultihop"
@@ -98,6 +100,34 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 	return &meta, nil
 }
 
+func capturedDesktopExternalPhysicalContext(ctx context.Context, owner *desktopExternalRuntime) (*mobilemultihop.DesktopExternalMetadata, error) {
+	if owner == nil {
+		return nil, errors.New("ordinary physical capture has no external owner")
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return nil, err
+	}
+	defer owner.mu.Unlock()
+	if owner.physical == nil {
+		return nil, nil
+	}
+	physical := owner.physical
+	if physical.Validate() != nil || !owner.direct && !(physical.Metadata().TargetOS == "darwin" && desktopExternalRetainedEntryOwner(owner)) || owner.predecessor != "" {
+		return nil, errors.New("ordinary physical capture lost its exact native policy")
+	}
+	meta := physical.Metadata()
+	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
+	if err != nil || meta.TargetOS != "windows" && meta.TargetOS != "linux" && meta.TargetOS != "darwin" || meta.TargetOS == "darwin" && !desktopExternalDarwinProtocol(meta.Protocol) || meta.SessionID != owner.session || owner.expected.SessionID != owner.session ||
+		meta.OriginalSourceSHA256 != owner.expected.SourceSHA256 || meta.OriginalConfigSHA256 != owner.expected.ConfigSHA256 ||
+		original.SourceSHA256() != meta.OriginalSourceSHA256 || original.Config() != physical.OriginalPolicy().Config() ||
+		original.Metadata() != physical.OriginalPolicy().Metadata() || meta.SOCKSUDPAssociationRequired && !(meta.Protocol == "socks5" && (meta.TargetOS == "linux" || meta.TargetOS == "windows" || meta.TargetOS == "darwin")) ||
+		(meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "shadowsocks" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" &&
+			meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn") {
+		return nil, errors.New("ordinary physical capture differs from its retained original graph")
+	}
+	return &meta, nil
+}
+
 func desktopExternalDarwinProtocol(protocol string) bool {
 	return protocol == "socks5" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg" || protocol == "openvpn"
 }
@@ -109,6 +139,17 @@ func desktopExternalPhysicalReceipt(owner *desktopExternalRuntime, received *mob
 
 func desktopExternalMeasurementIdentity(owner *desktopExternalRuntime) (string, string, error) {
 	metadata, err := capturedDesktopExternalPhysical(owner)
+	if err != nil {
+		return "", "", err
+	}
+	if metadata != nil {
+		return metadata.SourceSHA256, metadata.ConfigSHA256, nil
+	}
+	return owner.expected.SourceSHA256, owner.expected.ConfigSHA256, nil
+}
+
+func desktopExternalMeasurementIdentityContext(ctx context.Context, owner *desktopExternalRuntime) (string, string, error) {
+	metadata, err := capturedDesktopExternalPhysicalContext(ctx, owner)
 	if err != nil {
 		return "", "", err
 	}
@@ -136,4 +177,15 @@ func desktopExternalPhysicalEnvironment(environment []string, owner *desktopExte
 	}
 	return append(clean, "HOMEVPN_ENDPOINT=", "HOMEVPN_EXTERNAL_PHYSICAL_SOURCE_SHA256="+metadata.SourceSHA256,
 		"HOMEVPN_EXTERNAL_PHYSICAL_CONFIG_SHA256="+metadata.ConfigSHA256), nil
+}
+
+func desktopExternalPhysicalReceiptContext(ctx context.Context, owner *desktopExternalRuntime, received *mobilemultihop.DesktopExternalMetadata) error {
+	expected, err := capturedDesktopExternalPhysicalContext(ctx, owner)
+	if err != nil {
+		return err
+	}
+	if !(expected == nil && received == nil || expected != nil && received != nil && *expected == *received) {
+		return errors.New("external proof lost its captured physical receipt")
+	}
+	return ctx.Err()
 }

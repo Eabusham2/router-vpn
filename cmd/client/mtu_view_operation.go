@@ -114,7 +114,9 @@ func beginMTUViewOperation(a *app, parent context.Context, request mtuViewReques
 		return nil, nil, errors.New("invalid MTU request identifier")
 	}
 	slot := mtuViewSlotFor(a)
-	slot.mu.Lock()
+	if err := mobilemtu.LockContext(parent, &slot.mu); err != nil {
+		return nil, nil, err
+	}
 	defer slot.mu.Unlock()
 	if slot.session != identity.Session {
 		slot.session, slot.used = identity.Session, make(map[string]bool)
@@ -123,7 +125,9 @@ func beginMTUViewOperation(a *app, parent context.Context, request mtuViewReques
 		return nil, nil, errors.New("MTU request was already used or this connection reached its bounded request limit")
 	}
 	if previous := slot.current; previous != nil {
-		previous.mu.Lock()
+		if err := mobilemtu.LockContext(parent, &previous.mu); err != nil {
+			return nil, nil, err
+		}
 		running := previous.status.Running
 		previous.mu.Unlock()
 		if running {
@@ -149,7 +153,9 @@ func mtuViewOperationFrom(ctx context.Context) *mtuViewOperation {
 
 func updateMTUViewPhase(ctx context.Context, phase string, original int) {
 	if operation := mtuViewOperationFrom(ctx); operation != nil {
-		operation.mu.Lock()
+		if mobilemtu.LockContext(ctx, &operation.mu) != nil {
+			return
+		}
 		if operation.status.Running && operation.status.Phase != "canceling" {
 			operation.status.Phase = phase
 		}

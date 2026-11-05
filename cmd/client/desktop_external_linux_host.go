@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"router-vpn/internal/mobilemtu"
 	"sync/atomic"
 	"time"
 
@@ -100,8 +101,15 @@ func validateDesktopLinuxExternalSource(profile common.RouterProfile, launch *de
 func (h *desktopLinuxNodeHost) currentExternal(ctx context.Context) error {
 	if h == nil || ctx == nil || ctx.Err() != nil || h.operation == nil || h.closing || h.closed || h.parent == nil ||
 		h.policy != nil || h.external == nil || h.external.Validate() != nil || h.launch == nil || h.launch.external == nil ||
-		h.launch.external.physical != h.external || h.network == "" || physicalNetworkIdentity() != h.network {
+		h.launch.external.physical != h.external || h.network == "" {
 		return errors.New("Linux external host lost its original captured operation and policy")
+	}
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if network != h.network {
+		return errors.New("Linux external physical network changed")
 	}
 	if h.activation == nil {
 		if h.operation.Err() != nil {
@@ -125,7 +133,9 @@ func (h *desktopLinuxNodeHost) currentExternal(ctx context.Context) error {
 		return errors.New("Linux external host changed its original sealed command")
 	}
 	a := h.parent.app
-	a.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(h.launch.profileID)
 	revision := desktopOwnedNodeProfileToken(profile)

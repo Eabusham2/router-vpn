@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"router-vpn/internal/mobilemtu"
 	"runtime"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ type desktopExternalRuntime struct {
 	source, capture                        []byte
 	predecessor                            string
 	session, network, selection, execution string
+	networkIdentityContext                 func(context.Context) (string, error)
 	networkIdentity                        func() string
 	expected                               mobilemultihop.ExternalProofResult
 	profile, entry                         common.RouterProfile
@@ -411,6 +413,49 @@ func validateDesktopExternalProof(raw []byte, owner *desktopExternalRuntime, now
 	return proof, nil
 }
 
+func validateDesktopExternalProofContext(ctx context.Context, raw []byte, owner *desktopExternalRuntime, now time.Time) (desktopExternalProof, error) {
+	var proof desktopExternalProof
+	bad := errors.New("native external proof is stale or differs from the captured session, DNS or node path")
+	if owner == nil || len(raw) == 0 || len(raw) > 256<<10 || decodeRelayControlJSON(raw, &proof) != nil {
+		return proof, bad
+	}
+	if proof.NetworkReceipt != "" {
+		target := runtime.GOOS
+		if owner != nil && owner.windows != nil && owner.windows.policy != nil {
+			target = owner.windows.policy.Metadata().TargetOS
+		}
+		network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
+		if err != nil || network.TargetOS != target {
+			return proof, bad
+		}
+	}
+	if err := desktopExternalPhysicalReceiptContext(ctx, owner, proof.Physical); err != nil {
+		return proof, errors.Join(bad, err)
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return proof, err
+	}
+	defer owner.mu.Unlock()
+	expected := owner.expected
+	if proof.Schema != 1 || !proof.Healthy || !proof.DNSProven || proof.EntryProven != expected.EntryProven || proof.SessionID != expected.SessionID || proof.SourceSHA256 != expected.SourceSHA256 || proof.ConfigSHA256 != expected.ConfigSHA256 || proof.ExitID != expected.ExitID || proof.EntryID != expected.EntryID || proof.EntryNodeID != expected.EntryNodeID || proof.IP != expected.IP || proof.CheckedAt <= 0 || proof.CheckedAt < owner.started.Add(-time.Second).UnixMilli() || proof.CheckedAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < now.Add(-3*time.Second).UnixMilli() || proof.HeartbeatAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < proof.CheckedAt {
+		return proof, bad
+	}
+	if owner.selection == "auto" {
+		if proof.Execution != "local" && proof.Execution != "server" {
+			return proof, bad
+		}
+	} else if proof.Execution != owner.selection && !(owner.selection == "local" && proof.Execution == "") {
+		return proof, bad
+	}
+	if proof.Execution == "" {
+		proof.Execution = "local"
+	}
+	if owner.execution != "" && owner.execution != proof.Execution || owner.checkedAt != 0 && owner.checkedAt != proof.CheckedAt {
+		return proof, bad
+	}
+	return proof, nil
+}
+
 func (a *app) readDesktopExternalProof(launch *desktopNodeLaunch) (desktopExternalProof, error) {
 	proof, err := a.readDesktopExternalProofRecord(launch)
 	if err == nil && launch.external.retained != nil {
@@ -722,4 +767,100 @@ func (a *app) monitorDesktopExternalRuntime(launch *desktopNodeLaunch) {
 			return
 		}
 	}()
+}
+
+func (a *app) readDesktopExternalProofContext(ctx context.Context, launch *desktopNodeLaunch) (desktopExternalProof, error) {
+	proof, err := a.readDesktopExternalProofRecordContext(ctx, launch)
+	if err == nil && launch.external.retained != nil {
+		err = launch.external.retained.CurrentProof(ctx, proof)
+	}
+	if err == nil {
+		err = a.desktopExternalProofCurrentContext(ctx, launch)
+	}
+	return proof, errors.Join(err, ctx.Err())
+}
+func (a *app) desktopExternalProofCurrentContext(ctx context.Context, launch *desktopNodeLaunch) error {
+	if ctx == nil {
+		return errors.New("external proof requires its original caller")
+	}
+	if launch == nil || launch.external == nil || launch.command == nil {
+		return errors.New("external native process is no longer owned")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	owned := a.cmd == launch.command
+	a.mu.Unlock()
+	if !owned {
+		return errors.New("external native process is no longer owned")
+	}
+	owner := launch.external
+	if owner.windows != nil {
+		if err := owner.windows.currentContext(ctx, true); err != nil {
+			return err
+		}
+	} else if launch.command.Process == nil {
+		return errors.New("external native process has no actual original process")
+	}
+	var done <-chan struct{}
+	if owner.retained != nil {
+		observer, ok := owner.retained.(interface {
+			ProcessDoneContext(context.Context) (<-chan struct{}, error)
+		})
+		if !ok {
+			return errors.New("retained external process has no contextual observation")
+		}
+		var err error
+		done, err = observer.ProcessDoneContext(ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		done = desktopExternalProcessDone(launch)
+	}
+	select {
+	case <-done:
+		return errors.New("native external process exited before the captured proof could be retained")
+	default:
+	}
+	network, err := owner.currentNetworkIdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if owner.network == "" || owner.network != network {
+		return errors.New("external proof belongs to a retired physical network")
+	}
+	return ctx.Err()
+}
+func (a *app) readDesktopExternalProofRecordContext(ctx context.Context, launch *desktopNodeLaunch) (desktopExternalProof, error) {
+	if err := a.desktopExternalProofCurrentContext(ctx, launch); err != nil {
+		return desktopExternalProof{}, err
+	}
+	owner := launch.external
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "proof.json", 256<<10)
+	if err != nil {
+		return desktopExternalProof{}, err
+	}
+	proof, err := validateDesktopExternalProofContext(ctx, raw, owner, time.Now())
+	if err == nil {
+		err = a.desktopExternalProofCurrentContext(ctx, launch)
+	}
+	return proof, errors.Join(err, ctx.Err())
+}
+
+func (owner *desktopExternalRuntime) currentNetworkIdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("network observation requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if owner != nil && owner.networkIdentityContext != nil {
+		value, err := owner.networkIdentityContext(ctx)
+		return value, errors.Join(err, ctx.Err())
+	}
+	if owner != nil && owner.networkIdentity != nil {
+		return "", errors.New("captured network observer has no contextual capability")
+	}
+	return physicalNetworkIdentityContext(ctx)
 }

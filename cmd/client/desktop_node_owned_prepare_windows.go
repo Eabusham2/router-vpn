@@ -3,8 +3,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
+	"router-vpn/internal/mobilemtu"
 
 	"router-vpn/internal/windowscontroller"
 )
@@ -37,6 +39,21 @@ func captureDesktopOwnedNodePreparation(a *app) (desktopOwnedNodePreparation, er
 				return desktopNodeProtectionBackend{}, err
 			}
 			return desktopOwnedNodeProtectionBackendFor(capture)
+		},
+
+		currentContext: func(ctx context.Context) error {
+			if err := currentDesktopNodeControllerContext(ctx, capture); err != nil {
+				return err
+			}
+			if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+				return err
+			}
+			current := a.cfg.ProfilesFile
+			a.mu.Unlock()
+			if current != profiles || !windowsOwnedSamePath(current, filepath.Join(capture.dataRoot, "routers.json")) {
+				return errors.New("native Router preparation lost its original profile root")
+			}
+			return ctx.Err()
 		},
 		current: func() error {
 			if err := currentDesktopNodeController(capture); err != nil {

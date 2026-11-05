@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"router-vpn/internal/mobilemtu"
 	"runtime"
 
 	"router-vpn/internal/mobilemultihop"
@@ -94,6 +96,39 @@ func readDesktopRuntimeFile(launch *desktopNodeLaunch, name string, limit int64)
 	return nil, errDesktopRuntimeSnapshotChanged
 }
 
+func readDesktopRuntimeFileContext(ctx context.Context, launch *desktopNodeLaunch, name string, limit int64) ([]byte, error) {
+	if launch == nil {
+		return nil, errors.New("native runtime record has no captured owner")
+	}
+	if err := mobilemtu.LockContext(ctx, &launch.workspaceMu); err != nil {
+		return nil, err
+	}
+	defer launch.workspaceMu.Unlock()
+	if !desktopRuntimeFilename(name) || limit <= 0 {
+		return nil, errors.New("invalid native runtime record")
+	}
+	if err := desktopExternalDirectoryCurrent(launch); err != nil {
+		return nil, err
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		body, err := readDesktopRuntimeSnapshot(launch.directoryRoot, name, limit)
+		if errors.Is(err, errDesktopRuntimeSnapshotChanged) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err = desktopExternalDirectoryCurrent(launch); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return body, nil
+	}
+	return nil, errDesktopRuntimeSnapshotChanged
+}
+
 var errDesktopRuntimeSnapshotChanged = errors.New("native runtime record changed while opening")
 
 func readDesktopRuntimeSnapshot(root *os.Root, name string, limit int64) ([]byte, error) {
@@ -173,6 +208,59 @@ func writeDesktopRuntimeFile(launch *desktopNodeLaunch, name string, data []byte
 		return errors.New("native runtime input did not retain its captured contents")
 	}
 	return nil
+}
+
+func writeDesktopRuntimeFileContext(ctx context.Context, launch *desktopNodeLaunch, name string, data []byte, retry bool) error {
+	limit := 8 << 20
+	if launch != nil && name == "node-source.json" {
+		limit = mobilemultihop.NodeLaunchInputLimit
+	}
+	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
+		return errors.New("invalid native runtime input")
+	}
+	if err := mobilemtu.LockContext(ctx, &launch.workspaceMu); err != nil {
+		return err
+	}
+	if err := desktopExternalDirectoryCurrent(launch); err != nil {
+		launch.workspaceMu.Unlock()
+		return err
+	}
+	file, err := launch.directoryRoot.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		launch.workspaceMu.Unlock()
+		if retry && errors.Is(err, os.ErrExist) {
+			body, readErr := readDesktopRuntimeFileContext(ctx, launch, name, int64(len(data)))
+			if readErr == nil && bytes.Equal(data, body) {
+				return nil
+			}
+			return errors.Join(readErr, errors.New("native runtime request already has another owner or contents"))
+		}
+		return err
+	}
+	info, err := file.Stat()
+	if err == nil {
+		_, err = file.Write(data)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	current, statErr := launch.directoryRoot.Lstat(name)
+	if err == nil && (closeErr != nil || statErr != nil || info == nil || !os.SameFile(info, current) || current.Size() != int64(len(data))) {
+		err = errors.New("native runtime input changed during publication")
+	}
+	if err == nil {
+		err = desktopExternalDirectoryCurrent(launch)
+	}
+	launch.workspaceMu.Unlock()
+	if err != nil {
+		return err
+	}
+	body, err := readDesktopRuntimeFileContext(ctx, launch, name, int64(len(data)))
+	if err != nil || !bytes.Equal(data, body) {
+		return errors.Join(err, errors.New("native runtime input did not retain its captured contents"))
+	}
+	return ctx.Err()
 }
 
 func desktopRuntimeOwnedFile(name string) bool {

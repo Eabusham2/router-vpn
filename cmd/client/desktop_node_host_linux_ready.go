@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"router-vpn/internal/desktopnetwork"
 	"strings"
 	"time"
 
@@ -144,6 +145,18 @@ func desktopLinuxNodeTUNCurrent(live desktopNodeMTURecord) error {
 		return errors.New("Linux Router proof has no captured native interface")
 	}
 	iface, err := net.InterfaceByIndex(live.Index)
+	if err != nil || iface.Name != live.Interface || iface.Index != live.Index || iface.MTU != live.MTU ||
+		iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+		return errors.Join(err, errors.New("Linux Router proof changed its actual kernel TUN identity or MTU"))
+	}
+	return nil
+}
+
+func desktopLinuxNodeTUNCurrentContext(ctx context.Context, live desktopNodeMTURecord) error {
+	if live.Index < 1 || validateMTULiveInterface(live.Interface) != nil || live.MTU < 1280 || live.MTU > 9000 {
+		return errors.New("Linux Router proof has no captured native interface")
+	}
+	iface, _, err := desktopnetwork.InterfaceContext(ctx, live.Index)
 	if err != nil || iface.Name != live.Interface || iface.Index != live.Index || iface.MTU != live.MTU ||
 		iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 		return errors.Join(err, errors.New("Linux Router proof changed its actual kernel TUN identity or MTU"))

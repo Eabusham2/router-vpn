@@ -19,6 +19,7 @@ type desktopOwnedNodePreparation struct {
 	dataRoot           string
 	lifetime           context.Context
 	current            func() error
+	currentContext     func(context.Context) error
 	protectionBackend  func() (desktopNodeProtectionBackend, error) // Bound to the same captured native controller.
 }
 

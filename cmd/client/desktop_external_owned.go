@@ -13,6 +13,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemtu"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -35,6 +36,22 @@ func (host *desktopWindowsExternalHost) current() error {
 		return err
 	}
 	return host.capture.current()
+}
+
+func (host *desktopWindowsExternalHost) currentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native external observation requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if host == nil || host.app == nil || host.capture.lifetime == nil || host.capture.currentContext == nil || host.host.startExternal == nil || host.host.verify == nil || host.host.externalPreflight == nil || !filepath.IsAbs(host.capture.packageRoot) || !filepath.IsAbs(host.capture.dataRoot) {
+		return errors.New("native external observation lost its explicit captured Windows host")
+	}
+	if err := host.capture.lifetime.Err(); err != nil {
+		return err
+	}
+	return errors.Join(host.capture.currentContext(ctx), ctx.Err())
 }
 
 func (host *desktopWindowsExternalHost) protectionSlot() (*desktopNodeProtectionSlot, error) {
@@ -203,6 +220,26 @@ func validateDesktopWindowsExternalSource(profile common.RouterProfile, launch *
 	owner := launch.external
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	return validateDesktopWindowsExternalSourceLocked(profile, launch)
+}
+func validateDesktopWindowsExternalSourceContext(ctx context.Context, profile common.RouterProfile, launch *desktopNodeLaunch) error {
+	if ctx == nil {
+		return errors.New("native external source observation omitted caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.profileID || profile.ID != launch.policyProfileID {
+		return errors.New("native external source lost its exact saved node")
+	}
+	if err := mobilemtu.LockContext(ctx, &launch.external.mu); err != nil {
+		return err
+	}
+	defer launch.external.mu.Unlock()
+	return errors.Join(validateDesktopWindowsExternalSourceLocked(profile, launch), ctx.Err())
+}
+func validateDesktopWindowsExternalSourceLocked(profile common.RouterProfile, launch *desktopNodeLaunch) error {
+	owner := launch.external
 	selected, err := externalRuntimePolicy(profile)
 	if err == nil {
 		selected, err = externalDNSPolicyForPath(selected, common.RouterProfile{}, true)
@@ -385,6 +422,88 @@ func (owner *desktopWindowsExternalRuntime) current(processRequired bool) error 
 	return nil
 }
 
+func (owner *desktopWindowsExternalRuntime) currentContext(ctx context.Context, processRequired bool) error {
+	if ctx == nil {
+		return errors.New("native external owner observation omitted original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if owner == nil || owner.app == nil || owner.launch == nil || owner.host == nil || owner.host.app != owner.app ||
+		owner.policy == nil || owner.policy.Validate() != nil || owner.operation == nil || owner.launch.ownedNode != nil ||
+		owner.launch.external == nil || owner.launch.external.windows != owner || owner.launch.external.retained != owner ||
+		owner.launch.external.windowsHost != owner.host || owner.launch.external.physical != owner.policy {
+		return errors.New("native external owner changed its captured policy family")
+	}
+	if err := owner.host.currentContext(ctx); err != nil {
+		return err
+	}
+	l, a := owner.launch, owner.app
+	network, err := l.external.currentNetworkIdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if l.root != owner.host.capture.dataRoot || l.profileID != l.external.profile.ID || l.mode != "external-"+owner.policy.Metadata().Protocol ||
+		l.external.network == "" || l.external.network != network || l.configSHA256 != owner.policy.Metadata().ConfigSHA256 {
+		return errors.New("native external owner changed its captured runtime or network")
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	activated, published, retiring, retired, closed := owner.activated, owner.published, owner.retiring, owner.retired, owner.closed
+	process, done, slot := owner.process, owner.done, owner.slot
+	owner.mu.Unlock()
+	if retiring || retired || closed {
+		return errors.New("native external owner is retired")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	profile, exists := a.profileByIDLocked(l.profileID)
+	revision := desktopOwnedNodeProfileToken(profile)
+	sourceErr := validateDesktopWindowsExternalSourceContext(ctx, profile, l)
+	valid := exists && !a.closing && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owner.options &&
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == owner.savedOptions &&
+		(revision == owner.profileToken || activated && revision == owner.persistedToken)
+	if !activated {
+		valid = valid && a.checkCapturedConnectionOperationLocked(owner.operation) == nil && a.connectionCancelIntent != owner.operation
+	}
+	if published {
+		valid = valid && slot != nil && a.nodeProtection == slot && a.cmd == l.command && a.state.RouterID == l.profileID && a.state.RuntimeMode == l.mode
+	}
+	a.mu.Unlock()
+	if sourceErr != nil {
+		return errors.Join(sourceErr, ctx.Err())
+	}
+	if !valid {
+		return errors.Join(errors.New("native external owner belongs to a replaced request, private source or runtime"), ctx.Err())
+	}
+	if published {
+		if current, ok := desktopExternalRetainedLaunches.Load(a); !ok || current != l {
+			return errors.New("native external owner lost its exact retained registry entry")
+		}
+		if _, legacy := desktopNodeOwners.Load(a); legacy {
+			return errors.New("native external owner cannot share a legacy runtime registry")
+		}
+	}
+	if processRequired {
+		if !published || process == nil || done == nil {
+			return errors.New("native external owner has no actual retained child and exit observer")
+		}
+		select {
+		case <-done:
+			return errors.New("native external owner's exact child exited")
+		default:
+		}
+		observer, ok := process.(interface{ AliveContext(context.Context) error })
+		if !ok {
+			return errors.New("native external process omitted explicit bounded observation")
+		}
+		return errors.Join(observer.AliveContext(ctx), ctx.Err())
+	}
+	return ctx.Err()
+}
+
 func (owner *desktopWindowsExternalRuntime) ProcessDone() <-chan struct{} {
 	if owner == nil {
 		return nil
@@ -392,6 +511,20 @@ func (owner *desktopWindowsExternalRuntime) ProcessDone() <-chan struct{} {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	return owner.done
+}
+
+func (owner *desktopWindowsExternalRuntime) ProcessDoneContext(ctx context.Context) (<-chan struct{}, error) {
+	if ctx == nil || owner == nil {
+		return nil, errors.New("native external exit observation omitted caller or owner")
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return nil, err
+	}
+	defer owner.mu.Unlock()
+	if owner.done == nil {
+		return nil, errors.New("native external owner has no original exit observer")
+	}
+	return owner.done, ctx.Err()
 }
 
 func desktopWindowsExternalProcess(launch *desktopNodeLaunch) desktopNodeProcess {
@@ -405,8 +538,14 @@ func desktopWindowsExternalProcess(launch *desktopNodeLaunch) desktopNodeProcess
 }
 
 func (owner *desktopWindowsExternalRuntime) CurrentProof(ctx context.Context, proof desktopExternalProof) error {
-	if ctx == nil || ctx.Err() != nil || owner.current(true) != nil || !proof.Healthy || !proof.DNSProven ||
-		proof.EntryProven || proof.EntryID != "" || proof.Execution != "local" || !desktopExternalPhysicalReceipt(owner.launch.external, proof.Physical) {
+	if err := owner.currentContext(ctx, true); err != nil {
+		return err
+	}
+	if err := desktopExternalPhysicalReceiptContext(ctx, owner.launch.external, proof.Physical); err != nil {
+		return err
+	}
+	if !proof.Healthy || !proof.DNSProven ||
+		proof.EntryProven || proof.EntryID != "" || proof.Execution != "local" {
 		return errors.New("native external proof lost its actual process or distinct direct exit policy")
 	}
 	meta := owner.policy.Metadata()
@@ -417,20 +556,24 @@ func (owner *desktopWindowsExternalRuntime) CurrentProof(ctx context.Context, pr
 	if err != nil || network.TargetOS != "windows" || network.MTU < 1280 {
 		return errors.Join(err, errors.New("native external proof has no complete Windows TUN receipt"))
 	}
-	owner.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
 	slot, attempt, captured := owner.slot, owner.attempt, owner.proof
 	owner.mu.Unlock()
 	if slot == nil || attempt == nil || attempt.external != owner.policy || attempt.policy != nil {
 		return errors.New("native external proof lost its typed protection attempt")
 	}
-	slot.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &slot.mu); err != nil {
+		return err
+	}
 	valid := slot.active == attempt && attempt.prepared != nil && attempt.prepared.Capture.SessionID == meta.SessionID &&
 		attempt.prepared.Capture.SourceSHA256 == meta.SourceSHA256 && attempt.prepared.Policy == meta.KillSwitchPolicy
 	slot.mu.Unlock()
 	if !valid || captured != nil && *captured != proof.ExternalProofResult {
 		return errors.New("native external proof lost its original admitted protection or proved path")
 	}
-	return errors.Join(ctx.Err(), owner.current(true))
+	return errors.Join(ctx.Err(), owner.currentContext(ctx, true))
 }
 
 func (owner *desktopWindowsExternalRuntime) Activate(ctx context.Context) error {

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"router-vpn/internal/mobilemtu"
 	"time"
 
 	"router-vpn/internal/mobiletor"
@@ -24,6 +26,34 @@ func noteDesktopTorStrictHeartbeat(owner *desktopTorRuntime, proof desktopTorPro
 	defer owner.mu.Unlock()
 	if err := noteDesktopTorPaddingLocked(owner, proof, time.Now()); err != nil {
 		return err
+	}
+	if proof.HeartbeatAt > owner.lastProofHeartbeat {
+		owner.lastProofHeartbeat = proof.HeartbeatAt
+	}
+	if transition := owner.mtuTransition; transition != nil && proof.HeartbeatAt > transition.FromHeartbeatAt {
+		owner.mtuRetiredTransition = transition.TransitionID
+		owner.mtuTransition = nil
+	}
+	return nil
+}
+
+func noteDesktopTorStrictHeartbeatContext(ctx context.Context, owner *desktopTorRuntime, proof desktopTorProof) error {
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	defer owner.mu.Unlock()
+	if !desktopTorProofReadbackObservedLocked(owner, proof) {
+		return errors.New("Tor proof reader changed before complete adoption")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := noteDesktopTorPaddingLocked(owner, proof, time.Now()); err != nil {
+		return err
+	}
+	if proof.MTUReadback != nil {
+		receipt := *proof.MTUReadback
+		owner.mtuReadback = &receipt
 	}
 	if proof.HeartbeatAt > owner.lastProofHeartbeat {
 		owner.lastProofHeartbeat = proof.HeartbeatAt
@@ -108,6 +138,66 @@ func acceptDesktopTorMTUTransition(owner *desktopTorRuntime, transition mobileto
 	return true
 }
 
+func acceptDesktopTorMTUTransitionContext(ctx context.Context, owner *desktopTorRuntime, transition mobiletor.DesktopBridgeMTUTransition, baseRaw []byte, now time.Time) bool {
+	if owner == nil || transition.Schema != 1 || transition.TransitionID == 0 || !validDesktopTorMTUReadback(&transition.From) ||
+		transition.Generation != transition.From.Generation || transition.RequestID != transition.From.RequestID ||
+		transition.TargetMTU < 1280 || transition.TargetMTU > 9000 || transition.StartedAt <= 0 || transition.ExpiresAt <= transition.StartedAt ||
+		transition.ExpiresAt-transition.StartedAt > mobiletor.DesktopBridgeMTUTransitionLimit.Milliseconds() ||
+		transition.StartedAt > now.Add(time.Second).UnixMilli() || now.UnixMilli() >= transition.ExpiresAt ||
+		transition.FromHeartbeatAt < transition.StartedAt || transition.FromHeartbeatAt >= transition.ExpiresAt || transition.FromHeartbeatAt > now.Add(time.Second).UnixMilli() {
+		return false
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return false
+	}
+	expected, authority, session := owner.expected, owner.mtuAuthority, owner.mtu
+	if expected.MTUPolicy != "auto" || transition.SessionID != expected.SessionID || transition.SourceSHA256 != expected.SourceSHA256 || transition.ConfigSHA256 != expected.ConfigSHA256 ||
+		authority.generation != transition.Generation || authority.request != transition.RequestID || session == nil || owner.adopted == nil ||
+		transition.TransitionID <= owner.mtuRetiredTransition || owner.lastProofHeartbeat > transition.FromHeartbeatAt {
+		owner.mu.Unlock()
+		return false
+	}
+	if !desktopTorTransitionFollows(owner.mtuTransition, transition) {
+		owner.mu.Unlock()
+		return false
+	}
+	// Validation uses a separate owner value: historical admission must never
+	// advance the live reader or refresh the connection's heartbeat.
+	adopted := *owner.adopted
+	captured := &desktopTorRuntime{expected: expected, started: owner.started, adopted: &adopted,
+		mtu: session, mtuAuthority: authority, mtuReadback: owner.mtuReadback,
+		paddingReceipt: owner.paddingReceipt, paddingProof: owner.paddingProof}
+	owner.mu.Unlock()
+	if err := mobilemtu.LockContext(ctx, &session.mu); err != nil {
+		return false
+	}
+	active := session.generation == transition.Generation && (session.active == transition.RequestID || session.restoreMTU != 0)
+	session.mu.Unlock()
+	if !active {
+		return false
+	}
+	base, err := validateDesktopTorProofAtContext(ctx, baseRaw, captured, time.UnixMilli(transition.FromHeartbeatAt), now)
+	if err != nil || base.HeartbeatAt != transition.FromHeartbeatAt || base.MTUReadback == nil || *base.MTUReadback != transition.From {
+		return false
+	}
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return false
+	}
+	defer owner.mu.Unlock()
+	if owner.mtu != session || owner.mtuAuthority != authority || transition.TransitionID <= owner.mtuRetiredTransition || owner.lastProofHeartbeat > transition.FromHeartbeatAt {
+		return false
+	}
+	if !desktopTorTransitionFollows(owner.mtuTransition, transition) {
+		return false
+	}
+	if noteDesktopTorPaddingLocked(owner, base, now) != nil {
+		return false
+	}
+	copy := transition
+	owner.mtuTransition = &copy
+	return true
+}
+
 func (a *app) desktopTorMTUTransitionPending(launch *desktopNodeLaunch) bool {
 	if launch == nil || launch.tor == nil || a.desktopTorCurrent(launch) != nil {
 		return false
@@ -124,6 +214,30 @@ func (a *app) desktopTorMTUTransitionPending(launch *desktopNodeLaunch) bool {
 		return false
 	}
 	return a.desktopTorCurrent(launch) == nil
+}
+
+func (a *app) desktopTorMTUTransitionPendingContext(ctx context.Context, launch *desktopNodeLaunch) (bool, error) {
+	if launch == nil || launch.tor == nil {
+		return false, errors.New("Tor transition has no original owner")
+	}
+	if err := a.desktopTorCurrentContext(ctx, launch); err != nil {
+		return false, err
+	}
+	if err := mobilemtu.LockContext(ctx, &launch.tor.proofMu); err != nil {
+		return false, err
+	}
+	defer launch.tor.proofMu.Unlock()
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "mtu-transition.json", 8192)
+	var transition mobiletor.DesktopBridgeMTUTransition
+	if err != nil || decodeRelayControlJSON(raw, &transition) != nil {
+		return false, ctx.Err()
+	}
+	base, err := readDesktopRuntimeFileContext(ctx, launch, "proof.json", 64<<10)
+	if err != nil || !acceptDesktopTorMTUTransitionContext(ctx, launch.tor, transition, base, time.Now()) {
+		return false, ctx.Err()
+	}
+	err = a.desktopTorCurrentContext(ctx, launch)
+	return err == nil, err
 }
 
 func (a *app) desktopTorMonitorCurrent(launch *desktopNodeLaunch) bool {

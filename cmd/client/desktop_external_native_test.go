@@ -368,6 +368,12 @@ func desktopExternalRunCompiledFixture(t *testing.T, kind, root string, launch *
 	// the precondition of unrelated transport/cancellation negative controls.
 	fixtureNetwork := "isolated-child-network"
 	launch.external.networkIdentity = func() string { return fixtureNetwork }
+	launch.external.networkIdentityContext = func(ctx context.Context) (string, error) {
+		if launch.external.networkIdentity == nil {
+			return physicalNetworkIdentityContext(ctx)
+		}
+		return launch.external.networkIdentity(), ctx.Err()
+	}
 	launch.root, launch.external.network = root, fixtureNetwork
 	a := &app{cfg: common.ClientConfig{ScriptsDir: filepath.Join(root, "modes")}}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {

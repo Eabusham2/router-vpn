@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"os/exec"
+	"router-vpn/internal/mobilemtu"
 	"strings"
 	"sync"
 	"time"
@@ -162,14 +163,23 @@ func (h *desktopMacOSExternalHost) current(ctx context.Context, running bool) er
 	if h == nil || h.parent == nil || h.launch == nil || h.policy == nil || h.policy.Validate() != nil || h.operation == nil || h.baselineRun == nil ||
 		h.retiring || h.closed || h.launch.external == nil || h.launch.external.retained != h || h.launch.external.physical != h.policy ||
 		h.launch.root != macOSOwnedControllerRoot || h.launch.configSHA256 != h.selection.Config || !bytes.Equal(h.launch.config, []byte(h.policy.Config())) ||
-		h.launch.external.network == "" || h.launch.external.network != physicalNetworkIdentity() {
+		h.launch.external.network == "" {
 		return errors.New("macOS external host lost its original sealed operation")
+	}
+	network, err := h.launch.external.currentNetworkIdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if network != h.launch.external.network {
+		return errors.New("macOS external physical network changed")
 	}
 	if err := h.parent.Current(ctx); err != nil {
 		return err
 	}
 	a := h.parent.app
-	a.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	profile, exists := a.profileByIDLocked(h.launch.policyProfileID)
 	entry := common.RouterProfile{}
 	if !h.launch.external.direct {
@@ -333,14 +343,17 @@ func (h *desktopMacOSExternalHost) proofCurrent(ctx context.Context, proof deskt
 	expected := h.launch.external.expected
 	if !proof.Healthy || !proof.DNSProven || proof.EntryProven != expected.EntryProven || proof.EntryID != expected.EntryID || proof.EntryNodeID != expected.EntryNodeID || proof.ExitID != expected.ExitID || proof.Execution != "local" ||
 		proof.SessionID != meta.SessionID || proof.SourceSHA256 != meta.OriginalSourceSHA256 || proof.ConfigSHA256 != meta.OriginalConfigSHA256 ||
-		!desktopExternalPhysicalReceipt(h.launch.external, proof.Physical) || h.proof != nil && *h.proof != proof.ExternalProofResult {
+		h.proof != nil && *h.proof != proof.ExternalProofResult {
 		return errors.New("macOS external proof changed its original DNS or exit path")
+	}
+	if err := desktopExternalPhysicalReceiptContext(ctx, h.launch.external, proof.Physical); err != nil {
+		return err
 	}
 	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
 	if err != nil || receipt.TargetOS != "darwin" || receipt.MTU < 1280 || !strings.HasPrefix(receipt.Name, "utun") {
 		return errors.New("macOS external proof lacks its actual native TUN")
 	}
-	link, err := net.InterfaceByIndex(int(receipt.Index))
+	link, _, err := desktopnetwork.InterfaceContext(ctx, int(receipt.Index))
 	if err != nil || link.Name != receipt.Name || link.MTU != receipt.MTU || link.Flags&net.FlagUp == 0 {
 		return errors.New("macOS external TUN changed after native proof")
 	}
@@ -444,4 +457,14 @@ func (h *desktopMacOSExternalHost) Monitor(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+func (h *desktopMacOSExternalHost) ProcessDoneContext(ctx context.Context) (<-chan struct{}, error) {
+	if ctx == nil {
+		return nil, errors.New("process observation requires its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return h.ProcessDone(), ctx.Err()
 }

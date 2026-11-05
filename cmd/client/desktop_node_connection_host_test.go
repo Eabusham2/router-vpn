@@ -132,7 +132,15 @@ func newDesktopNodeConnectionFixture(t *testing.T, policy, layer string) *deskto
 			if a != f.a {
 				return desktopOwnedNodePreparation{}, errors.New("fixture controller belongs to another application")
 			}
-			return desktopOwnedNodePreparation{packageRoot: packageDir, dataRoot: data, lifetime: f.lifetime, current: func() error {
+			return desktopOwnedNodePreparation{packageRoot: packageDir, dataRoot: data, lifetime: f.lifetime, currentContext: func(ctx context.Context) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if f.controller.Load() {
+					return errors.New("captured controller was replaced")
+				}
+				return f.lifetime.Err()
+			}, current: func() error {
 				if f.controller.Load() {
 					return errors.New("captured controller was replaced")
 				}
@@ -324,6 +332,18 @@ func (child *desktopNodeConnectionChild) Alive() error {
 		return nil
 	}
 }
+func (child *desktopNodeConnectionChild) AliveContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-child.exited:
+		return errors.New("captured native child exited")
+	default:
+		return ctx.Err()
+	}
+}
+
 func (child *desktopNodeConnectionChild) Wait(ctx context.Context) (uint32, error) {
 	select {
 	case <-ctx.Done():

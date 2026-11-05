@@ -266,6 +266,13 @@ func (owner *desktopNodeWindowsJournalProcess) Alive() error {
 	return owner.desktopNodeProcessOwner.Alive()
 }
 
+func (owner *desktopNodeWindowsJournalProcess) AliveContext(ctx context.Context) error {
+	if owner == nil || owner.desktopNodeProcessOwner == nil {
+		return errors.New("native journal child was not created")
+	}
+	return owner.desktopNodeProcessOwner.AliveContext(ctx)
+}
+
 func (owner *desktopNodeWindowsJournalProcess) Wait(ctx context.Context) (uint32, error) {
 	if owner == nil || owner.desktopNodeProcessOwner == nil {
 		return 0, errors.New("native journal child has no exit owner")

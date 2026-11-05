@@ -133,6 +133,8 @@ SHARED_TESTS = (
     "TestDesktopNodePublicALLMissingGraphsKeepOriginalOwner",
     "TestDesktopNodePublicALLCancellationKeepsCapturedOperation",
     "TestSpeedLabFallbackReleaseRequiresCapturedTransaction",
+    "TestDesktopWindowsExternalCurrentProofContext",
+    "TestDesktopNodeProcessOwnerContextPreservesOriginalCallback",
     "TestDesktopWindowsExternalPublicConnectAndDisconnect",
     "TestDesktopWindowsExternalRetirementRetriesExactOwner",
     "TestDesktopWindowsExternalInvalidProofCannotConnect",
@@ -160,7 +162,7 @@ ARGUMENT_CASES = (
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
+EXPECTED = (*REQUIRED, *("TestDesktopWindowsExternalCurrentProofContext/"+case for case in ("current", "owner-lock", "app-lock", "source-lock", "slot-lock", "process-done-lock", "missing-host-observer", "missing-process-observer", "wrong-session", "wrong-slot")), *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
               for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
             *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
@@ -226,7 +228,7 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_process_windows.go",
     "cmd/client/desktop_node_process_windows_native_test.go",
     "cmd/client/desktop_external_owned.go", "cmd/client/desktop_external_owned_stop.go",
-    "cmd/client/desktop_external_owned_dns.go", "cmd/client/desktop_external_owned_test.go", "cmd/client/desktop_external_openvpn_owned_test.go",
+    "cmd/client/desktop_external_owned_dns.go", "cmd/client/desktop_external_owned_test.go", "cmd/client/desktop_external_owned_context_test.go", "cmd/client/desktop_external_openvpn_owned_test.go",
     "cmd/client/desktop_protection_selection.go", "cmd/client/desktop_external_native.go",
     "cmd/client/desktop_node_owned_prepare_windows.go", "cmd/client/desktop_native_workspace.go",
     "cmd/client/external_profile_connect.go", "cmd/client/dns_proof.go", "cmd/client/speed_lab_paths.go",
@@ -257,7 +259,7 @@ REQUIRED_SOURCES = (
     "cmd/client/bundled_native.go", "cmd/client/bundled_amnezia.go",
     "cmd/client/main.go", "cmd/client/ui.html", "cmd/client/logical_ui.js",
     "internal/windowscontroller/gui_windows.go",
-    "internal/windowscontroller/process_windows.go",
+    "internal/windowscontroller/process_windows.go", "internal/windowscontroller/context_lock.go", "internal/windowscontroller/process_context_windows.go",
     "internal/windowscontroller/launch_windows.go",
     "go.mod", "deploy/test_desktop_windows_identity.py",
     "deploy/test_windows_node_process.py", "deploy/test_windows_node_process_runner.py",

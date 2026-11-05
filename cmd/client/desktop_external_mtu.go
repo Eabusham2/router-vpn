@@ -186,6 +186,60 @@ func captureDesktopMTUSnapshot(a *app, launch *desktopNodeLaunch) (desktopMTUSna
 	}
 	return desktopMTUSnapshot{launch: launch, session: owner, profile: common.CloneRouterProfile(profile), selected: a.profiles.SelectedID, stateToken: mtuStateSnapshotToken(a.state)}, nil
 }
+
+func captureDesktopMTUSnapshotContext(ctx context.Context, a *app, launch *desktopNodeLaunch) (desktopMTUSnapshot, error) {
+	if speedLabTemporaryPersistenceSuppressed(a) {
+		return desktopMTUSnapshot{}, errors.New("temporary Speed Lab owns MTU and durable profile state")
+	}
+	if _, busy := speedLabTemporaryOwners.Load(a); busy {
+		return desktopMTUSnapshot{}, errors.New("temporary Speed Lab owns the current native path")
+	}
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, launch)
+	if err != nil {
+		return desktopMTUSnapshot{}, errors.Join(err, errors.New("active path has no native MTU owner"))
+	}
+	if err := mobilemtu.LockContext(ctx, identity.mu); err != nil {
+		return desktopMTUSnapshot{}, err
+	}
+	owner := *identity.mtu
+	identity.mu.Unlock()
+	if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
+		return desktopMTUSnapshot{}, err
+	}
+	if owner == nil {
+		return desktopMTUSnapshot{}, errors.New("native MTU has no captured saved profile identity")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return desktopMTUSnapshot{}, err
+	}
+	defer a.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return desktopMTUSnapshot{}, err
+	}
+	if err := mobilemtu.LockContext(ctx, identity.mu); err != nil {
+		return desktopMTUSnapshot{}, err
+	}
+	same := *identity.mtu == owner
+	identity.mu.Unlock()
+	currentIdentity, identityErr := capturedDesktopMeasurementRuntimeContext(ctx, launch)
+	if identityErr != nil || !same || currentIdentity != identity {
+		return desktopMTUSnapshot{}, errors.Join(identityErr, errors.New("native MTU runtime changed during snapshot"))
+	}
+	profile, ok := a.profileByIDLocked(owner.profileID)
+	if !ok || a.cmd != launch.command || !a.state.Connected || a.state.Phase != "connected" || a.state.RouterID != owner.profileID || mtuProfileSnapshotToken(profile) != owner.profileToken {
+		return desktopMTUSnapshot{}, errors.New("active native MTU path or saved profile changed")
+	}
+	if owner.entryID != "" {
+		entry, ok := a.profileByIDLocked(owner.entryID)
+		if !ok || mtuProfileSnapshotToken(entry) != owner.entryToken {
+			return desktopMTUSnapshot{}, errors.New("captured MTU entry credentials or policy changed")
+		}
+	}
+	if strings.ToLower(strings.TrimSpace(profile.MTUPolicy)) != "auto" || profile.JumboTUN {
+		return desktopMTUSnapshot{}, errors.New("choose Auto MTU without Jumbo before Retest")
+	}
+	return desktopMTUSnapshot{launch: launch, session: owner, profile: common.CloneRouterProfile(profile), selected: a.profiles.SelectedID, stateToken: mtuStateSnapshotToken(a.state)}, nil
+}
 func (s desktopMTUSnapshot) current(a *app) error {
 	if err := a.desktopMeasurementCurrentProof(s.launch); err != nil {
 		return err
@@ -203,7 +257,19 @@ func (s desktopMTUSnapshot) currentContext(ctx context.Context, a *app) error {
 		return err
 	}
 	defer a.mu.Unlock()
-	return s.currentLocked(a)
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, s.launch)
+	if err != nil {
+		return err
+	}
+	if err := mobilemtu.LockContext(ctx, identity.mu); err != nil {
+		return err
+	}
+	same := *identity.mtu == s.session
+	identity.mu.Unlock()
+	if !same {
+		return errors.New("MTU result belongs to a replaced original session")
+	}
+	return errors.Join(s.currentLocked(a), ctx.Err())
 }
 func (s desktopMTUSnapshot) currentLocked(a *app) error {
 	if speedLabTemporaryPersistenceSuppressed(a) {
@@ -250,6 +316,33 @@ func readDesktopMTURecord(launch *desktopNodeLaunch) (desktopMTURecord, error) {
 		return record, err
 	}
 	return record, nil
+}
+
+func readDesktopMTURecordContext(ctx context.Context, launch *desktopNodeLaunch) (desktopMTURecord, error) {
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "mtu-status.json", 64<<10)
+	if err != nil {
+		return desktopMTURecord{}, err
+	}
+	if _, err := applexray.Object(raw); err != nil {
+		return desktopMTURecord{}, errors.New("native MTU record is malformed")
+	}
+	var record desktopMTURecord
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&record) != nil {
+		return record, errors.New("native MTU record has unrecognized fields")
+	}
+	identity, identityErr := capturedDesktopMeasurementRuntimeContext(ctx, launch)
+	if identityErr != nil || record.Schema != 1 || record.Session != identity.session || record.SourceSHA256 != identity.source || record.ConfigSHA256 != identity.config {
+		return record, errors.New("native MTU record belongs to another session or graph")
+	}
+	if err := validateDesktopMTURecordForSource(record, identity.measuredSource); err != nil {
+		return record, err
+	}
+	if err := validateDesktopTorMTURecordContext(ctx, launch, record); err != nil {
+		return record, err
+	}
+	return record, ctx.Err()
 }
 
 func desktopMTUFinite(value float64) bool {
@@ -372,16 +465,16 @@ func desktopMTUControlFor(request desktopMTURequest) desktopMTUControl {
 }
 
 func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeLaunch, force bool) (result desktopMTURecord, failure error) {
-	snapshot, err := captureDesktopMTUSnapshot(a, launch)
-	if err != nil {
-		return result, err
-	}
 	budget := mtuRetestTimeout
-	if launch.tor != nil {
+	if launch != nil && launch.tor != nil {
 		budget = 5 * time.Minute // Shared Tor optimizer is bounded to four minutes.
 	}
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
+	snapshot, err := captureDesktopMTUSnapshotContext(ctx, a, launch)
+	if err != nil {
+		return result, err
+	}
 	identifier, err := randomHex(16)
 	if err != nil {
 		return result, err
@@ -394,7 +487,9 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 	if err != nil {
 		return result, err
 	}
-	snapshot.session.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &snapshot.session.mu); err != nil {
+		return result, err
+	}
 	if snapshot.session.active != "" {
 		snapshot.session.mu.Unlock()
 		return result, errors.New("native MTU operation is already active")
@@ -412,7 +507,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 		}
 		snapshot.session.mu.Unlock()
 	}()
-	identity, err := capturedDesktopMeasurementRuntime(launch)
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, launch)
 	if err != nil {
 		return result, err
 	}
@@ -451,7 +546,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 		if err := snapshot.currentContext(ctx, a); err != nil {
 			return result, err
 		}
-		record, err := readDesktopMTURecord(launch)
+		record, err := readDesktopMTURecordContext(ctx, launch)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return result, err
 		}
@@ -470,7 +565,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 					a.operationMu.Unlock()
 					return result, err
 				}
-				updated, err := persistDesktopMTU(a, snapshot, record)
+				updated, err := persistDesktopMTUContext(ctx, a, snapshot, record)
 				if err == nil {
 					written = &updated
 				}
@@ -532,7 +627,7 @@ func (a *app) cancelDesktopMTU(launch *desktopNodeLaunch, control desktopMTUCont
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		record, err := readDesktopMTURecord(launch)
+		record, err := readDesktopMTURecordContext(ctx, launch)
 		if err == nil && record.Generation == control.Generation && record.Status.Request == control.Request && record.Status.Complete && !record.Status.Running && !record.Status.Measured && record.Status.Source != "restored-captured-system-tun" {
 			if record.Status.EffectiveMTU > 0 && record.Status.OriginalMTU == record.Status.EffectiveMTU {
 				return a.waitDesktopTorMTUReadback(ctx, launch, record)
@@ -559,6 +654,43 @@ func persistDesktopMTU(a *app, snapshot desktopMTUSnapshot, record desktopMTURec
 		return common.RouterProfile{}, errors.New("MTU winner has no fresh transfer evidence")
 	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := snapshot.currentLocked(a); err != nil {
+		return common.RouterProfile{}, err
+	}
+	for i := range a.profiles.Profiles {
+		current := &a.profiles.Profiles[i]
+		if current.ID != snapshot.session.profileID {
+			continue
+		}
+		before := common.CloneRouterProfile(*current)
+		current.EffectiveMTU, current.EffectiveMTUSource = record.PreparedMTU, identity.measuredSource
+		current.EffectiveMTUPathKey, current.EffectiveMTUNetworkFingerprint, current.EffectiveMTUProfileFingerprint = record.PreparedPathKey, identity.network, snapshot.session.profileToken
+		current.EffectiveMTUTestedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		current.EffectiveUnderlayPMTU, current.EffectiveMTUSuccessRatio = 0, 0 // No authenticated UDP PMTU/loss claim for a public transfer.
+		for _, candidate := range record.Status.Candidates {
+			if candidate.MTU == record.PreparedMTU && candidate.Working {
+				current.EffectiveMTUMbps = math.Min(candidate.Download.Mbps, candidate.Upload.Mbps)
+				current.EffectiveMTUMedianRTTMs = candidate.MedianRTT
+			}
+		}
+		if err := a.persistProfilesLocked(); err != nil {
+			*current = before
+			return common.RouterProfile{}, err
+		}
+		return common.CloneRouterProfile(*current), nil
+	}
+	return common.RouterProfile{}, errors.New("captured MTU profile disappeared")
+}
+
+func persistDesktopMTUContext(ctx context.Context, a *app, snapshot desktopMTUSnapshot, record desktopMTURecord) (common.RouterProfile, error) {
+	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, snapshot.launch)
+	if err != nil || !record.WaitingCommit || validateDesktopMTURecordForSource(record, identity.measuredSource) != nil {
+		return common.RouterProfile{}, errors.New("MTU winner has no fresh transfer evidence")
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return common.RouterProfile{}, err
+	}
 	defer a.mu.Unlock()
 	if err := snapshot.currentLocked(a); err != nil {
 		return common.RouterProfile{}, err
@@ -759,7 +891,7 @@ func writeDesktopMTUControlContext(ctx context.Context, launch *desktopNodeLaunc
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	writeErr := writeDesktopRuntimeFile(launch, name, encoded, true)
+	writeErr := writeDesktopRuntimeFileContext(ctx, launch, name, encoded, true)
 	if writeErr == nil {
 		return ctx.Err()
 	}
@@ -774,7 +906,7 @@ func writeDesktopMTUControlContext(ctx context.Context, launch *desktopNodeLaunc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		record, err := readDesktopMTURecord(launch)
+		record, err := readDesktopMTURecordContext(ctx, launch)
 		if err == nil {
 			accepted := false
 			switch command := value.(type) {
@@ -804,4 +936,27 @@ func writeDesktopMTUControlContext(ctx context.Context, launch *desktopNodeLaunc
 		case <-ticker.C:
 		}
 	}
+}
+
+func desktopExternalMTULaunchContext(ctx context.Context, a *app) (*desktopNodeLaunch, error) {
+	value, ok := lookupDesktopNativeLaunch(a)
+	if !ok {
+		return nil, ctx.Err()
+	}
+	launch, ok := value.(*desktopNodeLaunch)
+	if !ok || launch == nil {
+		return nil, nil
+	}
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
+	owned := a.cmd == launch.command
+	a.mu.Unlock()
+	if !owned {
+		return nil, nil
+	}
+	if _, err := capturedDesktopMeasurementRuntimeContext(ctx, launch); err != nil {
+		return nil, err
+	}
+	return launch, ctx.Err()
 }

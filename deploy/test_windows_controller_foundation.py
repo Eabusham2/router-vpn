@@ -25,6 +25,7 @@ SPEC.loader.exec_module(NATIVE)
 TARGET = ROOT / "internal/windowscontroller"
 REQUIRED = (
     "TestWindowsControllerFoundationActualTokenAndABI",
+    "TestWindowsControllerFoundationProcessObservationContext",
     "TestWindowsControllerFoundationSingleLocalPipe",
     "TestWindowsControllerFoundationActualPeerAndPrivateFrames",
     "TestWindowsControllerFoundationRejectWrongProcessAndImage",
@@ -80,7 +81,7 @@ UAC_ACCEPTANCE = ("TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess",
 
 
 def sources():
-    expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
+    expected = {"context_lock.go", "context_lock_test.go", "process_context_windows.go", "process_context_windows_test.go", "api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go", "gui_windows.go", "stream_windows.go",
                 "inherited_process_windows.go", "inherited_process_windows_test.go",
                 "code_file_windows.go", "code_file_windows_test.go",

@@ -152,7 +152,7 @@ func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
 	if err := t.checkHead(ctx); err != nil {
 		return err
 	}
-	return t.control.Current(ctx)
+	return t.control.CurrentContext(ctx)
 }
 
 // Retire always joins the exact created child and settles its original journal.

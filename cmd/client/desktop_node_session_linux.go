@@ -76,8 +76,11 @@ func (s *desktopLinuxNodeSession) enter(ctx context.Context) error {
 }
 
 func (s *desktopLinuxNodeSession) currentLocked(ctx context.Context) error {
-	if s.closed || s.released || s.parent.Current(ctx) != nil {
+	if s.closed || s.released {
 		return errors.New("Linux Node session lost its original live controller")
+	}
+	if err := s.parent.Current(ctx); err != nil {
+		return err
 	}
 	p := s.parent.parent
 	select {
