@@ -31,6 +31,23 @@ def forbid(rel: str, *markers: str) -> None:
             errors.append(f"{rel}: forbidden durability regression marker {marker!r}")
 
 
+def require_order(rel: str, start: str, end: str, *markers: str) -> None:
+    """Keep ownership checks inside their actual mutation method and before write."""
+    source = text(rel)
+    first = source.find(start)
+    last = source.find(end, first + len(start)) if first >= 0 else -1
+    if first < 0 or last < 0:
+        errors.append(f"{rel}: missing captured mutation scope {start!r}")
+        return
+    scope = source[first:last]
+    previous = -1
+    for marker in markers:
+        position = scope.find(marker)
+        if position < 0 or position <= previous:
+            errors.append(f"{rel}: missing or misordered captured mutation guard {marker!r} in {start!r}")
+        previous = position
+
+
 def require_absent(rel: str) -> None:
     if (ROOT / rel).exists():
         errors.append(f"obsolete unsafe path must stay removed: {rel}")
@@ -131,13 +148,55 @@ require(
     "AndroidPrivateFileStore.write(file, raw, MAX_STORE)",
     "AndroidPrivateFileStore.remove(legacyFile, MAX_STORE)",
     "nodes.restoreSelection(originalSelection)",
-    "nodes.importBundle(originalBundle)",
+    "nodes.applyProfileBundle(update.id,update.original,updatedBundle)",
+    "nodes.restoreProfileBundle(update.id,update.original,update.updated)",
+    "nodes.restoreProfileSelection(originalSelection,attemptedSelections)",
 )
 forbid(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
     "Os.rename(",
     "FileOutputStream",
     "requirePrivateRegularFile",
+)
+# Forward publication and rollback each compare the exact captured bytes while
+# holding the shared store lock. Selection rollback owns both ID and file bytes;
+# ordinary import/selection helpers are not rollback authority.
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "synchronized Record load(String id)", "synchronized void delete(String id)",
+    "stageNode(updates", "nodes.snapshotSelection()", "applied.add(update)",
+    "attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(update.id,updatedBundle))",
+    "nodes.applyProfileBundle(update.id,update.original,updatedBundle)",
+    "}catch(Exception failure){", "nodes.restoreProfileBundle(update.id,update.original,update.updated)",
+    "nodes.restoreProfileSelection(originalSelection,attemptedSelections)",
+    "restorePreferences(originalPreferences)", "result.addSuppressed(rollback)",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java",
+    "synchronized Node applyProfileBundle(", "synchronized List<Node> list()",
+    "synchronized (STORE_LOCK)", "requireMutable(",
+    "if (!java.util.Arrays.equals(snapshotOptional(nodeFile(id)), original))",
+    "if (!id.equals(deriveId(new JSONObject(new String(updated, StandardCharsets.UTF_8)), updated)))",
+    "return importBundle(updated)",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java",
+    "synchronized void restoreProfileBundle(", "synchronized void restoreProfileSelection(",
+    "synchronized (STORE_LOCK)", "requireMutable(", "byte[] current = snapshotOptional(target)",
+    "if (java.util.Arrays.equals(current, original)) return",
+    "if (!java.util.Arrays.equals(current, published))", "validateBundle(bundle)",
+    "if (!id.equals(deriveId(bundle, original)))", "atomicWrite(target, original)",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java",
+    "synchronized void restoreProfileSelection(", "private static boolean sameSelection(",
+    "synchronized (STORE_LOCK)", "SelectionSnapshot current = snapshotSelection()",
+    "if (sameSelection(current, original)) return", "if (sameSelection(current, candidate))",
+    "if (!owned) throw", "rollbackSelection(activeBundleFile(), original.activeBundle, original.id)",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java",
+    "left.id.equals(right.id) && java.util.Arrays.equals(left.activeBundle, right.activeBundle)",
 )
 run_test("android/test_android_connection_profiles_contract.py")
 run_test("android/test_android_node_store_transaction_contract.py")
