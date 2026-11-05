@@ -22,6 +22,19 @@ SOURCE = None
 
 
 class NativeRetirementProjection(unittest.TestCase):
+    def test_pinned_constructor_address_calls_cannot_bypass_evidence(self):
+        cache = subprocess.check_output(["go", "env", "GOMODCACHE"], cwd=SOURCE, text=True).strip()
+        raw = (Path(cache)/(PREP.MODULE+"@"+PREP.VERSION)/"tun_linux.go").read_bytes()
+        projected = PREP.linux_retirement_patch(raw)
+        self.assertEqual(projected.count(b"t.routervpnLinuxAddAddress(tunLink,"), 2)
+        self.assertEqual(projected.count(b"t.routervpnLinuxLinkSetUp(tunLink)"), 1)
+        self.assertNotIn(b"netlink.AddrAdd(", projected)
+        self.assertNotIn(b"netlink.LinkSetUp(", projected)
+        self.assertNotIn(b'if err != nil && !errors.Is(err, unix.EEXIST) {\n\t\t\t\t\treturn E.Cause(err, "add address ", address)', projected)
+        for old, new in ((b"netlink.AddrAdd", b"netlink.AddrReplace"), (b"netlink.LinkSetUp", b"netlink.LinkSetDown")):
+            with self.assertRaisesRegex(ValueError, "Pinned Linux native lifecycle source changed"):
+                PREP.linux_retirement_patch(raw.replace(old,new,1))
+
     def test_actual_mtu_transaction_preparation_preserves_complete_source(self):
         with tempfile.TemporaryDirectory(prefix="native-mtu-manager-reprepare-") as directory:
             vendor = Path(directory)
@@ -65,7 +78,23 @@ class NativeRetirementProjection(unittest.TestCase):
             # checks the pinned original before applying its local replacement.
             (vendor/'go.sum').write_bytes(subprocess.check_output(['git', 'show', 'HEAD:go.sum'], cwd=SOURCE))
             PREP.prepare(vendor)
+            for name in ("sing_tun_address_retirement_linux.go.tmpl", "sing_tun_address_retirement_linux_test.go.tmpl"):
+                self.assertEqual((vendor/"routervpn-desktop-tun"/("routervpn_"+name.removesuffix(".tmpl"))).read_bytes(), (ROOT/"mobile/desktop"/name).read_bytes())
             projected = {path.relative_to(vendor): path.read_bytes() for path in vendor.rglob("*") if path.is_file()}
+            verified = PREP.verify_linux_retirement_source(vendor)
+            self.assertIn('routervpn-desktop-tun/routervpn_sing_tun_address_retirement_linux.go', verified)
+            for name in ('routervpn_sing_tun_address_retirement_linux.go', 'routervpn_sing_tun_retirement_socket_linux.go', 'routervpn_desktop_network_retirement.go'):
+                target = vendor/'routervpn-desktop-tun'/name
+                captured = target.read_bytes()
+                target.write_bytes(captured+b'\n// changed evidence boundary\n')
+                with self.assertRaises(ValueError):
+                    PREP.verify_linux_retirement_source(vendor)
+                self.assertEqual(target.read_bytes(), captured+b'\n// changed evidence boundary\n')
+                target.unlink()
+                with self.assertRaises(ValueError):
+                    PREP.verify_linux_retirement_source(vendor)
+                self.assertFalse(target.exists())
+                target.write_bytes(captured)
             inbound = vendor/'protocol/tun/inbound.go'
             original = inbound.read_bytes()
             PREP.prepare(vendor)

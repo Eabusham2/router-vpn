@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 	"syscall"
 
@@ -54,6 +55,11 @@ type routerVPNLinuxRetirement struct {
 	events                                                     []routerVPNLinuxRoutingEvent
 	failure                                                    error
 	receipt                                                    string
+	addresses                                                  map[string]routerVPNLinuxAddressRecord
+	addressObserved                                            map[string]routerVPNLinuxAddressRecord
+	addressDeleted                                             map[string]bool
+	addressSnapshot                                            func(context.Context) ([]routerVPNLinuxAddressRecord, error)
+	addressMode                                                func(context.Context) (byte, error)
 	// Explicit native-observer models are supplied only by focused tests.
 	original func(context.Context) error
 	snapshot func(context.Context, string) ([]DesktopNetworkObject, error)
@@ -109,6 +115,9 @@ func routervpnNewLinuxNative(options Options) (Tun, error) {
 	// From this point an unindexed retirement is never valid, even if the
 	// very first configuration syscall fails.
 	t.routervpnRetirement.configured = true
+	if err = t.routervpnLinuxAddressBegin(ctx); err != nil {
+		return t, err
+	}
 	err = t.configure(link)
 	return t, err
 }
@@ -356,6 +365,13 @@ func (t *NativeTun) routervpnLinuxEvents(ctx context.Context, expected *routerVP
 	s.events = append(s.events, events...)
 	matched := 0
 	for _, event := range s.events {
+		if event.address != nil {
+			if err := t.routervpnLinuxAddressEvent(event, false); err != nil {
+				s.failure = err
+				return err
+			}
+			continue
+		}
 		object := event.object
 		if expected != nil && !deleting && !event.delete && expected.matches(object) {
 			matched++
@@ -791,6 +807,21 @@ func (t *NativeTun) RouterVPNDesktopNetworkRetire(ctx context.Context) (string, 
 		if err := t.routervpnLinuxOriginal(ctx); err != nil {
 			return "", err
 		}
+		if s.addresses != nil {
+			if err := t.routervpnLinuxAddressesObserved(); err != nil {
+				return "", err
+			}
+			addresses, err := t.routervpnLinuxAddressCurrent(ctx)
+			if err != nil {
+				return "", err
+			}
+			if len(addresses) != len(s.addresses) {
+				return "", errors.New("native retirement found an unowned address")
+			}
+			for prefix, row := range addresses {
+				s.addresses[prefix] = row
+			}
+		}
 		// Refuse an unreportable original history while the actual TUN
 		// capability is still retained; closure cannot repair this boundary.
 		if _, err := t.routervpnLinuxRetirementReceipt(); err != nil {
@@ -876,6 +907,10 @@ func (t *NativeTun) routervpnLinuxRetirementReceipt() (string, error) {
 	}
 	SortDesktopNetworkObjects(objects)
 	receipt := DesktopNetworkRetirementReceipt{Schema: 1, TargetOS: "linux", Objects: objects}
+	for prefix := range s.addresses {
+		receipt.Addresses = append(receipt.Addresses, prefix)
+	}
+	sort.Strings(receipt.Addresses)
 	if s.created {
 		receipt.Created = true
 		receipt.Unindexed = t.routervpnOwnedIndex == 0 && !s.configured
@@ -961,6 +996,13 @@ func (t *NativeTun) routervpnLinuxReceiptContext(ctx context.Context) (string, e
 func (t *NativeTun) routervpnLinuxClosedEvents(events []routerVPNLinuxRoutingEvent, implicit bool) error {
 	s := &t.routervpnRetirement
 	for _, event := range events {
+		if event.address != nil {
+			if err := t.routervpnLinuxAddressEvent(event, implicit); err != nil {
+				s.failure = err
+				return err
+			}
+			continue
+		}
 		_, owned := s.history[event.object.Key()]
 		body := routervpnLinuxNativeBody(event.object)
 		if implicit && owned && event.delete && event.object.Kind == "route" && event.object.Index == uint32(t.routervpnOwnedIndex) && len(body) >= 12 && body[5] == unix.RTPROT_KERNEL {
@@ -1008,8 +1050,14 @@ func (t *NativeTun) routervpnLinuxImplicitRoute(object DesktopNetworkObject) boo
 		}
 	}
 	receipt := DesktopNetworkReceipt{Index: uint32(t.routervpnOwnedIndex)}
-	for _, prefix := range append(append([]netip.Prefix(nil), t.options.Inet4Address...), t.options.Inet6Address...) {
-		receipt.Addresses = append(receipt.Addresses, prefix.String())
+	if t.routervpnRetirement.addresses != nil {
+		for prefix := range t.routervpnRetirement.addresses {
+			receipt.Addresses = append(receipt.Addresses, prefix)
+		}
+	} else {
+		for _, prefix := range append(append([]netip.Prefix(nil), t.options.Inet4Address...), t.options.Inet6Address...) {
+			receipt.Addresses = append(receipt.Addresses, prefix.String())
+		}
 	}
 	if routervpnNetworkAddressRoute(receipt, object) {
 		return true
@@ -1017,6 +1065,18 @@ func (t *NativeTun) routervpnLinuxImplicitRoute(object DesktopNetworkObject) boo
 	// Link-local address routes are created by IPv6 addrconf on our actual
 	// newly created interface. They are never explicitly deleted by selector.
 	prefix, err := netip.ParsePrefix(object.Destination)
+	if t.routervpnRetirement.addresses != nil {
+		matched := false
+		for address := range t.routervpnRetirement.addresses {
+			actual, parse := netip.ParsePrefix(address)
+			if parse == nil && actual.Addr().IsLinkLocalUnicast() && (actual.Addr() == prefix.Addr() || actual.Masked() == prefix) {
+				matched = true
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
 	return err == nil && object.Family == 6 && prefix.Addr().IsLinkLocalUnicast() &&
 		(object.Table == 255 && body[7] == unix.RTN_LOCAL && prefix.Bits() == 128 || object.Table == 254 && body[7] == unix.RTN_UNICAST && prefix.Bits() == 64)
 }

@@ -17,10 +17,11 @@ import (
 
 // The original subscribed socket remains open from before native creation to
 // the final deletion/readback. A dump cannot replace this event continuity.
-const routervpnLinuxRoutingGroups = uint32(unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE | unix.RTMGRP_IPV6_ROUTE | 1<<(unix.RTNLGRP_IPV6_RULE-1))
+const routervpnLinuxRoutingGroups = uint32(unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR | unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV4_RULE | unix.RTMGRP_IPV6_ROUTE | 1<<(unix.RTNLGRP_IPV6_RULE-1))
 
 type routerVPNLinuxRoutingEvent struct {
 	object         DesktopNetworkObject
+	address        *routerVPNLinuxAddressRecord
 	delete         bool
 	sequence, port uint32
 }
@@ -181,6 +182,22 @@ func (w *routerVPNLinuxRoutingWatch) run() {
 			if command != nil && message.Header.Type == syscall.RTM_NEWLINK {
 				continue
 			}
+			if message.Header.Type == syscall.RTM_NEWADDR || message.Header.Type == syscall.RTM_DELADDR {
+				address, err := routervpnLinuxAddressRecord(message.Data)
+				if err != nil {
+					w.fail(err)
+					return
+				}
+				w.mu.Lock()
+				if len(w.events) >= 8192 {
+					w.mu.Unlock()
+					w.fail(errors.New("native address event bound exceeded"))
+					return
+				}
+				w.events = append(w.events, routerVPNLinuxRoutingEvent{address: &address, delete: message.Header.Type == syscall.RTM_DELADDR, sequence: message.Header.Seq, port: message.Header.Pid})
+				w.mu.Unlock()
+				continue
+			}
 			kind, deleted := "", false
 			switch message.Header.Type {
 			case syscall.RTM_NEWROUTE:
@@ -206,7 +223,7 @@ func (w *routerVPNLinuxRoutingWatch) run() {
 				w.fail(errors.New("native routing event bound exceeded"))
 				return
 			}
-			w.events = append(w.events, routerVPNLinuxRoutingEvent{object, deleted, message.Header.Seq, message.Header.Pid})
+			w.events = append(w.events, routerVPNLinuxRoutingEvent{object: object, delete: deleted, sequence: message.Header.Seq, port: message.Header.Pid})
 			w.mu.Unlock()
 		}
 	}

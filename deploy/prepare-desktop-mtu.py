@@ -107,6 +107,14 @@ def linux_retirement_patch(raw):
     replace(b'\t\terr := netlink.RouteAdd(&route)', b'\t\terr := t.routervpnLinuxAddRoute(route)')
     replace(b'\tfor i, rule := range t.rules() {\n\t\terr := netlink.RuleAdd(rule)', b'\trules := t.rules()\n\tfor i, rule := range rules {\n\t\terr := t.routervpnLinuxAddRule(rule)')
     replace(b'len(t.rules())', b'len(rules)')
+    for version in (b'4', b'6'):
+        replace(b'err = netlink.AddrAdd(tunLink, addr'+version+b')', b'err = t.routervpnLinuxAddAddress(tunLink, addr'+version+b')')
+    address_error = b'if err != nil && !errors.Is(err, unix.EEXIST) {\n\t\t\t\t\treturn E.Cause(err, "add address ", address)'
+    if raw.count(address_error) != 2:
+        raise ValueError('Pinned Linux address success/refusal boundaries changed')
+    raw = raw.replace(address_error, address_error.replace(b' && !errors.Is(err, unix.EEXIST)', b''))
+    replace(b'err = netlink.LinkSetUp(tunLink)', b'err = t.routervpnLinuxLinkSetUp(tunLink)')
+
     replace(b'\t\t_ = t.unsetRoute0(tunLink)\n', b'')
     replace(b'\terr = t.unsetRules()\n\tif err != nil {\n\t\treturn E.Cause(err, "cleanup rules")\n\t}\n', b'')
     replace(b'\t\t_ = t.unsetRules()\n', b'')
@@ -149,6 +157,18 @@ def verify_linux_retirement_source(vendor, go='go'):
     target = native / 'tun_linux.go'
     if native.is_symlink() or target.is_symlink() or not target.is_file() or target.read_bytes() != expected:
         raise ValueError('Linux retirement differs from the complete prepared native lifecycle')
+    # The address history is meaningful only with the exact constructor,
+    # notification parser and shared receipt codec that produced it.
+    for name in ('sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl',
+                 'sing_tun_address_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux_test.go.tmpl'):
+        original = ROOT/'mobile/desktop'/name
+        projected = native/('routervpn_'+name.removesuffix('.tmpl'))
+        if original.is_symlink() or projected.is_symlink() or not projected.is_file() or projected.read_bytes() != original.read_bytes():
+            raise ValueError('Linux partial-address retirement lost its exact prepared closure: '+name)
+    original = ROOT/'internal/desktopnetwork/desktop_network_retirement.go'
+    projected = native/'routervpn_desktop_network_retirement.go'
+    if original.is_symlink() or projected.is_symlink() or not projected.is_file() or projected.read_bytes() != original.read_bytes().replace(b'package desktopnetwork\n', b'package tun\n', 1):
+        raise ValueError('Linux partial-address retirement lost its shared receipt codec')
     records = dbus_preparer().verify(vendor, go=go)
     for path in sorted(native.rglob('*')):
         if path.is_symlink():
@@ -340,7 +360,7 @@ def prepare(vendor):
     prepared = inbound_retirement_patch(raw)
     if prepared != raw:
         inbound.write_bytes(prepared)
-    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux_test.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         path = ROOT/'mobile/desktop'/name
         if path.is_symlink():
             raise ValueError('Linked native network receipt template')

@@ -111,8 +111,11 @@ NATIVE_DBUS_CASES = ("invalid-index", "advertised-count", "zero-count", "unrefer
 NATIVE_DNS_CASES = ("ipv4-host-without-dns", "ipv4-host-with-explicit-dns",
                     "ipv6-host-without-dns", "ipv6-fallback")
 
+NATIVE_ADDRESS_RETIREMENT_TESTS = ("TestRouterVPNNativeLinuxPartialAddressRetirement", "TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects")
+NATIVE_ADDRESS_RETIREMENT_VERDICTS = [NATIVE_ADDRESS_RETIREMENT_TESTS[0], *[NATIVE_ADDRESS_RETIREMENT_TESTS[0]+"/"+name for name in ("partial-add-refusal", "cancel-after-add", "link-up-addrconf", "dad-completion")], NATIVE_ADDRESS_RETIREMENT_TESTS[1], *[NATIVE_ADDRESS_RETIREMENT_TESTS[1]+"/"+name for name in ("global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up")]]
+
 NATIVE_RETIREMENT_CASES = (
-    "complete-original-retirement", "fresh-stop-after-startup-cancel", "definite-add-refusal",
+    "complete-original-retirement", "partial-address-before-ready", "foreign-address", "address-aba", "fresh-stop-after-startup-cancel", "definite-add-refusal",
     "persistent-disjoint-route", "same-selector-aba", "foreign-wildcard-match", "replaced-file-object")
 
 XRAY_MODES = ("reality-vision", "reality-pq-vision", "reality-xhttp")
@@ -892,6 +895,8 @@ def execute_baseline_suite(baselines, suite):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
         raise ValueError("Node " + name + " omitted a required native boundary")
+    if name == "native-address-retirement":
+        require_native_verdicts(output, NATIVE_ADDRESS_RETIREMENT_VERDICTS, "native partial address retirement")
     if name == "native-routing-receipt":
         for case in ("", *NATIVE_DNS_CASES):
             full = "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary" + ("/" + case if case else "")
@@ -1086,6 +1091,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                         "TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics", "TestRouterVPNNativeLinuxRoutingBoundedInventory",
                         "TestRouterVPNNativeLinuxRoutingInventoryFraming", "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary",
 "TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors","TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes","TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire","TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext","TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones","TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard","TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange","TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt","TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal","TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst","TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed","TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability","TestRouterVPNNativeLinuxRoutingRetirementSocket","TestRouterVPNNativeLinuxRoutingRetirementNamespace", "TestRouterVPNNativeLinuxRoutingReceiptKeepsOriginalLifetimeAndCallerBudget", "TestRouterVPNNativeLinuxRoutingReceiptHeldOperation", "TestRouterVPNNativeLinuxRoutingObserverHeldOperation", "TestRouterVPNNativeLinuxRoutingInterfaceCancelledCaller")))
+        suites.append(("native-address-retirement", "github.com/sagernet/sing-tun", "^("+"|".join(NATIVE_ADDRESS_RETIREMENT_TESTS)+")$", NATIVE_ADDRESS_RETIREMENT_TESTS))
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
                        tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in

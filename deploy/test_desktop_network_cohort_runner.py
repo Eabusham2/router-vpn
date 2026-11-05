@@ -24,6 +24,20 @@ def verdict():
 
 
 class RoutingRetirementVerdicts(unittest.TestCase):
+    def test_exact_retained_transition_receipts_and_original_capabilities(self):
+        names = [name for parent, leaves in RUNNER.RETAINED_TRANSITION_CASES.items()
+                 for name in (parent, *(parent + "/" + leaf for leaf in leaves))]
+        self.assertEqual(len(names), 27)
+        self.assertEqual(len(set(names)), 27)
+        output = "\n".join("--- PASS: " + name + " (0.01s)" for name in names)
+        RUNNER.check_retained_transition_verdict(output)
+        for line in output.splitlines():
+            for mutation in (output.replace(line, "", 1), output + "\n" + line,
+                             output.replace(line, line.replace("PASS", "SKIP"), 1),
+                             output.replace(line, line.replace("PASS", "FAIL"), 1)):
+                with self.assertRaises(ValueError):
+                    RUNNER.check_retained_transition_verdict(mutation)
+
     def test_exact_observation_caller_and_failure_cases(self):
         for platform in ("linux", "darwin", "win32"):
             names = []

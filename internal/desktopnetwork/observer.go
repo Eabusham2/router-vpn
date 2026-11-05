@@ -78,6 +78,8 @@ type Tracker struct {
 	current                                   *DesktopNetworkReceipt
 	old                                       *DesktopNetworkReceipt
 	recorded                                  []DesktopNetworkReceipt
+	retired                                   []DesktopNetworkRetirementReceipt
+	retained                                  *Transition
 	events                                    []Event
 }
 
@@ -367,7 +369,7 @@ func (t *Tracker) Begin(ctx context.Context, original *DesktopNetworkReceipt) (r
 	if ctx.Err() != nil || t.closed || t.closing || t.transition || t.failureError() != nil || receiptKey(original) != receiptKey(t.current) {
 		return t.failLocked(errors.New("network transition does not own its original native receipt"))
 	}
-	t.old, t.recorded, t.events = cloneReceipt(original), nil, nil
+	t.old, t.recorded, t.retired, t.events = cloneReceipt(original), nil, nil, nil
 	t.transition = true
 	return nil
 }
@@ -379,7 +381,7 @@ func (t *Tracker) Record(receipt DesktopNetworkReceipt) (result error) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.closing || !t.transition || t.failureError() != nil || t.ctx.Err() != nil {
+	if t.closed || t.closing || !t.transition || t.retained != nil || t.failureError() != nil || t.ctx.Err() != nil {
 		return errors.New("transient network receipt has no current transition owner")
 	}
 	if len(t.recorded) >= 64 {
@@ -411,25 +413,36 @@ func eventOwnedBy(event Event, receipt *DesktopNetworkReceipt) bool {
 	if receipt == nil {
 		return false
 	}
+	return eventOwnedByFields(event, receipt.Index, receipt.LUID, receipt.Name, receipt.Addresses, receipt.Objects)
+}
+
+func eventOwnedByRetirement(event Event, receipt *DesktopNetworkRetirementReceipt) bool {
+	if receipt == nil || !receipt.Created || receipt.Unindexed || receipt.Index == 0 {
+		return false
+	}
+	return eventOwnedByFields(event, receipt.Index, 0, receipt.Name, receipt.Addresses, receipt.Objects)
+}
+
+func eventOwnedByFields(event Event, index uint32, luid uint64, name string, addresses []string, objects []DesktopNetworkObject) bool {
 	switch event.Kind {
 	case "link":
-		return event.Index == receipt.Index && (event.LUID == 0 || event.LUID == receipt.LUID) && (event.Name == "" || event.Name == receipt.Name)
+		return event.Index == index && (event.LUID == 0 || event.LUID == luid) && (event.Name == "" || event.Name == name)
 	case "address":
-		if event.Index != receipt.Index || event.LUID != receipt.LUID {
+		if event.Index != index || event.LUID != luid {
 			return false
 		}
-		for _, address := range receipt.Addresses {
+		for _, address := range addresses {
 			if event.Address == address || event.Partial && strings.Split(address, "/")[0] == event.Address {
 				return true
 			}
 		}
 	case "route", "rule":
-		for _, object := range receipt.Objects {
+		for _, object := range objects {
 			if eventMatchesObject(event, object) {
 				return true
 			}
 			if runtime.GOOS == "linux" && event.Kind == "rule" && !event.Partial {
-				for _, target := range receipt.Objects {
+				for _, target := range objects {
 					if DesktopLinuxRuleResolvedBy(event.Object, object, target) {
 						return true
 					}
@@ -440,7 +453,7 @@ func eventOwnedBy(event Event, receipt *DesktopNetworkReceipt) bool {
 			// a transition classification, never snapshot/physical identity.
 			// Keep every other native byte and require this original index.
 			if runtime.GOOS == "linux" && event.Kind == "route" && !event.Partial &&
-				object.Index == receipt.Index && event.Object.Index == receipt.Index &&
+				object.Index == index && event.Object.Index == index &&
 				event.Object.Flags^object.Flags == 16 {
 				raw, err := base64.StdEncoding.DecodeString(event.Object.Native)
 				if err == nil && len(raw) >= 12 {
@@ -483,6 +496,14 @@ func (t *Tracker) End(ctx context.Context, current *DesktopNetworkReceipt) (resu
 	if t.failureError() != nil {
 		return t.failureError()
 	}
+	if t.retained != nil {
+		return t.failLocked(errors.New("legacy completion cannot replace a retained operation"))
+	}
+	return t.finishTransitionLocked(current, key)
+}
+
+// Caller holds the original tracker lock after a complete same-caller native read.
+func (t *Tracker) finishTransitionLocked(current *DesktopNetworkReceipt, key string) error {
 	for _, event := range t.events {
 		if runtime.GOOS == "darwin" && event.Kind == "route" && event.Object.Flags&0x20000 != 0 {
 			parents := append([]DesktopNetworkObject(nil), t.physical.Objects...)
@@ -520,6 +541,9 @@ func (t *Tracker) End(ctx context.Context, current *DesktopNetworkReceipt) (resu
 		for i := range t.recorded {
 			owned = owned || eventOwnedBy(event, &t.recorded[i])
 		}
+		for i := range t.retired {
+			owned = owned || eventOwnedByRetirement(event, &t.retired[i])
+		}
 		if !owned {
 			return t.failLocked(errors.New("native transition contained an unclaimed routing, address or interface event"))
 		}
@@ -528,7 +552,7 @@ func (t *Tracker) End(ctx context.Context, current *DesktopNetworkReceipt) (resu
 		return t.failLocked(errors.New("native transition changed or left effects in its frozen physical cohort"))
 	}
 	t.current, t.old = cloneReceipt(current), nil
-	t.recorded, t.events, t.transition = nil, nil, false
+	t.recorded, t.retired, t.events, t.transition, t.retained = nil, nil, nil, false, nil
 	return nil
 }
 

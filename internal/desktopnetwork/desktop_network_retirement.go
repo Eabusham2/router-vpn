@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"strings"
 )
 
@@ -20,16 +21,17 @@ type DesktopNetworkRetirementReceipt struct {
 	Incarnation string                 `json:"incarnation"`
 	Name        string                 `json:"name"`
 	Index       uint32                 `json:"index"`
+	Addresses   []string               `json:"addresses,omitempty"`
 	Objects     []DesktopNetworkObject `json:"objects"`
 }
 
 func (r DesktopNetworkRetirementReceipt) Validate() error {
 	bad := errors.New("native retirement receipt lost its original bounded constructor")
-	if r.Schema != 1 || r.TargetOS != "linux" || len(r.Objects) > 256 || r.Objects == nil {
+	if r.Schema != 1 || r.TargetOS != "linux" || len(r.Addresses) > 32 || len(r.Objects) > 256 || r.Objects == nil {
 		return bad
 	}
 	if !r.Created {
-		if r.Unindexed || r.Incarnation != "" || r.Name != "" || r.Index != 0 || len(r.Objects) != 0 {
+		if r.Unindexed || r.Incarnation != "" || r.Name != "" || r.Index != 0 || len(r.Objects) != 0 || len(r.Addresses) != 0 {
 			return bad
 		}
 		return nil
@@ -37,10 +39,18 @@ func (r DesktopNetworkRetirementReceipt) Validate() error {
 	nonce, err := hex.DecodeString(r.Incarnation)
 	if err != nil || len(nonce) != 16 || hex.EncodeToString(nonce) != r.Incarnation || bytes.Equal(nonce, make([]byte, 16)) ||
 		r.Name == "" || len(r.Name) > 15 || strings.IndexFunc(r.Name, func(c rune) bool { return c <= 0x20 || c == 0x7f || c == '/' }) >= 0 ||
-		r.Unindexed && (r.Index != 0 || len(r.Objects) != 0) || !r.Unindexed && r.Index == 0 {
+		r.Unindexed && (r.Index != 0 || len(r.Objects) != 0 || len(r.Addresses) != 0) || !r.Unindexed && r.Index == 0 {
 		return bad
 	}
 	previous := ""
+	for _, address := range r.Addresses {
+		prefix, err := netip.ParsePrefix(address)
+		if err != nil || prefix.String() != address || prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() || prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" || address <= previous {
+			return bad
+		}
+		previous = address
+	}
+	previous = ""
 	for _, object := range r.Objects {
 		key := object.Key()
 		if object.Validate("linux") != nil || key <= previous || object.Family != 4 && object.Family != 6 ||

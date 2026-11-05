@@ -1,0 +1,407 @@
+//go:build linux
+
+package tun
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"net/netip"
+	"sort"
+	"syscall"
+
+	"github.com/sagernet/netlink"
+)
+
+// Address protocol is kernel metadata, not authority: Linux also accepts a
+// user-supplied IFA_PROTO. Only the retained original descriptor and the actual
+// successful constructor boundary permit recording this bounded evidence.
+type routerVPNLinuxAddressRecord struct {
+	prefix          string
+	index           uint32
+	flags           uint32
+	scope, protocol byte
+	protocolPresent bool
+	native          string
+}
+
+func routervpnLinuxAddressRecord(body []byte) (routerVPNLinuxAddressRecord, error) {
+	var result routerVPNLinuxAddressRecord
+	bad := errors.New("native retirement address metadata is incomplete")
+	if len(body) < 8 {
+		return result, bad
+	}
+	bits := 32
+	if body[0] == syscall.AF_INET6 {
+		bits = 128
+	} else if body[0] != syscall.AF_INET {
+		return result, bad
+	}
+	if int(body[1]) > bits {
+		return result, bad
+	}
+	attrs, err := routervpnLinuxAttributes(body[8:])
+	if err != nil {
+		return result, err
+	}
+	address := attrs[syscall.IFA_ADDRESS]
+	if local, ok := attrs[syscall.IFA_LOCAL]; ok {
+		address = local
+	}
+	if len(address) != bits/8 {
+		return result, bad
+	}
+	ip, ok := netip.AddrFromSlice(address)
+	if !ok || ip.Is4In6() || ip.IsUnspecified() || ip.IsMulticast() {
+		return result, bad
+	}
+	result.prefix = netip.PrefixFrom(ip, int(body[1])).String()
+	result.index = binary.LittleEndian.Uint32(body[4:])
+	result.scope = body[3]
+	result.flags = uint32(body[2])
+	if raw, ok := attrs[8]; ok {
+		if len(raw) != 4 {
+			return result, bad
+		}
+		result.flags = binary.LittleEndian.Uint32(raw)
+	}
+	if raw, ok := attrs[11]; ok {
+		if len(raw) != 1 {
+			return result, bad
+		}
+		result.protocolPresent = true
+		result.protocol = raw[0]
+	}
+	// Canonical immutable metadata retains creation time, address/peer, labels,
+	// lifetimes and protocol. Only DAD's tentative bit and updated timestamp may
+	// change without creating a different address; DADFAILED never qualifies.
+	keys := make([]int, 0, len(attrs))
+	for k := range attrs {
+		keys = append(keys, int(k))
+	}
+	sort.Ints(keys)
+	canonical := []byte{body[0], body[1], 0, body[3]}
+	canonical = binary.LittleEndian.AppendUint32(canonical, result.index)
+	canonical = binary.LittleEndian.AppendUint32(canonical, result.flags&^uint32(syscall.IFA_F_TENTATIVE))
+	for _, k := range keys {
+		raw := append([]byte(nil), attrs[uint16(k)]...)
+		if k == 8 {
+			continue
+		}
+		if k == syscall.IFA_CACHEINFO {
+			if len(raw) != 16 {
+				return result, bad
+			}
+			clear(raw[12:])
+		}
+		canonical = binary.LittleEndian.AppendUint16(canonical, uint16(k))
+		canonical = binary.LittleEndian.AppendUint16(canonical, uint16(len(raw)))
+		canonical = append(canonical, raw...)
+	}
+	result.native = string(canonical)
+	return result, nil
+}
+
+func (t *NativeTun) routervpnLinuxAddressSnapshot(ctx context.Context) ([]routerVPNLinuxAddressRecord, error) {
+	if model := t.routervpnRetirement.addressSnapshot; model != nil {
+		return model(ctx)
+	}
+	rows, err := linuxDump(ctx, syscall.RTM_GETADDR, syscall.RTM_NEWADDR)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]routerVPNLinuxAddressRecord, 0)
+	for _, row := range rows {
+		if len(row.Data) < 8 {
+			return nil, errors.New("native address inventory is truncated")
+		}
+		if binary.LittleEndian.Uint32(row.Data[4:]) != uint32(t.routervpnOwnedIndex) {
+			continue
+		}
+		value, err := routervpnLinuxAddressRecord(row.Data)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+		if len(result) > 32 {
+			return nil, errors.New("native address evidence exceeds its bound")
+		}
+	}
+	return result, ctx.Err()
+}
+
+func (t *NativeTun) routervpnLinuxAddressMode(ctx context.Context) (byte, error) {
+	if model := t.routervpnRetirement.addressMode; model != nil {
+		return model(ctx)
+	}
+	rows, err := linuxDump(ctx, syscall.RTM_GETLINK, syscall.RTM_NEWLINK)
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		if len(row.Data) < 16 {
+			return 0, errors.New("native generation policy link is truncated")
+		}
+		if binary.LittleEndian.Uint32(row.Data[4:]) != uint32(t.routervpnOwnedIndex) {
+			continue
+		}
+		attrs, err := routervpnLinuxAttributes(row.Data[16:])
+		if err != nil {
+			return 0, err
+		}
+		for key, raw := range attrs {
+			if key&0x3fff != 26 {
+				continue
+			} // IFLA_AF_SPEC
+			families, err := routervpnLinuxAttributes(raw)
+			if err != nil {
+				return 0, err
+			}
+			for family, data := range families {
+				if family&0x3fff != syscall.AF_INET6 {
+					continue
+				}
+				ipv6, err := routervpnLinuxAttributes(data)
+				if err != nil {
+					return 0, err
+				}
+				for kind, value := range ipv6 {
+					if kind&0x3fff == 8 { // IFLA_INET6_ADDR_GEN_MODE
+						if len(value) != 1 || value[0] > 3 {
+							return 0, errors.New("native address generation policy is invalid")
+						}
+						return value[0], ctx.Err()
+					}
+				}
+			}
+		}
+		return 1, ctx.Err() // No IPv6 generation policy: no automatic address is admissible.
+	}
+	return 0, errors.New("native address generation lost its original index")
+}
+
+func routervpnLinuxAutomaticAddress(row routerVPNLinuxAddressRecord, mode byte) bool {
+	prefix, err := netip.ParsePrefix(row.prefix)
+	if err != nil || !prefix.Addr().Is6() || !prefix.Addr().IsLinkLocalUnicast() || prefix.Bits() != 64 || row.scope != 253 || !row.protocolPresent || row.protocol != 3 {
+		return false
+	}
+	flags := uint32(syscall.IFA_F_PERMANENT)
+	if mode == 2 || mode == 3 {
+		flags |= 0x800
+	} else if mode != 0 {
+		return false
+	}
+	if row.flags&^uint32(syscall.IFA_F_TENTATIVE) != flags {
+		return false
+	}
+	// The raw canonical record retains only the kernel addrconf shape: no peer,
+	// label, broadcast, arbitrary route priority or foreign namespace attribute.
+	raw := []byte(row.native)
+	if len(raw) < 12 {
+		return false
+	}
+	attrs := raw[12:]
+	seenAddress, seenCache, seenProtocol := false, false, false
+	for len(attrs) > 0 {
+		if len(attrs) < 4 {
+			return false
+		}
+		kind := binary.LittleEndian.Uint16(attrs)
+		size := int(binary.LittleEndian.Uint16(attrs[2:]))
+		attrs = attrs[4:]
+		if size > len(attrs) {
+			return false
+		}
+		value := attrs[:size]
+		attrs = attrs[size:]
+		switch kind {
+		case syscall.IFA_ADDRESS:
+			seenAddress = true
+		case syscall.IFA_CACHEINFO:
+			if len(value) != 16 || binary.LittleEndian.Uint32(value) != ^uint32(0) || binary.LittleEndian.Uint32(value[4:]) != ^uint32(0) {
+				return false
+			}
+			seenCache = true
+		case 11:
+			seenProtocol = true
+		default:
+			return false
+		}
+	}
+	return seenAddress && seenCache && seenProtocol
+}
+
+func (t *NativeTun) routervpnLinuxAddressCurrent(ctx context.Context) (map[string]routerVPNLinuxAddressRecord, error) {
+	s := &t.routervpnRetirement
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := t.routervpnLinuxAddressSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return nil, err
+	}
+	result := make(map[string]routerVPNLinuxAddressRecord)
+	for _, row := range rows {
+		if row.index != uint32(t.routervpnOwnedIndex) || row.flags&syscall.IFA_F_DADFAILED != 0 || result[row.prefix].prefix != "" {
+			return nil, errors.New("native address inventory duplicated or replaced original index")
+		}
+		result[row.prefix] = row
+	}
+	for prefix, old := range s.addresses {
+		now, ok := result[prefix]
+		if !ok || old.native != "" && old.native != now.native {
+			return nil, errors.New("original constructor address was removed or replaced")
+		}
+	}
+	return result, ctx.Err()
+}
+
+func (t *NativeTun) routervpnLinuxAddressBegin(ctx context.Context) error {
+	s := &t.routervpnRetirement
+	s.addresses = make(map[string]routerVPNLinuxAddressRecord)
+	s.addressObserved = make(map[string]routerVPNLinuxAddressRecord)
+	s.addressDeleted = make(map[string]bool)
+	rows, err := t.routervpnLinuxAddressCurrent(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) != 0 {
+		return errors.New("new native constructor has pre-existing addresses")
+	}
+	return t.routervpnLinuxEvents(ctx, nil, false)
+}
+
+func (t *NativeTun) routervpnLinuxAddressMutation(ctx context.Context, prefix string, linkUp bool, mutate func() error) error {
+	s := &t.routervpnRetirement
+	if s.addresses == nil {
+		return errors.New("native address mutation has no original constructor capture")
+	}
+	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+		return err
+	}
+	before, err := t.routervpnLinuxAddressCurrent(ctx)
+	if err != nil {
+		return err
+	}
+	if len(before) != len(s.addresses) || len(before) >= 32 && !linkUp {
+		return errors.New("native address mutation found foreign or unbounded addresses")
+	}
+	var mode byte
+	if linkUp {
+		mode, err = t.routervpnLinuxAddressMode(ctx)
+		if err != nil {
+			return err
+		}
+	} else if _, exists := before[prefix]; exists {
+		return errors.New("native address add cannot adopt an existing address")
+	}
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return err
+	}
+	if err := mutate(); err != nil {
+		return err
+	}
+	if !linkUp {
+		s.addresses[prefix] = routerVPNLinuxAddressRecord{prefix: prefix, index: uint32(t.routervpnOwnedIndex)}
+	}
+	after, err := t.routervpnLinuxAddressCurrent(ctx)
+	if err != nil {
+		return err
+	}
+	if linkUp {
+		current, err := t.routervpnLinuxAddressMode(ctx)
+		if err != nil {
+			return err
+		}
+		if current != mode {
+			return errors.New("native address generation policy changed across LinkSetUp")
+		}
+	}
+	added := 0
+	for key, row := range after {
+		if old, exists := before[key]; exists {
+			if old.native != row.native {
+				return errors.New("native address was replaced during constructor call")
+			}
+			continue
+		}
+		added++
+		if linkUp {
+			if added > 1 || !routervpnLinuxAutomaticAddress(row, mode) {
+				return errors.New("LinkSetUp produced an unproved automatic address")
+			}
+		} else if key != prefix {
+			return errors.New("native address add observed a foreign address")
+		}
+	}
+	if !linkUp && added != 1 {
+		return errors.New("successful native address add lost its exact readback")
+	}
+	for key, row := range after {
+		s.addresses[key] = row
+	}
+	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+		return err
+	}
+	return t.routervpnLinuxAddressesObserved()
+}
+
+func (t *NativeTun) routervpnLinuxAddAddress(link netlink.Link, address *netlink.Addr) error {
+	prefix, valid := routervpnLinuxIPPrefix(address.IPNet)
+	if !valid || link == nil || link.Attrs().Index != t.routervpnOwnedIndex || link.Attrs().Name != t.options.Name {
+		return errors.New("native address add lost its original link")
+	}
+	return t.routervpnLinuxAddressMutation(t.options.RouterVPNNetworkContext, prefix.String(), false, func() error { return netlink.AddrAdd(link, address) })
+}
+func (t *NativeTun) routervpnLinuxLinkSetUp(link netlink.Link) error {
+	if link == nil || link.Attrs().Index != t.routervpnOwnedIndex || link.Attrs().Name != t.options.Name {
+		return errors.New("native LinkSetUp lost its original link")
+	}
+	return t.routervpnLinuxAddressMutation(t.options.RouterVPNNetworkContext, "", true, func() error { return netlink.LinkSetUp(link) })
+}
+
+func (t *NativeTun) routervpnLinuxAddressEvent(event routerVPNLinuxRoutingEvent, closing bool) error {
+	s := &t.routervpnRetirement
+	row := *event.address
+	if row.index != uint32(t.routervpnOwnedIndex) {
+		return nil
+	}
+	original, owned := s.addresses[row.prefix]
+	if !owned || row.flags&syscall.IFA_F_DADFAILED != 0 || original.native != "" && original.native != row.native {
+		return errors.New("native address event was not an original successful constructor effect")
+	}
+	if event.delete {
+		if !closing || s.addressDeleted[row.prefix] {
+			return errors.New("original constructor address was deleted outside its unique descriptor close")
+		}
+		s.addressDeleted[row.prefix] = true
+		return nil
+	}
+	if closing {
+		return errors.New("native address was created during original retirement")
+	}
+	if old, seen := s.addressObserved[row.prefix]; seen {
+		if old.native != row.native || old.flags&syscall.IFA_F_TENTATIVE == 0 || row.flags&syscall.IFA_F_TENTATIVE != 0 {
+			return errors.New("original address was duplicated or replaced")
+		}
+	}
+	s.addressObserved[row.prefix] = row
+	if original.native == "" {
+		s.addresses[row.prefix] = row
+	}
+	return nil
+}
+
+func (t *NativeTun) routervpnLinuxAddressesObserved() error {
+	s := &t.routervpnRetirement
+	for prefix := range s.addresses {
+		if _, ok := s.addressObserved[prefix]; !ok {
+			s.failure = errors.New("native address add lost its original notification")
+			return s.failure
+		}
+	}
+	return nil
+}

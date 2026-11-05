@@ -114,7 +114,7 @@ assertion was disabled and no unsuccessful setup is recorded as a pass.
 
 ## Native MTU operation admission and original cleanup
 
-The commit containing this section connects bounded MTU capture, command-mailbox
+Commit [`721511bb`](https://github.com/Eabusham2/router-vpn/commit/721511bbf641dca3fcf0e3e5a310079996a6fced) connects bounded MTU capture, command-mailbox
 admission, status, cancellation, cache commit, native replacement and restoration.
 The accepted command retains its original lifetime and transported absolute
 deadline; a short maintenance poll cannot cancel it or give it a new deadline.
@@ -225,6 +225,42 @@ retirement in the pure-expiry case; the genuine mixed-failure case still passed.
 The regression remains mandatory in the service runner. This does not certify
 every controller-monitor admission or mutex path; those remain separate caller
 integration obligations.
+
+## Partial native effects and retained observer transitions
+
+The commit containing this section retains exact addresses from successful native
+constructor calls, including a constructor that fails before Ready. An occupied
+address is refused rather than adopted. The original native route socket also
+observes address notifications; foreign changes, missing notifications, address
+replacement and an index/name substitution cannot become original retirement
+evidence. Automatic IPv6 address evidence is restricted to the captured link-up
+window, unchanged address-generation policy and complete matching kernel metadata.
+No by-name address deletion or fresh observer is introduced. Metadata alone does
+not establish ownership against a privileged injector forging that entire window.
+
+A bounded in-memory transition capability now retains each original observer's
+Ready and completed-retirement history across native replacement. Partial effects
+need actual retirement evidence and never acquire a fabricated Ready receipt.
+Pure completion expiry preserves the same token and history for the original
+cleanup allowance. Changed physical topology, mixed real failure and cancellation,
+foreign or stale tokens, and unclaimed address effects remain rejected. Both
+observers must complete independently; one acknowledgement cannot settle the other.
+This API observes evidence; it grants no engine mutation or winner-adoption power.
+
+The complete shared observer package passed 334 race verdicts in 3.661 seconds,
+including all 27 required retained-transition parent/leaf cases. The integrated
+actual native TUN selection passed 30 verdicts in 1.053 seconds, including all
+18 required address verdicts and original Stop/partial-startup cases. Source
+re-preparation, pinned-source refusal and missing/tampered projection checks
+passed five tests. The merged routing runner passed 40 checks and the cohort
+runner passed 18. Three targeted mutations rejected stale-token admission, lost
+history after pure expiry and address ownership by index alone. All seven earlier
+observer causal boundaries remain present.
+
+Native address tests use explicit operation/event models; they do not establish
+physical TUN acceptance. Privileged namespace cases remain mandatory in platform
+CI. The two-observer test drives two independent actual trackers with modeled
+native events; shipping service/controller phase coordination is still unfinished.
 
 ## Remaining requirement/evidence ledger
 

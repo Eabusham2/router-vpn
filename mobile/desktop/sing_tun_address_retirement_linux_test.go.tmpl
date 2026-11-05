@@ -1,0 +1,222 @@
+//go:build linux
+
+package tun
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"net/netip"
+	"os"
+	"slices"
+	"syscall"
+	"testing"
+
+	"golang.org/x/sys/unix"
+)
+
+func retirementAddress(t *testing.T, prefix string, auto bool, mutate func(map[uint16][]byte)) routerVPNLinuxAddressRecord {
+	t.Helper()
+	p := netip.MustParsePrefix(prefix)
+	family := byte(syscall.AF_INET)
+	scope := byte(0)
+	flags := uint32(syscall.IFA_F_PERMANENT)
+	if p.Addr().Is6() {
+		family = syscall.AF_INET6
+	}
+	if p.Addr().IsLinkLocalUnicast() {
+		scope = 253
+	}
+	if auto {
+		flags |= 0x800
+	}
+	body := []byte{family, byte(p.Bits()), byte(flags), scope}
+	body = binary.LittleEndian.AppendUint32(body, 8)
+	cache := make([]byte, 16)
+	binary.LittleEndian.PutUint32(cache, ^uint32(0))
+	binary.LittleEndian.PutUint32(cache[4:], ^uint32(0))
+	binary.LittleEndian.PutUint32(cache[8:], 1234)
+	attrs := map[uint16][]byte{syscall.IFA_ADDRESS: p.Addr().AsSlice(), 8: retirementU32(flags), syscall.IFA_CACHEINFO: cache}
+	if auto {
+		attrs[11] = []byte{3}
+	}
+	if mutate != nil {
+		mutate(attrs)
+	}
+	for key, value := range attrs {
+		body = append(body, retirementAttribute(key, value)...)
+	}
+	row, err := routervpnLinuxAddressRecord(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func retirementAddressFixture(t *testing.T) (*NativeTun, *retirementModel, *[]routerVPNLinuxAddressRecord) {
+	t.Helper()
+	n, m, _ := retirementFixture(t)
+	ctx := retirementStop(t)
+	n.options.RouterVPNNetworkContext = ctx
+	rows := []routerVPNLinuxAddressRecord{}
+	n.routervpnRetirement.addressSnapshot = func(ctx context.Context) ([]routerVPNLinuxAddressRecord, error) { return slices.Clone(rows), ctx.Err() }
+	n.routervpnRetirement.addressMode = func(ctx context.Context) (byte, error) { return 2, ctx.Err() }
+	if err := n.routervpnLinuxAddressBegin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return n, m, &rows
+}
+func retirementAddressAdd(n *NativeTun, m *retirementModel, rows *[]routerVPNLinuxAddressRecord, row routerVPNLinuxAddressRecord) error {
+	return n.routervpnLinuxAddressMutation(n.options.RouterVPNNetworkContext, row.prefix, false, func() error {
+		*rows = append(*rows, row)
+		copy := row
+		m.events = append(m.events, routerVPNLinuxRoutingEvent{address: &copy})
+		return nil
+	})
+}
+
+func TestRouterVPNNativeLinuxPartialAddressRetirement(t *testing.T) {
+	for _, scenario := range []string{"partial-add-refusal", "cancel-after-add", "link-up-addrconf", "dad-completion"} {
+		t.Run(scenario, func(t *testing.T) {
+			n, m, rows := retirementAddressFixture(t)
+			first := retirementAddress(t, "192.0.2.7/24", false, nil)
+			if scenario == "cancel-after-add" {
+				work, cancel := context.WithCancel(n.options.RouterVPNNetworkContext)
+				err := n.routervpnLinuxAddressMutation(work, first.prefix, false, func() error {
+					*rows = append(*rows, first)
+					m.events = append(m.events, routerVPNLinuxRoutingEvent{address: &first})
+					cancel()
+					return nil
+				})
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal("late address success lost original cancellation", err)
+				}
+			} else {
+				if err := retirementAddressAdd(n, m, rows, first); err != nil {
+					t.Fatal(err)
+				}
+			}
+			expected := []string{first.prefix}
+			if scenario == "partial-add-refusal" || scenario == "cancel-after-add" {
+				if err := n.routervpnLinuxAddressMutation(n.options.RouterVPNNetworkContext, "fd00::7/64", false, func() error { return unix.EPERM }); !errors.Is(err, unix.EPERM) {
+					t.Fatal(err)
+				}
+			} else {
+				second := retirementAddress(t, "fe80::1234/64", true, nil)
+				event := second
+				if scenario == "dad-completion" {
+					event.flags |= syscall.IFA_F_TENTATIVE
+				}
+				err := n.routervpnLinuxAddressMutation(n.options.RouterVPNNetworkContext, "", true, func() error {
+					*rows = append(*rows, second)
+					m.events = append(m.events, routerVPNLinuxRoutingEvent{address: &event})
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "dad-completion" {
+					m.events = append(m.events, routerVPNLinuxRoutingEvent{address: &second})
+					if err := n.routervpnLinuxEvents(n.options.RouterVPNNetworkContext, nil, false); err != nil {
+						t.Fatal(err)
+					}
+				}
+				expected = append(expected, second.prefix)
+			}
+			raw, err := n.RouterVPNDesktopNetworkRetire(retirementStop(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := ParseDesktopNetworkRetirementReceipt(raw)
+			if err != nil || !receipt.Created || receipt.Index != 8 || receipt.Name != "owned0" || !slices.Equal(receipt.Addresses, expected) || len(receipt.Objects) != 0 {
+				t.Fatal("partial constructor lost exact successful addresses without Ready", receipt, err)
+			}
+			if _, err := n.tunFile.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatal("receipt preceded original descriptor retirement", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects(t *testing.T) {
+	for _, scenario := range []string{"global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up"} {
+		t.Run(scenario, func(t *testing.T) {
+			n, m, rows := retirementAddressFixture(t)
+			ctx := n.options.RouterVPNNetworkContext
+			var err error
+			if scenario == "pre-existing" {
+				*rows = append(*rows, retirementAddress(t, "fe80::1234/64", true, nil))
+				called := false
+				work, cancel := context.WithCancel(ctx)
+				defer cancel()
+				err = n.routervpnLinuxAddressMutation(work, "", true, func() error { called = true; return nil })
+				if called {
+					t.Fatal("foreign pre-existing address reached LinkSetUp")
+				}
+			} else if scenario == "eexist" {
+				row := retirementAddress(t, "192.0.2.7/24", false, nil)
+				err = n.routervpnLinuxAddressMutation(ctx, row.prefix, false, func() error { return unix.EEXIST })
+				if len(n.routervpnRetirement.addresses) != 0 {
+					t.Fatal("EEXIST adopted address ownership")
+				}
+			} else if scenario == "address-aba" {
+				row := retirementAddress(t, "192.0.2.7/24", false, nil)
+				if err := retirementAddressAdd(n, m, rows, row); err != nil {
+					t.Fatal(err)
+				}
+				m.events = append(m.events, routerVPNLinuxRoutingEvent{address: &row, delete: true}, routerVPNLinuxRoutingEvent{address: &row})
+				err = n.routervpnLinuxEvents(ctx, nil, false)
+			} else {
+				prefix := "fe80::1234/64"
+				if scenario == "global" {
+					prefix = "fd00::7/64"
+				}
+				row := retirementAddress(t, prefix, true, func(attrs map[uint16][]byte) {
+					switch scenario {
+					case "wrong-protocol":
+						attrs[11] = []byte{0}
+					case "missing-protocol":
+						delete(attrs, 11)
+					case "label":
+						attrs[syscall.IFA_LABEL] = []byte("foreign\x00")
+					case "finite-lifetime":
+						binary.LittleEndian.PutUint32(attrs[syscall.IFA_CACHEINFO], 600)
+					}
+				})
+				mode := byte(2)
+				n.routervpnRetirement.addressMode = func(context.Context) (byte, error) { return mode, nil }
+				work, cancel := context.WithCancel(ctx)
+				defer cancel()
+				err = n.routervpnLinuxAddressMutation(work, "", true, func() error {
+					*rows = append(*rows, row)
+					if scenario != "missing-notification" {
+						m.events = append(m.events, routerVPNLinuxRoutingEvent{address: &row})
+					}
+					if scenario == "cancel-after-link-up" {
+						cancel()
+					}
+					if scenario == "changed-policy" {
+						mode = 3
+					}
+					if scenario == "same-name-replacement" {
+						foreign, openErr := os.CreateTemp(t.TempDir(), "same-name-foreign-object")
+						if openErr != nil {
+							t.Fatal(openErr)
+						}
+						t.Cleanup(func() { _ = foreign.Close() })
+						n.tunFile = foreign
+					}
+					return nil
+				})
+			}
+			if err == nil {
+				t.Fatal("foreign or replaced address qualified as constructor evidence")
+			}
+			if scenario != "eexist" {
+				if raw, err := n.RouterVPNDesktopNetworkRetire(retirementStop(t)); err == nil || raw != "" {
+					t.Fatal("foreign address produced completed retirement evidence", raw, err)
+				}
+			}
+		})
+	}
+}

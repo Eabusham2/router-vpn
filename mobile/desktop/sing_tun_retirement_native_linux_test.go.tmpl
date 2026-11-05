@@ -28,7 +28,7 @@ import (
 // receipt is fabricated for the deliberately replaced or ambiguous rules.
 func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 	const marker = "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE"
-	cases := []string{"complete-original-retirement", "fresh-stop-after-startup-cancel", "definite-add-refusal", "persistent-disjoint-route", "same-selector-aba", "foreign-wildcard-match", "replaced-file-object"}
+	cases := []string{"complete-original-retirement", "partial-address-before-ready", "foreign-address", "address-aba", "fresh-stop-after-startup-cancel", "definite-add-refusal", "persistent-disjoint-route", "same-selector-aba", "foreign-wildcard-match", "replaced-file-object"}
 	selected := os.Getenv(marker)
 	if selected == "" {
 		image, err := os.Executable()
@@ -153,7 +153,10 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 				t.Fatal("create fixture-owned conflicting rule", err)
 			}
 		}
-		startErr := native.Start()
+		var startErr error
+		if selected != "partial-address-before-ready" {
+			startErr = native.Start()
+		}
 		if selected == "definite-add-refusal" {
 			if startErr == nil {
 				t.Fatal("occupied native rule was adopted")
@@ -162,7 +165,7 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 			t.Fatal("actual native TUN startup", startErr)
 		}
 		var ready DesktopNetworkReceipt
-		if startErr == nil {
+		if startErr == nil && selected != "partial-address-before-ready" {
 			raw, err := native.RouterVPNDesktopNetworkReceipt()
 			if err != nil {
 				t.Fatal("actual native Ready ledger", err)
@@ -182,6 +185,28 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 			}
 			if ready.Index != uint32(native.routervpnOwnedIndex) || len(ready.Objects) < 10 {
 				t.Fatal("actual startup lost original complete native ledger")
+			}
+		}
+		if selected == "foreign-address" || selected == "address-aba" {
+			link, err := netlink.LinkByIndex(native.routervpnOwnedIndex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix := "192.0.2.91/24"
+			if selected == "address-aba" {
+				prefix = options.Inet4Address[0].String()
+			}
+			address, err := netlink.ParseAddr(prefix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selected == "address-aba" {
+				if err := netlink.AddrDel(link, address); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := netlink.AddrAdd(link, address); err != nil {
+				t.Fatal(err)
 			}
 		}
 		var foreignRoute *netlink.Route
@@ -242,7 +267,7 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 		cleanup, cancelCleanup := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancelCleanup()
 		raw, retireErr := native.RouterVPNDesktopNetworkRetire(cleanup)
-		negative := selected == "same-selector-aba" || selected == "foreign-wildcard-match" || selected == "replaced-file-object"
+		negative := selected == "foreign-address" || selected == "address-aba" || selected == "same-selector-aba" || selected == "foreign-wildcard-match" || selected == "replaced-file-object"
 		if negative {
 			if retireErr == nil || raw != "" {
 				t.Fatal("foreign/ambiguous native resource gained cleanup success")
@@ -265,6 +290,20 @@ func TestRouterVPNNativeLinuxRoutingRetirementNamespace(t *testing.T) {
 		receipt, err := ParseDesktopNetworkRetirementReceipt(raw)
 		if err != nil || !receipt.Created || receipt.Name != options.Name || receipt.Index != uint32(native.routervpnOwnedIndex) {
 			t.Fatal("native retirement receipt lost actual creation", receipt, err)
+		}
+		for _, prefix := range append(append([]netip.Prefix(nil), options.Inet4Address...), options.Inet6Address...) {
+			found := false
+			for _, address := range receipt.Addresses {
+				if address == prefix.String() {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("native retirement lost actual configured address", prefix)
+			}
+		}
+		if selected == "partial-address-before-ready" && ready.Index != 0 {
+			t.Fatal("partial constructor invented Ready")
 		}
 		for _, object := range ready.Objects {
 			if !routervpnNetworkHasObject(receipt.Objects, object) {

@@ -50,6 +50,24 @@ OBSERVATION_CONTEXT_CASES = {
     "TestNetworkNativeObservationHeldMutex": (),
 }
 
+RETAINED_TRANSITION_CASES = {
+    "TestNetworkRetainedTransitionKeepsBothOriginalObservers": ("service", "controller"),
+    "TestNetworkRetainedTransitionRejectsUnclaimedPartialEffects": ("missing-retirement", "wrong-address", "wrong-index", "unindexed-name-only", "foreign-object", "physical-away-and-back"),
+    "TestNetworkRetainedTransitionCancellationKeepsOriginalHistory": (),
+    "TestNetworkRetainedTransitionAdmissionUsesCaller": ("begin", "record", "retirement", "complete"),
+    "TestNetworkRetainedTransitionRejectsChangedEvidence": ("duplicate-retirement", "retirement-ready-identity", "duplicate-ready", "mixed-native-loss"),
+    "TestNetworkRetainedTransitionRequiresOriginalCapability": ("unbounded-caller", "foreign-receipt", "foreign-token", "busy-owner", "lifetime-loss"),
+}
+
+
+def check_retained_transition_verdict(output):
+    for parent, leaves in RETAINED_TRANSITION_CASES.items():
+        for name in (parent, *(parent + "/" + leaf for leaf in leaves)):
+            if output.count("--- PASS: " + name + " (") != 1:
+                raise ValueError("Retained transition omitted or duplicated its original receipt boundary: " + name)
+            if "--- SKIP: " + name + " (" in output or "--- FAIL: " + name + " (" in output:
+                raise ValueError("Retained transition skipped or failed: " + name)
+
 
 def check_observation_context_verdict(output, platform):
     for parent, leaves in OBSERVATION_CONTEXT_CASES.items():
@@ -168,6 +186,7 @@ def main():
         require_pass(base.stdout, parent)
     check_observation_context_verdict(base.stdout, sys.platform)
     if sys.platform == "linux":
+        check_retained_transition_verdict(base.stdout)
         check_routing_retirement_verdict(base.stdout)
         for parent in ("TestLinuxNetworkDumpCancellationJoinsOriginalSocket", "TestLinuxNetworkDumpStrictOriginalDatagrams", "TestLinuxRoutingRetirementRequiresOriginalJoinedInventory"):
             require_pass(base.stdout, parent)
