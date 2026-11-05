@@ -19,6 +19,8 @@ PHASES = (
     ('external paths and OpenVPN', r'^Test(?:External|OpenVPN|ImportedEntry)'),
 )
 REQUIRED = frozenset((
+    'TestImportedEntryHysteriaPairedFinalCompleteLayers',
+    'TestImportedEntryHysteriaRejectsChangedSource',
     'TestImportedEntryPairedFinalCompleteLayers',
     'TestImportedEntryPairedFinalRejectsChangedAuthority',
     'TestImportedEntryRuntimeDistinctProofsAndSelectedDNS',

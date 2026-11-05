@@ -56,8 +56,8 @@ public final class ImportedRouterTest {
  static void reject(String label,Work work)throws Exception{boolean refused=false;try{work.run();}catch(Exception expected){refused=true;}check(refused,"accepted "+label);check(RouterMultihop.open==0,"owner leaked after "+label);}
  static JSONObject object(String s)throws Exception{return new JSONObject(s);}
  static AndroidStandardExitStore.Entry entry(JSONArray args)throws Exception{
-  JSONObject capture=object(args.getString(1)),profile=capture.getJSONObject("profile"),external=profile.getJSONObject("external"),ss=external.getJSONObject("shadowsocks");
-  AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id=capture.getString("exit_id");e.name="Imported first";e.protocol="shadowsocks";e.server=ss.getString("server");e.serverPort=ss.getInt("port");e.method=ss.getString("method");e.secret=ss.getString("password");e.expectedPublicIp=capture.getString("expected_public_ip");
+  JSONObject capture=object(args.getString(1)),profile=capture.getJSONObject("profile"),external=profile.getJSONObject("external"),transport=external.getJSONObject(capture.getString("protocol"));
+  AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id=capture.getString("exit_id");e.name="Imported first";e.protocol=capture.getString("protocol");e.server=transport.getString("server");e.serverPort=transport.getInt("port");e.method=transport.optString("method","");e.secret=transport.getString("password");e.tlsServerName=transport.optString("tls_server_name","");e.expectedPublicIp=capture.getString("expected_public_ip");
   e.policy=object(profile.toString());for(String name:List.of("external","id","node_kind"))e.policy.remove(name);
   e.startLayer=external.optJSONObject("start_layer");AndroidStandardExitStore.validate(e);return e;
  }
@@ -105,7 +105,13 @@ public final class ImportedRouterTest {
   String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,"shadowsocks","local");
   check(before.equals(AndroidStandardExitStore.snapshot(e))&&beforeFinal.equals(b.toString()),"compiler mutated original source");
   JSONObject selected=object(c.metadata),raw=object(c.input),graph=object(c.config);
-  check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id")),"host changed selected identities");
+  check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(e.protocol),"host changed selected identities or transport");
+  if(e.protocol.equals("hysteria2")){
+   JSONObject captured=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("hysteria2");JSONObject first=null;JSONArray out=graph.getJSONArray("outbounds");for(int i=0;i<out.length();i++)if(out.getJSONObject(i).optString("tag").equals("entry-wg"))first=out.getJSONObject(i);
+   check(captured.getString("password").equals(e.secret)&&captured.getString("tls_server_name").equals(e.tlsServerName),"host changed captured QUIC password or TLS name");
+   check(first!=null&&first.getString("type").equals("hysteria2")&&first.getString("password").equals(e.secret)&&first.getJSONObject("tls").getString("server_name").equals(e.tlsServerName)&&first.getJSONObject("tls").getBoolean("enabled")&&!first.getJSONObject("tls").optBoolean("insecure",false),"host changed native QUIC TLS/password policy");
+   for(String field:List.of("password","tls_server_name"))reject("changed imported "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject("hysteria2").put(field,"replacement.example");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
+  }
   check(selected.optString("entry_api").isEmpty()&&selected.optString("entry_token").isEmpty()&&selected.optString("entry_node_id").isEmpty(),"import acquired private pairing");
   check(raw.getString("exit_start").isEmpty()&&object(raw.getString("entry_capture")).getJSONObject("profile").getString("dns_mode").equals("home"),"raw entry policy or inherent final layer changed");
   JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
@@ -155,8 +161,8 @@ public final class ImportedRouterTest {
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
-  check(all.size()==11,"the independent layer matrix is incomplete");for(Path p:all)one(root,p);
-  System.out.println("Android imported-entry original sources: "+checks+" checks; 9 independent layer graphs and 2 alternate SS2022 methods");
+  check(all.size()==20,"the SS2022/Hysteria2 independent layer matrix is incomplete");for(Path p:all)one(root,p);
+  System.out.println("Android imported-entry original sources: "+checks+" checks; 18 independent SS2022/Hysteria2 layer graphs and 2 alternate SS2022 methods");
  }
 }'''
 
@@ -173,7 +179,7 @@ def main():
         fixtures = temp / "fixtures"
         fixtures.mkdir()
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
-        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntryPairedFinal(CompleteLayers|PolicyAndCipherOwnership)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
+        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)

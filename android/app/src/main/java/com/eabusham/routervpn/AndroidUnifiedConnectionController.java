@@ -445,7 +445,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             AndroidImportedRouterPath.compile(captured,AndroidImportedRouterPath.finalBundle(exit.file),exitMode,execution);
             pendingNode=null;pendingStandardExit=null;pendingOrdinaryEntry=captured;pendingExternalDirect=false;
             pendingMode="multihop";pendingLayers=Collections.emptyList();pendingEntry=null;pendingExit=exit;
-            pendingExitMode=exitMode;pendingExecution=execution;pendingEntryMode="shadowsocks";
+            pendingExitMode=exitMode;pendingExecution=execution;pendingEntryMode=captured.protocol;
             pendingEntryDigest=first;pendingExternalDigest=last;pendingExternalRequestDigest=importedRouterRequestDigest(first,last,exitMode,execution);
             pendingCallback=callback;requestPermission(captured.name+" → "+exit.name,selection);
         }catch(Exception changed){clearPending();callback.finished(false,safe(changed));}
@@ -581,7 +581,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         pendingExitMode=in.getString(STATE_EXIT_MODE,"");if(pendingExitMode==null)pendingExitMode="";
         pendingStandardExit=findStandardExit(in.getString(STATE_STANDARD_EXIT,""));pendingExternalDirect=in.getBoolean(STATE_EXTERNAL_DIRECT,false);
         if("multihop".equals(pendingMode)&&(pendingExit==null||(pendingOrdinaryEntry==null?(pendingEntry==null||pendingEntry.id.equals(pendingExit.id)):
-                pendingEntry!=null||pendingOrdinaryEntry.id.equals(pendingExit.id)||!"shadowsocks".equals(pendingEntryMode))||pendingExitMode.isEmpty())){clearPending();callback.finished(false,"Pending multihop permission state could not be restored safely; choose the hops again.");return;}
+                pendingEntry!=null||pendingOrdinaryEntry.id.equals(pendingExit.id)||!pendingOrdinaryEntry.protocol.equals(pendingEntryMode))||pendingExitMode.isEmpty())){clearPending();callback.finished(false,"Pending multihop permission state could not be restored safely; choose the hops again.");return;}
         if("external".equals(pendingMode)&&(pendingStandardExit==null||(!pendingExternalDirect&&pendingEntry==null&&pendingOrdinaryEntry==null)||pendingExternalDirect&&pendingOrdinaryEntry!=null)){clearPending();callback.finished(false,"Pending external Speed Lab path disappeared before Android VPN permission completed.");return;}
         if("multihop".equals(pendingMode)&&pendingOrdinaryEntry!=null){
             pendingExternalDigest=in.getString("external_profile_digest_pending","");pendingEntryDigest=in.getString("external_entry_digest_pending","");pendingExternalRequestDigest=in.getString("external_request_digest_pending","");

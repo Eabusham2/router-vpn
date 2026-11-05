@@ -386,6 +386,17 @@ enum IOSMultihopExecution {
 enum IOSImportedEntryMultihop {
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func validate(entry: [String: Any], final: [String: Any]) throws {
+        guard let imported = entry["external"] as? [String: Any],
+              let kind = imported["protocol"] as? String, ["shadowsocks", "hysteria2"].contains(kind) else { throw issue() }
+        if kind == "shadowsocks" {
+            guard let transport = imported[kind] as? [String: Any], methods.contains(transport["method"] as? String ?? "") else { throw issue() }
+        } else {
+            guard let transport = imported[kind] as? [String: Any],
+                  let password = transport["password"] as? String, !password.isEmpty,
+                  let name = transport["tls_server_name"] as? String, !name.isEmpty, name.utf8.count <= 253,
+                  name.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil,
+                  !name.hasPrefix("."), !name.hasSuffix(".") else { throw issue() }
+        }
         guard entry["node_kind"] as? String == "external",
               final["node_kind"] == nil || final["node_kind"] is String,
               ["", "router-vpn"].contains(final["node_kind"] as? String ?? ""),
@@ -394,14 +405,10 @@ enum IOSImportedEntryMultihop {
               final["multihop_enabled"] as? Bool == true,
               final["multihop_entry_id"] as? String == entryID,
               final["multihop_exit_id"] as? String == finalID,
-              final["multihop_entry_mode"] as? String == "shadowsocks",
+              final["multihop_entry_mode"] as? String == kind,
               final["multihop_exit_mode"] as? String == "shadowsocks",
               (final["multihop_execution"] as? String ?? "local") == "local",
               entry["multihop_enabled"] as? Bool != true,
-              let imported = entry["external"] as? [String: Any],
-              imported["protocol"] as? String == "shadowsocks",
-              let transport = imported["shadowsocks"] as? [String: Any],
-              methods.contains(transport["method"] as? String ?? ""),
               let expected = imported["expected_public_ip"] as? String, !expected.isEmpty,
               ["node_proof_id", "router_api", "api_token"].allSatisfy({
                   entry[$0] == nil || entry[$0] is NSNull || entry[$0] as? String == ""
@@ -414,6 +421,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local Shadowsocks 2022 imported entry and a different paired Router VPN Shadowsocks final node with their original settings."])
+            "Choose a Local Shadowsocks 2022 or Hysteria2 imported entry and a different paired Router VPN Shadowsocks final node with their original settings."])
     }
 }

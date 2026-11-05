@@ -18,9 +18,9 @@ final class AndroidImportedRouterPath {
             "exit_profile", "exit_start", "dns_bootstrap", "source_sha256"};
 
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {
-        if (entry == null || !"shadowsocks".equals(entry.protocol)
-                || !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
-            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022.");
+        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2").contains(entry.protocol)
+                || "shadowsocks".equals(entry.protocol) && !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
+            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022 or Hysteria2.");
         }
         AndroidStandardExitStore.validate(entry);
     }
@@ -81,8 +81,10 @@ final class AndroidImportedRouterPath {
                     throw new IllegalStateException("The imported-entry compiler returned an incomplete captured path.");
                 }
                 JSONObject selected = new JSONObject(metadata);
-                if (!"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
-                        || !"shadowsocks".equals(selected.getString("entry_mode")) || !"shadowsocks".equals(selected.getString("exit_mode"))) {
+                String entryMode = new JSONObject(input.getString("entry_capture")).getString("protocol");
+                if (!Arrays.asList("shadowsocks", "hysteria2").contains(entryMode)
+                        || !"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
+                        || !entryMode.equals(selected.getString("entry_mode")) || !"shadowsocks".equals(selected.getString("exit_mode"))) {
                     throw new IllegalStateException("The imported-entry compiler changed the selected path.");
                 }
                 this.input = input.put("source_sha256", source).toString();

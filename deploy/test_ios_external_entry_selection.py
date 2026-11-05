@@ -101,6 +101,28 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try reject("imported Router rejects "+fault){try mixed.saveIOSMultihop(enabled:true,entryID:imported.id,exitID:paired.id,exitMode:"shadowsocks",execution:execution,entryMode:mode)}
    try check("rejected imported selection cannot mutate saved graph",mixed.writes==mixedWrites && encoded(mixed.bundle!)==savedMixed)
   }
+  var hysteria=try profile("imported-hysteria","external","hysteria2");hysteria.apiToken="";hysteria.dnsMode="home"
+  hysteria.external?.hysteria2=ExternalHysteria2Config(server:"203.0.113.21",port:443,password:" exact HY2 password ",tlsServerName:"entry.example.test")
+  let hyBundle=bundle(hysteria),hyModel=RouterVPNModel();hyModel.bundle=finalBundle
+  IOSNodeBundleStore.shared.nodes=[hysteria.id:try encoded(hyBundle),paired.id:try encoded(finalBundle)]
+  try hyModel.saveIOSMultihop(enabled:true,entryID:hysteria.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:"hysteria2")
+  let hyCaptured=try hyModel.iosMultihopEntryBundle(for:hyModel.bundle!)
+  try check("HY2 selection retains exact TLS/password/source",hyCaptured.routerProfiles==hyBundle.routerProfiles && hyCaptured.routerProfiles[0].external?.hysteria2==hysteria.external?.hysteria2 && hyModel.bundle?.routerProfiles[0].multihopEntryMode=="hysteria2")
+  let savedHY=try encoded(hyModel.bundle!),hyWrites=hyModel.writes
+  for fault in ["empty-password","empty-TLS","malformed-TLS","wrong-mode","server","auto","private-token"] {
+   var changed=hysteria,execution="local",mode="hysteria2"
+   switch fault {
+   case "empty-password":changed.external?.hysteria2?.password=""
+   case "empty-TLS":changed.external?.hysteria2?.tlsServerName=""
+   case "malformed-TLS":changed.external?.hysteria2?.tlsServerName="https://other.example.test"
+   case "wrong-mode":mode="shadowsocks"
+   case "server","auto":execution=fault
+   default:changed.apiToken="invented paired entry credential"
+   }
+   IOSNodeBundleStore.shared.nodes[hysteria.id]=try encoded(bundle(changed))
+   try reject("HY2 selection rejects "+fault){try hyModel.saveIOSMultihop(enabled:true,entryID:hysteria.id,exitID:paired.id,exitMode:"shadowsocks",execution:execution,entryMode:mode)}
+   try check("rejected HY2 selection keeps original saved graph",hyModel.writes==hyWrites && encoded(hyModel.bundle!)==savedHY)
+  }
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryProtocol in protocols {for exitProtocol in protocols {
    let entry=bundle(try profile("entry","external",entryProtocol)),model=RouterVPNModel()

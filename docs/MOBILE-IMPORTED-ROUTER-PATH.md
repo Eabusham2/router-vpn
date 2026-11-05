@@ -9,14 +9,16 @@ owned temporary tests, and native tunnel integration. This change adds one
 previously missing direction to Android and iOS/iPadOS:
 
 ```text
-Imported Shadowsocks 2022 entry → independently paired Router Shadowsocks final
+Imported Shadowsocks 2022 or Hysteria2 entry → independently paired Router Shadowsocks final
 ```
 
 Execution is Local, inside the application's existing Android VpnService or Apple
 PacketTunnel. The imported entry supports `2022-blake3-aes-128-gcm`,
-`2022-blake3-aes-256-gcm`, and `2022-blake3-chacha20-poly1305`. Entry and final
+`2022-blake3-aes-256-gcm`, and `2022-blake3-chacha20-poly1305`. Hysteria2 preserves
+its original server, port, password and verified TLS server name. Entry and final
 retain their separate Off, AES-256-GCM, or AES-256-GCM + XOR whitening choices.
-All nine layer combinations are constructed from the original sources.
+All nine layer combinations for each entry transport are constructed from the
+original sources. The two alternate SS2022 ciphers complete a twenty-graph matrix.
 
 Other imported entry protocols, other paired final transport families, and
 Server/Compare for this new direction remain requirements to implement and
@@ -27,7 +29,7 @@ the complete product delivered.
 ## Selection and saved state
 
 Android's multihop editor lists eligible imported entries alongside Router
-entries. Choosing an imported SS2022 entry allows selection of its paired Router
+entries. Choosing an imported SS2022 or Hysteria2 entry allows selection of its paired Router
 final. Saving selects that final and the complete Local graph; Connect still
 requests permission, starts the native graph, and proves the path.
 
@@ -46,7 +48,9 @@ Permission, Activity rotation, startup, restore, and node-usage accounting retai
 the original typed entry and final references. A matching text ID does not turn
 an imported node into a paired node. A changed source, protocol, execution
 choice, pending permission owner, or Home generation prevents the old request
-from starting or being adopted. Startup does not invent a historical Compare
+from starting or being adopted. Activity recreation compares the exact captured
+entry protocol; node usage also checks that original protocol against the proved
+Home owner. Startup does not invent a historical Compare
 winner for this Local-only direction.
 
 ## Compiler and proof ownership
@@ -62,9 +66,11 @@ Router API, token, node proof, or entry proof listener. The final retains its
 paired private identity and proof lane. Connected requires the imported entry's
 expected public address, the final's private identity, the selected DNS policy,
 and the original live engine owner. Native peer tests separately check actual
-encrypted traffic through both Shadowsocks peers and reject wrong entry keys,
-wrong final keys, bypassed final routing, wrong DNS routing, and wrong final
-identity.
+encrypted traffic through SS2022→SS and Hysteria2→SS peers. They reject wrong
+entry credentials, wrong final keys, bypassed final routing, wrong DNS routing,
+and wrong final identity. Hysteria2 additionally rejects incorrect SNI and
+untrusted certificates using the actual native TLS/QUIC certificate error.
+Timeouts and cancellation cannot satisfy those certificate-refusal assertions.
 
 Application DNS comes from the final's captured policy, including Home AdGuard.
 The imported source's standalone DNS configuration remains part of its original
@@ -114,17 +120,22 @@ Compare selection during restoration.
 ## Executable gates and evidence limits
 
 The shared compiler/runtime tests cover the independent layer matrix, all three
-entry ciphers, policy and source ownership, strict paired-final admission,
+SS2022 entry ciphers, Hysteria2 TLS/password capture, policy and source ownership,
+strict paired-final admission,
 public-entry/private-final/DNS proof, full Run-to-Healthy measurement ownership,
 retirement, and malformed or forged source rejection.
 
-`deploy/test_mobile_imported_entry.py` consumes the exact eleven shared source
-fixtures and the eleven emitted by the actual Android helper. The pinned
+`deploy/test_mobile_imported_entry.py` consumes the exact twenty shared source
+fixtures and the twenty emitted by the actual Android helper. The pinned
 libbox constructor must reproduce their original config and source digest.
 Its actual native parser, MTU profile reader, and MTU planner must accept them.
 The required fixture gate rejects missing, skipped, duplicated, foreign, or
 malformed cases. The Linux native peer gate additionally executes two encrypted
-Shadowsocks peers and the negative routing/key controls.
+Shadowsocks peers and a Hysteria2→SS pair with the negative routing, key and
+certificate controls. That encrypted Hysteria2 test exercises the unwrapped pair;
+all nine layer graphs separately pass the native parser, and layer engines retain
+their existing native traffic coverage. This does not claim encrypted mobile TUN
+traffic for every layer combination.
 
 Android gates exercise the actual helper, saved-profile store, permission
 controller, startup policy, multihop runtime, MTU session, node-usage recorder,
@@ -133,7 +144,7 @@ mutations must fail the intended assertions. The Java syntax gate covers every
 shipping Java source; the actual SDK/AAR APK build remains separately required.
 
 `deploy/test_ios_imported_router_pinned.py` is mandatory in Apple smoke and
-release preparation. It consumes the actual Swift-produced eleven-graph matrix
+release preparation. It consumes the actual Swift-produced twenty-graph matrix
 and requires native parser verdicts for all of it. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
 Local Swift/Xcode execution was unavailable during implementation; Python source

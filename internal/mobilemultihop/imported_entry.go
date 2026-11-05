@@ -13,12 +13,12 @@ type importedEntry struct {
 	source, metadata, profile, publicIP string
 }
 
-// NewImportedEntry composes an imported SS2022 predecessor and a paired
+// NewImportedEntry composes an imported SS2022 or Hysteria2 predecessor and a paired
 // Shadowsocks final. It is pure compilation: neither identity is proved here.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
-	bad := errors.New("imported entry requires a captured standalone SS2022 source and paired Shadowsocks final in Local execution")
+	bad := errors.New("imported entry requires a captured standalone SS2022 or Hysteria2 source and paired Shadowsocks final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || selection.Protocol != "shadowsocks" || selection.Profile["node_kind"] != "external" || exitMode != "shadowsocks" {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2") || selection.Profile["node_kind"] != "external" || exitMode != "shadowsocks" {
 		return nil, bad
 	}
 	// An imported operator address is a public-path proof, never a paired API.
@@ -98,7 +98,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 			node["detour"] = names[d]
 		}
 	}
-	if original == nil || !importedSS2022Method(predecessorText(original, "method")) {
+	if original == nil || selection.Protocol == "shadowsocks" && !importedSS2022Method(predecessorText(original, "method")) || selection.Protocol == "hysteria2" && original["type"] != "hysteria2" {
 		return nil, bad
 	}
 	// Each transport has its own authenticated layer. Attach the final's outer
@@ -195,7 +195,7 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if err != nil {
 		return nil, err
 	}
-	meta := Metadata{EntryKind: "external", EntryID: selection.ExitID, ExitID: predecessorText(exit.profile, "id"), ExitNodeID: predecessorText(exit.profile, "node_proof_id"), ExitAPI: predecessorText(exit.profile, "router_api"), ExitToken: predecessorText(exit.profile, "api_token"), EntryTag: "entry-wg", EntryMode: "shadowsocks", ExitMode: exitMode, Execution: "local", EntryStartLayer: entryMeta.StartLayer, ExitStartLayer: predecessorText(exit.profile, "start_layer")}
+	meta := Metadata{EntryKind: "external", EntryID: selection.ExitID, ExitID: predecessorText(exit.profile, "id"), ExitNodeID: predecessorText(exit.profile, "node_proof_id"), ExitAPI: predecessorText(exit.profile, "router_api"), ExitToken: predecessorText(exit.profile, "api_token"), EntryTag: "entry-wg", EntryMode: selection.Protocol, ExitMode: exitMode, Execution: "local", EntryStartLayer: entryMeta.StartLayer, ExitStartLayer: predecessorText(exit.profile, "start_layer")}
 	metadata, _ := json.Marshal(meta)
 	source, _ := json.Marshal([]string{"routervpn-imported-entry-v1", entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap})
 	c := &Controller{meta: meta, config: string(encoded), progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}, imported: &importedEntry{source: externalDigest(source), metadata: string(metadata), profile: profile, publicIP: selection.ExpectedPublicIP}}

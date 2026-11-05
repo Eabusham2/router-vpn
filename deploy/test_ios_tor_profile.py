@@ -707,13 +707,14 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let finalTransport:[String:Any]=["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":key]
   let base:[String:Any]=["inbounds":[["type":"tun","tag":"tun-in","auto_route":true,"strict_route":true,"mtu":1280]],"outbounds":[finalTransport,["type":"direct","tag":"direct"]],"route":["auto_detect_interface":true,"final":"proxy","rules":[["protocol":"dns","action":"hijack-dns"]]],"dns":["servers":[["type":"udp","tag":"home-dns","server":"10.77.0.1","detour":"proxy"]],"final":"home-dns"]]
   let assets=["sing-box.json":try json(base).base64EncodedString()]
-  let cases = layers.flatMap { first in layers.map { (first,$0,"2022-blake3-aes-256-gcm") } } + [("off","off","2022-blake3-aes-128-gcm"),("off","off","2022-blake3-chacha20-poly1305")]
-  for (entryLayer,finalLayer,method) in cases {
+  let cases: [(String,String,String,String)] = layers.flatMap { first in layers.map { (first,$0,"shadowsocks","2022-blake3-aes-256-gcm") } } + [("off","off","shadowsocks","2022-blake3-aes-128-gcm"),("off","off","shadowsocks","2022-blake3-chacha20-poly1305")] + layers.flatMap { first in layers.map { (first,$0,"hysteria2","") } }
+  for (entryLayer,finalLayer,kind,method) in cases {
    let entryKey=Data(repeating:105,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
    var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
+   if kind == "hysteria2" {imported=["protocol":kind,"expected_public_ip":"203.0.113.88","hysteria2":["server":"203.0.113.20","port":443,"password":" exact HY2 password ","tls_server_name":"entry.example.test"]]}
    if entryLayer != "off" {imported["start_layer"]=["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"203.0.113.20","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key]]}
    let entry:[String:Any]=["id":"imported-entry","node_kind":"external","start_layer":entryLayer,"dns_mode":"home","mtu_policy":"auto","external":imported]
-   let final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact paired token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":"shadowsocks","multihop_exit_id":"paired-final","multihop_exit_mode":"shadowsocks","multihop_execution":"local"]
+   let final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact paired token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":kind,"multihop_exit_id":"paired-final","multihop_exit_mode":"shadowsocks","multihop_execution":"local"]
    try IOSImportedEntryMultihop.validate(entry:entry,final:final)
    let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry)
    _ = try IOSMultihopStartLayer.capture(profile:final,profiles:["shadowsocks":assets])
@@ -727,8 +728,25 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    try check("imported Router keeps paired final Home DNS",servers[0]["server"] as? String=="192.168.50.133" && servers[0]["detour"] as? String=="proxy")
    let captured=try object(Data(raw.capture.utf8))["profile"] as! [String:Any]
    try check("entry capture preserves independent original policy",try json(captured)==json(entry))
+   if kind == "hysteria2" {
+    let native=outs.first{$0["type"] as? String=="hysteria2"}!
+    try check("HY2 original TLS and password survive graph composition",native["password"] as? String==" exact HY2 password " && (native["tls"] as? [String:Any])?["server_name"] as? String=="entry.example.test" && (native["tls"] as? [String:Any])?["insecure"] as? Bool != true)
+    for fault in ["empty-password","missing-TLS","malformed-TLS"] {
+     var changed=entry,external=imported,transport=imported["hysteria2"] as! [String:Any]
+     if fault=="empty-password" {transport["password"]=""}
+     else if fault=="missing-TLS" {transport.removeValue(forKey:"tls_server_name")}
+     else {transport["tls_server_name"]="https://wrong.example.test"}
+     external["hysteria2"]=transport;changed["external"]=external
+     reject("HY2 preflight rejects "+fault){try IOSImportedEntryMultihop.validate(entry:changed,final:final)}
+     reject("HY2 native source builder rejects "+fault){_ = try RouterVPNExternalExitBuilder.importedRouterSource(profile:changed)}
+    }
+    var replaced=entry,external=imported,transport=imported["hysteria2"] as! [String:Any]
+    transport["password"]="replacement credential";external["hysteria2"]=transport;replaced["external"]=external
+    let changed=try RouterVPNExternalExitBuilder.importedRouterSource(profile:replaced)
+    try check("HY2 original password remains in source capture",changed.capture != raw.capture && changed.config != raw.config)
+   }
    if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
-    try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(entryLayer+"--"+finalLayer+"--"+method+".json"))
+    try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json"))
    }
   }
  }
@@ -736,7 +754,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (11 graphs: 9 independent layers plus AES128/ChaCha20; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (20 graphs: original11SS plus9HY2 independent layer combinations; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

@@ -195,8 +195,8 @@ final class AndroidExternalPolicy {
 
     /** Original ordinary entry transport; its DNS policy never replaces the final node's. */
     static Captured captureImportedEntry(AndroidStandardExitStore.Entry entry) throws Exception {
-        if (entry == null || !"shadowsocks".equals(entry.protocol)) {
-            throw new IllegalArgumentException("Choose an imported Shadowsocks 2022 entry.");
+        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2").contains(entry.protocol)) {
+            throw new IllegalArgumentException("Choose an imported Shadowsocks 2022 or Hysteria2 entry.");
         }
         return capture(AndroidStandardExitStore.copy(entry), null, "external", null, "local");
     }

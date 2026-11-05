@@ -7,6 +7,7 @@ compilation is covered by the external/Tor/imported-Router suites; this suite ne
 nor claims device or network proof.
 """
 from pathlib import Path
+import argparse
 import os
 import shutil
 import subprocess
@@ -116,7 +117,7 @@ final class AndroidImportedRouterPath {
   AndroidStandardExitStore.validate(entry);AndroidNodeStore.validateBundle(bundle);
   JSONObject last=AndroidProfileSelection.selectedRouterProfile(bundle);
   String identity=AndroidNodeStore.stableNodeIdentity(bundle);
-  if(!entry.protocol.equals("shadowsocks")||!List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305").contains(entry.method)
+  if(!List.of("shadowsocks","hysteria2").contains(entry.protocol)||entry.protocol.equals("shadowsocks")&&!List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305").contains(entry.method)
    ||!mode.equals("shadowsocks")||!execution.equals("local")||!last.optString("node_kind").equals("router-vpn")
    ||entry.id.equals(last.getString("id"))||!identity.matches("[0-9a-f]{64}")||!identity.equals(last.optString("node_proof_id")))throw new IllegalArgumentException("invalid imported Router compiler input");
   bundle.getJSONObject("profiles").getJSONObject("shadowsocks");
@@ -234,34 +235,34 @@ public final class ConnectionProfilesHarness {
   if(protocol.equals("openvpn")){JSONObject source=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE")))).getJSONObject("external"),inline=source.getJSONObject("openvpn");e.openVPNConfig=inline.getString("config");e.username=inline.getString("username");e.password=inline.getString("password");e.expectedPublicIp=source.getString("expected_public_ip");e.openVPNPairing=new JSONObject(source.getJSONObject("openvpn_pairing").toString());e.openVPNResponseProbes=new JSONObject(source.getJSONObject("openvpn_response_probes").toString());}
   return e;
  }
- static AndroidStandardExitStore.Entry mixedSetup(Fixture f)throws Exception{
-  var entry=ordinary("shadowsocks","imported-first");f.exits.save(entry);
+ static AndroidStandardExitStore.Entry mixedSetup(Fixture f,String protocol)throws Exception{
+  var entry=ordinary(protocol,"imported-first");f.exits.save(entry);
   JSONObject last=bundle(f.first),profile=AndroidProfileSelection.selectedRouterProfile(last);
   profile.put("node_kind","router-vpn");
   last.getJSONObject("profiles").put("shadowsocks",new JSONObject().put("sing-box.json","fixture compiler boundary only"));
   f.nodes.importBundle(last.toString().getBytes(StandardCharsets.UTF_8));
   f.store.selectImportedRouterPath(entry,f.first);return entry;
  }
- static void importedRouterRoundtrip(Path root)throws Exception{
-  Fixture f=new Fixture(root);var entry=mixedSetup(f);var saved=f.store.add("Imported to paired");JSONObject row=f.row();
+ static void importedRouterRoundtrip(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2")){
+  Fixture f=new Fixture(root);var entry=mixedSetup(f,protocol);var saved=f.store.add("Imported to paired");JSONObject row=f.row();
   check(f.rows().getInt("schema_version")==6&&row.getString("node_kind").equals("router-vpn")&&row.getString("multihop_entry_kind").equals("external")&&row.getString("node_id").equals(f.first.id),"mixed schema6 lost exact role references");
   check(row.has("ordinary_entry_policy")&&row.has("exit_policy")&&!row.has("entry_policy")&&!row.has("entry_profile_id"),"mixed policy replaced imported role with Router identity");
   String serialized=text(f.rows);for(String secret:List.of("fixture-api-","fixture-socks-","fixture-private-",entry.secret,"sing-box.json","api_token"))check(!serialized.contains(secret),"mixed row copied private bytes: "+secret);
   entry.secret=Base64.getEncoder().encodeToString("N".repeat(32).getBytes(StandardCharsets.UTF_8));entry.policy.put("manual_mtu",1280);f.exits.save(entry);
   f.changeNode(f.first);JSONObject changed=bundle(f.first);AndroidProfileSelection.selectedRouterProfile(changed).put("api_token","new referenced final credential");f.nodes.importBundle(changed.toString().getBytes(StandardCharsets.UTF_8));
   f.otherSelection();f.store.load(saved.id);var path=f.store.currentImportedRouterPath();
-  check(path.entry.id.equals(entry.id)&&path.exit.id.equals(f.first.id)&&path.exitMode.equals("shadowsocks")&&path.execution.equals("local"),"mixed load changed original direction or execution");
+  check(path.entry.id.equals(entry.id)&&path.entry.protocol.equals(protocol)&&path.entry.tlsServerName.equals(entry.tlsServerName)&&path.exit.id.equals(f.first.id)&&path.exitMode.equals("shadowsocks")&&path.execution.equals("local")&&row.getString("ordinary_entry_protocol").equals(protocol)&&row.getString("multihop_entry_mode").equals(protocol),"mixed load changed original direction or execution");
   check(path.entry.secret.equals(entry.secret)&&path.entry.policy.getInt("manual_mtu")==1360&&profile(f.first).getInt("manual_mtu")==1360&&profile(f.first).getString("api_token").equals("new referenced final credential"),"mixed load did not restore separate policies while retaining referenced credentials");
   ProductConnectSurface ui=new ProductConnectSurface(f);ui.multihopToggle.setChecked(true);ui.pressConnect();
   check(ui.connection.starts==1&&ui.connection.ordinaryEntry.id.equals(entry.id)&&ui.connection.importedFinal.id.equals(f.first.id)&&ui.connection.entry==null,"shipping Connect lost imported Router direction");
   f.exits.get(entry.id);var updated=f.exits.get(entry.id);updated.policy.put("manual_mtu",1400);f.exits.save(updated);f.store.update(saved.id,"Updated mixed");f.changeExternal(entry.id);f.otherSelection();f.store.load(saved.id);
   check(f.exits.get(entry.id).policy.getInt("manual_mtu")==1400&&f.store.list().size()==1,"mixed Update lost original row or current policy");
   f.store.delete(saved.id);check(f.store.list().isEmpty()&&f.exits.get(entry.id).secret.equals(entry.secret)&&f.first.file.isFile(),"mixed Delete removed private referenced owners");
- }
- static void importedRouterInvalid(Path root)throws Exception{
-  for(String fault:List.of("server","auto","wrong-mode","wrong-direction","wrong-kind","missing-source","public-identity","foreign-secret","downgrade")){
-   Fixture f=new Fixture(root);mixedSetup(f);var saved=f.store.add("Mixed rejection");JSONObject row=f.row();
-   switch(fault){case "server","auto":row.put("multihop_execution",fault);break;case "wrong-mode":row.put("multihop_entry_mode","wireguard");break;
+ }}
+ static void importedRouterInvalid(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2")){
+  for(String fault:List.of("server","auto","wrong-mode","other-supported-mode","wrong-direction","wrong-kind","missing-source","public-identity","foreign-secret","downgrade")){
+   Fixture f=new Fixture(root);mixedSetup(f,protocol);var saved=f.store.add("Mixed rejection");JSONObject row=f.row();
+   switch(fault){case "server","auto":row.put("multihop_execution",fault);break;case "wrong-mode":row.put("multihop_entry_mode","wireguard");break;case "other-supported-mode":row.put("multihop_entry_mode",protocol.equals("shadowsocks")?"hysteria2":"shadowsocks");break;
     case "wrong-direction":row.put("multihop_exit_id",f.second.id);break;case "wrong-kind":row.put("multihop_entry_kind","router-vpn");break;
     case "missing-source":row.put("multihop_entry_id","missing");break;case "public-identity":row.put("ordinary_entry_public_ip","203.0.113.200");break;
     case "foreign-secret":row.getJSONObject("ordinary_entry_policy").put("password","must not persist");break;
@@ -269,20 +270,20 @@ public final class ConnectionProfilesHarness {
    f.row(row);if(fault.equals("downgrade"))Files.writeString(f.rows.toPath(),f.rows().put("schema_version",5).toString());
    State before=new State(f);int writes=AndroidPrivateFileStore.writes;rejected(()->f.store.load(saved.id),fault);before.same(f,"mixed rejection "+fault);check(writes==AndroidPrivateFileStore.writes,"mixed rejection wrote before validation");
   }
- }
- static void importedRouterRollback(Path root)throws Exception{
+ }}
+ static void importedRouterRollback(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2")){
   for(String fault:List.of("node","entry","preferences","rollback")){
-   Fixture f=new Fixture(root);var entry=mixedSetup(f);var saved=f.store.add("Mixed rollback");f.changeExternal(entry.id);f.changeNode(f.first);f.otherSelection();State before=new State(f);
+   Fixture f=new Fixture(root);var entry=mixedSetup(f,protocol);var saved=f.store.add("Mixed rollback");f.changeExternal(entry.id);f.changeNode(f.first);f.otherSelection();State before=new State(f);
    if(fault.equals("preferences")||fault.equals("rollback"))f.prefs.failures=fault.equals("rollback")?2:1;
    else{AndroidPrivateFileStore.failPath=(fault.equals("node")?f.first.file:new File(f.context.getFilesDir(),"standard-exits.json")).getAbsolutePath();AndroidPrivateFileStore.failures=1;}
    try{Exception error=rejected(()->f.store.load(saved.id),fault);before.same(f,"mixed transactional "+fault);check(error.getMessage().contains(fault.equals("rollback")?"rollback is incomplete":"prior connection state was restored"),"mixed rollback status inaccurate");}
    finally{AndroidPrivateFileStore.failures=0;AndroidPrivateFileStore.failPath="";}
   }
-  Fixture f=new Fixture(root);var entry=mixedSetup(f);var saved=f.store.add("Mixed source race");f.changeExternal(entry.id);f.otherSelection();Map<String,?> preferences=f.prefs.getAll();
+  Fixture f=new Fixture(root);var entry=mixedSetup(f,protocol);var saved=f.store.add("Mixed source race");f.changeExternal(entry.id);f.otherSelection();Map<String,?> preferences=f.prefs.getAll();
   AndroidImportedRouterPath.afterValidation=()->{AndroidImportedRouterPath.afterValidation=null;try{var current=f.exits.get(entry.id);current.secret=Base64.getEncoder().encodeToString("R".repeat(32).getBytes(StandardCharsets.UTF_8));f.exits.save(current);}catch(Exception error){throw new IllegalStateException(error);}};
   try{rejected(()->f.store.load(saved.id),"mixed source changed during validation");check(f.exits.get(entry.id).policy.getInt("manual_mtu")==1280&&preferences.equals(f.prefs.getAll()),"mixed race replaced newer source or selected stale path");}finally{AndroidImportedRouterPath.afterValidation=null;}
   State before=new State(f);f.prefs.failures=1;rejected(()->f.store.selectImportedRouterPath(f.exits.get(entry.id),f.first),"mixed selection publication failure");before.same(f,"mixed selection rollback");
- }
+ }}
  static void ordinaryTorRoundtrip(Path root)throws Exception{
   for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn")){
    Fixture f=new Fixture(root);var entry=ordinary(protocol,"ordinary-"+protocol);f.exits.save(entry);var exit=f.exits.get("external-b");exit.startupMode="last";exit.autoConnect=true;exit.torPolicy.put("manual_mtu",1320);f.exits.save(exit);
@@ -548,6 +549,9 @@ public final class ConnectionProfilesHarness {
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case-family", choices=("all", "imported-router"), default="all")
+    args = parser.parse_args()
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
         raise RuntimeError("Real Android JSON implementation required")
@@ -582,6 +586,8 @@ def main():
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
         # Each complete case family retains the original finite JVM budget.
         subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "imported-router"], env=env, check=True, timeout=180)
+        if args.case_family == "imported-router":
+            return
         subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data)], env=env, check=True, timeout=180)
         # A per-instance transaction can still lose an update between separate
         # Activities. Reproduce that defect only in isolated compiled classes.

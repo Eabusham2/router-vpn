@@ -160,15 +160,16 @@ enum RouterVPNExternalExitBuilder {
     /// its saved Home DNS is not authority over the paired final's resolver.
     static func importedRouterSource(profile: [String: Any]) throws -> (config: String, capture: String) {
         guard profile["node_kind"] as? String == "external", profile["multihop_enabled"] as? Bool != true,
-              let imported = profile["external"] as? [String: Any], imported["protocol"] as? String == "shadowsocks",
+              let imported = profile["external"] as? [String: Any],
+              let kind = imported["protocol"] as? String, ["shadowsocks", "hysteria2"].contains(kind),
               let id = profile["id"] as? String, !id.isEmpty else { throw error("Imported Router entry lost its original standalone source.") }
         try IOSStartLayer.validateExternal(profile: profile)
         let expected = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
-        let outbound = try customExit(external: imported, protocolName: "shadowsocks")
-        let data = try rawConfiguration(external: imported, protocolName: "shadowsocks", endpoints: [], outbounds: [outbound])
+        let outbound = try customExit(external: imported, protocolName: kind)
+        let data = try rawConfiguration(external: imported, protocolName: kind, endpoints: [], outbounds: [outbound])
         var original = profile
         let bootstrap = original.removeValue(forKey: "dns_bootstrap")
-        var capture: [String: Any] = ["schema": 1, "exit_id": id, "protocol": "shadowsocks",
+        var capture: [String: Any] = ["schema": 1, "exit_id": id, "protocol": kind,
                                       "expected_public_ip": expected, "profile": original]
         if let bootstrap {
             guard let value = bootstrap as? [String: Any], Set(value.keys) == ["server", "query"] else { throw error("Imported DNS capture is malformed.") }

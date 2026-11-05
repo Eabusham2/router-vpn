@@ -24,13 +24,14 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		t.Skip("exact generated compiler sources supplied by native mobile gate")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 11 {
+	if err != nil || len(entries) != 20 {
 		t.Fatal("incomplete original layer matrix", err)
 	}
 	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
 	for _, a := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		for _, b := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			expected[a+"--"+b+".json"] = true
+			expected["hysteria2--"+a+"--"+b+".json"] = true
 		}
 	}
 	for _, entry := range entries {
@@ -62,8 +63,17 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 			if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || metadata["entry_kind"] != "external" || metadata["entry_api"] != "" || metadata["entry_node_id"] != "" || metadata["entry_token"] != "" {
 				t.Fatal("imported capture acquired paired identity")
 			}
+			expectedMode := "shadowsocks"
+			layerName := name
+			if strings.HasPrefix(name, "hysteria2--") {
+				expectedMode = "hysteria2"
+				layerName = strings.TrimPrefix(name, "hysteria2--")
+			}
+			if metadata["entry_mode"] != expectedMode {
+				t.Fatal("captured imported transport mode changed")
+			}
 			if !strings.HasPrefix(name, "cipher-") {
-				parts := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+				parts := strings.Split(strings.TrimSuffix(layerName, ".json"), "--")
 				normalize := func(v string) string {
 					if v == "" {
 						return "off"
@@ -111,6 +121,7 @@ func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
 	for _, a := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		for _, b := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			expected[a+"--"+b+"--2022-blake3-aes-256-gcm.json"] = true
+			expected["hysteria2--"+a+"--"+b+".json"] = true
 		}
 	}
 	expected["off--off--2022-blake3-aes-128-gcm.json"] = true

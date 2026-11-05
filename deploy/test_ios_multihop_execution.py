@@ -63,6 +63,33 @@ SWIFT = r'''
   let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
   reject("imported restore rejects replaced proof source"){_ = try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:replacement)}
  }
+ static func importedHysteriaRouter()throws {
+  var config=try source("local","hysteria2","shadowsocks"),root=try JSONSerialization.jsonObject(with:source("local","hysteria2","shadowsocks")["bundle"] as! Data) as! [String:Any]
+  var final=(root["routerProfiles"] as! [[String:Any]])[0]
+  final["node_kind"]="router-vpn";final["node_proof_id"]=String(repeating:"a",count:64);final["router_api"]="http://10.77.0.1:8787";final["api_token"]="paired final"
+  root["routerProfiles"]=[final];config["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
+  let entry:[String:Any]=["id":"entry","node_kind":"external","start_layer":"off","external":["protocol":"hysteria2","expected_public_ip":"198.51.100.4","hysteria2":["server":"198.51.100.4","port":443,"password":" exact original secret ","tls_server_name":"entry.example.test"]]]
+  config["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[entry]],options:.sortedKeys)
+  let original=try IOSMultihopExecution.Source(configuration:config,digest:digest)
+  let receipt=try IOSMultihopExecution.Capture(source:original,execution:"local",session:UUID().uuidString,request:String(repeating:"f",count:32))
+  let restored=try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:original)
+  check("HY2 restore retains captured source and transport",restored.source==original && original.entryMode=="hysteria2")
+  for fault in ["password","TLS","protocol","source","server","auto","wrong-mode"] {
+   var changed=config,a=entry,b=final,external=entry["external"] as! [String:Any],transport=external["hysteria2"] as! [String:Any]
+   switch fault {
+   case "password":transport["password"]="replacement exact password"
+   case "TLS":transport["tls_server_name"]="replacement.example.test"
+   case "protocol":external["protocol"]="shadowsocks"
+   case "source":transport["server"]="198.51.100.5"
+   case "server","auto":b["multihop_execution"]=fault
+   default:b["multihop_entry_mode"]="shadowsocks"
+   }
+   external["hysteria2"]=transport;a["external"]=external
+   changed["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[a]],options:.sortedKeys)
+   var finalRoot=root;finalRoot["routerProfiles"]=[b];changed["bundle"]=try JSONSerialization.data(withJSONObject:finalRoot,options:.sortedKeys)
+   reject("HY2 restore refuses replaced original "+fault){let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest);_ = try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:replacement)}
+  }
+ }
  static func source(_ requested:String="auto",_ entry:String="max-quic-awg",_ exit:String="reality-xhttp")throws->[String:Any]{
   let bundle=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":entry,"multihop_exit_mode":exit,"multihop_execution":requested]],"profiles":["private":"exact exit credential bytes"]])
   let predecessor=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry"]],"profiles":["private":"exact entry credential bytes"]])
@@ -245,7 +272,7 @@ SWIFT = r'''
   }}}
  }
  static func main()throws{
-  try importedRouter()
+  try importedRouter();try importedHysteriaRouter()
   try torComparedExecutions()
   try torExecutions()
   try ordinaryTorExecutions()

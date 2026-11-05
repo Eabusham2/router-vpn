@@ -210,7 +210,7 @@ struct IOSMultihopView: View {
     @StateObject private var viaEntry = IOSViaEntryLatency()
     private var nodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
-            ($0.normalizedNodeKind == "external" && ((ordinaryExitProtocol != nil || torExitProtocol != nil) ? RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "") : ($0.external?.protocolName == "shadowsocks" && IOSImportedEntryMultihop.methods.contains($0.external?.shadowsocks?.method ?? "")))) }
+            ($0.normalizedNodeKind == "external" && ((ordinaryExitProtocol != nil || torExitProtocol != nil) ? RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "") : ($0.external?.protocolName == "hysteria2" || ($0.external?.protocolName == "shadowsocks" && IOSImportedEntryMultihop.methods.contains($0.external?.shadowsocks?.method ?? ""))))) }
     }
     private var exitNodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||

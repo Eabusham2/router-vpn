@@ -8,30 +8,39 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Mobile imported entry → paired Router final
 
-The Android and Apple source now supports an ordinary imported Shadowsocks 2022
-entry followed by an independently paired Router Shadowsocks final, using Local
-execution in one VpnService/PacketTunnel. All three SS2022 entry ciphers and all
-nine independent Start Layer combinations retain their original source and proof
-ownership. Selection, permission, saved profiles, restoration, selected DNS, typed
-hop measurement and MTU use the same captured graph. Failed private staging
-retains its exact cleanup owner and blocks replacement until cleanup joins.
+The Android and Apple source supports ordinary imported Shadowsocks 2022 and
+Hysteria2 entries followed by an independently paired Router Shadowsocks final,
+using Local execution in one VpnService/PacketTunnel. All three SS2022 entry
+ciphers and nine independent Start Layer combinations for each entry transport
+retain their original source and proof ownership. Hysteria2 preserves the captured
+TLS name and password. Selection, permission, saved profiles, restoration,
+selected DNS, typed hop measurement and MTU use the same captured graph. Failed
+private staging retains its cleanup owner and blocks replacement until cleanup
+joins. Activity recreation and usage receipts retain the actual imported mode.
 [The implementation and evidence boundary](MOBILE-IMPORTED-ROUTER-PATH.md) records
 the complete call path and its mandatory native gates.
 
-Local evidence includes the actual Android helper's 567 checks and four causal
-controls, permission 3,422/nine controls, usage 182/ten controls, startup
-3,813/eighteen controls, existing Last history 1,503/thirteen controls, and the
-runtime's retained constructor-cleanup cases with three causal controls. The
-shared pinned constructor/parser checks accept all eleven shared and Android
-host-produced graphs. Imported-profile persistence passed 140 checks; the
-original full profile family reached its unchanged 180-second watchdog while
-launching actual Go validators. That full family and its later concurrency
-control remain mandatory exact-SHA CI evidence, not local passes. Swift/Xcode
-and the mandatory Apple-produced eleven-graph native matrix were unavailable
-locally. Source/fixture evidence does not establish APK/IPA delivery, device
-routing, physical-network behavior or release publication.
+Local Hysteria2-increment evidence includes the actual Android helper's 1,062
+checks and four causal controls, permission 3,481/nine controls, usage 191/eleven
+controls, startup 3,952/eighteen controls, imported profile persistence 298 checks
+across 32 cases,
+and the actual runtime's source/restore/retained-cleanup tests for both entry
+protocols. Java syntax passes for all 101 sources. Shared compiler/runtime race
+tests pass 63 verdicts. The pinned constructor, native parser and typed MTU
+planner accept all twenty shared and twenty actual Android-produced graphs.
+Real native SS→SS and Hysteria2→SS traffic passes sixteen combined verdicts,
+including certificate, password, routing, selected-DNS and final-identity
+rejections. Removing captured password equality or disabling actual native TLS
+verification is detected by the corresponding deliberate negative controls.
 
-This closes one source direction, not the broader all-device graph requirement.
+The original full profile family previously reached its unchanged 180-second
+local watchdog while launching actual Go validators. That full family and its
+concurrency control remain mandatory exact-SHA CI evidence. Swift/Xcode and the
+mandatory Apple-produced twenty-graph native matrix are unavailable locally.
+Source/fixture evidence does not establish APK/IPA delivery, physical routing,
+network transitions, leaks, off-LAN behavior, signing or release publication.
+
+This adds a second source entry family in the imported-to-paired direction.
 Other imported entry protocols, other paired final families and Server/Compare
 for this direction remain unfinished; no original requirement or default is
 removed.
