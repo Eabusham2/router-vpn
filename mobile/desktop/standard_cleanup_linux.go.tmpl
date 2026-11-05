@@ -16,6 +16,7 @@ import (
 type routerVPNStandardCleanup struct {
 	result       *standardengine.CleanupFile
 	operations   *standardengine.OperationFile
+	mtu          *standardengine.NativeMTUWorker
 	capture      string
 	reader       routerVPNStandardInbound
 	instance     *box.Box
@@ -34,6 +35,32 @@ func (o *routerVPNStandardCleanup) retire(ctx context.Context) (string, error) {
 	}
 	if err := o.result.Current(); err != nil {
 		return "", err
+	}
+	if o.mtu != nil {
+		if err := o.mtu.Retire(ctx); err != nil {
+			return "", err
+		}
+		current, err := o.mtu.CurrentReader()
+		if err != nil {
+			return "", err
+		}
+		if current == nil {
+			o.reader = nil
+			// MTU may have retired every actual reader. Preserve its real prior
+			// reader ledger; the separate FD11 pages retain all acquired readers.
+			if o.ledger == "" {
+				o.ledger, err = o.mtu.CurrentRetirement()
+				if err != nil {
+					return "", err
+				}
+			}
+		} else {
+			reader, ok := current.(routerVPNStandardInbound)
+			if !ok {
+				return "", errors.New("standard MTU current reader lost original retirement capability")
+			}
+			o.reader = reader
+		}
 	}
 	if o.ledger == "" {
 		var err error

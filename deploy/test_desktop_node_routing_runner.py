@@ -34,6 +34,24 @@ class NativeLifecycleAdmissionVerdicts(unittest.TestCase):
             NODE.require_native_verdicts(output+output, names, "lifecycle admission")
 
 
+class StandardServiceMTUVerdicts(unittest.TestCase):
+    def test_actual_standard_reader_verdict_cannot_be_omitted_or_substituted(self):
+        suite = NODE.STANDARD_MTU_SUITE
+        name = suite[3][0]
+        output = "=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n"
+        baseline = Mock()
+        baseline.execute.return_value = (0, output)
+        with contextlib.redirect_stdout(io.StringIO()):
+            NODE.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+            for changed in ("", output + output, output.replace(name, name + "Foreign"),
+                            output.replace("--- PASS:", "--- SKIP:"),
+                            output.replace("--- PASS:", "--- FAIL:")):
+                baseline.execute.return_value = (0, changed)
+                with self.subTest(changed=changed), self.assertRaises(ValueError):
+                    NODE.execute_baseline_suite(baseline, suite)
+
+
 class NativeAddressRetirementVerdicts(unittest.TestCase):
     def test_partial_and_foreign_address_verdicts_cannot_be_omitted(self):
         names = NODE.NATIVE_ADDRESS_RETIREMENT_VERDICTS

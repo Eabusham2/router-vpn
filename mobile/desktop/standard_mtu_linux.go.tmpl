@@ -1,0 +1,68 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	"time"
+)
+
+type routerVPNStandardMTUBackend struct {
+	instance *box.Box
+	tag      string
+}
+type routerVPNStandardMTUTransaction struct {
+	transaction *inbound.RouterVPNTunTransaction
+}
+
+func (b *routerVPNStandardMTUBackend) Current(ctx context.Context) (any, error) {
+	current, present, err := adapter.RouterVPNInboundContext(ctx, b.instance.Inbound(), b.tag)
+	if err != nil || !present {
+		return nil, errors.Join(err, errors.New("standard MTU lost its original manager reader"))
+	}
+	return current, nil
+}
+func (b *routerVPNStandardMTUBackend) Change(ctx context.Context, expected any, mtu int) (standardengine.NativeMTUTransaction, error) {
+	reader, ok := expected.(adapter.Inbound)
+	if !ok {
+		return nil, errors.New("standard MTU omitted actual original inbound")
+	}
+	tx, err := b.instance.RouterVPNChangeMTUTransaction(ctx, reader, mtu)
+	if tx == nil {
+		return nil, err
+	}
+	return &routerVPNStandardMTUTransaction{tx}, err
+}
+func (b *routerVPNStandardMTUBackend) Retry(ctx context.Context, transaction standardengine.NativeMTUTransaction) error {
+	tx, ok := transaction.(*routerVPNStandardMTUTransaction)
+	if !ok || tx == nil || tx.transaction == nil {
+		return errors.New("standard MTU cleanup changed its original native transaction")
+	}
+	return b.instance.RouterVPNRetryMTUTransaction(ctx, tx.transaction)
+}
+func (t *routerVPNStandardMTUTransaction) Current() any { return t.transaction.Current() }
+func (t *routerVPNStandardMTUTransaction) Evidence() [standardengine.OperationReaders]standardengine.NativeMTUEvidence {
+	var result [standardengine.OperationReaders]standardengine.NativeMTUEvidence
+	for index, e := range t.transaction.Evidence() {
+		if index >= len(result) {
+			break
+		}
+		result[index] = standardengine.NativeMTUEvidence{Reader: e.Inbound, Ready: e.Ready, Retirement: e.Retirement, Retired: e.Retired, Pending: e.Pending}
+	}
+	return result
+}
+
+func routerVPNStandardMTUWorker(file *standardengine.OperationFile, instance *box.Box, tag string, original adapter.Inbound, ready string, guard func(context.Context) error) (*standardengine.NativeMTUWorker, error) {
+	return standardengine.NewNativeMTUWorker(file, &routerVPNStandardMTUBackend{instance, tag}, original, ready, guard,
+		func(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc, error) {
+			// Preserve the same eight-second original cleanup allowance as the
+			// shared native MTU operation controller. Each read shares its remainder.
+			return mobilemtu.WithOperationContext(ctx, budget, 8*time.Second)
+		})
+}

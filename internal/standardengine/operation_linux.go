@@ -420,7 +420,7 @@ func (o *OperationFile) record(ctx context.Context, r OperationReservation) ([]b
 	if err != nil {
 		return nil, err
 	}
-	if len(body) != 360 || binary.LittleEndian.Uint32(body) != r.Slot || !bytes.Equal(body[4:140], key) || body[140]&^byte(7) != 0 || body[140]&1 == 0 || !bytes.Equal(body[141:144], []byte{0, 0, 0}) {
+	if len(body) != operationRecordBodySize || binary.LittleEndian.Uint32(body) != r.Slot || !bytes.Equal(body[4:140], key) || body[140]&^byte(7) != 0 || body[140]&1 == 0 || !bytes.Equal(body[141:144], []byte{0, 0, 0}) {
 		return nil, errors.New("operation reservation differs from original key")
 	}
 	for role := 0; role < OperationReaders; role++ {
@@ -436,6 +436,9 @@ func (o *OperationFile) record(ctx context.Context, r OperationReservation) ([]b
 		if err != nil || !bytes.Equal(raw, canonical) || role == 0 && binding != r.Key.Original {
 			return nil, errors.New("operation role changed its captured binding")
 		}
+	}
+	if err := validateOperationExtension(body); err != nil {
+		return nil, err
 	}
 	return body, nil
 }
@@ -461,7 +464,7 @@ func (o *OperationFile) Reserve(ctx context.Context, key OperationKey) (Operatio
 		}
 		if bytes.Equal(frame, make([]byte, operationRecordSize)) {
 			r.Slot = slot
-			body := make([]byte, 360)
+			body := make([]byte, operationRecordBodySize)
 			binary.LittleEndian.PutUint32(body, slot)
 			copy(body[4:], raw)
 			body[140] = 1
@@ -469,7 +472,7 @@ func (o *OperationFile) Reserve(ctx context.Context, key OperationKey) (Operatio
 			return r, o.write(ctx, 4, body, recordOffset(slot), operationRecordSize)
 		}
 		body, err := operationBody(frame, 4)
-		if err != nil || len(body) != 360 {
+		if err != nil || len(body) != operationRecordBodySize {
 			return r, errors.New("operation reservation history is torn")
 		}
 		prior := decodeOperationKey(body[4:140])
@@ -519,8 +522,12 @@ func (o *OperationFile) Submit(ctx context.Context, r OperationReservation) erro
 	if o.child {
 		return errors.New("operation child cannot submit work")
 	}
-	if _, err := o.record(ctx, r); err != nil {
+	record, err := o.record(ctx, r)
+	if err != nil {
 		return err
+	}
+	if record[360] != 0 {
+		return errors.New("operation reservation already belongs to a command or aborted admission")
 	}
 	frame, err := o.rawRead(ctx, operationSlotSize, operationSlotSize)
 	if err != nil {
@@ -641,6 +648,18 @@ func operationPage(r OperationReservation, role OperationRole, phase OperationPh
 	return int(r.Slot)*6 + int(role)*2 + int(phase), nil
 }
 func (o *OperationFile) PublishEvidence(ctx context.Context, r OperationReservation, role OperationRole, phase OperationPhase, receipt []byte) error {
+	return o.publishEvidence(ctx, r, role, phase, receipt, false)
+}
+
+// PublishJoinedEvidence preserves actual native evidence after the worker has
+// joined, including cancellation/rollback. It cannot grant late winner adoption.
+// The retained worker calls this with a bounded read-only observation context;
+// publishing joined evidence grants no further native work or cleanup time.
+func (o *OperationFile) PublishJoinedEvidence(ctx context.Context, r OperationReservation, role OperationRole, phase OperationPhase, receipt []byte) error {
+	return o.publishEvidence(ctx, r, role, phase, receipt, true)
+}
+
+func (o *OperationFile) publishEvidence(ctx context.Context, r OperationReservation, role OperationRole, phase OperationPhase, receipt []byte, joined bool) error {
 	unlock, err := o.lock(ctx, false)
 	if err != nil {
 		return err
@@ -653,7 +672,7 @@ func (o *OperationFile) PublishEvidence(ctx context.Context, r OperationReservat
 	if !o.child {
 		return errors.New("operation evidence requires original child writer")
 	}
-	key, err := o.key(ctx, r.Key, phase == ReadyEvidence)
+	key, err := o.key(ctx, r.Key, phase == ReadyEvidence && !joined)
 	if err != nil {
 		return err
 	}
@@ -673,6 +692,24 @@ func (o *OperationFile) PublishEvidence(ctx context.Context, r OperationReservat
 	if len(receipt) == 0 || len(receipt) > bound {
 		return errors.New("operation raw receipt exceeds phase bound")
 	}
+	if joined && phase == ReadyEvidence && role != OriginalReader && binding.InitialReceiptSHA256 == "" {
+		// A partial native reader can expose its actual cached initial Ready
+		// only during joined cleanup. Complete that empty digest once, retaining
+		// the exact already-bound identity/generation. No acknowledged result or
+		// published Ready may be changed by this completion.
+		if record[373] != 0 || record[374] != 0 || record[368] != 0 && record[370]&4 == 0 {
+			return errors.New("completed reader cannot gain another initial receipt")
+		}
+		binding.InitialReceiptSHA256 = SHA256(receipt)
+		canonical, err := binding.canonical(true)
+		if err != nil {
+			return err
+		}
+		copy(bindingRaw, canonical)
+		if err := o.write(ctx, 4, record, recordOffset(r.Slot), operationRecordSize); err != nil {
+			return err
+		}
+	}
 	if phase == ReadyEvidence && SHA256(receipt) != binding.InitialReceiptSHA256 {
 		return errors.New("operation Ready differs from actual initial receipt")
 	}
@@ -682,6 +719,12 @@ func (o *OperationFile) PublishEvidence(ctx context.Context, r OperationReservat
 		return err
 	}
 	if !bytes.Equal(old, make([]byte, operationHeaderSize)) {
+		if joined {
+			prior, readErr := o.ReadEvidence(ctx, r, role, phase)
+			if readErr == nil && bytes.Equal(prior, receipt) {
+				return ctx.Err()
+			}
+		}
 		return errors.New("operation evidence page cannot be replaced or reused")
 	}
 	payload := make([]byte, OperationPageSize)
@@ -728,7 +771,13 @@ func (o *OperationFile) ReadEvidence(ctx context.Context, r OperationReservation
 	key, _ := r.Key.canonical()
 	keyDigest := sha256.Sum256(key)
 	bindingRaw := record[144+int(role)*72 : 144+(int(role)+1)*72]
-	if record[140]&(1<<role) == 0 || binary.LittleEndian.Uint32(body) != r.Slot || body[4] != byte(role) || body[5] != byte(phase) || body[6] != 0 || body[7] != 0 || !bytes.Equal(body[8:40], keyDigest[:]) || !bytes.Equal(body[40:112], bindingRaw) {
+	bindingMatches := bytes.Equal(body[40:112], bindingRaw)
+	// A retirement captured before the partial reader exposed its cached Ready
+	// keeps the empty initial digest, bound to the same identity/generation.
+	if !bindingMatches && role != OriginalReader && phase == RetirementEvidence && bytes.Equal(body[40:80], bindingRaw[:40]) && bytes.Equal(body[80:112], make([]byte, 32)) {
+		bindingMatches = true
+	}
+	if record[140]&(1<<role) == 0 || binary.LittleEndian.Uint32(body) != r.Slot || body[4] != byte(role) || body[5] != byte(phase) || body[6] != 0 || body[7] != 0 || !bytes.Equal(body[8:40], keyDigest[:]) || !bindingMatches {
 		return nil, errors.New("operation page substituted key, role or reader")
 	}
 	count := int(binary.LittleEndian.Uint32(body[112:]))

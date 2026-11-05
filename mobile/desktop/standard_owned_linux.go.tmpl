@@ -177,8 +177,11 @@ func routerVPNRunStandard(lifetime context.Context, expected string) (failure er
 	if err := peer.Send(startup, body); err != nil {
 		return err
 	}
+	cleanup.mtu, err = routerVPNStandardMTUWorker(operations, instance, shape.Tag, inbound, ledger, peer.Current)
+	if err != nil {
+		return err
+	}
 	// Only the original creating service can retire this process. Its immutable
 	// creation pidfd and joined Stop remain outside this observational channel.
-	<-lifetime.Done()
-	return nil
+	return cleanup.mtu.Run(lifetime)
 }

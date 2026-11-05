@@ -11,7 +11,7 @@ import (
 // FD11 carries bounded evidence and operation identity, never authority to
 // construct a reader, change MTU, or adopt an observer from serialized text.
 const OperationFD = 11
-const OperationLayout = 1
+const OperationLayout = 2
 const OperationControlSize = 64 << 10
 
 // Pages carry raw bounded evidence. They do not relax the native receipt
@@ -28,6 +28,99 @@ const operationHeadersOffset = operationRecordsOffset + OperationTransactions*op
 const operationKeySize = 136
 const operationBindingSize = 72
 const operationEnvelopeSize = 48
+const operationRecordBodySize = 424
+
+var ErrNoOperation = errors.New("no new original operation")
+var ErrOperationPending = errors.New("original operation worker has not published joined evidence")
+
+const NoReader OperationRole = 255
+
+type ObserverRole uint8
+
+const (
+	ServiceObserver ObserverRole = iota
+	ControllerObserver
+)
+
+type OperationCommand struct {
+	Reservation OperationReservation
+	MTU         int
+}
+
+type OperationResult struct {
+	CurrentRole                   OperationRole
+	Failed, Pending, WorkerJoined bool
+	ReadyMask, RetirementMask     uint8
+	Digest                        string
+	Revision                      uint64
+}
+
+type OperationReaderEvidence struct {
+	Binding           ReaderBinding
+	Ready, Retirement []byte
+}
+
+type OperationReport struct {
+	Command OperationCommand
+	Result  OperationResult
+	Readers [OperationReaders]*OperationReaderEvidence
+}
+
+// OperationResultDigest is shared by the native writer and both independent
+// observers. It validates serialized evidence identity only; each observer must
+// additionally admit the exact native receipts on its already retained epoch.
+func OperationResultDigest(report OperationReport) (string, error) {
+	r, result := report.Command.Reservation, report.Result
+	key, err := r.Key.canonical()
+	if err != nil || r.Slot >= OperationTransactions || report.Command.MTU < 576 || report.Command.MTU > 9000 || !result.WorkerJoined || result.Revision == 0 || result.CurrentRole > RollbackReader && result.CurrentRole != NoReader || result.ReadyMask&^uint8(7) != 0 || result.RetirementMask&^uint8(7) != 0 {
+		return "", errors.New("operation report omitted bounded joined identity")
+	}
+	frame := make([]byte, 160)
+	copy(frame, key)
+	binary.LittleEndian.PutUint32(frame[136:], r.Slot)
+	binary.LittleEndian.PutUint32(frame[140:], uint32(report.Command.MTU))
+	binary.LittleEndian.PutUint64(frame[144:], result.Revision)
+	frame[152], frame[153], frame[154] = byte(result.CurrentRole), result.ReadyMask, result.RetirementMask
+	if result.Failed {
+		frame[155] = 1
+	}
+	if result.Pending {
+		frame[156] = 1
+	}
+	hash := sha256.New()
+	_, _ = hash.Write(frame)
+	for role := OperationRole(0); role < OperationReaders; role++ {
+		e := report.Readers[role]
+		ready, retired := result.ReadyMask&(1<<role) != 0, result.RetirementMask&(1<<role) != 0
+		if e == nil {
+			if role == OriginalReader || ready || retired || result.CurrentRole == role {
+				return "", errors.New("native report omitted retained reader")
+			}
+			_, _ = hash.Write([]byte{byte(role), 0})
+			continue
+		}
+		binding, err := e.Binding.canonical(role != OriginalReader)
+		if err != nil || role == OriginalReader && e.Binding != r.Key.Original || ready != (len(e.Ready) != 0) || retired != (len(e.Retirement) != 0) || len(e.Ready) > 16<<10 || len(e.Retirement) > 48<<10 || ready && SHA256(e.Ready) != e.Binding.InitialReceiptSHA256 {
+			return "", errors.New("native report changed retained reader evidence")
+		}
+		if result.CurrentRole == role && (!ready || retired) || !result.Pending && result.CurrentRole != role && !retired {
+			return "", errors.New("native report omitted original resource settlement")
+		}
+		_, _ = hash.Write([]byte{byte(role), 1})
+		_, _ = hash.Write(binding)
+		for _, raw := range [][]byte{e.Ready, e.Retirement} {
+			sum := sha256.Sum256(raw)
+			_, _ = hash.Write(sum[:])
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// InitialReaderBinding describes the original retained reader. It is not a
+// capability to acquire a reader from a digest or a current interface name.
+func InitialReaderBinding(captureSHA, ready string) ReaderBinding {
+	return ReaderBinding{SHA256([]byte("standard-original-reader\x00" + captureSHA + "\x00" + ready)), 1, SHA256([]byte(ready))}
+}
 
 // ReaderBinding is a digest of an identity retained by the coordinator, not a
 // reader lookup key. Generation and initial receipt belong to that exact reader.

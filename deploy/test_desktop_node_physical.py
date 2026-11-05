@@ -84,6 +84,9 @@ NETWORK_CONTEXT_LEAVES = tuple(NETWORK_CONTEXT_TESTS[0] + "/" + name for name in
     "live", "guard-cancel", "interface-cancel", "receipt-cancel", "changed-index"))
 
 NATIVE_MTU_TEST = "TestRouterVPNNativeLinuxMTUTransactionNamespace"
+STANDARD_MTU_SUITE = ("standard-mtu-original-reader", "./cmd/sing-box",
+                      "^TestRouterVPNStandardMTUActualBoxKeepsOriginalReader$",
+                      ("TestRouterVPNStandardMTUActualBoxKeepsOriginalReader",))
 NATIVE_MTU_CASES = ("full-search-and-winner", "failed-candidate-and-original-restore", "cancelled-work-and-fresh-stop")
 NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("ReplacementAndRollback", "FailureDoesNotStartAnOverlappingReader", "InvalidationAndStaleCapture", "MutationIsSerialized", "TransactionRetainsOriginalAndPartialCandidateEvidence", "TransactionPreservesFailedConstructionAndRetry", "TransactionBoundsHistoryBeforeAcquisition", "TransactionCancelledAcquisitionAndNativeClose", "BorrowedPlatformKeepsCapturedRollback", "FullSearchRetainsEveryOriginalAttempt"))
 
@@ -187,7 +190,7 @@ def checked_sources(source):
     for name, relative in (("manager.go", "adapter/inbound/routervpn_mtu.go"), ("manager_test.go", "adapter/inbound/routervpn_mtu_test.go"), ("manager_native_linux_test.go", "adapter/inbound/routervpn_mtu_native_linux_test.go"), ("box.go", "routervpn_mtu.go"), ("box_test.go", "routervpn_mtu_test.go"), ("tun.go", "protocol/tun/routervpn_mtu.go"), ("tun_native_linux_test.go", "protocol/tun/routervpn_mtu_native_linux_test.go"), ("desktop_transaction_native_linux_test.go", "routervpn_mtu_transaction_native_linux_test.go")):
         copies[relative] = (ROOT / "mobile/mtu" / (name + ".tmpl")).read_bytes()
     for path in sorted((ROOT / "mobile/desktop").glob("*.go.tmpl")):
-        if path.name.startswith(("node", "mtu", "external")) and path.name not in PREP.PT_TEMPLATES and path.name not in PREP.BOX_TEMPLATES and path.name not in PREP.PEER_TEMPLATES:
+        if path.name.startswith(("node", "mtu", "external", "standard")) and path.name not in PREP.PT_TEMPLATES and path.name not in PREP.BOX_TEMPLATES and path.name not in PREP.PEER_TEMPLATES:
             copies["cmd/sing-box/routervpn_" + path.name.removesuffix(".tmpl")] = path.read_bytes()
     for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         copies['routervpn-desktop-tun/routervpn_' + name.removesuffix('.tmpl')] = (ROOT / 'mobile/desktop' / name).read_bytes()
@@ -900,6 +903,8 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name == "native-lifecycle-admission":
         require_native_verdicts(output, NATIVE_LIFECYCLE_ADMISSION_VERDICTS, "native lifecycle admission")
+    if name == STANDARD_MTU_SUITE[0]:
+        require_native_verdicts(output, STANDARD_MTU_SUITE[3], "standard service original MTU reader")
     if name == "native-address-retirement":
         require_native_verdicts(output, NATIVE_ADDRESS_RETIREMENT_VERDICTS, "native partial address retirement")
     if name == "native-routing-receipt":
@@ -1083,6 +1088,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     suites.append(("network-context", "./protocol/tun", "^TestRouterVPNDesktopNetwork(ReceiptOriginalContext|ReceiptHeldLifecycle|ContextClaimRetainsGuard|ReceiptUnavailable)$", NETWORK_CONTEXT_TESTS))
     suites.append(("native-monitor-context", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeMonitorOriginalContext$", ("TestRouterVPNNativeMonitorOriginalContext",)))
     if platform.system() == "Linux":
+        suites.append(STANDARD_MTU_SUITE)
         suites.append(("mtu-cleanup-context", "./adapter/inbound", "^TestRouterVPNTunContext(RestoresOnlyWithOriginalCleanupAllowance|ControllerRestoresAfterUnusedCloseCancellation)$", ("TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance", "TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation")))
         suites.append(("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NATIVE_MTU_TEST,)))
         suites.append(("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NATIVE_MTU_MODEL_TESTS))

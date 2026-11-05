@@ -1,0 +1,38 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNStandardMTUActualBoxKeepsOriginalReader(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	live := &routerVPNStandardMTUBackend{instance: desktopNodeMTUActualBox(t), tag: "tun-in"}
+	other := &routerVPNStandardMTUBackend{instance: desktopNodeMTUActualBox(t), tag: "tun-in"}
+	original, err := live.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := other.Current(ctx)
+	if err != nil || original == foreign {
+		t.Fatal("independent native readers", err)
+	}
+	if tx, err := live.Change(ctx, foreign, 1400); err == nil || tx != nil {
+		t.Fatal("foreign actual native reader acquired transaction", err)
+	}
+	stopped, end := context.WithCancel(ctx)
+	end()
+	if tx, err := live.Change(stopped, original, 1400); err == nil || tx != nil {
+		t.Fatal("cancelled actual native admission acquired transaction", err)
+	}
+	if current, err := live.Current(ctx); err != nil || current != original {
+		t.Fatal("rejected native admission replaced original", err)
+	}
+	if tx, err := live.Change(ctx, "interface-name", 1400); err == nil || tx != nil {
+		t.Fatal("serialized name became native authority", err)
+	}
+}
