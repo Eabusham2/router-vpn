@@ -152,6 +152,7 @@ ROUTE_TEMPLATES = {
 TUN_TEMPLATES = {
     'tun_darwin_control.go.tmpl': 'protocol/tun/routervpn_desktop_control_darwin.go',
     'tun_network.go.tmpl': 'protocol/tun/routervpn_desktop_network.go',
+    'tun_network_test.go.tmpl': 'protocol/tun/routervpn_desktop_network_test.go',
 }
 NETWORK_DISPATCH = '''\t// Invalidate native performance proofs before endpoints rebind.
 \tif manager := service.FromContext[adapter.ServiceManager](r.ctx); manager != nil {
@@ -309,7 +310,7 @@ def pt_copies():
     for name, relative in TUN_TEMPLATES.items():
         tunnel = ROOT/'mobile/desktop'/name
         raw = tunnel.read_bytes()
-        prefix = b'package tun\n' if name == 'tun_network.go.tmpl' else b'//go:build darwin\n\npackage tun\n'
+        prefix = b'package tun\n' if name in ('tun_network.go.tmpl', 'tun_network_test.go.tmpl') else b'//go:build darwin\n\npackage tun\n'
         if tunnel.is_symlink() or not raw.startswith(prefix):
             raise ValueError('Desktop Darwin tunnel control package boundary changed')
         content[relative] = raw
@@ -601,6 +602,9 @@ def prepare(vendor, go='go', *, env=None):
             if path.name.endswith('_test.go') and not (package == 'mobiletor' and (
                     path.name.startswith('desktop_standard_') or path.name in (
                     'desktop_socket_broker_test.go', 'desktop_socket_socks_test.go', 'desktop_socket_account_readback_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
+                    'desktop_socket_context_test.go', 'desktop_socket_windows_identity_current_test.go',
+                    'server_client_context_test.go', 'observation_context_test.go',
+                    'padding_receipt_context_test.go', 'padding_lease_fixture_test.go', 'padding_control_test.go', 'control_test.go',
                     'desktop_socket_tcp_completion_test.go',
                     'desktop_socket_grant_admission_test.go',
                     'desktop_socket_identity_readback_test.go',

@@ -101,7 +101,7 @@ func TestRouterVPNNodeMTUCommitRevertRejectsForeignExpiredAndReplacedOwners(t *t
 		}},
 		{"replacement-reader", func(o *routerVPNNodeMTU, e *desktopNodeMTUEngineFixture, _ *routerVPNNodeMTUCommand) {
 			old := o.inbound.(*desktopMTUTUNFixture)
-			e.current = &desktopMTUTUNFixture{index: old.index, mtu: old.mtu, guard: old.guard}
+			e.current = &desktopMTUTUNFixture{index: old.index, mtu: old.mtu, guard: old.guard, guardContext: old.guardContext}
 		}},
 		{"new-lease", func(o *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
 			begin := desktopNodeMTURequest(o, "begin", 0)
@@ -142,7 +142,7 @@ func TestRouterVPNNodeMTURevertKeepsOriginalDeadlineAndFailedReaderOwnership(t *
 			t.Fatal("revert extended the original native lease deadline")
 		}
 		old := expected.(*desktopMTUTUNFixture)
-		next := &desktopMTUTUNFixture{index: old.index + 1, mtu: old.mtu, guard: old.guard}
+		next := &desktopMTUTUNFixture{index: old.index + 1, mtu: old.mtu, guard: old.guard, guardContext: old.guardContext}
 		engine.current = next
 		return next, errors.New("fixture native rollback failed after owned reader replacement")
 	}

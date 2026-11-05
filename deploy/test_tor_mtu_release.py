@@ -35,6 +35,8 @@ type RouterVPNDesktopTor struct{
 }
 func(r *RouterVPNDesktopTor) Healthy()bool{return r.ctx.Err()==nil}
 func(r *RouterVPNDesktopTor) readerLifetimeCurrent()bool{return r.ctx.Err()==nil}
+func(r *RouterVPNDesktopTor) HealthyContext(ctx context.Context)error{if err:=ctx.Err();err!=nil{return err};return r.ctx.Err()}
+func(r *RouterVPNDesktopTor) readerLifetimeCurrentContext(ctx context.Context)error{return r.HealthyContext(ctx)}
 func desktopTorMTULeaseFixture(t *testing.T)(*desktopTorBoxFixture,*RouterVPNDesktopTor,*RouterVPNDesktopTorMTULease){
  ctx,cancel:=context.WithCancel(context.Background())
  owner:=&RouterVPNDesktopTor{ctx:ctx};lease:=&RouterVPNDesktopTorMTULease{owner:owner,ctx:ctx,cancel:cancel};owner.mtuLease.Store(lease)
@@ -52,14 +54,17 @@ def execute():
     tests = (ROOT / "mobile/desktop/tor_box_mtu_test.go.tmpl").read_text()
     signatures = ["type RouterVPNDesktopTorMTULease struct", "type routerVPNDesktopTorMTUActivity struct",
                   "func (a *routerVPNDesktopTorMTUActivity) retain(",
+                  "func (a *routerVPNDesktopTorMTUActivity) retainContext(",
                   "func (a *routerVPNDesktopTorMTUActivity) release(",
                   "func (a *routerVPNDesktopTorMTUActivity) current(",
                   "func (l *RouterVPNDesktopTorMTULease) BeginMeasurement(",
                   "func (l *RouterVPNDesktopTorMTULease) Healthy(",
+                  "func (l *RouterVPNDesktopTorMTULease) HealthyContext(",
+                  "func (l *RouterVPNDesktopTorMTULease) currentLifetimeContext(",
                   "func (l *RouterVPNDesktopTorMTULease) currentLifetime(",
                   "func (l *RouterVPNDesktopTorMTULease) RegisterOperation(",
                   "func (l *RouterVPNDesktopTorMTULease) Lifetime("]
-    actual = 'package box\nimport("context";"encoding/hex";"errors";"sync";"sync/atomic";"leasecontrol/mobiletor")\ntype routerVPNDesktopTorMTUActivityKey struct{}\n' + "\n\n".join(declaration(source, s) for s in signatures)
+    actual = 'package box\nimport("context";"encoding/hex";"errors";"sync";"sync/atomic";"leasecontrol/mobiletor";"leasecontrol/desktopnetwork")\ntype routerVPNDesktopTorMTUActivityKey struct{}\n' + "\n\n".join(declaration(source, s) for s in signatures)
     test = 'package box\nimport("context";"errors";"strings";"sync";"testing";"time")\n' + declaration(tests, "func TestRouterVPNDesktopTorMTUReleaseWithHeldOwner(")
     before = "\t\t\tl.active.Add(-1)\n"
     if actual.count(before) != 1:
@@ -73,6 +78,8 @@ def execute():
         folder = Path(temporary)
         (folder / "go.mod").write_text("module leasecontrol\n\ngo 1.24.0\n")
         (folder / "mobiletor").mkdir()
+        (folder / "desktopnetwork").mkdir()
+        (folder / "desktopnetwork/lock.go").write_bytes((ROOT / "internal/desktopnetwork/desktop_network_lock.go").read_bytes())
         (folder / "mobiletor/transition.go").write_text("package mobiletor\ntype DesktopBridgeMTUTransition struct{}\n")
         (folder / "boundary_test.go").write_text(BOUNDARY)
         (folder / "lease_test.go").write_text(test)

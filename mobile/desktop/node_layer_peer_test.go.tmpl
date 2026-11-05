@@ -1311,7 +1311,9 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 		if desktopNodeCompositeMode(peer.request.Mode) {
 			allowed = peer.compositeRemotes(t)
 		}
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, &desktopNodeLayerKernel{desktopNodePeerKernel: f.kernel, allowed: allowed}, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, &desktopNodeLayerKernel{desktopNodePeerKernel: f.kernel, allowed: allowed}, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, f.source, err
 	}); err != nil {
 		t.Fatal(err)

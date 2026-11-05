@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -180,18 +181,44 @@ func (n *routerVPNTorNative) Healthy() bool {
 func (n *routerVPNTorNative) processExited() bool {
 	return n.process != nil && n.process.exited()
 }
-func (n *routerVPNTorNative) VerifyCurrentPath(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil || !n.Healthy() || n.files.current() != nil {
+func (n *routerVPNTorNative) HealthyContext(ctx context.Context) error {
+	if ctx == nil {
 		return routerVPNTorFailure
 	}
-	n.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if n == nil || n.ctx.Err() != nil || n.processExited() {
+		return routerVPNTorFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	tor, closed := n.tor, n.boxClosed
+	n.mu.Unlock()
+	if closed || tor == nil {
+		return routerVPNTorFailure
+	}
+	return tor.HealthyContext(ctx)
+}
+func (n *routerVPNTorNative) VerifyCurrentPath(ctx context.Context) error {
+	if err := n.HealthyContext(ctx); err != nil {
+		return err
+	}
+	if n.files.current() != nil {
+		return routerVPNTorFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
 	tor := n.tor
 	n.mu.Unlock()
-	if err := tor.VerifyCurrentPath(ctx); err != nil || !n.Healthy() {
-		return routerVPNTorFailure
+	if err := tor.VerifyCurrentPath(ctx); err != nil {
+		return err
 	}
-	return nil
+	return n.HealthyContext(ctx)
 }
+
 func (n *routerVPNTorNative) Stage() string {
 	if n == nil {
 		return "starting"

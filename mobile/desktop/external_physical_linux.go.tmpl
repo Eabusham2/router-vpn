@@ -75,6 +75,19 @@ func (n *ExternalNetworkOwner) prepareExternalPhysicalLinux(policy *mobilemultih
 			actual := manager.DefaultNetworkInterface()
 			return actual != nil && actual.Index == index && actual.Name == name && actual.Flags&net.FlagUp != 0 && actual.Flags&net.FlagLoopback == 0 && slices.Equal(actual.Addresses, addresses)
 		}
+		physicalCurrentContext := func(observeCtx context.Context) error {
+			if err := n.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256); err != nil {
+				return err
+			}
+			actual, err := adapter.RouterVPNDefaultNetworkInterfaceContext(observeCtx, manager)
+			if err != nil {
+				return err
+			}
+			if !(actual != nil && actual.Index == index && actual.Name == name && actual.Flags&net.FlagUp != 0 && actual.Flags&net.FlagLoopback == 0 && slices.Equal(actual.Addresses, addresses)) {
+				return errors.New("captured physical interface changed during observation")
+			}
+			return observeCtx.Err()
+		}
 		options.Interfaces = interfaces
 		if ctx.Err() != nil || !physicalCurrent() {
 			return nil, nil, errors.New("linux ordinary physical interface changed during native capture")
@@ -86,7 +99,7 @@ func (n *ExternalNetworkOwner) prepareExternalPhysicalLinux(policy *mobilemultih
 			}
 			return nil, owned, err
 		}
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, owned, physicalCurrent)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, owned, physicalCurrent, physicalCurrentContext)
 		return broker, owned, err
 	})
 }

@@ -129,12 +129,11 @@ class TorMaintenanceAuditTests(unittest.TestCase):
             ("context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)", "context.WithCancel(ctx)"),
             ("context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)",
              "context.WithTimeout(context.Background(), mobiletor.DesktopBridgeHeartbeatMaxAge)"),
-            ("if err != nil || verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil",
-             "_ = err\n\t\tif verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil"),
+            ("if err := owner.VerifyCurrentPath(verify); err != nil", "if err := owner.VerifyCurrentPath(verify); false"),
             ("defer cancel()", "cancel()"),
             ("routerVPNTorRefreshReadback(verify, owner, &next)", "routerVPNTorRefreshReadback(ctx, owner, &next)"),
-            ("routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil || verify.Err() != nil",
-             "routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil"),
+            ("routerVPNTorRefreshPadding(verify, owner, &next, result.started, time.Now())", "routerVPNTorRefreshPadding(ctx, owner, &next, result.started, time.Now())"),
+            ("if err := verify.Err(); err != nil", "if err := verify.Err(); false"),
         ):
             with self.subTest(replacement=replacement):
                 self.reject(WORKER, original, replacement)

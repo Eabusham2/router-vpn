@@ -423,3 +423,18 @@ func (s *DesktopBridgeSession) retireOnFailure(failure *error) {
 		_ = s.owner.Close()
 	}
 }
+
+// CurrentContext observes only atomic ownership and the proxy's immutable
+// stopping channel; it never issues a control command or retires the child.
+func (s *DesktopBridgeSession) CurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("desktop Tor observation requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.Current() {
+		return errors.New("desktop Tor child ownership retired")
+	}
+	return ctx.Err()
+}

@@ -3,6 +3,7 @@ package mobiletor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -77,7 +78,15 @@ func newServerTorClientFixture(t *testing.T) *serverTorClientFixture {
 		default:
 			return nil, errServerTorClient
 		}
-	}, f.current.Load)
+	}, f.current.Load, func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !f.current.Load() {
+			return errServerTorClient
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,5 +339,39 @@ func TestServerTorClientRequiresActualSOCKSAuthenticationAndPublicTCPDestination
 				t.Fatal("invalid captured front authentication or destination was accepted")
 			}
 		})
+	}
+}
+
+func TestServerTorStrictControlNeverUsesLegacyOwnerCallback(t *testing.T) {
+	f := newServerTorClientFixture(t)
+	if err := f.client.Acquire(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.client.current = func() bool { panic("strict desktop control entered legacy callback") }
+	control, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := f.client.WaitContext(control); err != nil {
+		t.Fatal("bounded authenticated status exchange failed", err)
+	}
+	if _, err := f.client.StatusContext(control); err != nil {
+		t.Fatal("bounded renewed readback failed", err)
+	}
+}
+
+func TestServerTorControlKeepsItsOriginalMutexDeadlineAndFailureCleanup(t *testing.T) {
+	f := newServerTorClientFixture(t)
+	if err := f.client.Acquire(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.client.mu.Lock()
+	control, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	_, err := f.client.StatusContext(control)
+	cancel()
+	f.client.mu.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("original control admission deadline lost", err)
+	}
+	if f.client.ctx.Err() == nil {
+		t.Fatal("failed control operation lost existing retirement semantics")
 	}
 }

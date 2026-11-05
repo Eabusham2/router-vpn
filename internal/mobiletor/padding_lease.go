@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"router-vpn/internal/desktopnetwork"
 	"sync"
 	"time"
 )
@@ -19,6 +20,8 @@ type PaddingLeaseOptions struct {
 	SessionSHA256, SourceSHA256, Username, Password string
 	RateKbps                                        int
 	Current                                         func() bool
+	Observe                                         func(context.Context) error
+	ObserveProofUntil                               func(context.Context) (time.Time, error)
 	ProofValidUntil                                 func() time.Time
 	Retire                                          func(error)
 }
@@ -469,4 +472,42 @@ func (l *PaddingLease) Close(ctx context.Context) error {
 	l.closed = true
 	l.mu.Unlock()
 	return nil
+}
+
+// ReceiptContext retains the same grant/counter snapshot without waiting past
+// the observer's lifetime or falling back to legacy ownership callbacks.
+func (l *PaddingLease) ReceiptContext(ctx context.Context) (PaddingStatus, time.Time, time.Time, error) {
+	var empty PaddingStatus
+	if ctx == nil {
+		return empty, time.Time{}, time.Time{}, errors.New("padding receipt requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, time.Time{}, time.Time{}, err
+	}
+	if l == nil || l.options.Observe == nil || l.options.ObserveProofUntil == nil {
+		return empty, time.Time{}, time.Time{}, errors.New("padding receipt has no bounded captured observer")
+	}
+	if err := desktopnetwork.LockContext(ctx, &l.mu); err != nil {
+		return empty, time.Time{}, time.Time{}, err
+	}
+	status, observed, until, channel := l.status, l.observed, l.validUntil, l.channelAt
+	valid := l.known && l.ready && !l.cancelled && !l.closed && l.failure == nil
+	l.mu.Unlock()
+	if !valid || l.ctx.Err() != nil || status.State != "running" || status.ChannelCells == 0 || !time.Now().Before(until) || time.Since(channel) >= PaddingMaxTTL {
+		return status, observed, until, errors.New("padding receipt retired or expired")
+	}
+	if err := l.options.Observe(ctx); err != nil {
+		return status, observed, until, err
+	}
+	proofUntil, err := l.options.ObserveProofUntil(ctx)
+	if err != nil {
+		return status, observed, until, err
+	}
+	if proofUntil.Before(until) {
+		until = proofUntil
+	}
+	if !time.Now().Before(until) {
+		return status, observed, until, errors.New("padding proof expired")
+	}
+	return status, observed, until, ctx.Err()
 }

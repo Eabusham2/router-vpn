@@ -1236,7 +1236,15 @@ func desktopExternalIntegrationDelayedAccept(t *testing.T) {
 	source.live.Store(true)
 	kernel := &desktopExternalIntegrationKernel{source: source, local: address, remote: listener.Addr().(*net.TCPAddr).AddrPort(), index: uint32(iface.Index), name: iface.Name, grants: make(map[string]mobiletor.DesktopSocketGrant)}
 	source.kernel = kernel
-	broker, err := mobiletor.NewDesktopSocketBroker(ctx, source.capture, kernel, source.live.Load)
+	broker, err := mobiletor.NewDesktopSocketBroker(ctx, source.capture, kernel, source.live.Load, func(observeCtx context.Context) error {
+		if err := observeCtx.Err(); err != nil {
+			return err
+		}
+		if !source.live.Load() {
+			return errors.New("original fixture physical source retired")
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1524,7 +1532,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 			t.Error("physical factory ran after TUN startup")
 		}
 		f.source.capture = capture
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, f.source, err
 	}); err != nil {
 		t.Fatal(err)
@@ -1618,7 +1628,7 @@ func (f *desktopExternalIntegrationFixture) replacement(callback func(adapter.St
 			return expected, err
 		}
 		makeReader := func(value, nextIndex int) *desktopTorMTUCandidate {
-			return &desktopTorMTUCandidate{desktopTorBoxTUN: &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), name: name, index: nextIndex, mtu: value, claimed: true, guard: f.proof.engine.physical.current}}
+			return &desktopTorMTUCandidate{desktopTorBoxTUN: &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), name: name, index: nextIndex, mtu: value, claimed: true, guard: f.proof.engine.physical.current, guardContext: f.proof.engine.physical.(interface{ currentContext(context.Context) error }).currentContext}}
 		}
 		candidate, rollback := makeReader(mtu, index+1), makeReader(oldMTU, index+2)
 		candidate.afterStart = callback

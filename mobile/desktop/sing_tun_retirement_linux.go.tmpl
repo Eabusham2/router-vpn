@@ -23,7 +23,7 @@ import (
 )
 
 type routerVPNLinuxRetirementObserver interface {
-	current() error
+	current(context.Context) error
 	drain(context.Context) ([]routerVPNLinuxRoutingEvent, error)
 	remove(context.Context, DesktopNetworkObject) (*routerVPNLinuxRoutingCommand, error)
 	await(context.Context, *routerVPNLinuxRoutingCommand) error
@@ -114,11 +114,17 @@ func routervpnNewLinuxNative(options Options) (Tun, error) {
 }
 
 func (t *NativeTun) routervpnLinuxOriginal(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native original read lost its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s := &t.routervpnRetirement
 	if s.original != nil {
 		return s.original(ctx)
 	}
-	if err := s.watch.current(); err != nil {
+	if err := s.watch.current(ctx); err != nil {
 		return err
 	}
 	if !s.created || s.closed || t.tunFile == nil || t.tunFile != s.file {
@@ -155,7 +161,7 @@ func (t *NativeTun) routervpnLinuxOriginal(ctx context.Context) error {
 	}
 	current, err := t.routervpnLinuxInterfaceContext(ctx)
 	if err != nil || current.Index != t.routervpnOwnedIndex || current.Name != t.options.Name || current.Index < 1 {
-		return errors.New("native retirement lost its original TUN incarnation")
+		return errors.Join(err, ctx.Err(), errors.New("native retirement lost its original TUN incarnation"))
 	}
 	return nil
 }
@@ -903,26 +909,34 @@ func (t *NativeTun) routervpnLinuxAttestedReceipt() (string, error) {
 	return t.routervpnLinuxReceiptContext(ctx)
 }
 
-// A later read consumes its supplied operation budget while retaining the same
-// original TUN descriptor and notification stream; startup authority is never
-// refreshed or substituted.
-func (t *NativeTun) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
-	if ctx == nil {
-		return "", errors.New("native receipt lost its original caller")
+// Interface-only health reads retain the same descriptor and lifecycle lock
+// as complete receipts; a reused name/index cannot replace the original TUN.
+func (t *NativeTun) routervpnLinuxOwnedInterfaceContext(ctx context.Context) (*net.Interface, uint64, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	s := &t.routervpnRetirement
+	if err := LockContext(ctx, &s.mu); err != nil {
+		return nil, 0, err
 	}
-	if _, bounded := ctx.Deadline(); !bounded {
-		return "", errors.New("native receipt requires its operation deadline")
+	defer s.mu.Unlock()
+	if s.closed || s.receipt != "" || t.options.RouterVPNNetworkLifetime != nil && t.options.RouterVPNNetworkLifetime.Err() != nil {
+		return nil, 0, errors.New("native interface lost its original active constructor")
 	}
-	return t.routervpnLinuxReceiptContext(ctx)
+	if err := t.routervpnLinuxOriginal(ctx); err != nil {
+		return nil, 0, err
+	}
+	return t.routervpnNetworkInterfaceContext(ctx)
 }
 
 func (t *NativeTun) routervpnLinuxReceiptContext(ctx context.Context) (string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	s := &t.routervpnRetirement
-	s.mu.Lock()
+	if err := LockContext(ctx, &s.mu); err != nil {
+		return "", err
+	}
 	defer s.mu.Unlock()
-	if ctx == nil || ctx.Err() != nil || s.closed || s.receipt != "" || t.options.RouterVPNNetworkLifetime != nil && t.options.RouterVPNNetworkLifetime.Err() != nil {
+	if s.closed || s.receipt != "" || t.options.RouterVPNNetworkLifetime != nil && t.options.RouterVPNNetworkLifetime.Err() != nil {
 		return "", errors.New("native ready receipt lost its original active constructor")
 	}
 	if err := t.routervpnLinuxOriginal(ctx); err != nil {

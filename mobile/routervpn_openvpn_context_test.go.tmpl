@@ -1,0 +1,74 @@
+package openvpn
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNContextReadsOriginalMutexesWithoutRetiringSessions(t *testing.T) {
+	c := &Client{}
+	tls := &tlsClient{ready: true}
+	static := &staticKeyClientSession{ready: true}
+	c.lifecycle.currentSession = tls
+	cases := []struct {
+		name  string
+		mutex *sync.Mutex
+		read  func(context.Context) error
+	}{
+		{"lifecycle", &c.lifecycle.access, func(ctx context.Context) error { _, err := c.ReadyContext(ctx); return err }},
+		{"TLS readiness", &tls.access, func(ctx context.Context) error { _, err := c.ReadyContext(ctx); return err }},
+		{"challenge", &c.authentication.access, func(ctx context.Context) error { _, err := c.PendingChallengeContext(ctx); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.mutex.Lock()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			err := tc.read(ctx)
+			cancel()
+			tc.mutex.Unlock()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("original read deadline was lost", err)
+			}
+			if c.lifecycle.currentSession != tls || c.lifecycle.closed || !tls.ready {
+				t.Fatal("read expiry changed original session")
+			}
+		})
+	}
+	c.lifecycle.currentSession = static
+	static.access.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	_, err := c.ReadyContext(ctx)
+	cancel()
+	static.access.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || c.lifecycle.currentSession != static || !static.ready {
+		t.Fatal("static session changed after read expiry", err)
+	}
+	for _, session := range []clientSession{tls, static} {
+		c.lifecycle.currentSession = session
+		ready, err := c.ReadyContext(context.Background())
+		if !ready || err != nil {
+			t.Fatal("healthy original session rejected", err)
+		}
+	}
+	tls.ready = false
+	c.lifecycle.currentSession = tls
+	if ready, err := c.ReadyContext(context.Background()); ready || err != nil {
+		t.Fatal("actual unready TLS session accepted", ready, err)
+	}
+	c.lifecycle.currentSession = static
+	c.lifecycle.terminalError = errors.New("original terminal failure")
+	if ready, err := c.ReadyContext(context.Background()); ready || err != nil {
+		t.Fatal("terminal original accepted", ready, err)
+	}
+	c.authentication.pendingChallenge = &pendingChallengeState{challenge: Challenge{}}
+	challenge, err := c.PendingChallengeContext(context.Background())
+	if challenge == nil || err != nil {
+		t.Fatal("actual pending challenge lost", err)
+	}
+	if challenge == &c.authentication.pendingChallenge.challenge {
+		t.Fatal("observer exposed mutable original challenge")
+	}
+}

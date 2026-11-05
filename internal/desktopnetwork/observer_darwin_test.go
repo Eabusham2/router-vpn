@@ -45,7 +45,7 @@ func TestDarwinLocalCloneRetainedInCohortAndChangesInvalidate(t *testing.T) {
 				physical: physical, baseline: key, transition: transition}
 			event := Event{Kind: "route", Action: action, Index: local.Index, Object: local}
 			owner.observe(event, nil)
-			if !transition && owner.failure == nil || transition && len(owner.events) != 1 {
+			if !transition && owner.failureError() == nil || transition && len(owner.events) != 1 {
 				t.Fatal("local route event was silently exempted as a derived cache", action, transition)
 			}
 			if transition && owner.End(context.Background(), nil) == nil {
@@ -134,12 +134,12 @@ func TestDarwinCloneNativeScopeProjectionAndFailure(t *testing.T) {
 			}
 			tracker := &Tracker{ctx: context.Background(), physical: Snapshot{Objects: []DesktopNetworkObject{parent}}}
 			tracker.observe(Event{Kind: "route", Action: "add", Index: clone.Index, Object: clone}, nil)
-			if tracker.failure == nil || !strings.Contains(tracker.failure.Error(), "proto3_equal=false") {
+			if tracker.failureError() == nil || !strings.Contains(tracker.failureError().Error(), "proto3_equal=false") {
 				t.Fatal("native event discarded its original bounded failure")
 			}
-			failure := tracker.failure
+			failure := tracker.failureError()
 			tracker.observe(Event{Kind: "route", Action: "add", Index: originalClone.Index, Object: originalClone}, nil)
-			if tracker.failure != failure {
+			if tracker.failureError() != failure {
 				t.Fatal("later valid cache event replaced the original failure")
 			}
 		})

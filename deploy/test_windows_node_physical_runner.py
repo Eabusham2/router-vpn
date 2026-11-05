@@ -337,6 +337,28 @@ class OrdinarySOCKSScope(unittest.TestCase):
         subprocess.run([sys.executable, str(ROOT / 'deploy/test_windows_socket_retirement_observer.py')],
                        check=True, timeout=100)
 
+    def test_identity_observer_rejects_original_publication_lock_wait(self):
+        source = (ROOT / 'internal/mobiletor/desktop_socket_windows_identity.go').read_text()
+        needle = '\texpected := p.owner.Load()'
+        self.assertEqual(source.count(needle), 1)
+        mutant = source.replace(needle, '\tp.mu.Lock()\n' + needle + '\n\tp.mu.Unlock()', 1)
+        with tempfile.TemporaryDirectory(prefix='identity-observation-control-') as temporary:
+            identity = Path(temporary) / 'identity.go'
+            identity.write_text(mutant)
+            result = subprocess.run(
+                [sys.executable, str(ROOT / 'deploy/test_windows_socket_retirement_observer.py'),
+                 '--identity', str(identity)], capture_output=True, text=True, timeout=100)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        expected = 'TestWindowsIdentityCurrentDoesNotWaitForPublicationMutex'
+        failures = [line.split(': ', 1)[1].split(' ', 1)[0]
+                    for line in output.splitlines() if line.startswith('--- FAIL: ')]
+        self.assertEqual(failures, [expected], output)
+        self.assertEqual(output.count('native identity observation waited for publication mutex'), 1, output)
+        for infrastructure in ('panic:', 'build failed', 'setup failed', 'test timed out', 'DATA RACE'):
+            self.assertNotIn(infrastructure, output, output)
+        self.assertIn('FAIL\tretirement\t', output)
+
     def setUp(self):
         OrdinaryHysteria2Scope.setUp(self)
         relative = "routervpn/mobiletor/desktop_socket_windows_identity.go"

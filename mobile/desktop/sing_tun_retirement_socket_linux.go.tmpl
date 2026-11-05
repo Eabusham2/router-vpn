@@ -96,13 +96,15 @@ func (w *routerVPNLinuxRoutingWatch) fail(err error) {
 	}
 }
 
-func (w *routerVPNLinuxRoutingWatch) current() error {
+func (w *routerVPNLinuxRoutingWatch) current(ctx context.Context) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if w == nil {
 		return errors.New("native routing lifetime was not captured")
 	}
-	w.mu.Lock()
+	if err := LockContext(ctx, &w.mu); err != nil {
+		return err
+	}
 	defer w.mu.Unlock()
 	if w.closing || w.closed || w.failure != nil {
 		return errors.Join(errors.New("native routing lifetime lost continuity"), w.failure)
@@ -113,7 +115,7 @@ func (w *routerVPNLinuxRoutingWatch) current() error {
 	if err != nil || nsErr != nil || currentErr != nil || !os.SameFile(info, w.info) || !os.SameFile(ns, w.namespaceInfo) || !os.SameFile(current, w.namespaceInfo) {
 		return errors.New("native routing lifetime lost its original socket or namespace")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (w *routerVPNLinuxRoutingWatch) run() {
@@ -211,13 +213,18 @@ func (w *routerVPNLinuxRoutingWatch) run() {
 }
 
 func (w *routerVPNLinuxRoutingWatch) send(ctx context.Context, kind uint16, body []byte) (*routerVPNLinuxRoutingCommand, error) {
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return nil, errors.New("native routing command lost its bounded caller")
 	}
-	if err := w.current(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	w.mu.Lock()
+	if err := w.current(ctx); err != nil {
+		return nil, err
+	}
+	if err := LockContext(ctx, &w.mu); err != nil {
+		return nil, err
+	}
 	if w.sequence == ^uint32(0) || len(w.waiters) >= 512 {
 		w.mu.Unlock()
 		return nil, errors.New("native routing commands exceeded original bound")
@@ -281,10 +288,12 @@ func (w *routerVPNLinuxRoutingWatch) drain(ctx context.Context) ([]routerVPNLinu
 	if err != nil {
 		return nil, err
 	}
-	if err = w.current(); err != nil {
+	if err = w.current(ctx); err != nil {
 		return nil, err
 	}
-	w.mu.Lock()
+	if err := LockContext(ctx, &w.mu); err != nil {
+		return nil, err
+	}
 	defer w.mu.Unlock()
 	result := w.events
 	w.events = nil

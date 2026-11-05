@@ -39,6 +39,51 @@ class NativeRetirementVerdicts(unittest.TestCase):
                             NODE.execute_baseline_suite(baseline, suite)
 
 
+class NativeObservationVerdicts(unittest.TestCase):
+    def test_bounded_native_observations_require_each_selected_verdict(self):
+        identity = "TestRouterVPNNativeIdentityObservationPreservesHealthyOwner"
+        command = ["TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors",
+                   "TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock",
+                   "TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver"]
+        tor = "TestRouterVPNDesktopTorObservationRevokesWithoutJoiningCleanup"
+        lease = "TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation"
+        suites = [
+            (("external-lease-observation", "./experimental/libbox/routervpn/mobilemultihop", "^" + lease + "$", (lease,)),
+             [lease, lease + "/OK", lease + "/Service_Unavailable"]),
+            (("native-identity-context", ".", "^" + identity + "$", (identity,)),
+             [identity] + [identity + "/" + leaf for leaf in ("engine-lock", "physical-read", "genuine-replacement", "mixed-loss-cancel", "held-cleanup")]),
+            (("command-observation-context", "./cmd/sing-box", "original-context-selector", tuple(command)),
+             command + [command[0] + "/" + leaf for leaf in ("cancelled", "deadline", "unavailable", "identity", "success")] +
+             [parent + "/" + leaf for parent in command[1:] for leaf in ("external", "tor")]),
+            (("tor-observation-context", ".", "^" + tor + "$", (tor,)), [tor]),
+        ]
+        socket = ["TestDesktopBrokerContextExpiryDoesNotRetireOriginal", "TestDesktopBrokerContextRequiresExplicitObserver",
+                  "TestDesktopBrokerConfirmedLossSurvivesRacedCallerCancellation", "TestServerTorCurrentContextExpiresWithoutRetiringLease",
+                  "TestServerTorCurrentContextKeepsCancellationSeparateFromIdentityLoss", "TestServerTorConfirmedLossSurvivesRacedCallerCancellation",
+                  "TestObservationCancellationCannotHideConfirmedOwnerLoss", "TestObservationExpiryRequiresOriginalCaller",
+                  "TestPaddingNativeReceiptContextPreservesOwnerOnObserverExpiry"]
+        suites.append((("owned-socket-observation-context", "./routervpn/mobiletor", "original-socket-selector", tuple(socket)),
+                       socket + [socket[-1] + "/" + leaf for leaf in ("lease-lock", "owner-observation", "proof-observation", "success")]))
+        for manager in ("inbound", "outbound", "endpoint", "service", "dns"):
+            names = ["TestRouterVPNManagerObservationRetainsCaller"]
+            if manager == "inbound":
+                names += ["TestRouterVPNManagerInventoryRetainsCaller"]
+            suites.append((("manager-context-" + manager, "./adapter/" + manager, "original-manager-selector", tuple(names)), names))
+        for suite, names in suites:
+            lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+            baseline = Mock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                baseline.execute.return_value = (0, "".join(lines))
+                NODE.execute_baseline_suite(baseline, suite)
+                for line in lines:
+                    for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line,
+                                    "".join(lines).replace(line, line.replace("Test", "ForeignTest", 1), 1)):
+                        with self.subTest(suite=suite[0], line=line):
+                            baseline.execute.return_value = (0, changed)
+                            with self.assertRaisesRegex(ValueError, "omitted"):
+                                NODE.execute_baseline_suite(baseline, suite)
+
+
 class NativeMTUVerdicts(unittest.TestCase):
     def test_actual_tor_lease_release_ignores_held_owner_and_rejects_old_lock(self):
         spec = importlib.util.spec_from_file_location("tor_lease_control", ROOT / "deploy/test_tor_mtu_release.py")
@@ -55,7 +100,7 @@ class NativeMTUVerdicts(unittest.TestCase):
             (("tor-mtu-heartbeat", "./cmd/sing-box", "^TestRouterVPNDesktopTorMTUHeartbeat", (heartbeat,)),
              ["TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback", heartbeat] +
              [heartbeat + "/previous-" + prior + "/" + outcome for prior in ("false", "true")
-              for outcome in ("network-failure", "cancel-after-readback", "cancel-after-network", "success")]),
+              for outcome in ("network-failure", "cancel-after-readback", "cancel-after-network", "network-name", "network-index", "network-mtu", "revision-changed", "cancel-after-recheck", "success")]),
         ):
             lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
             baseline = Mock()
@@ -69,6 +114,20 @@ class NativeMTUVerdicts(unittest.TestCase):
                             baseline.execute.return_value = (0, changed)
                             with self.assertRaisesRegex(ValueError, "omitted"):
                                 NODE.execute_baseline_suite(baseline, suite)
+
+    def test_original_network_context_parent_and_each_leaf_are_required(self):
+        suite = ("network-context", "./protocol/tun", "^TestRouterVPNDesktopNetwork", NODE.NETWORK_CONTEXT_TESTS)
+        names = NODE.NETWORK_CONTEXT_TESTS + NODE.NETWORK_CONTEXT_LEAVES
+        lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+        baseline = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            baseline.execute.return_value = (0, "".join(lines))
+            NODE.execute_baseline_suite(baseline, suite)
+            for line in lines:
+                for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line):
+                    baseline.execute.return_value = (0, changed)
+                    with self.subTest(line=line), self.assertRaisesRegex(ValueError, "omitted"):
+                        NODE.execute_baseline_suite(baseline, suite)
 
     def test_owned_transaction_and_every_native_leaf_are_mandatory(self):
         suites = (("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NODE.NATIVE_MTU_TEST,)),

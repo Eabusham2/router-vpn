@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net"
 	"os"
 	"runtime"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	boxService "github.com/sagernet/sing-box/adapter/service"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/service"
 )
@@ -213,6 +215,53 @@ func (n *NodeNetworkOwner) Activate(policy *mobilemultihop.DesktopNodePolicy) (c
 	return n.ctx, nil
 }
 
+// MatchesContext reads only this original capture under the caller's deadline.
+func (n *NodeNetworkOwner) MatchesContext(ctx context.Context, session, source string) error {
+	if n == nil {
+		return net.ErrClosed
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	defer n.mu.Unlock()
+	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.capture.SessionID != session || n.capture.SourceSHA256 != source {
+		return net.ErrClosed
+	}
+	return ctx.Err()
+}
+
+func (n *NodeNetworkOwner) CurrentContext(ctx context.Context) error {
+	if n == nil {
+		return net.ErrClosed
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	broker, capture := n.broker, n.brokerCapture()
+	n.mu.Unlock()
+	if !current || broker == nil {
+		return net.ErrClosed
+	}
+	return broker.MatchesContext(ctx, capture)
+}
+
+func (n *NodeNetworkOwner) SocketCurrentContext(ctx context.Context) error {
+	if n == nil {
+		return net.ErrClosed
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	current := n.sockets && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	broker, capture := n.broker, n.brokerCapture()
+	n.mu.Unlock()
+	if !current || broker == nil {
+		return net.ErrClosed
+	}
+	return broker.MatchesContext(ctx, capture)
+}
+
 func (n *NodeNetworkOwner) Current() bool {
 	if n == nil {
 		return false
@@ -242,6 +291,15 @@ func (n *NodeNetworkOwner) SocketCurrent() bool {
 // entered native constructor or OS cleanup. Close retains and joins those
 // exact owners, including a source returned after this cancellation.
 func (n *NodeNetworkOwner) Cancel() { n.retire() }
+
+// CancelAdmission revokes the immutable original lifetime without waiting for
+// the owner mutex or source cleanup. The broker's owned cancellation callback
+// retains that cleanup; Close joins the same source and entered constructors.
+func (n *NodeNetworkOwner) CancelAdmission() {
+	if n != nil && n.cancel != nil {
+		n.cancel()
+	}
+}
 
 func (n *NodeNetworkOwner) retire() {
 	if n == nil {

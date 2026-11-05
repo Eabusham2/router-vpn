@@ -23,6 +23,17 @@ func (c *Controller) exchange(ctx context.Context, tag, method, target, token st
 	return c.exchangeBounded(ctx, tag, method, target, token, payload, multihoprelay.MaxControlResponseBytes)
 }
 
+// Keep private route/URL details out of the public error while retaining the
+// cause for cancellation classification. A concurrent observer expiry must not
+// turn a real HTTP, framing or transport failure into a healthy cancellation.
+type routedRequestFailure struct {
+	message string
+	cause   error
+}
+
+func (e routedRequestFailure) Error() string { return e.message }
+func (e routedRequestFailure) Unwrap() error { return e.cause }
+
 func (c *Controller) exchangeBounded(ctx context.Context, tag, method, target, token string, payload []byte, limit int) ([]byte, time.Duration, error) {
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSHandshakeTimeout: 2500 * time.Millisecond,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -48,7 +59,7 @@ func (c *Controller) exchangeBounded(ctx context.Context, tag, method, target, t
 	start := time.Now()
 	response, e := client.Do(request)
 	if e != nil {
-		return nil, 0, errors.New("routed request failed or timed out")
+		return nil, 0, routedRequestFailure{"routed request failed or timed out", e}
 	}
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
 	_ = response.Body.Close()
@@ -56,8 +67,14 @@ func (c *Controller) exchangeBounded(ctx context.Context, tag, method, target, t
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, 0, controlError{response.StatusCode}
 	}
-	if readErr != nil || len(data) > limit || ctx.Err() != nil {
+	if len(data) > limit {
 		return nil, 0, errors.New("routed response was oversized or expired")
+	}
+	if readErr != nil {
+		return nil, 0, routedRequestFailure{"routed response was oversized or expired", readErr}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, routedRequestFailure{"routed response was oversized or expired", err}
 	}
 	return data, elapsed, nil
 }

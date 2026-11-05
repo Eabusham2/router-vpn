@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // These observations carry no mutation capability. A receipt can classify an
@@ -69,9 +70,8 @@ type Tracker struct {
 	ctx                                       context.Context
 	native                                    nativeObserver
 	initializing, transition, closing, closed bool
-	reportedFailure                           bool
 	startedWithoutOwnedReceipt                bool
-	failure                                   error
+	failure                                   atomic.Pointer[networkObservationFailure]
 	baseline                                  string
 	identity                                  string
 	physical                                  Snapshot
@@ -79,6 +79,21 @@ type Tracker struct {
 	old                                       *DesktopNetworkReceipt
 	recorded                                  []DesktopNetworkReceipt
 	events                                    []Event
+}
+
+// The first genuine native failure is independent of observation lock acquisition.
+// This lets an expired reader retain an identity failure without waiting beyond
+// its caller deadline merely to publish or report that failure.
+type networkObservationFailure struct {
+	err      error
+	reported atomic.Bool
+}
+
+func (t *Tracker) failureError() error {
+	if failure := t.failure.Load(); failure != nil {
+		return failure.err
+	}
+	return nil
 }
 
 func Open(ctx context.Context, original *DesktopNetworkReceipt) (*Tracker, error) {
@@ -147,8 +162,8 @@ func (t *Tracker) initialize(ctx context.Context) error {
 	if ctx.Err() != nil || t.ctx.Err() != nil {
 		return errors.New("network initialization lost its original caller or retained lifetime")
 	}
-	if t.failure != nil || len(t.events) != 0 {
-		return errors.Join(errors.New("network changed while the observer was being installed"), t.failure)
+	if t.failureError() != nil || len(t.events) != 0 {
+		return errors.Join(errors.New("network changed while the observer was being installed"), t.failureError())
 	}
 	physical, key, err := project(snapshot, t.current)
 	if err != nil {
@@ -163,16 +178,16 @@ func (t *Tracker) initialize(ctx context.Context) error {
 }
 
 func (t *Tracker) failLocked(err error) error {
-	if err != nil && t.failure == nil {
-		t.failure = err
+	if err != nil {
+		t.failure.CompareAndSwap(nil, &networkObservationFailure{err: err})
 	}
-	return t.failure
+	return t.failureError()
 }
 
 func (t *Tracker) observe(event Event, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.failure != nil {
+	if t.closed || t.failureError() != nil {
 		return
 	}
 	if err != nil {
@@ -234,11 +249,33 @@ func (t *Tracker) reportFailure(result *error) {
 	if t == nil || result == nil || *result == nil {
 		return
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.failure != nil && errors.Is(*result, t.failure) {
-		t.reportedFailure = true
+	if failure := t.failure.Load(); failure != nil && errors.Is(*result, failure.err) {
+		failure.reported.Store(true)
 	}
+}
+
+// A joined native error must not become harmless just because it also contains
+// cancellation. Only a tree containing exclusively context errors is pure expiry.
+func observationExpired(err error) bool {
+	if err == nil {
+		return false
+	}
+	if many, ok := err.(interface{ Unwrap() []error }); ok {
+		children := many.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !observationExpired(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if one, ok := err.(interface{ Unwrap() error }); ok {
+		return observationExpired(one.Unwrap())
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
 func (t *Tracker) Identity() string {
@@ -263,37 +300,58 @@ func (t *Tracker) Current() (result error) {
 // budget. Cancellation/read failure cannot produce a current observation.
 func (t *Tracker) CurrentContext(ctx context.Context) (result error) {
 	defer t.reportFailure(&result)
-	if t == nil || ctx == nil || ctx.Err() != nil {
+	if t == nil || ctx == nil {
 		return errors.New("network observer is missing")
 	}
-	t.mu.Lock()
-	if t.closed || t.closing || t.initializing || t.transition || t.failure != nil || t.ctx.Err() != nil {
-		err := t.failure
+	if err := LockContext(ctx, &t.mu); err != nil {
+		return errors.Join(err, t.failureError())
+	}
+	if t.closed || t.closing || t.initializing || t.transition || t.failureError() != nil || t.ctx.Err() != nil {
+		err := t.failureError()
 		if err == nil {
 			err = errors.New("network observer is closed, cancelled or inside a native transition")
 		}
 		t.mu.Unlock()
 		return err
 	}
-	native, current := t.native, cloneReceipt(t.current)
+	native, current, baseline := t.native, cloneReceipt(t.current), t.baseline
 	t.mu.Unlock()
 	snapshot, err := native.Snapshot(ctx)
 	if err == nil {
-		err = native.Barrier(ctx)
+		// A complete snapshot may prove a real identity failure even when the
+		// following barrier exhausts the caller's remaining budget.
+		_, key, projection := project(snapshot, current)
+		if projection != nil {
+			t.failLocked(projection)
+		} else if key != baseline {
+			t.failLocked(errors.New("network snapshot changed its frozen physical cohort"))
+		}
+		if ctx.Err() == nil {
+			err = native.Barrier(ctx)
+		} else {
+			err = ctx.Err()
+		}
 	}
-	_, key, projection := project(snapshot, current)
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	if err != nil && !observationExpired(err) {
+		t.failLocked(err)
+	}
+	if failure := t.failureError(); failure != nil {
+		return errors.Join(failure, err, ctx.Err())
+	}
 	if err != nil {
-		return t.failLocked(err)
+		return err
 	}
-	if projection != nil {
-		return t.failLocked(projection)
+	if err := LockContext(ctx, &t.mu); err != nil {
+		return errors.Join(err, t.failureError())
 	}
-	if t.closed || t.closing || t.transition || t.ctx.Err() != nil || ctx.Err() != nil || receiptKey(t.current) != receiptKey(current) || key != t.baseline {
+	defer t.mu.Unlock()
+	if t.closed || t.closing || t.transition || t.ctx.Err() != nil || receiptKey(t.current) != receiptKey(current) {
 		return t.failLocked(errors.New("network snapshot changed its frozen physical cohort"))
 	}
-	return t.failure
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, t.failureError())
+	}
+	return t.failureError()
 }
 
 func (t *Tracker) Begin(ctx context.Context, original *DesktopNetworkReceipt) (result error) {
@@ -302,11 +360,11 @@ func (t *Tracker) Begin(ctx context.Context, original *DesktopNetworkReceipt) (r
 		return errors.New("network transition lost its caller")
 	}
 	if err := t.CurrentContext(ctx); err != nil {
-		return err
+		return t.failLocked(err)
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if ctx.Err() != nil || t.closed || t.closing || t.transition || t.failure != nil || receiptKey(original) != receiptKey(t.current) {
+	if ctx.Err() != nil || t.closed || t.closing || t.transition || t.failureError() != nil || receiptKey(original) != receiptKey(t.current) {
 		return t.failLocked(errors.New("network transition does not own its original native receipt"))
 	}
 	t.old, t.recorded, t.events = cloneReceipt(original), nil, nil
@@ -321,7 +379,7 @@ func (t *Tracker) Record(receipt DesktopNetworkReceipt) (result error) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.closing || !t.transition || t.failure != nil || t.ctx.Err() != nil {
+	if t.closed || t.closing || !t.transition || t.failureError() != nil || t.ctx.Err() != nil {
 		return errors.New("transient network receipt has no current transition owner")
 	}
 	if len(t.recorded) >= 64 {
@@ -422,8 +480,8 @@ func (t *Tracker) End(ctx context.Context, current *DesktopNetworkReceipt) (resu
 	if projection != nil {
 		return t.failLocked(projection)
 	}
-	if t.failure != nil {
-		return t.failure
+	if t.failureError() != nil {
+		return t.failureError()
 	}
 	for _, event := range t.events {
 		if runtime.GOOS == "darwin" && event.Kind == "route" && event.Object.Flags&0x20000 != 0 {
@@ -497,14 +555,11 @@ func (t *Tracker) Close() error {
 	}
 	t.mu.Lock()
 	t.closed = true
-	late := t.failure != nil && !t.reportedFailure
-	failure := t.failure
-	if late {
-		t.reportedFailure = true
-	}
+	failure := t.failure.Load()
+	late := failure != nil && !failure.reported.Swap(true)
 	t.mu.Unlock()
 	if late {
-		return fmt.Errorf("late native network event invalidated comparison before joined close: %w", failure)
+		return fmt.Errorf("late native network event invalidated comparison before joined close: %w", failure.err)
 	}
 	return nil
 }

@@ -355,7 +355,9 @@ func newExternalPhysicalFixture(t *testing.T, policy *mobilemultihop.DesktopExte
 func (f *externalPhysicalFixture) start(t *testing.T, source *physicalFactorySource) context.Context {
 	t.Helper()
 	if err := f.network.PrepareExternalPhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, source, err
 	}); err != nil {
 		t.Fatal(err)
@@ -425,7 +427,9 @@ func TestRouterVPNExternalPhysicalFactoryAndActivationRetainExactPolicy(t *testi
 		if capture != f.network.brokerCapture() || !current() || f.network.Current() {
 			t.Error("external factory lost its pre-TUN generation")
 		}
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, source, err
 	}
 	if err := f.network.PrepareExternalPhysicalBroker(policy, factory); err != nil || calls.Load() != 0 {
@@ -493,7 +497,9 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 				if capture != f.network.brokerCapture() || !current() || f.network.SocketCurrent() || f.network.Current() {
 					t.Error("external factory exposed a socket before exact initialization completed")
 				}
-				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+					return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+				})
 				return broker, source, err
 			}); err != nil {
 				t.Fatal(err)
@@ -981,7 +987,9 @@ func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
 			if err := f.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
 				// The actual byte fixture isolates OS identity/permit authority;
 				// it never creates an account or changes the runner's firewall.
-				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, kernel, current)
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, kernel, current, func(observeCtx context.Context) error {
+					return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+				})
 				return broker, partial, err
 			}); err != nil {
 				t.Fatal(err)
@@ -1146,7 +1154,9 @@ func TestRouterVPNExternalPhysicalTunnelLifecycleAndRetirement(t *testing.T) {
 		t.Fatal("inactive owner bound a tunnel")
 	}
 	if err := f.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, source, err
 	}); err != nil {
 		t.Fatal(err)
@@ -1348,7 +1358,9 @@ func TestRouterVPNExternalPhysicalRetirementKeepsExactJoinedSource(t *testing.T)
 				if partial {
 					return nil, source, errors.New("fixture failed after captured ordinary baseline construction")
 				}
-				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+					return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+				})
 				return broker, source, err
 			}); err != nil {
 				t.Fatal(err)

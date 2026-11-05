@@ -57,6 +57,11 @@ HYSTERIA2_SUITES = (
      "^TestRouterVPNDesktopNodeHysteria2(LayerCover|OuterCannotBypassFinal)$",
      ("TestRouterVPNDesktopNodeHysteria2LayerCover", "TestRouterVPNDesktopNodeHysteria2OuterCannotBypassFinal")),
 )
+NETWORK_CONTEXT_TESTS = tuple("TestRouterVPNDesktopNetwork" + name for name in (
+    "ReceiptOriginalContext", "ReceiptHeldLifecycle", "ContextClaimRetainsGuard", "ReceiptUnavailable"))
+NETWORK_CONTEXT_LEAVES = tuple(NETWORK_CONTEXT_TESTS[0] + "/" + name for name in (
+    "live", "guard-cancel", "interface-cancel", "receipt-cancel", "changed-index"))
+
 NATIVE_MTU_TEST = "TestRouterVPNNativeLinuxMTUTransactionNamespace"
 NATIVE_MTU_CASES = ("full-search-and-winner", "failed-candidate-and-original-restore", "cancelled-work-and-fresh-stop")
 NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("ReplacementAndRollback", "FailureDoesNotStartAnOverlappingReader", "InvalidationAndStaleCapture", "MutationIsSerialized", "TransactionRetainsOriginalAndPartialCandidateEvidence", "TransactionPreservesFailedConstructionAndRetry", "TransactionBoundsHistoryBeforeAcquisition", "TransactionCancelledAcquisitionAndNativeClose", "BorrowedPlatformKeepsCapturedRollback", "FullSearchRetainsEveryOriginalAttempt"))
@@ -147,6 +152,7 @@ def checked_sources(source):
         if path.is_symlink() or not path.is_file():
             raise ValueError("OpenVPN close policy lost its original source authority")
         records['gate/' + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    records.update(PREP.RELAY.OBSERVATION.verify(source))
     copies = PREP.pt_copies()
     PREP.preflight_pt_files(source, copies)
     for name, relative in PREP.PEER_TEMPLATES.items():
@@ -156,15 +162,15 @@ def checked_sources(source):
     for path in sorted((ROOT / "mobile/desktop").glob("*.go.tmpl")):
         if path.name.startswith(("node", "mtu", "external")) and path.name not in PREP.PT_TEMPLATES and path.name not in PREP.BOX_TEMPLATES and path.name not in PREP.PEER_TEMPLATES:
             copies["cmd/sing-box/routervpn_" + path.name.removesuffix(".tmpl")] = path.read_bytes()
-    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         copies['routervpn-desktop-tun/routervpn_' + name.removesuffix('.tmpl')] = (ROOT / 'mobile/desktop' / name).read_bytes()
-    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_retirement.go'):
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_retirement.go', 'desktop_network_dump_linux.go', 'desktop_network_lock.go'):
         copies['routervpn-desktop-tun/routervpn_' + name] = (ROOT / 'internal/desktopnetwork' / name).read_bytes().replace(b'package desktopnetwork\n', b'package tun\n', 1)
     for package in PREP.RELAY.PACKAGES:
         for path in sorted((ROOT / "internal" / package).glob("*.go")):
             if path.name.endswith("_test.go"):
                 continue
-            raw = path.read_bytes()
+            raw = PREP.RELAY.OBSERVATION.rewrite(path.read_bytes())
             for name in PREP.RELAY.PACKAGES:
                 raw = raw.replace(('"router-vpn/internal/' + name + '"').encode(),
                     ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/' + name + '"').encode())
@@ -874,16 +880,46 @@ def execute_baseline_suite(baselines, suite):
             full = "TestRouterVPNNativeLinuxRoutingRetirementNamespace/" + case
             if len(re.findall(r"(?m)^\s*--- PASS: " + re.escape(full) + r" \([^\n]*\)$", output)) != 1:
                 raise ValueError("Node routing gate omitted or duplicated an actual original-TUN retirement leaf: " + case)
+    if name == "native-identity-context":
+        root = "TestRouterVPNNativeIdentityObservationPreservesHealthyOwner"
+        require_native_verdicts(output, [root] + [root + "/" + case for case in ("engine-lock", "physical-read", "genuine-replacement", "mixed-loss-cancel", "held-cleanup")], "native identity observation")
+    if name == "command-observation-context":
+        parents = ["TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors",
+                   "TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock",
+                   "TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver"]
+        names = parents + [parents[0] + "/" + case for case in ("cancelled", "deadline", "unavailable", "identity", "success")]
+        names += [root + "/" + case for root in parents[1:] for case in ("external", "tor")]
+        require_native_verdicts(output, names, "command observation and Stop")
+    if name == "tor-observation-context":
+        require_native_verdicts(output, ["TestRouterVPNDesktopTorObservationRevokesWithoutJoiningCleanup"], "Tor observation revocation")
+    if name == "owned-socket-observation-context":
+        names = ["TestDesktopBrokerContextExpiryDoesNotRetireOriginal", "TestDesktopBrokerContextRequiresExplicitObserver",
+                 "TestDesktopBrokerConfirmedLossSurvivesRacedCallerCancellation", "TestServerTorCurrentContextExpiresWithoutRetiringLease",
+                 "TestServerTorCurrentContextKeepsCancellationSeparateFromIdentityLoss", "TestServerTorConfirmedLossSurvivesRacedCallerCancellation",
+                 "TestObservationCancellationCannotHideConfirmedOwnerLoss", "TestObservationExpiryRequiresOriginalCaller",
+                 "TestPaddingNativeReceiptContextPreservesOwnerOnObserverExpiry"]
+        names += [names[-1] + "/" + leaf for leaf in ("lease-lock", "owner-observation", "proof-observation", "success")]
+        require_native_verdicts(output, names, "owned socket and padding observations")
+    if name.startswith("manager-context-"):
+        names = ["TestRouterVPNManagerObservationRetainsCaller"]
+        if name == "manager-context-inbound":
+            names.append("TestRouterVPNManagerInventoryRetainsCaller")
+        require_native_verdicts(output, names, "native manager observation")
+    if name == "network-context":
+        require_native_verdicts(output, NETWORK_CONTEXT_TESTS + NETWORK_CONTEXT_LEAVES, "original network observation")
     if name == "mtu-startup-budget":
         require_native_verdicts(output, ["TestRouterVPNMTUStartupReceiptKeepsOriginalOperation"], "MTU startup budget")
     if name == "tor-mtu-release":
         root = "TestRouterVPNDesktopTorMTUReleaseWithHeldOwner"
         require_native_verdicts(output, [root, root + "/ordinary", root + "/inherited-measurement"], "Tor MTU release")
+    if name == "external-lease-observation":
+        root = "TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation"
+        require_native_verdicts(output, [root, root + "/OK", root + "/Service_Unavailable"], "external lease observation")
     if name == "tor-mtu-heartbeat":
         root = "TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt"
         names = ["TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback", root]
         names += [root + "/previous-" + prior + "/" + outcome for prior in ("false", "true")
-                  for outcome in ("network-failure", "cancel-after-readback", "cancel-after-network", "success")]
+                  for outcome in ("network-failure", "cancel-after-readback", "cancel-after-network", "network-name", "network-index", "network-mtu", "revision-changed", "cancel-after-recheck", "success")]
         require_native_verdicts(output, names, "Tor MTU heartbeat")
     if name == "native-mtu-transaction":
         require_native_verdicts(output, [NATIVE_MTU_TEST] + [NATIVE_MTU_TEST + "/" + case for case in NATIVE_MTU_CASES], "MTU transaction")
@@ -932,6 +968,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
+        ("external-lease-observation", "./experimental/libbox/routervpn/mobilemultihop", "^TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation$",
+         ("TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation",)),
         ("tor-mtu-release", ".", "^TestRouterVPNDesktopTorMTUReleaseWithHeldOwner$",
          ("TestRouterVPNDesktopTorMTUReleaseWithHeldOwner",)),
         ("tor-mtu-heartbeat", "./cmd/sing-box", "^TestRouterVPNDesktopTorMTUHeartbeat",
@@ -968,11 +1006,29 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNDesktopNodeCompositeWrongCredential",)),
         ("sip003-retained", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeSIP003(RetainedProof|RetainedWrongCredential|WrongWhitening|OuterCannotBypassFinal)$",
          tuple("TestRouterVPNDesktopNodeSIP003" + suffix for suffix in ("RetainedProof", "RetainedWrongCredential", "WrongWhitening", "OuterCannotBypassFinal"))),
-        ("sip003-cover-identity", "./protocol/routervpncomposite", "^TestNativeCompositePerformanceRequiresExactSIP003Owners$",
-         ("TestNativeCompositePerformanceRequiresExactSIP003Owners",)),
+        ("sip003-cover-identity", "./protocol/routervpncomposite", "^TestNativeCompositePerformance(RequiresExactSIP003Owners|ObservationKeepsCaller)$",
+         ("TestNativeCompositePerformanceRequiresExactSIP003Owners", "TestNativeCompositePerformanceObservationKeepsCaller")),
         ("cover-lifecycle", "./service/routervpnperformance", "^TestNativePerformance",
          tuple("TestNativePerformance" + suffix for suffix in ("NoIOUntilExplicitActivation", "StopsOnReplacementAndNetworkChange", "CannotUsePlaintextOrWrongNode", "DestinationCannotBeReplaced", "CapturedOptionsAndCancelledActivation", "CannotAdmitCompositeByTypeName"))),
     ]
+    suites.append(("owned-socket-observation-context", "./routervpn/mobiletor",
+                   "^Test(DesktopBroker(ContextExpiryDoesNotRetireOriginal|ContextRequiresExplicitObserver|ConfirmedLossSurvivesRacedCallerCancellation)|ServerTor(CurrentContextExpiresWithoutRetiringLease|CurrentContextKeepsCancellationSeparateFromIdentityLoss|ConfirmedLossSurvivesRacedCallerCancellation)|Observation(CancellationCannotHideConfirmedOwnerLoss|ExpiryRequiresOriginalCaller)|PaddingNativeReceiptContextPreservesOwnerOnObserverExpiry)$",
+                   ("TestDesktopBrokerContextExpiryDoesNotRetireOriginal", "TestDesktopBrokerContextRequiresExplicitObserver", "TestDesktopBrokerConfirmedLossSurvivesRacedCallerCancellation",
+                    "TestServerTorCurrentContextExpiresWithoutRetiringLease", "TestServerTorCurrentContextKeepsCancellationSeparateFromIdentityLoss", "TestServerTorConfirmedLossSurvivesRacedCallerCancellation",
+                    "TestObservationCancellationCannotHideConfirmedOwnerLoss", "TestObservationExpiryRequiresOriginalCaller", "TestPaddingNativeReceiptContextPreservesOwnerOnObserverExpiry")))
+    suites.append(("command-observation-context", "./cmd/sing-box",
+                   "^TestRouterVPNDesktop(NetworkProjectionContextPreservesObservationErrors|NativeNetworkProjectionCancelsHeldOwnerLock|StopInterruptsOriginalNetworkObserver)$",
+                   ("TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors", "TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock", "TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver")))
+    suites.append(("tor-observation-context", ".", "^TestRouterVPNDesktopTorObservationRevokesWithoutJoiningCleanup$", ("TestRouterVPNDesktopTorObservationRevokesWithoutJoiningCleanup",)))
+    suites.append(("native-identity-context", ".", "^TestRouterVPNNativeIdentityObservationPreservesHealthyOwner$", ("TestRouterVPNNativeIdentityObservationPreservesHealthyOwner",)))
+    for manager in ("inbound", "outbound", "endpoint", "service", "dns"):
+        package = "./dns" if manager == "dns" else "./adapter/" + manager
+        names = ("TestRouterVPNManagerObservationRetainsCaller",)
+        if manager == "inbound":
+            names += ("TestRouterVPNManagerInventoryRetainsCaller",)
+        suites.append(("manager-context-" + manager, package, "^TestRouterVPNManager(Observation|Inventory)RetainsCaller$", names))
+    suites.append(("network-context", "./protocol/tun", "^TestRouterVPNDesktopNetwork(ReceiptOriginalContext|ReceiptHeldLifecycle|ContextClaimRetainsGuard|ReceiptUnavailable)$", NETWORK_CONTEXT_TESTS))
+    suites.append(("native-monitor-context", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeMonitorOriginalContext$", ("TestRouterVPNNativeMonitorOriginalContext",)))
     if platform.system() == "Linux":
         suites.append(("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NATIVE_MTU_TEST,)))
         suites.append(("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NATIVE_MTU_MODEL_TESTS))
@@ -985,7 +1041,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                         "TestRouterVPNNativeLinuxRoutingConcurrentAddressOwnerFences", "TestRouterVPNNativeLinuxRoutingConcurrentAddressAtomicLedger",
                         "TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics", "TestRouterVPNNativeLinuxRoutingBoundedInventory",
                         "TestRouterVPNNativeLinuxRoutingInventoryFraming", "TestRouterVPNNativeLinuxRoutingDNSAddressBoundary",
-"TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors","TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes","TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire","TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext","TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones","TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard","TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange","TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt","TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal","TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst","TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed","TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability","TestRouterVPNNativeLinuxRoutingRetirementSocket","TestRouterVPNNativeLinuxRoutingRetirementNamespace", "TestRouterVPNNativeLinuxRoutingReceiptKeepsOriginalLifetimeAndCallerBudget")))
+"TestRouterVPNNativeLinuxRoutingRetirementKernelWildcardSelectors","TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes","TestRouterVPNNativeLinuxRoutingRetirementBindsActualRuleWire","TestRouterVPNNativeLinuxRoutingRetirementOriginalCallsAndFreshStopContext","TestRouterVPNNativeLinuxRoutingRetirementRetryRetainsOriginalMilestones","TestRouterVPNNativeLinuxRoutingRetirementRejectsForeignDuplicateAndWildcard","TestRouterVPNNativeLinuxRoutingRetirementEventContinuityAndDisjointForeignChange","TestRouterVPNNativeLinuxRoutingRetirementRacingABAHasNoSuccessReceipt","TestRouterVPNNativeLinuxRoutingRetirementPartialStartupAndDefiniteRefusal","TestRouterVPNNativeLinuxRoutingRetirementNarrowerOriginalRuleFirst","TestRouterVPNNativeLinuxRoutingRetirementNoConstructorAndUnindexed","TestRouterVPNNativeLinuxRoutingRetirementHistoryBoundRetainsCapability","TestRouterVPNNativeLinuxRoutingRetirementSocket","TestRouterVPNNativeLinuxRoutingRetirementNamespace", "TestRouterVPNNativeLinuxRoutingReceiptKeepsOriginalLifetimeAndCallerBudget", "TestRouterVPNNativeLinuxRoutingReceiptHeldOperation", "TestRouterVPNNativeLinuxRoutingObserverHeldOperation", "TestRouterVPNNativeLinuxRoutingInterfaceCancelledCaller")))
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
                        tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in

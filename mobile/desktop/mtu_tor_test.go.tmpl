@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -59,7 +60,7 @@ func (l *desktopTorMTULeaseFixture) ChangeMTU(ctx context.Context, expected adap
 	if l.generation == 0 || l.request == "" || expected != l.current || ctx.Err() != nil || l.closed.Load() || l.active {
 		return l.current, errors.New("Tor TUN mutated without its registered request")
 	}
-	l.current = &desktopMTUTUNFixture{index: l.current.index + 1, mtu: mtu, name: l.current.name, tag: l.current.tag, guard: l.current.guard}
+	l.current = &desktopMTUTUNFixture{index: l.current.index + 1, mtu: mtu, name: l.current.name, tag: l.current.tag, guard: l.current.guard, guardContext: l.current.guardContext}
 	l.revision++
 	l.changes = append(l.changes, mtu)
 	return l.current, nil
@@ -120,7 +121,15 @@ func desktopTorMTUFixtureForPolicy(t *testing.T, policy *mobiletor.DesktopBridge
 		name = "utun902"
 	}
 	base := &desktopMTULeaseFixture{config: policy.Config(), blockAt: 2}
-	base.current = &desktopMTUTUNFixture{index: 710, mtu: meta.ConfiguredMTU, name: name, tag: meta.TUNTag, guard: base.Healthy}
+	base.current = &desktopMTUTUNFixture{index: 710, mtu: meta.ConfiguredMTU, name: name, tag: meta.TUNTag, guard: base.Healthy, guardContext: func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !base.Healthy() {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}}
 	lease := &desktopTorMTULeaseFixture{desktopMTULeaseFixture: base, policy: policy}
 	physical := &atomic.Value{}
 	physical.Store(strings.Repeat("c", 64))
@@ -341,4 +350,23 @@ func TestRouterVPNDesktopMTUTorFreshPathCancelRetainsWorkerAndHealthyConnection(
 	if !mailbox.record.Complete || !mailbox.record.Cancelled || mailbox.record.Verified || !path.Healthy() {
 		t.Fatal("fresh path did not acknowledge actual drain", mailbox.record)
 	}
+}
+
+func (l *desktopTorMTULeaseFixture) MTUReadbackContext(ctx context.Context) (mobiletor.DesktopBridgeMTUReadback, error) {
+	if err := desktopnetwork.LockContext(ctx, &l.mu); err != nil {
+		return mobiletor.DesktopBridgeMTUReadback{}, err
+	}
+	defer l.mu.Unlock()
+	name, index, mtu, err := l.current.RouterVPNDesktopMTUInterfaceContext(ctx)
+	return mobiletor.DesktopBridgeMTUReadback{Generation: l.generation, RequestID: l.request, Revision: l.revision, InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu}, err
+}
+
+func (f *desktopTorPathRuntimeFixture) HealthyContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !f.Healthy() {
+		return routerVPNTorFailure
+	}
+	return nil
 }

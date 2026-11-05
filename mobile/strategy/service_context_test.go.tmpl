@@ -4,17 +4,43 @@ import (
 	"context"
 	"errors"
 	"github.com/sagernet/sing-box/adapter"
+	"sync"
 	"testing"
 	"time"
 )
+
+// The first Err call captures nil before signaling. Cancellation therefore
+// happens after admission begins, even when the implementation is changed to
+// an incorrect precheck followed by a blocking mutex acquisition.
+type routerVPNEnteredObservationContext struct {
+	context.Context
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (c *routerVPNEnteredObservationContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.entered) })
+	return err
+}
 
 func TestRouterVPNManagerObservationRetainsCaller(t *testing.T) {
 	m := &Manager{serviceByTag: map[string]adapter.Service{"captured": nil}}
 	m.access.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	entered := make(chan struct{})
+	ctx = &routerVPNEnteredObservationContext{Context: ctx, entered: entered}
 	done := make(chan error, 1)
 	go func() { _, _, err := m.RouterVPNGetContext(ctx, "captured"); done <- err }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		m.access.Unlock()
+		cancel()
+		<-done
+		t.Fatal("native observation did not enter the original caller context")
+	}
 	cancel()
 	select {
 	case err := <-done:

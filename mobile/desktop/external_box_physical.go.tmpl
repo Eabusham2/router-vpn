@@ -111,7 +111,13 @@ func (s *Box) RouterVPNDesktopExternalCreateProof(policy *mobilemultihop.Desktop
 	}
 	binding := &routerVPNDesktopExternalBinding{ctx: ctx, policy: policy, network: network, interfaceName: tunOptions.InterfaceName}
 	engine.physical = binding
-	name, index, mtu, err := reader.RouterVPNDesktopMTU(binding.current)
+	bounded, ok := reader.(interface {
+		RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
+	})
+	if !ok {
+		return nil, errors.New("ordinary desktop TUN lacks its bounded generation guard")
+	}
+	name, index, mtu, err := bounded.RouterVPNDesktopMTUContext(ctx, binding.currentContext)
 	if err != nil || name == "" || index < 1 || mtu != capture.ConfiguredMTU || binding.interfaceName != "" && name != binding.interfaceName {
 		return nil, errors.New("ordinary desktop native TUN differs from its captured interface policy")
 	}
@@ -163,6 +169,57 @@ type routerVPNDesktopExternalBinding struct {
 
 func (b *routerVPNDesktopExternalBinding) current() bool {
 	return b != nil && b.ctx != nil && b.ctx.Err() == nil && b.network != nil && b.network.Current()
+}
+
+func (b *routerVPNDesktopExternalBinding) currentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("external physical observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b == nil || b.ctx == nil || b.ctx.Err() != nil || b.network == nil {
+		return errors.New("external physical generation is retired")
+	}
+	return b.network.CurrentContext(ctx)
+}
+func (b *routerVPNDesktopExternalBinding) readbackContext(ctx context.Context, expected adapter.Inbound) (string, int, int, error) {
+	if err := b.currentContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	if b.detached || b.inbound != expected || b.reader == nil {
+		return "", 0, 0, errors.New("external TUN readback has a retired or replaced owner")
+	}
+	reader, ok := b.reader.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return "", 0, 0, errors.New("external TUN has no bounded native readback")
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if name != b.name || index != b.index || mtu != b.mtu {
+		return "", 0, 0, errors.New("external TUN no longer matches its proved readback")
+	}
+	if err := b.currentContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	return name, index, mtu, nil
+}
+func (b *routerVPNDesktopExternalBinding) validTUNContext(ctx context.Context, expected adapter.Inbound) error {
+	_, _, _, err := b.readbackContext(ctx, expected)
+	return err
+}
+
+// Revocation from a bounded observation cannot wait for the source's native
+// cleanup. The captured network context stops admission immediately; its
+// existing broker/lifecycle owner retains and joins every source afterward.
+func (b *routerVPNDesktopExternalBinding) cancelObservation() {
+	if b != nil && b.network != nil {
+		b.network.CancelAdmission()
+	}
 }
 
 func (b *routerVPNDesktopExternalBinding) cancel() {

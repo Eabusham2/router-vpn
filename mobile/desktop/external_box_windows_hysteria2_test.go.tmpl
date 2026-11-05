@@ -716,6 +716,7 @@ type desktopExternalWFPTUN struct {
 	luid                   uint64
 	ready, claimed, closed bool
 	guard                  func() bool
+	guardContext           func(context.Context) error
 }
 
 func (t *desktopExternalWFPTUN) Start(stage adapter.StartStage) error {
@@ -806,6 +807,49 @@ func (t *desktopExternalWFPTUN) RouterVPNDesktopMTUInterface() (string, int, int
 		return "", 0, 0, errors.New("external Wintun readback is unclaimed or stale")
 	}
 	return t.readback()
+}
+
+func (t *desktopExternalWFPTUN) RouterVPNDesktopMTUContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &t.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.mu.Unlock()
+	if t.claimed || guard == nil {
+		return "", 0, 0, errors.New("external Wintun claim is stale")
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	name, index, mtu, err := t.readback()
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	t.claimed, t.guardContext = true, guard
+	t.guard = func() bool { return guard(t.ctx) == nil }
+	return name, index, mtu, nil
+}
+func (t *desktopExternalWFPTUN) RouterVPNDesktopMTUInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &t.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.mu.Unlock()
+	if !t.claimed || t.guardContext == nil {
+		return "", 0, 0, errors.New("external Wintun readback has no bounded owner")
+	}
+	if err := t.guardContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	name, index, mtu, err := t.readback()
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	return name, index, mtu, nil
 }
 
 type desktopExternalWFPFixture struct {

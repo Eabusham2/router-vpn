@@ -210,7 +210,7 @@ func desktopExternalWFPOpenVPNReplace(f *desktopExternalWFPFixture, after func(a
 			options := f.tun.options
 			options.InterfaceName = name
 			options.MTU = uint32(value)
-			return &desktopExternalWFPOpenVPNTUNCandidate{desktopExternalWFPTUN: &desktopExternalWFPTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), ctx: f.tun.ctx, options: options, claimed: true, guard: f.proof.engine.physical.current}}
+			return &desktopExternalWFPOpenVPNTUNCandidate{desktopExternalWFPTUN: &desktopExternalWFPTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), ctx: f.tun.ctx, options: options, claimed: true, guard: f.proof.engine.physical.current, guardContext: f.proof.engine.physical.(interface{ currentContext(context.Context) error }).currentContext}}
 		}
 		*adopted, *restored = create(mtu), create(oldMTU)
 		(*adopted).after = after

@@ -264,12 +264,17 @@ func parseDarwinEvent(message syscall.RoutingMessage) (Event, error) {
 }
 
 func (o *darwinObserver) Barrier(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return errors.New("Darwin network barrier lost its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	o.mu.Lock()
+	if err := LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
 	if o.closing || o.closed || o.sequence == 0x7fffffff {
 		o.mu.Unlock()
 		return errors.New("Darwin network barrier lost its original socket")
@@ -278,19 +283,31 @@ func (o *darwinObserver) Barrier(ctx context.Context) error {
 	seq := o.sequence
 	waiter := make(chan error, 1)
 	o.waiters[seq] = waiter
-	o.mu.Unlock()
 	header := syscall.RtMsghdr{Msglen: uint16(unsafe.Sizeof(syscall.RtMsghdr{}) + 16), Version: syscall.RTM_VERSION, Type: syscall.RTM_GET, Flags: syscall.RTF_HOST, Addrs: syscall.RTA_DST, Pid: int32(os.Getpid()), Seq: seq}
 	request := make([]byte, int(header.Msglen))
 	copy(request, unsafe.Slice((*byte)(unsafe.Pointer(&header)), int(unsafe.Sizeof(header))))
 	sockaddr := request[int(unsafe.Sizeof(header)):]
 	sockaddr[0], sockaddr[1], sockaddr[4], sockaddr[7] = 16, syscall.AF_INET, 127, 1
-	n, err := o.file.Write(request)
-	if err != nil || n != len(request) {
-		return errors.Join(errors.New("Darwin network barrier request was not delivered completely"), err)
+	raw, err := o.file.SyscallConn()
+	n := 0
+	if err == nil {
+		var sendErr error
+		// The retained route socket is nonblocking. Do not wait for writable
+		// readiness outside this caller's deadline or detach a write worker.
+		err = raw.Control(func(fd uintptr) { n, sendErr = syscall.Write(int(fd), request) })
+		if err == nil {
+			err = sendErr
+		}
 	}
+	if err != nil || n != len(request) {
+		delete(o.waiters, seq)
+		o.mu.Unlock()
+		return errors.Join(errors.New("Darwin network barrier request was not delivered completely"), err, ctx.Err())
+	}
+	o.mu.Unlock()
 	select {
 	case err := <-waiter:
-		return err
+		return errors.Join(err, ctx.Err())
 	case <-o.joined:
 		return errors.New("Darwin network observer exited before its barrier")
 	case <-ctx.Done():
@@ -300,14 +317,20 @@ func (o *darwinObserver) Barrier(ctx context.Context) error {
 
 func (o *darwinObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 	var snapshot Snapshot
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return snapshot, errors.New("Darwin network snapshot lost its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return snapshot, errors.Join(err, ctx.Err())
 	}
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return snapshot, err
+		return snapshot, errors.Join(err, ctx.Err())
 	}
 	for _, iface := range interfaces {
+		if err := ctx.Err(); err != nil {
+			return snapshot, err
+		}
 		link := Link{Index: uint32(iface.Index), Name: iface.Name, MTU: iface.MTU, Flags: uint32(iface.Flags), Hardware: iface.HardwareAddr.String()}
 		if link.MTU <= 0 {
 			link, err = desktopDarwinCaptureUnusedInterface(link, func(index uint32) (desktopDarwinInterfaceReadback, error) {
@@ -317,28 +340,31 @@ func (o *darwinObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 				return darwinInterfaceReadback(index, syscall.RouteRIB)
 			})
 			if err != nil {
-				return snapshot, err
+				return snapshot, errors.Join(err, ctx.Err())
 			}
 		}
 		snapshot.Links = append(snapshot.Links, link)
 		addresses, err := iface.Addrs()
 		if err != nil {
-			return snapshot, err
+			return snapshot, errors.Join(err, ctx.Err())
 		}
 		for _, address := range addresses {
 			prefix, err := netip.ParsePrefix(address.String())
 			if err != nil {
-				return snapshot, err
+				return snapshot, errors.Join(err, ctx.Err())
 			}
 			snapshot.Addresses = append(snapshot.Addresses, Address{Index: uint32(iface.Index), Prefix: prefix.String()})
 		}
 	}
-	objects, err := desktopDarwinReadRouteDump2(syscall.RouteRIB)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return snapshot, err
 	}
+	objects, err := desktopDarwinReadRouteDump2(syscall.RouteRIB)
+	if err != nil {
+		return snapshot, errors.Join(err, ctx.Err())
+	}
 	snapshot.Objects = objects
-	return snapshot, nil
+	return snapshot, ctx.Err()
 }
 
 func darwinInterfaceReadback(index uint32, read func(int, int) ([]byte, error)) (desktopDarwinInterfaceReadback, error) {

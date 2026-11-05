@@ -4,17 +4,43 @@ import (
 	"context"
 	"errors"
 	"github.com/sagernet/sing-box/adapter"
+	"sync"
 	"testing"
 	"time"
 )
+
+// The first Err call captures nil before signaling. Cancellation therefore
+// happens after admission begins, even when the implementation is changed to
+// an incorrect precheck followed by a blocking mutex acquisition.
+type routerVPNEnteredObservationContext struct {
+	context.Context
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (c *routerVPNEnteredObservationContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.entered) })
+	return err
+}
 
 func TestRouterVPNManagerObservationRetainsCaller(t *testing.T) {
 	m := &Manager{inboundByTag: map[string]adapter.Inbound{"captured": nil}}
 	m.access.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	entered := make(chan struct{})
+	ctx = &routerVPNEnteredObservationContext{Context: ctx, entered: entered}
 	done := make(chan error, 1)
 	go func() { _, _, err := m.RouterVPNGetContext(ctx, "captured"); done <- err }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		m.access.Unlock()
+		cancel()
+		<-done
+		t.Fatal("native observation did not enter the original caller context")
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -34,5 +60,44 @@ func TestRouterVPNManagerObservationRetainsCaller(t *testing.T) {
 	defer stop()
 	if _, _, err := m.RouterVPNGetContext(expired, "captured"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("expired caller deadline renewed", err)
+	}
+}
+
+func TestRouterVPNManagerInventoryRetainsCaller(t *testing.T) {
+	m := &Manager{inbounds: []adapter.Inbound{nil}}
+	m.access.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{})
+	ctx = &routerVPNEnteredObservationContext{Context: ctx, entered: entered}
+	done := make(chan error, 1)
+	go func() { _, err := m.RouterVPNInboundsContext(ctx); done <- err }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		m.access.Unlock()
+		cancel()
+		<-done
+		t.Fatal("native observation did not enter the original caller context")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		m.access.Unlock()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("inventory original cancellation lost", err)
+		}
+	case <-time.After(time.Second):
+		m.access.Unlock()
+		<-done
+		t.Fatal("cancelled inventory waited on manager lock")
+	}
+	values, err := m.RouterVPNInboundsContext(context.Background())
+	if err != nil || len(values) != 1 {
+		t.Fatal("cancelled read changed original inventory", values, err)
+	}
+	values = append(values, nil)
+	if len(m.inbounds) != 1 {
+		t.Fatal("inventory caller changed captured manager backing storage")
 	}
 }

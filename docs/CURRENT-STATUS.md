@@ -1,12 +1,34 @@
 # Current implementation status
 
-Updated November 4, 2026 UTC. This file distinguishes published source,
+Updated November 5, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — verified through 4d25725c
+## November 5 continuation — original caller ownership
+
+[The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
+original-source reconciliation, the four individually verified pushes through
+`36175ae5`, and the integrated observation change in the commit containing this
+section. The lost November 4 patch was reconstructed and tested against current
+source; its old test counts were not reused as new evidence.
+
+Original caller deadlines now reach native manager, graph, network, physical,
+PT/broker, selected-proof and OpenVPN observations. Pure observation expiry
+preserves a healthy owner; confirmed identity failure revokes admission without
+blocking on cleanup. Original Stop can interrupt a held command observation.
+Tor MTU heartbeat adopts a complete matching receipt/revision, and Windows
+identity reads avoid the publication mutex. Focused actual-source races and
+causal controls are recorded in the evidence, with explicit native-fixture limits.
+
+This is not all-requirement completion. Installed Linux standard-service MTU
+Retest/Cancel remains unimplemented, and broader MTU operation admission still
+needs bounded Capture/start/status paths. Current exact-SHA release publication,
+physical/device/private acceptance and the other surviving platform/graph work
+remain separate requirements. The older continuation below is retained as history.
+
+## Previous implementation continuation — verified through 4d25725c
 
 The verified source cutoff is
 [`4d25725c`](https://github.com/Eabusham2/router-vpn/commit/4d25725ccef863a1e800a18483372308cd5d6a9f),

@@ -25,6 +25,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	SJ "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
@@ -684,6 +685,8 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 		_ = files.publish("progress.json", progress)
 		return files.publish("stopped.json", closed)
 	}
+	parent, joinStop := routerVPNWatchCommandStop(parent, files, session, policy.SourceSHA256())
+	defer joinStop()
 	owner, factoryErr := factory(ctx, policy, physical, string(source), string(capture), session)
 	if owner == nil {
 		// Factory errors with partial native ownership must return that owner.
@@ -730,7 +733,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 		select {
 		case outcome := <-done:
 			finished = true
-			if outcome.err != nil || parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) || !owner.Healthy() {
+			if outcome.err != nil || parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) || routerVPNExternalHealthyContext(parent, owner) != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
@@ -743,8 +746,12 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 			}
 			heartbeat = time.Now()
 			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, Physical: physicalMetadata, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
-			receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(owner)
+			receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(parent, owner)
 			if err != nil {
+				if parent.Err() != nil {
+					stopping = true
+					break
+				}
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
@@ -780,7 +787,11 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				stopping = true
 				break
 			}
-			if connected && !owner.Healthy() {
+			if connected && routerVPNExternalHealthyContext(parent, owner) != nil {
+				if parent.Err() != nil {
+					stopping = true
+					break
+				}
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
@@ -810,12 +821,18 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				progress.Stage = "proving"
 			} else if time.Since(heartbeat) >= 500*time.Millisecond {
 				heartbeat = time.Now()
-				receipt.HeartbeatAt, receipt.Progress = heartbeat.UnixMilli(), routerVPNExternalProgress(owner)
-				receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(owner)
+				next := receipt
+				next.HeartbeatAt, next.Progress = heartbeat.UnixMilli(), routerVPNExternalProgress(owner)
+				next.NetworkReceipt, err = routerVPNDesktopNetworkProjection(parent, owner)
 				if err != nil {
+					if parent.Err() != nil {
+						stopping = true
+						break
+					}
 					failure, stopping = routerVPNExternalFailure, true
 					break
 				}
+				receipt = next
 				if files.publish("proof.json", receipt) != nil {
 					failure, stopping = routerVPNExternalFailure, true
 					break
@@ -884,4 +901,57 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 		return routerVPNExternalFailure
 	}
 	return failure
+}
+
+func routerVPNExternalHealthyContext(ctx context.Context, owner routerVPNExternalOwner) error {
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	observed, ok := owner.(interface{ HealthyContext(context.Context) error })
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	return observed.HealthyContext(ctx)
+}
+func (n *routerVPNExternalNative) HealthyContext(ctx context.Context) error {
+	if n == nil {
+		return routerVPNExternalFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	proof, closed := n.proof, n.boxClosed
+	n.mu.Unlock()
+	if proof == nil || closed {
+		return routerVPNExternalFailure
+	}
+	return proof.HealthyContext(ctx)
+}
+
+// The command owns and joins this watcher before closing its captured root.
+// It observes only the original session/source Stop record, so a blocked
+// receipt or health read remains interruptible without revoking another owner.
+func routerVPNWatchCommandStop(parent context.Context, files *routerVPNExternalFiles, session, source string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if ctx.Err() != nil || files.stopRequested(session, source) {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return ctx, func() { cancel(); <-done }
 }

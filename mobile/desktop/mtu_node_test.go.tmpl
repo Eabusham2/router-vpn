@@ -54,7 +54,7 @@ func (engine *desktopNodeMTUEngineFixture) Change(ctx context.Context, expected 
 		return engine.change(ctx, expected, value)
 	}
 	old := expected.(*desktopMTUTUNFixture)
-	next := &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard}
+	next := &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard, guardContext: old.guardContext}
 	engine.current = next
 	return next, nil
 }
@@ -230,7 +230,7 @@ func TestRouterVPNNodeMTURejectsRetiredOrReplacedNativeReader(t *testing.T) {
 				valid.Store(false)
 			case "pointer":
 				// Identical name/index/MTU does not make a new object this owner.
-				engine.current = &desktopMTUTUNFixture{index: original.index, mtu: original.mtu, guard: original.guard}
+				engine.current = &desktopMTUTUNFixture{index: original.index, mtu: original.mtu, guard: original.guard, guardContext: original.guardContext}
 			case "index":
 				original.index++
 			case "mtu":
@@ -305,7 +305,7 @@ func TestRouterVPNNodeMTUFailedChangeRetainsExactNativeRollbackReader(t *testing
 	var rollback *desktopMTUTUNFixture
 	engine.change = func(_ context.Context, expected adapter.Inbound, _ int) (adapter.Inbound, error) {
 		old := expected.(*desktopMTUTUNFixture)
-		rollback = &desktopMTUTUNFixture{index: old.index + 1, mtu: old.mtu, guard: old.guard}
+		rollback = &desktopMTUTUNFixture{index: old.index + 1, mtu: old.mtu, guard: old.guard, guardContext: old.guardContext}
 		engine.current = rollback
 		return rollback, errors.New("candidate failed after native rollback")
 	}
@@ -332,7 +332,7 @@ func TestRouterVPNNodeMTUExpiryCannotClaimFailedNativeRollback(t *testing.T) {
 	desktopNodeMTUApply(t, owner, "set", 1360)
 	engine.change = func(_ context.Context, expected adapter.Inbound, _ int) (adapter.Inbound, error) {
 		old := expected.(*desktopMTUTUNFixture)
-		engine.current = &desktopMTUTUNFixture{index: old.index + 1, mtu: 1360, guard: old.guard}
+		engine.current = &desktopMTUTUNFixture{index: old.index + 1, mtu: 1360, guard: old.guard, guardContext: old.guardContext}
 		return engine.current, errors.New("original MTU could not be restored")
 	}
 	if err := owner.expire(owner.deadline); err == nil || owner.record.Active || owner.record.Restored || owner.record.MTU != 1360 || owner.record.Reader != 3 || engine.current != owner.inbound || owner.current() != nil {
@@ -347,8 +347,8 @@ func TestRouterVPNNodeMTUFailedChangeCannotAdoptReplacementOwner(t *testing.T) {
 	owner, engine, _ := desktopNodeMTUFixture(t)
 	desktopNodeMTUApply(t, owner, "begin", 0)
 	original := owner.inbound.(*desktopMTUTUNFixture)
-	returned := &desktopMTUTUNFixture{index: 18, mtu: 1360, guard: original.guard}
-	replacement := &desktopMTUTUNFixture{index: 18, mtu: 1360, guard: original.guard}
+	returned := &desktopMTUTUNFixture{index: 18, mtu: 1360, guard: original.guard, guardContext: original.guardContext}
+	replacement := &desktopMTUTUNFixture{index: 18, mtu: 1360, guard: original.guard, guardContext: original.guardContext}
 	engine.change = func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
 		engine.current = replacement
 		return returned, errors.New("another owner replaced the candidate")
@@ -678,11 +678,12 @@ func TestRouterVPNNodeMTUOwnedCancellationInterruptsNativeStartup(t *testing.T) 
 // without creating a system tunnel or changing the host network policy.
 type desktopNodeMTUHeartbeatFixture struct {
 	inbound.Adapter
-	guard   func() bool
-	raw     string
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
+	guard        func() bool
+	guardContext func(context.Context) error
+	raw          string
+	entered      chan struct{}
+	release      chan struct{}
+	once         sync.Once
 }
 
 func (*desktopNodeMTUHeartbeatFixture) Start(adapter.StartStage) error { return nil }
@@ -738,7 +739,7 @@ func TestRouterVPNNodeMTUHeartbeatStopOwnership(t *testing.T) {
 			defer cancelParent()
 			done := make(chan error, 1)
 			go func() {
-				done <- routerVPNRunNodeMTULoop(parent, graph, files, instance, desktopExternalSession, digest, nil, func() bool { return true }, func() error { return nil })
+				done <- routerVPNRunNodeMTULoop(parent, graph, files, instance, desktopExternalSession, digest, nil, func(ctx context.Context) error { return ctx.Err() }, func() error { return nil })
 			}()
 			var release sync.Once
 			finished := false
@@ -798,5 +799,38 @@ func TestRouterVPNNodeMTUHeartbeatStopOwnership(t *testing.T) {
 				t.Fatal("cancelled or invalid native evidence was published")
 			}
 		})
+	}
+}
+
+func (engine *desktopNodeMTUEngineFixture) CurrentContext(ctx context.Context) (adapter.Inbound, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return engine.current, engine.readErr
+}
+func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopMTUContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	f.guardContext = guard
+	f.guard = func() bool { return guard(context.Background()) == nil }
+	return f.RouterVPNDesktopMTUInterfaceContext(ctx)
+}
+func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopMTUInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	if f.guardContext == nil {
+		return "", 0, 0, routerVPNExternalFailure
+	}
+	if err := f.guardContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	return "router-vpn", 17, 1420, nil
+}
+func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	f.once.Do(func() { close(f.entered) })
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-f.release:
+		return f.raw, ctx.Err()
 	}
 }

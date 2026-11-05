@@ -5,6 +5,7 @@ package box
 import (
 	"context"
 	"errors"
+	"github.com/sagernet/sing-box/adapter"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobileperf"
@@ -54,6 +55,53 @@ func (owner *RouterVPNDesktopLinuxNodeCover) Current() bool {
 		}
 	}
 	return true
+}
+
+func (owner *RouterVPNDesktopLinuxNodeCover) CurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("Router cover observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if owner == nil || owner.instance == nil || owner.instance.ctx == nil || owner.instance.ctx.Err() != nil || owner.instance.service == nil || owner.policy == nil || owner.physical == nil || owner.physical.instance != owner.instance || owner.physical.policy != owner.policy || len(owner.options) != len(owner.services) || len(owner.services) > 1 || (len(owner.services) == 0) != (owner.digest == "") {
+		return errors.New("Router cover lost its captured owner")
+	}
+	if err := owner.physical.CurrentContext(ctx); err != nil {
+		return err
+	}
+	services, err := owner.instance.service.RouterVPNServicesContext(ctx)
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, service := range services {
+		if service.Type() != mobileperf.CoverType {
+			continue
+		}
+		if count >= len(owner.services) || service != owner.services[count] || service.Tag() != owner.options[count].Tag || !owner.services[count].Matches(owner.options[count].Options) {
+			return errors.New("Router cover service was replaced")
+		}
+		if err := owner.services[count].HealthyContext(ctx); err != nil {
+			return err
+		}
+		count++
+	}
+	if count != len(owner.services) {
+		return errors.New("Router cover service disappeared")
+	}
+	// Recheck the exact manager pointers after worker observations, without
+	// retaining the manager lock across a callback into that same native graph.
+	for _, service := range owner.services {
+		current, found, err := adapter.RouterVPNServiceContext(ctx, owner.instance.service, service.Tag())
+		if err != nil {
+			return err
+		}
+		if !found || current != service {
+			return errors.New("Router cover owner changed during observation")
+		}
+	}
+	return ctx.Err()
 }
 
 func (owner *RouterVPNDesktopLinuxNodeCover) Readiness() (int, string, error) {

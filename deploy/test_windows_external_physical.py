@@ -136,10 +136,11 @@ def checked_sources(source):
         if template.is_symlink() or target.is_symlink() or not target.is_file() or target.read_bytes() != expected:
             raise ValueError("Ordinary Windows command differs from shipping bytes: " + template.name)
         records[target.relative_to(source).as_posix()] = hashlib.sha256(expected).hexdigest()
+    records.update(BOOT.PREP.RELAY.OBSERVATION.verify(source))
     for path in sorted((ROOT / "internal/mobilemultihop").glob("*.go")):
         if path.name.endswith("_test.go"):
             continue
-        expected = path.read_bytes()
+        expected = BOOT.PREP.RELAY.OBSERVATION.rewrite(path.read_bytes())
         for package in BOOT.PREP.RELAY.PACKAGES:
             expected = expected.replace(('"router-vpn/internal/' + package + '"').encode(),
                 ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/' + package + '"').encode())

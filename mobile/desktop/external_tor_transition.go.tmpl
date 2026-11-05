@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"os"
 	"sync"
 	"time"
@@ -113,11 +114,44 @@ func routerVPNTorNextHeartbeat(parent, operation context.Context, previous int64
 	}
 }
 
-func routerVPNTorLifetimeCurrent(owner routerVPNTorOwner) bool {
-	if native, ok := owner.(routerVPNTorTransitionOwner); ok {
-		return native.LifetimeCurrent()
+func routerVPNTorLifetimeCurrent(ctx context.Context, owner routerVPNTorOwner) error {
+	if observed, ok := owner.(interface{ LifetimeCurrentContext(context.Context) error }); ok {
+		return observed.LifetimeCurrentContext(ctx)
 	}
-	return owner.Healthy() // Bounded fixture owners have no native reader lock.
+	return routerVPNTorHealthyContext(ctx, owner)
+}
+func routerVPNTorHealthyContext(ctx context.Context, owner routerVPNTorOwner) error {
+	if ctx == nil {
+		return routerVPNTorFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	observed, ok := owner.(interface{ HealthyContext(context.Context) error })
+	if !ok {
+		return routerVPNTorFailure
+	}
+	return observed.HealthyContext(ctx)
+}
+func (n *routerVPNTorNative) LifetimeCurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return routerVPNTorFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if n == nil || n.ctx.Err() != nil || n.processExited() {
+		return routerVPNTorFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	tor, closed := n.tor, n.boxClosed
+	n.mu.Unlock()
+	if closed || tor == nil {
+		return routerVPNTorFailure
+	}
+	return tor.LifetimeCurrentContext(ctx)
 }
 
 // This callback comes only from the exact captured native lease after fresh
@@ -154,11 +188,12 @@ func routerVPNTorTransitionKeepsAlive(value *mobiletor.DesktopBridgeMTUTransitio
 }
 
 type routerVPNTorMaintenance struct {
-	version   uint64
-	proof     mobiletor.DesktopBridgeProof
-	started   time.Time
-	heartbeat bool
-	err       error
+	version            uint64
+	proof              mobiletor.DesktopBridgeProof
+	started            time.Time
+	heartbeat          bool
+	observationExpired bool
+	err                error
 }
 
 // Exactly one retained worker advances the measurement mailboxes and checks
@@ -167,23 +202,50 @@ type routerVPNTorMaintenance struct {
 // private output ownership is released.
 func routerVPNTorMaintain(ctx context.Context, owner routerVPNTorOwner, files *routerVPNTorFiles,
 	dns *routerVPNDesktopDNSFiles, mtu *routerVPNDesktopMTUFiles, path *routerVPNDesktopPathFiles,
-	latency *routerVPNDesktopLatencyFiles,
-	result routerVPNTorMaintenance) routerVPNTorMaintenance {
-	if ctx.Err() != nil || !owner.Healthy() || files.current() != nil ||
-		mtu != nil && mtu.tick() != nil || path != nil && path.tick() != nil || dns.tick() != nil || latency.tick() != nil {
+	latency *routerVPNDesktopLatencyFiles, result routerVPNTorMaintenance) routerVPNTorMaintenance {
+	if err := routerVPNTorHealthyContext(ctx, owner); err != nil {
+		result.err = err
+		result.observationExpired = mobiletor.ObservationContextExpired(ctx, err)
+		return result
+	}
+	if files.current() != nil || mtu != nil && mtu.tick() != nil || path != nil && path.tick() != nil || dns.tick() != nil || latency.tick() != nil {
 		result.err = routerVPNTorFailure
 		return result
 	}
 	if result.heartbeat {
 		verify, cancel := context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)
 		defer cancel()
-		err := owner.VerifyCurrentPath(verify)
 		next := result.proof
-		if err != nil || verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil || routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil || verify.Err() != nil {
-			result.err = routerVPNTorFailure
-		} else {
-			result.proof = next
+		if err := owner.VerifyCurrentPath(verify); err != nil {
+			result.err = err
+			result.observationExpired = mobiletor.ObservationContextExpired(verify, err)
+			return result
 		}
+		if err := routerVPNTorHealthyContext(verify, owner); err != nil {
+			result.err = err
+			result.observationExpired = mobiletor.ObservationContextExpired(verify, err)
+			return result
+		}
+		if files.current() != nil {
+			result.err = routerVPNTorFailure
+			return result
+		}
+		if err := routerVPNTorRefreshReadback(verify, owner, &next); err != nil {
+			result.err = err
+			result.observationExpired = mobiletor.ObservationContextExpired(verify, err)
+			return result
+		}
+		if err := routerVPNTorRefreshPadding(verify, owner, &next, result.started, time.Now()); err != nil {
+			result.err = err
+			result.observationExpired = mobiletor.ObservationContextExpired(verify, err)
+			return result
+		}
+		if err := verify.Err(); err != nil {
+			result.err = err
+			result.observationExpired = mobiletor.ObservationContextExpired(verify, err)
+			return result
+		}
+		result.proof = next
 	}
 	return result
 }

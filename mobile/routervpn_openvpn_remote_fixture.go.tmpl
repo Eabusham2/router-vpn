@@ -32,3 +32,10 @@ func (c *ClientEndpoint) RouterVPNTestRestart() { c.client.RestartSession() }
 func (c *ClientEndpoint) RouterVPNTestTransportGeneration() uint64 {
 	return c.state.Load().routerVPNTransportGeneration
 }
+
+// Hold only this endpoint's original status mutex. The fixture never supplies
+// readiness, TLS state or a remote receipt; the ordinary reader must time out.
+func (c *ClientEndpoint) RouterVPNTestHoldStatus() func() {
+	c.statusAccess.Lock()
+	return c.statusAccess.Unlock
+}

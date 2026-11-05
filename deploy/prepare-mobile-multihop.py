@@ -43,13 +43,17 @@ _pq_spec.loader.exec_module(PQ)
 _hy2_spec = importlib.util.spec_from_file_location('routervpn_hy2_deadlines', ROOT/'deploy/prepare-hysteria2-deadlines.py')
 HY2_DEADLINES = importlib.util.module_from_spec(_hy2_spec)
 _hy2_spec.loader.exec_module(HY2_DEADLINES)
+_observation_spec = importlib.util.spec_from_file_location('routervpn_observation_policy', ROOT/'deploy/native_observation_policy.py')
+OBSERVATION = importlib.util.module_from_spec(_observation_spec)
+_observation_spec.loader.exec_module(OBSERVATION)
+
 def inputs():
     paths = [ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
+    return paths + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -63,6 +67,7 @@ def prepare(vendor):
         raise ValueError('expected the verified disposable sing-box checkout')
     HY2_DEADLINES.prepare(vendor)
     WHITENING.prepare(vendor)
+    OBSERVATION.prepare(vendor)
     root=vendor/'experimental/libbox'
     for package in PACKAGES:
         output=root/'routervpn'/package;output.mkdir(parents=True,exist_ok=True)
@@ -77,7 +82,7 @@ def prepare(vendor):
             if source.name=='core_config_test.go' or (package=='applexray' and source.name=='preparation_test.go'):continue
             # Preserve source bytes across hosts. Text-mode writes expand LF
             # to CRLF on Windows and invalidate the copied policy identity.
-            content=source.read_bytes()
+            content=OBSERVATION.rewrite(source.read_bytes())
             for name in PACKAGES:
                 content=content.replace(('"router-vpn/internal/'+name+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"').encode())
             (output/source.name).write_bytes(content)

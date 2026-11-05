@@ -138,7 +138,7 @@ func (r *RouterVPNDesktopTor) startPadding(ctx context.Context, proof *mobiletor
 	session := sha256.Sum256([]byte(meta.SessionID))
 	lease, err := owner.PaddingLease(r.ctx, mobiletor.PaddingLeaseOptions{
 		SessionSHA256: hex.EncodeToString(session[:]), SourceSHA256: meta.SourceSHA256, RateKbps: meta.Padding.RateKbps,
-		Current: r.paddingOwnerCurrent, ProofValidUntil: r.paddingProofUntil, Retire: func(error) { r.Cancel() },
+		Current: r.paddingOwnerCurrent, ProofValidUntil: r.paddingProofUntil, Observe: r.paddingOwnerCurrentContext, ObserveProofUntil: r.paddingProofUntilContext, Retire: func(error) { r.Cancel() },
 	})
 	if err != nil {
 		return err
@@ -294,4 +294,94 @@ func (r *RouterVPNDesktopTor) refreshPaddingProof(ctx context.Context,
 	}
 	r.paddingProof.Store(captured)
 	return nil
+}
+
+func (r *RouterVPNDesktopTor) paddingOwnerCurrentContext(ctx context.Context) error {
+	if err := r.readerLifetimeCurrentContext(ctx); err != nil {
+		return err
+	}
+	if r.server != nil || r.pt == nil || r.paddingGate == nil {
+		return errors.New("desktop Tor padding owner unavailable")
+	}
+	if err := r.pt.LifetimeCurrentContext(ctx); err != nil {
+		return err
+	}
+	if err := r.sessionCurrentContext(ctx); err != nil {
+		return err
+	}
+	if err := r.serverEntryCurrentContext(ctx); err != nil {
+		return err
+	}
+	return r.paddingGate.CurrentContext(ctx)
+}
+func (r *RouterVPNDesktopTor) paddingProofUntilContext(ctx context.Context) (time.Time, error) {
+	if ctx == nil {
+		return time.Time{}, errors.New("desktop Tor padding proof requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return time.Time{}, err
+	}
+	if r == nil || r.policy == nil {
+		return time.Time{}, errors.New("desktop Tor padding proof owner unavailable")
+	}
+	until, err := r.policy.Metadata().PaddingProofUntil(r.paddingProof.Load(), r.createdAt, time.Now())
+	if err != nil {
+		return time.Time{}, err
+	}
+	return until, ctx.Err()
+}
+func (r *RouterVPNDesktopTor) paddingHealthyContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("desktop Tor padding observation requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil || r.policy == nil {
+		return errors.New("desktop Tor padding owner unavailable")
+	}
+	meta := r.policy.Metadata()
+	if !meta.Padding.Enabled || meta.Execution == "server" {
+		if r.padding.Load() != nil || r.paddingProof.Load() != nil {
+			return errors.New("desktop Tor unexpected padding owner")
+		}
+		return ctx.Err()
+	}
+	_, err := r.padding.Load().NativeReceiptContext(ctx)
+	return err
+}
+func (r *RouterVPNDesktopTor) PaddingSnapshotContext(ctx context.Context) (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error) {
+	if err := r.paddingHealthyContext(ctx); err != nil {
+		return nil, nil, err
+	}
+	meta := r.policy.Metadata()
+	if !meta.Padding.Enabled || meta.Execution == "server" {
+		return nil, nil, nil
+	}
+	lease := r.padding.Load()
+	if err := r.paddingOwnerCurrentContext(ctx); err != nil {
+		return nil, nil, err
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		proof := r.paddingProof.Load()
+		receipt, err := lease.NativeReceiptContext(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if proof != r.paddingProof.Load() {
+			continue
+		}
+		if proof == nil {
+			return nil, nil, errors.New("desktop Tor padding proof unavailable")
+		}
+		if err := r.paddingOwnerCurrentContext(ctx); err != nil {
+			return nil, nil, err
+		}
+		if err := meta.ValidatePaddingProof(receipt, proof, r.createdAt, time.Now()); err != nil {
+			return nil, nil, err
+		}
+		copied := *proof
+		return receipt, &copied, ctx.Err()
+	}
+	return nil, nil, errors.New("desktop Tor padding proof changed during observation")
 }

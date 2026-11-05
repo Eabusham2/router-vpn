@@ -31,13 +31,17 @@ def mobile_policy_sources():
             if not path.name.startswith('desktop_')]
 
 
+_observation_spec = importlib.util.spec_from_file_location('routervpn_observation_policy', ROOT/'deploy/native_observation_policy.py')
+OBSERVATION = importlib.util.module_from_spec(_observation_spec)
+_observation_spec.loader.exec_module(OBSERVATION)
+
 def inputs():
-    return sorted(set([Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'deploy/test_mobile_tor_thread_signals.py', ROOT/'deploy/test_mobile_tor_package_runtime.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
+    return sorted(set([*OBSERVATION.inputs(), Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'deploy/test_mobile_tor_thread_signals.py', ROOT/'deploy/test_mobile_tor_package_runtime.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
         *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/nativeopenvpn').glob('*.go') if not p.name.endswith('_test.go')],
         *mobile_policy_sources(), *lease_policy_sources(), ROOT/'deploy/test_mobile_tor_source_closure.py',
-        ROOT/'internal/dnsmeasure/catalog.go',
+        ROOT/'internal/dnsmeasure/catalog.go', ROOT/'internal/desktopnetwork/desktop_network_lock.go',
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
         *(ROOT/'mobile/toroutbound').glob('*.tmpl')]))
 
@@ -67,6 +71,7 @@ def rewrite(data):
     for source, target in (
         ('router-vpn/internal/mobiletor', MODULE+'/routervpn/mobiletor'),
         ('router-vpn/internal/common', MODULE+'/routervpn/common'),
+        ('router-vpn/internal/desktopnetwork', MODULE+'/routervpn/desktopnetwork'),
         ('router-vpn/internal/awgpolicy', MODULE+'/routervpn/awgpolicy'),
         ('router-vpn/internal/nativeopenvpn', MODULE+'/routervpn/nativeopenvpn'),
         ('router-vpn/internal/multihoprelay', MODULE+'/experimental/libbox/routervpn/multihoprelay'),
@@ -84,6 +89,7 @@ def lease_policy_sources():
 
 
 def lease_rewrite(data):
+    data = OBSERVATION.rewrite(data)
     for package in LEASE_PACKAGES:
         data = data.replace(('"router-vpn/internal/'+package+'"').encode(),
                             ('"'+MODULE+'/experimental/libbox/routervpn/'+package+'"').encode())
@@ -93,7 +99,9 @@ def lease_rewrite(data):
 
 
 def copies():
-    result = {}
+    result = {'routervpn/desktopnetwork/desktop_network_lock.go':
+              (ROOT/'internal/desktopnetwork/desktop_network_lock.go').read_bytes()}
+    result.update(OBSERVATION.copies())
     for path in lease_policy_sources():
         result['experimental/libbox/routervpn/'+path.parent.name+'/'+path.name] = lease_rewrite(path.read_bytes())
     # The DNS-only native Tor adapter uses the same closed catalog as the full

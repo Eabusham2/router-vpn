@@ -1,6 +1,7 @@
 package mobiletor
 
 import (
+	"context"
 	"errors"
 	"math"
 	"time"
@@ -74,4 +75,25 @@ func (l *PaddingLease) NativeReceipt() (*PaddingReceipt, bool) {
 		return nil, false
 	}
 	return receipt, true
+}
+
+func (l *PaddingLease) NativeReceiptContext(ctx context.Context) (*PaddingReceipt, error) {
+	status, observed, expires, err := l.ReceiptContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	receipt := &PaddingReceipt{Direction: "outgoing", Accounting: "tor-link-cell", SessionSHA256: status.Identity.SessionSHA256,
+		SourceSHA256: status.Identity.SourceSHA256, Generation: status.Identity.Generation, RateKbps: status.RateKbps,
+		ChannelCells: status.ChannelCells, ChannelBytes: status.ChannelBytes, ObservedAt: observed.UnixMilli(), ExpiresAt: expires.UnixMilli()}
+	proofUntil, err := l.options.ObserveProofUntil(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidatePaddingReceipt(receipt, TorPaddingPolicy{Enabled: true, RateKbps: l.options.RateKbps}, l.options.SessionSHA256, l.options.SourceSHA256, proofUntil, time.Now()); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return receipt, nil
 }

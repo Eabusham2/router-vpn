@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/multihoprelay"
 )
 
@@ -30,41 +31,51 @@ var errServerTorClient = errors.New("captured Tor server lease is unavailable or
 // dialer. No default resolver, HTTP proxy, physical dialer, or local Tor process
 // exists here. Its receipt is server readiness, never the client's exit proof.
 type ServerTorClient struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	entry         *PredecessorProof
-	policy        *ServerTorPolicy
-	session       string
-	current       func() bool
-	control       *Network
-	data          *Network
-	operation     chan struct{}
-	mu            sync.Mutex
-	closing       bool
-	attempt       bool
-	request       multihoprelay.TorRequest
-	lease         multihoprelay.TorLease
-	sequence      uint64
-	ready         bool
-	started       time.Time
-	padding       *multihoprelay.TorPaddingReceipt
-	paddingExpiry *time.Timer
-	dial          DialContext
-	comparison    *ServerTorComparison
-	stoppedOwner  string
+	ctx            context.Context
+	cancel         context.CancelFunc
+	entry          *PredecessorProof
+	policy         *ServerTorPolicy
+	session        string
+	current        func() bool
+	currentContext func(context.Context) error
+	control        *Network
+	data           *Network
+	operation      chan struct{}
+	mu             sync.Mutex
+	closing        bool
+	attempt        bool
+	request        multihoprelay.TorRequest
+	lease          multihoprelay.TorLease
+	sequence       uint64
+	ready          bool
+	started        time.Time
+	padding        *multihoprelay.TorPaddingReceipt
+	paddingExpiry  *time.Timer
+	dial           DialContext
+	comparison     *ServerTorComparison
+	stoppedOwner   string
 }
 
-func NewServerTorClient(parent context.Context, policy *ServerTorPolicy, entry *PredecessorProof, session string, dial DialContext, current func() bool) (*ServerTorClient, error) {
+func NewServerTorClient(parent context.Context, policy *ServerTorPolicy, entry *PredecessorProof, session string, dial DialContext, current func() bool, observe ...func(context.Context) error) (*ServerTorClient, error) {
 	if parent == nil || parent.Err() != nil || policy == nil || entry == nil || policy.EntryNodeID() != entry.node || !capturedHex(session, 16) || dial == nil || current == nil || !current() {
 		return nil, errServerTorClient
 	}
+	if len(observe) > 1 || len(observe) == 1 && observe[0] == nil {
+		return nil, errors.New("server Tor has an invalid bounded observer")
+	}
 	ctx, cancel := context.WithCancel(parent)
 	c := &ServerTorClient{ctx: ctx, cancel: cancel, entry: entry, policy: policy, session: session, current: current, dial: dial, operation: make(chan struct{}, 1)}
+	if len(observe) == 1 {
+		c.currentContext = observe[0]
+	}
 	// Cleanup keeps this exact entry alive until DELETE is acknowledged. User
 	// cancellation closes data immediately but cannot cancel its own cleanup.
 	control, err := NewNetwork(context.WithoutCancel(parent), func(ctx context.Context, network, address string) (net.Conn, error) {
-		if network != "tcp" || address != entry.address || !current() {
+		if network != "tcp" || address != entry.address {
 			return nil, errServerTorClient
+		}
+		if err := c.controlOwnerCurrent(ctx); err != nil {
+			return nil, err
 		}
 		return dial(ctx, network, address)
 	}, nil)
@@ -90,9 +101,52 @@ func NewServerTorClient(parent context.Context, policy *ServerTorPolicy, entry *
 	return c, nil
 }
 
-func (c *ServerTorClient) lock(ctx context.Context) error {
-	if c == nil || ctx == nil || ctx.Err() != nil {
+func (c *ServerTorClient) controlOwnerCurrent(ctx context.Context) error {
+	if ctx == nil {
 		return errServerTorClient
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.currentContext != nil {
+		return c.currentContext(ctx)
+	}
+	// Compatibility belongs only to clients constructed through the legacy
+	// mobile API. Strict desktop control entrypoints reject this capability.
+	if !c.current() {
+		return errServerTorClient
+	}
+	return ctx.Err()
+}
+
+func (c *ServerTorClient) lockState(ctx context.Context) error {
+	if c.currentContext != nil {
+		return desktopnetwork.LockContext(ctx, &c.mu)
+	}
+	c.mu.Lock()
+	return nil
+}
+
+func (c *ServerTorClient) StatusContext(ctx context.Context) (multihoprelay.TorReceipt, error) {
+	if c == nil || c.currentContext == nil {
+		return multihoprelay.TorReceipt{}, errors.New("server Tor control has no bounded original observer")
+	}
+	return c.Status(ctx)
+}
+
+func (c *ServerTorClient) WaitContext(ctx context.Context) (multihoprelay.TorReceipt, error) {
+	if c == nil || c.currentContext == nil {
+		return multihoprelay.TorReceipt{}, errors.New("server Tor control has no bounded original observer")
+	}
+	return c.Wait(ctx)
+}
+
+func (c *ServerTorClient) lock(ctx context.Context) error {
+	if c == nil || ctx == nil {
+		return errServerTorClient
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	select {
 	case c.operation <- struct{}{}:
@@ -102,6 +156,45 @@ func (c *ServerTorClient) lock(ctx context.Context) error {
 	}
 }
 func (c *ServerTorClient) unlock() { <-c.operation }
+func (c *ServerTorClient) CurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("server Tor observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c == nil || c.ctx.Err() != nil {
+		return errServerTorClient
+	}
+	if c.currentContext == nil {
+		return errors.New("server Tor has no bounded original observer")
+	}
+	if err := c.currentContext(ctx); err != nil {
+		if !ObservationContextExpired(ctx, err) {
+			c.cancel()
+		}
+		return errors.Join(err, ctx.Err())
+	}
+	if err := desktopnetwork.LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	now := time.Now()
+	current := !c.closing && c.attempt && c.lease.OwnerID != "" && c.lease.ExpiresAt.After(now) && (!c.ready || c.paddingCurrentLocked(now))
+	expired := c.lease.OwnerID != "" && (!c.lease.ExpiresAt.After(now) || c.ready && !c.paddingCurrentLocked(now))
+	c.mu.Unlock()
+	if expired {
+		c.cancel()
+		return errors.Join(errServerTorClient, ctx.Err())
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !current || c.ctx.Err() != nil {
+		return errServerTorClient
+	}
+	return nil
+}
+
 func (c *ServerTorClient) Current() bool {
 	if c == nil {
 		return false
@@ -248,7 +341,7 @@ func (c *ServerTorClient) Acquire(ctx context.Context) (failure error) {
 	if err := c.exchange(ctx, http.MethodPut, request, &lease, false); err != nil {
 		return err
 	}
-	return c.adoptLease(lease, false)
+	return c.adoptLease(ctx, lease, false)
 }
 
 func (c *ServerTorClient) capture(lease multihoprelay.TorLease) multihoprelay.TorCapture {
@@ -256,12 +349,17 @@ func (c *ServerTorClient) capture(lease multihoprelay.TorLease) multihoprelay.To
 		RegistrySHA256: lease.RegistrySHA256, OwnerID: lease.OwnerID, Peer: lease.Request.Peer, Host: lease.Host, Port: lease.Port, Username: lease.Username, Password: lease.Password, BootstrapDeadline: lease.BootstrapDeadline}
 }
 
-func (c *ServerTorClient) adoptLease(lease multihoprelay.TorLease, existing bool) error {
-	c.mu.Lock()
+func (c *ServerTorClient) adoptLease(ctx context.Context, lease multihoprelay.TorLease, existing bool) error {
+	if err := c.lockState(ctx); err != nil {
+		return err
+	}
 	defer c.mu.Unlock()
 	now := time.Now()
 	api, _ := url.Parse(c.entry.target)
-	if c.closing || c.ctx.Err() != nil || !c.current() || lease.Request != c.request || lease.NodeID != c.entry.node ||
+	if err := c.controlOwnerCurrent(ctx); err != nil {
+		return err
+	}
+	if c.closing || c.ctx.Err() != nil || lease.Request != c.request || lease.NodeID != c.entry.node ||
 		lease.Host != api.Hostname() || lease.DNSPolicySHA256 != c.policy.DNSPolicySHA256() || c.capture(lease).Validate() != nil ||
 		lease.Phase != multihoprelay.TorPending && lease.Phase != multihoprelay.TorReady ||
 		!lease.ExpiresAt.After(now) || lease.ExpiresAt.After(now.Add(305*time.Second)) ||
@@ -292,10 +390,16 @@ func (c *ServerTorClient) Status(ctx context.Context) (result multihoprelay.TorR
 		return multihoprelay.TorReceipt{}, err
 	}
 	defer c.unlock()
-	if !c.Current() {
+	if c.currentContext != nil {
+		if err := c.CurrentContext(ctx); err != nil {
+			return multihoprelay.TorReceipt{}, err
+		}
+	} else if !c.Current() {
 		return multihoprelay.TorReceipt{}, errServerTorClient
 	}
-	c.mu.Lock()
+	if err := c.lockState(ctx); err != nil {
+		return multihoprelay.TorReceipt{}, err
+	}
 	request, renew := c.request, time.Until(c.lease.ExpiresAt) < 10*time.Second
 	c.mu.Unlock()
 	if renew {
@@ -303,7 +407,7 @@ func (c *ServerTorClient) Status(ctx context.Context) (result multihoprelay.TorR
 		if err := c.exchange(ctx, http.MethodPut, request, &lease, false); err != nil {
 			return multihoprelay.TorReceipt{}, err
 		}
-		if err := c.adoptLease(lease, true); err != nil {
+		if err := c.adoptLease(ctx, lease, true); err != nil {
 			return multihoprelay.TorReceipt{}, err
 		}
 	}
@@ -320,12 +424,17 @@ func (c *ServerTorClient) Status(ctx context.Context) (result multihoprelay.TorR
 	if err := c.exchange(ctx, http.MethodPost, payload, &status, false); err != nil {
 		return multihoprelay.TorReceipt{}, err
 	}
-	if err := c.adoptLease(status.Lease, true); err != nil {
+	if err := c.adoptLease(ctx, status.Lease, true); err != nil {
 		return multihoprelay.TorReceipt{}, err
 	}
-	c.mu.Lock()
+	if err := c.lockState(ctx); err != nil {
+		return multihoprelay.TorReceipt{}, err
+	}
 	defer c.mu.Unlock()
-	if c.closing || c.ctx.Err() != nil || !c.current() || multihoprelay.ValidateTorReceipt(status.Receipt, c.capture(c.lease), nonce, c.started, time.Now()) != nil || status.Receipt.Sequence <= c.sequence || status.Receipt.Phase != c.lease.Phase || c.ready && status.Receipt.Phase != multihoprelay.TorReady || !c.adoptPaddingLocked(status.Receipt) {
+	if err := c.controlOwnerCurrent(ctx); err != nil {
+		return multihoprelay.TorReceipt{}, err
+	}
+	if c.closing || c.ctx.Err() != nil || multihoprelay.ValidateTorReceipt(status.Receipt, c.capture(c.lease), nonce, c.started, time.Now()) != nil || status.Receipt.Sequence <= c.sequence || status.Receipt.Phase != c.lease.Phase || c.ready && status.Receipt.Phase != multihoprelay.TorReady || !c.adoptPaddingLocked(status.Receipt) {
 		return multihoprelay.TorReceipt{}, errServerTorClient
 	}
 	c.sequence, c.ready = status.Receipt.Sequence, status.Receipt.Phase == multihoprelay.TorReady
@@ -351,7 +460,9 @@ func (c *ServerTorClient) Wait(ctx context.Context) (result multihoprelay.TorRec
 		if receipt.Phase == multihoprelay.TorReady {
 			return receipt, nil
 		}
-		c.mu.Lock()
+		if err := c.lockState(ctx); err != nil {
+			return multihoprelay.TorReceipt{}, err
+		}
 		expired := !c.lease.BootstrapDeadline.After(time.Now())
 		c.mu.Unlock()
 		if expired {
@@ -452,7 +563,10 @@ func (c *ServerTorClient) Close(ctx context.Context) error {
 }
 
 func (c *ServerTorClient) exchange(parent context.Context, method string, payload, result any, cleanup bool) (failure error) {
-	if parent == nil || parent.Err() != nil || !c.current() || !cleanup && c.ctx.Err() != nil {
+	if err := c.controlOwnerCurrent(parent); err != nil {
+		return err
+	}
+	if !cleanup && c.ctx.Err() != nil {
 		return errServerTorClient
 	}
 	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
@@ -522,8 +636,11 @@ func (c *ServerTorClient) exchange(parent context.Context, method string, payloa
 		return errServerTorClient
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(limit+1)))
-	if err != nil || len(raw) > limit || ctx.Err() != nil || !c.current() {
+	if err != nil || len(raw) > limit || ctx.Err() != nil {
 		return errServerTorClient
+	}
+	if err := c.controlOwnerCurrent(ctx); err != nil {
+		return err
 	}
 	if _, err := profileObject(string(raw), limit); err != nil {
 		return errServerTorClient

@@ -181,8 +181,12 @@ def need_desktop_tor_maintenance() -> None:
         for marker in ("verify, cancel := context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)",
                        "err := owner.VerifyCurrentPath(verify)", "defer cancel()", "next := result.proof"):
             go_contract_at(heartbeat, marker)
-        invalid = go_contract_block(heartbeat, "if err != nil || verify.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(verify, owner, &next) != nil || routerVPNTorRefreshPadding(owner, &next, result.started, time.Now()) != nil || verify.Err() != nil")
-        go_contract_at(invalid, "result.err = routerVPNTorFailure")
+        for observer in ("owner.VerifyCurrentPath(verify)", "routerVPNTorHealthyContext(verify, owner)",
+                         "routerVPNTorRefreshReadback(verify, owner, &next)",
+                         "routerVPNTorRefreshPadding(verify, owner, &next, result.started, time.Now())", "verify.Err()"):
+            invalid = go_contract_block(heartbeat, "if err := " + observer + "; err != nil")
+            go_contract_at(invalid, "result.err = err")
+            go_contract_at(invalid, "return result")
         if not (go_contract_at(heartbeat, "defer cancel()") < go_contract_at(heartbeat, "owner.VerifyCurrentPath(verify)") < go_contract_at(heartbeat, "routerVPNTorRefreshReadback(verify, owner, &next)") < go_contract_at(heartbeat, "result.proof = next")):
             raise ValueError("retained heartbeat must verify before adopting readback")
 
@@ -229,7 +233,8 @@ def need_desktop_tor_maintenance() -> None:
                        "proof.HeartbeatAt == value.FromHeartbeatAt", "*proof.MTUReadback == value.From"):
             go_contract_at(transition, marker)
         native = go_contract_block(go_contract_tokens(read("mobile/desktop/external_tor_native.go.tmpl")), "func (n *routerVPNTorNative) VerifyCurrentPath(")
-        go_contract_at(native, "if err := tor.VerifyCurrentPath(ctx); err != nil || !n.Healthy()")
+        go_contract_at(native, "if err := tor.VerifyCurrentPath(ctx); err != nil")
+        go_contract_at(native, "return n.HealthyContext(ctx)")
         path = go_contract_block(go_contract_tokens(read("mobile/desktop/mtu_tor.go.tmpl")), "func (p *routerVPNTorFreshPath) VerifyCurrentPathContext(")
         go_contract_at(path, "state, err := mtu.owner.Capture()")
         go_contract_at(path, "mtu.owner.VerifyExternal(ctx, state) != nil")

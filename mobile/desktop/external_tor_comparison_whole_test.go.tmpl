@@ -18,6 +18,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"io"
 	"math/big"
 	"net"
@@ -56,6 +57,7 @@ type routerVPNTorWholeTUN struct {
 	mtu                    int
 	ready, closed, claimed bool
 	guard                  func() bool
+	guardContext           func(context.Context) error
 }
 
 func (t *routerVPNTorWholeTUN) Start(stage adapter.StartStage) error {
@@ -560,4 +562,33 @@ func (p *routerVPNTorWholePeer) serve(raw net.Conn) error {
 	body := `{"IsTor":true,"IP":"203.0.113.19"}`
 	_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
 	return err
+}
+
+func (t *routerVPNTorWholeTUN) RouterVPNDesktopMTUContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || t.claimed || guard == nil {
+		return "", 0, 0, errors.New("fixture TUN unowned")
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	t.claimed, t.guardContext = true, guard
+	t.guard = func() bool { return guard(context.Background()) == nil }
+	return t.name, 711, t.mtu, nil
+}
+func (t *routerVPNTorWholeTUN) RouterVPNDesktopMTUInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || !t.claimed || t.guardContext == nil {
+		return "", 0, 0, errors.New("fixture TUN retired")
+	}
+	if err := t.guardContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	return t.name, 711, t.mtu, nil
 }

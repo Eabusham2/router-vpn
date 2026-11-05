@@ -28,6 +28,7 @@ def run(core):
     load('prepare-mobile-openvpn.py').prepare(core)
     load('mobile_openvpn_close_policy.py').prepare(core)
     subprocess.run(['go','mod','tidy'],cwd=core,check=True,timeout=180)
+    subprocess.run(['go','test','-race','-mod=readonly','-count=1','-timeout=60s','github.com/sagernet/sing-openvpn','-run','^TestRouterVPNContext','-v'],cwd=core,check=True,timeout=90)
     with tempfile.TemporaryDirectory(prefix='router-openvpn-mapped-layer-') as temporary:
         binary=Path(temporary)/'start-layer-relay'
         subprocess.run(['go','build','-buildvcs=false','-o',str(binary),'./cmd/start-layer-relay'],cwd=ROOT,check=True,timeout=120)

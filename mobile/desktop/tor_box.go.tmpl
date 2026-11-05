@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/json"
@@ -23,6 +24,8 @@ import (
 
 type routerVPNDesktopTorTUN interface {
 	RouterVPNDesktopMTU(func() bool) (string, int, int, error)
+	RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
+	RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
 	RouterVPNDesktopMTUInterface() (string, int, int, error)
 }
 
@@ -62,6 +65,7 @@ type RouterVPNDesktopTor struct {
 	workers                     sync.WaitGroup
 	joined                      chan struct{}
 	joinOnce                    sync.Once
+	cancelCleanup               sync.Once
 	started                     atomic.Bool
 	proved                      atomic.Bool
 	retired                     atomic.Bool
@@ -118,7 +122,7 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 	if !ok {
 		return nil, errors.New("desktop Tor TUN has no native interface readback")
 	}
-	name, index, mtu, err := tun.RouterVPNDesktopMTU(owner.readerLifetimeCurrent)
+	name, index, mtu, err := tun.RouterVPNDesktopMTUContext(ctx, owner.readerLifetimeCurrentContext)
 	if err != nil || name == "" || index < 1 || mtu != meta.ConfiguredMTU || meta.InterfaceName != "" && name != meta.InterfaceName {
 		return nil, errors.New("desktop Tor native interface does not match its selected MTU")
 	}
@@ -134,7 +138,7 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 		// Data retirement must not destroy the retained entry needed for an
 		// exact authenticated DELETE. This witness never calls server.Current
 		// or readerLifetimeCurrent; a physical reset still revokes it.
-		if err := server.Bind(ctx, policy, engine.routes[meta.EntryTag], owner.serverEntryCurrent, owner.currentNative); err != nil {
+		if err := server.Bind(ctx, policy, engine.routes[meta.EntryTag], owner.serverEntryCurrent, owner.currentNative, owner.serverEntryCurrentContext); err != nil {
 			return nil, err
 		}
 		owner.server = server
@@ -155,16 +159,16 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 		resolver.Strategy = option.DomainStrategy(C.DomainStrategyIPv4Only)
 	}
 	if policy.Mode() == "tor" {
-		owner.pt, err = routervpndesktoppt.NewPlain(ctx, resolver, policy.Predecessor(), owner.currentNative)
+		owner.pt, err = routervpndesktoppt.NewPlain(ctx, resolver, policy.Predecessor(), owner.currentNative, owner.currentNativeContext)
 	} else {
 		plan, planErr := policy.Plan()
 		if planErr != nil {
 			return nil, planErr
 		}
 		if predecessor := policy.Predecessor(); predecessor != nil {
-			owner.pt, err = routervpndesktoppt.NewWithPredecessor(ctx, plan, resolver, predecessor, owner.currentNative)
+			owner.pt, err = routervpndesktoppt.NewWithPredecessor(ctx, plan, resolver, predecessor, owner.currentNative, owner.currentNativeContext)
 		} else {
-			owner.pt, err = routervpndesktoppt.New(ctx, plan, resolver, owner.currentNative)
+			owner.pt, err = routervpndesktoppt.New(ctx, plan, resolver, owner.currentNative, owner.currentNativeContext)
 		}
 	}
 	if err != nil {
@@ -451,7 +455,7 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 	if err != nil {
 		return result, err
 	}
-	networkReceipt, err := r.DesktopNetworkReceipt()
+	networkReceipt, err := r.DesktopNetworkReceiptContext(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -529,41 +533,59 @@ func (r *RouterVPNDesktopTor) LifetimeCurrent() bool {
 }
 
 func (r *RouterVPNDesktopTor) VerifyCurrentPath(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil || !r.Healthy() {
-		return errors.New("desktop Tor proof is retired")
+	if err := r.HealthyContext(ctx); err != nil {
+		return err
 	}
-	r.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &r.mu); err != nil {
+		return err
+	}
 	session := r.session
 	r.mu.Unlock()
-	// Tor's authenticated control stream retires after an interrupted command
-	// because an unread reply must never become another command's authority.
-	// Keep that bounded exchange owned by the connection, not by a temporary
-	// DNS/MTU/path caller. The caller still joins it and cannot adopt a result
-	// after cancellation; stopping the connection cancels it immediately.
+	// Authenticated replies must drain under the connection's own bound.
 	control, cancel := context.WithTimeout(r.ctx, 5*time.Second)
 	_, err := session.Verify(control)
 	cancel()
 	if err != nil {
-		r.Cancel()
+		r.cancelObservation()
 		return err
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if _, _, _, err := r.readback(); err != nil || !r.Healthy() {
-		r.Cancel()
-		return errors.New("desktop Tor path changed during verification")
+	_, _, _, err = r.readbackContext(ctx)
+	if err == nil {
+		err = r.HealthyContext(ctx)
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if err != nil {
+		// An observer deadline cannot revoke the retained connection. A genuine
+		// identity fault still retires it even when detected by a heartbeat.
+		if !mobiletor.ObservationContextExpired(ctx, err) {
+			r.cancelObservation()
+		}
+		return err
 	}
-	return nil
+	return ctx.Err()
 }
 
-func (r *RouterVPNDesktopTor) Cancel() {
-	if r != nil && r.retired.CompareAndSwap(false, true) {
-		r.proved.Store(false)
+// Observation failure revokes admission immediately. Existing command/Close
+// ownership drains comparison and padding resources; no observer waits on
+// their cleanup locks and no detached cleanup worker is created here.
+func (r *RouterVPNDesktopTor) cancelObservation() {
+	if r == nil {
+		return
+	}
+	r.retired.Store(true)
+	r.proved.Store(false)
+	if r.cancel != nil {
 		r.cancel()
+	}
+}
+func (r *RouterVPNDesktopTor) Cancel() {
+	if r == nil {
+		return
+	}
+	r.cancelObservation()
+	r.cancelCleanup.Do(func() {
 		if comparison := r.comparison.Load(); comparison != nil {
 			comparison.Cancel()
 		}
@@ -573,7 +595,7 @@ func (r *RouterVPNDesktopTor) Cancel() {
 		if r.paddingGate != nil {
 			r.paddingGate.Cancel()
 		}
-	}
+	})
 }
 
 // The command calls this only while retaining its Tor process and Box. A
@@ -753,4 +775,153 @@ func (e *routerVPNDesktopTorDNS) SelectedDNS(ctx context.Context) error {
 		return errors.New("desktop Tor selected DNS proof became stale")
 	}
 	return nil
+}
+
+func (r *RouterVPNDesktopTor) readerLifetimeCurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("desktop Tor observation requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil || r.retired.Load() || r.ctx == nil || r.ctx.Err() != nil || r.network == nil {
+		return errors.New("desktop Tor physical generation retired")
+	}
+	return r.network.CurrentContext(ctx)
+}
+func (r *RouterVPNDesktopTor) currentNativeContext(ctx context.Context) error {
+	if err := r.readerLifetimeCurrentContext(ctx); err != nil {
+		return err
+	}
+	if r.engine == nil {
+		return errors.New("desktop Tor native engine unavailable")
+	}
+	identity, err := r.engine.IdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if identity == "" {
+		return errors.New("desktop Tor native graph changed")
+	}
+	return ctx.Err()
+}
+func (r *RouterVPNDesktopTor) serverEntryCurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("Tor Server observation requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil || r.network == nil || r.engine == nil || r.engine.box == nil || r.engine.box.ctx.Err() != nil {
+		return errors.New("Tor Server entry retired")
+	}
+	if err := r.network.CurrentContext(ctx); err != nil {
+		return err
+	}
+	e := r.engine
+	select {
+	case <-e.box.done:
+		return errors.New("Tor Server Box stopped")
+	default:
+	}
+	for tag, owner := range e.owners {
+		current, ok, err := adapter.RouterVPNOutboundContext(ctx, e.box.outbound, tag)
+		if err != nil {
+			return err
+		}
+		if !ok || current != owner {
+			return errors.New("Tor Server entry outbound changed")
+		}
+	}
+	for tag, owner := range e.dns {
+		current, ok, err := adapter.RouterVPNTransportContext(ctx, e.box.dnsTransport, tag)
+		if err != nil {
+			return err
+		}
+		if !ok || current != owner {
+			return errors.New("Tor Server entry DNS changed")
+		}
+	}
+	for tag, owner := range e.services {
+		current, ok, err := adapter.RouterVPNServiceContext(ctx, e.box.service, tag)
+		if err != nil {
+			return err
+		}
+		if !ok || current != owner {
+			return errors.New("Tor Server entry service changed")
+		}
+	}
+	return ctx.Err()
+}
+func (r *RouterVPNDesktopTor) sessionCurrentContext(ctx context.Context) error {
+	// started publishes the immutable session after Start's only assignment.
+	if !r.started.Load() || r.session == nil {
+		return errors.New("desktop Tor session unavailable")
+	}
+	session, ok := r.session.(interface{ CurrentContext(context.Context) error })
+	if !ok {
+		return errors.New("desktop Tor session has no bounded ownership observation")
+	}
+	return session.CurrentContext(ctx)
+}
+func (r *RouterVPNDesktopTor) HealthyContext(ctx context.Context) error {
+	if err := r.currentNativeContext(ctx); err != nil {
+		return err
+	}
+	if !r.proved.Load() {
+		return errors.New("desktop Tor has no retained proof")
+	}
+	if r.server == nil {
+		if r.pt == nil {
+			return errors.New("desktop Tor PT owner unavailable")
+		}
+		if err := r.pt.CurrentContext(ctx); err != nil {
+			return err
+		}
+	}
+	if err := r.sessionCurrentContext(ctx); err != nil {
+		return err
+	}
+	return r.paddingHealthyContext(ctx)
+}
+func (r *RouterVPNDesktopTor) LifetimeCurrentContext(ctx context.Context) error {
+	if err := r.readerLifetimeCurrentContext(ctx); err != nil {
+		return err
+	}
+	if !r.proved.Load() {
+		return errors.New("desktop Tor has no retained proof")
+	}
+	if err := r.sessionCurrentContext(ctx); err != nil {
+		return err
+	}
+	return r.paddingHealthyContext(ctx)
+}
+func (r *RouterVPNDesktopTor) readbackContext(ctx context.Context) (string, int, int, error) {
+	if r == nil {
+		return "", 0, 0, errors.New("desktop Tor native interface unavailable")
+	}
+	if err := desktopnetwork.RLockContext(ctx, &r.interfaceMu); err != nil {
+		return "", 0, 0, err
+	}
+	defer r.interfaceMu.RUnlock()
+	return r.readbackLockedContext(ctx)
+}
+func (r *RouterVPNDesktopTor) readbackLockedContext(ctx context.Context) (string, int, int, error) {
+	if err := r.currentNativeContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	if r.tun == nil {
+		return "", 0, 0, errors.New("desktop Tor native interface unavailable")
+	}
+	name, index, mtu, err := r.tun.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if name != r.name || index != r.index || mtu != r.mtu {
+		return "", 0, 0, errors.New("desktop Tor native interface identity or MTU changed")
+	}
+	if err := r.currentNativeContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	return name, index, mtu, nil
 }

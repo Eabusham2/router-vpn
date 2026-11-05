@@ -636,7 +636,9 @@ func desktopOpenVPNReferenceNew(t *testing.T, process *desktopOpenVPNComposition
 			t.Error("physical preparation ran after provider TUN startup")
 		}
 		f.source.capture = capture
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, f.source, err
 	}); err != nil {
 		t.Fatal("actual provider physical preparation", err)

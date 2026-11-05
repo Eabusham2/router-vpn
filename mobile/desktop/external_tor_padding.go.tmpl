@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"time"
 
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -10,26 +12,40 @@ import (
 // reader lock. The MTU admission loop must keep cancellation responsive while
 // a retained worker replaces that reader.
 type routerVPNTorPaddingOwner interface {
-	PaddingSnapshot() (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error)
+	PaddingSnapshotContext(context.Context) (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error)
 }
 
 func (n *routerVPNTorNative) PaddingSnapshot() (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error) {
-	if n == nil || !n.LifetimeCurrent() || n.files.current() != nil {
+	return n.PaddingSnapshotContext(context.Background())
+}
+func (n *routerVPNTorNative) PaddingSnapshotContext(ctx context.Context) (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error) {
+	if err := n.LifetimeCurrentContext(ctx); err != nil {
+		return nil, nil, err
+	}
+	if n.files.current() != nil {
 		return nil, nil, routerVPNTorFailure
 	}
-	n.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return nil, nil, err
+	}
 	tor := n.tor
 	n.mu.Unlock()
-	receipt, proof, err := tor.PaddingSnapshot()
-	if err != nil || !n.LifetimeCurrent() {
-		return nil, nil, routerVPNTorFailure
+	receipt, proof, err := tor.PaddingSnapshotContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := n.LifetimeCurrentContext(ctx); err != nil {
+		return nil, nil, err
 	}
 	return receipt, proof, nil
 }
 
-func routerVPNTorRefreshPadding(owner routerVPNTorOwner, proof *mobiletor.DesktopBridgeProof, started, now time.Time) error {
-	if proof == nil || !routerVPNTorLifetimeCurrent(owner) {
+func routerVPNTorRefreshPadding(ctx context.Context, owner routerVPNTorOwner, proof *mobiletor.DesktopBridgeProof, started, now time.Time) error {
+	if proof == nil {
 		return routerVPNTorFailure
+	}
+	if err := routerVPNTorLifetimeCurrent(ctx, owner); err != nil {
+		return err
 	}
 	meta := proof.Policy
 	if !meta.Padding.Enabled || meta.Execution == "server" {
@@ -39,14 +55,19 @@ func routerVPNTorRefreshPadding(owner routerVPNTorOwner, proof *mobiletor.Deskto
 	if !ok {
 		return routerVPNTorFailure
 	}
-	receipt, witness, err := padding.PaddingSnapshot()
+	receipt, witness, err := padding.PaddingSnapshotContext(ctx)
 	// The lease worker can finish a real observation during this bounded
 	// read. Validate at completion, never label that newer sample as future.
 	if completed := time.Now(); completed.After(now) {
 		now = completed
 	}
-	if err != nil || !routerVPNTorLifetimeCurrent(owner) ||
-		meta.ValidatePaddingProof(receipt, witness, started, now) != nil ||
+	if err != nil {
+		return err
+	}
+	if err := routerVPNTorLifetimeCurrent(ctx, owner); err != nil {
+		return err
+	}
+	if meta.ValidatePaddingProof(receipt, witness, started, now) != nil ||
 		mobiletor.ValidateDesktopPaddingProgress(proof.Padding, receipt, proof.PaddingProof, witness) != nil {
 		return routerVPNTorFailure
 	}

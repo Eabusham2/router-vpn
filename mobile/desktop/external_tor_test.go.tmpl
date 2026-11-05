@@ -499,3 +499,13 @@ func TestRouterVPNDesktopTorCommandRequiresExactPrivateEntryReceipt(t *testing.T
 		})
 	}
 }
+
+func (f *routerVPNTorCommandFixture) HealthyContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !f.Healthy() {
+		return routerVPNTorFailure
+	}
+	return nil
+}

@@ -195,7 +195,7 @@ def darwin_owned_source(raw):
 # Exact pinned inbound after the declared retained/mobile MTU projection,
 # before either desktop lifecycle projection. Only those complete states are
 # admitted; a partial/duplicate edit must not become a cached-source repair.
-INBOUND_MTU_SHA256 = '8a51e5061754b388919ad5366a6b88694267f43e9c47ed37a88f82fdb0b5b01a'
+INBOUND_MTU_SHA256 = 'abc973fd68bf66800df527237a664fcece120ed9de6a2cba1aa3a5679405044e'
 INBOUND_CONTEXT_EDIT = (
     b'tunOptions: tun.Options{',
     b'tunOptions: tun.Options{\n\t\t\tRouterVPNNetworkContext: ctx,\n\t\t\tRouterVPNNetworkLifetime: ctx,',
@@ -326,7 +326,7 @@ def prepare(vendor):
     subprocess.run(['go', 'mod', 'edit', '-require=github.com/godbus/dbus/v5@v5.2.2'], cwd=destination, check=True)
     # The wire decoder is identical in the parent and native TUN module. It
     # imports only the standard library and never introduces a module cycle.
-    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_dump_linux.go', 'desktop_network_retirement.go'):
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go', 'desktop_network_dump_linux.go', 'desktop_network_retirement.go', 'desktop_network_lock.go'):
         path = ROOT/'internal/desktopnetwork'/name
         raw = path.read_bytes()
         if path.is_symlink() or raw.count(b'package desktopnetwork\n') != 1:
@@ -340,7 +340,7 @@ def prepare(vendor):
     prepared = inbound_retirement_patch(raw)
     if prepared != raw:
         inbound.write_bytes(prepared)
-    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         path = ROOT/'mobile/desktop'/name
         if path.is_symlink():
             raise ValueError('Linked native network receipt template')

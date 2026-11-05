@@ -19,3 +19,11 @@ func (m *Manager) RouterVPNGetContext(ctx context.Context, tag string) (adapter.
 	}
 	return value, found, nil
 }
+
+func (m *Manager) RouterVPNInboundsContext(ctx context.Context) ([]adapter.Inbound, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+		return nil, err
+	}
+	defer m.access.Unlock()
+	return append([]adapter.Inbound(nil), m.inbounds...), ctx.Err()
+}

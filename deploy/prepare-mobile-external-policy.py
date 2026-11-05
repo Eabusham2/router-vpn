@@ -40,6 +40,7 @@ def prepare(vendor, *, mobile=True):
         if source.count(before)!=1:raise ValueError('native external configuration capture boundary changed')
         source=source.replace(before,after,1)
     path.write_text(source)
+    (vendor/'routervpn_external_observation_test.go').write_bytes((ROOT/'mobile/externalpolicy/observation_test.go.tmpl').read_bytes())
     for name in ('box.go','box_test.go'):
         template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')
         (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())

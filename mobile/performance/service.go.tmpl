@@ -156,6 +156,81 @@ func (s *Service) Identity() string {
 	}
 	return proof + ":" + packet
 }
+func (s *Service) resolveContext(ctx context.Context, tag string, seen map[string]bool) (adapter.Outbound, string, error) {
+	if seen[tag] || len(seen) > 12 {
+		return nil, "", errors.New("cyclic cover route")
+	}
+	seen[tag] = true
+	out, ok, err := adapter.RouterVPNOutboundContext(ctx, s.manager, tag)
+	if err != nil {
+		return nil, "", err
+	}
+	if !ok {
+		return nil, "", errors.New("cover route is missing")
+	}
+	identity := fmt.Sprintf("%p", out)
+	if selector, ok := out.(*group.Selector); ok {
+		selected := selector.Now()
+		child, suffix, err := s.resolveContext(ctx, selected, seen)
+		return child, identity + ":" + selected + ":" + suffix, err
+	}
+	if composite, ok := out.(*routervpncomposite.Outbound); ok {
+		captured, err := composite.RouterVPNPerformanceIdentityContext(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		if captured == "" {
+			return nil, "", errors.New("cover lost its started SIP003 TCP and UDP owners")
+		}
+		return out, identity + ":" + captured, nil
+	}
+	switch out.Type() {
+	case "wireguard", "routervpn-amneziawg", "shadowsocks", "hysteria2", "routervpn-aes-xor", "routervpn-xray":
+		return out, identity, nil
+	case "socks":
+		dependencies := out.Dependencies()
+		if len(dependencies) != 1 {
+			return nil, "", errors.New("cover cannot use plaintext SOCKS outside an encrypted path")
+		}
+		_, suffix, err := s.resolveContext(ctx, dependencies[0], seen)
+		return out, identity + ":" + suffix, err
+	default:
+		return nil, "", errors.New("cover has no accepted encrypted route")
+	}
+}
+func (s *Service) IdentityContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("cover observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !s.ready.Load() || s.invalid.Load() || s.ctx.Err() != nil {
+		return "", errors.New("cover route retired")
+	}
+	_, proof, err := s.resolveContext(ctx, s.options.ProofTag, map[string]bool{})
+	if err != nil {
+		return "", err
+	}
+	_, packet, err := s.resolveContext(ctx, s.options.PacketTag, map[string]bool{})
+	if err != nil {
+		return "", err
+	}
+	return proof + ":" + packet, ctx.Err()
+}
+func (s *Service) HealthyContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("cover observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s == nil || s.invalid.Load() || !s.ready.Load() || s.worker == nil {
+		return errors.New("cover service is retired")
+	}
+	return s.worker.HealthyContext(ctx)
+}
+
 func (s *Service) Dial(ctx context.Context, network, tag, address string) (net.Conn, error) {
 	if s.Identity() == "" {
 		return nil, errors.New("cover path changed")

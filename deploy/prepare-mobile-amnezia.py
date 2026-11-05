@@ -25,8 +25,12 @@ _timers_spec=importlib.util.spec_from_file_location('routervpn_amnezia_timers', 
 TIMERS=importlib.util.module_from_spec(_timers_spec)
 _timers_spec.loader.exec_module(TIMERS)
 
+_observation_spec = importlib.util.spec_from_file_location('routervpn_observation_policy', ROOT/'deploy/native_observation_policy.py')
+OBSERVATION = importlib.util.module_from_spec(_observation_spec)
+_observation_spec.loader.exec_module(OBSERVATION)
+
 def inputs():
-    return [Path(__file__).resolve(),ROOT/'deploy/prepare-sing-packet-concurrency.py']+SCHEDULER.inputs()+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))+policy_inputs()+WIREGUARD_BIND.inputs()+TIMERS.inputs()
+    return OBSERVATION.inputs()+[Path(__file__).resolve(),ROOT/'deploy/prepare-sing-packet-concurrency.py']+SCHEDULER.inputs()+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))+policy_inputs()+WIREGUARD_BIND.inputs()+TIMERS.inputs()
 def policy_inputs():
     return [path for package in POLICY_PACKAGES for path in sorted((ROOT/'internal'/package).glob('*.go')) if not path.name.endswith('_test.go')]
 def prepare_policies(vendor):
@@ -37,12 +41,13 @@ def prepare_policies(vendor):
     for path in policy_inputs():
         # This pass follows the shared policy preparation. Preserve its exact
         # bytes on Windows too; text I/O normalizes or expands line endings.
-        content=path.read_bytes()
+        content=OBSERVATION.rewrite(path.read_bytes())
         for package in POLICY_PACKAGES:
             content=content.replace(('"router-vpn/internal/'+package+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"').encode())
         if b'"router-vpn/internal/' in content:
             raise ValueError('Native AWG policy import closure is incomplete: '+str(path.relative_to(ROOT)))
         sources[vendor/'experimental/libbox/routervpn'/path.parent.name/path.name]=content
+    OBSERVATION.prepare(vendor)
     for path,content in sources.items():
         path.parent.mkdir(parents=True,exist_ok=True)
         path.write_bytes(content)

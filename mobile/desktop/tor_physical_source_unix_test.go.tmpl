@@ -67,6 +67,14 @@ func TestRouterVPNDesktopTorPTPhysicalImportedSourceCarriesActualSelectedDNSAndT
 	options := testNetworkOptions()
 	f.broker, err = mobiletor.NewDesktopSocketBroker(f.f.ctx, capture, source, func() bool {
 		return f.network.Matches(options.SessionID, options.SourceSHA256) && f.f.active.Load()
+	}, func(observeCtx context.Context) error {
+		if err := f.network.MatchesContext(observeCtx, options.SessionID, options.SourceSHA256); err != nil {
+			return err
+		}
+		if !f.f.active.Load() {
+			return errors.New("original fixture source retired")
+		}
+		return observeCtx.Err()
 	})
 	if err != nil {
 		t.Fatal(err)

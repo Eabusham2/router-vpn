@@ -85,10 +85,16 @@ class Tests(unittest.TestCase):
                 for name,data in contents.items():bundle.writestr(MODULE.PREFIX+name,data)
             with mock.patch.object(MODULE,'SUM',MODULE.h1(rows)):
                 MODULE.extract_verified(archive,target);MODULE.verify_tree(target)
-                for name in ('unchanged.go','client_session_tls.go','client_tunnel.go',MODULE.FIXTURE):
+                for name in ('unchanged.go','client_session_tls.go','client_tunnel.go',MODULE.FIXTURE,*MODULE.context_sources()):
                     path=target/name;good=path.read_bytes();path.write_bytes(good+b'changed')
                     with self.subTest(name=name),self.assertRaises(ValueError):MODULE.verify_tree(target)
                     path.write_bytes(good)
+                # A partial bounded projection is never accepted, even by the
+                # verified older-tree migration path.
+                helper=target/'routervpn_context_lock.go';good=helper.read_bytes();helper.unlink()
+                with self.assertRaisesRegex(ValueError,'incomplete'): MODULE.verify_tree(target)
+                with self.assertRaisesRegex(ValueError,'incomplete'): MODULE.verify_tree(target,allow_missing_context=True)
+                helper.write_bytes(good)
                 (target/'unrelated.go').symlink_to(target/'unchanged.go')
                 with self.assertRaises(ValueError):MODULE.verify_tree(target)
 

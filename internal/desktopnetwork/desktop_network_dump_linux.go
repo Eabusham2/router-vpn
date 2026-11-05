@@ -16,8 +16,11 @@ import (
 // nonblocking and belongs to the original operation. Cancellation closes that
 // exact descriptor, wakes the runtime poller and joins the close callback.
 func linuxDumpRequest(ctx context.Context, request int) ([]byte, error) {
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return nil, errors.New("Linux network dump lost its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

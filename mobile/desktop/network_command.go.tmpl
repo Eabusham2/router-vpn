@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"os"
@@ -8,60 +10,119 @@ import (
 	"strings"
 )
 
-func routerVPNDesktopNetworkProjection(owner any) (string, error) {
-	if captured, ok := owner.(interface{ DesktopNetworkReceipt() (string, error) }); ok {
-		return captured.DesktopNetworkReceipt()
+func routerVPNDesktopNetworkProjection(ctx context.Context, owner any) (string, error) {
+	if ctx == nil {
+		return "", routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if captured, ok := owner.(interface {
+		DesktopNetworkReceiptContext(context.Context) (string, error)
+	}); ok {
+		return captured.DesktopNetworkReceiptContext(ctx)
+	}
+	if _, legacy := owner.(interface{ DesktopNetworkReceipt() (string, error) }); legacy {
+		return "", routerVPNExternalFailure
 	}
 	return "", nil
 }
-
 func (n *routerVPNExternalNative) DesktopNetworkReceipt() (string, error) {
-	n.mu.Lock()
+	return n.DesktopNetworkReceiptContext(context.Background())
+}
+func (n *routerVPNExternalNative) DesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if n == nil {
+		return "", routerVPNExternalFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return "", err
+	}
 	proof := n.proof
 	n.mu.Unlock()
 	if proof == nil {
 		return "", routerVPNExternalFailure
 	}
-	raw, err := proof.DesktopNetworkReceipt()
-	n.mu.Lock()
+	raw, err := proof.DesktopNetworkReceiptContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return "", err
+	}
 	defer n.mu.Unlock()
-	if err != nil || n.proof != proof || !proof.Healthy() {
+	if n.proof != proof {
 		return "", routerVPNExternalFailure
 	}
-	return raw, nil
+	if err := proof.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	return raw, ctx.Err()
 }
-
 func (n *routerVPNTorNative) DesktopNetworkReceipt() (string, error) {
-	n.mu.Lock()
+	return n.DesktopNetworkReceiptContext(context.Background())
+}
+func (n *routerVPNTorNative) DesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if n == nil {
+		return "", routerVPNTorFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return "", err
+	}
 	tor := n.tor
 	n.mu.Unlock()
 	if tor == nil {
 		return "", routerVPNTorFailure
 	}
-	raw, err := tor.DesktopNetworkReceipt()
-	n.mu.Lock()
+	raw, err := tor.DesktopNetworkReceiptContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return "", err
+	}
 	defer n.mu.Unlock()
-	if err != nil || n.tor != tor || !tor.Healthy() {
+	if n.tor != tor {
 		return "", routerVPNTorFailure
 	}
-	return raw, nil
+	if err := tor.HealthyContext(ctx); err != nil {
+		return "", err
+	}
+	return raw, ctx.Err()
+}
+func (owner *routerVPNNodeMTU) DesktopNetworkReceipt() (string, error) {
+	return owner.DesktopNetworkReceiptContext(context.Background())
 }
 
-// The node MTU loop already retains the exact currently adopted inbound. A
-// reader replacement must project that new original TUN, never initial ready.
-func (owner *routerVPNNodeMTU) DesktopNetworkReceipt() (string, error) {
-	if owner == nil || owner.current() != nil {
+// The sole node command loop owns inbound and record. Native readers serialize
+// their own observations; no background publisher can mutate these command
+// fields between the two exact-reader checks.
+func (owner *routerVPNNodeMTU) DesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if owner == nil {
 		return "", routerVPNExternalFailure
+	}
+	if err := owner.currentContext(ctx); err != nil {
+		return "", err
 	}
 	inbound := owner.inbound
-	reader, ok := inbound.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
+	reader, ok := inbound.(interface {
+		RouterVPNDesktopNetworkReceiptContext(context.Context) (string, error)
+	})
 	if !ok {
 		owner.reportNetworkReceiptFailure("native TUN cannot attest its actual routing calls")
+		if _, legacy := inbound.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) }); legacy {
+			return "", routerVPNExternalFailure
+		}
 		return "", nil
 	}
-	raw, err := reader.RouterVPNDesktopNetworkReceipt()
-	if owner.inbound != inbound || owner.current() != nil {
+	raw, err := reader.RouterVPNDesktopNetworkReceiptContext(ctx)
+	if owner.inbound != inbound {
 		return "", routerVPNExternalFailure
+	}
+	if err != nil && !errors.Is(err, desktopnetwork.ErrNetworkReceiptUnavailable) {
+		return "", err
+	}
+	if check := owner.currentContext(ctx); check != nil {
+		return "", check
 	}
 	if err != nil {
 		owner.reportNetworkReceiptFailure(err.Error())
@@ -71,7 +132,7 @@ func (owner *routerVPNNodeMTU) DesktopNetworkReceipt() (string, error) {
 	if err != nil || receipt.TargetOS != runtime.GOOS || receipt.Name != owner.record.Interface || receipt.Index != uint32(owner.record.Index) || receipt.MTU != owner.record.MTU {
 		return "", routerVPNExternalFailure
 	}
-	return raw, nil
+	return raw, ctx.Err()
 }
 
 // Keep the original optional-readback outcome unchanged. The first actual
@@ -87,6 +148,7 @@ func (owner *routerVPNNodeMTU) reportNetworkReceiptFailure(message string) {
 }
 
 func routerVPNNodeMTUDiagnosticReason(message string) string {
+	message = strings.TrimPrefix(message, desktopnetwork.ErrNetworkReceiptUnavailable.Error()+"\n")
 	for _, known := range []struct{ prefix, code string }{
 		{"native Linux routing call has no unique owned addition", "unique-addition"},
 		{"native Linux routing inventory changed during its own add", "inventory-changed"},

@@ -160,7 +160,10 @@ type retirementModel struct {
 	beforeRemove                                                  func()
 }
 
-func (m *retirementModel) current() error {
+func (m *retirementModel) current(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if m.closed {
 		return errors.New("original model observer closed")
 	}
@@ -648,6 +651,86 @@ func TestRouterVPNNativeLinuxRoutingRetirementBindsActualDefaultRoutes(t *testin
 		if call.matches(retirementRoute(t, 8, 2022)) {
 			t.Fatal("malformed original route prefix was accepted", bad)
 		}
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingReceiptHeldOperation(t *testing.T) {
+	native, _, file := retirementFixture(t)
+	s := &native.routervpnRetirement
+	s.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := native.RouterVPNDesktopNetworkReceiptContext(ctx); done <- err }()
+	select {
+	case err := <-done:
+		s.mu.Unlock()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("queued native read lost its original deadline", err)
+		}
+	case <-time.After(time.Second):
+		s.mu.Unlock()
+		<-done
+		t.Fatal("expired native receipt waited for retained retirement lock")
+	}
+	if s.failure != nil || s.closed || s.receipt != "" || native.tunFile != file {
+		t.Fatal("expired observation changed original native authority")
+	}
+	sentinel := errors.New("original live native descriptor reached again")
+	s.original = func(ctx context.Context) error { return sentinel }
+	if _, err := native.RouterVPNDesktopNetworkReceiptContext(retirementStop(t)); !errors.Is(err, sentinel) {
+		t.Fatal("expired read poisoned later original descriptor admission", err)
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingObserverHeldOperation(t *testing.T) {
+	for _, operation := range []string{"current", "drain"} {
+		t.Run(operation, func(t *testing.T) {
+			watch := &routerVPNLinuxRoutingWatch{}
+			watch.mu.Lock()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				if operation == "current" {
+					done <- watch.current(ctx)
+				} else {
+					_, err := watch.drain(ctx)
+					done <- err
+				}
+			}()
+			select {
+			case err := <-done:
+				watch.mu.Unlock()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("native observer changed original deadline", err)
+				}
+			case <-time.After(time.Second):
+				// Make late admission reject before any modeled native file read.
+				watch.closed = true
+				watch.mu.Unlock()
+				<-done
+				t.Fatal("expired observer waited for held original stream lock")
+			}
+			if watch.failure != nil || watch.closing || watch.closed || watch.sequence != 0 {
+				t.Fatal("expired observation mutated retained event authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxRoutingInterfaceCancelledCaller(t *testing.T) {
+	native, _, _ := retirementFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, _, err := native.RouterVPNDesktopNetworkInterfaceContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("native interface entry discarded original cancellation", err)
+	}
+	if _, _, err := native.routervpnNetworkInterfaceContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("actual native link inventory discarded original cancellation", err)
+	}
+	if _, err := native.RouterVPNDesktopNetworkReceiptContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("native receipt entry discarded original cancellation", err)
 	}
 }
 

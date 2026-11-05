@@ -78,6 +78,7 @@ type routerVPNExternalPhysicalBinding interface {
 	current() bool
 	validTUN(adapter.Inbound) bool
 	cancel()
+	cancelObservation()
 	measurementConfig(string) (string, error)
 	mtuAuthority(string, string) (string, string, error)
 	retireTUN(context.Context, adapter.Inbound) error
@@ -135,6 +136,22 @@ func (r *RouterVPNExternalProofRequest) Cancel() {
 }
 func (r *RouterVPNExternalProofRequest) Healthy() bool {
 	return r != nil && r.request != nil && r.request.Healthy()
+}
+func (r *RouterVPNExternalProofRequest) HealthyContext(ctx context.Context) error {
+	if r == nil || r.request == nil {
+		return errors.New("external proof is unavailable")
+	}
+	return r.request.HealthyContext(ctx)
+}
+func (r *RouterVPNExternalProofRequest) VerifyCurrentPathContext(ctx context.Context) error {
+	if r == nil || r.request == nil {
+		return errors.New("external proof is unavailable")
+	}
+	err := r.request.VerifyCurrentPathContext(ctx)
+	if err != nil && !mobiletor.ObservationContextExpired(ctx, err) && r.engine != nil && r.engine.physical != nil {
+		r.engine.physical.cancelObservation()
+	}
+	return err
 }
 func (r *RouterVPNExternalProofRequest) VerifyCurrentPath() error {
 	if r == nil || r.request == nil {
@@ -196,6 +213,70 @@ func (e *routerVPNExternalNativeEngine) OpenVPNRemote(tag string) (nativeopenvpn
 	}
 	if !exists || current != owner || e.Identity() == "" || tag == mobilemultihop.LocalTag && e.Selected() != tag {
 		return nativeopenvpn.RemoteReceipt{}, errors.New("native OpenVPN remote owner changed during observation")
+	}
+	return receipt, nil
+}
+
+func (e *routerVPNExternalNativeEngine) SelectedContext(ctx context.Context) (string, error) {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return "", err
+	}
+	selector, ok := e.routes[mobilemultihop.ExternalFinalTag].(*group.Selector)
+	if !ok {
+		return "", errors.New("external native selector is unavailable")
+	}
+	selected := selector.Now()
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return "", err
+	}
+	return selected, nil
+}
+func (e *routerVPNExternalNativeEngine) OpenVPNRemoteContext(ctx context.Context, tag string) (nativeopenvpn.RemoteReceipt, error) {
+	var empty nativeopenvpn.RemoteReceipt
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return empty, err
+	}
+	if tag != mobilemultihop.LocalTag && tag != mobilemultihop.ExternalFinalTag {
+		return empty, errors.New("OpenVPN native route is not captured")
+	}
+	if tag == mobilemultihop.LocalTag {
+		selected, err := e.SelectedContext(ctx)
+		if err != nil {
+			return empty, err
+		}
+		if selected != tag {
+			return empty, errors.New("OpenVPN native route is not selected")
+		}
+	}
+	owner := e.routes[tag]
+	endpoint, ok := owner.(interface {
+		RouterVPNConnectedRemoteContext(context.Context) (nativeopenvpn.RemoteReceipt, error)
+	})
+	if !ok {
+		return empty, errors.New("OpenVPN native endpoint has no bounded remote observation")
+	}
+	receipt, err := endpoint.RouterVPNConnectedRemoteContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	current, found, err := adapter.RouterVPNOutboundContext(ctx, e.box.outbound, tag)
+	if err != nil {
+		return empty, err
+	}
+	if !found || current != owner {
+		return empty, errors.New("OpenVPN native remote owner changed")
+	}
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return empty, err
+	}
+	if tag == mobilemultihop.LocalTag {
+		selected, err := e.SelectedContext(ctx)
+		if err != nil {
+			return empty, err
+		}
+		if selected != tag {
+			return empty, errors.New("OpenVPN native selection changed")
+		}
 	}
 	return receipt, nil
 }
@@ -285,6 +366,111 @@ func (e *routerVPNExternalNativeEngine) Identity() string {
 	defer e.mu.RUnlock()
 	return e.identityLocked()
 }
+
+// IdentityContext observes only the captured graph. An expired read does not
+// revoke a healthy physical owner; a demonstrated replacement revokes it now.
+func (e *routerVPNExternalNativeEngine) IdentityContext(ctx context.Context) (string, error) {
+	if e == nil {
+		return "", errors.New("external native owner is unavailable")
+	}
+	if err := adapter.RouterVPNRLockContext(ctx, &e.mu); err != nil {
+		return "", err
+	}
+	defer e.mu.RUnlock()
+	return e.identityLockedContext(ctx)
+}
+func (e *routerVPNExternalNativeEngine) identityLockedContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("external graph observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if e == nil {
+		return "", errors.New("external native owner is unavailable")
+	}
+	invalid := func(message string) (string, error) {
+		if e.physical != nil {
+			e.physical.cancelObservation()
+		}
+		return "", errors.New(message)
+	}
+	if e.box == nil || e.box.ctx.Err() != nil {
+		return invalid("external native graph was retired")
+	}
+	select {
+	case <-e.box.done:
+		return invalid("external native Box was closed")
+	default:
+	}
+	var physical interface {
+		currentContext(context.Context) error
+		validTUNContext(context.Context, adapter.Inbound) error
+	}
+	if e.physical != nil {
+		var ok bool
+		physical, ok = e.physical.(interface {
+			currentContext(context.Context) error
+			validTUNContext(context.Context, adapter.Inbound) error
+		})
+		if !ok {
+			return "", errors.New("external physical owner has no bounded observation")
+		}
+		if err := physical.currentContext(ctx); err != nil {
+			if !mobiletor.ObservationContextExpired(ctx, err) {
+				e.physical.cancelObservation()
+			}
+			return "", err
+		}
+	}
+	for tag, owner := range e.owners {
+		current, found, err := adapter.RouterVPNOutboundContext(ctx, e.box.outbound, tag)
+		if err != nil {
+			return "", err
+		}
+		if !found || current != owner {
+			return invalid("external native outbound owner changed")
+		}
+	}
+	for tag, owner := range e.dns {
+		current, found, err := adapter.RouterVPNTransportContext(ctx, e.box.dnsTransport, tag)
+		if err != nil {
+			return "", err
+		}
+		if !found || current != owner {
+			return invalid("external native DNS owner changed")
+		}
+	}
+	for tag, owner := range e.services {
+		current, found, err := adapter.RouterVPNServiceContext(ctx, e.box.service, tag)
+		if err != nil {
+			return "", err
+		}
+		if !found || current != owner {
+			return invalid("external native service owner changed")
+		}
+	}
+	current, found, err := adapter.RouterVPNInboundContext(ctx, e.box.inbound, e.tunTag)
+	if err != nil {
+		return "", err
+	}
+	if !found || current != e.tun {
+		return invalid("external native TUN owner changed")
+	}
+	if physical != nil {
+		if err := physical.validTUNContext(ctx, e.tun); err != nil {
+			if !mobiletor.ObservationContextExpired(ctx, err) {
+				e.physical.cancelObservation()
+			}
+			return "", err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%p", e.box), nil
+}
+
 func (e *routerVPNExternalNativeEngine) identityLocked() (identity string) {
 	if e == nil {
 		return ""
@@ -333,7 +519,10 @@ func (e *routerVPNExternalNativeEngine) identityLocked() (identity string) {
 	return fmt.Sprintf("%p", e.box)
 }
 func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
-	if e.Identity() == "" || ctx.Err() != nil {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return nil, err
+	}
+	if ctx.Err() != nil {
 		return nil, errors.New("external native owner changed")
 	}
 	owner, ok := e.routes[tag]
@@ -348,7 +537,8 @@ func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address s
 		return nil, errors.New("external proof cannot use a default resolver")
 	}
 	connection, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
-	if err != nil || ctx.Err() != nil || e.Identity() == "" {
+	_, identityErr := e.IdentityContext(ctx)
+	if err != nil || identityErr != nil || ctx.Err() != nil {
 		if connection != nil {
 			_ = connection.Close()
 		}
@@ -357,7 +547,10 @@ func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address s
 	return connection, nil
 }
 func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag string) error {
-	if e.Identity() == "" || e.tunTag != tunTag {
+	if _, err := e.IdentityContext(parent); err != nil {
+		return err
+	}
+	if e.tunTag != tunTag {
 		return errors.New("external DNS proof belongs to another TUN")
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
@@ -368,7 +561,10 @@ func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag 
 	if err := routerVPNStrategyDNSExchange(ctx, e.box.dnsRouter.Exchange); err != nil {
 		return err
 	}
-	if e.Identity() == "" || ctx.Err() != nil {
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
 		return errors.New("external DNS owner changed during proof")
 	}
 	return nil

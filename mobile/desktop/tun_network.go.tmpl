@@ -35,6 +35,125 @@ func (t *Inbound) RouterVPNDesktopNetworkReceipt() (string, error) {
 	return raw, nil
 }
 
+// Context variants never enter the legacy unbounded guard or ambient
+// interface lookup. The original desktop owner supplies the read-only guard
+// at claim time, and replacement readers retain that exact callback.
+func (t *Inbound) RouterVPNDesktopMTUContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	if t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || guard == nil || t.routervpnDesktop ||
+		(runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows") {
+		return "", 0, 0, errors.New("desktop MTU requires its original unclaimed native TUN")
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	name, index, mtu, err := t.routervpnDesktopInterfaceContext(ctx)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	t.routervpnDesktop, t.routervpnDesktopIndex = true, index
+	t.routervpnDesktopGuardContext = guard
+	t.routervpnDesktopGuard = func() bool { return guard(t.ctx) == nil }
+	return name, index, mtu, nil
+}
+
+func (t *Inbound) RouterVPNDesktopMTUInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnDesktop {
+		return "", 0, 0, errors.New("desktop MTU owner is missing")
+	}
+	return t.routervpnDesktopInterfaceContext(ctx)
+}
+
+func (t *Inbound) routervpnDesktopInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	if !t.routervpnReady || t.tunIf == nil {
+		return "", 0, 0, errors.New("desktop TUN or physical path retired")
+	}
+	if t.routervpnDesktopGuardContext != nil {
+		if err := t.routervpnDesktopGuardContext(ctx); err != nil {
+			return "", 0, 0, err
+		}
+	} else if t.routervpnDesktopGuard != nil {
+		return "", 0, 0, errors.New("desktop TUN omitted its captured context guard")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	reader, ok := t.tunIf.(interface {
+		RouterVPNDesktopNetworkInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return "", 0, 0, errors.New("original native TUN omitted its bounded interface read")
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopNetworkInterfaceContext(ctx)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if name == "" || name != t.tunOptions.Name || index < 1 || mtu < 1280 || mtu > 9000 ||
+		t.routervpnDesktopIndex != 0 && index != t.routervpnDesktopIndex || mtu != int(t.tunOptions.MTU) {
+		return "", 0, 0, errors.New("native TUN identity or MTU readback changed")
+	}
+	if t.routervpnDesktopGuardContext != nil {
+		if err := t.routervpnDesktopGuardContext(ctx); err != nil {
+			return "", 0, 0, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	return name, index, mtu, nil
+}
+
+func (t *Inbound) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return "", err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnDesktop {
+		return "", errors.New("network receipt has no retained desktop TUN owner")
+	}
+	name, index, mtu, err := t.routervpnDesktopInterfaceContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	reader, ok := t.tunIf.(interface {
+		RouterVPNDesktopNetworkReceiptContext(context.Context) (string, error)
+	})
+	if !ok {
+		return "", errors.New("native TUN cannot attest its bounded routing calls")
+	}
+	raw, err := reader.RouterVPNDesktopNetworkReceiptContext(ctx)
+	if err != nil || ctx.Err() != nil {
+		return "", errors.Join(err, ctx.Err())
+	}
+	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
+	if err != nil || receipt.TargetOS != runtime.GOOS || receipt.Name != name || receipt.Index != uint32(index) || receipt.MTU != mtu {
+		return "", errors.New("native routing receipt differs from the retained TUN")
+	}
+	if _, _, _, err := t.routervpnDesktopInterfaceContext(ctx); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
 // Only an unstarted original inbound accepts its creator's startup budget.
 // The method supplies cancellation to native ledger reads, never ownership.
 func (t *Inbound) RouterVPNDesktopNetworkStartup(ctx context.Context) error {
@@ -183,10 +302,12 @@ func (t *Inbound) RouterVPNDesktopMTUStartupContext(ctx context.Context) error {
 // construction supplies no fabricated Ready; its original owner stays retained
 // until actual native retirement succeeds and yields its complete call history.
 func (t *Inbound) RouterVPNDesktopMTUReceiptContext(ctx context.Context) (ready, retired string, failure error) {
-	t.routervpnLifecycle.Lock()
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return "", "", err
+	}
 	defer t.routervpnLifecycle.Unlock()
-	if ctx == nil || ctx.Err() != nil {
-		return "", "", errors.New("MTU evidence lost its operation caller")
+	if err := ctx.Err(); err != nil {
+		return "", "", err
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		return "", "", errors.New("MTU evidence requires its original deadline")
@@ -197,7 +318,7 @@ func (t *Inbound) RouterVPNDesktopMTUReceiptContext(ctx context.Context) (ready,
 	if !t.routervpnReady || t.tunIf == nil {
 		return "", "", nil
 	}
-	name, index, mtu, err := t.routervpnDesktopInterface()
+	name, index, mtu, err := t.routervpnDesktopInterfaceContext(ctx)
 	if err != nil {
 		return "", "", err
 	}
@@ -208,14 +329,14 @@ func (t *Inbound) RouterVPNDesktopMTUReceiptContext(ctx context.Context) (ready,
 		return "", "", errors.New("MTU native adapter omitted its original routing ledger")
 	}
 	raw, err := reader.RouterVPNDesktopNetworkReceiptContext(ctx)
-	if err != nil {
-		return "", "", err
+	if err != nil || ctx.Err() != nil {
+		return "", "", errors.Join(err, ctx.Err())
 	}
 	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
 	if err != nil || receipt.Name != name || receipt.Index != uint32(index) || receipt.MTU != mtu {
 		return "", "", errors.New("MTU receipt changed its original native interface")
 	}
-	if _, _, _, err = t.routervpnDesktopInterface(); err != nil {
+	if _, _, _, err = t.routervpnDesktopInterfaceContext(ctx); err != nil {
 		return "", "", err
 	}
 	return raw, "", ctx.Err()

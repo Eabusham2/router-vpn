@@ -102,7 +102,7 @@ sys.exit(status)
             for source in target.rglob('*.go'):
                 self.assertNotIn(b'"router-vpn/internal/', source.read_bytes())
                 original=ROOT/'internal'/source.parent.name/source.name
-                expected=original.read_bytes()
+                expected=module.OBSERVATION.rewrite(original.read_bytes())
                 for package in module.POLICY_PACKAGES:
                     expected=expected.replace(('"router-vpn/internal/'+package+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"').encode())
                 self.assertEqual(source.read_bytes(),expected)

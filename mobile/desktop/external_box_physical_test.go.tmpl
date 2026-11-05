@@ -196,7 +196,9 @@ func (f *desktopExternalBoxFixture) start(t *testing.T) {
 			t.Error("physical source was created after TUN activation")
 		}
 		f.source.capture = capture
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.source, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.source, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, f.source, err
 	}); err != nil {
 		t.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net"
 	"regexp"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	boxService "github.com/sagernet/sing-box/adapter/service"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/service"
 )
@@ -239,6 +241,36 @@ func (n *NetworkOwner) BindPhysicalBroker(broker *mobiletor.DesktopSocketBroker)
 	}
 	n.broker, n.physical = broker, physical
 	return nil
+}
+
+// MatchesContext reads only this original capture under the caller's deadline.
+func (n *NetworkOwner) MatchesContext(ctx context.Context, session, source string) error {
+	if n == nil {
+		return net.ErrClosed
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	defer n.mu.Unlock()
+	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.capture.SessionID != session || n.capture.SourceSHA256 != source {
+		return net.ErrClosed
+	}
+	return ctx.Err()
+}
+
+func (n *NetworkOwner) CurrentContext(ctx context.Context) error {
+	if n == nil {
+		return net.ErrClosed
+	}
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
+	current := n.activated && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	n.mu.Unlock()
+	if !current {
+		return net.ErrClosed
+	}
+	return ctx.Err()
 }
 
 func (n *NetworkOwner) Current() bool {

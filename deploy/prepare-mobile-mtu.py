@@ -65,7 +65,7 @@ def prepare(vendor, *, mobile=True):
     changes={
       'protocol/tun/inbound.go':[
         ('\t"strings"','\t"strings"\n\t"sync"'),
-        ('type Inbound struct {','type Inbound struct {\n\troutervpnInitial option.TunInboundOptions\n\troutervpnLifecycle sync.Mutex\n\troutervpnReady bool\n\troutervpnDesktop bool\n\troutervpnDesktopFresh bool\n\troutervpnDesktopIndex int\n\troutervpnDesktopGuard func() bool'),
+        ('type Inbound struct {','type Inbound struct {\n\troutervpnInitial option.TunInboundOptions\n\troutervpnLifecycle sync.Mutex\n\troutervpnReady bool\n\troutervpnDesktop bool\n\troutervpnDesktopFresh bool\n\troutervpnDesktopIndex int\n\troutervpnDesktopGuard func() bool\n\troutervpnDesktopGuardContext func(context.Context) error'),
         ('func (t *Inbound) Start(stage adapter.StartStage) error {','func (t *Inbound) routervpnStart(stage adapter.StartStage) error {'),
         ('\tinbound := &Inbound{','\tinbound := &Inbound{\n\t\troutervpnInitial: options,'),
       ],

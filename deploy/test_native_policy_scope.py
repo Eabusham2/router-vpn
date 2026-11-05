@@ -46,11 +46,35 @@ class NativePolicyScope(unittest.TestCase):
                 self.assertEqual(parent.read_text(),'do not erase unknown test')
                 return
             module.prepare(vendor)
+            helper = module.OBSERVATION
+            original = ROOT/'internal/common/observation_context.go'
+            target = vendor/helper.RELATIVE
+            self.assertEqual(target.read_bytes(), original.read_bytes())
+            self.assertEqual([p.name for p in target.parent.glob('*.go')], ['observation_context.go'])
+            self.assertIn(original, module.inputs())
+            self.assertIn(ROOT/'deploy/native_observation_policy.py', module.inputs())
+            self.assertEqual(set(helper.verify(vendor)), {helper.RELATIVE})
+            target.unlink()
+            with self.assertRaisesRegex(ValueError, 'missing or modified'):
+                helper.verify(vendor)
+            helper.prepare(vendor)
+            target.write_bytes(original.read_bytes()+b'// changed classifier\n')
+            with self.assertRaisesRegex(ValueError, 'missing or modified'):
+                helper.verify(vendor)
+            with self.assertRaisesRegex(ValueError, 'differs from its original'):
+                helper.prepare(vendor)
+            target.write_bytes(original.read_bytes())
+            extra = target.parent/'parent_contract_test.go'
+            extra.write_bytes(b'package common\n')
+            with self.assertRaisesRegex(ValueError, 'undeclared common sources'):
+                helper.verify(vendor)
+            extra.unlink()
+            helper.verify(vendor)
             if windows_text:
                 for package in module.PACKAGES:
                     for path in (ROOT/'internal'/package).glob('*.go'):
                         if path.name=='core_config_test.go' or package=='applexray' and path.name=='preparation_test.go':continue
-                        expected=path.read_bytes()
+                        expected=module.OBSERVATION.rewrite(path.read_bytes())
                         for source_package in module.PACKAGES:
                             expected=expected.replace(('"router-vpn/internal/'+source_package+'"').encode(),
                                 ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+source_package+'"').encode())

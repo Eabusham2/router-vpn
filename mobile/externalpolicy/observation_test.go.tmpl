@@ -1,0 +1,179 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/log"
+)
+
+type boundedIdentityEnteredContext struct {
+	context.Context
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (c *boundedIdentityEnteredContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.entered) })
+	return err
+}
+
+type boundedIdentityTUN struct{ inbound.Adapter }
+
+func (*boundedIdentityTUN) Start(adapter.StartStage) error { return nil }
+func (*boundedIdentityTUN) Close() error                   { return nil }
+
+type boundedIdentityPhysical struct {
+	cancelled atomic.Bool
+	observe   func(context.Context) error
+	cleanup   func()
+}
+
+func (p *boundedIdentityPhysical) current() bool                 { return !p.cancelled.Load() }
+func (p *boundedIdentityPhysical) validTUN(adapter.Inbound) bool { return p.current() }
+func (p *boundedIdentityPhysical) cancel() {
+	if p.cleanup != nil {
+		p.cleanup()
+	}
+	p.cancelled.Store(true)
+}
+func (p *boundedIdentityPhysical) cancelObservation()                               { p.cancelled.Store(true) }
+func (p *boundedIdentityPhysical) measurementConfig(s string) (string, error)       { return s, nil }
+func (p *boundedIdentityPhysical) mtuAuthority(a, b string) (string, string, error) { return a, b, nil }
+func (p *boundedIdentityPhysical) retireTUN(context.Context, adapter.Inbound) error { return nil }
+func (p *boundedIdentityPhysical) adoptTUN(context.Context, adapter.Inbound) error  { return nil }
+func (p *boundedIdentityPhysical) currentContext(ctx context.Context) error {
+	if p.observe != nil {
+		return p.observe(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.cancelled.Load() {
+		return errors.New("original physical owner retired")
+	}
+	return nil
+}
+func (p *boundedIdentityPhysical) validTUNContext(ctx context.Context, _ adapter.Inbound) error {
+	return p.currentContext(ctx)
+}
+
+func boundedIdentityFixture(t *testing.T) (*routerVPNExternalNativeEngine, *boundedIdentityPhysical) {
+	t.Helper()
+	registry := inbound.NewRegistry()
+	inbound.Register[struct{}](registry, "bounded-test", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ struct{}) (adapter.Inbound, error) {
+		return &boundedIdentityTUN{inbound.NewAdapter("bounded-test", tag)}, nil
+	})
+	manager := inbound.NewManager(nil, registry, nil)
+	if err := manager.Create(context.Background(), nil, nil, "captured-tun", "bounded-test", nil); err != nil {
+		t.Fatal(err)
+	}
+	tun, ok := manager.Get("captured-tun")
+	if !ok {
+		t.Fatal("actual native manager did not install fixture")
+	}
+	physical := &boundedIdentityPhysical{}
+	engine := &routerVPNExternalNativeEngine{box: &Box{ctx: context.Background(), done: make(chan struct{}), inbound: manager}, tun: tun, tunTag: "captured-tun", physical: physical}
+	if _, err := engine.IdentityContext(context.Background()); err != nil {
+		t.Fatal("actual graph fixture is not current", err)
+	}
+	return engine, physical
+}
+func TestRouterVPNNativeIdentityObservationPreservesHealthyOwner(t *testing.T) {
+	for _, stage := range []string{"engine-lock", "physical-read", "genuine-replacement", "mixed-loss-cancel", "held-cleanup"} {
+		t.Run(stage, func(t *testing.T) {
+			engine, physical := boundedIdentityFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if stage == "mixed-loss-cancel" {
+				physical.observe = func(ctx context.Context) error {
+					cancel()
+					return errors.Join(ctx.Err(), errors.New("observed another physical generation"))
+				}
+				if identity, err := engine.IdentityContext(ctx); err == nil || identity != "" || !physical.cancelled.Load() {
+					t.Fatal("raced cancellation hid confirmed physical owner loss", identity, err)
+				}
+				return
+			}
+			if stage == "held-cleanup" {
+				held := make(chan struct{})
+				physical.cleanup = func() { <-held }
+				if err := engine.box.inbound.Create(context.Background(), nil, nil, "captured-tun", "bounded-test", nil); err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan error, 1)
+				go func() { _, err := engine.IdentityContext(ctx); done <- err }()
+				select {
+				case err := <-done:
+					close(held)
+					if err == nil || !physical.cancelled.Load() {
+						t.Fatal("actual owner loss did not revoke admission", err)
+					}
+				case <-time.After(time.Second):
+					close(held)
+					<-done
+					t.Fatal("bounded identity failure entered held native cleanup")
+				}
+				return
+			}
+			if stage == "genuine-replacement" {
+				if err := engine.box.inbound.Create(context.Background(), nil, nil, "captured-tun", "bounded-test", nil); err != nil {
+					t.Fatal(err)
+				}
+				if identity, err := engine.IdentityContext(ctx); err == nil || identity != "" || !physical.cancelled.Load() {
+					t.Fatal("genuine manager replacement retained original authority", identity, err)
+				}
+				return
+			}
+			entered := make(chan struct{})
+			if stage == "engine-lock" {
+				ctx = &boundedIdentityEnteredContext{Context: ctx, entered: entered}
+				engine.mu.Lock()
+			} else {
+				physical.observe = func(ctx context.Context) error { cancel(); return ctx.Err() }
+			}
+			done := make(chan error, 1)
+			go func() { _, err := engine.IdentityContext(ctx); done <- err }()
+			if stage == "engine-lock" {
+				select {
+				case <-entered:
+				case <-time.After(time.Second):
+					engine.mu.Unlock()
+					cancel()
+					<-done
+					t.Fatal("identity observation did not enter the original caller context")
+				}
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if stage == "engine-lock" {
+					engine.mu.Unlock()
+				}
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal("original caller cancellation lost", err)
+				}
+			case <-time.After(time.Second):
+				if stage == "engine-lock" {
+					engine.mu.Unlock()
+				}
+				<-done
+				t.Fatal("native identity observation waited after cancellation")
+			}
+			if physical.cancelled.Load() {
+				t.Fatal("cancelled observer retired healthy physical connection")
+			}
+			physical.observe = nil
+			if identity, err := engine.IdentityContext(context.Background()); err != nil || identity == "" {
+				t.Fatal("healthy connection lost after cancelled observation", identity, err)
+			}
+		})
+	}
+}

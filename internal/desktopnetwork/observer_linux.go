@@ -149,10 +149,15 @@ func (o *linuxObserver) Barrier(ctx context.Context) error {
 		ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 	}
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return errors.New("Linux network barrier lost its caller")
 	}
-	o.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
 	if o.closing || o.closed || o.sequence == ^uint32(0) {
 		o.mu.Unlock()
 		return errors.New("Linux network barrier lost its original socket")
@@ -161,7 +166,6 @@ func (o *linuxObserver) Barrier(ctx context.Context) error {
 	seq := o.sequence
 	waiter := make(chan error, 1)
 	o.waiters[seq] = waiter
-	o.mu.Unlock()
 	request := make([]byte, 32)
 	binary.LittleEndian.PutUint32(request, uint32(len(request)))
 	binary.LittleEndian.PutUint16(request[4:], syscall.RTM_GETLINK)
@@ -181,14 +185,14 @@ func (o *linuxObserver) Barrier(ctx context.Context) error {
 		}
 	}
 	if err != nil {
-		o.mu.Lock()
 		delete(o.waiters, seq)
 		o.mu.Unlock()
-		return err
+		return errors.Join(err, ctx.Err())
 	}
+	o.mu.Unlock()
 	select {
 	case err := <-waiter:
-		return err
+		return errors.Join(err, ctx.Err())
 	case <-o.joined:
 		return errors.New("Linux network observer exited before its barrier")
 	case <-ctx.Done():
@@ -333,35 +337,38 @@ func (o *linuxObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 		response uint16
 		name     string
 	}{{syscall.RTM_GETLINK, syscall.RTM_NEWLINK, "link"}, {syscall.RTM_GETADDR, syscall.RTM_NEWADDR, "address"}, {syscall.RTM_GETROUTE, syscall.RTM_NEWROUTE, "route"}, {syscall.RTM_GETRULE, syscall.RTM_NEWRULE, "rule"}} {
-		if ctx == nil || ctx.Err() != nil {
+		if ctx == nil {
 			return snapshot, errors.New("Linux network snapshot lost its caller")
+		}
+		if err := ctx.Err(); err != nil {
+			return snapshot, errors.Join(err, ctx.Err())
 		}
 		rows, err := linuxDump(ctx, kind.request, kind.response)
 		if err != nil {
-			return snapshot, err
+			return snapshot, errors.Join(err, ctx.Err())
 		}
 		for _, row := range rows {
 			switch kind.name {
 			case "link":
 				v, err := linuxLink(row.Data)
 				if err != nil {
-					return snapshot, err
+					return snapshot, errors.Join(err, ctx.Err())
 				}
 				snapshot.Links = append(snapshot.Links, v)
 			case "address":
 				v, err := linuxAddress(row.Data)
 				if err != nil {
-					return snapshot, err
+					return snapshot, errors.Join(err, ctx.Err())
 				}
 				snapshot.Addresses = append(snapshot.Addresses, v)
 			default:
 				v, err := ParseDesktopLinuxNetworkObject(kind.name, row.Data)
 				if err != nil {
-					return snapshot, err
+					return snapshot, errors.Join(err, ctx.Err())
 				}
 				snapshot.Objects = append(snapshot.Objects, v)
 			}
 		}
 	}
-	return snapshot, nil
+	return snapshot, ctx.Err()
 }

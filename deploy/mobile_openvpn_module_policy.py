@@ -3,6 +3,7 @@ from pathlib import Path, PurePosixPath
 import base64
 import hashlib
 import json
+import re
 import stat
 import subprocess
 import tempfile
@@ -55,7 +56,9 @@ PATCHES = {
 }
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'mobile/routervpn_openvpn_generation_fixture.go.tmpl']
+    return [Path(__file__).resolve(), ROOT/'mobile/routervpn_openvpn_generation_fixture.go.tmpl',
+            ROOT/'mobile/routervpn_openvpn_context.go.tmpl', ROOT/'mobile/routervpn_openvpn_context_test.go.tmpl',
+            ROOT/'internal/desktopnetwork/desktop_network_lock.go']
 
 
 def patch(name, data, reverse=False):
@@ -74,9 +77,17 @@ def h1(rows):
     return 'h1:'+base64.b64encode(hashlib.sha256(summary.encode()).digest()).decode()
 
 
-def verify_tree(directory):
+def context_sources():
+    lock = (ROOT/'internal/desktopnetwork/desktop_network_lock.go').read_text().replace('package desktopnetwork', 'package openvpn', 1)
+    lock = re.sub(r'\b(LockContext|RLockContext)\b', lambda match: 'RouterVPN'+match.group(1), lock)
+    return {'routervpn_context.go': (ROOT/'mobile/routervpn_openvpn_context.go.tmpl').read_bytes(),
+            'routervpn_context_test.go': (ROOT/'mobile/routervpn_openvpn_context_test.go.tmpl').read_bytes(),
+            'routervpn_context_lock.go': lock.encode()}
+
+
+def verify_tree(directory, *, allow_missing_context=False):
     if directory.is_symlink() or not directory.is_dir(): raise ValueError('Prepared OpenVPN must be an owned directory')
-    rows=[];total=0;fixture=False
+    rows=[];total=0;fixture=False;bounded=context_sources();observed_context=set()
     for source in sorted(directory.rglob('*')):
         if source.is_symlink() or not(source.is_file() or source.is_dir()): raise ValueError('Linked or special prepared OpenVPN source')
         if source.is_dir(): continue
@@ -85,11 +96,17 @@ def verify_tree(directory):
         total+=source.stat().st_size
         if total>MAX_BYTES or len(rows)>=10000: raise ValueError('OpenVPN source exceeds bounds')
         data=source.read_bytes()
+        if name in bounded:
+            if data != bounded[name]: raise ValueError('OpenVPN bounded observer differs from captured source')
+            observed_context.add(name)
+            continue
         if name==FIXTURE:
             if data!=(ROOT/'mobile/routervpn_openvpn_generation_fixture.go.tmpl').read_bytes(): raise ValueError('OpenVPN fixture differs from captured source')
             fixture=True;continue
         if name in PATCHES: data=patch(name,data,True)
         rows.append((PREFIX+name,hashlib.sha256(data).hexdigest()))
+    if observed_context != set(bounded) and (observed_context or not allow_missing_context):
+        raise ValueError('Prepared OpenVPN bounded observation closure is incomplete')
     if not fixture or h1(rows)!=SUM: raise ValueError('Prepared OpenVPN differs from its pinned module and exact generation patch')
 
 
@@ -101,7 +118,7 @@ def extract_verified(archive,target):
         for member in members:
             if not member.filename.startswith(PREFIX): raise ValueError('Foreign OpenVPN module prefix')
             name=member.filename[len(PREFIX):];parts=PurePosixPath(name)
-            if not name or str(parts)!=name or '\\' in name or '\n' in name or '\r' in name or '..' in parts.parts or parts.is_absolute() or member.is_dir() or stat.S_ISLNK(member.external_attr>>16) or name in seen or name==FIXTURE: raise ValueError('Unsafe OpenVPN archive entry')
+            if not name or str(parts)!=name or '\\' in name or '\n' in name or '\r' in name or '..' in parts.parts or parts.is_absolute() or member.is_dir() or stat.S_ISLNK(member.external_attr>>16) or name in seen or name==FIXTURE or name in context_sources(): raise ValueError('Unsafe OpenVPN archive entry')
             seen.add(name);total+=member.file_size
             if total>MAX_BYTES or member.file_size>MAX_BYTES: raise ValueError('OpenVPN archive exceeds bounds')
             data=bundle.read(member);rows.append((member.filename,hashlib.sha256(data).hexdigest()))
@@ -109,6 +126,7 @@ def extract_verified(archive,target):
             output=target/name;output.parent.mkdir(parents=True,exist_ok=True);output.write_bytes(data)
     if h1(rows)!=SUM: raise ValueError('OpenVPN download does not match pinned h1 checksum')
     (target/FIXTURE).write_bytes((ROOT/'mobile/routervpn_openvpn_generation_fixture.go.tmpl').read_bytes())
+    for name, data in context_sources().items(): (target/name).write_bytes(data)
     verify_tree(target)
 
 
@@ -122,7 +140,13 @@ def prepare(vendor):
     expected={'Old':{'Path':MODULE,'Version':VERSION},'New':{'Path':'./'+COPY}}
     if replacements and replacements!=[expected]: raise ValueError('Unowned OpenVPN module replacement')
     target=vendor/COPY
-    if target.exists() or target.is_symlink(): verify_tree(target)
+    if target.exists() or target.is_symlink():
+        # An older owned tree is upgraded only after its complete original
+        # official checksum and existing generation patch have been verified.
+        verify_tree(target, allow_missing_context=True)
+        for name, data in context_sources().items():
+            if not (target/name).exists(): (target/name).write_bytes(data)
+        verify_tree(target)
     else:
         info=json.loads(subprocess.check_output(['go','mod','download','-json',MODULE+'@'+VERSION],cwd=vendor,text=True))
         if info.get('Path')!=MODULE or info.get('Version')!=VERSION or info.get('Sum')!=SUM or info.get('Error'): raise ValueError('OpenVPN module metadata does not match pinned source')

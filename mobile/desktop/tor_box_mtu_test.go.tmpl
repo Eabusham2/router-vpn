@@ -79,7 +79,7 @@ func desktopTorMTUReplacement(f *desktopTorBoxFixture, owner *RouterVPNDesktopTo
 		makeReader := func(value, index int) *desktopTorMTUCandidate {
 			return &desktopTorMTUCandidate{desktopTorBoxTUN: &desktopTorBoxTUN{
 				Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), name: name, index: index, mtu: value,
-				claimed: true, guard: owner.readerLifetimeCurrent,
+				claimed: true, guard: owner.readerLifetimeCurrent, guardContext: owner.readerLifetimeCurrentContext,
 			}}
 		}
 		candidate, rollback := makeReader(mtu, index+1), makeReader(oldMTU, index+2)
@@ -905,5 +905,43 @@ func TestRouterVPNDesktopTorEntryMTUAuthorityPreservesSingleTUNPolicy(t *testing
 				t.Fatal("rejected entry optimizer changed current native path", current, err)
 			}
 		})
+	}
+}
+
+func TestRouterVPNDesktopTorObservationRevokesWithoutJoiningCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	owner := &RouterVPNDesktopTor{ctx: ctx, cancel: cancel}
+	owner.proved.Store(true)
+	childCtx, childCancel := context.WithCancel(ctx)
+	defer childCancel()
+	comparison := &RouterVPNDesktopTorComparison{ctx: childCtx, cancel: childCancel}
+	owner.comparison.Store(comparison)
+	replacementCtx, replacementCancel := context.WithCancel(t.Context())
+	defer replacementCancel()
+	replacement := &RouterVPNDesktopTor{ctx: replacementCtx, cancel: replacementCancel}
+	replacement.proved.Store(true)
+	comparison.mu.Lock()
+	done := make(chan struct{})
+	go func() { owner.cancelObservation(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		comparison.mu.Unlock()
+		<-done
+		t.Fatal("genuine observation failure waited for descendant cleanup lock")
+	}
+	if !owner.retired.Load() || owner.proved.Load() || ctx.Err() != context.Canceled || childCtx.Err() != context.Canceled {
+		comparison.mu.Unlock()
+		t.Fatal("original admission was not immediately and monotonically revoked")
+	}
+	if replacement.retired.Load() || !replacement.proved.Load() || replacementCtx.Err() != nil {
+		comparison.mu.Unlock()
+		t.Fatal("observation revoked a replacement owner")
+	}
+	comparison.mu.Unlock()
+	owner.Cancel()
+	if !comparison.cancelled {
+		t.Fatal("earlier observation revocation suppressed owned descendant cleanup")
 	}
 }

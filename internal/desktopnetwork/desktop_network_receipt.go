@@ -14,6 +14,21 @@ import (
 
 const DesktopNetworkReceiptLimit = 16 << 10
 
+// Optional successful-call evidence may be unavailable while its native
+// owner remains healthy. The same std-only source is projected into sing-tun;
+// match the explicit capability marker across those two package identities.
+// Cancellation, stale ownership and missing required APIs are not this case.
+var ErrNetworkReceiptUnavailable error = networkReceiptUnavailable{}
+
+type networkReceiptUnavailable struct{}
+
+func (networkReceiptUnavailable) Error() string                       { return "complete native network receipt unavailable" }
+func (networkReceiptUnavailable) RouterVPNNetworkReceiptUnavailable() {}
+func (networkReceiptUnavailable) Is(target error) bool {
+	_, ok := target.(interface{ RouterVPNNetworkReceiptUnavailable() })
+	return ok
+}
+
 // DesktopNetworkObject describes one observed kernel route or policy rule.
 // Linux Native is its canonical complete rtnetlink body, including otherwise
 // unknown attributes. The other platforms use the native notification keys.

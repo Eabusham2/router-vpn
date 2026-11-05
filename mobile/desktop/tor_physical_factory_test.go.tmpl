@@ -64,7 +64,9 @@ func TestRouterVPNPhysicalFactoryRunsBeforeTUNAndRetainsExactCapture(t *testing.
 		if capture != n.brokerCapture() || !current() || n.Current() || n.ready {
 			t.Error("physical factory ran after admission or with another capture")
 		}
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+			return n.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, source, err
 	}
 	if err := n.PreparePhysicalBroker(factory); err != nil {
@@ -106,7 +108,9 @@ func TestRouterVPNPhysicalFactoryRetainsPartialSourceAndLateCompletion(t *testin
 				var broker *mobiletor.DesktopSocketBroker
 				if withBroker {
 					var err error
-					broker, err = mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+					broker, err = mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+						return n.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+					})
 					if err != nil {
 						t.Error(err)
 					}
@@ -167,7 +171,9 @@ func TestRouterVPNPhysicalFactoryRequiresOSOwnerBeforeInitialize(t *testing.T) {
 	}
 	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
 	if err := n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+			return n.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, source, err
 	}); err != nil {
 		t.Fatal(err)

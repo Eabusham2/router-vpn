@@ -24,6 +24,22 @@ def verdict():
 
 
 class RoutingRetirementVerdicts(unittest.TestCase):
+    def test_exact_observation_caller_and_failure_cases(self):
+        for platform in ("linux", "darwin", "win32"):
+            names = []
+            for parent, leaves in RUNNER.OBSERVATION_CONTEXT_CASES.items():
+                if parent == "TestNetworkNativeObservationHeldMutex":
+                    leaves = ("snapshot",) if platform == "win32" else ("barrier",)
+                names.extend((parent, *(parent + "/" + leaf for leaf in leaves)))
+            output = "\n".join("--- PASS: " + name + " (0.01s)" for name in names)
+            RUNNER.check_observation_context_verdict(output, platform)
+            for line in output.splitlines():
+                for mutation in (output.replace(line, "", 1), output + "\n" + line,
+                                 output.replace(line, line.replace("PASS", "SKIP"), 1),
+                                 output.replace(line, line.replace("PASS", "FAIL"), 1)):
+                    with self.assertRaises(ValueError):
+                        RUNNER.check_observation_context_verdict(mutation, platform)
+
     def test_exact_original_and_foreign_retirement_cases(self):
         parent="TestLinuxRoutingRetirementRequiresOriginalJoinedInventory"
         output="\n".join("--- PASS: "+name+" (0.01s)" for name in (parent,*(parent+"/"+leaf for leaf in RUNNER.ROUTING_RETIREMENT_CASES)))

@@ -263,19 +263,27 @@ func (o *windowsObserver) table(name string) (uintptr, uint32, error) {
 
 func (o *windowsObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 	var snapshot Snapshot
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return snapshot, errors.New("Windows network snapshot lost its caller")
 	}
-	o.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		return snapshot, errors.Join(err, ctx.Err())
+	}
+	if err := LockContext(ctx, &o.mu); err != nil {
+		return snapshot, err
+	}
 	defer o.mu.Unlock()
 	if o.closed || o.dll == nil {
 		return snapshot, errors.New("Windows network snapshot lost its original observer")
 	}
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return snapshot, err
+		return snapshot, errors.Join(err, ctx.Err())
 	}
 	for _, iface := range interfaces {
+		if err := ctx.Err(); err != nil {
+			return snapshot, err
+		}
 		var luid uint64
 		result, _, _ := o.procedures["ConvertInterfaceIndexToLuid"].Call(uintptr(iface.Index), uintptr(unsafe.Pointer(&luid)))
 		if result != 0 || luid == 0 {
@@ -285,9 +293,12 @@ func (o *windowsObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 	ipInterfaces := make(map[uint32][]desktopWindowsIPInterfaceShape)
 	for _, name := range []string{"GetIpForwardTable2", "GetUnicastIpAddressTable", "GetIpInterfaceTable"} {
+		if err := ctx.Err(); err != nil {
+			return snapshot, err
+		}
 		pointer, count, err := o.table(name)
 		if err != nil {
-			return snapshot, err
+			return snapshot, errors.Join(err, ctx.Err())
 		}
 		func() {
 			defer o.procedures["FreeMibTable"].Call(pointer)
@@ -328,25 +339,28 @@ func (o *windowsObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 			}
 		}()
 		if err != nil {
-			return snapshot, err
+			return snapshot, errors.Join(err, ctx.Err())
 		}
 	}
 	for i := range snapshot.Links {
 		link, err := desktopWindowsLinkMTU(snapshot.Links[i], ipInterfaces[snapshot.Links[i].Index])
 		if err != nil {
-			return snapshot, err
+			return snapshot, errors.Join(err, ctx.Err())
 		}
 		snapshot.Links[i] = link
 		parts := strings.Split(snapshot.Links[i].Policy, ";")
 		sort.Strings(parts)
 		snapshot.Links[i].Policy = strings.Join(parts, ";")
 	}
-	return snapshot, nil
+	return snapshot, ctx.Err()
 }
 
 func (o *windowsObserver) Barrier(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		return errors.New("Windows network observer lost its bounded caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	// IP Helper callbacks deliver independent typed changes. There is no native
 	// callback flush API. Their latch is checked under the tracker lock after

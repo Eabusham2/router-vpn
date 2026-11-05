@@ -1,0 +1,53 @@
+package openvpn
+
+import (
+	"context"
+	"errors"
+)
+
+// ReadyContext observes the same original lifecycle and session as Ready. It
+// retains the lifecycle lock while reading that session's actual readiness;
+// timeout cannot replace, stop or restart either owner.
+func (c *Client) ReadyContext(ctx context.Context) (bool, error) {
+	if c == nil {
+		return false, errors.New("OpenVPN readiness has no original client")
+	}
+	if err := RouterVPNLockContext(ctx, &c.lifecycle.access); err != nil {
+		return false, err
+	}
+	defer c.lifecycle.access.Unlock()
+	if c.lifecycle.closed || c.lifecycle.terminalError != nil || c.lifecycle.currentSession == nil {
+		return false, nil
+	}
+	switch session := c.lifecycle.currentSession.(type) {
+	case *tlsClient:
+		if err := RouterVPNLockContext(ctx, &session.access); err != nil {
+			return false, err
+		}
+		defer session.access.Unlock()
+		return session.ready, ctx.Err()
+	case *staticKeyClientSession:
+		if err := RouterVPNLockContext(ctx, &session.access); err != nil {
+			return false, err
+		}
+		defer session.access.Unlock()
+		return session.ready, ctx.Err()
+	default:
+		return false, errors.New("OpenVPN readiness has an unsupported original session")
+	}
+}
+
+func (c *Client) PendingChallengeContext(ctx context.Context) (*Challenge, error) {
+	if c == nil {
+		return nil, errors.New("OpenVPN challenge observation has no original client")
+	}
+	if err := RouterVPNLockContext(ctx, &c.authentication.access); err != nil {
+		return nil, err
+	}
+	defer c.authentication.access.Unlock()
+	if c.authentication.pendingChallenge == nil {
+		return nil, ctx.Err()
+	}
+	challenge := c.authentication.pendingChallenge.challenge
+	return &challenge, ctx.Err()
+}

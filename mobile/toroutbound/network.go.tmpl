@@ -256,6 +256,43 @@ func (n *torNetworkCapture) current() error {
 	return nil
 }
 
+func (n *torNetworkCapture) currentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native Tor observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if n == nil || !n.prepared || n.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if service.FromContext[adapter.DNSRouter](n.ctx) != n.router ||
+		service.FromContext[adapter.DNSTransportManager](n.ctx) != n.dns ||
+		service.FromContext[adapter.OutboundManager](n.ctx) != n.outbound ||
+		service.FromContext[adapter.NetworkManager](n.ctx) != n.network {
+		return errors.New("Snowflake native network owner was replaced")
+	}
+	for tag, captured := range n.dnsOwners {
+		owner, loaded, err := adapter.RouterVPNTransportContext(ctx, n.dns, tag)
+		if err != nil {
+			return err
+		}
+		if !loaded || owner != captured.owner || !slices.Equal(owner.Dependencies(), captured.dependencies) {
+			return errors.New("Snowflake bootstrap DNS owner was replaced")
+		}
+	}
+	for tag, captured := range n.outboundOwners {
+		owner, loaded, err := adapter.RouterVPNOutboundContext(ctx, n.outbound, tag)
+		if err != nil {
+			return err
+		}
+		if !loaded || owner != captured.owner || !slices.Equal(owner.Dependencies(), captured.dependencies) {
+			return errors.New("Snowflake bootstrap predecessor was replaced")
+		}
+	}
+	return ctx.Err()
+}
+
 func (n *torNetworkCapture) resolve(ctx context.Context, network, host string) ([]netip.Addr, error) {
 	if ctx == nil {
 		return nil, errors.New("Snowflake DNS query has no owner")

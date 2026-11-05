@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"os"
 	"sync/atomic"
 	"time"
@@ -247,21 +248,27 @@ func (f *routerVPNDesktopPathFiles) close() error {
 }
 
 func (n *routerVPNExternalNative) VerifyCurrentPath() error {
-	n.mu.Lock()
+	return n.VerifyCurrentPathContext(context.Background())
+}
+func (n *routerVPNExternalNative) VerifyCurrentPathContext(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
 	proof, closed := n.proof, n.boxClosed
 	n.mu.Unlock()
 	if proof == nil || closed {
 		return routerVPNExternalFailure
 	}
-	// No owner or engine mutex is held across the authenticated native query.
-	if err := proof.VerifyCurrentPath(); err != nil {
-		return routerVPNExternalFailure
+	if err := proof.VerifyCurrentPathContext(ctx); err != nil {
+		return err
 	}
-	n.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return err
+	}
 	current := n.proof == proof && !n.boxClosed
 	n.mu.Unlock()
-	if !current || !proof.Healthy() {
+	if !current {
 		return routerVPNExternalFailure
 	}
-	return nil
+	return proof.HealthyContext(ctx)
 }

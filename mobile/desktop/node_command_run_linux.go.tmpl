@@ -168,13 +168,17 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 	if err != nil {
 		return err
 	}
-	current := func() bool {
-		if stopped.Load() || parent.Err() != nil || graph.Err() != nil || !cover.Current() {
-			return false
+	current := func(call context.Context) error {
+		if err := call.Err(); err != nil {
+			return err
 		}
-		ctx, cancel := context.WithTimeout(graph, 2*time.Second)
-		defer cancel()
-		return control.current(ctx) == nil
+		if stopped.Load() || parent.Err() != nil || graph.Err() != nil {
+			return routerVPNExternalFailure
+		}
+		if err := cover.CurrentContext(call); err != nil {
+			return err
+		}
+		return control.current(call)
 	}
 	return routerVPNRunNodeMTULoop(parent, graph, files, instance, session, config, physical, current, func() error {
 		ctx, cancel := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)

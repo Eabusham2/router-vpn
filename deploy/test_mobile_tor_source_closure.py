@@ -14,6 +14,7 @@ PREP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREP)
 PREFIXES = ('routervpn/common/', 'routervpn/mobiletor/', 'routervpn/awgpolicy/',
             'routervpn/nativeopenvpn/', 'routervpn/dnsmeasure/',
+            'routervpn/desktopnetwork/desktop_network_lock.go',
             'experimental/libbox/routervpn/')
 
 
@@ -38,6 +39,8 @@ def main():
     parser.add_argument('--go', default='go')
     args = parser.parse_args()
     content = PREP.copies()
+    if content.get('routervpn/desktopnetwork/desktop_network_lock.go') != (ROOT/'internal/desktopnetwork/desktop_network_lock.go').read_bytes():
+        raise AssertionError('Mobile Tor changed its exact standard-library observation lock')
     expected = {'routervpn/mobiletor/'+path.name for path in PREP.mobile_policy_sources()}
     actual = {name for name in content if name.startswith('routervpn/mobiletor/')}
     if actual != expected or any(Path(name).name.startswith('desktop_') for name in actual):
@@ -51,7 +54,7 @@ def main():
             raise AssertionError('Mobile Tor changed the shared lease validator: '+source.name)
     result = compile_sources(content, args.go,
                              '^Test(TorProfilePreservesSavedResolverAndDynamicSession|'
-                             'PredecessorFingerprintBindsCompleteCapturedEntry|ExternalPredecessor|MobileExternalTor|TorJumbo|MobileServerTor|ServerTorRetained|PaddingControl|PaddingLease|PaddingReceipt|LocalPadding|NativePadding)')
+                             'PredecessorFingerprintBindsCompleteCapturedEntry|ExternalPredecessor|MobileExternalTor|TorJumbo|MobileServerTor|ServerTorRetained|ServerTorCurrentContext|PaddingControl|PaddingLease|PaddingReceipt|LocalPadding|NativePadding)')
     if result.returncode:
         raise RuntimeError('Actual mobile Tor generated closure failed:\n'+result.stdout)
     print(result.stdout.strip())

@@ -50,7 +50,9 @@ func physicalTunnelNetwork(t *testing.T, source mobiletor.DesktopSocketSource, p
 	t.Helper()
 	n := physicalFactoryNetwork(t)
 	if err := n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, policy, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, policy, current, func(observeCtx context.Context) error {
+			return n.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, source, err
 	}); err != nil {
 		t.Fatal(err)

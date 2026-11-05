@@ -1,0 +1,185 @@
+package tun
+
+import (
+	"context"
+	"errors"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	native "github.com/sagernet/sing-tun"
+)
+
+// Only the native kernel read is modeled. These cases execute the shipping
+// inbound lifecycle lock, original guard, receipt parsing and late acceptance.
+type desktopNetworkContextFixture struct {
+	native.Tun
+	caller                     context.Context
+	raw                        string
+	interfaceRead, receiptRead func()
+	receiptFailure             error
+	index                      int
+	reads                      int
+}
+
+func (f *desktopNetworkContextFixture) RouterVPNDesktopNetworkInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if ctx != f.caller {
+		return "", 0, 0, errors.New("interface replaced original observation caller")
+	}
+	f.reads++
+	if f.interfaceRead != nil {
+		f.interfaceRead()
+	}
+	return "owned0", f.index, 1280, nil
+}
+func (f *desktopNetworkContextFixture) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if ctx != f.caller {
+		return "", errors.New("receipt replaced original observation caller")
+	}
+	f.reads++
+	if f.receiptRead != nil {
+		f.receiptRead()
+	}
+	return f.raw, f.receiptFailure
+}
+
+func desktopNetworkContextInbound(t *testing.T, ctx context.Context) (*Inbound, *desktopNetworkContextFixture) {
+	t.Helper()
+	receipt := desktopnetwork.DesktopNetworkReceipt{Schema: 1, TargetOS: runtime.GOOS, Incarnation: strings.Repeat("a", 32), Name: "owned0", Index: 8, MTU: 1280, Addresses: []string{"192.0.2.1/32"}, Objects: []desktopnetwork.DesktopNetworkObject{}}
+	if runtime.GOOS == "windows" {
+		receipt.LUID = 9
+	}
+	raw, err := desktopnetwork.CanonicalDesktopNetworkReceipt(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopNetworkContextFixture{caller: ctx, raw: raw, index: 8}
+	inbound := &Inbound{ctx: context.Background(), routervpnReady: true, routervpnDesktop: true, routervpnDesktopIndex: 8,
+		tunIf: f, tunOptions: native.Options{Name: "owned0", MTU: 1280}}
+	inbound.routervpnDesktopGuardContext = func(caller context.Context) error {
+		if caller != f.caller {
+			return errors.New("guard replaced original observation caller")
+		}
+		return caller.Err()
+	}
+	inbound.routervpnDesktopGuard = func() bool { panic("bounded observation entered legacy guard") }
+	return inbound, f
+}
+
+func TestRouterVPNDesktopNetworkReceiptOriginalContext(t *testing.T) {
+	for _, mode := range []string{"live", "guard-cancel", "interface-cancel", "receipt-cancel", "changed-index"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			inbound, f := desktopNetworkContextInbound(t, ctx)
+			switch mode {
+			case "guard-cancel":
+				inbound.routervpnDesktopGuardContext = func(caller context.Context) error {
+					if caller != ctx {
+						t.Fatal("guard caller changed")
+					}
+					cancel()
+					return nil
+				}
+			case "interface-cancel":
+				f.interfaceRead = cancel
+			case "receipt-cancel":
+				f.receiptRead = cancel
+			case "changed-index":
+				f.index++
+			}
+			raw, err := inbound.RouterVPNDesktopNetworkReceiptContext(ctx)
+			if mode == "live" {
+				if err != nil || raw != f.raw || f.reads != 3 {
+					t.Fatal("original complete receipt not delivered", err, f.reads)
+				}
+			} else if raw != "" || err == nil {
+				t.Fatal("late or changed receipt acquired authority", err)
+			} else if mode != "changed-index" && !errors.Is(err, context.Canceled) {
+				t.Fatal("pure observation expiry lost caller cause", err)
+			}
+			if inbound.tunIf != f || !inbound.routervpnReady || !inbound.routervpnDesktop || inbound.routervpnRetirementReceipt != "" {
+				t.Fatal("observation changed the healthy original owner")
+			}
+			if mode == "guard-cancel" && f.reads != 0 {
+				t.Fatal("expired guard entered native read")
+			}
+			if mode != "live" && mode != "changed-index" {
+				later, stop := context.WithTimeout(context.Background(), time.Second)
+				defer stop()
+				f.caller, f.interfaceRead, f.receiptRead = later, nil, nil
+				inbound.routervpnDesktopGuardContext = func(caller context.Context) error { return caller.Err() }
+				if raw, err := inbound.RouterVPNDesktopNetworkReceiptContext(later); err != nil || raw != f.raw {
+					t.Fatal("expired read poisoned a later observation of the same owner", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNetworkReceiptHeldLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	inbound, f := desktopNetworkContextInbound(t, ctx)
+	inbound.routervpnLifecycle.Lock()
+	done := make(chan error, 1)
+	go func() { _, err := inbound.RouterVPNDesktopNetworkReceiptContext(ctx); done <- err }()
+	select {
+	case err := <-done:
+		inbound.routervpnLifecycle.Unlock()
+		if !errors.Is(err, context.DeadlineExceeded) || f.reads != 0 {
+			t.Fatal("queued receipt lost original operation", err)
+		}
+	case <-time.After(time.Second):
+		inbound.routervpnLifecycle.Unlock()
+		<-done
+		t.Fatal("expired observation waited for held lifecycle")
+	}
+	if inbound.tunIf != f || !inbound.routervpnReady {
+		t.Fatal("expired waiter changed retained reader")
+	}
+}
+
+func TestRouterVPNDesktopNetworkContextClaimRetainsGuard(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	inbound, f := desktopNetworkContextInbound(t, ctx)
+	inbound.routervpnDesktop, inbound.routervpnDesktopIndex = false, 0
+	inbound.routervpnDesktopGuard, inbound.routervpnDesktopGuardContext = nil, nil
+	checks := 0
+	guard := func(caller context.Context) error { checks++; return caller.Err() }
+	name, index, mtu, err := inbound.RouterVPNDesktopMTUContext(ctx, guard)
+	if err != nil || name != "owned0" || index != 8 || mtu != 1280 || !inbound.routervpnDesktop || checks != 2 {
+		t.Fatal("bounded claim lost original guard", err)
+	}
+	if raw, err := inbound.RouterVPNDesktopNetworkReceiptContext(ctx); err != nil || raw != f.raw || checks != 6 {
+		t.Fatal("receipt omitted captured claim guard", err, checks)
+	}
+	if _, _, _, err := inbound.RouterVPNDesktopMTUContext(ctx, guard); err == nil {
+		t.Fatal("second claim replaced original owner")
+	}
+}
+
+func TestRouterVPNDesktopNetworkReceiptUnavailable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	inbound, f := desktopNetworkContextInbound(t, ctx)
+	cause := errors.New("ambiguous original successful-call inventory")
+	f.receiptFailure = errors.Join(native.ErrNetworkReceiptUnavailable, cause)
+	if raw, err := inbound.RouterVPNDesktopNetworkReceiptContext(ctx); raw != "" || !errors.Is(err, desktopnetwork.ErrNetworkReceiptUnavailable) || !errors.Is(err, cause) {
+		t.Fatal("native optional evidence lost its distinct cross-module cause", err)
+	}
+	if inbound.tunIf != f || !inbound.routervpnReady {
+		t.Fatal("missing optional evidence retired original inbound")
+	}
+	f.receiptFailure = nil
+	if raw, err := inbound.RouterVPNDesktopNetworkReceiptContext(ctx); err != nil || raw != f.raw {
+		t.Fatal("optional evidence error poisoned later current receipt", err)
+	}
+	inbound.routervpnDesktopGuardContext = nil
+	if _, err := inbound.RouterVPNDesktopNetworkReceiptContext(ctx); err == nil || errors.Is(err, desktopnetwork.ErrNetworkReceiptUnavailable) {
+		t.Fatal("missing bounded guard was treated as optional inventory", err)
+	}
+}

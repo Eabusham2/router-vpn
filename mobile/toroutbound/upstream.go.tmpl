@@ -72,3 +72,28 @@ func (c *torUpstreamCapture) current() error {
 	}
 	return nil
 }
+
+func (c *torUpstreamCapture) currentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native Tor observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c == nil {
+		return nil
+	}
+	if c.ctx.Err() != nil || service.FromContext[adapter.OutboundManager](c.ctx) != c.manager {
+		return errors.New("native Tor predecessor manager was retired")
+	}
+	for tag, expected := range c.owners {
+		owner, found, err := adapter.RouterVPNOutboundContext(ctx, c.manager, tag)
+		if err != nil {
+			return err
+		}
+		if !found || owner != expected.owner || !slices.Equal(owner.Dependencies(), expected.dependencies) {
+			return errors.New("native Tor predecessor identity changed")
+		}
+	}
+	return ctx.Err()
+}

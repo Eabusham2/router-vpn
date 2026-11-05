@@ -91,6 +91,8 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
 		return finish()
 	}
+	parent, joinStop := routerVPNWatchCommandStop(parent, files.routerVPNExternalFiles, session, metadata.SourceSHA256)
+	defer joinStop()
 	var binary *routerVPNTorBinary
 	if files.inputs.Policy().ServerPolicy() != nil {
 		if binaryPath != "" || getenv("HOMEVPN_TOR_BINARY_SHA256") != "" {
@@ -168,7 +170,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					continue
 				}
 			}
-			if !connected || mtuFiles == nil || parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) || !routerVPNTorLifetimeCurrent(owner) {
+			if !connected || mtuFiles == nil || parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) || routerVPNTorLifetimeCurrent(parent, owner) != nil {
 				request.respond(routerVPNTorFailure)
 				stopping = true
 				break
@@ -179,7 +181,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
-			if routerVPNTorRefreshPadding(owner, &receipt, started, now) != nil {
+			if routerVPNTorRefreshPadding(parent, owner, &receipt, started, now) != nil {
 				request.respond(routerVPNTorFailure)
 				failure, stopping = routerVPNTorFailure, true
 				break
@@ -204,7 +206,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				stopping = true
 				break
 			}
-			if !routerVPNTorLifetimeCurrent(owner) || files.current() != nil {
+			if routerVPNTorLifetimeCurrent(parent, owner) != nil || files.current() != nil {
+				if parent.Err() != nil {
+					stopping = true
+					break
+				}
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
@@ -214,13 +220,18 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 			if result.version != proofVersion {
 				break
 			}
+			if result.observationExpired {
+				// An expired observation cannot refresh or retire the connection. The
+				// independent heartbeat-age policy still applies to its previous proof.
+				break
+			}
 			if result.err != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
 			if result.heartbeat {
 				now := time.Now()
-				if routerVPNTorRefreshPadding(owner, &result.proof, started, now) != nil ||
+				if routerVPNTorRefreshPadding(parent, owner, &result.proof, started, now) != nil ||
 					mobiletor.ValidateDesktopPaddingProgress(receipt.Padding, result.proof.Padding, receipt.PaddingProof, result.proof.PaddingProof) != nil {
 					failure, stopping = routerVPNTorFailure, true
 					break
@@ -241,7 +252,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				stopping = true
 				break
 			}
-			if result.err != nil || files.current() != nil || !owner.Healthy() || !routerVPNTorValidProof(result.proof, metadata, started, time.Now()) {
+			if result.err != nil || files.current() != nil || routerVPNTorHealthyContext(parent, owner) != nil || !routerVPNTorValidProof(result.proof, metadata, started, time.Now()) {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
@@ -278,7 +289,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					break
 				}
 			}
-			if routerVPNTorRefreshReadback(parent, owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(owner, &receipt, started, time.Now()) != nil {
+			if routerVPNTorRefreshReadback(parent, owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(parent, owner, &receipt, started, time.Now()) != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
@@ -307,7 +318,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					failure, stopping = routerVPNTorFailure, true
 					break
 				}
-				if !routerVPNTorLifetimeCurrent(owner) {
+				if routerVPNTorLifetimeCurrent(parent, owner) != nil {
+					if parent.Err() != nil {
+						stopping = true
+						break
+					}
 					failure, stopping = routerVPNTorFailure, true
 					break
 				}
@@ -316,7 +331,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				// native padding lease. Publish only its actual fresh snapshot;
 				// retain the same base heartbeat and transition deadline.
 				if transition != nil && receipt.HeartbeatAt == transition.FromHeartbeatAt && metadata.Padding.Enabled && metadata.Execution == "" && now.Sub(paddingPublished) >= 500*time.Millisecond {
-					if routerVPNTorRefreshPadding(owner, &receipt, started, now) != nil || files.publish("proof.json", receipt) != nil {
+					if routerVPNTorRefreshPadding(parent, owner, &receipt, started, now) != nil || files.publish("proof.json", receipt) != nil {
 						failure, stopping = routerVPNTorFailure, true
 						break
 					}

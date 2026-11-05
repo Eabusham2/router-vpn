@@ -171,7 +171,13 @@ func (s *Box) routerVPNDesktopNodeActivatePhysical(policy *mobilemultihop.Deskto
 	}()
 	owner := &RouterVPNDesktopNodePhysical{instance: s, ctx: ctx, policy: policy, network: network,
 		inbound: inbound, reader: reader, interfaceName: options.InterfaceName}
-	name, index, mtu, err := reader.RouterVPNDesktopMTU(owner.generationCurrent)
+	bounded, ok := reader.(interface {
+		RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
+	})
+	if !ok {
+		return nil, errors.New("Router node TUN lacks its bounded generation guard")
+	}
+	name, index, mtu, err := bounded.RouterVPNDesktopMTUContext(ctx, owner.generationCurrentContext)
 	expectedMTU := capture.ConfiguredMTU
 	if restored := policy.Metadata().RestoredMTU; restored != 0 {
 		expectedMTU = restored
@@ -194,6 +200,82 @@ func (s *Box) routerVPNDesktopNodeActivatePhysical(policy *mobilemultihop.Deskto
 // never this binding's mutex or the inbound manager being replaced.
 func (owner *RouterVPNDesktopNodePhysical) generationCurrent() bool {
 	return owner != nil && owner.ctx != nil && owner.ctx.Err() == nil && owner.network != nil && owner.network.Current()
+}
+
+func (owner *RouterVPNDesktopNodePhysical) generationCurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("Router node observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if owner == nil || owner.ctx == nil || owner.ctx.Err() != nil || owner.network == nil {
+		return errors.New("Router node physical generation is retired")
+	}
+	return owner.network.CurrentContext(ctx)
+}
+func (owner *RouterVPNDesktopNodePhysical) readbackContext(ctx context.Context) (string, int, int, error) {
+	if err := owner.generationCurrentContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	if owner.detached || owner.instance == nil || owner.inbound == nil || owner.reader == nil {
+		return "", 0, 0, errors.New("Router node physical TUN is retired or detached")
+	}
+	current, found, err := adapter.RouterVPNInboundContext(ctx, owner.instance.inbound, owner.inbound.Tag())
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if !found || current != owner.inbound {
+		return "", 0, 0, errors.New("Router node physical TUN was replaced")
+	}
+	reader, ok := owner.reader.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return "", 0, 0, errors.New("Router node TUN has no bounded native readback")
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if name != owner.name || index != owner.index || mtu != owner.mtu {
+		return "", 0, 0, errors.New("Router node physical TUN changed its proved readback")
+	}
+	if err := owner.generationCurrentContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	return name, index, mtu, nil
+}
+func (owner *RouterVPNDesktopNodePhysical) CurrentContext(ctx context.Context) error {
+	if owner == nil {
+		return errors.New("Router node physical owner is unavailable")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	defer owner.mu.Unlock()
+	_, _, _, err := owner.readbackContext(ctx)
+	return err
+}
+func (owner *RouterVPNDesktopNodePhysical) ClaimTUNContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if owner == nil || guard == nil {
+		return "", 0, 0, errors.New("Router node MTU has no bounded physical guard")
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+		return "", 0, 0, err
+	}
+	name, index, mtu, err := owner.readbackContext(ctx)
+	owner.mu.Unlock()
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	return name, index, mtu, nil
 }
 
 func (owner *RouterVPNDesktopNodePhysical) readback() (string, int, int, error) {

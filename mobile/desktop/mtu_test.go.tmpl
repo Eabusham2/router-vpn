@@ -21,9 +21,10 @@ import (
 
 type desktopMTUTUNFixture struct {
 	adapter.Inbound
-	index, mtu int
-	name, tag  string
-	guard      func() bool
+	index, mtu   int
+	name, tag    string
+	guard        func() bool
+	guardContext func(context.Context) error
 }
 
 func (*desktopMTUTUNFixture) Type() string { return "tun" }
@@ -38,6 +39,15 @@ func (t *desktopMTUTUNFixture) RouterVPNDesktopMTU(guard func() bool) (string, i
 		return "", 0, 0, errors.New("unowned")
 	}
 	t.guard = guard
+	t.guardContext = func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !guard() {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
 	return t.RouterVPNDesktopMTUInterface()
 }
 func (t *desktopMTUTUNFixture) RouterVPNDesktopMTUInterface() (string, int, int, error) {
@@ -83,7 +93,7 @@ func (l *desktopMTULeaseFixture) ChangeMTU(ctx context.Context, expected adapter
 	if expected != l.current || ctx.Err() != nil || l.closed.Load() {
 		return l.current, errors.New("stale")
 	}
-	l.current = &desktopMTUTUNFixture{index: l.current.index + 1, mtu: mtu, name: l.current.name, tag: l.current.tag, guard: l.current.guard}
+	l.current = &desktopMTUTUNFixture{index: l.current.index + 1, mtu: mtu, name: l.current.name, tag: l.current.tag, guard: l.current.guard, guardContext: l.current.guardContext}
 	l.changes = append(l.changes, mtu)
 	return l.current, nil
 }
@@ -446,4 +456,32 @@ func TestRouterVPNDesktopMTUImmediateCancellationRetainsActualReadback(t *testin
 			t.Fatal("immediate cancellation lost the captured readback", result)
 		}
 	}
+}
+
+func (t *desktopMTUTUNFixture) RouterVPNDesktopMTUContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if t.guard != nil || guard == nil {
+		return "", 0, 0, errors.New("unowned fixture")
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	t.guardContext = guard
+	t.guard = func() bool { return guard(context.Background()) == nil }
+	return t.RouterVPNDesktopMTUInterfaceContext(ctx)
+}
+func (t *desktopMTUTUNFixture) RouterVPNDesktopMTUInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	if t.guardContext == nil {
+		return "", 0, 0, errors.New("fixture lacks bounded guard")
+	}
+	if err := t.guardContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	name := t.name
+	if name == "" {
+		name = "router-vpn"
+	}
+	return name, t.index, t.mtu, nil
 }

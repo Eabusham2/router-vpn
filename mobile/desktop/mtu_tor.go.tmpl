@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"time"
 
 	box "github.com/sagernet/sing-box"
@@ -13,6 +14,7 @@ type routerVPNDesktopTorMTULease interface {
 	routerVPNDesktopMTULease
 	routerVPNDesktopMTUReadbackLease
 	routerVPNDesktopMTUMeasurementLease
+	MTUReadbackContext(context.Context) (mobiletor.DesktopBridgeMTUReadback, error)
 	RegisterOperation(uint64, string) error
 	VerificationTarget() (string, string)
 }
@@ -21,7 +23,7 @@ var _ routerVPNDesktopTorMTULease = (*box.RouterVPNDesktopTorMTULease)(nil)
 
 type routerVPNTorMeasurementOwner interface {
 	routerVPNExternalMTUProvider
-	MTUReadback() (*mobiletor.DesktopBridgeMTUReadback, error)
+	MTUReadbackContext(context.Context) (*mobiletor.DesktopBridgeMTUReadback, error)
 	FreshPathOwner() routerVPNDesktopPathOwner
 }
 
@@ -41,9 +43,9 @@ func routerVPNTorRefreshReadback(ctx context.Context, owner routerVPNTorOwner, r
 		}
 		return nil // Fixture owners do not claim a real OS TUN.
 	}
-	readback, err := captured.MTUReadback()
+	readback, err := captured.MTUReadbackContext(ctx)
 	if err != nil {
-		return routerVPNTorFailure
+		return err
 	}
 	// The MTU reader and routing witness form one receipt. Never install the
 	// new interface/MTU before the matching network observation has succeeded;
@@ -55,8 +57,27 @@ func routerVPNTorRefreshReadback(ctx context.Context, owner routerVPNTorOwner, r
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	network, err := routerVPNDesktopNetworkProjection(owner)
+	network, err := routerVPNDesktopNetworkProjection(ctx, owner)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Both observations must describe the same staged native interface. The
+	// second MTU read prevents a transaction (including an interface-index ABA)
+	// between the two snapshots from becoming a complete but mixed receipt.
+	if network != "" {
+		witness, err := desktopnetwork.ParseDesktopNetworkReceipt(network)
+		if err != nil || witness.Name != next.InterfaceName || witness.Index != uint32(next.InterfaceIndex) || witness.MTU != next.EffectiveMTU {
+			return routerVPNTorFailure
+		}
+	}
+	confirmed, err := captured.MTUReadbackContext(ctx)
+	if err != nil {
+		return err
+	}
+	if (confirmed == nil) != (next.MTUReadback == nil) || confirmed != nil && *confirmed != *next.MTUReadback {
 		return routerVPNTorFailure
 	}
 	if err := ctx.Err(); err != nil {
@@ -155,6 +176,9 @@ func (m *routerVPNDesktopMTU) register(request routerVPNDesktopMTURequest) error
 // may advance the revision; terminal/waiting-commit adoption still requires the
 // controller's matching atomically published live proof receipt.
 func (m *routerVPNDesktopMTU) readbackLocked() (*mobiletor.DesktopBridgeMTUReadback, error) {
+	return m.readbackLockedContext(context.Background())
+}
+func (m *routerVPNDesktopMTU) readbackLockedContext(ctx context.Context) (*mobiletor.DesktopBridgeMTUReadback, error) {
 	if !m.tor {
 		return nil, nil
 	}
@@ -162,8 +186,11 @@ func (m *routerVPNDesktopMTU) readbackLocked() (*mobiletor.DesktopBridgeMTUReadb
 	if !ok || m.closed || m.owner.invalid.Load() {
 		return nil, routerVPNExternalFailure
 	}
-	readback, err := lease.MTUReadback()
-	if err != nil || readback.Generation != m.request.Generation || readback.RequestID != m.request.Request ||
+	readback, err := lease.MTUReadbackContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if readback.Generation != m.request.Generation || readback.RequestID != m.request.Request ||
 		readback.InterfaceName == "" || readback.InterfaceIndex < 1 || readback.EffectiveMTU < 1280 || readback.EffectiveMTU > 9000 {
 		return nil, routerVPNExternalFailure
 	}
@@ -183,20 +210,33 @@ func (m *routerVPNDesktopMTU) readback() (*mobiletor.DesktopBridgeMTUReadback, e
 }
 
 func (n *routerVPNTorNative) MTUReadback() (*mobiletor.DesktopBridgeMTUReadback, error) {
-	if !n.Healthy() || n.files.current() != nil {
+	return n.MTUReadbackContext(context.Background())
+}
+func (n *routerVPNTorNative) MTUReadbackContext(ctx context.Context) (*mobiletor.DesktopBridgeMTUReadback, error) {
+	if err := n.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	if n.files.current() != nil {
 		return nil, routerVPNTorFailure
 	}
-	n.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
+		return nil, err
+	}
 	mtu := n.mtu
 	n.mu.Unlock()
 	if mtu == nil {
-		return nil, nil
+		return nil, ctx.Err()
 	}
-	return mtu.readback()
+	if err := desktopnetwork.LockContext(ctx, &mtu.mu); err != nil {
+		return nil, err
+	}
+	defer mtu.mu.Unlock()
+	return mtu.readbackLockedContext(ctx)
 }
 
 type routerVPNTorPathRuntime interface {
 	Healthy() bool
+	HealthyContext(context.Context) error
 	DesktopMTU() (*routerVPNDesktopMTU, error)
 }
 
@@ -213,8 +253,8 @@ func (p *routerVPNTorFreshPath) VerifyCurrentPath() error {
 	return p.VerifyCurrentPathContext(context.Background())
 }
 func (p *routerVPNTorFreshPath) VerifyCurrentPathContext(parent context.Context) error {
-	if parent == nil || parent.Err() != nil || !p.Healthy() {
-		return routerVPNTorFailure
+	if err := p.HealthyContext(parent); err != nil {
+		return err
 	}
 	mtu, err := p.owner.DesktopMTU()
 	if err != nil {
@@ -225,12 +265,25 @@ func (p *routerVPNTorFreshPath) VerifyCurrentPathContext(parent context.Context)
 	stop := context.AfterFunc(p.ctx, cancel)
 	defer stop()
 	state, err := mtu.owner.Capture()
-	if err != nil || mtu.owner.VerifyExternal(ctx, state) != nil || !p.Healthy() || ctx.Err() != nil {
+	if err != nil || mtu.owner.VerifyExternal(ctx, state) != nil {
 		return routerVPNTorFailure
 	}
-	return nil
+	return p.HealthyContext(ctx)
 }
 
 func (n *routerVPNTorNative) FreshPathOwner() routerVPNDesktopPathOwner {
 	return &routerVPNTorFreshPath{owner: n, ctx: n.ctx, current: n.files.current}
+}
+
+func (p *routerVPNTorFreshPath) HealthyContext(ctx context.Context) error {
+	if ctx == nil {
+		return routerVPNTorFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p == nil || p.owner == nil || p.ctx == nil || p.ctx.Err() != nil || p.current == nil || p.current() != nil {
+		return routerVPNTorFailure
+	}
+	return p.owner.HealthyContext(ctx)
 }

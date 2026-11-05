@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -198,8 +199,8 @@ func (l *RouterVPNDesktopTorMTULease) RegisterOperation(generation uint64, reque
 // Lifetime counts actual operations until their sockets/callbacks release.
 // Close cannot release PT, the network generation or the Box before this join.
 func (l *RouterVPNDesktopTorMTULease) Lifetime(parent context.Context) (context.Context, context.CancelFunc, error) {
-	if parent == nil || parent.Err() != nil || !l.Healthy() {
-		return nil, nil, errors.New("desktop Tor MTU operation has no current lifetime")
+	if err := l.HealthyContext(parent); err != nil {
+		return nil, nil, err
 	}
 	var releaseActivity func()
 	if captured := parent.Value(routerVPNDesktopTorMTUActivityKey{}); captured != nil {
@@ -208,17 +209,25 @@ func (l *RouterVPNDesktopTorMTULease) Lifetime(parent context.Context) (context.
 			return nil, nil, errors.New("desktop Tor measurement context has no owner")
 		}
 		var err error
-		releaseActivity, err = activity.retain(l)
+		releaseActivity, err = activity.retainContext(parent, l)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 	r := l.owner
-	r.mu.Lock()
-	if r.closing || !l.currentLifetime() {
+	if err := desktopnetwork.LockContext(parent, &r.mu); err != nil {
+		if releaseActivity != nil {
+			releaseActivity()
+		}
+		return nil, nil, err
+	}
+	if err := l.currentLifetimeContext(parent); r.closing || err != nil {
 		r.mu.Unlock()
 		if releaseActivity != nil {
 			releaseActivity()
+		}
+		if err != nil {
+			return nil, nil, err
 		}
 		return nil, nil, errors.New("desktop Tor MTU owner is closing")
 	}
@@ -243,9 +252,9 @@ func (l *RouterVPNDesktopTorMTULease) Lifetime(parent context.Context) (context.
 			r.workers.Done()
 		})
 	}
-	if ctx.Err() != nil || !l.Healthy() {
+	if err := l.HealthyContext(ctx); err != nil {
 		release()
-		return nil, nil, errors.New("desktop Tor MTU lifetime retired during capture")
+		return nil, nil, err
 	}
 	return ctx, release, nil
 }
@@ -266,23 +275,51 @@ func (l *RouterVPNDesktopTorMTULease) Inbound() (adapter.Inbound, error) {
 // The desktop Tor owner already claimed this exact TUN before proving it.
 // A second RouterVPNDesktopMTU claim would weaken or replace its lifetime guard.
 func (l *RouterVPNDesktopTorMTULease) MTUReadback() (mobiletor.DesktopBridgeMTUReadback, error) {
-	ctx, release, err := l.Lifetime(context.Background())
+	return l.MTUReadbackContext(context.Background())
+}
+func (l *RouterVPNDesktopTorMTULease) MTUReadbackContext(parent context.Context) (mobiletor.DesktopBridgeMTUReadback, error) {
+	var empty mobiletor.DesktopBridgeMTUReadback
+	ctx, release, err := l.Lifetime(parent)
 	if err != nil {
-		return mobiletor.DesktopBridgeMTUReadback{}, err
+		return empty, err
 	}
 	defer release()
 	r := l.owner
-	r.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &r.mu); err != nil {
+		return empty, err
+	}
 	generation, request := l.generation, l.request
 	r.mu.Unlock()
-	r.interfaceMu.Lock()
-	defer r.interfaceMu.Unlock()
-	name, index, mtu, err := r.readbackLocked()
-	if err != nil || ctx.Err() != nil || !l.Healthy() {
-		return mobiletor.DesktopBridgeMTUReadback{}, errors.New("desktop Tor MTU readback changed")
+	if err := desktopnetwork.RLockContext(ctx, &r.interfaceMu); err != nil {
+		return empty, err
 	}
-	return mobiletor.DesktopBridgeMTUReadback{Generation: generation, RequestID: request, Revision: r.mtuRevision,
-		InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu}, nil
+	defer r.interfaceMu.RUnlock()
+	name, index, mtu, err := r.readbackLockedContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	if err := l.HealthyContext(ctx); err != nil {
+		return empty, err
+	}
+	return mobiletor.DesktopBridgeMTUReadback{Generation: generation, RequestID: request, Revision: r.mtuRevision, InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu}, nil
+}
+func (l *RouterVPNDesktopTorMTULease) currentLifetimeContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("Tor MTU observation requires its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if l == nil || l.owner == nil || l.ctx == nil || l.ctx.Err() != nil || l.closed.Load() || l.owner.mtuLease.Load() != l {
+		return errors.New("desktop Tor MTU lease retired")
+	}
+	return l.owner.readerLifetimeCurrentContext(ctx)
+}
+func (l *RouterVPNDesktopTorMTULease) HealthyContext(ctx context.Context) error {
+	if err := l.currentLifetimeContext(ctx); err != nil {
+		return err
+	}
+	return l.owner.HealthyContext(ctx)
 }
 
 func (l *RouterVPNDesktopTorMTULease) ChangeMTU(parent context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
@@ -431,7 +468,7 @@ func (l *RouterVPNDesktopTorMTULease) verify(parent context.Context, dial func(c
 		return err
 	}
 	defer release()
-	before, err := l.MTUReadback()
+	before, err := l.MTUReadbackContext(ctx)
 	if err != nil || dial == nil || prove == nil {
 		return errors.New("desktop Tor MTU proof has no captured TUN dialer")
 	}
@@ -454,7 +491,7 @@ func (l *RouterVPNDesktopTorMTULease) verify(parent context.Context, dial func(c
 	if err := l.owner.VerifyCurrentPath(ctx); err != nil {
 		return err
 	}
-	after, err := l.MTUReadback()
+	after, err := l.MTUReadbackContext(ctx)
 	if err != nil || after != before || ctx.Err() != nil {
 		return errors.New("desktop Tor MTU reader changed during public proof")
 	}
@@ -492,4 +529,17 @@ func (l *RouterVPNDesktopTorMTULease) Resolve(parent context.Context, host strin
 		return nil, errors.New("desktop Tor MTU selected DNS returned no public destination")
 	}
 	return result, nil
+}
+
+func (a *routerVPNDesktopTorMTUActivity) retainContext(ctx context.Context, lease *RouterVPNDesktopTorMTULease) (func(), error) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
+	defer a.mu.Unlock()
+	if a.lease != lease || a.closing || a.refs < 1 {
+		return nil, errors.New("desktop Tor measurement activity retired")
+	}
+	a.refs++
+	var once sync.Once
+	return func() { once.Do(func() { a.release(false) }) }, nil
 }

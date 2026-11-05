@@ -1,0 +1,27 @@
+//go:build linux || windows || darwin
+
+package tun
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing/common/control"
+)
+
+// The retained monitor publishes immutable interface values through its
+// original atomic pointer. Reading it neither starts native inventory nor
+// substitutes another monitor, and a cancelled caller cannot adopt the value.
+func (m *defaultInterfaceMonitor) RouterVPNDefaultInterfaceContext(ctx context.Context) (*control.Interface, error) {
+	if ctx == nil || m == nil {
+		return nil, errors.New("default interface read lost its original caller or monitor")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	current := m.defaultInterface.Load()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return current, nil
+}

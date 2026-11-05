@@ -53,6 +53,57 @@ func (t *NativeTun) RouterVPNDesktopNetworkReceipt() (string, error) {
 	return t.routervpnObserveNetworkReceipt()
 }
 
+// Context observations retain their own operation deadline, independent of
+// the original constructor and native TUN lifetime.
+func (t *NativeTun) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if ctx == nil {
+		return "", errors.New("native receipt lost its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return "", errors.New("native receipt requires its operation deadline")
+	}
+	if t.options.FileDescriptor != 0 || t.options.NetNs != "" || t.options.EXP_ExternalConfiguration {
+		return "", errors.Join(ErrNetworkReceiptUnavailable, errors.New("network receipt requires the original native TUN constructor"))
+	}
+	if native, ok := any(t).(interface {
+		routervpnLinuxReceiptContext(context.Context) (string, error)
+	}); ok {
+		return native.routervpnLinuxReceiptContext(ctx)
+	}
+	return t.routervpnObserveNetworkReceiptContext(ctx)
+}
+
+// Read only the original native adapter's interface, without an ambient
+// name-only lookup in the inbound wrapper. The platform checks its captured
+// creation index; Linux also carries ctx through the actual link dump.
+func (t *NativeTun) RouterVPNDesktopNetworkInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if ctx == nil {
+		return "", 0, 0, errors.New("native interface lost its original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	var current *net.Interface
+	var err error
+	if native, ok := any(t).(interface {
+		routervpnLinuxOwnedInterfaceContext(context.Context) (*net.Interface, uint64, error)
+	}); ok {
+		current, _, err = native.routervpnLinuxOwnedInterfaceContext(ctx)
+	} else {
+		current, _, err = t.routervpnNetworkInterfaceContext(ctx)
+	}
+	if err != nil || current == nil || current.Name != t.options.Name || current.Index < 1 || current.Flags&net.FlagUp == 0 || current.MTU != int(t.options.MTU) {
+		return "", 0, 0, errors.Join(err, ctx.Err(), errors.New("native interface lost its original adapter"))
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	return current.Name, current.Index, current.MTU, nil
+}
+
 // The observational kernel shape alone grants no creator capability. Linux's
 // public method also requires its original descriptor and notification stream.
 func (t *NativeTun) routervpnObserveNetworkReceipt() (string, error) {
@@ -67,11 +118,11 @@ func (t *NativeTun) routervpnObserveNetworkReceiptContext(ctx context.Context) (
 		return "", err
 	}
 	if t.options.FileDescriptor != 0 || t.options.NetNs != "" || t.options.EXP_ExternalConfiguration {
-		return "", errors.New("network receipt requires the original native TUN constructor")
+		return "", errors.Join(ErrNetworkReceiptUnavailable, errors.New("network receipt requires the original native TUN constructor"))
 	}
 	current, luid, err := t.routervpnNetworkInterfaceContext(ctx)
 	if err != nil || current.Index < 1 || current.Name != t.options.Name || current.MTU != int(t.options.MTU) || current.Flags&net.FlagUp == 0 {
-		return "", errors.New("network receipt lost its current native interface")
+		return "", errors.Join(err, ctx.Err(), errors.New("network receipt lost its current native interface"))
 	}
 	addresses, err := t.routervpnNetworkAddressesContext(ctx, current)
 	if err != nil {
@@ -94,7 +145,9 @@ func (t *NativeTun) routervpnObserveNetworkReceiptContext(ctx context.Context) (
 		return "", errors.New("network receipt lost a configured TUN address")
 	}
 	sort.Strings(ownedAddresses)
-	t.routervpnNetwork.mu.Lock()
+	if err := LockContext(ctx, &t.routervpnNetwork.mu); err != nil {
+		return "", err
+	}
 	if t.routervpnNetwork.nonce == "" {
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
@@ -110,7 +163,7 @@ func (t *NativeTun) routervpnObserveNetworkReceiptContext(ctx context.Context) (
 	failure := t.routervpnNetwork.failure
 	t.routervpnNetwork.mu.Unlock()
 	if failure != nil {
-		return "", failure
+		return "", errors.Join(ErrNetworkReceiptUnavailable, failure)
 	}
 	objects, err := t.routervpnNetworkObjectsContext(ctx, receipt)
 	if err != nil {
@@ -120,12 +173,16 @@ func (t *NativeTun) routervpnObserveNetworkReceiptContext(ctx context.Context) (
 	SortDesktopNetworkObjects(receipt.Objects)
 	after, afterLUID, err := t.routervpnNetworkInterfaceContext(ctx)
 	if err != nil || after.Index != current.Index || after.Name != current.Name || after.MTU != current.MTU || after.Flags != current.Flags || afterLUID != luid {
-		return "", errors.New("native TUN changed while capturing its routing receipt")
+		return "", errors.Join(err, ctx.Err(), errors.New("native TUN changed while capturing its routing receipt"))
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return CanonicalDesktopNetworkReceipt(receipt)
+	raw, err := CanonicalDesktopNetworkReceipt(receipt)
+	if err != nil || ctx.Err() != nil {
+		return "", errors.Join(err, ctx.Err())
+	}
+	return raw, nil
 }
 
 func routervpnNetworkHasObject(objects []DesktopNetworkObject, want DesktopNetworkObject) bool {

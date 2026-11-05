@@ -3,7 +3,10 @@
 package openvpn
 
 import (
+	"context"
+	"errors"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	SOVPN "github.com/sagernet/sing-openvpn"
 	"net"
 )
 
@@ -41,6 +44,66 @@ func (c *ClientEndpoint) RouterVPNConnectedRemote() (nativeopenvpn.RemoteReceipt
 	}
 	receipt := nativeopenvpn.RemoteReceipt{Remote: remote, Generation: state.routerVPNTransportGeneration, ConnectedAt: state.tunnelInfo.ConnectedSince.UnixMilli()}
 	if receipt.Validate() != nil || !c.client.Ready() || c.loopContext.Err() != nil || c.state.Load() != state {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	return receipt, nil
+}
+
+// RouterVPNConnectedRemoteContext preserves the complete connected-remote
+// witness while acquiring native readiness/auth/status locks under the caller.
+// A read timeout returns its original error and never mutates this endpoint.
+func (c *ClientEndpoint) RouterVPNConnectedRemoteContext(ctx context.Context) (nativeopenvpn.RemoteReceipt, error) {
+	if ctx == nil {
+		return nativeopenvpn.RemoteReceipt{}, errors.New("OpenVPN remote observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	if c == nil || c.loopContext.Err() != nil || c.client == nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	state := c.state.Load()
+	if state == nil || !state.started || !state.tunnelConfigured || state.routerVPNTransportGeneration == 0 || state.tunnelInfo.ConnectedSince.IsZero() {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	ready, err := c.client.ReadyContext(ctx)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	if !ready {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	if err := SOVPN.RouterVPNLockContext(ctx, &c.statusAccess); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	terminal := c.terminalError != ""
+	c.statusAccess.Unlock()
+	if terminal {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	challenge, err := c.client.PendingChallengeContext(ctx)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	if challenge != nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	remote, err := nativeopenvpn.ParseRemote(state.tunnelInfo.Server, state.tunnelInfo.Network)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	receipt := nativeopenvpn.RemoteReceipt{Remote: remote, Generation: state.routerVPNTransportGeneration, ConnectedAt: state.tunnelInfo.ConnectedSince.UnixMilli()}
+	if receipt.Validate() != nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	ready, err = c.client.ReadyContext(ctx)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	if !ready || c.loopContext.Err() != nil || c.state.Load() != state {
 		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
 	}
 	return receipt, nil

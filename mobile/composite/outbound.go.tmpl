@@ -114,6 +114,38 @@ func (h *Outbound) RouterVPNPerformanceIdentity() string {
 	return fmt.Sprintf("%p:%s:%s:%p:%p", h, h.options.Mode, h.options.NodeID, tcp, udp)
 }
 
+func (h *Outbound) RouterVPNPerformanceIdentityContext(ctx context.Context) (string, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &h.mu); err != nil {
+		return "", err
+	}
+	if h.closed || h.ctx.Err() != nil || h.options.Mode != "ss-v2ray" || h.tcp == nil || h.udp == nil {
+		h.mu.Unlock()
+		return "", errors.New("composite cover owner changed")
+	}
+	tcp, udp := h.tcp, h.udp
+	h.mu.Unlock()
+	current, hasOwner, err := adapter.RouterVPNOutboundContext(ctx, h.manager, h.Tag())
+	if err != nil {
+		return "", err
+	}
+	currentTCP, hasTCP, err := adapter.RouterVPNOutboundContext(ctx, h.manager, h.options.TCP)
+	if err != nil {
+		return "", err
+	}
+	currentUDP, hasUDP, err := adapter.RouterVPNOutboundContext(ctx, h.manager, h.options.UDP)
+	if err != nil {
+		return "", err
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &h.mu); err != nil {
+		return "", err
+	}
+	defer h.mu.Unlock()
+	if h.closed || h.ctx.Err() != nil || h.tcp != tcp || h.udp != udp || !hasOwner || current != h || !hasTCP || currentTCP != tcp || !hasUDP || currentUDP != udp {
+		return "", errors.New("composite cover owner changed")
+	}
+	return fmt.Sprintf("%p:%s:%s:%p:%p", h, h.options.Mode, h.options.NodeID, tcp, udp), ctx.Err()
+}
+
 func (h *Outbound) lane(network string) (adapter.Outbound, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

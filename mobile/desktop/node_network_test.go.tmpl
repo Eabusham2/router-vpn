@@ -90,7 +90,9 @@ func (f *nodePhysicalFixture) prepare(t *testing.T, source *physicalFactorySourc
 		if f.network.Current() || f.network.SocketCurrent() || !current() || capture != f.network.brokerCapture() {
 			t.Error("node factory ran outside its pre-TUN captured initialization")
 		}
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, source, err
 	}); err != nil {
 		t.Fatal(err)
@@ -199,7 +201,9 @@ func TestRouterVPNNodePhysicalFactoryCancellationJoinsPartialOwner(t *testing.T)
 				var broker *mobiletor.DesktopSocketBroker
 				if withBroker {
 					var err error
-					broker, err = mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+					broker, err = mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+						return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+					})
 					if err != nil {
 						t.Error(err)
 					}
@@ -282,7 +286,9 @@ func TestRouterVPNNodePhysicalRetirementKeepsExactJoinedSource(t *testing.T) {
 				if partial {
 					return nil, source, errors.New("fixture failed after captured baseline construction")
 				}
-				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current, func(observeCtx context.Context) error {
+					return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+				})
 				return broker, source, err
 			}); err != nil {
 				t.Fatal(err)

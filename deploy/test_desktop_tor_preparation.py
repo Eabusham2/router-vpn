@@ -168,6 +168,14 @@ class DesktopPTPreparation(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'exact prepared source'):
                     uid_gate.checked_sources(self.vendor)
                 target.write_bytes(exact)
+            for name in ('desktop_socket_context_test.go', 'desktop_socket_windows_identity_current_test.go',
+                         'server_client_context_test.go', 'observation_context_test.go',
+                         'padding_receipt_context_test.go', 'padding_lease_fixture_test.go', 'padding_control_test.go', 'control_test.go'):
+                original = ROOT/'internal/mobiletor'/name
+                relative = 'routervpn/mobiletor/'+name
+                exact = PREP.relocated_shared_source(original.read_bytes())
+                self.assertEqual(generated[relative], exact)
+                self.assertEqual((self.vendor/relative).read_bytes(), exact)
             for package in ('windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection'):
                 for path in sorted((ROOT/'internal'/package).glob('*.go')):
                     if path.name.endswith('_test.go'):

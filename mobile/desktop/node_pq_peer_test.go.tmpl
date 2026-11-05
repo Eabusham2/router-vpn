@@ -790,7 +790,9 @@ func newNodePQFixture(t *testing.T, mode, layer, fault string) *nodePQFixture {
 			t.Error("PQ Node source initialized after TUN or socket admission")
 		}
 		f.kernel.capture = capture
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current, func(observeCtx context.Context) error {
+			return f.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+		})
 		return broker, f.source, err
 	}); err != nil {
 		t.Fatal(err)

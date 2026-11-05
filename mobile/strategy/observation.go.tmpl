@@ -177,3 +177,26 @@ func RouterVPNDefaultNetworkInterfaceContext(ctx context.Context, manager Networ
 	}
 	return result, nil
 }
+
+func RouterVPNInboundsContext(ctx context.Context, manager InboundManager) ([]Inbound, error) {
+	if ctx == nil {
+		return nil, errors.New("native inbound inventory has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	reader, ok := manager.(interface {
+		RouterVPNInboundsContext(context.Context) ([]Inbound, error)
+	})
+	if !ok {
+		return nil, errors.New("native inbound manager has no bounded inventory")
+	}
+	values, err := reader.RouterVPNInboundsContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}

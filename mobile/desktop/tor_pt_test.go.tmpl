@@ -30,6 +30,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/control"
@@ -1066,5 +1067,146 @@ func TestRouterVPNDesktopTorPTEntryCloseWaitsForPrivateProofDrain(t *testing.T) 
 	var one [1]byte
 	if _, err := peer.Read(one[:]); !errors.Is(err, io.EOF) {
 		t.Fatal("late private proof socket remained open", err)
+	}
+}
+
+// These tests hold the original owner mutex/callback, so an implementation that
+// substitutes Current() blocks beyond the original caller rather than passing.
+func TestDesktopCurrentContextKeepsOriginalOwnersAfterReadExpiry(t *testing.T) {
+	ownerCtx, stopOwner := context.WithCancel(context.Background())
+	defer stopOwner()
+	tor := &NetworkOwner{ctx: ownerCtx, cancel: stopOwner, capture: CaptureOptions{SessionID: "session", SourceSHA256: "source"}, activated: true, ready: true}
+	node := &NodeNetworkOwner{ctx: ownerCtx, cancel: stopOwner, capture: NodeCaptureOptions{SessionID: "session", SourceSHA256: "source"}}
+	external := &ExternalNetworkOwner{ctx: ownerCtx, cancel: stopOwner}
+	local := &LocalTorOutbound{ctx: ownerCtx, cancel: stopOwner, bound: true}
+	server := &ServerTorOutbound{ctx: ownerCtx}
+	cases := []struct {
+		name    string
+		mu      *sync.Mutex
+		observe func(context.Context) error
+	}{
+		{"Tor network", &tor.mu, tor.CurrentContext},
+		{"Tor capture", &tor.mu, func(ctx context.Context) error { return tor.MatchesContext(ctx, "session", "source") }},
+		{"Node network", &node.mu, node.CurrentContext}, {"Node sockets", &node.mu, node.SocketCurrentContext},
+		{"Node capture", &node.mu, func(ctx context.Context) error { return node.MatchesContext(ctx, "session", "source") }},
+		{"External network", &external.mu, external.CurrentContext}, {"External sockets", &external.mu, external.SocketCurrentContext},
+		{"Local lease", &local.mu, local.CurrentContext}, {"Server lease", &server.mu, server.CurrentContext},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.mu.Lock()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			err := tc.observe(ctx)
+			cancel()
+			tc.mu.Unlock()
+			if !errors.Is(err, context.DeadlineExceeded) || ownerCtx.Err() != nil {
+				t.Fatal("observation expiry changed original owner", err, ownerCtx.Err())
+			}
+		})
+	}
+	if err := tor.CurrentContext(context.Background()); err != nil {
+		t.Fatal("original Tor network did not recover", err)
+	}
+	if err := node.MatchesContext(context.Background(), "session", "source"); err != nil {
+		t.Fatal("original Node capture did not recover", err)
+	}
+	if err := local.CurrentContext(context.Background()); err != nil {
+		t.Fatal("original Local lease did not recover", err)
+	}
+	tor.retired = true
+	local.closing = true
+	if tor.CurrentContext(context.Background()) == nil || local.CurrentContext(context.Background()) == nil {
+		t.Fatal("actual retired owner accepted")
+	}
+}
+
+func TestDesktopPTCurrentContextSeparatesObservationExpiryAndOwnerLoss(t *testing.T) {
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	defer cancelOwner()
+	var physical sync.Mutex
+	owner := &Owner{ctx: ownerCtx, cancel: cancelOwner, physical: func() bool { panic("bounded read used old callback") }, physicalContext: func(ctx context.Context) error {
+		if err := desktopnetwork.LockContext(ctx, &physical); err != nil {
+			return err
+		}
+		physical.Unlock()
+		return errors.New("captured physical generation replaced")
+	}}
+	owner.ready.Store(true)
+	physical.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := owner.CurrentContext(ctx)
+	cancel()
+	physical.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || ownerCtx.Err() != nil || owner.retired.Load() || owner.LifetimeCurrentContext(context.Background()) != nil {
+		t.Fatal("pure observation expiry retired the PT owner", err)
+	}
+	if err := owner.CurrentContext(context.Background()); err == nil || ownerCtx.Err() == nil || !owner.retired.Load() || owner.ready.Load() {
+		t.Fatal("actual generation loss did not revoke original PT", err)
+	}
+}
+
+type observationRetirementSource struct {
+	*physicalFactorySource
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *observationRetirementSource) Cancel() {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	s.physicalFactorySource.Cancel()
+}
+
+func TestDesktopCancelAdmissionDoesNotJoinOwnerMutexOrSourceCleanup(t *testing.T) {
+	for _, kind := range []string{"node", "external"} {
+		t.Run(kind, func(t *testing.T) {
+			lifetime, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			source := &observationRetirementSource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}, entered: make(chan struct{}), release: make(chan struct{})}
+			var released sync.Once
+			free := func() { released.Do(func() { close(source.release) }) }
+			defer free()
+			capture := mobiletor.DesktopSocketCapture{SessionID: strings.Repeat("a", 32), SourceSHA256: strings.Repeat("b", 64), NetworkID: strings.Repeat("c", 32)}
+			broker, err := mobiletor.NewDesktopSocketBroker(lifetime, capture, source, func() bool { return lifetime.Err() == nil }, func(ctx context.Context) error { return errors.Join(ctx.Err(), lifetime.Err()) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			node := &NodeNetworkOwner{ctx: lifetime, cancel: cancel, broker: broker, source: source}
+			external := &ExternalNetworkOwner{ctx: lifetime, cancel: cancel, broker: broker, source: source}
+			mu, revoke, closeOwner := &node.mu, node.CancelAdmission, node.Close
+			if kind == "external" {
+				mu, revoke, closeOwner = &external.mu, external.CancelAdmission, external.Close
+			}
+			mu.Lock()
+			revoked := make(chan struct{})
+			go func() { revoke(); close(revoked) }()
+			select {
+			case <-revoked:
+			case <-time.After(time.Second):
+				mu.Unlock()
+				t.Fatal("observation retirement waited for owner mutex or source cleanup")
+			}
+			if lifetime.Err() == nil {
+				mu.Unlock()
+				t.Fatal("original owner remained admitted")
+			}
+			mu.Unlock()
+			select {
+			case <-source.entered:
+			case <-time.After(time.Second):
+				t.Fatal("owned broker callback lost original source cleanup")
+			}
+			if source.cancelled.Load() || source.closed.Load() {
+				t.Fatal("held native cleanup was reported joined")
+			}
+			free()
+			if err := closeOwner(); err != nil {
+				t.Fatal(err)
+			}
+			if !source.cancelled.Load() || !source.closed.Load() {
+				t.Fatal("Close discarded original source cleanup")
+			}
+		})
 	}
 }

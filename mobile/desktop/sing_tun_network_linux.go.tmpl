@@ -22,9 +22,12 @@ func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) 
 }
 
 func (t *NativeTun) routervpnNetworkInterfaceContext(ctx context.Context) (*net.Interface, uint64, error) {
+	if ctx == nil {
+		return nil, 0, errors.New("native interface lost its original caller")
+	}
 	current, err := t.routervpnLinuxInterfaceContext(ctx)
 	if err != nil || current.Index != t.routervpnOwnedIndex || t.routervpnOwnedIndex < 1 {
-		return nil, 0, errors.New("native Linux routing receipt lost its original TUN")
+		return nil, 0, errors.Join(err, ctx.Err(), errors.New("native Linux routing receipt lost its original TUN"))
 	}
 	return current, 0, nil
 }

@@ -547,6 +547,22 @@ func TestRouterVPNRelayNativeQueuedOldTLSCallbackCannotProveNewTransport(t *test
 		}
 		t.Fatal("actual new TLS callback did not prove its own generation", err, receipt.Remote)
 	}
+	// Query the same actual replacement TLS/data session through the bounded
+	// API. Holding the original endpoint mutex must expire this read alone.
+	releaseStatus := endpoint.RouterVPNTestHoldStatus()
+	observeCtx, cancelObserve := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	_, observeErr := endpoint.RouterVPNConnectedRemoteContext(observeCtx)
+	cancelObserve()
+	releaseStatus()
+	if !errors.Is(observeErr, context.DeadlineExceeded) {
+		t.Fatal("original status-lock read did not preserve caller deadline", observeErr)
+	}
+	observeCtx, cancelObserve = context.WithTimeout(context.Background(), time.Second)
+	bounded, observeErr := endpoint.RouterVPNConnectedRemoteContext(observeCtx)
+	cancelObserve()
+	if observeErr != nil || bounded != receipt.Remote {
+		t.Fatal("read expiry changed the actual retained TLS remote generation", bounded, receipt.Remote, observeErr)
+	}
 }
 
 // The auxiliary test provider uses the upstream server endpoint, whose closed

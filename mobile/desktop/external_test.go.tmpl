@@ -483,3 +483,13 @@ func TestRouterVPNDesktopExternalActualConstructorFailureRetainsPartialManagers(
 		t.Fatal("actual unstarted native managers did not close", err)
 	}
 }
+
+func (f *desktopExternalFixture) HealthyContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !f.healthy.Load() {
+		return routerVPNExternalFailure
+	}
+	return nil
+}

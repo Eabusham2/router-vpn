@@ -31,6 +31,14 @@ func (m *testManager) Outbound(tag string) (adapter.Outbound, bool) {
 	return value, ok
 }
 
+func (m *testManager) RouterVPNOutboundContext(ctx context.Context, tag string) (adapter.Outbound, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	value, found := m.values[tag]
+	return value, found, ctx.Err()
+}
+
 type testChild struct {
 	outbound.Adapter
 	dials, packets, closed atomic.Int64
@@ -377,5 +385,38 @@ func TestNativeCompositePerformanceRequiresExactSIP003Owners(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNativeCompositePerformanceObservationKeepsCaller(t *testing.T) {
+	owner, manager, _, _ := setup(t, "ss-v2ray")
+	expected, err := owner.RouterVPNPerformanceIdentityContext(context.Background())
+	if err != nil || expected == "" {
+		t.Fatal("captured composite is not current", err)
+	}
+	owner.mu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := owner.RouterVPNPerformanceIdentityContext(ctx); done <- err }()
+	cancel()
+	select {
+	case err := <-done:
+		owner.mu.Unlock()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("original composite caller cancellation lost", err)
+		}
+	case <-time.After(time.Second):
+		owner.mu.Unlock()
+		<-done
+		t.Fatal("cancelled composite observation waited on owner lock")
+	}
+	actual, err := owner.RouterVPNPerformanceIdentityContext(context.Background())
+	if err != nil || actual != expected {
+		t.Fatal("cancelled read damaged healthy composite", err)
+	}
+	delete(manager.values, "owned-udp")
+	if actual, err := owner.RouterVPNPerformanceIdentityContext(context.Background()); err == nil || actual != "" {
+		t.Fatal("actual UDP owner loss was accepted", actual, err)
 	}
 }

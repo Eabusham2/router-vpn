@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"net"
 	"net/netip"
 	"sort"
@@ -361,3 +362,33 @@ func (c *routerVPNDesktopMTUSocket) Close() error {
 
 var _ mobilemtu.ExternalOwner = (*routerVPNDesktopMTUOwner)(nil)
 var _ routerVPNDesktopMTUTUN = (*ntun.Inbound)(nil)
+
+func routerVPNDesktopPhysicalPathContext(ctx context.Context, instance *box.Box) (string, error) {
+	if ctx == nil || instance == nil || instance.Network() == nil {
+		return "", routerVPNExternalFailure
+	}
+	selected, err := adapter.RouterVPNDefaultNetworkInterfaceContext(ctx, instance.Network())
+	if err != nil {
+		return "", err
+	}
+	if selected == nil || selected.Index < 1 || selected.Name == "" {
+		return "", routerVPNExternalFailure
+	}
+	current, addresses, err := desktopnetwork.InterfaceContext(ctx, selected.Index)
+	if err != nil {
+		return "", err
+	}
+	if current.Name != selected.Name || current.Flags&net.FlagUp == 0 || current.Flags&net.FlagLoopback != 0 || len(addresses) == 0 {
+		return "", routerVPNExternalFailure
+	}
+	parts := []string{current.Name, fmt.Sprint(current.Index), fmt.Sprint(current.MTU)}
+	for _, address := range addresses {
+		parts = append(parts, address.String())
+	}
+	for _, gateway := range selected.Gateways {
+		parts = append(parts, "gateway:"+gateway.String())
+	}
+	sort.Strings(parts)
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(digest[:]), ctx.Err()
+}

@@ -112,7 +112,15 @@ func newDesktopPhysicalFixture(t *testing.T, activate bool) *desktopPhysicalFixt
 		t.Fatal(err)
 	}
 	policy := newDesktopPhysicalPolicyFixture()
-	broker, err := mobiletor.NewDesktopSocketBroker(f.ctx, capture, policy, func() bool { return network.Matches(options.SessionID, options.SourceSHA256) && f.active.Load() })
+	broker, err := mobiletor.NewDesktopSocketBroker(f.ctx, capture, policy, func() bool { return network.Matches(options.SessionID, options.SourceSHA256) && f.active.Load() }, func(observeCtx context.Context) error {
+		if err := network.MatchesContext(observeCtx, options.SessionID, options.SourceSHA256); err != nil {
+			return err
+		}
+		if !f.active.Load() {
+			return errors.New("original fixture network retired")
+		}
+		return observeCtx.Err()
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +353,7 @@ func TestRouterVPNDesktopTorPTPhysicalRequiredCapabilityCannotFallBack(t *testin
 				} else {
 					capture.NetworkID = strings.Repeat("d", 32)
 				}
-				wrong, err := mobiletor.NewDesktopSocketBroker(context.Background(), capture, newDesktopPhysicalPolicyFixture(), func() bool { return true })
+				wrong, err := mobiletor.NewDesktopSocketBroker(context.Background(), capture, newDesktopPhysicalPolicyFixture(), func() bool { return true }, func(observeCtx context.Context) error { return observeCtx.Err() })
 				if err != nil {
 					t.Fatal(err)
 				}

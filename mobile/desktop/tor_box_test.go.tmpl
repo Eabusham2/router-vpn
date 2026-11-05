@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"net"
 	"net/netip"
 	"runtime"
@@ -44,6 +45,7 @@ type desktopTorBoxTUN struct {
 	index, mtu             int
 	ready, claimed, closed bool
 	guard                  func() bool
+	guardContext           func(context.Context) error
 }
 
 func (t *desktopTorBoxTUN) Start(stage adapter.StartStage) error {
@@ -401,4 +403,43 @@ func TestRouterVPNDesktopTorBoxCloseWaitsForCapturedStart(t *testing.T) {
 		t.Fatal("canceled control configuration enabled Tor networking")
 	}
 	closeDesktopTorBox(t, owner)
+}
+
+func (t *desktopTorBoxTUN) RouterVPNDesktopMTUContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || t.claimed || guard == nil {
+		return "", 0, 0, errors.New("fixture TUN unowned")
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	t.claimed, t.guardContext = true, guard
+	t.guard = func() bool { return guard(context.Background()) == nil }
+	return t.name, t.index, t.mtu, nil
+}
+func (t *desktopTorBoxTUN) RouterVPNDesktopMTUInterfaceContext(ctx context.Context) (string, int, int, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || !t.claimed || t.guardContext == nil {
+		return "", 0, 0, errors.New("fixture TUN retired")
+	}
+	if err := t.guardContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	return t.name, t.index, t.mtu, nil
+}
+
+func (s *desktopTorBoxChild) CurrentContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.active.Load() {
+		return errors.New("fixture child retired")
+	}
+	return nil
 }

@@ -27,11 +27,13 @@ package retirement
 import (
  "bytes"
  "context"
+ "encoding/hex"
  "errors"
  "net"
  "sync"
  "sync/atomic"
  "syscall"
+ "time"
 )
 type target struct {capture, policy string; metadata []byte}
 func (t target) matches(c, p string, m []byte) bool {return t.capture==c && t.policy==p && bytes.Equal(t.metadata,m)}
@@ -61,7 +63,10 @@ func (*api) endpointProperties(handle uintptr,id uint64)(int,[]byte,error){
  if observed.entered!=nil {close(observed.entered);<-observed.release}
  return 0,nil,observed.endpointErr
 }
-type DesktopWindowsSocketIdentity struct {ctx context.Context;gate chan struct{};closed bool;sockets map[string]bool;engine uintptr;api *api}
+type DesktopSocketCapture struct {SessionID,SourceSHA256,NetworkID string}
+type DesktopSocketKernelOwner struct {Kind,IdentitySHA256 string;Generation uint64;ProcessID uint32}
+const DesktopSocketReadbackAge=3*time.Second
+type DesktopWindowsSocketIdentity struct {ctx context.Context;cancel context.CancelFunc;gate chan struct{};closed bool;sockets map[string]bool;engine uintptr;api *api;capture DesktopSocketCapture;mu sync.Mutex;owner atomic.Pointer[DesktopSocketKernelOwner];current,closing atomic.Bool;observed atomic.Int64}
 type DesktopWindowsSocketPolicy struct {
  ctx context.Context;gate chan struct{};retired atomic.Bool
  capture,owner string;metadata,fixtureScope []byte
@@ -213,24 +218,34 @@ func TestRetirementTimeoutRetainsEnteredIndependentReader(t *testing.T){
 '''
 
 
-def execute(observer=OBSERVER):
+def execute(observer=OBSERVER, identity_path=None):
     compiler = shutil.which('go')
     if not compiler:
         raise SystemExit('Go is required for the portable native observer control')
     source = Path(observer).read_text()
     policy = (ROOT / 'internal/mobiletor/desktop_socket_windows_policy.go').read_text()
-    identity = (ROOT / 'internal/mobiletor/desktop_socket_windows_identity.go').read_text()
+    identity = Path(identity_path or ROOT / 'internal/mobiletor/desktop_socket_windows_identity.go').read_text()
+    broker = (ROOT / 'internal/mobiletor/desktop_socket_broker.go').read_text()
     selected = [function(source, 'func (r *DesktopWindowsNodeSocketRetirement) originalClosed()'),
                 function(source, 'func (r *DesktopWindowsNodeSocketRetirement) RequireRetired('),
                 function(source, 'func (r *DesktopWindowsNodeSocketRetirement) RetainedGrant('),
                 function(policy, 'func desktopWindowsPolicyCall['),
                 function(identity, 'func (p *DesktopWindowsSocketIdentity) call('),
-                function(identity, 'func desktopWindowsIdentityContextError(')]
+                function(identity, 'func desktopWindowsIdentityContextError('),
+                function(identity, 'func (p *DesktopWindowsSocketIdentity) Current('),
+                function(identity, 'func (p *DesktopWindowsSocketIdentity) Owner('),
+                function(broker, 'func desktopSocketHex('),
+                function(broker, 'func (o DesktopSocketKernelOwner) valid(')]
     with tempfile.TemporaryDirectory(prefix='windows-retirement-observer-') as temporary:
         folder = Path(temporary)
         (folder / 'go.mod').write_text('module retirement\n\ngo 1.24.0\n')
         (folder / 'observer.go').write_text(BOUNDARIES + '\n' + '\n\n'.join(selected))
         (folder / 'observer_test.go').write_text(TESTS)
+        native_tests = (ROOT / 'internal/mobiletor/desktop_socket_windows_identity_current_test.go').read_text()
+        prefix = '//go:build windows\n\npackage mobiletor\n'
+        if not native_tests.startswith(prefix):
+            raise ValueError('Native Windows identity context test boundary changed')
+        (folder / 'identity_current_test.go').write_text(native_tests.replace(prefix, 'package retirement\n', 1))
         environment = dict(os.environ, GOWORK='off', GOFLAGS='')
         host_os, host_arch = subprocess.check_output(
             [compiler, 'env', 'GOHOSTOS', 'GOHOSTARCH'], env=environment, text=True, timeout=15).split()
@@ -245,4 +260,6 @@ def execute(observer=OBSERVER):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--observer', type=Path, default=OBSERVER)
-    execute(parser.parse_args().observer)
+    parser.add_argument('--identity', type=Path)
+    args = parser.parse_args()
+    execute(args.observer, args.identity)

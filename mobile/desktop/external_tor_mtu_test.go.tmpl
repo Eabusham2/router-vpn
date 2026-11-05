@@ -265,7 +265,7 @@ func (f *desktopTorReceiptCommandFixture) DesktopNetworkReceipt() (string, error
 
 func TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt(t *testing.T) {
 	for _, prior := range []bool{false, true} {
-		for _, outcome := range []string{"network-failure", "cancel-after-readback", "cancel-after-network", "success"} {
+		for _, outcome := range []string{"network-failure", "cancel-after-readback", "cancel-after-network", "network-name", "network-index", "network-mtu", "revision-changed", "cancel-after-recheck", "success"} {
 			t.Run(fmt.Sprintf("previous-%t/%s", prior, outcome), func(t *testing.T) {
 				files := desktopTorAutoFiles(t)
 				base, _ := desktopTorMeasuredCommand(t, files)
@@ -279,8 +279,10 @@ func TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt(t *testing.T) {
 					InterfaceName: initial.InterfaceName, InterfaceIndex: initial.InterfaceIndex + 1, EffectiveMTU: 1400}
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
+				readbacks := 0
 				base.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) {
-					if outcome == "cancel-after-readback" {
+					readbacks++
+					if outcome == "cancel-after-readback" || outcome == "cancel-after-recheck" && readbacks == 2 {
 						cancel()
 					}
 					return &valid, nil
@@ -291,6 +293,14 @@ func TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt(t *testing.T) {
 					t.Fatal(err)
 				}
 				witness.Name = valid.InterfaceName
+				switch outcome {
+				case "network-name":
+					witness.Name += "-replacement"
+				case "network-index":
+					witness.Index++
+				case "network-mtu":
+					witness.MTU++
+				}
 				network, err = desktopnetwork.CanonicalDesktopNetworkReceipt(witness)
 				if err != nil {
 					t.Fatal(err)
@@ -298,6 +308,9 @@ func TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt(t *testing.T) {
 				calls := 0
 				owner := &desktopTorReceiptCommandFixture{desktopTorMeasuredCommandFixture: base, network: func() (string, error) {
 					calls++
+					if outcome == "revision-changed" {
+						valid.Revision++
+					}
 					if outcome == "network-failure" {
 						return "", errors.New("captured network witness lost")
 					}
@@ -339,4 +352,24 @@ func TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt(t *testing.T) {
 			})
 		}
 	}
+}
+
+func (f *desktopTorMeasuredCommandFixture) MTUReadbackContext(ctx context.Context) (*mobiletor.DesktopBridgeMTUReadback, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if f.readback != nil {
+		return f.readback()
+	}
+	if err := desktopnetwork.LockContext(ctx, &f.mtu.mu); err != nil {
+		return nil, err
+	}
+	defer f.mtu.mu.Unlock()
+	return f.mtu.readbackLockedContext(ctx)
+}
+func (f *desktopTorReceiptCommandFixture) DesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return f.network()
 }

@@ -74,8 +74,8 @@ type DesktopWindowsSocketIdentity struct {
 	sockets         map[string]*desktopWindowsIdentitySocket
 	closed          bool
 
-	mu        sync.Mutex // owner/SID publication only; no native calls while held
-	owner     DesktopSocketKernelOwner
+	mu        sync.Mutex // SID publication only; no native calls while held
+	owner     atomic.Pointer[DesktopSocketKernelOwner]
 	publicSID []byte
 	current   atomic.Bool
 	closing   atomic.Bool
@@ -260,7 +260,9 @@ func (p *DesktopWindowsSocketIdentity) prepare() (resultErr error) {
 		return errors.New("Windows isolated identity has an invalid generation")
 	}
 	p.mu.Lock()
-	p.owner = DesktopSocketKernelOwner{Kind: "windows-isolated-token", IdentitySHA256: hex.EncodeToString(identity.Sum(nil)), Generation: generation, ProcessID: uint32(os.Getpid())}
+	owner := DesktopSocketKernelOwner{Kind: "windows-isolated-token", IdentitySHA256: hex.EncodeToString(identity.Sum(nil)), Generation: generation, ProcessID: uint32(os.Getpid())}
+	// Publish the exact verified owner once; this value is never mutated.
+	p.owner.Store(&owner)
 	p.publicSID = append([]byte(nil), p.sid...)
 	p.mu.Unlock()
 	return nil
@@ -285,24 +287,20 @@ func (p *DesktopWindowsSocketIdentity) Owner() (DesktopSocketKernelOwner, error)
 	if p == nil {
 		return DesktopSocketKernelOwner{}, net.ErrClosed
 	}
-	p.mu.Lock()
-	owner := p.owner
-	p.mu.Unlock()
-	if !p.Current(p.capture, owner) {
+	owner := p.owner.Load()
+	if owner == nil || !p.Current(p.capture, *owner) {
 		return DesktopSocketKernelOwner{}, net.ErrClosed
 	}
-	return owner, nil
+	return *owner, nil
 }
 
 func (p *DesktopWindowsSocketIdentity) Current(capture DesktopSocketCapture, owner DesktopSocketKernelOwner) bool {
 	if p == nil || p.ctx.Err() != nil || p.closing.Load() || !p.current.Load() || capture != p.capture {
 		return false
 	}
-	p.mu.Lock()
-	expected := p.owner
-	p.mu.Unlock()
+	expected := p.owner.Load()
 	age := time.Now().UnixMilli() - p.observed.Load()
-	return owner == expected && owner.valid() && age >= 0 && age <= DesktopSocketReadbackAge.Milliseconds()
+	return expected != nil && owner == *expected && owner.valid() && age >= 0 && age <= DesktopSocketReadbackAge.Milliseconds()
 }
 
 func (p *DesktopWindowsSocketIdentity) SID() ([]byte, error) {

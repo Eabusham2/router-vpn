@@ -1,0 +1,32 @@
+//go:build linux || windows || darwin
+
+package tun
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/sagernet/sing/common/control"
+)
+
+func TestRouterVPNNativeMonitorOriginalContext(t *testing.T) {
+	monitor := &defaultInterfaceMonitor{}
+	original := &control.Interface{}
+	monitor.defaultInterface.Store(original)
+	if current, err := monitor.RouterVPNDefaultInterfaceContext(context.Background()); err != nil || current != original {
+		t.Fatal("bounded monitor read substituted its atomic original", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if current, err := monitor.RouterVPNDefaultInterfaceContext(ctx); current != nil || !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled monitor read adopted retained interface", err)
+	}
+	if monitor.DefaultInterface() != original {
+		t.Fatal("cancelled observation changed monitor lifetime")
+	}
+	monitor.defaultInterface.Store(nil)
+	if current, err := monitor.RouterVPNDefaultInterfaceContext(context.Background()); current != nil || err != nil {
+		t.Fatal("absent current interface resurrected previous observation", err)
+	}
+}

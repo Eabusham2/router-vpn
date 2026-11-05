@@ -206,21 +206,22 @@ func desktopSocketRevokeControlled(ctx context.Context, policy DesktopSocketPoli
 // constructing a generic source/tuple record does not enable strict protection.
 // Public Direct strict admission stays closed until those adapters are wired.
 type DesktopSocketBroker struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	capture    DesktopSocketCapture
-	owner      DesktopSocketKernelOwner
-	policy     DesktopSocketPolicy
-	source     DesktopSocketSource
-	current    func() bool
-	mu         sync.Mutex
-	closing    bool
-	sockets    map[*desktopSocket]struct{}
-	workers    sync.WaitGroup
-	joined     chan struct{}
-	joinOnce   sync.Once
-	monitor    chan struct{}
-	parentStop func() bool
+	ctx            context.Context
+	cancel         context.CancelFunc
+	capture        DesktopSocketCapture
+	owner          DesktopSocketKernelOwner
+	policy         DesktopSocketPolicy
+	source         DesktopSocketSource
+	current        func() bool
+	currentContext func(context.Context) error
+	mu             sync.Mutex
+	closing        bool
+	sockets        map[*desktopSocket]struct{}
+	workers        sync.WaitGroup
+	joined         chan struct{}
+	joinOnce       sync.Once
+	monitor        chan struct{}
+	parentStop     func() bool
 }
 
 type desktopSocket struct {
@@ -283,9 +284,12 @@ func (o DesktopSocketKernelOwner) valid() bool {
 	return desktopSocketHex(o.IdentitySHA256, 64) && o.Generation != 0 && o.ProcessID != 0
 }
 
-func NewDesktopSocketBroker(parent context.Context, capture DesktopSocketCapture, policy DesktopSocketPolicy, current func() bool) (*DesktopSocketBroker, error) {
+func NewDesktopSocketBroker(parent context.Context, capture DesktopSocketCapture, policy DesktopSocketPolicy, current func() bool, observe ...func(context.Context) error) (*DesktopSocketBroker, error) {
 	if parent == nil || parent.Err() != nil || !capture.valid() || policy == nil || current == nil || !current() {
 		return nil, errors.New("desktop physical broker has no live captured native source")
+	}
+	if len(observe) > 1 || len(observe) == 1 && observe[0] == nil {
+		return nil, errors.New("desktop physical broker has an invalid bounded observer")
 	}
 	owner, err := policy.Owner()
 	if err != nil || !owner.valid() || !policy.Current(capture, owner) {
@@ -294,8 +298,11 @@ func NewDesktopSocketBroker(parent context.Context, capture DesktopSocketCapture
 	ctx, cancel := context.WithCancel(parent)
 	b := &DesktopSocketBroker{ctx: ctx, cancel: cancel, capture: capture, owner: owner, policy: policy, current: current,
 		sockets: make(map[*desktopSocket]struct{}), joined: make(chan struct{}), monitor: make(chan struct{})}
+	if len(observe) == 1 {
+		b.currentContext = observe[0]
+	}
 	b.source, _ = policy.(DesktopSocketSource)
-	b.parentStop = context.AfterFunc(parent, b.Cancel)
+	b.parentStop = context.AfterFunc(ctx, b.Cancel)
 	go b.monitorOwned()
 	return b, nil
 }
@@ -309,6 +316,57 @@ func (b *DesktopSocketBroker) Capture() DesktopSocketCapture {
 
 func (b *DesktopSocketBroker) Matches(capture DesktopSocketCapture) bool {
 	return b != nil && capture == b.capture && b.Current()
+}
+
+// CancelAdmission revokes this captured lifetime immediately. Its existing
+// owned cancellation callback retains and joins source/socket cleanup.
+func (b *DesktopSocketBroker) CancelAdmission() {
+	if b != nil {
+		b.cancel()
+	}
+}
+
+func (b *DesktopSocketBroker) MatchesContext(ctx context.Context, capture DesktopSocketCapture) error {
+	if ctx == nil {
+		return errors.New("physical broker observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b == nil || capture != b.capture {
+		return net.ErrClosed
+	}
+	return b.CurrentContext(ctx)
+}
+
+func (b *DesktopSocketBroker) CurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("physical broker observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b == nil || b.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if b.currentContext == nil {
+		return errors.New("physical broker has no bounded original observer")
+	}
+	if err := b.currentContext(ctx); err != nil {
+		if !ObservationContextExpired(ctx, err) {
+			b.CancelAdmission()
+		}
+		return errors.Join(err, ctx.Err())
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The native policy contract is explicitly a bounded, memory-only read.
+	if b.ctx.Err() != nil || !b.policy.Current(b.capture, b.owner) {
+		b.CancelAdmission()
+		return net.ErrClosed
+	}
+	return ctx.Err()
 }
 
 func (b *DesktopSocketBroker) Current() bool {

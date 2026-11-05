@@ -66,6 +66,7 @@ func (t *Inbound) RouterVPNMTUReadersContext(ctx context.Context, mtu int) (adap
 			next.routervpnDesktop = true
 			next.routervpnDesktopFresh = true
 			next.routervpnDesktopGuard = t.routervpnDesktopGuard
+			next.routervpnDesktopGuardContext = t.routervpnDesktopGuardContext
 		}
 	}
 	return candidate, rollback, nil

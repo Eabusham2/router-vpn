@@ -42,6 +42,26 @@ PARENTS = (
     "TestDarwinUnusedInterfaceChangesStayLatched",
     "TestLinuxOwnedGotoRuleTransitions",
 )
+OBSERVATION_CONTEXT_CASES = {
+    "TestNetworkRetainedLifetimeKeepsOriginalOperationBudget": (),
+    "TestNetworkStartupTransitionKeepsOriginalOperationBudget": ("begin", "end"),
+    "TestNetworkObservationExpiryPreservesRealFailures": ("event", "continuity", "identity", "joined-native"),
+    "TestNetworkObservationHeldMutexKeepsCaller": ("entry", "completion", "failure-report"),
+    "TestNetworkNativeObservationHeldMutex": (),
+}
+
+
+def check_observation_context_verdict(output, platform):
+    for parent, leaves in OBSERVATION_CONTEXT_CASES.items():
+        if parent == "TestNetworkNativeObservationHeldMutex":
+            leaves = ("snapshot",) if platform == "win32" else ("barrier",)
+        for name in (parent, *(parent + "/" + leaf for leaf in leaves)):
+            if output.count("--- PASS: " + name + " (") != 1:
+                raise ValueError("Network observation omitted or duplicated its caller boundary: " + name)
+            if "--- SKIP: " + name + " (" in output or "--- FAIL: " + name + " (" in output:
+                raise ValueError("Network observation skipped or failed: " + name)
+
+
 ROUTING_RETIREMENT_CASES = (
     "empty", "route-remains", "rule-remains", "duplicate-owned", "malformed", "unjoined", "failed-join",
     "owned-baseline", "incomplete-baseline", "read-failure", "cancelled", "late-cancel", "foreign-reader",
@@ -146,6 +166,7 @@ def main():
                     "./internal/desktopnetwork"], env=env)
     for parent in PARENTS:
         require_pass(base.stdout, parent)
+    check_observation_context_verdict(base.stdout, sys.platform)
     if sys.platform == "linux":
         check_routing_retirement_verdict(base.stdout)
         for parent in ("TestLinuxNetworkDumpCancellationJoinsOriginalSocket", "TestLinuxNetworkDumpStrictOriginalDatagrams", "TestLinuxRoutingRetirementRequiresOriginalJoinedInventory"):
@@ -196,9 +217,18 @@ def main():
              "TestNetworkCohortPhysicalAndUnclaimedChangesStayInvalid", "gateway-away-and-back"),
             ("accept-unclaimed-transition", 'if !owned {\n\t\t\treturn t.failLocked(errors.New("native transition contained an unclaimed routing, address or interface event"))\n\t\t}',
              'if !owned { continue }', "TestNetworkCohortOriginalAndUnregisterOwnership", "unclaimed-failed-start"),
-            ("skip-final-physical-snapshot", 'receiptKey(t.current) != receiptKey(current) || key != t.baseline {',
-             'receiptKey(t.current) != receiptKey(current) || false && key != t.baseline {', "TestNetworkCohortOriginalAndUnregisterOwnership", "snapshot-after-callback-loss"),
-            ("drop-late-close-event", 'late := t.failure != nil && !t.reportedFailure',
+            ("skip-final-physical-snapshot", 'else if key != baseline {',
+             'else if false && key != baseline {', "TestNetworkCohortOriginalAndUnregisterOwnership", "snapshot-after-callback-loss"),
+            ("unbounded-observation-completion", 'if err != nil {\n\t\treturn err\n\t}\n\tif err := LockContext(ctx, &t.mu); err != nil {\n\t\treturn errors.Join(err, t.failureError())\n\t}',
+             'if err != nil { return err }; t.mu.Lock()',
+             "TestNetworkObservationHeldMutexKeepsCaller", "completion"),
+            ("hide-native-error-behind-expiry", 'if err != nil && !observationExpired(err) {',
+             'if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {',
+             "TestNetworkObservationExpiryPreservesRealFailures", "joined-native"),
+            ("cancelled-transition-recovers", 'if err := t.CurrentContext(ctx); err != nil {\n\t\treturn t.failLocked(err)\n\t}',
+             'if err := t.CurrentContext(ctx); err != nil { return err }',
+             "TestNetworkStartupTransitionKeepsOriginalOperationBudget", "begin"),
+            ("drop-late-close-event", 'late := failure != nil && !failure.reported.Swap(true)',
              'late := false', "TestNetworkCohortOriginalAndUnregisterOwnership", "late-callback-before-joined-close"),
         )
         for name, before, after, test, witness in controls:

@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
@@ -60,13 +64,13 @@ func desktopNetworkOwnerFixture(t *testing.T) (*routerVPNNodeMTU, *desktopNodeMT
 
 func TestRouterVPNNodeMTUNetworkProjectionRetainsCurrentMTUReader(t *testing.T) {
 	owner, engine, original, _ := desktopNetworkOwnerFixture(t)
-	raw, err := routerVPNDesktopNetworkProjection(owner)
+	raw, err := routerVPNDesktopNetworkProjection(context.Background(), owner)
 	if err != nil || raw != original.raw {
 		t.Fatal("initial captured reader was not projected", err)
 	}
 	engine.change = func(ctx context.Context, expected adapter.Inbound, value int) (adapter.Inbound, error) {
 		old := expected.(*desktopNetworkInboundFixture)
-		next := &desktopNetworkInboundFixture{desktopMTUTUNFixture: &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard},
+		next := &desktopNetworkInboundFixture{desktopMTUTUNFixture: &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard, guardContext: old.guardContext},
 			raw: desktopNetworkReceiptFixture(t, old.index+1, value, strings.Repeat("e", 30)+string("0123456789abcdef"[(old.index+1)%16])+"1")}
 		engine.current = next
 		return next, nil
@@ -125,7 +129,7 @@ func TestRouterVPNNodeMTUNetworkProjectionRejectsSubstitution(t *testing.T) {
 
 func TestRouterVPNNodeMTUNetworkOptionalEvidenceDoesNotFabricateReceipt(t *testing.T) {
 	owner, _, inbound, _ := desktopNetworkOwnerFixture(t)
-	inbound.err = errors.New("native routing readback unavailable")
+	inbound.err = errors.Join(desktopnetwork.ErrNetworkReceiptUnavailable, errors.New("native routing readback unavailable"))
 	if raw, err := owner.DesktopNetworkReceipt(); err != nil || raw != "" {
 		t.Fatal("optional native evidence became a fabricated daily connection failure", raw, err)
 	}
@@ -133,7 +137,7 @@ func TestRouterVPNNodeMTUNetworkOptionalEvidenceDoesNotFabricateReceipt(t *testi
 	if raw, err := ordinary.DesktopNetworkReceipt(); err != nil || raw != "" {
 		t.Fatal("fixture without native evidence fabricated a receipt", raw, err)
 	}
-	if raw, err := routerVPNDesktopNetworkProjection(struct{}{}); err != nil || raw != "" {
+	if raw, err := routerVPNDesktopNetworkProjection(context.Background(), struct{}{}); err != nil || raw != "" {
 		t.Fatal("unknown engine fabricated a receipt", raw, err)
 	}
 }
@@ -165,7 +169,7 @@ func desktopNetworkDiagnosticOutput(t *testing.T, operation func()) string {
 func TestRouterVPNNodeMTUNetworkFirstFailurePreservesOptionalReaderOutcome(t *testing.T) {
 	owner, engine, inbound, _ := desktopNetworkOwnerFixture(t)
 	private := "private-node-key/192.0.2.17\nsecret-token"
-	inbound.err = errors.New("native Linux routing call has no unique owned addition: " + private)
+	inbound.err = errors.Join(desktopnetwork.ErrNetworkReceiptUnavailable, errors.New("native Linux routing call has no unique owned addition: "+private))
 	before := owner.record
 	read := func() {
 		t.Helper()
@@ -184,13 +188,13 @@ func TestRouterVPNNodeMTUNetworkFirstFailurePreservesOptionalReaderOutcome(t *te
 	if first != want || strings.Contains(first, private) {
 		t.Fatal("first reader diagnostic was repeated, private or mislabeled", first)
 	}
-	inbound.err = errors.New(private)
+	inbound.err = errors.Join(desktopnetwork.ErrNetworkReceiptUnavailable, errors.New(private))
 	if repeated := desktopNetworkDiagnosticOutput(t, read); repeated != "" {
 		t.Fatal("a later failure replaced the same reader's first observation", repeated)
 	}
 	engine.change = func(ctx context.Context, expected adapter.Inbound, value int) (adapter.Inbound, error) {
 		old := expected.(*desktopNetworkInboundFixture)
-		next := &desktopNetworkInboundFixture{desktopMTUTUNFixture: &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard}, err: errors.New(private)}
+		next := &desktopNetworkInboundFixture{desktopMTUTUNFixture: &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard, guardContext: old.guardContext}, err: errors.Join(desktopnetwork.ErrNetworkReceiptUnavailable, errors.New(private))}
 		engine.current = next
 		return next, nil
 	}
@@ -232,5 +236,169 @@ func TestRouterVPNNodeMTUNetworkMissingReaderDiagnosticCannotFabricateEvidence(t
 	}
 	if output != want || owner.record != before {
 		t.Fatal("missing reader diagnostic changed ownership or fabricated a receipt", output)
+	}
+}
+
+func (n *desktopNetworkInboundFixture) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if n.duringRead != nil {
+		n.duringRead()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return n.raw, n.err
+}
+
+func TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors(t *testing.T) {
+	for _, scenario := range []string{"cancelled", "deadline", "unavailable", "identity", "success"} {
+		t.Run(scenario, func(t *testing.T) {
+			owner, _, inbound, valid := desktopNetworkOwnerFixture(t)
+			prior := owner.record
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var expected error
+			switch scenario {
+			case "cancelled":
+				expected = context.Canceled
+				inbound.duringRead = cancel
+			case "deadline":
+				expected = context.DeadlineExceeded
+				inbound.err = expected
+			case "unavailable":
+				inbound.err = errors.Join(desktopnetwork.ErrNetworkReceiptUnavailable, errors.New("ambiguous original route addition"))
+			case "identity":
+				expected = errors.New("original native descriptor replaced")
+				inbound.err = expected
+			}
+			raw, err := routerVPNDesktopNetworkProjection(ctx, owner)
+			if expected != nil && !errors.Is(err, expected) {
+				t.Fatalf("observation error changed: %v", err)
+			}
+			if expected == nil && err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "success" {
+				if raw != inbound.raw {
+					t.Fatal("exact original witness lost")
+				}
+			} else if raw != "" {
+				t.Fatal("failed or unavailable read fabricated evidence")
+			}
+			if owner.record != prior || !valid.Load() {
+				t.Fatal("observation mutated or retired the captured owner")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNativeNetworkProjectionCancelsHeldOwnerLock(t *testing.T) {
+	for _, tor := range []bool{false, true} {
+		t.Run(map[bool]string{false: "external", true: "tor"}[tor], func(t *testing.T) {
+			var owner any
+			var unlock func()
+			if tor {
+				n := &routerVPNTorNative{}
+				n.mu.Lock()
+				owner, unlock = n, n.mu.Unlock
+			} else {
+				n := &routerVPNExternalNative{}
+				n.mu.Lock()
+				owner, unlock = n, n.mu.Unlock
+			}
+			// Store the unlock method, not its invocation, to keep the actual shipping
+			// mutex contended until the original caller has returned.
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := routerVPNDesktopNetworkProjection(ctx, owner); done <- err }()
+			select {
+			case err := <-done:
+				unlock()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("lost caller expiry: %v", err)
+				}
+			case <-time.After(time.Second):
+				unlock()
+				<-done
+				t.Fatal("shipping owner lock ignored caller expiry")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver(t *testing.T) {
+	for _, tor := range []bool{false, true} {
+		t.Run(map[bool]string{false: "external", true: "tor"}[tor], func(t *testing.T) {
+			directory, policy := desktopExternalWorkspace(t)
+			files, err := routerVPNOpenExternalFiles(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			ctx, join := routerVPNWatchCommandStop(t.Context(), files, desktopExternalSession, policy.SourceSHA256())
+			defer join()
+			var owner any
+			var unlock func()
+			if tor {
+				n := &routerVPNTorNative{}
+				n.mu.Lock()
+				owner, unlock = n, n.mu.Unlock
+			} else {
+				n := &routerVPNExternalNative{}
+				n.mu.Lock()
+				owner, unlock = n, n.mu.Unlock
+			}
+			var release sync.Once
+			defer release.Do(unlock)
+			done := make(chan error, 1)
+			go func() { _, err := routerVPNDesktopNetworkProjection(ctx, owner); done <- err }()
+			writeStop := func(path, session, source string) {
+				t.Helper()
+				raw, _ := json.Marshal(routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: source})
+				if err := os.WriteFile(filepath.Join(path, "stop.json"), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Replacing the path cannot make another session's directory authoritative.
+			retained := directory + "-retained"
+			if err := os.Rename(directory, retained); err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(retained)
+			if err := os.Mkdir(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			writeStop(directory, desktopExternalSession, policy.SourceSHA256())
+			writeStop(retained, strings.Repeat("b", 32), policy.SourceSHA256())
+			select {
+			case err := <-done:
+				t.Fatalf("foreign Stop interrupted retained owner: %v", err)
+			case <-time.After(150 * time.Millisecond):
+			}
+			writeStop(retained, desktopExternalSession, strings.Repeat("c", 64))
+			select {
+			case err := <-done:
+				t.Fatalf("wrong source interrupted retained owner: %v", err)
+			case <-time.After(150 * time.Millisecond):
+			}
+			writeStop(retained, desktopExternalSession, policy.SourceSHA256())
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("original Stop lost cancellation: %v", err)
+				}
+			case <-time.After(time.Second):
+				release.Do(unlock)
+				<-done
+				t.Fatal("original Stop could not interrupt shipping owner mutex")
+			}
+			release.Do(unlock)
+			if !files.stopRequested(desktopExternalSession, policy.SourceSHA256()) {
+				t.Fatal("watcher changed its captured Stop record")
+			}
+		})
 	}
 }

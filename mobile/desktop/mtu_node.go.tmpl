@@ -96,6 +96,7 @@ type routerVPNNodeCommitRevert struct {
 }
 type routerVPNNodeMTUEngine interface {
 	Current() (adapter.Inbound, error)
+	CurrentContext(context.Context) (adapter.Inbound, error)
 	Change(context.Context, adapter.Inbound, int) (adapter.Inbound, error)
 }
 type routerVPNNodeMTUBox struct {
@@ -131,10 +132,12 @@ func (engine *routerVPNNodeMTUBox) ClaimTUN(guard func() bool) (string, int, int
 }
 
 type routerVPNNodeMTU struct {
+	ctx          context.Context
 	engine       routerVPNNodeMTUEngine
 	inbound      routerVPNDesktopMTUTUN
 	record       routerVPNNodeMTURecord
 	guard        func() bool
+	guardContext func(context.Context) error
 	used         map[string]bool
 	original     int
 	deadline     time.Time
@@ -145,10 +148,26 @@ type routerVPNNodeMTU struct {
 }
 
 func newRouterVPNNodeMTU(engine routerVPNNodeMTUEngine, session, config, path string, guard func() bool) (*routerVPNNodeMTU, error) {
-	if engine == nil || !routerVPNExternalSession.MatchString(session) || len(config) != 64 || len(path) != 64 || guard == nil || !guard() {
+	// Compatibility entry point has no caller to propagate. Its explicitly
+	// supplied guard is adapted here; bounded production uses the method below.
+	return newRouterVPNNodeMTUContext(context.Background(), engine, session, config, path, func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if guard == nil || !guard() {
+			return routerVPNExternalFailure
+		}
+		return nil
+	})
+}
+func newRouterVPNNodeMTUContext(ctx context.Context, engine routerVPNNodeMTUEngine, session, config, path string, guard func(context.Context) error) (*routerVPNNodeMTU, error) {
+	if ctx == nil || engine == nil || !routerVPNExternalSession.MatchString(session) || len(config) != 64 || len(path) != 64 || guard == nil {
 		return nil, routerVPNExternalFailure
 	}
-	current, err := engine.Current()
+	if err := guard(ctx); err != nil {
+		return nil, err
+	}
+	current, err := engine.CurrentContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -156,36 +175,92 @@ func newRouterVPNNodeMTU(engine routerVPNNodeMTUEngine, session, config, path st
 	if !ok || inbound.Type() != "tun" {
 		return nil, routerVPNExternalFailure
 	}
-	claim := inbound.RouterVPNDesktopMTU
-	if captured, ok := engine.(interface {
-		ClaimTUN(func() bool) (string, int, int, error)
-	}); ok {
-		claim = captured.ClaimTUN
+	claim, ok := current.(interface {
+		RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
+	})
+	if !ok {
+		return nil, routerVPNExternalFailure
 	}
-	name, index, mtu, err := claim(guard)
+	claimMethod := claim.RouterVPNDesktopMTUContext
+	if captured, ok := engine.(interface {
+		ClaimTUNContext(context.Context, func(context.Context) error) (string, int, int, error)
+	}); ok {
+		claimMethod = captured.ClaimTUNContext
+	}
+	name, index, mtu, err := claimMethod(ctx, guard)
 	if err != nil {
 		return nil, err
 	}
-	owner := &routerVPNNodeMTU{engine: engine, inbound: inbound, guard: guard, used: map[string]bool{}, record: routerVPNNodeMTURecord{Schema: 1, Session: session, Config: config, Path: path, Reader: 1, Interface: name, Index: index, MTU: mtu}}
-	if err = owner.current(); err != nil {
+	owner := &routerVPNNodeMTU{ctx: ctx, engine: engine, inbound: inbound, guardContext: guard, guard: func() bool { return guard(context.Background()) == nil }, used: map[string]bool{}, record: routerVPNNodeMTURecord{Schema: 1, Session: session, Config: config, Path: path, Reader: 1, Interface: name, Index: index, MTU: mtu}}
+	if err := owner.currentContext(ctx); err != nil {
 		return nil, err
 	}
 	return owner, nil
 }
-func (owner *routerVPNNodeMTU) current() error {
-	if !owner.guard() {
-		return routerVPNExternalFailure
+func (engine *routerVPNNodeMTUBox) CurrentContext(ctx context.Context) (adapter.Inbound, error) {
+	current, ok, err := adapter.RouterVPNInboundContext(ctx, engine.instance.Inbound(), engine.tag)
+	if err != nil {
+		return nil, err
 	}
-	actual, err := owner.engine.Current()
-	if err != nil || actual != owner.inbound {
-		return routerVPNExternalFailure
+	if !ok {
+		return nil, routerVPNExternalFailure
 	}
-	name, index, mtu, err := owner.inbound.RouterVPNDesktopMTUInterface()
-	if err != nil || name != owner.record.Interface || index != owner.record.Index || mtu != owner.record.MTU || !owner.guard() {
-		return routerVPNExternalFailure
-	}
-	return nil
+	return current, nil
 }
+func (engine *routerVPNNodeMTUBox) ClaimTUNContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if engine.physical != nil {
+		return engine.physical.ClaimTUNContext(ctx, guard)
+	}
+	current, err := engine.CurrentContext(ctx)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	reader, ok := current.(interface {
+		RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
+	})
+	if !ok {
+		return "", 0, 0, routerVPNExternalFailure
+	}
+	return reader.RouterVPNDesktopMTUContext(ctx, guard)
+}
+func (owner *routerVPNNodeMTU) currentContext(ctx context.Context) error {
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if owner == nil || owner.guardContext == nil {
+		return routerVPNExternalFailure
+	}
+	if err := owner.guardContext(ctx); err != nil {
+		return err
+	}
+	actual, err := owner.engine.CurrentContext(ctx)
+	if err != nil {
+		return err
+	}
+	if actual != owner.inbound {
+		return routerVPNExternalFailure
+	}
+	reader, ok := owner.inbound.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return err
+	}
+	if name != owner.record.Interface || index != owner.record.Index || mtu != owner.record.MTU {
+		return routerVPNExternalFailure
+	}
+	return owner.guardContext(ctx)
+}
+
+func (owner *routerVPNNodeMTU) current() error { return owner.currentContext(owner.ctx) }
+
 func (owner *routerVPNNodeMTU) change(value int) error {
 	return owner.changeBefore(value, time.Time{})
 }
@@ -200,7 +275,7 @@ func (owner *routerVPNNodeMTU) changeBefore(value int, deadline time.Time) error
 	if !deadline.IsZero() && deadline.Before(limit) {
 		limit = deadline
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), limit)
+	ctx, cancel := context.WithDeadline(owner.ctx, limit)
 	defer cancel()
 	next, changeErr := owner.engine.Change(ctx, owner.inbound, value)
 	actual, err := owner.engine.Current()
@@ -502,7 +577,15 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 		}
 	}
 	return routerVPNRunNodeMTULoop(parent, ctx, files, instance, session, config, physical,
-		func() bool { return !stopped.Load() }, func() error {
+		func(call context.Context) error {
+			if err := call.Err(); err != nil {
+				return err
+			}
+			if stopped.Load() {
+				return routerVPNExternalFailure
+			}
+			return nil
+		}, func() error {
 			if physical == nil {
 				return nil
 			}
@@ -514,12 +597,19 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 // caller still owns its actual graph, admission, selected-DNS proof and joined
 // teardown; the extra guard cannot create or replace any of those owners.
 func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExternalFiles, instance *box.Box,
-	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func() bool, ready func() error) error {
+	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func(context.Context) error, ready func() error) error {
 	if parent == nil || ctx == nil || files == nil || instance == nil || current == nil || ready == nil {
 		return routerVPNExternalFailure
 	}
+	observe, stopObserve := context.WithCancel(parent)
+	stopGraph := context.AfterFunc(ctx, stopObserve)
+	defer func() { stopGraph(); stopObserve() }()
 	var inbound adapter.Inbound
-	for _, candidate := range instance.Inbound().Inbounds() {
+	inbounds, err := adapter.RouterVPNInboundsContext(observe, instance.Inbound())
+	if err != nil {
+		return err
+	}
+	for _, candidate := range inbounds {
 		if candidate.Type() == "tun" {
 			if inbound != nil {
 				return routerVPNExternalFailure
@@ -530,12 +620,33 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 	if inbound == nil {
 		return routerVPNExternalFailure
 	}
-	path := routerVPNDesktopPhysicalPath(instance)
-	guard := func() bool {
-		return current() && parent.Err() == nil && ctx.Err() == nil && path != "" && path == routerVPNDesktopPhysicalPath(instance) &&
-			(physical == nil || physical.Current())
+	path, err := routerVPNDesktopPhysicalPathContext(observe, instance)
+	if err != nil {
+		return err
 	}
-	owner, err := newRouterVPNNodeMTU(&routerVPNNodeMTUBox{instance: instance, tag: inbound.Tag(), physical: physical}, session, config, path, guard)
+	guard := func(call context.Context) error {
+		if err := current(call); err != nil {
+			return err
+		}
+		if parent.Err() != nil {
+			return parent.Err()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		actual, err := routerVPNDesktopPhysicalPathContext(call, instance)
+		if err != nil {
+			return err
+		}
+		if path == "" || actual != path {
+			return routerVPNExternalFailure
+		}
+		if physical != nil {
+			return physical.CurrentContext(call)
+		}
+		return call.Err()
+	}
+	owner, err := newRouterVPNNodeMTUContext(observe, &routerVPNNodeMTUBox{instance: instance, tag: inbound.Tag(), physical: physical}, session, config, path, guard)
 	if err != nil {
 		return routerVPNExternalFailure
 	}
@@ -549,7 +660,7 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 		if parent.Err() != nil || files.stopRequested(session, config) {
 			return nil
 		}
-		if owner.expire(time.Now()) != nil || owner.current() != nil {
+		if owner.expire(time.Now()) != nil || owner.currentContext(observe) != nil {
 			if parent.Err() != nil || files.stopRequested(session, config) {
 				return nil
 			}
@@ -575,8 +686,9 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 		}
 		if consumed != nil || time.Since(heartbeat) >= 250*time.Millisecond {
 			heartbeat = time.Now()
-			owner.record.Heartbeat = heartbeat.UnixMilli()
-			owner.record.NetworkReceipt, err = owner.DesktopNetworkReceipt()
+			next := owner.record
+			next.Heartbeat = heartbeat.UnixMilli()
+			next.NetworkReceipt, err = owner.DesktopNetworkReceiptContext(observe)
 			if err != nil {
 				// The owned Stop watcher can cancel the graph while native
 				// readback is in flight. Join that requested shutdown without
@@ -587,6 +699,7 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 				}
 				return routerVPNExternalFailure
 			}
+			owner.record = next
 			if err = files.publish("node-mtu-status.json", owner.record); err != nil {
 				return routerVPNExternalFailure
 			}

@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
@@ -122,6 +123,20 @@ func (o *LocalTorOutbound) Bind(parent context.Context, policy *mobiletor.Deskto
 // Current is only this bound owner's lifetime, not its path or padding proof.
 // Its callbacks are evaluated outside the mutex to keep manager teardown free
 // of a gate-lock/manager-lock cycle.
+func (o *LocalTorOutbound) CurrentContext(ctx context.Context) error {
+	if o == nil {
+		return net.ErrClosed
+	}
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
+	defer o.mu.Unlock()
+	if !o.bound || o.closing || o.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	return ctx.Err()
+}
+
 func (o *LocalTorOutbound) Current() bool {
 	if o == nil {
 		return false
