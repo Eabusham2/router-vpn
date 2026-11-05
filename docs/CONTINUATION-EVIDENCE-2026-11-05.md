@@ -1934,6 +1934,50 @@ The native focused check uses supported purego linkage. Full production static
 linkage and real installed namespace/TUN execution remain mandatory exact-SHA
 CI; local NET_ADMIN and physical-device acceptance are not claimed.
 
+## Retained Tor fixture cleanup diagnostics and newer native evidence
+
+The macOS `7a6c92a8` comparison failure in job `127115210042` occurs during
+the original TempDir cleanup. The caller now registers a failure-only observer
+before its first TempDir, so Go's reverse cleanup order preserves the original
+failure and then records the retained root. It does not retry removal, sleep,
+change a deadline or turn cleanup failure into success. The inspection retains
+an `os.Root`, checks directory identity, refuses symlink traversal, and limits
+metadata to 48 entries, depth four and 160 bytes per name. Goroutine output is
+bounded to 32 KiB. No file contents or environment values are read.
+
+The two frozen test files pass five exact race tests with no skips in 1.238s.
+Restoring the original caller independently fails the registration/ordering
+assertion; the failed package completes in 0.052s. The original complete Tor
+comparison compiles here but refuses activation when physical network identity
+cannot be obtained. An independent stdlib probe reports the actual
+`netlinkrib: operation not permitted` restriction. It is not a macOS cleanup
+reproduction or an accepted physical connection.
+
+The later macOS job `127130153610`, run `41993220644` at `2fc4c8c`, passes
+the same owned-comparison/final-adoption step. It is subsequently cancelled in
+the macOS cancellation step. The observed cleanup problem is intermittent;
+neither that step pass nor these diagnostics establish a production lifecycle
+repair or a complete workflow success.
+
+Fresh exact-source native observations also supersede specific older gaps:
+
+- At `7242210a`, run `41994485289` succeeds on ARM64 (`127136251106`) and
+  AMD64 (`127136251517`). The actual ARM64 log passes `mtu-rollback` in 4.32s
+  and verifies original TUN retirement in all six cases. The preceding
+  `fbb88ffb` address-close authority fix is preserved. A separately tested local
+  duplicate fix was retained as recovery evidence and not replayed over it.
+- In Windows physical-bootstrap run `41992012243` at `a05da2a1`, AMD64 job
+  `127130819509` passes the actual external and Tor original-Stop cases in
+  0.81s. Its later strict SIP003 mutation construction fails because the exact
+  source predicate now has two call sites. That later harness boundary remains
+  a distinct repair; the workflow is not marked successful.
+- The captured layered WG/Hysteria2 unit is published as `3f9a1c6f`, preserving
+  all three newer upstream commits. Its merged routing runner passes all 47
+  tests in 8.628s, including actual heartbeat and held-owner lease controls.
+  An initial invocation without Go on PATH failed two setup cases; the corrected
+  toolchain invocation passes every case. The original native-namespace and
+  full production-linkage requirements remain mandatory.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

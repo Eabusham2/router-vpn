@@ -25,7 +25,7 @@ func desktopTorEntryFixture(t *testing.T, host string) (*app, common.RouterProfi
 	// Resolve only this newly created fixture root. macOS exposes temporary
 	// files through /var -> /private/var, while shipping private-store paths
 	// must continue rejecting symlink components and later replacements.
-	root, err := filepath.EvalSymlinks(t.TempDir())
+	root, err := desktopTorFixtureDiagnosticTempRoot(t)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -132,8 +132,12 @@ original socket notification under the unchanged caller deadline. Pending
 evidence survives observation cancellation for original-owner cleanup; foreign,
 duplicate, DAD-failed or changed-native evidence still refuses. The prepared
 native package passes 67 race verdicts and two defect controls, all 46 routing
-runner checks pass, and its full ARM64 native test binary compiles. Actual
-kernel acceptance still requires the exact-SHA CI result.
+runner checks pass, and its full ARM64 native test binary compiles. A separate
+late address-deletion failure was then corrected in `fbb88ffb`. At descendant
+`7242210a`, both actual generated Node/TUN architecture jobs pass in run
+`41994485289`; ARM64 explicitly verifies original retirement during MTU rollback.
+This closes that observed kernel case at that source identity, while current-head
+release and physical-device acceptance remain separate.
 
 The backend transaction audit now follows the exact captured standard-exit
 connection and Speed Lab restoration path introduced in `5ab593c8`. Its old
@@ -165,8 +169,19 @@ that exact identity and absence of a replacement before testing the foreign
 directory, wrong session, wrong source and original Stop. Platforms that permit
 the rename retain the original pathname-replacement test. Twelve actual native
 command race verdicts pass, and independently removing the session or source
-check fails its intended assertion. Production Stop behavior is unchanged;
-actual Windows execution of this corrected fixture remains required.
+check fails its intended assertion. Production Stop behavior is unchanged.
+The corrected external and Tor Stop cases pass in the actual AMD64 job
+`127130819509` at `a05da2a1`. That job then fails at a separate strict mutation
+construction boundary; its full workflow is not a pass.
+
+The Tor entry fixture now records bounded directory metadata and goroutine stacks
+only after an original failed cleanup leaves its captured root present. The
+observer registers before the first TempDir, retains the failure, never retries
+deletion and never reads configuration or key contents. Five focused race tests
+pass, and restoring the old fixture call fails the required ordering assertion.
+The macOS nonempty-directory failure remains intermittent: the later `2fc4c8c`
+comparison step passes, but its job is cancelled at a later step. These diagnostics
+do not claim a production writer/lifecycle repair or a complete native job pass.
 
 The macOS native kernel runner now emits bounded captured progress before
 fallible process-group termination. A termination or output-join error retains
