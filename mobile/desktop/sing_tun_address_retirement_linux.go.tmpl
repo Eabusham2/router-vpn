@@ -392,6 +392,11 @@ func (t *NativeTun) routervpnLinuxAddressMutation(ctx context.Context, prefix st
 			if added > 1 || !routervpnLinuxAutomaticAddress(row, mode) {
 				return errors.New("LinkSetUp produced an unproved automatic address")
 			}
+			// addrconf_add_linklocal publishes this exact address before its
+			// queued DAD work emits RTM_NEWADDR, including on a NOARP TUN.
+			// A GETLINK acknowledgement cannot join that work queue. Retain
+			// this strictly classified effect until the original stream proves it.
+			s.addressPending = key
 		} else if key != prefix {
 			return errors.New("native address add observed a foreign address")
 		}
@@ -405,7 +410,7 @@ func (t *NativeTun) routervpnLinuxAddressMutation(ctx context.Context, prefix st
 	if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
 		return err
 	}
-	return t.routervpnLinuxAddressesObserved()
+	return t.routervpnLinuxAddressesObservedContext(ctx)
 }
 
 func (t *NativeTun) routervpnLinuxAddAddress(link netlink.Link, address *netlink.Addr) error {
@@ -463,4 +468,43 @@ func (t *NativeTun) routervpnLinuxAddressesObserved() error {
 		}
 	}
 	return nil
+}
+
+func (t *NativeTun) routervpnLinuxAddressesObservedContext(ctx context.Context) error {
+	s := &t.routervpnRetirement
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		missing := ""
+		for prefix := range s.addresses {
+			if _, ok := s.addressObserved[prefix]; !ok {
+				if prefix != s.addressPending {
+					return t.routervpnLinuxAddressesObserved()
+				}
+				missing = prefix
+			}
+		}
+		if missing == "" {
+			s.addressPending = ""
+			return ctx.Err()
+		}
+		waiter, ok := s.watch.(interface{ waitEvent(context.Context) error })
+		if !ok {
+			return errors.New("native automatic address has no original event waiter")
+		}
+		if err := waiter.waitEvent(ctx); err != nil {
+			return err
+		}
+		if err := t.routervpnLinuxEvents(ctx, nil, false); err != nil {
+			return err
+		}
+		rows, err := t.routervpnLinuxAddressCurrent(ctx)
+		if err != nil {
+			return err
+		}
+		if len(rows) != len(s.addresses) {
+			return errors.New("native pending address observed a foreign address")
+		}
+	}
 }

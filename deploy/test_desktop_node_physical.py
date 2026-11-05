@@ -147,6 +147,11 @@ NATIVE_LIFECYCLE_ADMISSION_VERDICTS = [*NATIVE_LIFECYCLE_ADMISSION_TESTS, *[root
 NATIVE_ADDRESS_RETIREMENT_TESTS = ("TestRouterVPNNativeLinuxPartialAddressRetirement", "TestRouterVPNNativeLinuxAddressBoundaryRejectsForeignEffects", "TestRouterVPNNativeLinuxAddressPolicyNetlink")
 NATIVE_ADDRESS_RETIREMENT_VERDICTS = [NATIVE_ADDRESS_RETIREMENT_TESTS[0], *[NATIVE_ADDRESS_RETIREMENT_TESTS[0]+"/"+name for name in ("partial-add-refusal", "cancel-after-add", "link-up-addrconf", "link-up-eui64-random", "dad-completion")], NATIVE_ADDRESS_RETIREMENT_TESTS[1], *[NATIVE_ADDRESS_RETIREMENT_TESTS[1]+"/"+name for name in ("global", "wrong-protocol", "missing-protocol", "label", "finite-lifetime", "pre-existing", "changed-policy", "same-name-replacement", "eexist", "address-aba", "missing-notification", "cancel-after-link-up", "eui64-ethernet", "eui64-already-up", "eui64-still-down", "eui64-type-change", "eui64-missing-policy", "eui64-disappeared-policy", "eui64-wrong-address-flags", "eui64-stable-change", "eui64-index-change", "eui64-flags-change", "eui64-token-change", "unchanged-still-down")], NATIVE_ADDRESS_RETIREMENT_TESTS[2], *[NATIVE_ADDRESS_RETIREMENT_TESTS[2]+"/"+name for name in ("eui64-down", "random-up", "none", "absent", "duplicate", "invalid", "truncated", "token", "invalid-token")]]
 
+NATIVE_ADDRESS_RETIREMENT_TESTS += ("TestRouterVPNNativeLinuxAutomaticAddressWait", "TestRouterVPNNativeLinuxAddressWatchWake")
+NATIVE_ADDRESS_RETIREMENT_VERDICTS += [name for root, leaves in (
+    ("TestRouterVPNNativeLinuxAutomaticAddressWait", ("delayed", "cancel-then-retire", "missing", "foreign", "duplicate", "dad-failed", "changed-readback")),
+    ("TestRouterVPNNativeLinuxAddressWatchWake", ("queued", "wake", "cancel", "joined"))) for name in (root, *(root + "/" + leaf for leaf in leaves))]
+
 NATIVE_CLOSED_EVENT_ROOT = "TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics"
 NATIVE_CLOSED_EVENT_CASES = ("first-close", "late-final", "late-final-ipv6", "late-final-linklocal", "duplicate-first", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "changed-address-policy", "disjoint")
 NATIVE_CLOSED_EVENT_VERDICTS = (NATIVE_CLOSED_EVENT_ROOT, *(NATIVE_CLOSED_EVENT_ROOT + "/" + case for case in NATIVE_CLOSED_EVENT_CASES))

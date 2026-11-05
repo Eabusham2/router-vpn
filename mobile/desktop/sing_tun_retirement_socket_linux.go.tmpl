@@ -44,6 +44,7 @@ type routerVPNLinuxRoutingWatch struct {
 	closing, closed, fileClosed, namespaceClosed bool
 	failure                                      error
 	events                                       []routerVPNLinuxRoutingEvent
+	changed                                      chan struct{}
 	waiters                                      map[uint32]*routerVPNLinuxRoutingCommand
 }
 
@@ -195,6 +196,7 @@ func (w *routerVPNLinuxRoutingWatch) run() {
 					return
 				}
 				w.events = append(w.events, routerVPNLinuxRoutingEvent{address: &address, delete: message.Header.Type == syscall.RTM_DELADDR, sequence: message.Header.Seq, port: message.Header.Pid})
+				w.signalEventLocked()
 				w.mu.Unlock()
 				continue
 			}
@@ -224,8 +226,45 @@ func (w *routerVPNLinuxRoutingWatch) run() {
 				return
 			}
 			w.events = append(w.events, routerVPNLinuxRoutingEvent{object: object, delete: deleted, sequence: message.Header.Seq, port: message.Header.Pid})
+			w.signalEventLocked()
 			w.mu.Unlock()
 		}
+	}
+}
+
+func (w *routerVPNLinuxRoutingWatch) signalEventLocked() {
+	if w.changed != nil {
+		close(w.changed)
+	}
+	w.changed = make(chan struct{})
+}
+
+// Await the retained subscribed socket, not a timer or a replacement dump.
+// Check the queue under the same mutex as publication so an event between the
+// last barrier and this wait cannot be lost. Observer expiry leaves it queued.
+func (w *routerVPNLinuxRoutingWatch) waitEvent(ctx context.Context) error {
+	if err := w.current(ctx); err != nil {
+		return err
+	}
+	if err := LockContext(ctx, &w.mu); err != nil {
+		return err
+	}
+	if len(w.events) != 0 {
+		w.mu.Unlock()
+		return ctx.Err()
+	}
+	if w.changed == nil {
+		w.changed = make(chan struct{})
+	}
+	changed := w.changed
+	w.mu.Unlock()
+	select {
+	case <-changed:
+		return w.current(ctx)
+	case <-w.joined:
+		return errors.New("native routing observer exited before its address event")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

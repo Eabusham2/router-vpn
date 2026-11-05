@@ -61,6 +61,7 @@ type routerVPNLinuxRetirement struct {
 	receipt             string
 	addresses           map[string]routerVPNLinuxAddressRecord
 	addressObserved     map[string]routerVPNLinuxAddressRecord
+	addressPending      string
 	addressDeleted      map[string]bool
 	addressSnapshot     func(context.Context) ([]routerVPNLinuxAddressRecord, error)
 	addressMode         func(context.Context) (routerVPNLinuxAddressPolicy, error)
@@ -829,7 +830,7 @@ func (t *NativeTun) RouterVPNDesktopNetworkRetire(ctx context.Context) (string, 
 			return "", err
 		}
 		if s.addresses != nil {
-			if err := t.routervpnLinuxAddressesObserved(); err != nil {
+			if err := t.routervpnLinuxAddressesObservedContext(ctx); err != nil {
 				return "", err
 			}
 			addresses, err := t.routervpnLinuxAddressCurrent(ctx)

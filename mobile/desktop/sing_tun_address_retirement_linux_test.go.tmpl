@@ -11,6 +11,7 @@ import (
 	"slices"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -307,6 +308,183 @@ func TestRouterVPNNativeLinuxAddressPolicyNetlink(t *testing.T) {
 			}
 			if err != nil || policy.linkType != 0xfffe || policy.index != 8 || policy.stableFlags != syscall.IFF_NOARP || (len(policy.token) == 16) != (scenario == "token") || policy.up != (scenario == "random-up") || policy.present != (scenario != "absent") || policy.mode != mode {
 				t.Fatal("actual rtnetlink policy lost its link kind/state or presence", policy, err)
+			}
+		})
+	}
+}
+
+// The native-effect model deliberately exposes the automatic address before
+// the original notification, as addrconf's queued DAD work does. Every check
+// below executes the production mutation, event classification and retirement.
+type retirementAddressWaitModel struct {
+	*retirementModel
+	wait func(context.Context) error
+}
+
+func (m *retirementAddressWaitModel) waitEvent(ctx context.Context) error { return m.wait(ctx) }
+
+func TestRouterVPNNativeLinuxAutomaticAddressWait(t *testing.T) {
+	for _, scenario := range []string{"delayed", "cancel-then-retire", "missing", "foreign", "duplicate", "dad-failed", "changed-readback"} {
+		t.Run(scenario, func(t *testing.T) {
+			n, model, rows, policy := retirementAddressFixture(t)
+			work, cancel := context.WithTimeout(n.options.RouterVPNNetworkContext, 100*time.Millisecond)
+			defer cancel()
+			original := retirementAddress(t, "fe80::1234/64", true, nil)
+			original.flags |= syscall.IFA_F_TENTATIVE
+			completed := original
+			completed.flags &^= syscall.IFA_F_TENTATIVE
+			calls := 0
+			waiter := &retirementAddressWaitModel{retirementModel: model}
+			waiter.wait = func(ctx context.Context) error {
+				calls++
+				if ctx != work {
+					t.Fatal("pending notification replaced its original caller")
+				}
+				if n.routervpnRetirement.addressObserved[original.prefix].prefix != "" {
+					t.Fatal("readback invented notification evidence")
+				}
+				if scenario == "cancel-then-retire" {
+					cancel()
+					return ctx.Err()
+				}
+				if scenario == "missing" {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				event := completed
+				switch scenario {
+				case "foreign":
+					event.prefix = "fe80::9999/64"
+				case "dad-failed":
+					event.flags |= syscall.IFA_F_DADFAILED
+				case "changed-readback":
+					changed := completed
+					changed.native += "changed"
+					*rows = []routerVPNLinuxAddressRecord{changed}
+				default:
+					*rows = []routerVPNLinuxAddressRecord{completed}
+				}
+				model.events = append(model.events, routerVPNLinuxRoutingEvent{address: &event})
+				if scenario == "duplicate" {
+					model.events = append(model.events, routerVPNLinuxRoutingEvent{address: &event})
+				}
+				return nil
+			}
+			n.routervpnRetirement.watch = waiter
+			err := n.routervpnLinuxAddressMutation(work, "", true, func() error {
+				*rows = []routerVPNLinuxAddressRecord{original}
+				policy.up = true
+				return nil
+			})
+			if calls != 1 {
+				t.Fatal("original automatic address did not await its notification", calls, err)
+			}
+			if scenario == "delayed" {
+				if err != nil {
+					t.Fatal("original delayed DAD notification was rejected", err)
+				}
+			} else if scenario == "cancel-then-retire" || scenario == "missing" {
+				if !errors.Is(err, work.Err()) || work.Err() == nil || n.routervpnRetirement.failure != nil || n.routervpnRetirement.addressPending != original.prefix {
+					t.Fatal("observer expiry poisoned or discarded the original pending effect", err, n.routervpnRetirement.failure)
+				}
+				if _, err := n.tunFile.Stat(); err != nil {
+					t.Fatal("unproved notification retired original TUN", err)
+				}
+				if scenario == "missing" {
+					return
+				}
+				waiter.wait = func(ctx context.Context) error {
+					*rows = []routerVPNLinuxAddressRecord{completed}
+					model.events = append(model.events, routerVPNLinuxRoutingEvent{address: &completed})
+					return ctx.Err()
+				}
+			} else {
+				if err == nil {
+					t.Fatal("foreign notification or changed original readback qualified")
+				}
+				return
+			}
+			raw, err := n.RouterVPNDesktopNetworkRetire(retirementStop(t))
+			receipt, parseErr := ParseDesktopNetworkRetirementReceipt(raw)
+			if err != nil || parseErr != nil || !slices.Equal(receipt.Addresses, []string{original.prefix}) {
+				t.Fatal("joined original notification did not retain exact retirement", err, parseErr, receipt)
+			}
+		})
+	}
+}
+
+// Exercise the actual watch's publication/wait handshake with retained OS file
+// and namespace witnesses. Only kernel delivery is modeled here; the mandatory
+// namespace suite supplies actual NETLINK_ROUTE notifications and TUN effects.
+func TestRouterVPNNativeLinuxAddressWatchWake(t *testing.T) {
+	for _, scenario := range []string{"queued", "wake", "cancel", "joined"} {
+		t.Run(scenario, func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "original-watch")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			ns, err := os.Open("/proc/thread-self/ns/net")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ns.Close()
+			info, _ := file.Stat()
+			nsInfo, _ := ns.Stat()
+			w := &routerVPNLinuxRoutingWatch{file: file, info: info, namespace: ns, namespaceInfo: nsInfo, joined: make(chan struct{})}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if scenario == "queued" {
+				w.events = []routerVPNLinuxRoutingEvent{{}}
+			}
+			result := make(chan error, 1)
+			go func() { result <- w.waitEvent(ctx) }()
+			if scenario != "queued" {
+				for {
+					w.mu.Lock()
+					entered := w.changed != nil
+					w.mu.Unlock()
+					if entered {
+						break
+					}
+					select {
+					case err := <-result:
+						t.Fatal("wait returned before original event", err)
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					case <-time.After(time.Millisecond):
+					}
+				}
+				select {
+				case err := <-result:
+					t.Fatal("original event waiter returned early", err)
+				default:
+				}
+				switch scenario {
+				case "wake":
+					w.mu.Lock()
+					w.events = append(w.events, routerVPNLinuxRoutingEvent{})
+					w.signalEventLocked()
+					w.mu.Unlock()
+				case "cancel":
+					cancel()
+				case "joined":
+					close(w.joined)
+				}
+			}
+			select {
+			case err := <-result:
+				if (scenario == "queued" || scenario == "wake") && err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "cancel" && !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+				if scenario == "joined" && err == nil {
+					t.Fatal("exited observer invented notification")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("original event waiter did not join")
 			}
 		})
 	}
