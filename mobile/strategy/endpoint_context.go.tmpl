@@ -1,0 +1,18 @@
+package endpoint
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/adapter"
+)
+
+func (m *Manager) RouterVPNGetContext(ctx context.Context, tag string) (adapter.Endpoint, bool, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+		return nil, false, err
+	}
+	value, found := m.endpointByTag[tag]
+	m.access.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return value, found, nil
+}

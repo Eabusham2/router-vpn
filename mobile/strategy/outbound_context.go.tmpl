@@ -1,0 +1,21 @@
+package outbound
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/adapter"
+)
+
+func (m *Manager) RouterVPNOutboundContext(ctx context.Context, tag string) (adapter.Outbound, bool, error) {
+	if err := adapter.RouterVPNRLockContext(ctx, &m.access); err != nil {
+		return nil, false, err
+	}
+	value, found := m.outboundByTag[tag]
+	m.access.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return adapter.RouterVPNEndpointContext(ctx, m.endpoint, tag)
+	}
+	return value, found, nil
+}

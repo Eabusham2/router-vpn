@@ -1,0 +1,26 @@
+package service
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/adapter"
+)
+
+func (m *Manager) RouterVPNGetContext(ctx context.Context, tag string) (adapter.Service, bool, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+		return nil, false, err
+	}
+	value, found := m.serviceByTag[tag]
+	m.access.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return value, found, nil
+}
+
+func (m *Manager) RouterVPNServicesContext(ctx context.Context) ([]adapter.Service, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+		return nil, err
+	}
+	defer m.access.Unlock()
+	return append([]adapter.Service(nil), m.services...), ctx.Err()
+}

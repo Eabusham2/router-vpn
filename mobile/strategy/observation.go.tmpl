@@ -1,0 +1,179 @@
+package adapter
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+)
+
+// RouterVPNLockContext retains the caller's deadline while observing a manager.
+// A timed-out observer never owns a detached waiter or unlocks another caller.
+func RouterVPNLockContext(ctx context.Context, mu *sync.Mutex) error {
+	return routerVPNObserveLock(ctx, mu.TryLock, mu.Unlock)
+}
+func RouterVPNRLockContext(ctx context.Context, mu *sync.RWMutex) error {
+	return routerVPNObserveLock(ctx, mu.TryRLock, mu.RUnlock)
+}
+func routerVPNObserveLock(ctx context.Context, acquire func() bool, release func()) error {
+	if ctx == nil {
+		return errors.New("native observation has no caller context")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if acquire() {
+			if err := ctx.Err(); err != nil {
+				release()
+				return err
+			}
+			return nil
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func RouterVPNInboundContext(ctx context.Context, manager InboundManager, tag string) (Inbound, bool, error) {
+	if ctx == nil {
+		return nil, false, errors.New("native inbound observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	reader, ok := manager.(interface {
+		RouterVPNGetContext(context.Context, string) (Inbound, bool, error)
+	})
+	if !ok {
+		return nil, false, errors.New("native inbound manager has no bounded observation")
+	}
+	result, found, err := reader.RouterVPNGetContext(ctx, tag)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return result, found, nil
+}
+
+func RouterVPNOutboundContext(ctx context.Context, manager OutboundManager, tag string) (Outbound, bool, error) {
+	if ctx == nil {
+		return nil, false, errors.New("native outbound observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	reader, ok := manager.(interface {
+		RouterVPNOutboundContext(context.Context, string) (Outbound, bool, error)
+	})
+	if !ok {
+		return nil, false, errors.New("native outbound manager has no bounded observation")
+	}
+	result, found, err := reader.RouterVPNOutboundContext(ctx, tag)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return result, found, nil
+}
+
+func RouterVPNEndpointContext(ctx context.Context, manager EndpointManager, tag string) (Endpoint, bool, error) {
+	if ctx == nil {
+		return nil, false, errors.New("native endpoint observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	reader, ok := manager.(interface {
+		RouterVPNGetContext(context.Context, string) (Endpoint, bool, error)
+	})
+	if !ok {
+		return nil, false, errors.New("native endpoint manager has no bounded observation")
+	}
+	result, found, err := reader.RouterVPNGetContext(ctx, tag)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return result, found, nil
+}
+
+func RouterVPNServiceContext(ctx context.Context, manager ServiceManager, tag string) (Service, bool, error) {
+	if ctx == nil {
+		return nil, false, errors.New("native service observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	reader, ok := manager.(interface {
+		RouterVPNGetContext(context.Context, string) (Service, bool, error)
+	})
+	if !ok {
+		return nil, false, errors.New("native service manager has no bounded observation")
+	}
+	result, found, err := reader.RouterVPNGetContext(ctx, tag)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return result, found, nil
+}
+
+func RouterVPNTransportContext(ctx context.Context, manager DNSTransportManager, tag string) (DNSTransport, bool, error) {
+	if ctx == nil {
+		return nil, false, errors.New("native transport observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	reader, ok := manager.(interface {
+		RouterVPNTransportContext(context.Context, string) (DNSTransport, bool, error)
+	})
+	if !ok {
+		return nil, false, errors.New("native transport manager has no bounded observation")
+	}
+	result, found, err := reader.RouterVPNTransportContext(ctx, tag)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return result, found, nil
+}
+
+func RouterVPNDefaultNetworkInterfaceContext(ctx context.Context, manager NetworkManager) (*NetworkInterface, error) {
+	if ctx == nil {
+		return nil, errors.New("native network observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	reader, ok := manager.(interface {
+		RouterVPNDefaultNetworkInterfaceContext(context.Context) (*NetworkInterface, error)
+	})
+	if !ok {
+		return nil, errors.New("native network manager has no bounded interface observation")
+	}
+	result, err := reader.RouterVPNDefaultNetworkInterfaceContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}

@@ -1,0 +1,45 @@
+package route
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/common/control"
+)
+
+func (r *NetworkManager) RouterVPNDefaultNetworkInterfaceContext(ctx context.Context) (*adapter.NetworkInterface, error) {
+	if ctx == nil {
+		return nil, errors.New("native interface observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	monitor, ok := r.interfaceMonitor.(interface {
+		RouterVPNDefaultInterfaceContext(context.Context) (*control.Interface, error)
+	})
+	if !ok {
+		return nil, errors.New("native interface monitor has no bounded observation")
+	}
+	iif, err := monitor.RouterVPNDefaultInterfaceContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if iif == nil {
+		return nil, nil
+	}
+	for _, it := range r.networkInterfaces.Load() {
+		if it.Interface.Index == iif.Index {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return &it, nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &adapter.NetworkInterface{Interface: *iif}, nil
+}

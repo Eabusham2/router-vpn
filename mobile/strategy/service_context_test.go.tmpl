@@ -1,0 +1,38 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNManagerObservationRetainsCaller(t *testing.T) {
+	m := &Manager{serviceByTag: map[string]adapter.Service{"captured": nil}}
+	m.access.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, _, err := m.RouterVPNGetContext(ctx, "captured"); done <- err }()
+	cancel()
+	select {
+	case err := <-done:
+		m.access.Unlock()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("original observation cancellation lost", err)
+		}
+	case <-time.After(time.Second):
+		m.access.Unlock()
+		<-done
+		t.Fatal("cancelled native observation waited on manager lock")
+	}
+	if _, found, err := m.RouterVPNGetContext(context.Background(), "captured"); err != nil || !found {
+		t.Fatal("expired observer changed captured manager state", found, err)
+	}
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	if _, _, err := m.RouterVPNGetContext(expired, "captured"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("expired caller deadline renewed", err)
+	}
+}
