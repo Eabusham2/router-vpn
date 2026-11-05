@@ -5,10 +5,12 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"router-vpn/internal/common"
@@ -57,11 +59,17 @@ func (b *linuxStandardBootBootstrapClient) forget(ctx context.Context) error {
 	if b.consumed.Load() || b.closed.Load() {
 		return nil
 	}
+	if original, ok := linuxStandardBootBootstraps.Load(b.app); !ok || original != b {
+		return errors.New("bootstrap original registration changed before retirement")
+	}
 	if b.peer != nil && b.protection == nil {
 		if e := b.peer.CloseContext(ctx); e != nil {
 			return e
 		}
 		b.peer = nil
+	}
+	if e := b.releaseParent(ctx); e != nil {
+		return e
 	}
 	if !linuxStandardBootBootstraps.CompareAndDelete(b.app, b) {
 		return errors.New("bootstrap original registration changed")
@@ -77,6 +85,9 @@ func (b *linuxStandardBootBootstrapClient) cleanup(ctx context.Context) error {
 		return e
 	}
 	defer b.mu.Unlock()
+	if b.consumed.Load() || b.closed.Load() {
+		return nil
+	}
 	if !b.attempted || b.cleanupAcknowledged {
 		return b.forget(ctx)
 	}
@@ -152,9 +163,24 @@ func captureLinuxBootBootstrapClient(ctx context.Context, a *app, parent *deskto
 		}
 		client.mu.Unlock()
 	}
+	// Publish the cleanup dependency while original parent admission is fenced.
+	// Shutdown snapshots these owners before canceling the native parent.
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.gate:
+	}
+	defer func() { p.gate <- struct{}{} }()
+	if e := p.currentLocked(true); e != nil {
+		return nil, e
+	}
 	if _, loaded := linuxStandardBootBootstraps.LoadOrStore(a, b); loaded {
 		return nil, errors.New("bootstrap cannot replace original registration")
 	}
+	if p.dependents == nil {
+		p.dependents = make(map[ownedDesktopNodeParent]struct{})
+	}
+	p.dependents[b] = struct{}{}
 	return b, nil
 }
 func (b *linuxStandardBootBootstrapClient) lookup(ctx context.Context, name string) (addresses []netip.Addr, handled bool, failure error) {
@@ -162,7 +188,7 @@ func (b *linuxStandardBootBootstrapClient) lookup(ctx context.Context, name stri
 		return nil, true, e
 	}
 	defer b.mu.Unlock()
-	if b.consumed.Load() || name != b.request.Hostname || b.operation.Err() != nil {
+	if b.closed.Load() || b.consumed.Load() || name != b.request.Hostname || b.operation.Err() != nil {
 		return nil, true, errors.New("bootstrap changed original outer hostname or operation")
 	}
 	work, cancel := context.WithDeadline(ctx, time.Unix(0, b.request.DeadlineNS))
@@ -170,7 +196,7 @@ func (b *linuxStandardBootBootstrapClient) lookup(ctx context.Context, name stri
 	// Keep the transport envelope deadline at ctx's original bound: the inner
 	// immutable work stamp remains earlier despite millisecond wire rounding.
 	response, e := b.rpc(ctx, "boot-bootstrap")
-	if e != nil && !b.attempted && b.peer == nil && errors.Is(e, os.ErrNotExist) {
+	if e != nil && b.unsentAbsent(response, e) {
 		return nil, false, b.forget(ctx)
 	}
 	if e != nil {
@@ -236,10 +262,47 @@ func (b *linuxStandardBootBootstrapClient) bindTransferLocked(ctx context.Contex
 	source.protection = b.protection
 	return &linuxStandardBootBootstrapBinding{ID: b.request.ID, Address: address.String()}, nil
 }
-func (b *linuxStandardBootBootstrapClient) consumeTransferLocked() error {
+func (b *linuxStandardBootBootstrapClient) consumeTransferLocked(ctx context.Context) error {
 	if !linuxStandardBootBootstraps.CompareAndDelete(b.app, b) {
 		return errors.New("bootstrap transfer lost original registration")
 	}
 	b.consumed.Store(true)
+	return b.releaseParent(ctx)
+}
+
+// Close joins only this original bootstrap before parent cancellation. After
+// transfer consumption the successor owns the peer; only detach our dependency.
+func (b *linuxStandardBootBootstrapClient) Close(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	if e := b.cleanup(ctx); e != nil {
+		return e
+	}
+	if b.consumed.Load() {
+		return b.releaseParent(ctx)
+	}
 	return nil
+}
+func (b *linuxStandardBootBootstrapClient) unsentAbsent(response linuxStandardServiceResponse, failure error) bool {
+	if b.attempted || b.peer != nil || response.unconnectedSocket == "" {
+		return false
+	}
+	operation, ok := failure.(*net.OpError)
+	if !ok || operation.Op != "dial" || operation.Net != "unixpacket" {
+		return false
+	}
+	address, ok := operation.Addr.(*net.UnixAddr)
+	if !ok || address.Name != response.unconnectedSocket || address.Net != "unixpacket" {
+		return false
+	}
+	call, ok := operation.Err.(*os.SyscallError)
+	return ok && call.Syscall == "connect" && call.Err == syscall.ENOENT
+}
+
+func (b *linuxStandardBootBootstrapClient) releaseParent(ctx context.Context) error {
+	if b == nil || b.parent == nil || b.parent.parent == nil {
+		return errors.New("bootstrap lost its original parent dependency")
+	}
+	return b.parent.parent.releaseDependent(ctx, b)
 }

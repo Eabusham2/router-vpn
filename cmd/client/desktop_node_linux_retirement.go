@@ -193,8 +193,21 @@ func (p *desktopLinuxNodeParent) prepareTransactionShutdown(ctx context.Context)
 			}
 		}
 	}
+	var bootstraps []*linuxStandardBootBootstrapClient
+	for dependent := range p.dependents {
+		if bootstrap, ok := dependent.(*linuxStandardBootBootstrapClient); ok {
+			bootstraps = append(bootstraps, bootstrap)
+		}
+	}
 	transactions := append([]*desktopLinuxNodeTransaction(nil), p.shutdownTransactions...)
 	p.gate <- struct{}{}
+	// Cleanup may observe this parent and release its dependency; never hold
+	// the parent gate while joining the retained service conversation.
+	for _, bootstrap := range bootstraps {
+		if err := bootstrap.Close(ctx); err != nil {
+			return err
+		}
+	}
 	for _, transaction := range transactions {
 		if err := transaction.prepareParentShutdown(ctx, make(map[*desktopLinuxNodeTransaction]bool), len(transactions)); err != nil {
 			return err

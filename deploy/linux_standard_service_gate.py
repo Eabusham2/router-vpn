@@ -5,6 +5,8 @@ import re
 PREFIX = 'TestLinuxStandardService'
 MTU_PREFIX = 'TestLinuxStandardMTU'
 CORE = {
+    'BootBootstrapUnsentDestination': ('legacy', 'generation', 'missing-receipt', 'foreign-socket', 'missing-image', 'mixed-error', 'cancelled', 'wrong-network', 'wrong-operation', 'wrong-syscall', 'attempted', 'retained-peer'),
+    'BootBootstrapParentJoin': ('cancelled-no-next-lookup', 'held-cleanup-retry', 'replacement', 'consumed-transfer', 'pending-failure-retry', 'consumed-detach-retry'),
     'BootTransferRetainsExactSource': ('original', 'replacement-boot', 'engine-not-joined', 'cleanup-pending', 'wrong-session', 'peer-close-pending', 'peer-closed'),
     'BootTransferUnsentAndCancelledCleanup': ('unsent', 'cancelled', 'replacement'),
     'BootTransferSourceKindsRemainDistinct': (),
@@ -471,3 +473,5 @@ SOURCE.update({'internal/dnsmeasure/transport_bootstrap.go','internal/dnsmeasure
 NATIVE_MTU_SOURCES.update({'cmd/client/' + name for name in (
  'linux_standard_service_boot_bootstrap_native_test.go', 'linux_standard_service_boot_resolver_native_test.go',
  'linux_standard_service_boot_hostname_namespace_native_test.go')})
+
+SOURCE.add('cmd/client/linux_standard_service_boot_bootstrap_client_linux_test.go')

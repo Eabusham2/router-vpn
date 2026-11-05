@@ -103,7 +103,10 @@ func TestLinuxStandardServiceBootBootstrapPeerCleanupRetainsAcknowledgedClose(t 
 				call = &bootPeerCancelDuringClose{Context: parent, cancel: cancel}
 			}
 			a := &app{}
-			b := &linuxStandardBootBootstrapClient{app: a, peer: peer, attempted: true, cleanupAcknowledged: true}
+			p := &desktopLinuxNodeParent{gate: make(chan struct{}, 1), dependents: make(map[ownedDesktopNodeParent]struct{})}
+			p.gate <- struct{}{}
+			b := &linuxStandardBootBootstrapClient{app: a, parent: &desktopLinuxNodeParentCapture{app: a, parent: p}, peer: peer, attempted: true, cleanupAcknowledged: true}
+			p.dependents[b] = struct{}{}
 			linuxStandardBootBootstraps.Store(a, b)
 			defer linuxStandardBootBootstraps.Delete(a)
 			if e := b.cleanup(call); !errors.Is(e, context.Canceled) {
@@ -119,7 +122,7 @@ func TestLinuxStandardServiceBootBootstrapPeerCleanupRetainsAcknowledgedClose(t 
 					t.Fatal("canceled admission damaged live peer", e)
 				}
 			}
-			// No parent/RPC capability is installed in this local finalization fixture.
+			// Only a local dependency gate is installed, without native parent/RPC authority.
 			// Repeating network cleanup or lookup would fail instead of joining these
 			// actual original descriptors after the authenticated clean milestone.
 			ctx, stop := context.WithTimeout(context.Background(), time.Second)
@@ -127,7 +130,7 @@ func TestLinuxStandardServiceBootBootstrapPeerCleanupRetainsAcknowledgedClose(t 
 			if e := b.cleanup(ctx); e != nil {
 				t.Fatal("acknowledged original close could not finish locally", e)
 			}
-			if !b.closed.Load() || peer.task != nil || peer.command != nil || peer.pidfd != nil {
+			if !b.closed.Load() || len(p.dependents) != 0 || peer.task != nil || peer.command != nil || peer.pidfd != nil {
 				t.Fatal("partial original close did not join")
 			}
 			if _, ok := linuxStandardBootBootstraps.Load(a); ok {

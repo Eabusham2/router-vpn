@@ -195,6 +195,7 @@ func linuxStandardServiceRPC(ctx context.Context, image, namespace os.FileInfo, 
 	dialer := net.Dialer{Deadline: deadline}
 	connection, err := dialer.DialContext(ctx, "unixpacket", socket)
 	if err != nil {
+		response.unconnectedSocket = socket
 		return response, err
 	}
 	defer connection.Close()

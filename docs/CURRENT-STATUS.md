@@ -66,6 +66,22 @@ cleanup allowance is an explicit implementation limit, separate from and unable
 to renew the original lookup deadline. Active image handoff fences both lookup
 and pending cleanup admission.
 
+The controller now distinguishes absence of the validated original Unix socket
+from a missing executable, changed source or mixed error. Only the exact unsent
+`connect`/`ENOENT` result can retain the ordinary resolver fallback. Pending
+bootstrap conversations register with the original parent before the first RPC;
+shutdown joins them before canceling that parent, even when no later lookup is
+requested. Consumed transfers detach only their old dependency and preserve the
+successor's service peer. Bounded detach or cleanup failure retains a retryable
+original owner. The focused race family passes all 52 verdicts, including 20 new
+fallback and parent-retirement verdicts. Actual namespace/service acceptance
+remains separate from these local models and native peer-close tests.
+
+Resolver search/NSS/hosts semantics, systemd-resolved per-link routing and
+transport policy, native TCP fallback, kernel grant expiry and cleanup after a
+lost creation acknowledgement remain source work. In particular, reading a
+flattened systemd upstream file does not prove its routing-domain policy.
+
 Local evidence is 77 focused race verdicts across the client, process witness,
 DNS and native parser packages; 27 exact relocated native helper verdicts on the
 pinned core (including completed-close retries); and five causal mutants rejected

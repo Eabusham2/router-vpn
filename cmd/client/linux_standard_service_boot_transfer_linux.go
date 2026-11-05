@@ -126,7 +126,7 @@ func captureLinuxStandardBootNodeTransfer(ctx context.Context, h *desktopLinuxNo
 	}
 	h.standardTransfer = t // Retain before the authenticated request can be sent.
 	if h.bootBootstrap != nil {
-		if err := h.bootBootstrap.consumeTransferLocked(); err != nil {
+		if err := h.bootBootstrap.consumeTransferLocked(ctx); err != nil {
 			return t, err
 		}
 	}

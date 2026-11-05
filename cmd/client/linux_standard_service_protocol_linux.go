@@ -46,6 +46,7 @@ type linuxStandardServiceRequest struct {
 }
 
 type linuxStandardServiceResponse struct {
+	unconnectedSocket   string                                    // local validated dial destination; never decoded
 	Bootstrap           *linuxStandardBootBootstrapResponse       `json:"bootstrap,omitempty"`
 	ImageUpgrade        *linuxStandardServiceImageUpgradeResponse `json:"image_upgrade,omitempty"`
 	Startup             *linuxStandardServiceStartup              `json:"startup,omitempty"`
