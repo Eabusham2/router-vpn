@@ -126,6 +126,18 @@ additional admission predicates. All 19 overlay/source-boundary checks pass;
 the previous overlay reproduces the three reported test failures. This is a
 test-harness correction, not production Windows Tor admission or WFP acceptance.
 
+The Windows Node mutation gate now selects the exact original SIP003 method
+when a newer contextual sibling contains the same predicate. It continues to
+reject absent or ambiguous methods and leaves contextual methods unchanged.
+The Unix interface control likewise keeps its unique original return boundary.
+The external MTU retention control now mutates the actual external lease used
+by its fixture, and source capture verifies that lease and its actual manager;
+the unrelated Tor lease cannot satisfy this boundary. All 71 selected Python
+checks pass, 59 Linux and 46 Windows controls construct from the prepared source,
+and four actual prepared-native baseline verdicts pass under race. Three scoped
+production defects fail their intended assertions. The corrected external
+network-reset control and complete native Windows jobs still require CI.
+
 The observed ARM64 Node/TUN MTU-rollback notification failure is corrected in
 `dc2ad7f5`: a strictly classified automatic IPv6 address waits for the actual
 original socket notification under the unchanged caller deadline. Pending

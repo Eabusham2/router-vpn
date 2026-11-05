@@ -141,6 +141,18 @@ def checked_sources(source):
             raise ValueError("Ordinary Windows command differs from shipping bytes: " + template.name)
         records[target.relative_to(source).as_posix()] = hashlib.sha256(expected).hexdigest()
     records.update(BOOT.PREP.RELAY.OBSERVATION.verify(source))
+    # These two original methods are also the actual retention-control targets.
+    # The standalone Tor MTU implementation cannot stand in for the external
+    # lease exercised by the ordinary Box integration fixture.
+    for relative, template in (
+        ("routervpn_external_mtu.go", "mobile/externalpolicy/mtu.go.tmpl"),
+        ("adapter/inbound/routervpn_mtu.go", "mobile/mtu/manager.go.tmpl"),
+    ):
+        original, target = ROOT / template, source / relative
+        expected = original.read_bytes()
+        if original.is_symlink() or target.is_symlink() or not target.is_file() or target.read_bytes() != expected:
+            raise ValueError("Ordinary Windows retention source differs from shipping bytes: " + relative)
+        records[relative] = hashlib.sha256(expected).hexdigest()
     for path in sorted((ROOT / "internal/mobilemultihop").glob("*.go")):
         if path.name.endswith("_test.go"):
             continue
@@ -163,7 +175,7 @@ def control_selection(case):
 
 
 def mtu_retention_mutants(source):
-    engine_path = "routervpn_desktop_tor_box_mtu.go"
+    engine_path = "routervpn_external_mtu.go"
     manager_path = "adapter/inbound/routervpn_mtu.go"
     engine = (source / engine_path).read_text(encoding="utf-8")
     manager = (source / manager_path).read_text(encoding="utf-8")

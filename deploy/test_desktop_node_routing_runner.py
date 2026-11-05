@@ -20,6 +20,63 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+class ExactPerformanceMutationBoundary(unittest.TestCase):
+    def test_actual_legacy_methods_do_not_mutate_contextual_siblings(self):
+        cases = (
+            ("mobile/performance/service.go.tmpl",
+             "func (s *Service) resolve(tag string, seen map[string]bool) (adapter.Outbound, string, error) {",
+             "func (s *Service) resolveContext(",
+             "if composite, ok := out.(*routervpncomposite.Outbound); ok {",
+             "if composite, ok := out.(*routervpncomposite.Outbound); false && ok {"),
+            ("mobile/performance/service.go.tmpl",
+             "func (s *Service) resolve(tag string, seen map[string]bool) (adapter.Outbound, string, error) {",
+             "func (s *Service) resolveContext(", "switch out.Type() {",
+             'switch out.Type() {\n\tcase "routervpn-composite":\n\t\treturn out, identity, nil'),
+            ("mobile/composite/outbound.go.tmpl",
+             "func (h *Outbound) RouterVPNPerformanceIdentity() string {",
+             "func (h *Outbound) RouterVPNPerformanceIdentityContext(",
+             "|| currentTCP != tcp ||", "|| false && currentTCP != tcp ||"),
+            ("mobile/composite/outbound.go.tmpl",
+             "func (h *Outbound) RouterVPNPerformanceIdentity() string {",
+             "func (h *Outbound) RouterVPNPerformanceIdentityContext(",
+             "|| currentUDP != udp {", "|| false && currentUDP != udp {"),
+        )
+        for name, signature, sibling, before, after in cases:
+            with self.subTest(source=name, mutation=before):
+                path = ROOT / name
+                original = path.read_text()
+                self.assertEqual(original.count(before), 2)
+                changed = NODE.mutation_in_function(original, signature, before, after)
+                boundary = original.index(sibling)
+                self.assertEqual(changed[changed.index(sibling):], original[boundary:])
+                self.assertEqual(changed, original.replace(before, after, 1))
+                self.assertEqual(path.read_text(), original)
+
+    def test_missing_duplicate_and_wrong_method_fail_closed(self):
+        signature = "func (s *Service) selected() {"
+        raw = "package sample\n\n" + signature + "\n unique()\n}\nfunc sibling() {\n unique()\n}\n"
+        for value, target, before in (
+            (raw, signature.replace("selected", "missing"), "unique()"),
+            (raw + "\n" + signature + "\n unique()\n}\n", signature, "unique()"),
+            (raw.replace(" unique()", " unique(); unique()", 1), signature, "unique()"),
+            (raw.replace(" unique()", " absent()", 1), signature, "unique()"),
+        ):
+            with self.subTest(source=value, target=target):
+                with self.assertRaises(ValueError):
+                    NODE.mutation_in_function(value, target, before, "broken()")
+
+    def test_unix_interface_control_preserves_contextual_observer(self):
+        original = (ROOT / "mobile/desktop/node_physical_linux.go.tmpl").read_text()
+        before = "return actual != nil && actual.Index == index"
+        after = "return actual != nil && (actual.Index == index || actual.Index != index)"
+        self.assertEqual(original.count("actual.Index == index"), 2)
+        changed = NODE.BOOT.IDENTITY.replace_once(original, before, after)
+        marker = "physicalCurrentContext := func("
+        self.assertEqual(changed[changed.index(marker):], original[original.index(marker):])
+        with self.assertRaises(ValueError):
+            NODE.BOOT.IDENTITY.replace_once(original + "\n" + before, before, after)
+
+
 class NativeStartupTransportVerdicts(unittest.TestCase):
     def test_original_supervised_startup_transport_is_required(self):
         self.assertEqual({key: len(value) for key, value in NODE.STARTUP_TRANSPORT_VERDICTS.items()}, {"native-startup-transport": 17, "native-startup-codec": 10})

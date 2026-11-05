@@ -1978,6 +1978,46 @@ Fresh exact-source native observations also supersede specific older gaps:
   toolchain invocation passes every case. The original native-namespace and
   full production-linkage requirements remain mandatory.
 
+## Exact native mutation targets after contextual methods were added
+
+The Windows physical-bootstrap run `41992012243` at `a05da2a1` exposed two
+distinct test-harness defects after its real baseline stages progressed:
+
+1. Captured Node job `127130819509` aborted strict SIP003 mutation construction.
+   The original unscoped predicate now appears in both `resolve` and
+   `resolveContext`. Four controls now select their exact original receiver and
+   method and then require one exact mutation inside that body. Missing,
+   duplicated or changed methods still fail construction. The contextual
+   siblings remain byte-identical. The Unix changed-interface control similarly
+   selects its unique original return statement rather than both callbacks.
+2. Native-bootstrap jobs `127130820046` and `127130820060` correctly rejected
+   the discarded-engine-candidate control because its selected test passed.
+   That control had changed the Tor MTU implementation, while the actual
+   external fixture calls `RouterVPNExternalMTULease.changeMTU`. It now targets
+   `routervpn_external_mtu.go`; the original manager control remains separate.
+   `checked_sources` additionally requires the exact shipping bytes and hashes
+   for both actual retention-control targets.
+
+All four source files are frozen in `native-mutation-boundary-unit-files.json`.
+The selected 71 Python cases pass in 7.578s. The two unchanged Python cases
+that launch Go were excluded from this selection while another owner held the
+compiler slot; both had already passed in the earlier complete 47-case routing
+runner. The normally prepared core constructs all 59 Linux and 46 Windows
+controls. These counts describe the gate inventory, not completed product
+requirements or successful native execution of every control.
+
+The actual prepared composite/performance baseline then passes all four
+required named verdicts under race. Borrowed TCP, borrowed UDP and type-label
+defects each compile and fail the exact intended assertion, in 0.133s, 0.206s
+and 0.043s respectively. Neither a build failure nor a timeout, panic, skip or
+race substitutes for the expected defect. Original target and fixture files
+remain byte-identical to the current templates throughout those controls.
+
+The complete SIP003 peer, Unix-interface and corrected external network-reset
+controls remain mandatory native CI. Local interface discovery fails before
+the external fixture's intended assertion; this patch does not claim a local
+physical-network pass, change production admission or remove a negative case.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

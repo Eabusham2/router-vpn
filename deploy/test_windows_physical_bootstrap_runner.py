@@ -21,6 +21,28 @@ spec.loader.exec_module(EXTERNAL)
 
 
 class ExternalMTURetentionControls(unittest.TestCase):
+    def test_actual_external_and_manager_sources_are_captured_and_rechecked(self):
+        with tempfile.TemporaryDirectory(prefix="external-retention-sources-") as directory:
+            root, core = Path(directory) / "root", Path(directory) / "core"
+            pairs = (("routervpn_external_mtu.go", "mobile/externalpolicy/mtu.go.tmpl"),
+                     ("adapter/inbound/routervpn_mtu.go", "mobile/mtu/manager.go.tmpl"))
+            for target, template in pairs:
+                for path in (root / template, core / target):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes((ROOT / template).read_bytes())
+            with patch.object(EXTERNAL, "ROOT", root), \
+                 patch.object(EXTERNAL.BOOT, "sources", return_value=(core, {})), \
+                 patch.object(EXTERNAL.BOOT.PREP.RELAY.OBSERVATION, "verify", return_value={}):
+                _, records = EXTERNAL.checked_sources(core)
+                self.assertTrue(all(target in records for target, _ in pairs))
+                for target, template in pairs:
+                    with self.subTest(changed=target):
+                        original = (core / target).read_bytes()
+                        (core / target).write_bytes(original + b"\n// changed original owner\n")
+                        with self.assertRaisesRegex(ValueError, "retention source differs"):
+                            EXTERNAL.checked_sources(core)
+                        (core / target).write_bytes(original)
+
     def test_control_selector_preserves_exact_integration_child_scope(self):
         parent = "TestRouterVPNDesktopExternalPhysicalIntegration"
         case = parent + "/network-reset-after-native-publication"
@@ -36,7 +58,7 @@ class ExternalMTURetentionControls(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="external-mtu-retention-") as directory:
             core = Path(directory)
             originals = {
-                "routervpn_desktop_tor_box_mtu.go": ROOT / "mobile/desktop/tor_box_mtu.go.tmpl",
+                "routervpn_external_mtu.go": ROOT / "mobile/externalpolicy/mtu.go.tmpl",
                 "adapter/inbound/routervpn_mtu.go": ROOT / "mobile/mtu/manager.go.tmpl",
             }
             for name, source in originals.items():
@@ -52,7 +74,15 @@ class ExternalMTURetentionControls(unittest.TestCase):
                 self.assertIn(witness, fixture)
                 self.assertNotEqual(changed, originals[name].read_text())
                 self.assertEqual((core / name).read_bytes(), originals[name].read_bytes())
-            (core / "routervpn_desktop_tor_box_mtu.go").write_text("changed source")
+            engine = next(control for control in controls if control[0] == "discarded-original-engine-candidate")
+            self.assertEqual(engine[1], "routervpn_external_mtu.go")
+            self.assertIn("func (l *RouterVPNExternalMTULease) changeMTU(", engine[-1])
+            self.assertIn("\te.tun = expected\n", engine[-1])
+            self.assertNotIn("\te.tun = current\n", engine[-1])
+            # The similarly named Tor lease is a different implementation and
+            # must never satisfy this external fixture's source boundary.
+            (core / "routervpn_desktop_tor_box_mtu.go").write_bytes((ROOT / "mobile/desktop/tor_box_mtu.go.tmpl").read_bytes())
+            (core / "routervpn_external_mtu.go").write_text("changed source")
             with self.assertRaises(ValueError):
                 EXTERNAL.mtu_retention_mutants(core)
 

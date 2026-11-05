@@ -689,6 +689,14 @@ def build_xray_reference(compiler, source, workspace, captured, race):
     return binary, hashlib.sha256(binary.read_bytes()).hexdigest(), xray, records
 
 
+def mutation_in_function(raw, signature, before, after):
+    """Keep one actual receiver/method boundary when contextual siblings exist."""
+    marker = "\n" + signature
+    if raw.count(marker) != 1:
+        raise ValueError("Node native mutation lost its exact function: " + signature)
+    return BOOT.IDENTITY.function_mutant(raw, signature, before, after)
+
+
 def mutants(source, windows):
     def changed(relative, before, after, count=1):
         raw = (source / relative).read_text(encoding="utf-8")
@@ -697,6 +705,9 @@ def mutants(source, windows):
                 raise ValueError("Node native mutation lost its exact source count: " + relative)
             return raw.replace(before, after)
         return BOOT.IDENTITY.replace_once(raw, before, after)
+    def changed_function(relative, signature, before, after):
+        raw = (source / relative).read_text(encoding="utf-8")
+        return mutation_in_function(raw, signature, before, after)
     lower = "routervpn/desktoppt/node_physical.go"
     network = "routervpn/desktoppt/node_network.go"
     box = "routervpn_desktop_node_box_physical.go"
@@ -707,16 +718,20 @@ def mutants(source, windows):
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
         ("sip003-cover-without-captured-composite", "service/routervpnperformance/service.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeSIP003RetainedProof", "off/owned",
-         "SIP003 cover lost independent TCP proof, UDP owner or truthful native boundary", changed("service/routervpnperformance/service.go",
+         "SIP003 cover lost independent TCP proof, UDP owner or truthful native boundary", changed_function("service/routervpnperformance/service.go",
+         "func (s *Service) resolve(tag string, seen map[string]bool) (adapter.Outbound, string, error) {",
          "if composite, ok := out.(*routervpncomposite.Outbound); ok {", "if composite, ok := out.(*routervpncomposite.Outbound); false && ok {")),
         ("sip003-cover-borrowed-tcp", "protocol/routervpncomposite/outbound.go", "./protocol/routervpncomposite", "TestNativeCompositePerformanceRequiresExactSIP003Owners", "tcp-replaced",
-         "cover capability inferred a mode/type, unopened lane or replaced lifecycle", changed("protocol/routervpncomposite/outbound.go",
+         "cover capability inferred a mode/type, unopened lane or replaced lifecycle", changed_function("protocol/routervpncomposite/outbound.go",
+         "func (h *Outbound) RouterVPNPerformanceIdentity() string {",
          "|| currentTCP != tcp ||", "|| false && currentTCP != tcp ||")),
         ("sip003-cover-borrowed-udp", "protocol/routervpncomposite/outbound.go", "./protocol/routervpncomposite", "TestNativeCompositePerformanceRequiresExactSIP003Owners", "udp-replaced",
-         "cover capability inferred a mode/type, unopened lane or replaced lifecycle", changed("protocol/routervpncomposite/outbound.go",
+         "cover capability inferred a mode/type, unopened lane or replaced lifecycle", changed_function("protocol/routervpncomposite/outbound.go",
+         "func (h *Outbound) RouterVPNPerformanceIdentity() string {",
          "|| currentUDP != udp {", "|| false && currentUDP != udp {")),
         ("sip003-cover-type-label", "service/routervpnperformance/service.go", "./service/routervpnperformance", "TestNativePerformanceCannotAdmitCompositeByTypeName", "",
-         "a composite type label replaced the captured concrete two-lane owner", changed("service/routervpnperformance/service.go",
+         "a composite type label replaced the captured concrete two-lane owner", changed_function("service/routervpnperformance/service.go",
+         "func (s *Service) resolve(tag string, seen map[string]bool) (adapter.Outbound, string, error) {",
          "switch out.Type() {", 'switch out.Type() {\n\tcase "routervpn-composite":\n\t\treturn out, identity, nil')),
         ("sip003-uncaptured-transport", "transport/sip003/v2ray.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeTraffic", "ss-v2ray/off",
          "simultaneous composite traffic omitted one retained native lane grant", changed("transport/sip003/v2ray.go",
@@ -814,7 +829,7 @@ def mutants(source, windows):
         result.extend((
             ("unix-changed-interface", factory, "./routervpn/desktoppt", test, "wg/lan-off/ipv6-off/always/index",
              "Unix Node admitted a changed interface, cancellation or partial source",
-             changed(factory, "actual.Index == index", "(actual.Index == index || actual.Index != index)")),
+             changed(factory, "return actual != nil && actual.Index == index", "return actual != nil && (actual.Index == index || actual.Index != index)")),
             ("unix-substituted-private-tuple", factory, "./routervpn/desktoppt", test, "wg/lan-off/ipv6-off/always/live",
              "Unix Node constructor changed exact private outer tuples or allowed selected Home DNS",
              changed(factory, "uint16(destination.Port)", "uint16(destination.Port+1)")),
