@@ -24,6 +24,9 @@ class StandardServiceGateTests(unittest.TestCase):
                     'cmd/client/linux_standard_service_boot_resolver_linux.go',
                     'internal/mobiletor/desktop_standard_linux_bootstrap.go',
                     'internal/mobiletor/desktop_standard_linux_bootstrap_native_test.go',
+                    'internal/mobiletor/desktop_standard_linux_bootstrap_netlink.go',
+                    'internal/mobiletor/desktop_standard_linux_bootstrap_netlink_test.go',
+                    'internal/mobiletor/desktop_standard_linux_bootstrap_netlink_native_test.go',
                     'internal/linuxprocess/bootstrap_cleanup_gate_linux_native_test.go',
                     'internal/dnsmeasure/transport_bootstrap.go'}
         self.assertTrue(required.issubset(gate.SOURCE))
@@ -41,11 +44,33 @@ class StandardServiceGateTests(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('bootstrap_guardian',ROOT/'deploy/test_desktop_linux_guardian.py')
         guardian=importlib.util.module_from_spec(spec);spec.loader.exec_module(guardian)
         self.assertIn('StandardBootstrapSocket', guardian.STANDARD_KERNEL_CASES)
+        self.assertIn('StandardBootstrapConditionalRemoval', guardian.STANDARD_KERNEL_CASES)
         output='\n'.join('--- PASS: TestLinuxStandardBootstrap'+case+' (0.01s)' for case in guardian.BOOTSTRAP_PARSER)
         guardian.require_socks_verdicts(output,'TestLinuxStandardBootstrap',guardian.BOOTSTRAP_PARSER)
         for line in output.splitlines():
             for bad in (output.replace(line,'',1), output+'\n'+line, output.replace(line,line.replace('PASS','SKIP'))):
                 with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,'TestLinuxStandardBootstrap',guardian.BOOTSTRAP_PARSER)
+        prefix='TestDesktopLinuxGuardianKernelStandardBootstrapConditionalRemoval/'
+        output='\n'.join('--- PASS: '+prefix+case+' (0.01s)' for case in guardian.BOOTSTRAP_REMOVAL_NATIVE)
+        guardian.require_socks_verdicts(output,prefix,guardian.BOOTSTRAP_REMOVAL_NATIVE)
+        for line in output.splitlines():
+            for bad in (output.replace(line,'',1), output+'\n'+line, output.replace(line,line.replace('PASS','SKIP')), output.replace(line,line.replace('PASS','FAIL'))):
+                with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,prefix,guardian.BOOTSTRAP_REMOVAL_NATIVE)
+
+    def test_bootstrap_removal_uses_original_observed_generation(self):
+        source=(ROOT/'internal/mobiletor/desktop_standard_linux_bootstrap.go').read_text()
+        start=source.index('func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(')
+        end=source.index('// The source port/cookie',start)
+        cleanup=source[start:end]
+        prior=-1
+        for step in ('present, generation, e := t.observeGeneration(ctx, b)',
+                     'desktopLinuxStandardLease(lease)',
+                     'b.netlink.deleteBootstrapRule(ctx, generation, b.nft.table(), t.handle)',
+                     'if !acknowledged', 'present, e = t.observe(ctx, b)', 't.closeSocket()'):
+            position=cleanup.find(step,prior+1)
+            self.assertGreater(position,prior,'bootstrap cleanup lost its original conditional native ordering: '+step)
+            prior=position
+        self.assertNotIn('desktopLinuxNFTCommandFiles',cleanup)
 
     def test_actual_worker_bounded_join_and_causal(self):
         spec=importlib.util.spec_from_file_location('standard_worker_stop',ROOT/'deploy/test_standard_worker_stop.py')

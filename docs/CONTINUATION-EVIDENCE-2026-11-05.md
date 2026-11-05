@@ -2384,6 +2384,49 @@ Windows retained ordinary entries, other graph families, Server/Compare and
 additional Start Layer compositions remain individual implementation work. No
 original graph/platform requirement is removed by the bounded admission here.
 
+## Conditional native bootstrap rule removal
+
+The original cleanup read back a generation-bracketed inventory, then invoked a
+separate nft subprocess to delete by handle. An intervening ruleset change could
+replace that handle between observation and mutation. Cleanup now retains the
+observed generation and submits a conditional atomic Netlink batch using the
+same original native endpoint, table, output chain and acknowledged rule handle.
+It revalidates the original lease before sending. A changed generation rejects
+the transaction; begin/command/foreign acknowledgements cannot substitute for
+the original committed batch receipt. A malformed or lost receipt retains the
+uncertain endpoint and owner. Complete original baseline and rule-absence
+readback still precedes closing the original socket and file.
+
+The isolated source consists of `782e9f2a50a82693f05658c9efa0422a472610e4`
+plus the eight files in this unit. Both root and normally prepared native
+bootstrap/baseline suites execute 152 named verdicts under the race detector,
+with no failures or skips (1.211 seconds and 1.194 seconds respectively). Native
+preparation starts from pristine pinned core
+`1ac1a339cb1223e9c70eae14c44411c75033c02d`, uses its own Xray checkout and the
+ordinary preparer, and verifies all 177 copied source records unchanged after
+execution. The compiled control that zeroes the batch generation fails the
+intended wire-condition assertion. Three focused Python gates pass in 1.515
+seconds, the strict namespace verdict inventory rejects missing/renamed/duplicate
+or failed results, and restoring the old subprocess cleanup fails the exact
+source-wiring assertion.
+
+The actual-kernel fixture adds six mandatory scenarios: stale ruleset,
+same-handle replacement, pre-send cancellation, committed removal, retired
+handle and closed endpoint. It owns an unhooked table inside the required fresh
+network namespace and verifies that the independent baseline remains intact.
+The native gate requires every child verdict and the actual zero-generation
+causal failure. These fixtures compile in the prepared engine; their privileged
+execution remains exact-SHA CI evidence because the previously recorded local
+namespace/proc launch mismatch is unresolved. Local wire/model results do not
+stand in for that kernel execution.
+
+Before publication, newer `6318a5c7`, `1938916a` and `7903b70d` source was
+preserved. None changes these eight frozen implementation/gate paths. The latter
+also advances the independent mobile graph work; its author-reported tests are
+not represented as a fresh execution of this Linux suite. Kernel grant expiry,
+recovery after a lost creation acknowledgement, full resolved policy execution,
+current all-platform publication and physical/private acceptance remain open.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

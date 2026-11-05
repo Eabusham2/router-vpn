@@ -202,10 +202,19 @@ The UDP/TCP native cancellation cases compile and remain mandatory; they were no
 executed against a privileged local kernel. The source preparation and tests are
 recorded separately from exact-SHA CI, packaging and device acceptance.
 
+Bootstrap cleanup now submits the exact observed ruleset generation and original
+rule handle through the retained native Netlink endpoint. The atomic batch rejects
+an intervening ruleset change, including a replacement using the same handle.
+Only the original committed receipt followed by complete absence/baseline readback
+allows socket retirement; an unknown receipt keeps the original uncertain owner.
+The focused bootstrap/baseline suite passes 152 verdicts in both root source and
+the normally prepared native engine. The generation-removal causal control and
+source-wiring control fail at their intended assertions. Six actual-kernel removal
+scenarios and their causal control are mandatory CI, not locally executed proof.
+
 Authenticated systemd-resolved per-link routing/security and actual selected
-DoT/DNSSEC execution, unsupported NSS actions/modules, kernel grant expiry,
-cleanup after a lost creation acknowledgement and generation-conditioned removal
-remain source work. A flattened systemd upstream file cannot establish its
+DoT/DNSSEC execution, unsupported NSS actions/modules, kernel grant expiry and
+cleanup after a lost creation acknowledgement remain source work. A flattened systemd upstream file cannot establish its
 routing-domain policy; an explicit refusal does not complete that requirement.
 
 The earlier bounded-UDP increment recorded 77 focused race verdicts across the client, process witness,

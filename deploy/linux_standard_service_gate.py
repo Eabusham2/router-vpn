@@ -471,6 +471,9 @@ SOURCE.update({'internal/dnsmeasure/transport_bootstrap.go','internal/dnsmeasure
  'internal/linuxprocess/bootstrap_cleanup_gate_linux_native_test.go',
  'internal/mobiletor/desktop_standard_linux_bootstrap.go','internal/mobiletor/desktop_standard_linux_bootstrap_test.go',
  'internal/mobiletor/desktop_standard_linux_bootstrap_native_test.go','internal/mobiletor/desktop_standard_linux_protection.go'})
+SOURCE.update({'internal/mobiletor/desktop_standard_linux_bootstrap_netlink.go',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap_netlink_test.go',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap_netlink_native_test.go'})
 NATIVE_MTU_SOURCES.update({'cmd/client/' + name for name in (
  'linux_standard_service_boot_bootstrap_native_test.go', 'linux_standard_service_boot_resolver_native_test.go',
  'linux_standard_service_boot_hostname_namespace_native_test.go')})

@@ -230,26 +230,38 @@ func (t *desktopLinuxStandardBootstrap) inventory(b *DesktopLinuxNodeBaseline, r
 	return present, desktopLinuxProtectionInventoryRows(&n, filtered, false)
 }
 func (t *desktopLinuxStandardBootstrap) observe(ctx context.Context, b *DesktopLinuxNodeBaseline) (bool, error) {
+	present, _, err := t.observeGeneration(ctx, b)
+	return present, err
+}
+
+// A successful observation retains the exact generation that brackets the
+// complete original baseline and temporary rule. Cleanup submits that same
+// generation to the kernel; a later policy change cannot turn readback into
+// authority to delete a same-handle replacement.
+func (t *desktopLinuxStandardBootstrap) observeGeneration(ctx context.Context, b *DesktopLinuxNodeBaseline) (bool, uint32, error) {
 	if e := b.currentNamespace(ctx); e != nil {
-		return false, e
+		return false, 0, e
 	}
 	before, e := b.netlink.generation(ctx)
 	if e != nil {
-		return false, e
+		return false, 0, e
 	}
 	rows, e := desktopLinuxNFTReadTable(ctx, b.nft.table())
 	if e != nil {
-		return false, e
+		return false, 0, e
 	}
 	present, e := t.inventory(b, rows)
 	if e != nil {
-		return false, e
+		return false, 0, e
 	}
 	after, e := b.netlink.generation(ctx)
 	if e != nil || before != after {
-		return false, errors.Join(e, errors.New("bootstrap policy changed during its native snapshot"))
+		return false, 0, errors.Join(e, errors.New("bootstrap policy changed during its native snapshot"))
 	}
-	return present, b.currentNamespace(ctx)
+	if e = b.currentNamespace(ctx); e != nil {
+		return false, 0, e
+	}
+	return present, after, nil
 }
 func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(ctx context.Context, lease *os.File) error {
 	t, b := p.bootstrap, p.baseline
@@ -266,13 +278,18 @@ func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(ctx context.Cont
 		return errors.New("bootstrap retains an unacknowledged grant and original socket")
 	}
 	if t.handle != 0 {
-		present, e := t.observe(ctx, b)
+		present, generation, e := t.observeGeneration(ctx, b)
 		if e != nil {
 			return e
 		}
 		if present {
-			body, _ := json.Marshal(map[string]any{"nftables": []any{map[string]any{"delete": map[string]any{"rule": map[string]any{"family": "inet", "table": b.nft.table(), "chain": "output", "handle": t.handle}}}}})
-			_, commandErr := desktopLinuxNFTCommandFiles(ctx, []string{"-j", "-f", "-"}, string(body), []*os.File{lease})
+			if e = desktopLinuxStandardLease(lease); e != nil {
+				return e
+			}
+			acknowledged, _, commandErr := b.netlink.deleteBootstrapRule(ctx, generation, b.nft.table(), t.handle)
+			if !acknowledged {
+				return errors.Join(commandErr, errors.New("bootstrap retains its original uncommitted removal"))
+			}
 			present, e = t.observe(ctx, b)
 			if e != nil || present {
 				return errors.Join(commandErr, e, errors.New("bootstrap original grant removal is not proved"))

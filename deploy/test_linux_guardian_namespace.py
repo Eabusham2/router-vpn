@@ -283,6 +283,7 @@ def check_verdict_inventory():
                           ('TestDesktopLinuxGuardianKernelStandardNodeTransfer/', GUARDIAN.STANDARD_TRANSFER_NATIVE),
                           ('TestLinuxStandard', GUARDIAN.STANDARD_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernel', GUARDIAN.STANDARD_KERNEL_CASES),
+                          ('TestDesktopLinuxGuardianKernelStandardBootstrapConditionalRemoval/', GUARDIAN.BOOTSTRAP_REMOVAL_NATIVE),
                           ('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES),
                           ('TestDesktopLinuxRunningSOCKS', GUARDIAN.RUNNING_SOCKS_PARSER_CASES),
