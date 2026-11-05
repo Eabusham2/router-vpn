@@ -17,6 +17,13 @@ final class AndroidImportedRouterPath {
     private static final String[] INPUT_KEYS = {"entry_config", "entry_capture", "exit_mode", "exit_files",
             "exit_profile", "exit_start", "dns_bootstrap", "source_sha256"};
 
+    static boolean supports(String entryProtocol, String finalMode) {
+        boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
+        return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
+                && (Arrays.asList("shadowsocks", "hysteria2").contains(finalMode)
+                || proxyEntry && Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(finalMode));
+    }
+
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {
         if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg").contains(entry.protocol)
                 || "shadowsocks".equals(entry.protocol) && !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
@@ -84,7 +91,7 @@ final class AndroidImportedRouterPath {
                 if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg").contains(entryMode)
                         || !"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
                         || !entryMode.equals(selected.getString("entry_mode")) || !input.getString("exit_mode").equals(selected.getString("exit_mode"))
-                        || !Arrays.asList("shadowsocks", "hysteria2").contains(selected.getString("exit_mode"))) {
+                        || !supports(entryMode, selected.getString("exit_mode"))) {
                     throw new IllegalStateException("The imported-entry compiler changed the selected path.");
                 }
                 this.input = input.put("source_sha256", source).toString();
@@ -95,8 +102,8 @@ final class AndroidImportedRouterPath {
 
     static Compiled compile(AndroidStandardExitStore.Entry entry, JSONObject exit, String exitMode, String execution) throws Exception {
         requireEntry(entry);
-        if (!"local".equals(execution) || !Arrays.asList("shadowsocks", "hysteria2").contains(exitMode)) {
-            throw new IllegalArgumentException("Choose Local and the paired final node's Shadowsocks or Hysteria2 transport for this imported entry.");
+        if (!"local".equals(execution) || !supports(entry.protocol, exitMode)) {
+            throw new IllegalArgumentException("Choose a supported Local final transport for this imported entry.");
         }
         AndroidNodeStore.validateBundle(exit);
         JSONObject profile = new JSONObject(AndroidProfileSelection.selectedRouterProfile(exit).toString());
@@ -109,10 +116,10 @@ final class AndroidImportedRouterPath {
         // historical UI preferences. Apply that validated choice to this copy;
         // preparation/restoration still retain the complete original node file.
         profile.put("multihop_execution", execution);
-        // The HY2 final's outer Start Layer comes from this same paired node's
-        // exact generated SS asset map. Its wrapper belongs to another API.
+        // Non-SS finals take their outer Start Layer from this same paired
+        // node's exact generated SS asset map, separately from the inner mode.
         String layer = AndroidStartLayer.selectedMode(exit);
-        String exitStart = "hysteria2".equals(exitMode) && !"off".equals(layer)
+        String exitStart = !"shadowsocks".equals(exitMode) && !"off".equals(layer)
                 ? exit.getJSONObject("profiles").getJSONObject("shadowsocks").toString() : "";
         AndroidExternalPolicy.Captured captured = AndroidExternalPolicy.captureImportedEntry(entry);
         JSONObject input = new JSONObject().put("schema", 1).put("entry_config", captured.source).put("entry_capture", captured.capture)
@@ -150,7 +157,7 @@ final class AndroidImportedRouterPath {
     static void requireSessionMode(String modeId, String metadata) throws Exception {
         JSONObject selected = new JSONObject(metadata);
         String mode = selected.getString("exit_mode");
-        if (!Arrays.asList("shadowsocks", "hysteria2").contains(mode)
+        if (!supports(selected.getString("entry_mode"), mode)
                 || !"external".equals(selected.getString("entry_kind"))
                 || !"local".equals(selected.getString("execution"))
                 || !("multihop-imported-" + mode).equals(modeId)) {

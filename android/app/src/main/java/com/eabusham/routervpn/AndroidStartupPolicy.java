@@ -72,7 +72,7 @@ final class AndroidStartupPolicy {
                         Map<String,Object> preferences, Map<String,byte[]> files,String lastExecution,AndroidMultihopRuntime.StartupCapture lastMultihop)throws Exception {
             if(ordinaryEntry!=null&&(entry!=null||external==null&&exit==null
                     ||external!=null&&ordinaryEntry.id.equals(external.id)||exit!=null&&ordinaryEntry.id.equals(exit.id)
-                    ||external==null&&(!Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode)||!entryMode.equals(ordinaryEntry.protocol)||!Arrays.asList("shadowsocks","hysteria2").contains(exitMode)||!"local".equals(execution))))
+                    ||external==null&&(!AndroidImportedRouterPath.supports(entryMode,exitMode)||!entryMode.equals(ordinaryEntry.protocol)||!"local".equals(execution))))
                 throw new IllegalArgumentException("Startup must retain two distinct exact path owners.");
             this.mode=mode;this.node=node;this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.exitMode=exitMode;
             this.execution=execution;this.source=source;this.lastRaw=lastRaw;this.lastExecution=lastExecution;this.selectedID=selectedID;this.activeID=activeID;

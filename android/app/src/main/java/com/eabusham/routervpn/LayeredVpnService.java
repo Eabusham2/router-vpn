@@ -833,7 +833,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             File exitLayerFile=new File(session,AndroidMultihopStartLayer.EXIT_SESSION_FILE).getCanonicalFile();
             File importedEntryFile=new File(session,AndroidImportedRouterPath.SESSION_FILE).getCanonicalFile();
             if(importedEntryFile.exists()&&(!importedEntryFile.isFile()||!importedEntryFile.getParentFile().equals(session)
-                    ||!executionFile.isFile()||!java.util.Arrays.asList("multihop-imported-shadowsocks","multihop-imported-hysteria2").contains(modeId)
+                    ||!executionFile.isFile()||!java.util.Arrays.asList("multihop-imported-shadowsocks","multihop-imported-hysteria2","multihop-imported-wg","multihop-imported-awg2-fast","multihop-imported-awg2-strong").contains(modeId)
                     ||entryLayerFile.exists()||exitLayerFile.exists()))throw new IllegalStateException("Imported entry sources have no exclusive original multihop owner.");
             if(modeId.startsWith("multihop-imported-")&&!importedEntryFile.isFile())throw new IllegalStateException("The imported entry lost its original private sources.");
             if(exitLayerFile.exists()&&(!executionFile.isFile()||!exitLayerFile.getParentFile().equals(session)))throw new IllegalStateException("Exit Start Layer has no owned multihop session.");

@@ -4,6 +4,26 @@ import SwiftUI
 @MainActor
 extension RouterVPNModel {
     static let ordinaryExternalHopProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
+    /// Picker availability uses the selected paired home's original raw assets.
+    /// Save and Connect capture and validate those same sources again.
+    func iosImportedRouterFinalModes(entryMode: String, exitID: String) -> [String] {
+        guard let data = IOSNodeBundleStore.shared.bundleData(containing: exitID, current: bundle),
+              var selected = try? JSONDecoder().decode(ClientBundle.self, from: data),
+              selected.routerProfiles.filter({ $0.id == exitID }).count == 1,
+              let profile = selected.routerProfiles.first(where: { $0.id == exitID }),
+              profile.normalizedNodeKind == "router-vpn",
+              let encoded = try? JSONEncoder().encode(profile),
+              let original = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else { return [] }
+        selected.selectedRouterID = exitID
+        return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].filter { mode in
+            guard IOSImportedEntryMultihop.supports(entry: entryMode, final: mode) else { return false }
+            do {
+                _ = try IOSMultihopStartLayer.capture(profile: original, profiles: selected.profiles)
+                _ = try IOSRuntimeSelector.selectRaw(bundle: selected, rawProfileID: mode)
+                return true
+            } catch { return false }
+        }
+    }
     /// Return the complete entry bundle, never the selected exit's raw files
     /// with a different display id. Capture before suspension/start.
     func iosMultihopEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
@@ -230,6 +250,9 @@ struct IOSMultihopView: View {
         guard let node = nodes.first(where: { $0.id == entryID }), node.normalizedNodeKind == "external" else { return nil }
         return node.external?.protocolName
     }
+    private var importedFinalModes: [String] {
+        model.iosImportedRouterFinalModes(entryMode: externalEntryProtocol ?? "", exitID: exitID)
+    }
     private var externalExecutionEligible: Bool {
         guard let entry = nodes.first(where: { $0.id == entryID }),
               let exit = exitNodes.first(where: { $0.id == exitID }) else { return false }
@@ -321,11 +344,14 @@ struct IOSMultihopView: View {
                     } else {
                     if externalEntryProtocol != nil {
                         Picker("Exit transport", selection: $exitMode) {
-                            if !["shadowsocks", "hysteria2"].contains(exitMode) {
-                                Text("Choose Shadowsocks or Hysteria2 for this imported entry").tag(exitMode)
+                            if !importedFinalModes.contains(exitMode) {
+                                Text("Choose a supported final for this imported entry").tag(exitMode)
                             }
-                            Text("Shadowsocks 2022").tag("shadowsocks")
-                            Text("Hysteria2").tag("hysteria2")
+                            if importedFinalModes.contains("shadowsocks") { Text("Shadowsocks 2022").tag("shadowsocks") }
+                            if importedFinalModes.contains("hysteria2") { Text("Hysteria2").tag("hysteria2") }
+                            if importedFinalModes.contains("wg") { Text("WireGuard").tag("wg") }
+                            if importedFinalModes.contains("awg2-fast") { Text("AmneziaWG Fast").tag("awg2-fast") }
+                            if importedFinalModes.contains("awg2-strong") { Text("AmneziaWG Strong").tag("awg2-strong") }
                         }
                         LabeledContent("Execution", value: "Local")
                         Text("The imported entry keeps its own public-address proof and Start Layer. The paired final node keeps its private identity, DNS and independent Start Layer.")
@@ -399,7 +425,7 @@ struct IOSMultihopView: View {
                 }
                 Section("Connection requirements") {
                     if externalEntryProtocol != nil && torExitProtocol == nil && ordinaryExitProtocol == nil {
-                        Text("Link an imported WireGuard, AmneziaWG, Shadowsocks 2022 or Hysteria2 entry and one different paired Router VPN final node. Choose the final node's complete Shadowsocks or Hysteria2 transport for Local execution. Each hop retains its original credentials and independent Start Layer. The final node supplies Home AdGuard or the selected custom DNS policy; DNS stays inside the final path. Both nodes' LAN-Off and IPv6-Off policies are enforced. A WireGuard or AmneziaWG entry retains its captured packet MTU; the paired final controls the single proxy TUN. Proxy-entry MTU policies must agree on that TUN.")
+                        Text("Link an imported WireGuard, AmneziaWG, Shadowsocks 2022 or Hysteria2 entry and one different paired Router VPN final node. Shadowsocks 2022 and Hysteria2 entries can use the final node's captured Shadowsocks, Hysteria2, WireGuard or AmneziaWG Fast/Strong transport. Imported WireGuard and AmneziaWG entries require a Shadowsocks or Hysteria2 final. Each hop retains its original credentials and independent Start Layer. The final node supplies Home AdGuard or the selected custom DNS policy; DNS stays inside the final path. Both nodes' LAN-Off and IPv6-Off policies are enforced. The app owns one TUN, and each WireGuard or AmneziaWG endpoint retains its independent captured packet MTU. Native startup validates the complete MTU policy before Connected.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                     Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, WireGuard/AmneziaWG with Rosenpass PQ, Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG (with or without Rosenpass PQ), self-contained Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. An entry AES or AES+XOR Start Layer stays on the captured entry for Local, Server and Compare. Exit AES or AES+XOR uses the same captured exit in Local, Server and Compare; Server requires matching private relay provisioning. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")

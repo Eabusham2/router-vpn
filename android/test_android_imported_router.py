@@ -132,6 +132,14 @@ public final class ImportedRouterTest {
    for(String field:List.of("private_key","peer_public_key","preshared_key","endpoint","mtu","persistent_keepalive_interval"))reject("changed captured packet "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));JSONObject packet=capture.getJSONObject("profile").getJSONObject("external").getJSONObject(e.protocol);if(field.equals("mtu"))packet.put(field,e.wgMtu+1);else if(field.equals("persistent_keepalive_interval"))packet.put(field,e.wgKeepalive==null?21:e.wgKeepalive+1);else if(field.equals("endpoint"))packet.put(field,"203.0.113.99:40000");else packet.put(field,java.util.Base64.getEncoder().encodeToString("X".repeat(32).getBytes(StandardCharsets.UTF_8)));changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
    if(e.protocol.equals("amneziawg"))reject("changed captured AWG parameter",()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject(e.protocol).getJSONObject("parameters").put("s1","37");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   }
+  if(List.of("wg","awg2-fast","awg2-strong").contains(finalMode)){
+   check(raw.getString("exit_files").equals(object(args.getString(3)).toString()),"host replaced captured paired packet assets");
+   JSONObject last=null;JSONArray endpoints=graph.getJSONArray("endpoints");for(int i=0;i<endpoints.length();i++)if(endpoints.getJSONObject(i).optString("tag").equals("routervpn-execution-local"))last=endpoints.getJSONObject(i);
+   check(last!=null&&last.getString("type").equals(finalMode.equals("wg")?"wireguard":"routervpn-amneziawg"),"host omitted or substituted paired packet endpoint");
+   check(last.getInt("mtu")>=1280&&!last.getString("private_key").isEmpty()&&!last.getJSONArray("peers").getJSONObject(0).getString("public_key").isEmpty(),"host lost paired packet MTU or key sources");
+   for(String key:List.of("exit_files","exit_start")){if(raw.getString(key).isEmpty())continue;reject("changed paired packet original source",()->{JSONObject changed=object(c.input);changed.put(key,raw.getString(key)+" ");AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});}
+   if(!finalMode.equals("wg"))check(last.has("amnezia"),"host lost captured final AWG parameters");
+  }
   check(selected.optString("entry_api").isEmpty()&&selected.optString("entry_token").isEmpty()&&selected.optString("entry_node_id").isEmpty(),"import acquired private pairing");
   check(raw.getString("exit_start").equals(args.getString(5).isEmpty()?"":object(args.getString(5)).toString())&&object(raw.getString("entry_capture")).getJSONObject("profile").getString("dns_mode").equals("home"),"raw entry policy or inherent final layer changed");
   JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
@@ -140,13 +148,13 @@ public final class ImportedRouterTest {
   AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+finalMode,c.metadata);
   reject("changed final session label",()->AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+(finalMode.equals("shadowsocks")?"hysteria2":"shadowsocks"),c.metadata));
   reject("changed final source mode",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,object(c.input).put("exit_mode",finalMode.equals("shadowsocks")?"hysteria2":"shadowsocks").toString()));
-  if(finalMode.equals("hysteria2")&&!args.getString(5).isEmpty()){
+  if(!finalMode.equals("shadowsocks")&&!args.getString(5).isEmpty()){
    check(object(raw.getString("exit_start")).has("sing-box.json")&&!object(raw.getString("exit_start")).has("profile"),"final layer did not keep its raw original asset map");
    JSONObject missing=object(b.toString());missing.getJSONObject("profiles").remove("shadowsocks");reject("missing final layer source",()->AndroidImportedRouterPath.compile(e,missing,finalMode,"local"));
    reject("wrapped final layer source",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,object(c.input).put("exit_start",new JSONObject().put("mode",profile(b).getString("start_layer")).put("profile",object(args.getString(5))).toString()).toString()));
   }
   export(fixture.getFileName().toString(),c);
-  if(fixture.getFileName().toString().equals("off--off.json")){
+  if(fixture.getFileName().toString().equals("off--off--2022-blake3-aes-256-gcm.json")){
    for(String kind:List.of("absent","")){JSONObject legacy=object(b.toString());if(kind.equals("absent"))profile(legacy).remove("node_kind");else profile(legacy).put("node_kind",kind);String bytes=legacy.toString();var compiled=AndroidImportedRouterPath.compile(e,legacy,finalMode,"local");check(compiled.config.equals(c.config)&&!compiled.source.equals(c.source)&&legacy.toString().equals(bytes),"legacy normalization changed original source or graph");JSONObject frozen=object(object(compiled.input).getString("exit_profile"));check(kind.equals("absent")?!frozen.has("node_kind"):frozen.getString("node_kind").isEmpty(),"legacy source was rewritten before hashing");}
    for(Object invalid:List.of("external",true,JSONObject.NULL)){JSONObject changed=object(b.toString());profile(changed).put("node_kind",invalid);reject("unpaired final kind",()->AndroidImportedRouterPath.compile(e,changed,finalMode,"local"));}
    for(String historical:List.of("server","auto")){JSONObject importedFinal=object(b.toString());profile(importedFinal).put("multihop_execution",historical);String original=importedFinal.toString();var compiled=AndroidImportedRouterPath.compile(e,importedFinal,finalMode,"local");check(original.equals(importedFinal.toString())&&profile(importedFinal).getString("multihop_execution").equals(historical),"selected Local projection changed original final source");check(object(object(compiled.input).getString("exit_profile")).getString("multihop_execution").equals("local")&&compiled.config.equals(c.config),"historical final preference replaced explicit Local graph");reject("explicit Server remains unavailable",()->AndroidImportedRouterPath.compile(e,importedFinal,finalMode,"server"));}
@@ -161,7 +169,8 @@ public final class ImportedRouterTest {
   reject("trailing session object",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input+"{}"));
   reject("wrong final key source",()->{JSONObject changed=object(c.input);JSONObject p=object(changed.getString("exit_profile"));p.put("api_token","replacement-secret");changed.put("exit_profile",p.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   for(String execution:List.of("server","auto"))reject(execution,()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
-  reject("different final protocol",()->AndroidImportedRouterPath.compile(e,b,"wg","local"));
+  reject("different final protocol",()->AndroidImportedRouterPath.compile(e,b,"naive-h3","local"));
+  if(List.of("wireguard","amneziawg").contains(e.protocol))for(String nested:List.of("wg","awg2-fast","awg2-strong"))reject("unproved nested packet graph",()->AndroidImportedRouterPath.compile(e,b,nested,"local"));
   JSONObject same=object(b.toString());profile(same).put("id",e.id);same.put("selectedRouterID",e.id);reject("same source identity",()->AndroidImportedRouterPath.compile(e,same,finalMode,"local"));
   JSONObject unpaired=object(b.toString());profile(unpaired).remove("node_proof_id");reject("unpaired final",()->AndroidImportedRouterPath.compile(e,unpaired,finalMode,"local"));
   Path privateRoot=Files.createTempDirectory(root,"sources-");android.content.Context context=new android.content.Context(privateRoot.toFile());AndroidStandardExitStore store=new AndroidStandardExitStore(context);store.save(e);
@@ -189,10 +198,10 @@ public final class ImportedRouterTest {
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
-  check(all.size()==76,"the complete proxy/packet independent entry/final layer matrix is incomplete");
+  check(all.size()==136,"the complete proxy/packet independent entry/final layer matrix is incomplete");
   String phase=args[3];boolean packet=phase.startsWith("packet-");
-  check(List.of("shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2").contains(phase),"unknown original matrix phase");
-  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return packet?name.startsWith(phase+"--"):!name.startsWith("packet-")&&name.startsWith("final-hysteria2--")==phase.equals("hysteria2");}).toList();check(selected.size()==(packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
+  check(List.of("shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
+  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
   System.out.println("Android imported-entry original sources: "+checks+" checks; "+phase+", "+selected.size()+" original independent layer graphs");
  }
 }'''
@@ -210,7 +219,7 @@ def main():
         fixtures = temp / "fixtures"
         fixtures.mkdir()
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
-        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
+        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -246,7 +255,7 @@ def main():
         private.mkdir()
         command=["java", "-cp", os.pathsep.join((str(classes), str(jar))), "com.eabusham.routervpn.ImportedRouterTest", str(temp / "compiler"), str(private), str(fixtures)]
         # Preserve the original finite bound for each complete final-mode family.
-        for final_mode in ("shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2"):
+        for final_mode in ("shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2", "wg", "awg2-fast", "awg2-strong"):
             subprocess.run(command+[final_mode], check=True, timeout=180)
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()

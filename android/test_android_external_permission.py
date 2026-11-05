@@ -47,9 +47,10 @@ final class AndroidTorProfile {static String compileOrdinary(AndroidStandardExit
 // Runtime and graph construction are verified by their own actual source suites.
 // This boundary validates direction without inventing a paired imported node.
 final class AndroidImportedRouterPath {
+ // PRODUCTION_IMPORTED_PAIR
  static void requireEntry(AndroidStandardExitStore.Entry e){if(e==null||!List.of("shadowsocks","hysteria2","wireguard","amneziawg").contains(e.protocol))throw new IllegalArgumentException("imported SS2022/Hysteria2 required");AndroidStandardExitStore.validate(e);}
  static JSONObject finalBundle(File f)throws Exception{JSONObject b=new JSONObject(AndroidTorProfile.strictText(AndroidPrivateFileStore.read(f,AndroidNodeStore.MAX_BUNDLE)));AndroidNodeStore.validateBundle(b);return b;}
- static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){requireEntry(e);if(!List.of("shadowsocks","hysteria2").contains(mode)||!"local".equals(execution))throw new IllegalArgumentException("mixed Local proxy graph required");}
+ static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){requireEntry(e);if(!supports(e.protocol,mode)||!"local".equals(execution))throw new IllegalArgumentException("mixed Local proxy graph required");}
 }
 final class AndroidExternalNodeComparison {static boolean active;static int cancels;static boolean hasActiveOperation(){return active;}static boolean cancelActiveOperation(){if(active)cancels++;return active;}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context c){return busy;}}
@@ -130,6 +131,9 @@ final class AndroidStartupPolicy {
  static Attempt restore(String nonce){return null;}static void cancelPending(){}static boolean recordProven(Context c,AndroidNodeStore n,File f,String session,String raw,String source){return false;}
 }
 '''
+imported_pair = re.findall(r'(?ms)^    static boolean supports\(String entryProtocol, String finalMode\) \{\n.*?^    \}', (JAVA / 'AndroidImportedRouterPath.java').read_text())
+assert len(imported_pair) == 1, 'missing exact imported pair predicate'
+BOUNDARIES = BOUNDARIES.replace(' // PRODUCTION_IMPORTED_PAIR', imported_pair[0])
 BOUNDARIES = BOUNDARIES.replace('// MULTIHOP_CAPTURE_TYPES', MULTIHOP_CAPTURE_TYPES)
 BOUNDARIES = BOUNDARIES.replace('final class AndroidStandardExitRuntime {', 'final class AndroidStandardExitRuntime {' + UNOWNED_EXTERNAL_RESTORE_SOURCE)
 
@@ -242,7 +246,8 @@ public class ExternalPermissionTest {
   for(String execution:List.of("server","auto")){Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,"socks5");f.controller.connectOrdinaryTor(entry,f.exit,execution,f.callback);check(f.runtime().starts==0&&!f.callback.ok&&f.callback.completions==1,"ordinary provider acquired private server authority");}
  }
  static AndroidStandardExitStore.Entry imported(Fixture f,String protocol){AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id="independent-imported";entry.protocol=protocol;entry.secret="original-imported-credential";entry.policy="original-imported-policy";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));return entry;}
- static void importedPaths(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2","wireguard","amneziawg"))for(String finalMode:List.of("shadowsocks","hysteria2")){
+ static void importedPaths(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2","wireguard","amneziawg"))for(String finalMode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")){
+  if(!AndroidImportedRouterPath.supports(protocol,finalMode)){Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,finalMode,"local",f.callback);check(!f.callback.ok&&f.callback.completions==1&&!f.controller.isPermissionPending()&&AndroidRuntimeRegistry.instance.multihop.starts==0,"unsupported nested packet graph requested permission");continue;}
   for(boolean rotate:new boolean[]{false,true}){
    Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,finalMode,"local",f.callback);
    Bundle state=new Bundle();f.controller.savePending(state);var original=f.controller;int code=f.activity.permissionRequest;

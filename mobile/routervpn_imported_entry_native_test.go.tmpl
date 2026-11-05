@@ -24,7 +24,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		t.Skip("exact generated compiler sources supplied by native mobile gate")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 76 {
+	if err != nil || len(entries) != 136 {
 		t.Fatal("incomplete original layer matrix", err)
 	}
 	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
@@ -39,7 +39,9 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		originalNames = append(originalNames, name)
 	}
 	for _, name := range originalNames {
-		expected["final-hysteria2--"+name] = true
+		for _, final := range []string{"hysteria2", "wg", "awg2-fast", "awg2-strong"} {
+			expected["final-"+final+"--"+name] = true
+		}
 	}
 	for _, protocol := range []string{"wireguard", "amneziawg"} {
 		for _, final := range []string{"shadowsocks", "hysteria2"} {
@@ -81,9 +83,12 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 			}
 			expectedMode, expectedFinal := "shadowsocks", "shadowsocks"
 			layerName := name
-			if strings.HasPrefix(layerName, "final-hysteria2--") {
-				expectedFinal = "hysteria2"
-				layerName = strings.TrimPrefix(layerName, "final-hysteria2--")
+			for _, final := range []string{"hysteria2", "wg", "awg2-fast", "awg2-strong"} {
+				if strings.HasPrefix(layerName, "final-"+final+"--") {
+					expectedFinal = final
+					layerName = strings.TrimPrefix(layerName, "final-"+final+"--")
+					break
+				}
 			}
 			if strings.HasPrefix(layerName, "hysteria2--") {
 				expectedMode = "hysteria2"
@@ -163,7 +168,9 @@ func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
 		originalNames = append(originalNames, name)
 	}
 	for _, name := range originalNames {
-		expected["final-hysteria2--"+name] = true
+		for _, final := range []string{"hysteria2", "wg", "awg2-fast", "awg2-strong"} {
+			expected["final-"+final+"--"+name] = true
+		}
 	}
 	for _, protocol := range []string{"wireguard", "amneziawg"} {
 		for _, final := range []string{"shadowsocks", "hysteria2"} {

@@ -67,6 +67,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor-server-with-predecessor":value,err=mobiletor.CompileServerProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
  case "tor-server-mtu-authority":var predecessor *mobiletor.PredecessorProof;predecessor,err=mobiletor.NewPredecessorProof(r.Source);if err==nil{value,err=mobiletor.ServerMTUAuthority(r.Config,r.Policy,r.Node,predecessor)}
  case "tor-mtu-authority":var predecessor *mobiletor.PredecessorProof;if r.Source!=""{predecessor,err=mobiletor.NewPredecessorProof(r.Source)};if err==nil{value,err=mobiletor.MTUAuthorityWithPredecessor(r.Config,r.Policy,r.Node,predecessor)}
+ case "imported-final-baseline":var plan *mobilemultihop.NodeProfile;plan,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,"");if err==nil{value=plan.Config()}
  case "imported-router":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],a["mode"],a["files"],a["profile"],a["start"],"");if err==nil{value=plan.Config()}}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
@@ -716,7 +717,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   var hyBase=base
   hyBase["outbounds"]=[["type":"hysteria2","tag":"proxy","server":"192.0.2.44","server_port":8443,"password":" exact paired HY2 secret ","tls":["enabled":true,"server_name":"final.example.test","certificate_path":"final-trust.pem"]],["type":"direct","tag":"direct"]]
   let hyAssets=["sing-box.json":try json(hyBase).base64EncodedString(),"final-trust.pem":certificate]
-  for finalMode in ["shadowsocks","hysteria2"] {for (entryLayer,finalLayer,kind,method) in cases {
+  for finalMode in ["shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"] {for (entryLayer,finalLayer,kind,method) in cases {
+   let packetFinal=["wg","awg2-fast","awg2-strong"].contains(finalMode)
    let entryKey=Data(repeating:105,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
    var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
    if kind == "hysteria2" {imported=["protocol":kind,"expected_public_ip":"203.0.113.88","hysteria2":["server":"203.0.113.20","port":443,"password":" exact HY2 password ","tls_server_name":"entry.example.test"]]}
@@ -727,22 +729,36 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    }
    if entryLayer != "off" {imported["start_layer"]=["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"203.0.113.20","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key]]}
    let entry:[String:Any]=["id":"imported-entry","node_kind":"external","start_layer":entryLayer,"dns_mode":"home","mtu_policy":"auto","external":imported]
-   let final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact-paired-token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":kind,"multihop_exit_id":"paired-final","multihop_exit_mode":finalMode,"multihop_execution":"local"]
+   var final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact-paired-token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":kind,"multihop_exit_id":"paired-final","multihop_exit_mode":finalMode,"multihop_execution":"local"]
+   if packetFinal && ["wireguard","amneziawg"].contains(kind) {
+    reject("packet entry to packet final requires separate nested MTU proof"){try IOSImportedEntryMultihop.validate(entry:entry,final:final)}
+    continue
+   }
+   var finalMaps=["shadowsocks":assets,"hysteria2":hyAssets]
+   if packetFinal {
+    let original=try root(finalMode,finalLayer,[:],composite)
+    let selected=(original["routerProfiles"] as! [[String:Any]])[0]
+    for field in ["node_proof_id","endpoint","router_api"] {final[field]=selected[field]}
+    finalMaps=original["profiles"] as! [String:[String:String]]
+   }
    try IOSImportedEntryMultihop.validate(entry:entry,final:final)
    let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry)
-   let finalSource=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:["shadowsocks":assets,"hysteria2":hyAssets])
-   try check("HY2 final layer uses original raw same-node SS map",finalSource.start == (finalMode=="hysteria2" && finalLayer != "off" ? String(decoding:try json(assets),as:UTF8.self):""))
-   if ["wireguard","amneziawg"].contains(kind) {
+   let finalSource=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:finalMaps)
+   try check("non-SS final layer uses original raw same-node SS map",finalSource.start == (finalMode != "shadowsocks" && finalLayer != "off" ? String(decoding:try json(finalMaps["shadowsocks"]!),as:UTF8.self):""))
+   if packetFinal || ["wireguard","amneziawg"].contains(kind) {
     var profileJSON=final
     profileJSON["name"]="Captured final";profileJSON["adguard_ipv6"]="";profileJSON["socks_host"]="";profileJSON["socks_port"]=0;profileJSON["socks_username"]="";profileJSON["socks_password"]=""
     var selected=ClientBundle.empty
     selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profileJSON))]
-    selected.selectedRouterID="paired-final";selected.profiles=["shadowsocks":assets,"hysteria2":hyAssets]
+    selected.selectedRouterID="paired-final";selected.profiles=finalMaps
     let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
-    try check("public Connect selector admits only captured packet entry label",selection.engine == .multihop && selection.rawProfileID==finalMode && selection.multihopEntryMode==kind && !IOSRuntimeSelector.multihopModeIDs.contains(kind))
+    try check("public Connect selector admits only captured packet entry label",selection.engine == .multihop && selection.rawProfileID==finalMode && selection.multihopEntryMode==kind && (packetFinal || !IOSRuntimeSelector.multihopModeIDs.contains(kind)))
     for execution in ["server","auto"] {
      var wrong=selected;wrong.routerProfiles[0].multihopExecution=execution
-     reject("packet public Connect cannot change Local to "+execution){_ = try IOSRuntimeSelector.selectMultihop(bundle:wrong,rawProfileID:nil)}
+     if packetFinal {
+      var changed=final;changed["multihop_execution"]=execution
+      reject("imported proxy packet final cannot change Local to "+execution){try IOSImportedEntryMultihop.validate(entry:entry,final:changed)}
+     } else {reject("packet public Connect cannot change Local to "+execution){_ = try IOSRuntimeSelector.selectMultihop(bundle:wrong,rawProfileID:nil)}}
     }
     reject("packet public Connect cannot silently select individual raw mode"){_ = try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:finalMode)}
    }
@@ -751,7 +767,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    let graph=try object(Data(encoded.utf8)),inbounds=graph["inbounds"] as! [[String:Any]],outs=graph["outbounds"] as! [[String:Any]]
    try check("imported Router owns one TUN",inbounds.filter{$0["type"] as? String=="tun"}.count==1)
    try check("imported Router owns final proof lane only",inbounds.filter{$0["tag"] as? String=="routervpn-proof" && $0["listen_port"] as? Int==1099}.count==1 && !inbounds.contains{$0["listen_port"] as? Int==1098})
-   try check("imported Router keeps final transport behind entry",outs.contains{$0["detour"] as? String=="entry-wg"} && !outs.contains{$0["type"] as? String=="direct"})
+   try check("imported Router keeps final transport behind entry",(outs+(graph["endpoints"] as? [[String:Any]] ?? [])).contains{$0["detour"] as? String=="entry-wg"} && !outs.contains{$0["type"] as? String=="direct"})
    let dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]]
    try check("imported Router keeps paired final Home DNS",servers[0]["server"] as? String=="192.168.50.133" && servers[0]["detour"] as? String=="proxy")
    let captured=try object(Data(raw.capture.utf8))["profile"] as! [String:Any]
@@ -791,6 +807,29 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
     try check("packet credential replacement changes original capture and graph",changed.capture != raw.capture && changed.config != raw.config)
     transport["endpoint"]="unowned.example.test:51820";external[kind]=transport;replaced["external"]=external
     reject("packet entry cannot resolve uncaptured host outside native path"){_ = try RouterVPNExternalExitBuilder.importedRouterSource(profile:replaced)}
+   }
+   if packetFinal {
+    let native=try tagged(graph,"routervpn-execution-local")
+    let baseline=try object(Data(bridge(["Op":"imported-final-baseline","Mode":finalMode,"Files":finalSource.files,"Policy":String(decoding:json(final),as:UTF8.self),"Source":finalSource.start]).utf8))
+    let original=try tagged(baseline,"proxy")
+    var normalized=native;normalized["tag"]="proxy"
+    if finalLayer=="off" {normalized.removeValue(forKey:"detour")}
+    try check("paired packet final preserves all native credentials MTU and padding",try json(normalized)==json(original))
+    try check("paired packet final remains native and keeps independent MTU",native["type"] as? String==(finalMode=="wg" ? "wireguard":"routervpn-amneziawg") && native["mtu"] as? Int==1420 && inbounds.first{$0["type"] as? String=="tun"}?["mtu"] as? Int==1280)
+    for fault in ["missing-final-assets","missing-layer-assets"] {
+     var maps=finalMaps
+     if fault=="missing-final-assets" {maps.removeValue(forKey:finalMode)}
+     else {if finalLayer=="off"{continue};maps.removeValue(forKey:"shadowsocks")}
+     reject("packet final requires captured raw assets "+fault){_ = try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)}
+    }
+    if finalLayer != "off" {
+     var maps=finalMaps,layerGraph=try object(Data(base64Encoded:finalMaps["shadowsocks"]!["sing-box.json"]!)!)
+     var transports=layerGraph["outbounds"] as! [[String:Any]];transports[0]["server"]="198.51.100.99";layerGraph["outbounds"]=transports
+     maps["shadowsocks"]=["sing-box.json":try json(layerGraph).base64EncodedString()]
+     let foreign=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)
+     var changed=args;changed["start"]=foreign.start
+     reject("actual compiler rejects foreign packet final outer layer"){_ = try bridge(["Op":"imported-router","Config":text(changed)])}
+    }
    }
    if kind == "hysteria2" {
     let native=outs.first{$0["tag"] as? String=="entry-wg"}!
@@ -832,7 +871,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
     let name: String
     if ["wireguard","amneziawg"].contains(kind) {name="packet-"+kind+"--final-"+finalMode+"--"+entryLayer+"--"+finalLayer+".json"}
-    else {name=(finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")}
+    else {name=(packetFinal ? "final-"+finalMode+"--":finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")}
     try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(name))
    }
   }}
@@ -841,7 +880,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (76 graphs: preserved40 proxy-entry graphs plus36 WG/AWG entries with independent layers and SS/HY2 finals; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (136 graphs: preserved76 plus60 proxy entries with paired WG/AWG finals and independent layers; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

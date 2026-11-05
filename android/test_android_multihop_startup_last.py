@@ -45,7 +45,7 @@ final class AndroidNativeMAXProfile{ // MAX_PREDICATE
 }
 final class AndroidNativeCompositeProfile{ // COMPOSITE_PREDICATE
 }
-final class AndroidStandardExitStore {static final class Entry{String id,name;}}
+final class AndroidStandardExitStore {static final class Entry{String id,name,protocol;}}
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] data=Files.readAllBytes(f.toPath());if(data.length==0||data.length>max)throw new IllegalArgumentException("bounded source required");return data;}}
 final class AndroidNodeStore {
  static final int MAX_BUNDLE=32*1024*1024;
@@ -53,6 +53,7 @@ final class AndroidNodeStore {
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");if(b.getString("node_id").isEmpty())throw new IllegalArgumentException("missing paired node");}
 }
 final class AndroidImportedRouterPath {
+ static boolean supports(String entry,String last){return false;} // This paired-only fixture owns no imported graph.
  static final class PreparationFailure extends Exception{final String sessionId="";}
  static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{throw new IllegalStateException("No imported Router source in paired Last fixture");}
  static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{throw new IllegalStateException("No imported Router owner in paired Last fixture");}

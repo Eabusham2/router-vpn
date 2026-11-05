@@ -14,12 +14,16 @@ type importedEntry struct {
 }
 
 // NewImportedEntry composes an imported SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
-// Shadowsocks or Hysteria2 final. Compilation proves neither identity.
+// Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
+// composition is not admitted here. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
-	bad := errors.New("imported entry requires a captured standalone SS2022, Hysteria2, WireGuard or AmneziaWG source and paired Shadowsocks or Hysteria2 final in Local execution")
+	bad := errors.New("imported entry requires a captured standalone SS2022, Hysteria2, WireGuard or AmneziaWG source and paired SS/HY2/WG/AWG final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2") {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
+	}
+	if (exitMode == "wg" || exitMode == "awg2-fast" || exitMode == "awg2-strong") && (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg") {
+		return nil, errors.New("imported packet entry to paired packet final requires a separately verified nested packet envelope")
 	}
 	// An imported operator address is a public-path proof, never a paired API.
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
@@ -113,13 +117,15 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	// Each transport has its own authenticated layer. Attach the final's outer
 	// edge, preserving an inner detour if its compiler produced one.
 	var final map[string]any
-	outs, _ := last["outbounds"].([]any)
 	byTag := map[string]map[string]any{}
-	for _, raw := range outs {
-		n := raw.(map[string]any)
-		byTag[predecessorText(n, "tag")] = n
-		if n["tag"] == "proxy" {
-			final = n
+	for _, family := range []string{"endpoints", "outbounds"} {
+		rows, _ := last[family].([]any)
+		for _, raw := range rows {
+			n := raw.(map[string]any)
+			byTag[predecessorText(n, "tag")] = n
+			if n["tag"] == "proxy" {
+				final = n
+			}
 		}
 	}
 	if final == nil {
@@ -134,6 +140,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		if outer == nil {
 			return nil, bad
 		}
+	}
+	if (exitMode == "wg" || exitMode == "awg2-fast" || exitMode == "awg2-strong") && predecessorText(final, "detour") != "" && predecessorText(outer, "server") != predecessorText(exit.profile, "endpoint") {
+		return nil, errors.New("paired packet final and Start Layer belong to different node endpoints")
 	}
 	outer["detour"] = "entry-wg"
 	for _, family := range []string{"endpoints", "outbounds"} {
@@ -197,10 +206,13 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	// Final private proof is routed through the same selector as application
 	// traffic. There is deliberately no imported-entry private proof listener.
 	last["inbounds"] = append(last["inbounds"].([]any), map[string]any{"type": "mixed", "tag": "routervpn-proof", "listen": "127.0.0.1", "listen_port": 1099})
-	for _, raw := range last["outbounds"].([]any) {
-		n := raw.(map[string]any)
-		if n["tag"] == "proxy" {
-			n["tag"] = LocalTag
+	for _, family := range []string{"endpoints", "outbounds"} {
+		rows, _ := last[family].([]any)
+		for _, raw := range rows {
+			n := raw.(map[string]any)
+			if n["tag"] == "proxy" {
+				n["tag"] = LocalTag
+			}
 		}
 	}
 	last["outbounds"] = append(last["outbounds"].([]any), map[string]any{"type": "selector", "tag": "proxy", "outbounds": []string{LocalTag}, "default": LocalTag, "interrupt_exist_connections": true})

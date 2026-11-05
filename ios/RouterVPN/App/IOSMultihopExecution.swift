@@ -385,6 +385,12 @@ enum IOSMultihopExecution {
 /// proof remain separate; this never grants a pairing identity to an import.
 enum IOSImportedEntryMultihop {
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
+    static func supports(entry: String, final: String) -> Bool {
+        if ["shadowsocks", "hysteria2"].contains(final) {
+            return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
+        }
+        return ["shadowsocks", "hysteria2"].contains(entry) && ["wg", "awg2-fast", "awg2-strong"].contains(final)
+    }
     static func validate(entry: [String: Any], final: [String: Any]) throws {
         guard let imported = entry["external"] as? [String: Any],
               let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(kind) else { throw issue() }
@@ -417,7 +423,7 @@ enum IOSImportedEntryMultihop {
               final["multihop_entry_id"] as? String == entryID,
               final["multihop_exit_id"] as? String == finalID,
               final["multihop_entry_mode"] as? String == kind,
-              ["shadowsocks", "hysteria2"].contains(final["multihop_exit_mode"] as? String ?? ""),
+              supports(entry: kind, final: final["multihop_exit_mode"] as? String ?? ""),
               (final["multihop_execution"] as? String ?? "local") == "local",
               entry["multihop_enabled"] as? Bool != true,
               let expected = imported["expected_public_ip"] as? String, !expected.isEmpty,
@@ -432,6 +438,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local WireGuard, AmneziaWG, Shadowsocks 2022 or Hysteria2 imported entry and a different paired Router VPN Shadowsocks or Hysteria2 final node with their original settings."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. Shadowsocks 2022 and Hysteria2 entries also support paired WireGuard and AmneziaWG finals; imported packet entries require Shadowsocks or Hysteria2 finals."])
     }
 }

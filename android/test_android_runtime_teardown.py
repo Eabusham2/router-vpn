@@ -145,12 +145,13 @@ final class AndroidMultihopController {
 // Pure graph compilation uses the real compiler in test_android_imported_router.py.
 // This lifecycle boundary preserves the exact imported-store owner across workers.
 final class AndroidImportedRouterPath {
+    // PRODUCTION_IMPORTED_PAIR
  static int prepared;static Runnable afterPrepare;static boolean failPreparation;
  static final class PreparationFailure extends Exception{final String sessionId;PreparationFailure(String id){super("retained original private staging");sessionId=id;}}
  static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{if(!java.util.List.of("shadowsocks","hysteria2","wireguard","amneziawg").contains(e.protocol))throw new IllegalArgumentException("SS2022 or Hysteria2 entry required");return new AndroidMultihopController.Source(e);}
  static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{s.require(null);return AndroidStandardExitStore.copy(AndroidStandardExitStore.saved.get(s.importedId));}
  static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{
-  e.require(null);last.require(x);if(!java.util.List.of("shadowsocks","hysteria2").contains(mode)||!execution.equals("local"))throw new IllegalArgumentException("mixed Local proxy required");prepared++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=entry(c,e).protocol;var result=new AndroidMultihopController.Prepared(e,x,mode);if(failPreparation)throw new PreparationFailure(result.session.sessionId);if(afterPrepare!=null)afterPrepare.run();return result;
+  e.require(null);last.require(x);if(!supports(entry(c,e).protocol,mode)||!execution.equals("local"))throw new IllegalArgumentException("mixed Local proxy required");prepared++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=entry(c,e).protocol;var result=new AndroidMultihopController.Prepared(e,x,mode);if(failPreparation)throw new PreparationFailure(result.session.sessionId);if(afterPrepare!=null)afterPrepare.run();return result;
  }
 }
 final class AndroidStandardExitStore {
@@ -401,7 +402,8 @@ public final class RuntimeTeardownHarness {
             try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();if(fault.equals("duplicate"))exit.id=entry.id;if(fault.equals("wrong-exit"))exit.protocol="socks5";if(fault.equals("tor-entry"))entry.protocol="tor";Callback cb=new Callback(0);owner.external.connectOrdinary(entry,exit,fault.equals("server")||fault.equals("auto")?fault:"local",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidTorProfile.ordinaryPreparations==0,"ordinary input acquired unavailable path authority");}
         });
     }
-    static void importedRouterRuntimeTests(){for(String protocol:new String[]{"shadowsocks","hysteria2","wireguard","amneziawg"})for(String finalMode:new String[]{"shadowsocks","hysteria2"}){
+    static void importedRouterRuntimeTests(){for(String protocol:new String[]{"shadowsocks","hysteria2","wireguard","amneziawg"})for(String finalMode:new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"}){
+        if(!AndroidImportedRouterPath.supports(protocol,finalMode)){test("imported packet-to-packet requires its own native envelope",()->{try(Owner owner=new Owner("multihop")){Callback cb=new Callback(0);owner.multihop.connectImported(ordinary(protocol),new AndroidNodeStore.Node("paired-final"),finalMode,"local",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidImportedRouterPath.prepared==0,"unsupported nested packet graph acquired runtime authority");}});continue;}
         test("imported Router runtime captures and restores original typed owner",()->{
             try(Owner owner=new Owner("multihop")){
                 AndroidStandardExitStore.Entry first=ordinary(protocol);AndroidNodeStore.Node last=new AndroidNodeStore.Node("paired-final");Callback connected=new Callback(0);
@@ -859,6 +861,9 @@ for name in ('nativeWireGuardFamily', 'nativePQFamily', 'nativeNaiveFamily', 'na
     assert len(matches) == 1, 'missing or ambiguous production transport predicate: ' + name
     predicates.append(matches[0])
 STUBS = STUBS.replace('    // PRODUCTION_TRANSPORT_PREDICATES', '\n'.join(predicates))
+imported_predicate = re.findall(r'(?ms)^    static boolean supports\(String entryProtocol, String finalMode\) \{\n.*?^    \}', (JAVA / 'AndroidImportedRouterPath.java').read_text())
+assert len(imported_predicate) == 1, 'missing exact imported pair predicate'
+STUBS = STUBS.replace('    // PRODUCTION_IMPORTED_PAIR', imported_predicate[0])
 external_source = (JAVA / 'AndroidExternalPolicy.java').read_text()
 external_predicate = re.findall(r'(?ms)^    static boolean supports\(String protocol\) \{\n.*?^    \}', external_source)
 assert len(external_predicate) == 1, 'missing exact external capability predicate'

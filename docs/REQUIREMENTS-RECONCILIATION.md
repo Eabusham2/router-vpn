@@ -20,44 +20,45 @@ deployment acceptance.
 
 ## November 5 mobile imported-entry source increment
 
-The original August 19 Router/custom choice for each hop now has a first mobile
-reverse direction: imported SS2022, Hysteria2, WireGuard or AmneziaWG entry →
-independently paired Router Shadowsocks or Hysteria2 final, Local execution. The source preserves
-distinct public-entry
-and private-final proof, independent Start Layers, complete captured policy,
-selected DNS, typed measurements/MTU, permission ownership and exact restoration.
-See [MOBILE-IMPORTED-ROUTER-PATH.md](MOBILE-IMPORTED-ROUTER-PATH.md) for source paths,
-mandatory actual graph/peer gates and the separation of local evidence from
-Apple/device/package acceptance.
+The original August 19 Router/custom choice for each hop now has a mobile
+reverse direction with Local execution. Imported SS2022 or Hysteria2 entries
+can reach independently paired Router Shadowsocks, Hysteria2, WireGuard,
+AmneziaWG Fast or AmneziaWG Strong finals. Imported WireGuard and AmneziaWG
+entries currently support paired Shadowsocks or Hysteria2 finals. The source
+preserves distinct public-entry/private-final proof, independent Start Layers,
+complete captured policy, selected DNS, typed measurements/MTU, permission
+ownership and exact restoration. See [MOBILE-IMPORTED-ROUTER-PATH.md](MOBILE-IMPORTED-ROUTER-PATH.md)
+for source paths, mandatory graph/peer gates and their acceptance boundaries.
 
-The Hysteria2 final retains original TLS/password/certificate capture and its
-same-node raw SS outer-layer assets. The packet-entry increment preserves exact
-WG/AWG endpoint credentials, MTU and obfuscation parameters in the native graph.
-The original forty proxy graphs plus thirty-six packet graphs pass shared and
-actual Android constructor/parser/MTU verification: 154 exact verdicts. Shared
-race tests pass 143 verdicts; actual encrypted peers pass 42, including fourteen
-new packet scenarios plus their parent. Negative controls reject wrong keys,
-PSK, AWG parameters, certificate identity/trust, route, selected DNS, private
-identity and public-entry identity. Profile persistence and Product callbacks
-pass 771/81 existing checks/cases plus 437/47 for each packet protocol. Home,
-startup and permission retain ordinary packet labels without changing the
-paired raw-mode catalogue. Apple-generated graphs remain a mandatory native CI
-gate; local source and Go checks do not substitute for Swift or physical tunnels.
+The original 76 graphs remain, with sixty additional proxy-entry/packet-final
+graphs. The Hysteria2 final retains its original TLS/password/trust parameters;
+WG/AWG endpoints retain their exact credentials, packet MTU and obfuscation
+parameters. Optional final AES wrapping uses that final's own raw SS assets.
+Shared race tests pass 218 verdicts; actual encrypted peers pass 59, including
+seventeen new packet-final verdicts. Negative controls reject wrong keys, PSK,
+AWG parameters, certificate identity/trust, routing, selected DNS and private or
+public identities. Native source/config equality, parsing and typed MTU plans
+pass for both 136-case shared/Android matrices (274 exact native verdicts),
+including the copied policy tests after full native preparation. Retuning the application TUN
+must not rewrite a captured packet endpoint or claim fresh physical path evidence.
 
 The packet-native test exposed a pre-existing stack delivery/teardown race;
 `d7bff4ae` fixes and causally tests that separate runtime issue. Profile source
 rollback (`799a6f30`) and forward apply (`5c06b361`) retain exact byte ownership
-under the shared node lock. Their strict audit (`ed717fc4`) preserves existing
-behavior gates. These source fixes do not establish complete preference-owner
-transaction behavior, which remains its own active implementation unit.
+under the shared node lock. `39c8d7fa` extends ownership to the shared preference
+and selected-node transaction, including automatic selection during refresh.
+Its 57 focused checks/ten cases and seven causal controls pass; the strict audit
+passes twelve tests with 45 source/order mutants. `3ef453c1` preserves the complete
+MTU dependency closure when preparing native multihop/relay packages.
 
-The remaining graph ledger is unchanged in scope: other imported protocols,
-other paired final transports, Server/Compare and complete requested-platform
-coverage still need implementation and verification. Local Android/helper and
-pinned native graph results do not close the original full profile regression
-that hit its unchanged local watchdog, Apple native execution, exact-SHA mobile
-packages, physical/off-LAN/visual acceptance, signing or deployment. Those remain
-separate gates; this increment does not reduce the original requirement set.
+The remaining ledger includes ordinary packet-entry to paired packet-final
+envelopes, other imported protocols/final families, Server/Compare, and complete
+requested-platform coverage. Safe refusal leaves those requirements unfinished.
+Local Android/helper and pinned native graph results do not close the original
+full profile regression that hit its unchanged local watchdog, Apple native
+execution, exact-SHA mobile packages, physical/off-LAN/visual acceptance, signing
+or deployment. Those remain separate gates; this increment does not reduce the
+original requirement set.
 
 ## Implementation reconciliation through 14dc92e3
 

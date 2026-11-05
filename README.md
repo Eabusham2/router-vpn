@@ -128,7 +128,7 @@ The native GTK application includes nftables protection, supported multihop grap
 
 ### Android
 
-Android uses one owned `VpnService` with WireGuard, AmneziaWG and the pinned combined Libbox/Xray runtime. Source includes AUTO/SMART/CUSTOM, Tor, supported layered/MAX and multihop graphs, selected-node/DNS proofs and validated external imports. OpenVPN uses the real bundled endpoint for the [documented inline-profile subset](docs/MOBILE-OPENVPN.md). Imported SS2022, Hysteria2, WireGuard or AmneziaWG entries can reach paired SS2022 or Hysteria2 finals through the [captured Local path](docs/MOBILE-IMPORTED-ROUTER-PATH.md). Other graph and execution combinations retain their individual readiness checks and unfinished requirements. APK builds, signing and physical VPN/lockdown/leak/transition tests are separate acceptance evidence.
+Android uses one owned `VpnService` with WireGuard, AmneziaWG and the pinned combined Libbox/Xray runtime. Source includes AUTO/SMART/CUSTOM, Tor, supported layered/MAX and multihop graphs, selected-node/DNS proofs and validated external imports. OpenVPN uses the real bundled endpoint for the [documented inline-profile subset](docs/MOBILE-OPENVPN.md). Imported SS2022 and Hysteria2 entries can reach paired SS2022, Hysteria2, WireGuard or AmneziaWG Fast/Strong finals through the [captured Local path](docs/MOBILE-IMPORTED-ROUTER-PATH.md); imported WireGuard and AmneziaWG entries currently require SS2022 or Hysteria2 finals. Other graph and execution combinations retain their individual readiness checks and unfinished requirements. APK builds, signing and physical VPN/lockdown/leak/transition tests are separate acceptance evidence.
 
 ### iOS / iPadOS
 

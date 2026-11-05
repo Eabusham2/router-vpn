@@ -8,69 +8,75 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Mobile imported entry → paired Router final
 
-Android and Apple source now supports ordinary imported Shadowsocks 2022,
-Hysteria2, WireGuard and AmneziaWG entries followed by an independently paired
-Router Shadowsocks or Hysteria2 final. Local execution stays inside one owned
-VpnService/PacketTunnel. The original forty proxy graphs remain, with thirty-six
-new packet-entry graphs covering both packet protocols, both finals and all nine
-independent Start Layer choices. Packet entries retain their exact keys, PSK,
-endpoint, AllowedIPs, keepalive, MTU and AWG parameters. Final Hysteria2 keeps its
-original TLS identity/trust and same-node raw SS outer-layer assets. Selected
-DNS, including Home AdGuard, still exits through the paired final.
+Android and Apple source supports ordinary imported Shadowsocks 2022, Hysteria2,
+WireGuard and AmneziaWG entries followed by an independently paired Router final.
+The proxy entries can use paired Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast
+or AmneziaWG Strong finals. Imported WireGuard and AmneziaWG entries currently
+require Shadowsocks or Hysteria2 finals; nested packet entries/finals remain an
+explicit unfinished graph family. Local execution stays inside one owned
+VpnService/PacketTunnel. The previous 76 graphs remain, with 60 new proxy-entry
+to packet-final graphs, for 136 captured layer/cipher graphs. Each packet endpoint
+retains its exact keys, PSK, endpoint, AllowedIPs, keepalive, MTU and AWG parameters.
+A final's optional AES outer transport comes from that same paired node's raw SS
+assets. Selected DNS, including Home AdGuard, exits through the paired final.
 
 The Android picker explains temporary Router connect/prove/measure/disconnect
 and the separate Save and Connect actions. Imported selection starts no Router
-measurement. Eligible final choices require complete captured assets and retain
-the original final-file digest. Apple preserves unsupported saved choices until
-the user deliberately changes them. Ordinary packet protocol labels remain
-separate from the paired raw-mode catalogue; Home state, profiles, permission,
-startup, usage, measurements and restoration keep the original typed sources.
-[The complete path and evidence limits](MOBILE-IMPORTED-ROUTER-PATH.md) remain
-separate from full product delivery.
+measurement. Each offered final transport must compile from complete captured
+assets; selection retains the original final-file digest. Apple also filters
+choices against the linked final's actual assets and preserves an invalid saved
+choice until deliberately changed. Ordinary imported protocol labels remain
+separate from paired raw modes. Profiles, permission, startup, usage, measurements
+and restoration retain the original typed sources. See the [path and evidence
+limits](MOBILE-IMPORTED-ROUTER-PATH.md).
 
-Local Android evidence includes 5,192 actual helper checks/five causal controls;
-permission 3,867/nine controls; startup 4,786/eighteen controls; usage 209 original
-plus 36 packet checks/eleven controls; and 346 actual Product dialog checks with
-seven hidden-list and two dispatch/disclosure controls. Home state passes 7,732
-checks, 365 identity pairs, 24 no-write refusals and nine serialized races plus
-its unlocked negative control. Imported profile persistence and Product
-callbacks pass 771 checks across 81 existing cases, plus 437 checks across 47
-cases for each packet protocol. Each complete family retains its original
-finite watchdog. Runtime restoration and retained-cleanup cases cover all four
-entries and both finals; all 101 shipping Java sources pass syntax checks.
+Local Android evidence includes 9,360 actual helper checks and five causal
+controls, 4,251 permission checks and nine controls, 5,620 startup checks and
+eighteen controls, the actual multihop runtime's ownership/restoration gates,
+and full service type checking with four negative controls. All 101 shipping
+Java sources pass syntax checks. The three new saved-profile/picker families
+pass 1,493 checks across 161 isolated cases. The mandatory combined dispatcher
+also passes all six imported families: 3,154 checks across 336 cases, retaining
+Add/Load/Update/Delete, current credential references, stale-source refusal and
+exact final labels. A separate six-value summary check also rejects the old
+unknown-mode-as-Shadowsocks display.
+These JVM and service fixtures have explicit OS/native boundaries; they do not
+establish a physical Android tunnel.
 
-Shared compiler/runtime race tests pass 143 verdicts. The pinned constructor,
-native parser and typed MTU planner accept all 76 shared and all 76 actual
-Android-produced graphs, with 154 mandatory verdicts across both source matrices.
-The native encrypted-peer gate passes 42 verdicts, including fourteen new packet
-scenarios plus their parent. It covers WG-to-SS, AWG-to-Hysteria2 and entry AES,
-with wrong keys, PSK, AWG parameters, certificate, route, DNS and private/public
-identity controls. All new graphs verify that application TUN retuning leaves
-the captured packet endpoint unchanged. These parser/MTU combinations do not
-claim physical encrypted mobile traffic for every graph and layer choice.
+Shared compiler/runtime race tests pass 218 verdicts. The actual pinned native
+encrypted-peer gate passes 59 verdicts, adding WG and both AWG final variants,
+including final AES wrapping, with wrong-key/PSK/AWG, entry TLS/trust, route, DNS
+and separate private/public identity controls. Each original-source graph must
+also pass the native constructor, exact config/source-digest comparison, native
+parser and typed MTU planner. The 136 shared and 136 actual Android exports pass
+all 274 required native verdicts after the full corrected mobile preparer; the
+copied policy tests also pass their 218 race-test verdicts. Packet-final endpoint MTU and complete endpoint
+configuration remain unchanged when the application TUN is retuned; neither a
+parser pass nor that configured value is a measured physical path MTU.
 
-The actual packet tests exposed a WG/AWG stack shutdown race. Published
-`d7bff4ae` drains the admitted dispatcher before gVisor teardown, rejects late
-writes/attaches and preserves both runtime framework hooks. Its deterministic
-native test and two causal controls pass; the merged routing runner passes all
-53 tests. The exact private-stack call graph was checked for lock-order cycles.
+Published `d7bff4ae` drains an admitted WG/AWG dispatcher before gVisor teardown,
+rejects late writes/attaches and preserves both runtime framework hooks. Its
+native race test and two causal controls pass; the merged runner passes 53 tests.
+Published `3ef453c1` copies the complete MTU dependency closure into prepared
+mobile/relay source, fixing the exact native-composition failure without removing
+source-byte, scope or Windows-newline checks.
 
-Published `799a6f30` and `5c06b361` make Router-node profile rollback and forward
-apply compare the captured original/published bytes under one shared store lock.
-The focused executable cases retain newer credentials and reject removal of the
-source comparison or atomic boundary. Published `ed717fc4` updates the durable
-audit to enforce those exact guarded operations; eight focused tests, including
-18 deliberate source/order mutations, pass. Broader preference/selection
-transaction ownership remains a separate active source unit.
+Published `799a6f30` and `5c06b361` retain exact Router-node bytes during profile
+rollback/forward apply under one shared store lock. Published `39c8d7fa` adds
+preference and selection ownership: stale failures cannot revert a newer choice,
+and automatic refresh reads the selection under that same monitor. Its focused
+57 checks/10 cases and seven causal controls pass, alongside 1,645 imported-profile
+checks/175 cases, 72 import/refresh UI checks/six controls, Product dialogs and
+node usage. The strict audit passes twelve tests covering 45 source/order mutants.
 
 The original full profile family previously reached its unchanged 180-second
-local watchdog while launching actual Go validators. That complete family and
-its concurrency control remain mandatory exact-SHA CI evidence. Swift/Xcode
-and the mandatory Apple-produced 76-graph native matrix are unavailable locally.
+local watchdog while launching actual Go validators. That full regression and
+its concurrency control remain mandatory exact-SHA CI evidence. Swift/Xcode and
+the mandatory Apple-produced 136-graph native matrix are unavailable locally.
 Source/fixture evidence does not establish APK/IPA delivery, physical routing,
 network transitions, leaks, off-LAN behavior, signing or release publication.
-Other imported entry protocols, other paired final families and Server/Compare
-for this direction remain unfinished; no original requirement is removed.
+Other imported protocols, remaining graph families and Server/Compare for this
+direction remain unfinished; no original requirement is removed.
 
 ## Linux ordinary Shadowsocks entry to Shadowsocks final
 

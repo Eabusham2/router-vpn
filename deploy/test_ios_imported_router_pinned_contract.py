@@ -29,10 +29,13 @@ class ImportedGate(unittest.TestCase):
         self.assertEqual(len(original), 40)
         self.assertEqual(len(packet), 36)
         self.assertFalse(original & packet)
-        self.assertEqual(G.NAMES, original | packet)
+        packet_final = {'final-'+mode+'--'+name for mode in ('wg','awg2-fast','awg2-strong') for name in ss | hy}
+        self.assertEqual(len(packet_final),60)
+        self.assertFalse(packet_final & (original | packet))
+        self.assertEqual(G.NAMES, original | packet | packet_final)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 78)
+        self.assertEqual(len(self.events()), 138)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

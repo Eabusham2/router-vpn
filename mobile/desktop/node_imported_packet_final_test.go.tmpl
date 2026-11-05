@@ -1,0 +1,423 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Exact source compiler + shipping final WG/AWG endpoint constructors, independent
+// pinned cryptographic providers and actual SS/HY2 finals. Only captured physical
+// tuples are mapped to private sockets; no device TUN/OS protection is inferred.
+func TestRouterVPNImportedPacketFinalNativeTraffic(t *testing.T) {
+	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("original packet sources required")
+		}
+		t.Skip("mandatory native gate supplies original sources")
+	}
+	for _, fault := range []string{"success-wg-ss", "success-awg-fast-ss", "success-awg-strong-hy2", "success-final-layer", "final-private-key", "final-public-key", "final-psk", "final-awg-parameter", "entry-key", "entry-sni", "entry-trust", "outer-layer-key", "final-route", "dns-route", "final-identity", "entry-public-ip"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 8*time.Second)
+			defer cancel()
+			protocol, mode := "hysteria2", "awg2-strong"
+			if fault == "success-wg-ss" {
+				protocol, mode = "shadowsocks", "wg"
+			}
+			if fault == "success-awg-fast-ss" {
+				protocol, mode = "shadowsocks", "awg2-fast"
+			}
+			layer := "off"
+			layered := fault == "success-final-layer" || fault == "outer-layer-key"
+			if layered {
+				layer = "aes-256-gcm"
+			}
+			label := "off--" + layer
+			if protocol == "hysteria2" {
+				label = "hysteria2--" + label
+			}
+			raw, err := os.ReadFile(filepath.Join(directory, "final-"+mode+"--"+label+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var args []string
+			if json.Unmarshal(raw, &args) != nil || len(args) != 9 {
+				t.Fatal("original source missing")
+			}
+			// Generate both independent peer keys before capturing the exact input pair.
+			provider, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumer, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret := make([]byte, 32)
+			if _, err = rand.Read(secret); err != nil {
+				t.Fatal(err)
+			}
+			defer clear(secret)
+			encode := base64.StdEncoding.EncodeToString
+			var assets map[string]string
+			_ = json.Unmarshal([]byte(args[3]), &assets)
+			asset := "awg.conf"
+			if mode == "wg" {
+				asset = "wg.conf"
+			}
+			raw, _ = base64.StdEncoding.DecodeString(assets[asset])
+			lines := strings.Split(string(raw), "\n")
+			for i, line := range lines {
+				field, _, ok := strings.Cut(line, "=")
+				if !ok {
+					continue
+				}
+				switch strings.TrimSpace(field) {
+				case "PrivateKey":
+					lines[i] = "PrivateKey = " + encode(consumer.Bytes())
+				case "PublicKey":
+					lines[i] = "PublicKey = " + encode(provider.PublicKey().Bytes())
+				case "PresharedKey":
+					lines[i] = "PresharedKey = " + encode(secret)
+				case "Address":
+					lines[i] = "Address = 10.79.0.2/32, fd79:79::2/128"
+				}
+			}
+			assets[asset] = encode([]byte(strings.Join(lines, "\n")))
+			raw, _ = json.Marshal(assets)
+			args[3] = string(raw)
+			var profile map[string]any
+			_ = json.Unmarshal([]byte(args[4]), &profile)
+			if mode == "wg" {
+				digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + encode(provider.PublicKey().Bytes())))
+				profile["node_proof_id"] = hex.EncodeToString(digest[:])
+			}
+			raw, _ = json.Marshal(profile)
+			args[4] = string(raw)
+			entryCert, entryCA := desktopExternalInstalledPeerCertificate(t, false)
+			plan, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var graph map[string]any
+			_ = json.Unmarshal([]byte(plan.Config()), &graph)
+			byTag := map[string]map[string]any{}
+			for _, family := range []string{"endpoints", "outbounds"} {
+				rows, _ := graph[family].([]any)
+				for _, raw := range rows {
+					v := raw.(map[string]any)
+					byTag[v["tag"].(string)] = v
+				}
+			}
+			firstRaw, lastRaw := byTag["entry-wg"], byTag[mobilemultihop.LocalTag]
+			if firstRaw == nil || lastRaw == nil || lastRaw["detour"] != "entry-wg" && !layered {
+				t.Fatal("actual endpoint closure/final detour missing")
+			}
+			var meta mobilemultihop.Metadata
+			_ = json.Unmarshal([]byte(plan.Metadata()), &meta)
+			paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer "+meta.ExitToken {
+					http.Error(w, "foreign", 403)
+					return
+				}
+				id := meta.ExitNodeID
+				if fault == "final-identity" {
+					id = "foreign"
+				}
+				fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, id)
+			}))
+			defer paired.Close()
+			publicCert, publicCA := desktopImportedFinalCertificate(t)
+			public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ip := "203.0.113.88"
+				if fault == "entry-public-ip" {
+					ip = "203.0.113.89"
+				}
+				fmt.Fprintf(w, "ip=%s\n", ip)
+			}))
+			public.TLS = &tls.Config{Certificates: []tls.Certificate{publicCert}, MinVersion: tls.VersionTLS12}
+			public.StartTLS()
+			defer public.Close()
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+				r := new(dns.Msg).SetReply(q)
+				r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+				_ = w.WriteMsg(r)
+			})}
+			dnsDone := make(chan error, 1)
+			go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+			defer func() { _ = dnsServer.Shutdown(); _ = packet.Close(); <-dnsDone }()
+			selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+			if selected["detour"] != "proxy" {
+				t.Fatal("DNS bypassed final")
+			}
+			dnsTarget := net.JoinHostPort(selected["server"].(string), "53")
+			newServer := func(routes []desktopNodeLayerRoute) *desktopNodeLayerServer {
+				c, stop := context.WithCancel(ctx)
+				t.Cleanup(stop)
+				return &desktopNodeLayerServer{ctx: c, cancel: stop, connections: map[io.Closer]bool{}, routes: routes}
+			}
+			finalServer := newServer([]desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: "udp", Destination: dnsTarget, Physical: packet.LocalAddr().String()}})
+			entryPeer := lastRaw["peers"].([]any)[0].(map[string]any)
+			rules := map[string]desktopReferenceRule{}
+			for _, r := range finalServer.routes {
+				a := netip.MustParseAddrPort(r.Destination)
+				rules[r.Network+"/"+r.Destination] = desktopReferenceRule{Network: r.Network, Address: a.Addr().String(), Port: int(a.Port()), Target: r.Physical}
+			}
+			peerRequest := desktopExternalInstalledWGRequest{PrivateKey: encode(provider.Bytes()), ClientPublicKey: encode(consumer.PublicKey().Bytes()), PresharedKey: encode(secret)}
+			parameters, backend := "", startDesktopDarwinWGDevice
+			if mode != "wg" {
+				values := map[string]string{}
+				for k, v := range lastRaw["amnezia"].(map[string]any) {
+					values[k] = v.(string)
+				}
+				parameters, backend = desktopDarwinAmneziaBackend(t, desktopExternalInstalledAWGRequest{peerRequest, values})
+			}
+			peer := desktopInstalledPacketDevice(t, finalServer, peerRequest, netip.MustParseAddr("127.0.0.1"), parameters, backend, rules, true)
+			defer peer.close()
+			target := net.JoinHostPort(entryPeer["address"].(string), fmt.Sprint(int(entryPeer["port"].(float64))))
+			physical := peer.address
+			var outerRaw map[string]any
+			var outerServer *desktopNodeLayerServer
+			if layered {
+				outerRaw = byTag[mobilemultihop.NativeStartLayerTag]
+				if lastRaw["detour"] != mobilemultihop.NativeStartLayerTag || outerRaw["detour"] != "entry-wg" {
+					t.Fatal("final packet layer bypassed")
+				}
+				outerServer = newServer([]desktopNodeLayerRoute{{Network: "udp", Destination: target, Physical: physical}})
+				outer := desktopStartSSProvider(t, outerServer, outerRaw["method"].(string), outerRaw["password"].(string), netip.MustParseAddr("127.0.0.1"))
+				defer outer.close()
+				physical = outer.address
+				target = net.JoinHostPort(outerRaw["server"].(string), fmt.Sprint(int(outerRaw["server_port"].(float64))))
+			}
+			entryServer := newServer([]desktopNodeLayerRoute{{Network: "udp", Destination: target, Physical: physical}, {Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()}})
+			entryPhysical := ""
+			if protocol == "hysteria2" {
+				p, e := net.ListenPacket("udp4", "127.0.0.1:0")
+				if e != nil {
+					t.Fatal(e)
+				}
+				entryPhysical = p.LocalAddr().String()
+				close := startDesktopExternalInstalledHysteria2(t, entryServer, p, entryCert, firstRaw["password"].(string))
+				defer close()
+			} else {
+				p := desktopStartSSProvider(t, entryServer, firstRaw["method"].(string), firstRaw["password"].(string), netip.MustParseAddr("127.0.0.1"))
+				entryPhysical = p.address
+				defer p.close()
+			}
+			entryTarget := net.JoinHostPort(firstRaw["server"].(string), fmt.Sprint(int(firstRaw["server_port"].(float64))))
+			lower := &desktopSSReferenceLower{virtual: entryTarget, original: entryPhysical}
+			manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
+			owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+			owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
+			rootsEntry := x509.NewCertPool()
+			trust := entryCA
+			if fault == "entry-trust" {
+				trust = publicCA
+			}
+			if !rootsEntry.AppendCertsFromPEM([]byte(trust)) {
+				t.Fatal("entry trust absent")
+			}
+			owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: rootsEntry})
+			firstRaw["detour"] = "captured-physical"
+			switch fault {
+			case "final-private-key":
+				lastRaw["private_key"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+			case "final-public-key":
+				entryPeer["public_key"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+			case "final-psk":
+				entryPeer["pre_shared_key"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+			case "final-awg-parameter":
+				lastRaw["amnezia"].(map[string]any)["s1"] = "57"
+			case "entry-key":
+				firstRaw["password"] = "wrong-entry-password"
+			case "entry-sni":
+				firstRaw["tls"].(map[string]any)["server_name"] = "wrong-entry.example"
+			case "outer-layer-key":
+				outerRaw["password"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+			case "final-route":
+				entryPeer["address"] = "192.0.2.99"
+			}
+			create := func(value map[string]any) adapter.Outbound {
+				raw, _ := json.Marshal(value)
+				var out adapter.Outbound
+				var e error
+				switch value["type"] {
+				case "wireguard":
+					var options option.WireGuardEndpointOptions
+					_ = json.Unmarshal(raw, &options)
+					out, e = WG.NewEndpoint(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
+				case mobilemultihop.AmneziaType:
+					var options Options
+					_ = json.Unmarshal(raw, &options)
+					out, e = NewEndpoint(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
+				case "hysteria2":
+					var options option.Hysteria2OutboundOptions
+					_ = json.Unmarshal(raw, &options)
+					out, e = HY.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
+				case "shadowsocks":
+					var options option.ShadowsocksOutboundOptions
+					_ = json.Unmarshal(raw, &options)
+					out, e = SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
+				default:
+					t.Fatal("unknown original native type")
+				}
+				if e != nil {
+					t.Fatal(e)
+				}
+				t.Cleanup(func() { _ = out.(io.Closer).Close() })
+				manager.owners[value["tag"].(string)] = out
+				return out
+			}
+			first := create(firstRaw)
+			if layered {
+				create(outerRaw)
+			}
+			final := create(lastRaw)
+			for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+				if e := final.(adapter.Lifecycle).Start(stage); e != nil {
+					if (fault == "entry-key" || fault == "entry-sni" || fault == "entry-trust") && ctx.Err() == nil && strings.Contains(e.Error(), "protected dialer") {
+						raw, tcp, udp := peer.stats()
+						if lower.calls.Load() == 0 || raw != 0 || tcp != 0 || udp != 0 || entryServer.plainTCP.Load() != 0 || entryServer.plainUDP.Load() != 0 {
+							t.Fatal("rejected entry authentication acquired packet final authority")
+						}
+						return
+					}
+					t.Fatal(e)
+				}
+			}
+			limit := 2 * time.Second
+			if !strings.HasPrefix(fault, "success-") {
+				limit = 350 * time.Millisecond
+			}
+			// Actual TLS public response through the proxy entry, separately from final private proof.
+			probePublic, stopPublic := context.WithTimeout(ctx, 2*time.Second)
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM([]byte(publicCA)) {
+				t.Fatal("public fixture trust missing")
+			}
+			publicTransport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "captured-final.example", MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+				return first.DialContext(c, n, M.ParseSocksaddr(a))
+			}}
+			publicRequest, _ := http.NewRequestWithContext(probePublic, "GET", "https://1.1.1.1/cdn-cgi/trace", nil)
+			publicResponse, publicErr := (&http.Client{Transport: publicTransport}).Do(publicRequest)
+			publicOK := false
+			if publicErr == nil {
+				body, e := io.ReadAll(io.LimitReader(publicResponse.Body, 4096))
+				_ = publicResponse.Body.Close()
+				publicOK = e == nil && string(body) == "ip=203.0.113.88\n"
+			}
+			publicTransport.CloseIdleConnections()
+			stopPublic()
+			blockedEntry := fault == "entry-key" || fault == "entry-sni" || fault == "entry-trust"
+			if publicOK != (!blockedEntry && fault != "entry-public-ip") {
+				t.Fatal("original packet public identity did not follow real TLS path", fault, publicErr)
+			}
+			probe, stop := context.WithTimeout(ctx, limit)
+			transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return final.DialContext(ctx, network, M.ParseSocksaddr(address))
+			}}
+			request, _ := http.NewRequestWithContext(probe, "GET", meta.ExitAPI+"/health", nil)
+			request.Header.Set("Authorization", "Bearer "+meta.ExitToken)
+			response, failure := (&http.Client{Transport: transport}).Do(request)
+			proofOK := false
+			if failure == nil {
+				var value struct {
+					OK    bool   `json:"ok"`
+					Node  string `json:"node_id"`
+					Proof string `json:"proof"`
+				}
+				failure = json.NewDecoder(response.Body).Decode(&value)
+				_ = response.Body.Close()
+				proofOK = failure == nil && value.OK && value.Node == meta.ExitNodeID && value.Proof == "router-vpn-private-agent-v1"
+			}
+			transport.CloseIdleConnections()
+			stop()
+			positive := strings.HasPrefix(fault, "success-")
+			if proofOK != (positive || fault == "dns-route" || fault == "entry-public-ip") {
+				t.Fatal("final proof acceptance bypassed actual native owners", fault, failure)
+			}
+			if fault == "dns-route" {
+				dnsTarget = "192.168.50.134:53"
+			}
+			probe, stop = context.WithTimeout(ctx, limit)
+			connection, failure := final.DialContext(probe, "udp", M.ParseSocksaddr(dnsTarget))
+			dnsOK := false
+			if failure == nil {
+				deadline, _ := probe.Deadline()
+				_ = connection.SetDeadline(deadline)
+				query := new(dns.Msg)
+				query.SetQuestion("example.com.", dns.TypeA)
+				wire, _ := query.Pack()
+				_, failure = connection.Write(wire)
+				buffer := make([]byte, 4096)
+				n := 0
+				if failure == nil {
+					n, failure = connection.Read(buffer)
+				}
+				var reply dns.Msg
+				if failure == nil && reply.Unpack(buffer[:n]) == nil {
+					dnsOK = reply.Response && reply.Id == query.Id && len(reply.Answer) == 1
+				}
+				_ = connection.Close()
+			}
+			stop()
+			if dnsOK != (positive || fault == "final-identity" || fault == "entry-public-ip") {
+				t.Fatal("DNS acceptance bypassed exact final chain", fault, failure)
+			}
+
+			rawPackets, plainTCP, plainUDP := peer.stats()
+			blockedFinal := blockedEntry || fault == "final-private-key" || fault == "final-public-key" || fault == "final-psk" || fault == "final-awg-parameter" || fault == "outer-layer-key" || fault == "final-route"
+			if lower.calls.Load() == 0 {
+				t.Fatal("original physical proxy owner bypassed")
+			}
+			if positive && (rawPackets == 0 || plainTCP == 0 || plainUDP == 0 || entryServer.plainUDP.Load() == 0) {
+				t.Fatal("actual encrypted proxy and packet final payload not observed", rawPackets, plainTCP, plainUDP)
+			}
+			if blockedFinal && (plainTCP != 0 || plainUDP != 0) {
+				t.Fatal("rejected final peer decrypted payload", fault, plainTCP, plainUDP)
+			}
+			if (blockedEntry || fault == "final-route" || fault == "outer-layer-key") && rawPackets != 0 {
+				t.Fatal("unowned route reached final peer")
+			}
+			if layered && positive && outerServer.plainUDP.Load() == 0 {
+				t.Fatal("packet final outer layer bypassed")
+			}
+
+		})
+	}
+}
