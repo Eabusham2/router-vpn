@@ -1166,6 +1166,32 @@ at published `0f46cb02`: map-first run `41978725510` and native UI run
 `41978725494` completed successfully. This does not establish completion of the
 remaining workflows or a new full published release.
 
+## Real loopback responses retain a positive measured interval
+
+Windows captured-Node jobs `127059380806` (AMD64) and `127059380497` (ARM64)
+in run `41970020671` both stopped the lease-observation cancellation fixture
+at its initial `request.Run()`: the unchanged scorer required two positive
+measurements. AMD64 failed the OK branch while ARM64 failed the 503 branch;
+the other branch passed on each architecture. The fixture source remained
+byte-identical from `b88449dc` through `88be1f34`.
+
+The fixture delayed Local node/public responses by 20/10ms but allowed Server
+loopback responses to complete within one clock tick. Both Server response
+handlers now delay their actual reply by 2ms. Requests, TLS, transferred bytes,
+selected route, elapsed-time calculation and ownership remain real. No
+production measurement is clamped, synthesized or given a score after failure;
+the exact `(last + external) / 2` calculation and invalid-zero rejection remain.
+
+An isolated `88be1f34` tree plus only this test fixture passes the five selected
+lease/comparison/restoration/failure parents and all 27 leaves under race in
+22.883s (32 verdicts). The unchanged complete route-choice package passes 16
+parents and 11 leaves in 1.164s (27 verdicts), including zero/negative rejection,
+the exact mean, the same comparison target, final recheck, no-winner failures
+and owned cleanup. Neither run has failures, skips, duplicate or unexpected
+selected verdicts. These local results do not replace the actual Windows
+AMD64/ARM64 reruns; the original Windows failures were not reproduced as a
+local clock-resolution experiment.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

@@ -60,6 +60,13 @@ inventory from 420 to 429; those privileged cases have not executed locally.
 Other graph families, layered Linux paths, Server/Compare and device acceptance
 retain their own unfinished requirements.
 
+The real loopback comparison fixture now gives both candidate responses a
+measurable interval. Windows AMD64 and ARM64 had each rejected a zero-time
+fixture candidate before reaching the lease-cancellation assertion. Only test
+response delivery changes; the exact average and rejection of zero/failed
+measurements remain. Focused lease/comparison races pass 32 verdicts, and the
+unchanged scoring suite passes 27. Actual Windows reruns remain required.
+
 Original caller deadlines now reach native manager, graph, network, physical,
 PT/broker, selected-proof and OpenVPN observations. Pure observation expiry
 preserves a healthy owner; confirmed identity failure revokes admission without

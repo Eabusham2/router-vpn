@@ -452,6 +452,11 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			}
 			if tag == LocalTag {
 				time.Sleep(20 * time.Millisecond)
+			} else {
+				// Both candidates need a real response interval. An immediate
+				// loopback reply may occupy one clock tick on a native host;
+				// production must still reject zero instead of inventing a score.
+				time.Sleep(2 * time.Millisecond)
 			}
 			if bad {
 				w.WriteHeader(503)
@@ -475,6 +480,8 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			}
 			if tag == LocalTag {
 				time.Sleep(10 * time.Millisecond)
+			} else {
+				time.Sleep(2 * time.Millisecond)
 			}
 			ip := policy.capture.ExpectedPublicIP
 			if bad {
