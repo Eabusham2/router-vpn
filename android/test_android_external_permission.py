@@ -49,7 +49,7 @@ final class AndroidTorProfile {static String compileOrdinary(AndroidStandardExit
 final class AndroidImportedRouterPath {
  static void requireEntry(AndroidStandardExitStore.Entry e){if(e==null||!List.of("shadowsocks","hysteria2").contains(e.protocol))throw new IllegalArgumentException("imported SS2022/Hysteria2 required");AndroidStandardExitStore.validate(e);}
  static JSONObject finalBundle(File f)throws Exception{JSONObject b=new JSONObject(AndroidTorProfile.strictText(AndroidPrivateFileStore.read(f,AndroidNodeStore.MAX_BUNDLE)));AndroidNodeStore.validateBundle(b);return b;}
- static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){requireEntry(e);if(!"shadowsocks".equals(mode)||!"local".equals(execution))throw new IllegalArgumentException("mixed Local SS graph required");}
+ static void compile(AndroidStandardExitStore.Entry e,JSONObject b,String mode,String execution){requireEntry(e);if(!List.of("shadowsocks","hysteria2").contains(mode)||!"local".equals(execution))throw new IllegalArgumentException("mixed Local proxy graph required");}
 }
 final class AndroidExternalNodeComparison {static boolean active;static int cancels;static boolean hasActiveOperation(){return active;}static boolean cancelActiveOperation(){if(active)cancels++;return active;}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context c){return busy;}}
@@ -242,32 +242,32 @@ public class ExternalPermissionTest {
   for(String execution:List.of("server","auto")){Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,"socks5");f.controller.connectOrdinaryTor(entry,f.exit,execution,f.callback);check(f.runtime().starts==0&&!f.callback.ok&&f.callback.completions==1,"ordinary provider acquired private server authority");}
  }
  static AndroidStandardExitStore.Entry imported(Fixture f,String protocol){AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id="independent-imported";entry.protocol=protocol;entry.secret="original-imported-credential";entry.policy="original-imported-policy";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));return entry;}
- static void importedPaths(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2")){
+ static void importedPaths(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2"))for(String finalMode:List.of("shadowsocks","hysteria2")){
   for(boolean rotate:new boolean[]{false,true}){
-   Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",f.callback);
+   Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,finalMode,"local",f.callback);
    Bundle state=new Bundle();f.controller.savePending(state);var original=f.controller;int code=f.activity.permissionRequest;
    check(AndroidRuntimeRegistry.instance.multihop.starts==0&&f.controller.isPermissionPending(),"imported path ran before original permission");
    check(!state.values.toString().contains(entry.secret)&&!state.values.toString().contains(entry.policy),"imported permission serialized private source");
    if(rotate){f.restore(state);original.onActivityResult(code,Activity.RESULT_OK);check(AndroidRuntimeRegistry.instance.multihop.starts==0,"old Activity consumed transferred imported permission");}
    entry.secret="mutated caller object";f.allow();f.allow();var runtime=AndroidRuntimeRegistry.instance.multihop;
-   check(f.callback.ok&&f.callback.completions==1&&runtime.starts==1&&runtime.ordinary.secret.equals("original-imported-credential")&&runtime.ordinary.protocol.equals(protocol)&&runtime.importedFinal==f.entry&&runtime.importedMode.equals("shadowsocks")&&runtime.importedExecution.equals("local"),"imported permission lost exact frozen typed sources or completed twice: "+protocol+"/"+rotate);
+   check(f.callback.ok&&f.callback.completions==1&&runtime.starts==1&&runtime.ordinary.secret.equals("original-imported-credential")&&runtime.ordinary.protocol.equals(protocol)&&runtime.importedFinal==f.entry&&runtime.importedMode.equals(finalMode)&&runtime.importedExecution.equals("local"),"imported permission lost exact frozen typed sources or completed twice: "+protocol+"/"+rotate);
   }
-  for(String fault:List.of("entry-key","entry-policy","entry-removed","final-bytes","final-removed","final-id","request-digest","entry-mode","server","denied","cancelled"))for(boolean rotate:new boolean[]{false,true}){
-   Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",f.callback);Bundle state=new Bundle();f.controller.savePending(state);
+  for(String fault:List.of("entry-key","entry-policy","entry-removed","final-bytes","final-removed","final-id","request-digest","entry-mode","final-mode","server","denied","cancelled"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,finalMode,"local",f.callback);Bundle state=new Bundle();f.controller.savePending(state);
    switch(fault){case "entry-key":entry.secret="replacement";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));break;
     case "entry-policy":entry.policy="replacement-policy";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));break;
     case "entry-removed":AndroidStandardExitStore.saved.remove(entry.id);break;case "final-bytes":Files.writeString(f.file,Files.readString(f.file)+" ");break;case "final-removed":Files.delete(f.file);break;
     case "final-id":state.putString("routervpn.pending.exit","foreign-final");break;case "request-digest":state.putString("external_request_digest_pending","0".repeat(64));break;
-    case "entry-mode":state.putString("multihop_entry_mode_pending","wg");break;case "server":state.putString("multihop_execution_pending","server");break;
+    case "entry-mode":state.putString("multihop_entry_mode_pending","wg");break;case "final-mode":state.putString("routervpn.pending.exit_mode",finalMode.equals("shadowsocks")?"hysteria2":"shadowsocks");break;case "server":state.putString("multihop_execution_pending","server");break;
    }
-   if(rotate||Set.of("final-id","request-digest","entry-mode","server").contains(fault))f.restore(state);
+   if(rotate||Set.of("final-id","request-digest","entry-mode","final-mode","server").contains(fault))f.restore(state);
    if(fault.equals("cancelled"))check(f.controller.cancelPending(f.callback),"original imported cancellation was refused");
    if(fault.equals("denied"))f.controller.onActivityResult(f.activity.permissionRequest,0);else f.allow();
    check(AndroidRuntimeRegistry.instance.multihop.starts==0&&!f.callback.ok,"changed imported permission started a different source: "+fault+"/"+rotate);
   }
-  Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",f.callback);int old=f.activity.permissionRequest;
+  Fixture f=new Fixture(root);var entry=imported(f,protocol);f.controller.connectImportedMultihop(entry,f.entry,finalMode,"local",f.callback);int old=f.activity.permissionRequest;
   check(!f.controller.cancelPending(new Callback())&&f.controller.isPermissionPending(),"foreign callback cancelled imported permission");
-  check(f.controller.cancelPending(f.callback),"captured imported cancellation failed");Callback next=new Callback();f.controller.connectImportedMultihop(entry,f.entry,"shadowsocks","local",next);int current=f.activity.permissionRequest;
+  check(f.controller.cancelPending(f.callback),"captured imported cancellation failed");Callback next=new Callback();f.controller.connectImportedMultihop(entry,f.entry,finalMode,"local",next);int current=f.activity.permissionRequest;
   f.controller.onActivityResult(old,Activity.RESULT_OK);check(current!=old&&AndroidRuntimeRegistry.instance.multihop.starts==0&&next.completions==0,"late imported permission consumed replacement");f.controller.onActivityResult(current,Activity.RESULT_OK);check(next.ok&&AndroidRuntimeRegistry.instance.multihop.starts==1,"replacement imported owner did not complete");
  }}
  static void savedChoice(Fixture f){Map<String,Object> prefs=android.content.Context.connectionPreferences;prefs.put("selected_kind","router-vpn");prefs.put("selected_id",f.entry.id);prefs.put("mode","custom:Saved");prefs.put("custom_presets","USER_SAVED_CUSTOM_LAYERS_ONLY");prefs.put("multihop_on",false);prefs.put("multihop_entry",f.entry.id);prefs.put("multihop_exit","another-saved-node");prefs.put("multihop_exit_mode","shadowsocks");prefs.put("multihop_entry_mode","wg");prefs.put("multihop_entry_kind","router-vpn");prefs.put("multihop_execution","local");}

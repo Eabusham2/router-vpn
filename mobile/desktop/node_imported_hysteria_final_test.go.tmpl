@@ -1,0 +1,401 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	QUIC "github.com/sagernet/quic-go"
+	"github.com/sagernet/sing-box/adapter"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Actual pinned native encrypted transports use independently captured entry
+// and final trust. The fixture supplies a private final certificate asset before
+// compiling the original sources, and maps only their physical tuples to local
+// peers. It does not infer a mobile OS TUN grant from this component execution.
+func TestRouterVPNImportedHysteriaFinalNativeTraffic(t *testing.T) {
+	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("original native sources required")
+		}
+		t.Skip("original source exports supplied by mandatory native gate")
+	}
+	for _, fault := range []string{"success-ss", "success-hysteria", "success-final-layer", "final-password", "final-sni", "final-trust", "outer-layer-key", "final-route", "dns-route", "final-identity"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			label := "final-hysteria2--hysteria2--off--off.json"
+			if fault == "success-ss" {
+				label = "final-hysteria2--off--off.json"
+			}
+			layered := fault == "success-final-layer" || fault == "outer-layer-key"
+			if layered {
+				label = "final-hysteria2--hysteria2--off--aes-256-gcm.json"
+			}
+			raw, err := os.ReadFile(filepath.Join(directory, label))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var args []string
+			if json.Unmarshal(raw, &args) != nil || len(args) != 9 {
+				t.Fatal("original source missing")
+			}
+			entryCert, entryCA := desktopExternalInstalledPeerCertificate(t, false)
+			finalCert, finalCA := desktopImportedFinalCertificate(t)
+			var assets map[string]string
+			if json.Unmarshal([]byte(args[3]), &assets) != nil {
+				t.Fatal("final assets missing")
+			}
+			nativeRaw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var original map[string]any
+			if json.Unmarshal(nativeRaw, &original) != nil {
+				t.Fatal("final original graph invalid")
+			}
+			originalFinal := original["outbounds"].([]any)[0].(map[string]any)
+			originalTLS := originalFinal["tls"].(map[string]any)
+			originalTLS["server_name"] = "captured-final.example"
+			capturedCA := finalCA
+			if fault == "final-trust" {
+				capturedCA = entryCA
+			}
+			assets["cert.pem"] = base64.StdEncoding.EncodeToString([]byte(capturedCA))
+			nativeRaw, _ = json.Marshal(original)
+			assets["sing-box.json"] = base64.StdEncoding.EncodeToString(nativeRaw)
+			nativeRaw, _ = json.Marshal(assets)
+			args[3] = string(nativeRaw)
+			plan, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var graph map[string]any
+			_ = json.Unmarshal([]byte(plan.Config()), &graph)
+			byTag := map[string]map[string]any{}
+			for _, n := range graph["outbounds"].([]any) {
+				v := n.(map[string]any)
+				byTag[v["tag"].(string)] = v
+			}
+			firstRaw, lastRaw := byTag["entry-wg"], byTag[mobilemultihop.LocalTag]
+			if firstRaw == nil || lastRaw == nil || lastRaw["type"] != "hysteria2" {
+				t.Fatal("compiled native owners missing")
+			}
+			var meta mobilemultihop.Metadata
+			_ = json.Unmarshal([]byte(plan.Metadata()), &meta)
+			paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer "+meta.ExitToken {
+					http.Error(w, "foreign", 403)
+					return
+				}
+				node := meta.ExitNodeID
+				if fault == "final-identity" {
+					node = "foreign"
+				}
+				fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, node)
+			}))
+			defer paired.Close()
+			dnsPacket, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			dnsServer := &dns.Server{PacketConn: dnsPacket, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+				reply := new(dns.Msg).SetReply(q)
+				reply.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+				_ = w.WriteMsg(reply)
+			})}
+			dnsDone := make(chan error, 1)
+			go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+			defer func() { _ = dnsServer.Shutdown(); _ = dnsPacket.Close(); <-dnsDone }()
+			selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+			if selected["type"] != "udp" || selected["detour"] != "proxy" {
+				t.Fatal("selected DNS bypasses final")
+			}
+			dnsTarget := net.JoinHostPort(selected["server"].(string), "53")
+			newServer := func(routes []desktopNodeLayerRoute) *desktopNodeLayerServer {
+				c, stop := context.WithCancel(ctx)
+				t.Cleanup(stop)
+				return &desktopNodeLayerServer{ctx: c, cancel: stop, connections: map[io.Closer]bool{}, routes: routes}
+			}
+			finalServer := newServer([]desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: "udp", Destination: dnsTarget, Physical: dnsPacket.LocalAddr().String()}})
+			finalPacket, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			finalObservation := &desktopExternalHysteriaObservation{}
+			obfs := lastRaw["obfs"].(map[string]any)
+			if obfs["type"] != "salamander" {
+				t.Fatal("final lost captured obfuscation")
+			}
+			closeFinal := desktopStartImportedFinalHysteria(t, finalServer, finalPacket, finalCert, lastRaw["password"].(string), obfs["password"].(string), finalObservation)
+			defer closeFinal()
+			outerRaw := lastRaw
+			target := net.JoinHostPort(lastRaw["server"].(string), fmt.Sprint(int(lastRaw["server_port"].(float64))))
+			physical := finalPacket.LocalAddr().String()
+			var outerServer *desktopNodeLayerServer
+			if layered {
+				outerRaw = byTag[mobilemultihop.NativeStartLayerTag]
+				if outerRaw == nil || lastRaw["detour"] != mobilemultihop.NativeStartLayerTag || outerRaw["detour"] != "entry-wg" {
+					t.Fatal("final native inner/outer detours changed")
+				}
+				outerServer = newServer([]desktopNodeLayerRoute{{Network: "udp", Destination: target, Physical: physical}})
+				outer := desktopStartSSProvider(t, outerServer, outerRaw["method"].(string), outerRaw["password"].(string), netip.MustParseAddr("127.0.0.1"))
+				defer outer.close()
+				physical = outer.address
+				target = net.JoinHostPort(outerRaw["server"].(string), fmt.Sprint(int(outerRaw["server_port"].(float64))))
+			} else if lastRaw["detour"] != "entry-wg" {
+				t.Fatal("final has unowned predecessor")
+			}
+			entryServer := newServer([]desktopNodeLayerRoute{{Network: "udp", Destination: target, Physical: physical}})
+			var entryAddress string
+			if firstRaw["type"] == "hysteria2" {
+				packet, e := net.ListenPacket("udp4", "127.0.0.1:0")
+				if e != nil {
+					t.Fatal(e)
+				}
+				entryAddress = packet.LocalAddr().String()
+				close := startDesktopExternalInstalledHysteria2(t, entryServer, packet, entryCert, firstRaw["password"].(string))
+				defer close()
+			} else {
+				entry := desktopStartSSProvider(t, entryServer, firstRaw["method"].(string), firstRaw["password"].(string), netip.MustParseAddr("127.0.0.1"))
+				defer entry.close()
+				entryAddress = entry.address
+			}
+			entryTarget := net.JoinHostPort(firstRaw["server"].(string), fmt.Sprint(int(firstRaw["server_port"].(float64))))
+			lower := &desktopSSReferenceLower{virtual: entryTarget, original: entryAddress}
+			manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
+			owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM([]byte(entryCA)) {
+				t.Fatal("entry original trust invalid")
+			}
+			owned = service.ContextWith[adapter.CertificateStore](owned, &desktopImportedHysteriaTrust{roots: roots})
+			firstRaw["detour"] = "captured-physical"
+			if fault == "final-password" {
+				lastRaw["password"] = "foreign-final-password"
+			}
+			if fault == "final-sni" {
+				lastRaw["tls"].(map[string]any)["server_name"] = "wrong-final.example"
+			}
+			if fault == "final-route" {
+				lastRaw["server"] = "192.0.2.99"
+			}
+			if fault == "outer-layer-key" {
+				outerRaw["password"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
+			}
+			create := func(value map[string]any) adapter.Outbound {
+				raw, _ := json.Marshal(value)
+				var out adapter.Outbound
+				var failure error
+				if value["type"] == "hysteria2" {
+					var options option.Hysteria2OutboundOptions
+					if json.Unmarshal(raw, &options) != nil {
+						t.Fatal("HY2 options invalid")
+					}
+					out, failure = HY.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
+				} else {
+					var options option.ShadowsocksOutboundOptions
+					if json.Unmarshal(raw, &options) != nil {
+						t.Fatal("SS options invalid")
+					}
+					out, failure = SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
+				}
+				if failure != nil {
+					t.Fatal(failure)
+				}
+				t.Cleanup(func() { _ = out.(io.Closer).Close() })
+				manager.owners[value["tag"].(string)] = out
+				return out
+			}
+			create(firstRaw)
+			if layered {
+				create(outerRaw)
+			}
+			final := create(lastRaw)
+			limit := 2 * time.Second
+			if fault == "final-password" || fault == "final-route" || fault == "outer-layer-key" || fault == "dns-route" {
+				limit = 350 * time.Millisecond
+			}
+			probe, stop := context.WithTimeout(ctx, limit)
+			transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return final.DialContext(ctx, network, M.ParseSocksaddr(address))
+			}}
+			request, _ := http.NewRequestWithContext(probe, "GET", meta.ExitAPI+"/health", nil)
+			request.Header.Set("Authorization", "Bearer "+meta.ExitToken)
+			response, failure := (&http.Client{Transport: transport}).Do(request)
+			proofOK := false
+			if failure == nil {
+				var value struct {
+					OK    bool   `json:"ok"`
+					Node  string `json:"node_id"`
+					Proof string `json:"proof"`
+				}
+				failure = json.NewDecoder(response.Body).Decode(&value)
+				_ = response.Body.Close()
+				proofOK = failure == nil && value.OK && value.Node == meta.ExitNodeID && value.Proof == "router-vpn-private-agent-v1"
+			}
+			transport.CloseIdleConnections()
+			stop()
+			if fault == "final-sni" || fault == "final-trust" {
+				var original *QUIC.TransportError
+				marker := "x509: certificate signed by unknown authority"
+				if fault == "final-sni" {
+					marker = "x509: certificate is valid for captured-final.example, not wrong-final.example"
+				}
+				if !errors.As(failure, &original) || original.Remote || !strings.Contains(original.ErrorMessage, "tls: failed to verify certificate: "+marker) {
+					t.Fatal("final QUIC TLS lost its independent verification cause", failure)
+				}
+			}
+			positive := strings.HasPrefix(fault, "success-")
+			if proofOK != (positive || fault == "dns-route") {
+				t.Fatal("final proof acceptance bypassed actual native owners", fault, failure)
+			}
+			if fault == "dns-route" {
+				dnsTarget = "192.168.50.134:53"
+			}
+			probe, stop = context.WithTimeout(ctx, limit)
+			connection, failure := final.DialContext(probe, "udp", M.ParseSocksaddr(dnsTarget))
+			dnsOK := false
+			if failure == nil {
+				deadline, _ := probe.Deadline()
+				_ = connection.SetDeadline(deadline)
+				query := new(dns.Msg)
+				query.SetQuestion("example.com.", dns.TypeA)
+				wire, _ := query.Pack()
+				_, failure = connection.Write(wire)
+				buffer := make([]byte, 4096)
+				n := 0
+				if failure == nil {
+					n, failure = connection.Read(buffer)
+				}
+				var reply dns.Msg
+				if failure == nil && reply.Unpack(buffer[:n]) == nil {
+					dnsOK = reply.Response && reply.Id == query.Id && len(reply.Answer) == 1
+				}
+				_ = connection.Close()
+			}
+			stop()
+			if dnsOK != (positive || fault == "final-identity") {
+				t.Fatal("DNS acceptance bypassed exact final chain", fault, failure)
+			}
+			if lower.calls.Load() == 0 || entryServer.rawUDP.Load() == 0 {
+				t.Fatal("original physical encrypted entry not reached")
+			}
+			if positive && (entryServer.plainUDP.Load() == 0 || finalServer.rawUDP.Load() == 0 || finalServer.plainTCP.Load() == 0 || finalServer.plainUDP.Load() == 0) {
+				t.Fatal("native decrypted traffic did not traverse both owners")
+			}
+			if fault == "final-password" && finalObservation.authFailures.Load() == 0 {
+				t.Fatal("wrong final password did not reach actual authentication")
+			}
+			if (fault == "final-sni" || fault == "final-trust") && finalObservation.authFailures.Load() != 0 {
+				t.Fatal("untrusted final reached authentication")
+			}
+			if (fault == "outer-layer-key" || fault == "final-route") && finalServer.rawUDP.Load() != 0 {
+				t.Fatal("unowned outer path reached final")
+			}
+			if (fault == "final-password" || fault == "final-sni" || fault == "final-trust") && (finalServer.plainTCP.Load() != 0 || finalServer.plainUDP.Load() != 0) {
+				t.Fatal("rejected final gained decrypted traffic")
+			}
+			if layered && positive && outerServer.plainUDP.Load() == 0 {
+				t.Fatal("final AES layer bypassed")
+			}
+		})
+	}
+}
+
+func desktopImportedFinalCertificate(t *testing.T) (tls.Certificate, string) {
+	t.Helper()
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	root := &x509.Certificate{SerialNumber: big.NewInt(91001), Subject: pkix.Name{CommonName: "independent captured final root"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, root, root, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(91002), Subject: pkix.Name{CommonName: "captured-final.example"}, DNSNames: []string{"captured-final.example"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	cert, err := x509.CreateCertificate(rand.Reader, leaf, root, &key.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{cert, der}, PrivateKey: key}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+func desktopStartImportedFinalHysteria(t *testing.T, server *desktopNodeLayerServer, packet net.PacketConn, cert tls.Certificate, password, mask string, observation *desktopExternalHysteriaObservation) func() {
+	t.Helper()
+	private, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chain []string
+	for _, der := range cert.Certificate {
+		chain = append(chain, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+	}
+	logger := log.NewNOPFactory().NewLogger("captured-final-hysteria")
+	config, err := boxTLS.NewServer(server.ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: chain, Key: []string{string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))}})
+	clear(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: server.ctx, Logger: logger, TLSConfig: config, SalamanderPassword: mask, UDPTimeout: 5 * time.Second, Handler: desktopNodeHysteria2Handler{server}, MasqueradeHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.Host == "hysteria" && r.URL.Path == "/auth" {
+			observation.authFailures.Add(1)
+		}
+		http.NotFound(w, r)
+	})})
+	if err == nil {
+		native.UpdateUsers([]int{1}, []string{password})
+		err = config.Start()
+	}
+	if err == nil {
+		err = native.Start(&desktopNodeHysteria2Packet{PacketConn: packet, server: server})
+	}
+	close := func() {
+		_ = packet.Close()
+		if native != nil {
+			_ = native.Close()
+		}
+		_ = config.Close()
+	}
+	if err != nil {
+		close()
+		t.Fatal(err)
+	}
+	return close
+}

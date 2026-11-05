@@ -64,17 +64,19 @@ SWIFT = r'''
   reject("imported restore rejects replaced proof source"){_ = try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:replacement)}
  }
  static func importedHysteriaRouter()throws {
-  var config=try source("local","hysteria2","shadowsocks"),root=try JSONSerialization.jsonObject(with:source("local","hysteria2","shadowsocks")["bundle"] as! Data) as! [String:Any]
+  for finalMode in ["shadowsocks","hysteria2"] {
+  var config=try source("local","hysteria2",finalMode),root=try JSONSerialization.jsonObject(with:source("local","hysteria2",finalMode)["bundle"] as! Data) as! [String:Any]
   var final=(root["routerProfiles"] as! [[String:Any]])[0]
   final["node_kind"]="router-vpn";final["node_proof_id"]=String(repeating:"a",count:64);final["router_api"]="http://10.77.0.1:8787";final["api_token"]="paired final"
+  root["profiles"]=[finalMode:["sing-box.json":"original final password and TLS source","final.pem":"original certificate bytes"],"shadowsocks-layer":["sing-box.json":"original raw layer map"]]
   root["routerProfiles"]=[final];config["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
   let entry:[String:Any]=["id":"entry","node_kind":"external","start_layer":"off","external":["protocol":"hysteria2","expected_public_ip":"198.51.100.4","hysteria2":["server":"198.51.100.4","port":443,"password":" exact original secret ","tls_server_name":"entry.example.test"]]]
   config["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[entry]],options:.sortedKeys)
   let original=try IOSMultihopExecution.Source(configuration:config,digest:digest)
   let receipt=try IOSMultihopExecution.Capture(source:original,execution:"local",session:UUID().uuidString,request:String(repeating:"f",count:32))
   let restored=try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:original)
-  check("HY2 restore retains captured source and transport",restored.source==original && original.entryMode=="hysteria2")
-  for fault in ["password","TLS","protocol","source","server","auto","wrong-mode"] {
+  check("HY2 restore retains captured source and transport",restored.source==original && original.entryMode=="hysteria2" && original.exitMode==finalMode)
+  for fault in ["password","TLS","protocol","source","server","auto","wrong-mode","final-mode","final-password","final-certificate","final-layer"] {
    var changed=config,a=entry,b=final,external=entry["external"] as! [String:Any],transport=external["hysteria2"] as! [String:Any]
    switch fault {
    case "password":transport["password"]="replacement exact password"
@@ -82,12 +84,22 @@ SWIFT = r'''
    case "protocol":external["protocol"]="shadowsocks"
    case "source":transport["server"]="198.51.100.5"
    case "server","auto":b["multihop_execution"]=fault
+   case "final-mode":b["multihop_exit_mode"]=finalMode=="hysteria2" ? "shadowsocks":"hysteria2"
+   case "final-password","final-certificate","final-layer":break
    default:b["multihop_entry_mode"]="shadowsocks"
    }
    external["hysteria2"]=transport;a["external"]=external
    changed["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[a]],options:.sortedKeys)
-   var finalRoot=root;finalRoot["routerProfiles"]=[b];changed["bundle"]=try JSONSerialization.data(withJSONObject:finalRoot,options:.sortedKeys)
+   var finalRoot=root;finalRoot["routerProfiles"]=[b]
+   if fault=="final-password" || fault=="final-certificate" || fault=="final-layer" {
+    var maps=root["profiles"] as! [String:[String:String]]
+    if fault=="final-layer" {maps["shadowsocks-layer"]=["sing-box.json":"substituted layer key"]}
+    else {maps[finalMode]![fault=="final-password" ? "sing-box.json":"final.pem"]="substituted original source"}
+    finalRoot["profiles"]=maps
+   }
+   changed["bundle"]=try JSONSerialization.data(withJSONObject:finalRoot,options:.sortedKeys)
    reject("HY2 restore refuses replaced original "+fault){let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest);_ = try IOSMultihopExecution.Capture.decode(receipt.encoded(),source:replacement)}
+  }
   }
  }
  static func source(_ requested:String="auto",_ entry:String="max-quic-awg",_ exit:String="reality-xhttp")throws->[String:Any]{

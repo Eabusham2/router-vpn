@@ -22,10 +22,10 @@ class ImportedGate(unittest.TestCase):
     def test_preserved_ss_and_complete_hysteria_matrix(self):
         ss = {a+'--'+b+'--2022-blake3-aes-256-gcm.json' for a in G.LAYERS for b in G.LAYERS} | {'off--off--2022-blake3-aes-128-gcm.json', 'off--off--2022-blake3-chacha20-poly1305.json'}
         hy = {'hysteria2--'+a+'--'+b+'.json' for a in G.LAYERS for b in G.LAYERS}
-        self.assertEqual(G.NAMES, ss | hy)
+        self.assertEqual(G.NAMES, ss | hy | {"final-hysteria2--"+name for name in ss | hy})
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 22)
+        self.assertEqual(len(self.events()), 42)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

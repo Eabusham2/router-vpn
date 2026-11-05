@@ -37,7 +37,7 @@ extension RouterVPNModel {
             guard imported.external?.matchesStartLayer(imported.startLayer) == true else { throw IOSImportedEntryMultihop.issue() }
             if imported.external?.startLayer != nil { try IOSExternalExecution.validateLayerDraft(imported) }
             _ = try IOSMultihopStartLayer.capture(profile: final, profiles: exitBundle.profiles)
-            _ = try IOSRuntimeSelector.selectRaw(bundle: exitBundle, rawProfileID: "shadowsocks")
+            _ = try IOSRuntimeSelector.selectRaw(bundle: exitBundle, rawProfileID: exit.multihopExitMode ?? "")
             entry.selectedRouterID = entryID
             entry.endpoint = imported.endpoint
             entry.nodeProofID = ""; entry.routerAPI = ""; entry.apiToken = ""
@@ -320,7 +320,13 @@ struct IOSMultihopView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                     if externalEntryProtocol != nil {
-                        LabeledContent("Exit transport", value: "Shadowsocks 2022")
+                        Picker("Exit transport", selection: $exitMode) {
+                            if !["shadowsocks", "hysteria2"].contains(exitMode) {
+                                Text("Choose Shadowsocks or Hysteria2 for this imported entry").tag(exitMode)
+                            }
+                            Text("Shadowsocks 2022").tag("shadowsocks")
+                            Text("Hysteria2").tag("hysteria2")
+                        }
                         LabeledContent("Execution", value: "Local")
                         Text("The imported entry keeps its own public-address proof and Start Layer. The paired final node keeps its private identity, DNS and independent Start Layer.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -392,12 +398,17 @@ struct IOSMultihopView: View {
                     }
                 }
                 Section("Connection requirements") {
+                    if externalEntryProtocol != nil && torExitProtocol == nil && ordinaryExitProtocol == nil {
+                        Text("Link an imported Shadowsocks 2022 or Hysteria2 entry and one different paired Router VPN final node. Choose the final node's complete Shadowsocks or Hysteria2 transport for Local execution. Each hop retains its original credentials and independent Start Layer. The final node supplies Home AdGuard or the selected custom DNS policy; DNS stays inside the final path. Both nodes' LAN-Off and IPv6-Off policies are enforced, and their captured MTU policies must agree on the single TUN.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
                     Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, WireGuard/AmneziaWG with Rosenpass PQ, Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG (with or without Rosenpass PQ), self-contained Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. An entry AES or AES+XOR Start Layer stays on the captured entry for Local, Server and Compare. Exit AES or AES+XOR uses the same captured exit in Local, Server and Compare; Server requires matching private relay provisioning. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
                         .font(.caption).foregroundStyle(.secondary)
+                    }
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save graph") {
-                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? (externalEntryProtocol != nil ? "shadowsocks" : exitMode), execution: (externalEntryProtocol != nil && torExitProtocol == nil && ordinaryExitProtocol == nil ? "local" : execution), entryMode: externalEntryProtocol ?? entryMode); dismiss() }
+                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: (externalEntryProtocol != nil && torExitProtocol == nil && ordinaryExitProtocol == nil ? "local" : execution), entryMode: externalEntryProtocol ?? entryMode); dismiss() }
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || viaEntry.running || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }

@@ -24,7 +24,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		t.Skip("exact generated compiler sources supplied by native mobile gate")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 20 {
+	if err != nil || len(entries) != 40 {
 		t.Fatal("incomplete original layer matrix", err)
 	}
 	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
@@ -33,6 +33,13 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 			expected[a+"--"+b+".json"] = true
 			expected["hysteria2--"+a+"--"+b+".json"] = true
 		}
+	}
+	originalNames := make([]string, 0, len(expected))
+	for name := range expected {
+		originalNames = append(originalNames, name)
+	}
+	for _, name := range originalNames {
+		expected["final-hysteria2--"+name] = true
 	}
 	for _, entry := range entries {
 		t.Run(entry.Name(), func(t *testing.T) {
@@ -63,16 +70,23 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 			if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || metadata["entry_kind"] != "external" || metadata["entry_api"] != "" || metadata["entry_node_id"] != "" || metadata["entry_token"] != "" {
 				t.Fatal("imported capture acquired paired identity")
 			}
-			expectedMode := "shadowsocks"
+			expectedMode, expectedFinal := "shadowsocks", "shadowsocks"
 			layerName := name
-			if strings.HasPrefix(name, "hysteria2--") {
+			if strings.HasPrefix(layerName, "final-hysteria2--") {
+				expectedFinal = "hysteria2"
+				layerName = strings.TrimPrefix(layerName, "final-hysteria2--")
+			}
+			if strings.HasPrefix(layerName, "hysteria2--") {
 				expectedMode = "hysteria2"
-				layerName = strings.TrimPrefix(name, "hysteria2--")
+				layerName = strings.TrimPrefix(layerName, "hysteria2--")
+			}
+			if metadata["exit_mode"] != expectedFinal {
+				t.Fatal("captured final transport mode changed")
 			}
 			if metadata["entry_mode"] != expectedMode {
 				t.Fatal("captured imported transport mode changed")
 			}
-			if !strings.HasPrefix(name, "cipher-") {
+			if !strings.HasPrefix(layerName, "cipher-") {
 				parts := strings.Split(strings.TrimSuffix(layerName, ".json"), "--")
 				normalize := func(v string) string {
 					if v == "" {
@@ -126,6 +140,13 @@ func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
 	}
 	expected["off--off--2022-blake3-aes-128-gcm.json"] = true
 	expected["off--off--2022-blake3-chacha20-poly1305.json"] = true
+	originalNames := make([]string, 0, len(expected))
+	for name := range expected {
+		originalNames = append(originalNames, name)
+	}
+	for _, name := range originalNames {
+		expected["final-hysteria2--"+name] = true
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != len(expected) {
 		t.Fatal("incomplete actual Apple matrix", err)

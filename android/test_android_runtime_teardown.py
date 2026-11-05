@@ -150,7 +150,7 @@ final class AndroidImportedRouterPath {
  static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{if(!java.util.List.of("shadowsocks","hysteria2").contains(e.protocol))throw new IllegalArgumentException("SS2022 or Hysteria2 entry required");return new AndroidMultihopController.Source(e);}
  static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{s.require(null);return AndroidStandardExitStore.copy(AndroidStandardExitStore.saved.get(s.importedId));}
  static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{
-  e.require(null);last.require(x);if(!mode.equals("shadowsocks")||!execution.equals("local"))throw new IllegalArgumentException("mixed Local SS required");prepared++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=entry(c,e).protocol;var result=new AndroidMultihopController.Prepared(e,x,mode);if(failPreparation)throw new PreparationFailure(result.session.sessionId);if(afterPrepare!=null)afterPrepare.run();return result;
+  e.require(null);last.require(x);if(!java.util.List.of("shadowsocks","hysteria2").contains(mode)||!execution.equals("local"))throw new IllegalArgumentException("mixed Local proxy required");prepared++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=entry(c,e).protocol;var result=new AndroidMultihopController.Prepared(e,x,mode);if(failPreparation)throw new PreparationFailure(result.session.sessionId);if(afterPrepare!=null)afterPrepare.run();return result;
  }
 }
 final class AndroidStandardExitStore {
@@ -401,12 +401,12 @@ public final class RuntimeTeardownHarness {
             try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();if(fault.equals("duplicate"))exit.id=entry.id;if(fault.equals("wrong-exit"))exit.protocol="socks5";if(fault.equals("tor-entry"))entry.protocol="tor";Callback cb=new Callback(0);owner.external.connectOrdinary(entry,exit,fault.equals("server")||fault.equals("auto")?fault:"local",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidTorProfile.ordinaryPreparations==0,"ordinary input acquired unavailable path authority");}
         });
     }
-    static void importedRouterRuntimeTests(){for(String protocol:new String[]{"shadowsocks","hysteria2"}){
+    static void importedRouterRuntimeTests(){for(String protocol:new String[]{"shadowsocks","hysteria2"})for(String finalMode:new String[]{"shadowsocks","hysteria2"}){
         test("imported Router runtime captures and restores original typed owner",()->{
             try(Owner owner=new Owner("multihop")){
                 AndroidStandardExitStore.Entry first=ordinary(protocol);AndroidNodeStore.Node last=new AndroidNodeStore.Node("paired-final");Callback connected=new Callback(0);
-                owner.multihop.connectImported(first,last,"shadowsocks","local",connected);connected.awaitDone();check(connected.ok&&owner.engine.starts.get()==1&&AndroidImportedRouterPath.prepared==1,"imported graph did not start once");
-                var home=AndroidHomeStateStore.current;check(home.activeEntryId.equals(first.id)&&home.activeExitId.equals(last.id)&&home.activeEntryMode.equals(protocol),"imported graph lost typed identity");
+                owner.multihop.connectImported(first,last,finalMode,"local",connected);connected.awaitDone();check(connected.ok&&owner.engine.starts.get()==1&&AndroidImportedRouterPath.prepared==1,"imported graph did not start once");
+                var home=AndroidHomeStateStore.current;check(home.activeEntryId.equals(first.id)&&home.activeExitId.equals(last.id)&&home.activeEntryMode.equals(protocol)&&home.runtimeMode.equals(finalMode),"imported graph lost typed identity");
                 String source=AndroidStandardExitStore.snapshot(owner.multihop.capturedOrdinaryEntry(home));var caller=owner.multihop.capturedOrdinaryEntry(home);caller.name="caller changed";
                 check(source.equals(AndroidStandardExitStore.snapshot(owner.multihop.capturedOrdinaryEntry(home))),"runtime exposed mutable imported source");
                 var captured=owner.multihop.captureRestore(null,last,home);owner.disconnect();awaitIdle(owner);var idle=AndroidHomeStateStore.current;Callback restored=new Callback(0);
@@ -416,35 +416,35 @@ public final class RuntimeTeardownHarness {
         });
         for(String changed:new String[]{"import","final","wrong-private-entry","replacement-home"})test("imported Router restoration rejects "+changed,()->{
             try(Owner owner=new Owner("multihop")){
-                AndroidStandardExitStore.Entry first=ordinary(protocol);AndroidNodeStore.Node last=new AndroidNodeStore.Node("paired-final");Callback cb=new Callback(0);owner.multihop.connectImported(first,last,"shadowsocks","local",cb);cb.awaitDone();check(cb.ok,"initial imported proof failed");
+                AndroidStandardExitStore.Entry first=ordinary(protocol);AndroidNodeStore.Node last=new AndroidNodeStore.Node("paired-final");Callback cb=new Callback(0);owner.multihop.connectImported(first,last,finalMode,"local",cb);cb.awaitDone();check(cb.ok,"initial imported proof failed");
                 var capture=owner.multihop.captureRestore(null,last,AndroidHomeStateStore.current);owner.disconnect();awaitIdle(owner);var idle=AndroidHomeStateStore.current;
-                if(changed.equals("import")){first.name="replaced provider";AndroidStandardExitStore.saved.put(first.id,first);}if(changed.equals("final"))AndroidMultihopController.changedSources.add(last.file.getPath());if(changed.equals("replacement-home"))AndroidHomeStateStore.beginMultihop(owner.context,"another",last.id,"shadowsocks","wg");
+                if(changed.equals("import")){first.name="replaced provider";AndroidStandardExitStore.saved.put(first.id,first);}if(changed.equals("final"))AndroidMultihopController.changedSources.add(last.file.getPath());if(changed.equals("replacement-home"))AndroidHomeStateStore.beginMultihop(owner.context,"another",last.id,finalMode,"wg");
                 Callback rejected=new Callback(0);owner.multihop.restoreCaptured(changed.equals("wrong-private-entry")?new AndroidNodeStore.Node(first.id):null,last,capture,idle,rejected);rejected.awaitDone();check(!rejected.ok&&owner.engine.starts.get()==1,"changed mixed capture started a replacement graph");
             }
         });
         test("imported Router late proof rejects replacement source",()->{
-            try(Owner owner=new Owner("multihop")){AndroidStandardExitStore.Entry first=ordinary(protocol);Callback cb=new Callback(3);owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",cb);cb.awaitEntered();
+            try(Owner owner=new Owner("multihop")){AndroidStandardExitStore.Entry first=ordinary(protocol);Callback cb=new Callback(3);owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),finalMode,"local",cb);cb.awaitEntered();
                 try{first.name="changed before adoption";AndroidStandardExitStore.saved.put(first.id,first);}finally{cb.release.countDown();}cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==1&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected&&LayeredVpnService.mtuStarts.get()==0,"late imported result escaped its source owner");awaitIdle(owner);}
         });
         test("imported Router prelaunch cancellation cleans only its private staging",()->{
-            try(Owner owner=new Owner("multihop")){Callback cb=new Callback(2);owner.multihop.connectImported(ordinary(protocol),new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",cb);cb.awaitEntered();try{owner.disconnect();}finally{cb.release.countDown();}cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&LayeredVpnService.discarded.get()==1,"cancelled imported preparation leaked private staging or launched");awaitIdle(owner);}
+            try(Owner owner=new Owner("multihop")){Callback cb=new Callback(2);owner.multihop.connectImported(ordinary(protocol),new AndroidNodeStore.Node("paired-final"),finalMode,"local",cb);cb.awaitEntered();try{owner.disconnect();}finally{cb.release.countDown();}cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&LayeredVpnService.discarded.get()==1,"cancelled imported preparation leaked private staging or launched");awaitIdle(owner);}
         });
         for(boolean pending:new boolean[]{false,true})test("imported Router constructor failure retains cleanup receipt "+pending,()->{
             try(Owner owner=new Owner("multihop")){
                 AndroidImportedRouterPath.failPreparation=true;LayeredVpnService.failDiscard=pending;
                 AndroidStandardExitStore.Entry first=ordinary(protocol);Callback failed=new Callback(0);
-                owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",failed);failed.awaitDone();
+                owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),finalMode,"local",failed);failed.awaitDone();
                 var field=AndroidMultihopRuntime.class.getDeclaredField("active");field.setAccessible(true);((java.util.concurrent.Future<?>)field.get(owner.multihop)).get(3,TimeUnit.SECONDS);
                 check(!failed.ok&&owner.engine.starts.get()==0&&LayeredVpnService.discarded.get()==1,"preparation failure lost cleanup receipt");
                 check(owner.busy()==pending&&!AndroidHomeStateStore.current.connected,"constructor cleanup outcome lost retained ownership");
-                if(pending){Callback replacement=new Callback(0);owner.multihop.connectImported(first,new AndroidNodeStore.Node("replacement-final"),"shadowsocks","local",replacement);replacement.awaitDone();check(!replacement.ok&&AndroidImportedRouterPath.prepared==1,"constructor cleanup permitted a replacement");LayeredVpnService.failDiscard=false;owner.disconnect();awaitIdle(owner);check(LayeredVpnService.discarded.get()==2,"constructor cleanup retry lost original session");}
+                if(pending){Callback replacement=new Callback(0);owner.multihop.connectImported(first,new AndroidNodeStore.Node("replacement-final"),finalMode,"local",replacement);replacement.awaitDone();check(!replacement.ok&&AndroidImportedRouterPath.prepared==1,"constructor cleanup permitted a replacement");LayeredVpnService.failDiscard=false;owner.disconnect();awaitIdle(owner);check(LayeredVpnService.discarded.get()==2,"constructor cleanup retry lost original session");}
                 else awaitIdle(owner);
             }
         });
         test("imported Router failed staging cleanup retains retry ownership",()->{
-            try(Owner owner=new Owner("multihop")){AndroidStandardExitStore.Entry first=ordinary(protocol);Callback cb=new Callback(2);owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),"shadowsocks","local",cb);cb.awaitEntered();LayeredVpnService.failDiscard=true;
+            try(Owner owner=new Owner("multihop")){AndroidStandardExitStore.Entry first=ordinary(protocol);Callback cb=new Callback(2);owner.multihop.connectImported(first,new AndroidNodeStore.Node("paired-final"),finalMode,"local",cb);cb.awaitEntered();LayeredVpnService.failDiscard=true;
                 try{boolean failed=false;try{owner.disconnect();}catch(IllegalStateException expected){failed=true;}check(failed,"failed staging cleanup reported success");}finally{cb.release.countDown();}cb.awaitDone();check(!cb.ok&&owner.busy()&&owner.engine.starts.get()==0,"failed cleanup lost its original owner");
-                Callback replacement=new Callback(0);owner.multihop.connectImported(first,new AndroidNodeStore.Node("another-final"),"shadowsocks","local",replacement);replacement.awaitDone();check(!replacement.ok&&owner.engine.starts.get()==0,"pending cleanup allowed replacement launch");LayeredVpnService.failDiscard=false;owner.disconnect();awaitIdle(owner);
+                Callback replacement=new Callback(0);owner.multihop.connectImported(first,new AndroidNodeStore.Node("another-final"),finalMode,"local",replacement);replacement.awaitDone();check(!replacement.ok&&owner.engine.starts.get()==0,"pending cleanup allowed replacement launch");LayeredVpnService.failDiscard=false;owner.disconnect();awaitIdle(owner);
             }
         });
     }}

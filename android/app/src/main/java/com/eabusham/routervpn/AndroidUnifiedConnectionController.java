@@ -458,7 +458,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private void requireImportedRouterCapture(AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit,String mode,String execution,
                                                String first,String last)throws Exception{
         AndroidImportedRouterPath.requireEntry(entry);
-        if(exit==null||entry.id.equals(exit.id)||!"shadowsocks".equals(mode)||!"local".equals(execution)
+        if(exit==null||entry.id.equals(exit.id)||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(mode)||!"local".equals(execution)
                 ||first==null||last==null||!first.matches("[0-9a-f]{64}")||!last.matches("[0-9a-f]{64}")
                 ||!first.equals(externalDigest(entry))||!first.equals(externalDigest(exitStore.get(entry.id)))
                 ||!last.equals(entryDigest(exit)))throw new IllegalStateException("The original imported entry or paired final node changed.");

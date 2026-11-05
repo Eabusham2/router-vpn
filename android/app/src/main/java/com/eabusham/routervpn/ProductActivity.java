@@ -394,7 +394,7 @@ public final class ProductActivity extends Activity {
             List<String> labels=new ArrayList<>();
             for(AndroidNodeStore.Node node:nodes)labels.add("Router • "+node.name+(telemetry.cachedMedian(node.id)>0?String.format(Locale.US," • direct %.1f ms",telemetry.cachedMedian(node.id)):""));
             for(AndroidStandardExitStore.Entry entry:imports)labels.add("Custom • "+entry.name+" • "+entry.protocol);
-            choiceDialog("Multihop entry","Choose hop 1, then the final Router node. For a Router entry, Router VPN will then briefly establish and prove this entry, measure candidates through it, and disconnect. Imported Shadowsocks 2022 and Hysteria2 entries use Local execution and the final node's Shadowsocks transport. Save the path, then press Connect.")
+            choiceDialog("Multihop entry","Choose hop 1, then the final Router node. For a Router entry, Router VPN will then briefly establish and prove this entry, measure candidates through it, and disconnect. Imported Shadowsocks 2022 and Hysteria2 entries use Local execution with the final node's available Shadowsocks or Hysteria2 transport. Save the path, then press Connect.")
                 .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                     if(w<nodes.size())prepareViaEntryExitMeasurement(nodes.get(w),nodes);
                     else chooseImportedRouterFinal(imports.get(w-nodes.size()),nodes);
@@ -409,11 +409,36 @@ public final class ProductActivity extends Activity {
             if(finals.isEmpty())throw new IllegalStateException("Add a different paired Router final node.");
             choiceDialog("Final Router node","The final node supplies its saved DNS and device policy. The imported entry and final node retain their own keys and Start Layers. Use Connect after saving this path.")
                 .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
-                    try{original.require(null);new AndroidConnectionProfileStore(this,nodeStore,exitStore).selectImportedRouterPath(entry,finals.get(w));refreshAll();toast("Saved "+entry.name+" → "+finals.get(w).name+". Press Connect when ready.");}
-                    catch(Exception changed){toast(safe(changed));}
+                    chooseImportedRouterTransport(original,finals.get(w));
                 }).setNegativeButton("Cancel",null).show();
         }catch(Exception error){toast(safe(error));}
     }
+    private void chooseImportedRouterTransport(AndroidMultihopController.Source original,AndroidNodeStore.Node last){
+        try{
+            if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing its transport.");
+            AndroidStandardExitStore.Entry first=AndroidImportedRouterPath.entry(this,original);
+            byte[] bytes=AndroidPrivateFileStore.read(last.file,AndroidNodeStore.MAX_BUNDLE);
+            AndroidMultihopController.Source finalSource=AndroidMultihopController.captureSource(last.file,bytes);
+            JSONObject bundle=AndroidImportedRouterPath.finalBundle(last.file);
+            List<String> modes=new ArrayList<>();List<String> labels=new ArrayList<>();
+            for(String mode:new String[]{"shadowsocks","hysteria2"}){
+                try{AndroidImportedRouterPath.compile(first,bundle,mode,"local");modes.add(mode);labels.add("hysteria2".equals(mode)?"Hysteria2":"Shadowsocks");}
+                catch(Exception unavailable){/* Only complete captured transport assets are offered. */}
+            }
+            original.require(null);finalSource.require(last.file);
+            if(modes.isEmpty())throw new IllegalStateException("This paired node has no complete Shadowsocks or Hysteria2 final transport for the selected layers.");
+            choiceDialog("Final Router transport","Choose the final transport. Both hops keep their original credentials and Start Layers; the final node supplies the selected DNS policy.")
+                .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
+                    try{
+                        original.require(null);finalSource.require(last.file);
+                        new AndroidConnectionProfileStore(this,nodeStore,exitStore).selectImportedRouterPath(
+                                AndroidImportedRouterPath.entry(this,original),last,modes.get(w),finalSource.digest);
+                        refreshAll();toast("Saved "+first.name+" → "+last.name+" • "+labels.get(w)+". Press Connect when ready.");
+                    }catch(Exception changed){toast(safe(changed));}
+                }).setNegativeButton("Cancel",null).show();
+        }catch(Exception error){toast(safe(error));}
+    }
+
     private void prepareViaEntryExitMeasurement(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> all){
         if(mutationBusy()){toast("VPN state changed; disconnect/finish before measuring multihop candidates.");return;}
         List<AndroidNodeStore.Node> exits=new ArrayList<>();for(AndroidNodeStore.Node node:all)if(!node.id.equals(entry.id))exits.add(node);
@@ -475,7 +500,7 @@ public final class ProductActivity extends Activity {
     private void chooseMultihopMode(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,AndroidViaEntryLatencyProbe.Result selection){if(mutationBusy()){toast("VPN state changed; disconnect/finish before editing multihop.");return;}try{selection.requireCurrent();List<NativeSingBoxController.ModeInfo>modes=connection.supportedMultihopExitModes(exit);if(modes.isEmpty()){toast("That exit has no available native WireGuard/Shadowsocks/Hysteria2 exit transport.");return;}String[]labels=new String[modes.size()];for(int i=0;i<modes.size();i++)labels[i]=modes.get(i).name+" ["+modes.get(i).id+"]";new AlertDialog.Builder(this).setTitle("Exit transport").setItems(labels,(d,w)->{if(mutationBusy()){toast("VPN state changed; disconnect/finish before saving multihop.");return;}chooseMultihopExecution(entry,exit,modes.get(w).id,selection);}).setNegativeButton("Cancel",null).show();}catch(Exception error){toast(safe(error));}}
     private void refreshMultihopSummary(){if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopToggle.setChecked(on);try{AndroidConnectionProfileStore.ExternalSelection path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentExternalPath(prefs().getString(SELECTED_ID,""));multihopHint.setText(path.direct()?"Direct → "+path.exit.name:(path.ordinaryEntry!=null?path.ordinaryEntry.name:path.entry.name)+" → "+path.exit.name+" • "+path.entryMode+" → "+path.exit.protocol+" • "+("server".equals(path.execution)?"Server":"auto".equals(path.execution)?"Compare":"Local"));}catch(Exception invalid){multihopHint.setText("Choose external path in Edit hops");}return;}boolean live=connection.isMultihopConnected();boolean on=live||prefs().getBoolean(MULTI_ON,false);multihopToggle.setChecked(on);if(!on){multihopHint.setText("Off");return;}String entryId=live?connection.activeMultihopEntryId():prefs().getString(MULTI_ENTRY,""),exitId=live?connection.activeMultihopExitId():prefs().getString(MULTI_EXIT,""),mode=live?connection.activeMultihopExitMode():prefs().getString(MULTI_MODE,"");try{AndroidStandardExitStore.Entry ordinary=live?connection.activeImportedMultihopEntry():"external".equals(prefs().getString("multihop_entry_kind","router-vpn"))?exitStore.get(entryId):null;
         AndroidNodeStore.Node exit=nodeById(exitId);
-        if(ordinary!=null){if(exit==null)throw new IllegalStateException("The final node is unavailable.");multihopHint.setText((live?"LIVE • ":"")+ordinary.name+" → "+exit.name+" • "+("hysteria2".equals(ordinary.protocol)?"Hysteria2":"Shadowsocks 2022")+" → Shadowsocks • Local"+(live&&currentPathMs>0?String.format(Locale.US," • PATH %.1f ms",currentPathMs):""));return;}
+        if(ordinary!=null){if(exit==null)throw new IllegalStateException("The final node is unavailable.");multihopHint.setText((live?"LIVE • ":"")+ordinary.name+" → "+exit.name+" • "+("hysteria2".equals(ordinary.protocol)?"Hysteria2":"Shadowsocks 2022")+" → "+("hysteria2".equals(mode)?"Hysteria2":"Shadowsocks")+" • Local"+(live&&currentPathMs>0?String.format(Locale.US," • PATH %.1f ms",currentPathMs):""));return;}
         AndroidNodeStore.Node entry=nodeById(entryId);if(entry==null||exit==null){multihopHint.setText(live?"Live graph identity unavailable":"Choose hops");return;}double a=telemetry.cachedMedian(entry.id),b=telemetry.cachedMedian(exit.id);StringBuilder s=new StringBuilder(live?"LIVE • ":"").append(entry.name);if(a>0)s.append(String.format(Locale.US," %.1f ms",a));s.append(" → ").append(exit.name);if(b>0)s.append(String.format(Locale.US," %.1f ms",b));if(currentPathMs>0&&live)s.append(String.format(Locale.US," • PATH %.1f ms",currentPathMs));s.append(" • ").append(live?connection.activeMultihopEntryMode():prefs().getString("multihop_entry_mode","wg")).append(" → ").append(mode);multihopHint.setText(s.toString());}catch(Exception error){multihopHint.setText(live?"Live graph identity unavailable":"Choose hops");}}
     private AndroidNodeStore.Node nodeById(String id)throws Exception{if(id==null||id.isEmpty())return null;for(AndroidNodeStore.Node n:nodeStore.list())if(n.id.equals(id))return n;return null;}
 

@@ -123,6 +123,25 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try reject("HY2 selection rejects "+fault){try hyModel.saveIOSMultihop(enabled:true,entryID:hysteria.id,exitID:paired.id,exitMode:"shadowsocks",execution:execution,entryMode:mode)}
    try check("rejected HY2 selection keeps original saved graph",hyModel.writes==hyWrites && encoded(hyModel.bundle!)==savedHY)
   }
+  finalBundle.profiles["hysteria2"]=["sing-box.json":try encoded(["outbounds":[["type":"hysteria2","tag":"proxy","server":"192.0.2.44","server_port":8443,"password":" exact paired final password ","tls":["enabled":true,"server_name":"final.example.test","certificate_path":"final.pem"]]]]).base64EncodedString(),"final.pem":Data("original paired certificate bytes".utf8).base64EncodedString()]
+  for originalEntry in [imported,hysteria] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   var selectedFinal=finalBundle;selectedFinal.routerProfiles[0].startLayer=layer
+   let model=RouterVPNModel();model.bundle=selectedFinal
+   IOSNodeBundleStore.shared.nodes=[originalEntry.id:try encoded(bundle(originalEntry)),paired.id:try encoded(selectedFinal)]
+   try model.saveIOSMultihop(enabled:true,entryID:originalEntry.id,exitID:paired.id,exitMode:"hysteria2",execution:"local",entryMode:originalEntry.external!.protocolName)
+   let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("HY2 final selection preserves both complete profiles and independent layer",model.bundle?.routerProfiles[0].multihopExitMode=="hysteria2" && model.bundle?.routerProfiles[0].startLayer==layer && model.bundle?.profiles==selectedFinal.profiles && captured.routerProfiles==[originalEntry])
+   for fault in ["missing-final-assets","wrong-final-mode","server","auto"] {
+    var changed=selectedFinal;var mode="hysteria2",execution="local"
+    if fault=="missing-final-assets"{changed.profiles.removeValue(forKey:"hysteria2")}
+    else if fault=="wrong-final-mode"{mode="wg"}
+    else{execution=fault}
+    IOSNodeBundleStore.shared.nodes[paired.id]=try encoded(changed)
+    let refused=RouterVPNModel();refused.bundle=changed;let saved=try encoded(changed)
+    try reject("HY2 final save rejects "+fault){try refused.saveIOSMultihop(enabled:true,entryID:originalEntry.id,exitID:paired.id,exitMode:mode,execution:execution,entryMode:originalEntry.external!.protocolName)}
+    try check("HY2 final failed selection is transactional",refused.writes==0 && encoded(refused.bundle!)==saved)
+   }
+  }}
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryProtocol in protocols {for exitProtocol in protocols {
    let entry=bundle(try profile("entry","external",entryProtocol)),model=RouterVPNModel()
@@ -428,8 +447,28 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
 '''
 
 
+
+def validate_imported_picker(view):
+    branch = view[view.index('                    if externalEntryProtocol != nil {'):]
+    branch = branch[:branch.index('                    } else {')]
+    for required in ('Picker("Exit transport", selection: $exitMode)',
+                     'if !["shadowsocks", "hysteria2"].contains(exitMode)',
+                     'Text("Choose Shadowsocks or Hysteria2 for this imported entry").tag(exitMode)',
+                     'Text("Shadowsocks 2022").tag("shadowsocks")',
+                     'Text("Hysteria2").tag("hysteria2")'):
+        if required not in branch:
+            raise ValueError('Imported final picker must preserve invalid saved values and require an explicit valid choice')
+    if 'exitMode =' in branch:
+        raise ValueError('Imported final picker must not silently rewrite the saved transport')
+    requirements = view[view.index('Section("Connection requirements")'):]
+    if ('if externalEntryProtocol != nil && torExitProtocol == nil && ordinaryExitProtocol == nil' not in requirements
+            or 'one different paired Router VPN final node' not in requirements):
+        raise ValueError('Imported entry requirements must describe its one paired final node')
+
+
 def main():
     view = (APP / 'IOSMultihopView.swift').read_text()
+    validate_imported_picker(view)
     capture = view[view.index('@MainActor\nextension RouterVPNModel {'):view.index('struct IOSMultihopView: View')]
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]

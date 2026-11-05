@@ -14,11 +14,11 @@ type importedEntry struct {
 }
 
 // NewImportedEntry composes an imported SS2022 or Hysteria2 predecessor and a paired
-// Shadowsocks final. It is pure compilation: neither identity is proved here.
+// Shadowsocks or Hysteria2 final. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
-	bad := errors.New("imported entry requires a captured standalone SS2022 or Hysteria2 source and paired Shadowsocks final in Local execution")
+	bad := errors.New("imported entry requires a captured standalone SS2022 or Hysteria2 source and paired Shadowsocks or Hysteria2 final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2") || selection.Profile["node_kind"] != "external" || exitMode != "shadowsocks" {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2") {
 		return nil, bad
 	}
 	// An imported operator address is a public-path proof, never a paired API.

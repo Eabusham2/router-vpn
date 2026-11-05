@@ -22,18 +22,24 @@ deployment acceptance.
 
 The original August 19 Router/custom choice for each hop now has a first mobile
 reverse direction: imported SS2022 or Hysteria2 entry → independently paired
-Router Shadowsocks final, Local execution. The source preserves distinct public-entry
+Router Shadowsocks or Hysteria2 final, Local execution. The source preserves
+distinct public-entry
 and private-final proof, independent Start Layers, complete captured policy,
 selected DNS, typed measurements/MTU, permission ownership and exact restoration.
 See [MOBILE-IMPORTED-ROUTER-PATH.md](MOBILE-IMPORTED-ROUTER-PATH.md) for source paths,
 mandatory actual graph/peer gates and the separation of local evidence from
 Apple/device/package acceptance.
 
-The Hysteria2 increment retains verified TLS/password capture, all independent
-Start Layers, captured-mode permission recreation and exact usage receipts.
-Twenty shared and actual Android-produced source graphs pass native constructor,
-parser and MTU planning; real QUIC/TLS→SS peer tests reject wrong certificate
-identity, credentials and routing. Apple-generated graphs remain a native CI gate.
+The Hysteria2-final increment retains original TLS/password/certificate capture,
+all independent Start Layers, final-mode permission recreation, exact usage
+receipts and source-bound final transport selection. Forty shared and forty
+actual Android-produced source graphs pass pinned native constructor, parser
+and MTU planning. Real encrypted peers pass 27 verdicts across both entry/final
+families, including an AES-wrapped Hysteria2 final, and reject wrong credentials,
+certificate identity/trust, route, selected DNS and private identity. Actual
+profile persistence and Product selection callbacks pass 771 checks across 81
+cases. Apple-generated graphs remain a mandatory native CI gate; local source
+and Go checks do not substitute for Swift or physical tunnel execution.
 
 The remaining graph ledger is unchanged in scope: other imported protocols,
 other paired final transports, Server/Compare and complete requested-platform

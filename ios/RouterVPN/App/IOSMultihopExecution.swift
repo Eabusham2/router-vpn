@@ -406,7 +406,7 @@ enum IOSImportedEntryMultihop {
               final["multihop_entry_id"] as? String == entryID,
               final["multihop_exit_id"] as? String == finalID,
               final["multihop_entry_mode"] as? String == kind,
-              final["multihop_exit_mode"] as? String == "shadowsocks",
+              ["shadowsocks", "hysteria2"].contains(final["multihop_exit_mode"] as? String ?? ""),
               (final["multihop_execution"] as? String ?? "local") == "local",
               entry["multihop_enabled"] as? Bool != true,
               let expected = imported["expected_public_ip"] as? String, !expected.isEmpty,
@@ -421,6 +421,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local Shadowsocks 2022 or Hysteria2 imported entry and a different paired Router VPN Shadowsocks final node with their original settings."])
+            "Choose a Local Shadowsocks 2022 or Hysteria2 imported entry and a different paired Router VPN Shadowsocks or Hysteria2 final node with their original settings."])
     }
 }

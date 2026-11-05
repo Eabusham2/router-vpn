@@ -935,15 +935,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         try IOSImportedEntryMultihop.validate(entry: entryProfile, final: finalProfile)
         guard restoredMultihopExecution == nil || restoredMultihopExecution == "local",
               let source = multihopExecutionSource, source.requested == "local",
-              let profiles = root["profiles"] as? [String: [String: String]],
-              let assets = profiles["shadowsocks"], !assets.isEmpty else { throw IOSImportedEntryMultihop.issue() }
+              let profiles = root["profiles"] as? [String: [String: String]] else { throw IOSImportedEntryMultihop.issue() }
         let proofID = try suppliedNodeProof(root: root, selectedProfile: finalProfile)
         let finalURL = try selectedProofURL(finalProfile)
         let entry = try RouterVPNExternalExitBuilder.importedRouterSource(profile: entryProfile)
-        _ = try IOSMultihopStartLayer.capture(profile: finalProfile, profiles: profiles)
-        // SS2022 itself is the final AES layer; NewNodeProfile applies its
-        // captured XOR setting to that transport without a second AES owner.
-        let filesJSON = String(decoding: try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys]), as: UTF8.self)
+        let finalSource = try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile: finalProfile, profiles: profiles)
+        let filesJSON = finalSource.files
         let profileJSON = String(decoding: try JSONSerialization.data(withJSONObject: finalProfile, options: [.sortedKeys]), as: UTF8.self)
         let bootstrap: String
         if let value = finalProfile["dns_bootstrap"] {
@@ -956,8 +953,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
               profileJSON.utf8.count <= 256 * 1024,
               bootstrap.utf8.count <= 16384 else { throw IOSImportedEntryMultihop.issue() }
         var failure: NSError?
-        guard let plan = LibboxNewRouterImportedEntryMultihop(entry.config, entry.capture, "shadowsocks",
-                    filesJSON, profileJSON, "", bootstrap, &failure), failure == nil else {
+        guard let plan = LibboxNewRouterImportedEntryMultihop(entry.config, entry.capture, finalSource.mode,
+                    filesJSON, profileJSON, finalSource.start, bootstrap, &failure), failure == nil else {
             throw failure ?? IOSImportedEntryMultihop.issue()
         }
         let strict = strictKillSwitchRequested(entryProfile) || strictKillSwitchRequested(finalProfile)

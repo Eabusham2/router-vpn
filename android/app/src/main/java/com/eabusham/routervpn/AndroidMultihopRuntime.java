@@ -226,8 +226,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     synchronized void connectImported(AndroidStandardExitStore.Entry entry, AndroidNodeStore.Node exit, String exitMode,
                                       String execution, Callback callback) {
         try {
-            if (exit==null||!"local".equals(execution)||!"shadowsocks".equals(exitMode))
-                throw new IllegalArgumentException("This imported entry requires a paired Shadowsocks final node and Local execution.");
+            if (exit==null||!"local".equals(execution)||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(exitMode))
+                throw new IllegalArgumentException("This imported entry requires a paired Shadowsocks or Hysteria2 final node and Local execution.");
             AndroidMultihopController.Source first=AndroidImportedRouterPath.captureSource(context,entry);
             String firstMode=AndroidImportedRouterPath.entry(context,first).protocol;
             byte[] original=AndroidPrivateFileStore.read(exit.file,AndroidNodeStore.MAX_BUNDLE);
@@ -263,7 +263,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         if (transitioning || connected || !pendingPreparedSession.isEmpty() || (active != null && !active.isDone())) { callback.finished(false, "Another Android multihop session or private staging cleanup is still owned."); return; }
         boolean imported=expectedEntry!=null&&expectedEntry.imported();
         if (exit==null || (imported ? entry!=null||expectedEntry.importedId.equals(exit.id)||!"local".equals(execution)||!"local".equals(policy)
-                ||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(entryMode)||!"shadowsocks".equals(exitMode)||expectedExit==null
+                ||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(entryMode)||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(exitMode)||expectedExit==null
                 : entry==null||entry.id.equals(exit.id))) { callback.finished(false, "Multihop requires its exact two different stored sources."); return; }
         final String entryId=imported?expectedEntry.importedId:entry.id;
         if (exitMode == null || exitMode.trim().isEmpty()) { callback.finished(false, "Choose a supported multihop exit transport."); return; }

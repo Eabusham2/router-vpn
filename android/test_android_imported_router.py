@@ -63,8 +63,9 @@ public final class ImportedRouterTest {
  }
  static JSONObject bundle(JSONArray args)throws Exception{
   JSONObject profile=object(args.getString(4));
-  return new JSONObject().put("selectedRouterID",profile.getString("id")).put("routerProfiles",new JSONArray().put(profile))
-   .put("profiles",new JSONObject().put("shadowsocks",object(args.getString(3))));
+  JSONObject files=new JSONObject().put(args.getString(2),object(args.getString(3)));
+  if(!args.getString(5).isEmpty())files.put("shadowsocks",object(args.getString(5)));
+  return new JSONObject().put("selectedRouterID",profile.getString("id")).put("routerProfiles",new JSONArray().put(profile)).put("profiles",files);
  }
  static JSONObject profile(JSONObject bundle)throws Exception{return bundle.getJSONArray("routerProfiles").getJSONObject(0);}
  static void export(String name,AndroidImportedRouterPath.Compiled c)throws Exception{
@@ -101,11 +102,11 @@ public final class ImportedRouterTest {
   check(completed,"source check deadlocked behind store mutation owner");
  }
  static void one(Path root,Path fixture)throws Exception{
-  JSONArray args=new JSONArray(Files.readString(fixture));AndroidStandardExitStore.Entry e=entry(args);JSONObject b=bundle(args);
-  String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,"shadowsocks","local");
+  JSONArray args=new JSONArray(Files.readString(fixture));String finalMode=args.getString(2);AndroidStandardExitStore.Entry e=entry(args);JSONObject b=bundle(args);
+  String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,finalMode,"local");
   check(before.equals(AndroidStandardExitStore.snapshot(e))&&beforeFinal.equals(b.toString()),"compiler mutated original source");
   JSONObject selected=object(c.metadata),raw=object(c.input),graph=object(c.config);
-  check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(e.protocol),"host changed selected identities or transport");
+  check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(e.protocol)&&selected.getString("exit_mode").equals(finalMode),"host changed selected identities or transport");
   if(e.protocol.equals("hysteria2")){
    JSONObject captured=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("hysteria2");JSONObject first=null;JSONArray out=graph.getJSONArray("outbounds");for(int i=0;i<out.length();i++)if(out.getJSONObject(i).optString("tag").equals("entry-wg"))first=out.getJSONObject(i);
    check(captured.getString("password").equals(e.secret)&&captured.getString("tls_server_name").equals(e.tlsServerName),"host changed captured QUIC password or TLS name");
@@ -113,15 +114,23 @@ public final class ImportedRouterTest {
    for(String field:List.of("password","tls_server_name"))reject("changed imported "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject("hysteria2").put(field,"replacement.example");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   }
   check(selected.optString("entry_api").isEmpty()&&selected.optString("entry_token").isEmpty()&&selected.optString("entry_node_id").isEmpty(),"import acquired private pairing");
-  check(raw.getString("exit_start").isEmpty()&&object(raw.getString("entry_capture")).getJSONObject("profile").getString("dns_mode").equals("home"),"raw entry policy or inherent final layer changed");
+  check(raw.getString("exit_start").equals(args.getString(5).isEmpty()?"":object(args.getString(5)).toString())&&object(raw.getString("entry_capture")).getJSONObject("profile").getString("dns_mode").equals("home"),"raw entry policy or inherent final layer changed");
   JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
   check(dns.getString("server").equals("192.168.50.133")&&dns.getString("detour").equals("proxy"),"Home AdGuard final policy lost");
   try{RouterMultihop exact=AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input);check(exact.sourceSHA256().equals(c.source),"reconstruction source changed");exact.close();}finally{check(RouterMultihop.open==0,"pure compilation leaked");}
+  AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+finalMode,c.metadata);
+  reject("changed final session label",()->AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+(finalMode.equals("shadowsocks")?"hysteria2":"shadowsocks"),c.metadata));
+  reject("changed final source mode",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,object(c.input).put("exit_mode",finalMode.equals("shadowsocks")?"hysteria2":"shadowsocks").toString()));
+  if(finalMode.equals("hysteria2")&&!args.getString(5).isEmpty()){
+   check(object(raw.getString("exit_start")).has("sing-box.json")&&!object(raw.getString("exit_start")).has("profile"),"final layer did not keep its raw original asset map");
+   JSONObject missing=object(b.toString());missing.getJSONObject("profiles").remove("shadowsocks");reject("missing final layer source",()->AndroidImportedRouterPath.compile(e,missing,finalMode,"local"));
+   reject("wrapped final layer source",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,object(c.input).put("exit_start",new JSONObject().put("mode",profile(b).getString("start_layer")).put("profile",object(args.getString(5))).toString()).toString()));
+  }
   export(fixture.getFileName().toString(),c);
   if(fixture.getFileName().toString().equals("off--off.json")){
-   for(String kind:List.of("absent","")){JSONObject legacy=object(b.toString());if(kind.equals("absent"))profile(legacy).remove("node_kind");else profile(legacy).put("node_kind",kind);String bytes=legacy.toString();var compiled=AndroidImportedRouterPath.compile(e,legacy,"shadowsocks","local");check(compiled.config.equals(c.config)&&!compiled.source.equals(c.source)&&legacy.toString().equals(bytes),"legacy normalization changed original source or graph");JSONObject frozen=object(object(compiled.input).getString("exit_profile"));check(kind.equals("absent")?!frozen.has("node_kind"):frozen.getString("node_kind").isEmpty(),"legacy source was rewritten before hashing");}
-   for(Object invalid:List.of("external",true,JSONObject.NULL)){JSONObject changed=object(b.toString());profile(changed).put("node_kind",invalid);reject("unpaired final kind",()->AndroidImportedRouterPath.compile(e,changed,"shadowsocks","local"));}
-   for(String historical:List.of("server","auto")){JSONObject importedFinal=object(b.toString());profile(importedFinal).put("multihop_execution",historical);String original=importedFinal.toString();var compiled=AndroidImportedRouterPath.compile(e,importedFinal,"shadowsocks","local");check(original.equals(importedFinal.toString())&&profile(importedFinal).getString("multihop_execution").equals(historical),"selected Local projection changed original final source");check(object(object(compiled.input).getString("exit_profile")).getString("multihop_execution").equals("local")&&compiled.config.equals(c.config),"historical final preference replaced explicit Local graph");reject("explicit Server remains unavailable",()->AndroidImportedRouterPath.compile(e,importedFinal,"shadowsocks","server"));}
+   for(String kind:List.of("absent","")){JSONObject legacy=object(b.toString());if(kind.equals("absent"))profile(legacy).remove("node_kind");else profile(legacy).put("node_kind",kind);String bytes=legacy.toString();var compiled=AndroidImportedRouterPath.compile(e,legacy,finalMode,"local");check(compiled.config.equals(c.config)&&!compiled.source.equals(c.source)&&legacy.toString().equals(bytes),"legacy normalization changed original source or graph");JSONObject frozen=object(object(compiled.input).getString("exit_profile"));check(kind.equals("absent")?!frozen.has("node_kind"):frozen.getString("node_kind").isEmpty(),"legacy source was rewritten before hashing");}
+   for(Object invalid:List.of("external",true,JSONObject.NULL)){JSONObject changed=object(b.toString());profile(changed).put("node_kind",invalid);reject("unpaired final kind",()->AndroidImportedRouterPath.compile(e,changed,finalMode,"local"));}
+   for(String historical:List.of("server","auto")){JSONObject importedFinal=object(b.toString());profile(importedFinal).put("multihop_execution",historical);String original=importedFinal.toString();var compiled=AndroidImportedRouterPath.compile(e,importedFinal,finalMode,"local");check(original.equals(importedFinal.toString())&&profile(importedFinal).getString("multihop_execution").equals(historical),"selected Local projection changed original final source");check(object(object(compiled.input).getString("exit_profile")).getString("multihop_execution").equals("local")&&compiled.config.equals(c.config),"historical final preference replaced explicit Local graph");reject("explicit Server remains unavailable",()->AndroidImportedRouterPath.compile(e,importedFinal,finalMode,"server"));}
   }
 
   reject("forged graph",()->AndroidImportedRouterPath.prepareExecution(c.config+" ",c.metadata,c.input));
@@ -132,37 +141,39 @@ public final class ImportedRouterTest {
   reject("duplicate session field",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,"{\"schema\":1,"+c.input.substring(1)));
   reject("trailing session object",()->AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input+"{}"));
   reject("wrong final key source",()->{JSONObject changed=object(c.input);JSONObject p=object(changed.getString("exit_profile"));p.put("api_token","replacement-secret");changed.put("exit_profile",p.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
-  for(String execution:List.of("server","auto"))reject(execution,()->AndroidImportedRouterPath.compile(e,b,"shadowsocks",execution));
+  for(String execution:List.of("server","auto"))reject(execution,()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
   reject("different final protocol",()->AndroidImportedRouterPath.compile(e,b,"wg","local"));
-  JSONObject same=object(b.toString());profile(same).put("id",e.id);same.put("selectedRouterID",e.id);reject("same source identity",()->AndroidImportedRouterPath.compile(e,same,"shadowsocks","local"));
-  JSONObject unpaired=object(b.toString());profile(unpaired).remove("node_proof_id");reject("unpaired final",()->AndroidImportedRouterPath.compile(e,unpaired,"shadowsocks","local"));
+  JSONObject same=object(b.toString());profile(same).put("id",e.id);same.put("selectedRouterID",e.id);reject("same source identity",()->AndroidImportedRouterPath.compile(e,same,finalMode,"local"));
+  JSONObject unpaired=object(b.toString());profile(unpaired).remove("node_proof_id");reject("unpaired final",()->AndroidImportedRouterPath.compile(e,unpaired,finalMode,"local"));
   Path privateRoot=Files.createTempDirectory(root,"sources-");android.content.Context context=new android.content.Context(privateRoot.toFile());AndroidStandardExitStore store=new AndroidStandardExitStore(context);store.save(e);
   Path file=privateRoot.resolve("final.json");Files.writeString(file,b.toString());
   AndroidMultihopController.Source original=AndroidImportedRouterPath.captureSource(context,e),last=AndroidMultihopController.captureSource(file.toFile(),Files.readAllBytes(file));
   check(original.file==null&&original.imported()&&!original.same(last),"import borrowed a private Router source");
   sourceDoesNotWaitForMutation(original);
   reject("import supplied paired file",()->original.require(file.toFile()));
-  AndroidMultihopController.Prepared prepared=AndroidImportedRouterPath.prepare(context,original,file.toFile(),"shadowsocks","local",last);
+  AndroidMultihopController.Prepared prepared=AndroidImportedRouterPath.prepare(context,original,file.toFile(),finalMode,"local",last);
   Path staged=privateRoot.resolve("layered-sessions").resolve(prepared.session.sessionId);
-  check(prepared.session.mode.equals("multihop-imported-shadowsocks")&&Files.readString(staged.resolve(AndroidImportedRouterPath.SESSION_FILE)).equals(c.input),"staged owner differs from original source");
+  check(prepared.session.mode.equals("multihop-imported-"+finalMode)&&Files.readString(staged.resolve(AndroidImportedRouterPath.SESSION_FILE)).equals(c.input),"staged owner differs from original source");
   check(Files.exists(staged.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))==AndroidImportedRouterPath.requiresProtection(c.input),"strict protection marker mismatch");
   long count;try(var dirs=Files.list(staged.getParent())){count=dirs.count();}
   AndroidPrivateFileStore.failName=AndroidImportedRouterPath.SESSION_FILE;
-  try{reject("private staging failure",()->AndroidImportedRouterPath.prepare(context,original,file.toFile(),"shadowsocks","local",last));}finally{AndroidPrivateFileStore.failName="";}
+  try{reject("private staging failure",()->AndroidImportedRouterPath.prepare(context,original,file.toFile(),finalMode,"local",last));}finally{AndroidPrivateFileStore.failName="";}
   try(var dirs=Files.list(staged.getParent())){check(dirs.count()==count,"failed staging left a private workspace");}
   Libbox.hook=()->{try{Files.writeString(file,b.toString()+" ");}catch(Exception err){throw new RuntimeException(err);}};
-  reject("source replaced during native compile",()->AndroidImportedRouterPath.prepare(context,original,file.toFile(),"shadowsocks","local",last));
+  reject("source replaced during native compile",()->AndroidImportedRouterPath.prepare(context,original,file.toFile(),finalMode,"local",last));
   try(var dirs=Files.list(staged.getParent())){check(dirs.count()==count,"source mutation staged an owner");}
   Files.writeString(file,b.toString());AndroidStandardExitStore.Entry replacement=AndroidStandardExitStore.copy(e);replacement.name="Replacement import";store.save(replacement);
   reject("changed imported capture",()->original.require(null));
-  reject("changed imported restore",()->AndroidImportedRouterPath.prepare(context,original,file.toFile(),"shadowsocks","local",last));
+  reject("changed imported restore",()->AndroidImportedRouterPath.prepare(context,original,file.toFile(),finalMode,"local",last));
   check(RouterMultihop.open==0,"constructor ownership escaped fixture");
  }
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
-  check(all.size()==20,"the SS2022/Hysteria2 independent layer matrix is incomplete");for(Path p:all)one(root,p);
-  System.out.println("Android imported-entry original sources: "+checks+" checks; 18 independent SS2022/Hysteria2 layer graphs and 2 alternate SS2022 methods");
+  check(all.size()==40,"the SS2022/Hysteria2 independent entry/final layer matrix is incomplete");
+  boolean finalHY=args[3].equals("hysteria2");check(finalHY||args[3].equals("shadowsocks"),"unknown final matrix phase");
+  List<Path> selected=all.stream().filter(p->p.getFileName().toString().startsWith("final-hysteria2--")==finalHY).toList();check(selected.size()==20,"incomplete final-mode phase");for(Path p:selected)one(root,p);
+  System.out.println("Android imported-entry original sources: "+checks+" checks; "+args[3]+" final, 20 original independent entry/layer graphs");
  }
 }'''
 
@@ -179,7 +190,7 @@ def main():
         fixtures = temp / "fixtures"
         fixtures.mkdir()
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
-        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
+        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -197,7 +208,13 @@ def main():
         app.mkdir(parents=True)
         for name in ("AndroidImportedRouterPath", "AndroidExternalProtection", "AndroidExternalPolicy", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidProfileSelection", "AndroidDirectStandardExitController", "AndroidStandardExitController", "AndroidNumericAddress", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / f"{name}.java", app / f"{name}.java")
-        (app / "Boundaries.java").write_text("package com.eabusham.routervpn;\n"+E.BOUNDARIES)
+        # Retain shipping layer normalization; empty saved values mean Off.
+        layer_source=(JAVA / "AndroidStartLayer.java").read_text()
+        layer_methods="\n".join(block(layer_source, signature) for signature in ("    static String selectedMode(", "    private static JSONObject selectedRouterProfile(", "    private static JSONObject requireHome(", "    private static String normalize("))
+        layer_constants="\n".join(line for line in layer_source.splitlines() if any("static final String "+name+" =" in line for name in ("OFF", "AES", "AES_XOR")))
+        (app / "AndroidStartLayer.java").write_text("package com.eabusham.routervpn;import org.json.JSONObject;import java.util.Locale;final class AndroidStartLayer{"+layer_constants+layer_methods+"}")
+        boundaries=E.BOUNDARIES.replace(block(E.BOUNDARIES,"final class AndroidStartLayer"),"")
+        (app / "Boundaries.java").write_text("package com.eabusham.routervpn;\n"+boundaries)
         controller = (JAVA / "AndroidMultihopController.java").read_text()
         capture = "\n".join(block(controller, signature) for signature in ("    static final class Prepared {", "    static final class Source {", "    private static final class LoadedBundle {", "    static Source captureSource(", "    private static String sourceDigest(", "    private static byte[] readBundleBytes("))
         (app / "AndroidMultihopController.java").write_text("package com.eabusham.routervpn;import java.io.*;import java.nio.charset.StandardCharsets;import org.json.*;final class AndroidMultihopController{private static final int MAX_BUNDLE=32*1024*1024;"+capture+"}")
@@ -208,10 +225,13 @@ def main():
         private = temp / "private"
         private.mkdir()
         command=["java", "-cp", os.pathsep.join((str(classes), str(jar))), "com.eabusham.routervpn.ImportedRouterTest", str(temp / "compiler"), str(private), str(fixtures)]
-        subprocess.run(command, check=True, timeout=180)
+        # Preserve the original finite bound for each complete final-mode family.
+        for final_mode in ("shadowsocks", "hysteria2"):
+            subprocess.run(command+[final_mode], check=True, timeout=180)
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()
         controls=(
+            ('|| !("multihop-imported-" + mode).equals(modeId)', '|| false', 'accepted changed final session label'),
             ('throw new PreparationFailure(ownedFolder.getName(), original, cleanup);', 'original.addSuppressed(cleanup);', 'failed staging cleanup lost its retained session capability'),
             ('if (!config.equals(owner.config()) || !metadata.equals(owner.metadata()) || !input.getString("source_sha256").equals(owner.sourceSHA256()))', 'if (false)', 'accepted forged graph'),
             ('if (!original.equals(AndroidStandardExitStore.snapshot(AndroidStandardExitStore.capturedEntry(owner,id))))', 'if (false)', 'accepted changed imported capture'),
@@ -223,7 +243,7 @@ def main():
             if original.count(old)!=1:raise AssertionError("Imported source ownership control changed")
             source.write_text(original.replace(old,new))
             subprocess.run(compile_command,check=True,timeout=60,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-            result=subprocess.run(command,env=causal_env,capture_output=True,text=True,timeout=180)
+            result=subprocess.run(command+["shadowsocks"],env=causal_env,capture_output=True,text=True,timeout=180)
             if result.returncode==0 or assertion not in result.stderr:raise AssertionError("Imported ownership causal was not rejected at its intended assertion: "+result.stderr)
             print("Android imported source causal rejected:",assertion)
         source.write_text(original)

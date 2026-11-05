@@ -58,7 +58,6 @@ final class AndroidImportedRouterPath {
                 || !identity.equals(profile.optString("node_proof_id"))) {
             throw new IllegalStateException("The final node lost its independently paired identity.");
         }
-        bundle.getJSONObject("profiles").getJSONObject("shadowsocks");
         return bundle;
     }
 
@@ -84,7 +83,8 @@ final class AndroidImportedRouterPath {
                 String entryMode = new JSONObject(input.getString("entry_capture")).getString("protocol");
                 if (!Arrays.asList("shadowsocks", "hysteria2").contains(entryMode)
                         || !"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
-                        || !entryMode.equals(selected.getString("entry_mode")) || !"shadowsocks".equals(selected.getString("exit_mode"))) {
+                        || !entryMode.equals(selected.getString("entry_mode")) || !input.getString("exit_mode").equals(selected.getString("exit_mode"))
+                        || !Arrays.asList("shadowsocks", "hysteria2").contains(selected.getString("exit_mode"))) {
                     throw new IllegalStateException("The imported-entry compiler changed the selected path.");
                 }
                 this.input = input.put("source_sha256", source).toString();
@@ -95,8 +95,8 @@ final class AndroidImportedRouterPath {
 
     static Compiled compile(AndroidStandardExitStore.Entry entry, JSONObject exit, String exitMode, String execution) throws Exception {
         requireEntry(entry);
-        if (!"local".equals(execution) || !"shadowsocks".equals(exitMode)) {
-            throw new IllegalArgumentException("Choose Local and the paired final node's Shadowsocks transport for this imported entry.");
+        if (!"local".equals(execution) || !Arrays.asList("shadowsocks", "hysteria2").contains(exitMode)) {
+            throw new IllegalArgumentException("Choose Local and the paired final node's Shadowsocks or Hysteria2 transport for this imported entry.");
         }
         AndroidNodeStore.validateBundle(exit);
         JSONObject profile = new JSONObject(AndroidProfileSelection.selectedRouterProfile(exit).toString());
@@ -109,13 +109,15 @@ final class AndroidImportedRouterPath {
         // historical UI preferences. Apply that validated choice to this copy;
         // preparation/restoration still retain the complete original node file.
         profile.put("multihop_execution", execution);
+        // The HY2 final's outer Start Layer comes from this same paired node's
+        // exact generated SS asset map. Its wrapper belongs to another API.
+        String layer = AndroidStartLayer.selectedMode(exit);
+        String exitStart = "hysteria2".equals(exitMode) && !"off".equals(layer)
+                ? exit.getJSONObject("profiles").getJSONObject("shadowsocks").toString() : "";
         AndroidExternalPolicy.Captured captured = AndroidExternalPolicy.captureImportedEntry(entry);
         JSONObject input = new JSONObject().put("schema", 1).put("entry_config", captured.source).put("entry_capture", captured.capture)
                 .put("exit_mode", exitMode).put("exit_files", exit.getJSONObject("profiles").getJSONObject(exitMode).toString())
-                // Shadowsocks carries its selected AES/XOR policy in its own
-                // original transport. NewNodeProfile rejects an extra layer
-                // source that would duplicate that authenticated transport.
-                .put("exit_profile", profile.toString()).put("exit_start", "")
+                .put("exit_profile", profile.toString()).put("exit_start", exitStart)
                 .put("dns_bootstrap", profile.has("dns_bootstrap") ? profile.getJSONObject("dns_bootstrap").toString() : "");
         return new Compiled(input);
     }
@@ -143,6 +145,17 @@ final class AndroidImportedRouterPath {
             }
             return owner;
         } catch (Throwable failure) { owner.close(); throw failure; }
+    }
+
+    static void requireSessionMode(String modeId, String metadata) throws Exception {
+        JSONObject selected = new JSONObject(metadata);
+        String mode = selected.getString("exit_mode");
+        if (!Arrays.asList("shadowsocks", "hysteria2").contains(mode)
+                || !"external".equals(selected.getString("entry_kind"))
+                || !"local".equals(selected.getString("execution"))
+                || !("multihop-imported-" + mode).equals(modeId)) {
+            throw new IllegalStateException("The imported session label differs from its captured final transport.");
+        }
     }
 
     static boolean requiresProtection(String raw) throws Exception {

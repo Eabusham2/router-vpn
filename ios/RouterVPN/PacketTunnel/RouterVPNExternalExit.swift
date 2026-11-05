@@ -179,6 +179,24 @@ enum RouterVPNExternalExitBuilder {
                 String(decoding: try JSONSerialization.data(withJSONObject: capture, options: [.sortedKeys]), as: UTF8.self))
     }
 
+    /// Keep final transport and optional outer AES assets in separate original
+    /// maps. The native node compiler owns certificate inlining and layering.
+    static func importedRouterFinalSource(profile: [String: Any], profiles: [String: [String: String]]) throws -> (mode: String, files: String, start: String) {
+        guard let mode = profile["multihop_exit_mode"] as? String, ["shadowsocks", "hysteria2"].contains(mode),
+              let assets = profiles[mode], !assets.isEmpty else { throw error("The paired final transport lost its original assets.") }
+        let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: profiles)
+        let files = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])
+        var start = ""
+        if mode == "hysteria2", layer.mode != "off" {
+            guard let originalAES = profiles["shadowsocks"] else { throw error("The paired Hysteria2 final lost its original AES assets.") }
+            let encoded = try JSONSerialization.data(withJSONObject: originalAES, options: [.sortedKeys])
+            guard encoded.count <= IOSMultihopStartLayer.maximumBytes else { throw error("The paired final layer exceeds its private source bound.") }
+            start = String(decoding: encoded, as: UTF8.self)
+        }
+        guard files.count <= 8 * 1024 * 1024 else { throw error("The paired final assets exceed their private source bound.") }
+        return (mode, String(decoding: files, as: UTF8.self), start)
+    }
+
     static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil,
                       restoredExecution: String? = nil) throws -> RouterVPNExternalExitRuntime {
         let kind = string(profile["node_kind"]).lowercased()

@@ -189,10 +189,10 @@ public final class NodeUsageTest{
   try(Fixture f=new Fixture(root)){android.net.VpnService.needsPermission=true;Callback temporary=new Callback(f.activity,false);f.controller.connect("wg",List.of(),temporary);Bundle state=new Bundle();f.controller.savePending(state);int code=f.activity.permissionRequest;f.controller.close();f.controller=new AndroidUnifiedConnectionController(f.activity,f.store);f.controller.restorePending(state,f.callback);f.controller.onActivityResult(code,android.app.Activity.RESULT_OK);f.finish();check(f.callback.ok&&!f.usage().exists(),"Activity recreation promoted temporary receipt into user usage");}
   try(Fixture f=new Fixture(root)){android.net.VpnService.needsPermission=true;f.connect();Bundle state=new Bundle();f.controller.savePending(state);int code=f.activity.permissionRequest;f.controller.close();f.controller=new AndroidUnifiedConnectionController(f.activity,f.store);Callback temporary=new Callback(f.activity,false);f.controller.restorePending(state,temporary);f.controller.onActivityResult(code,android.app.Activity.RESULT_OK);f.finish();check(temporary.ok&&f.count("router-vpn",f.a.id)==6,"Activity recreation lost original user usage intent");}
  }
- static void importedExclusions(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2")){
+ static void importedExclusions(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2"))for(String finalMode:List.of("shadowsocks","hysteria2")){
   try(Fixture f=new Fixture(root)){
    var imported=AndroidStandardExitStore.copy(f.x);imported.id=f.a.id;imported.protocol=protocol;f.exits.save(imported);
-   f.controller.connectImportedMultihop(imported,f.b,"shadowsocks","local",f.callback);f.finish();
+   f.controller.connectImportedMultihop(imported,f.b,finalMode,"local",f.callback);f.finish();
    check(f.callback.ok&&f.count("external",f.a.id)==1&&f.count("router-vpn",f.a.id)==0&&f.count("router-vpn",f.b.id)==2,"imported usage conflated same text IDs across original node kinds: "+protocol);
    byte[] receipt=f.read(f.usage());NativeUsageBoundary.last.run();check(Arrays.equals(receipt,f.read(f.usage())),"duplicate imported completion counted both nodes again");
   }
@@ -205,7 +205,7 @@ public final class NodeUsageTest{
    if(fault.equals("final-source"))NativeUsageBoundary.beforeFinish=()->{try{AndroidPrivateFileStore.write(f.b.file,(Files.readString(f.b.file.toPath())+" ").getBytes(java.nio.charset.StandardCharsets.UTF_8),AndroidNodeStore.MAX_BUNDLE);}catch(Exception e){throw new AssertionError(e);}};
    if(fault.equals("cancelled"))android.net.VpnService.needsPermission=true;
    Callback callback=fault.equals("temporary")?new Callback(f.activity,false):f.callback;
-   f.controller.connectImportedMultihop(f.x,f.b,"shadowsocks","local",callback);
+   f.controller.connectImportedMultihop(f.x,f.b,finalMode,"local",callback);
    if(fault.equals("cancelled"))f.controller.cancelPermissionPending();else f.finish();
    check(!f.usage().exists(),"unproved or replaced imported graph recorded usage: "+fault);
   }
