@@ -8,6 +8,16 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Mobile imported entry → paired Router final
 
+The Android multihop picker explains that choosing a Router entry briefly
+connects and proves that entry, measures candidates through it, and disconnects;
+saving the chosen path still leaves Connect separate. Its executable dialog
+fixture now models Android's `CharSequence[]` list API and both imported entry
+types. The actual shipping handlers pass 314 checks, all seven original hidden-
+list controls, and two additional controls for wrong imported dispatch and
+missing temporary-probe explanation. Imported selection retains its original
+entry and final-node candidates without starting a Router measurement or saving
+early. These Android boundary tests do not establish physical visual QA.
+
 The Android and Apple source supports ordinary imported Shadowsocks 2022 and
 Hysteria2 entries followed by an independently paired Router Shadowsocks final,
 using Local execution in one VpnService/PacketTunnel. All three SS2022 entry

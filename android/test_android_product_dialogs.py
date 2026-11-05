@@ -52,6 +52,10 @@ final class AndroidNodeStore {
  List<Node> list(){return nodes;}String activeId(){return selected;}
  void select(String id){selected=id;selections++;}
 }
+final class AndroidStandardExitStore {
+ static final class Entry {final String id,name,protocol;Entry(String id){this(id,"shadowsocks");}Entry(String id,String protocol){this.id=id;name="Imported "+id;this.protocol=protocol;}}
+ final List<Entry> entries=new ArrayList<>();List<Entry> list(){return entries;}
+}
 final class AndroidUnifiedNodeCatalog {
  static final String SORT_CURRENT="current";
  static final class Item {
@@ -103,7 +107,8 @@ import android.app.AlertDialog;import android.content.SharedPreferences;import a
 import android.widget.*;import org.json.JSONObject;import java.util.*;
 public final class ProductDialogHarness extends android.app.Activity {
  static final String SELECTED_KIND="selected_kind",SELECTED_ID="selected_id",MULTI_ON="multihop_on",MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_mode";
- final MemoryPreferences saved=new MemoryPreferences();final AndroidNodeStore nodeStore=new AndroidNodeStore();
+ final MemoryPreferences saved=new MemoryPreferences();final AndroidNodeStore nodeStore=new AndroidNodeStore();final AndroidStandardExitStore exitStore=new AndroidStandardExitStore();
+ AndroidStandardExitStore.Entry importedEntry;List<AndroidNodeStore.Node> importedFinals;
  final AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog();final AndroidTelemetry telemetry=new AndroidTelemetry();
  final Connection connection=new Connection();final Button fastestButton=new Button(this);final CheckBox multihopToggle=new CheckBox(this);
  final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
@@ -121,6 +126,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}
  void refreshMultihopSummary(){}
  void prepareViaEntryExitMeasurement(AndroidNodeStore.Node node,List<AndroidNodeStore.Node> nodes){entry=node.id;exit=Integer.toString(nodes.size());}
+ void chooseImportedRouterFinal(AndroidStandardExitStore.Entry first,List<AndroidNodeStore.Node> finals){importedEntry=first;importedFinals=finals;}
  void chooseMultihopMode(AndroidNodeStore.Node first,AndroidNodeStore.Node last,AndroidViaEntryLatencyProbe.Result result){entry=first.id;exit=last.id;}
  AndroidViaEntryLatencyProbe.Result capture(){return new AndroidViaEntryLatencyProbe.Result(nodeById("a"),Arrays.asList(nodeById("b"),nodeById("c")),Collections.emptyList());}
  static String safe(Throwable error){return error==null?"error":error.getMessage();}
@@ -207,7 +213,21 @@ HARNESS_SUFFIX = r'''
   ProductDialogHarness h=new ProductDialogHarness();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"wg","wg",h.capture());h.busy=true;shown(3,"Multihop execution").clickItem(2);check(h.saved.writes==0&&!h.multihopToggle.isChecked(),"late busy refuses saved multihop mutation");
   h=new ProductDialogHarness();var captured=h.capture();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"wg","wg",captured);captured.stale=true;shown(3,"Multihop execution").clickItem(2);check(h.saved.writes==0&&h.message.contains("Retest"),"late changed capture cannot save an old measured choice");
  }
- static void entry(){ProductDialogHarness h=new ProductDialogHarness();h.configureMultihop();shown(3,"Multihop entry").clickItem(2);check(h.entry.equals("c")&&h.exit.equals("3"),"chosen entry and complete candidate list passed to measurement");h=new ProductDialogHarness();h.busy=true;h.configureMultihop();check(h.entry.isEmpty(),"busy multihop setup cannot create temporary tunnel");}
+ static void entry(){
+  ProductDialogHarness h=new ProductDialogHarness();h.configureMultihop();AlertDialog d=shown(3,"Multihop entry");
+  String note=((TextView)((LinearLayout)d.customTitle).children.get(1)).getText().toString();
+  check(note.contains("Router VPN will then briefly establish and prove this entry")&&note.contains("disconnect")&&note.contains("press Connect"),"Router entry discloses temporary proved measurement before selection");
+  d.clickItem(2);check(h.entry.equals("c")&&h.exit.equals("3"),"chosen entry and complete candidate list passed to measurement");
+  h=new ProductDialogHarness();h.busy=true;h.configureMultihop();check(h.entry.isEmpty(),"busy multihop setup cannot create temporary tunnel");
+  for(String protocol:new String[]{"shadowsocks","hysteria2"})for(int routers:new int[]{1,3}){
+   h=new ProductDialogHarness();while(h.nodeStore.nodes.size()>routers)h.nodeStore.nodes.remove(h.nodeStore.nodes.size()-1);
+   AndroidStandardExitStore.Entry first=new AndroidStandardExitStore.Entry("provider",protocol);h.exitStore.entries.add(first);
+   h.configureMultihop();d=shown(routers+1,"Multihop entry");check(d.items[routers].contains("Imported provider")&&d.items[routers].contains(protocol),"imported entry keeps its own visible identity");
+   d.clickItem(routers);check(h.importedEntry==first&&h.importedFinals==h.nodeStore.nodes&&h.entry.isEmpty()&&h.saved.writes==0,"imported selection preserves its source without starting a Router measurement or saving early");
+  }
+  h=new ProductDialogHarness();h.nodeStore.nodes.clear();h.exitStore.entries.add(new AndroidStandardExitStore.Entry("provider"));AlertDialog.last=null;h.configureMultihop();
+  check(AlertDialog.last==null&&h.importedEntry==null,"imported entry cannot fabricate a missing paired final");
+ }
  static void exits(){
   ProductDialogHarness h=new ProductDialogHarness();List<AndroidNodeStore.Node> exits=Arrays.asList(h.nodeById("b"),h.nodeById("c"));
   var captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.singletonList(new AndroidTelemetry.Result("b",4.2)));
@@ -249,6 +269,12 @@ def main():
         sources["android/app/AlertDialog.java"] = sources["android/app/AlertDialog.java"].replace(
             "public CharSequence title,message;", "public boolean cancelable=true;public void setMessage(CharSequence value){message=value;}public CharSequence title,message;").replace(
             "public Builder setTitle(", "public Builder setCancelable(boolean value){dialog.cancelable=value;return this;}public Builder setTitle(")
+        # The real Android API accepts CharSequence[], including the imported
+        # entry labels. Preserve the same message/list precedence and callbacks.
+        original_items="public Builder setItems(String[] values,OnClickListener listener){dialog.items=values.clone();dialog.itemClick=listener;return this;}"
+        assert sources["android/app/AlertDialog.java"].count(original_items)==1
+        sources["android/app/AlertDialog.java"]=sources["android/app/AlertDialog.java"].replace(original_items,
+            "public Builder setItems(CharSequence[] values,OnClickListener listener){dialog.items=new String[values.length];for(int i=0;i<values.length;i++)dialog.items[i]=values[i].toString();dialog.itemClick=listener;return this;}")
         sources["android/graphics/Color.java"] = "package android.graphics;public final class Color {public static final int WHITE=-1;}"
         sources["android/os/SystemClock.java"] = "package android.os;public final class SystemClock {public static long elapsedRealtime(){return 10000;}}"
         sources["android/content/SharedPreferences.java"] = """package android.content;
@@ -265,7 +291,7 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
         for name, text in sources.items():
             path = tmp / name;path.parent.mkdir(parents=True, exist_ok=True);path.write_text(text)
         target = tmp / "com/eabusham/routervpn/ProductDialogHarness.java"
-        def compile_run(parts, negative=None):
+        def compile_run(parts, negative=None, expected_failure="items must be reachable"):
             target.write_text(HARNESS_PREFIX + "\n".join(parts) + support + HARNESS_SUFFIX)
             build = subprocess.run(["javac", "--release", "17", "-cp", JSON_JAR, "-d", str(tmp), *map(str, tmp.rglob("*.java"))], text=True, capture_output=True, timeout=30)
             assert build.returncode == 0, build.stderr
@@ -274,7 +300,7 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
                 assert run.returncode == 0, run.stdout+run.stderr
                 print(run.stdout.strip())
             else:
-                assert run.returncode != 0 and "items must be reachable" in run.stderr, f"negative {negative} survived or failed for unrelated reason: {run.stdout}{run.stderr}"
+                assert run.returncode != 0 and expected_failure in run.stderr, f"negative {negative} survived or failed for unrelated reason: {run.stdout}{run.stderr}"
         compile_run(handlers)
         # An exact old builder on any affected surface must fail its actual action test.
         for index in range(len(handlers)):
@@ -282,7 +308,18 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             changed[index] = changed[index].replace("choiceDialog(", "brokenChoiceDialog(", 1)
             changed.append("private AlertDialog.Builder brokenChoiceDialog(String title,String note){return new AlertDialog.Builder(this).setTitle(title).setMessage(note);}")
             compile_run(changed, index)
+        for old,new,expected in (
+            ("else chooseImportedRouterFinal(imports.get(w-nodes.size()),nodes);",
+             "else prepareViaEntryExitMeasurement(nodes.get(0),nodes);",
+             "imported selection preserves its source without starting a Router measurement or saving early"),
+            ("Router VPN will then briefly establish and prove this entry", "Router entries offer measurements",
+             "Router entry discloses temporary proved measurement before selection"),
+        ):
+            changed=handlers.copy();assert changed[5].count(old)==1
+            changed[5]=changed[5].replace(old,new)
+            compile_run(changed,5,expected)
     print("Android product dialogs: all seven original-builder negative controls rejected")
+    print("Android product dialogs: imported dispatch and temporary-probe disclosure defects rejected")
 
 
 if __name__ == "__main__":

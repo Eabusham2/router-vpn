@@ -394,7 +394,7 @@ public final class ProductActivity extends Activity {
             List<String> labels=new ArrayList<>();
             for(AndroidNodeStore.Node node:nodes)labels.add("Router • "+node.name+(telemetry.cachedMedian(node.id)>0?String.format(Locale.US," • direct %.1f ms",telemetry.cachedMedian(node.id)):""));
             for(AndroidStandardExitStore.Entry entry:imports)labels.add("Custom • "+entry.name+" • "+entry.protocol);
-            choiceDialog("Multihop entry","Choose hop 1, then the final Router node. Router entries offer routed candidate measurements. Imported Shadowsocks 2022 and Hysteria2 entries use Local execution and the final node's Shadowsocks transport.")
+            choiceDialog("Multihop entry","Choose hop 1, then the final Router node. For a Router entry, Router VPN will then briefly establish and prove this entry, measure candidates through it, and disconnect. Imported Shadowsocks 2022 and Hysteria2 entries use Local execution and the final node's Shadowsocks transport. Save the path, then press Connect.")
                 .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                     if(w<nodes.size())prepareViaEntryExitMeasurement(nodes.get(w),nodes);
                     else chooseImportedRouterFinal(imports.get(w-nodes.size()),nodes);

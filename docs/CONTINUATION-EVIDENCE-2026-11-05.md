@@ -2105,6 +2105,41 @@ device acceptance are separate. The authoritative Tor prerequisite at `79df821a`
 fails at the same old compiler-download HTTP-504 call, before Tor compilation;
 the bounded downloader correction is already published in `ffc25642`.
 
+## Android imported picker and temporary-measurement explanation
+
+The newer mobile changes through `222df0ea` superseded the old Android source
+assertions, including schema 5, the old preparation signature and teardown that
+preceded private staging cleanup. Upstream `6730c0d3` and `0cef1298` repaired
+those checks. Their newer assertions were preserved instead of replaying an
+independent local draft of the same corrections.
+
+Executing the ProductActivity dialog test still exposed a real fixture compile
+failure: the imported-entry store was absent and its AlertDialog boundary
+accepted only `String[]`, whereas the shipping picker supplies `CharSequence[]`.
+The fixture now represents that actual API while retaining the same AOSP
+message-versus-list behavior and original callback checks. New action cases
+exercise both Shadowsocks and Hysteria2 entries with one or several Router
+candidates. They require the exact original imported entry and candidate list,
+no Router measurement or early saved selection, and no fabricated paired final.
+
+The picker also again explains its temporary Router connection, proof,
+measurement and disconnect before the entry is chosen. The imported path keeps
+its existing Local execution explanation and both supported protocol labels.
+Choosing the eventual saved path still leaves the final Connect action separate.
+
+The unchanged shipping Java handlers compiled and executed on OpenJDK 17.0.20:
+314 checks pass. All seven original-builder mutations still fail their intended
+hidden-list assertion. Two additional compiling controls reject substituted
+Router measurement for an imported entry and omission of the temporary-probe
+explanation. The final source was tested on the `222df0ea` composition; its
+affected files were unchanged by the later server/network-reader and bootstrap
+commits. Widget, store and network boundaries are explicit doubles, so this is
+actual handler execution rather than Android device rendering or VPN traffic.
+
+An earlier broad local orchestration attempt failed existing process/PF
+lifecycle checks and is not reported as a complete release pass. The focused
+dialog evidence cannot certify current native packages, publication or devices.
+
 ## Protected hostname fallback and original-parent cleanup
 
 Upstream `f9b816e5`, subsequently retained in `222df0ea`, supplied the installed
