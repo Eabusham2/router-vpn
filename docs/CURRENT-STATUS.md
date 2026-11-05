@@ -52,6 +52,15 @@ generation leases remain required. Active Always upgrade, which needs a live
 two-generation native handoff, is still unfinished; see
 [the generation boundary](LINUX-SERVICE-IMAGE-GENERATIONS.md).
 
+Standard-to-Standard native protection transfer now retains each original
+creator and exact same-policy endpoint inventory, pins the original mutation
+lease inode and conditionally removes only the source. Abort requires the old
+guard to be exclusive before releasing its reservation. Repeated and stale
+acknowledgements preserve the original decision and newer pins. All 54 merged
+repository race verdicts pass, as do the 40-verdict prepared native-module suite
+and two deliberate policy/creator defect controls. Eleven kernel scenarios are
+mandatory; active installer/service coordination remains unfinished.
+
 The MAX TLS reference now retains actual native TCP/UDP pairs for its variable
 packet and middle endpoints instead of assuming fixed ports are available.
 All 21 port-pair leaves and their parent pass under race while TCP51820 is held;

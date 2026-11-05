@@ -274,7 +274,9 @@ def check_verdict_inventory():
     flattened = tuple(case for _, cases in GUARDIAN.KERNEL_GROUPS for case in cases)
     if flattened != GUARDIAN.KERNEL_CASES or len(flattened) != len(set(flattened)):
         raise AssertionError('Bounded native groups omit or repeat a required kernel boundary')
-    for prefix, cases in (('TestLinuxNodeStandardTransfer', GUARDIAN.REVERSE_TRANSFER_PARSER),
+    for prefix, cases in (('TestLinuxStandardImageTransfer', GUARDIAN.IMAGE_TRANSFER_PARSER),
+                          ('TestDesktopLinuxGuardianKernelStandardImageTransfer/', GUARDIAN.IMAGE_TRANSFER_NATIVE),
+                          ('TestLinuxNodeStandardTransfer', GUARDIAN.REVERSE_TRANSFER_PARSER),
                           ('TestDesktopLinuxGuardianKernelNodeStandardTransfer/', GUARDIAN.REVERSE_TRANSFER_NATIVE),
                           ('TestLinuxStandardNodeTransferRejectsChangedInventory/', GUARDIAN.STANDARD_TRANSFER_INVENTORY),
                           ('TestLinuxStandardNodeTransferUnknownResultRetainsPins/', GUARDIAN.STANDARD_TRANSFER_UNKNOWN),

@@ -1489,6 +1489,44 @@ helper; the commands, pin, preparers and source comparison remain actual.
 This verifies preparation, not Windows driver execution. The separate native
 integration ownership assertions in the same jobs retain their own investigation.
 
+## Original native Standard image-transfer creators
+
+The native layer now exposes retained Standard-to-Standard source-transfer and
+successor-pin capabilities. Both snapshots are taken from actual acknowledged
+inventories and must agree on namespace, captured HomeLAN and complete endpoint
+policy, while identifying distinct creator sessions. The existing full snapshot
+parser and all Node/reverse production contracts are unchanged. A separately
+opened read-only descriptor retains the original mutation-lock inode without
+holding its flock between service phases; Commit rejects a replacement lease.
+
+Only the original source creator removes its table beside the independently
+proved successor under a stable native generation. Result observes without
+releasing authority. Abort Finish requires source-exclusive native inventory,
+so a remaining successor prevents premature release. Lost and repeated replies
+retain the same source/target decision, and old Finish/Resolve cannot clear a
+newer reservation. Unknown removal remains pinned.
+
+Root's merged repository race run passes **54 verdicts (1.988s)**, including
+20 image-transfer verdicts and unchanged Node/reverse regressions. The actual
+prepared sing-box `routervpn/mobiletor` package separately passes **40 verdicts
+(1.571s)** with `-mod=readonly` and an immutable exact preparer projection.
+Removing endpoint equality and removing distinct-creator enforcement each
+fails its intended assertion. The final guardian-tag binary compiles under race,
+and the strict complete verdict inventory passes. The mandatory native parent
+adds eleven real nft cases, including wrong/reopened leases, lost successor,
+changed native policy, cancellation, lost acknowledgement and premature abort.
+These kernel cases did not execute locally: UID-map acknowledgement failed
+before the test process entered the native gate.
+
+The five-path immutable manifest is
+`d2ce2f7818f882186567d7b95d0c98dac67e46a497d94d2dc3f7030911c8b96e`;
+final evidence is
+`91053c7814449fff38526c0582cb04905501a0548610ef9e02cfafba5a874b26`.
+This is the original-creator layer for active Always upgrades. The authenticated
+service coordinator, actual code-promotion journal, readiness/old join and
+installed two-generation acceptance remain required before that product
+requirement is complete.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
