@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"router-vpn/internal/common"
 )
 
 var linuxStandardServiceMonitors sync.Map // map[*linuxStandardServiceLaunch]*linuxStandardServiceMonitor
@@ -167,6 +169,13 @@ func (m *linuxStandardServiceMonitor) observe() (failure error, selected bool) {
 	}
 	if failure == nil {
 		m.observations.Add(1)
+	} else if common.ObservationContextExpired(ctx, failure) {
+		// This was a read of an already proved activation. An expired read
+		// neither proves the runtime healthy nor authorizes its retirement.
+		// Classify before the deferred cancel: a genuine source/engine error,
+		// including one joined with cancellation, still needs the final owned
+		// transaction recheck. The next tick keeps this same original monitor.
+		return nil, true
 	}
 	return failure, true
 }

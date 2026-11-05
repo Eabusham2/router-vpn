@@ -46,6 +46,7 @@ CORE = {
     'MonitorRejectsLateFailureOverReplacement': (),
     'MonitorCancellationJoinsEnteredObservation': (),
     'MonitorRechecksUnderOriginalTransaction': (),
+    'MonitorPreservesOnlyPureObservationExpiry': ('pure-expiry', 'mixed-runtime-failure'),
     'MonitorFailureRetainsRetryOwner': (),
     'MonitorSourceMutationRetiresOnlyOriginal': (),
     'MonitorRejectsUnprovedOrRepeatedActivation': ('dns', 'joined', 'unattempted', 'wrong-operation', 'foreign-runtime', 'foreign-tracker'),
