@@ -1,0 +1,63 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestDesktopMTUActualWritersKeepCallerDeadline(t *testing.T) {
+	for _, restore := range []bool{false, true} {
+		name := "retest"
+		if restore {
+			name = "captured-restore"
+		}
+		t.Run(name, func(t *testing.T) {
+			a, launch := desktopMTUControllerFixture(t, "mtu-deadline")
+			deadline := time.Now().Add(4 * time.Second)
+			ctx, cancel := context.WithDeadline(context.Background(), deadline)
+			defer cancel()
+			if restore {
+				desktopMeasurementMTUSession(launch).restoreMTU = 1392
+				if err := a.restoreDesktopCapturedMTU(ctx, launch); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := a.runDesktopExternalMTU(ctx, launch, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			raw, err := readDesktopRuntimeFile(launch, "mtu-observed-request.json", 4096)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request desktopMTURequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				t.Fatal(err)
+			}
+			if request.DeadlineNS != deadline.UnixNano() {
+				t.Fatalf("mailbox renewed/lost caller deadline: got %d want %d", request.DeadlineNS, deadline.UnixNano())
+			}
+			if desktopMTUControlFor(request).DeadlineNS != request.DeadlineNS {
+				t.Fatal("commit discarded original request deadline")
+			}
+		})
+	}
+}
+func TestDesktopMTUExpiredWriterDoesNotPublish(t *testing.T) {
+	a, launch := desktopMTUControllerFixture(t, "mtu-hold")
+	_ = a
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := desktopMTURequest{Generation: 1, Request: strings.Repeat("a", 32), DeadlineNS: time.Now().Add(time.Minute).UnixNano()}
+	if err := writeDesktopMTUControlContext(ctx, launch, "mtu-request.json", request); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := readDesktopRuntimeFile(launch, "mtu-request.json", 4096); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("expired writer published mailbox input", err)
+	}
+}

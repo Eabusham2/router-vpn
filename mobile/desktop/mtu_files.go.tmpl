@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"os"
+	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
@@ -16,6 +19,7 @@ type routerVPNDesktopMTUInput struct {
 	digest [32]byte
 }
 type routerVPNDesktopMTUFiles struct {
+	lifetime                context.Context
 	files                   *routerVPNExternalFiles
 	owner                   *routerVPNDesktopMTU
 	session, source, config string
@@ -152,4 +156,216 @@ func routerVPNOpenDesktopMTUProvider(files *routerVPNExternalFiles, provider rou
 	}
 	result := &routerVPNDesktopMTUFiles{files: files, owner: mtu, session: session, source: source, config: config, inputs: map[string]routerVPNDesktopMTUInput{}}
 	return result, result.tick()
+}
+
+// DeadlineNS is the controller's absolute deadline, including time already
+// spent preparing and delivering the mailbox input. It is never renewed here.
+func routerVPNDesktopMTUInputContext(parent context.Context, deadlineNS int64) (context.Context, context.CancelFunc, error) {
+	if parent == nil || deadlineNS <= 0 {
+		return nil, nil, routerVPNExternalFailure
+	}
+	ctx, cancel := context.WithDeadline(parent, time.Unix(0, deadlineNS))
+	if err := ctx.Err(); err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return ctx, cancel, nil
+}
+func (f *routerVPNDesktopMTUFiles) readContext(ctx context.Context, name string, value any, current routerVPNDesktopMTURecord) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	raw, err := f.files.read(name, 4096)
+	if err != nil || !routerVPNMTUStrict(raw, value) {
+		return false, nil
+	}
+	var control routerVPNDesktopMTUControl
+	switch request := value.(type) {
+	case *routerVPNDesktopMTURequest:
+		control = routerVPNDesktopMTUControl{Schema: request.Schema, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: request.Generation, Request: request.Request, DeadlineNS: request.DeadlineNS}
+		if request.Generation != current.Generation+1 && (request.Generation != current.Generation || request.Request != current.Status.Request) {
+			return false, nil
+		}
+	case *routerVPNDesktopMTUControl:
+		control = *request
+		if request.Generation != current.Generation || request.Request != current.Status.Request {
+			return false, nil
+		}
+	default:
+		return false, nil
+	}
+	if !f.identity(control) || control.DeadlineNS <= 0 {
+		return false, nil
+	}
+	info, err := f.files.root.Lstat(name)
+	if err != nil {
+		return false, nil
+	}
+	again, err := f.files.read(name, 4096)
+	if err != nil || !bytes.Equal(raw, again) {
+		return false, nil
+	}
+	identity := routerVPNDesktopMTUInput{info: info, digest: sha256.Sum256(raw)}
+	if old, exists := f.inputs[name]; exists && (!os.SameFile(old.info, info) || old.digest != identity.digest) {
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	f.inputs[name] = identity
+	return true, nil
+}
+func (f *routerVPNDesktopMTUFiles) tickContext(parent context.Context) error {
+	ctx, stop := context.WithTimeout(parent, 2*time.Second)
+	defer stop()
+	if f.lifetime == nil {
+		return routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if f.owner.owner.invalid.Load() {
+		return routerVPNExternalFailure
+	}
+	previous, err := f.owner.recordContext(ctx)
+	if err != nil {
+		return err
+	}
+	var request routerVPNDesktopMTURequest
+	if !previous.Status.Running {
+		read, err := f.readContext(ctx, "mtu-request.json", &request, previous)
+		if err != nil {
+			return err
+		}
+		if read && request.Generation != previous.Generation {
+			err = f.owner.startContextOn(ctx, f.lifetime, request)
+			if err != nil {
+				if mobiletor.ObservationContextOnly(err) && ctx.Err() == nil && time.Now().UnixNano() >= request.DeadlineNS {
+					delete(f.inputs, "mtu-request.json")
+				} else {
+					return err
+				}
+			}
+		}
+	}
+	current, err := f.owner.recordContext(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"mtu-cancel.json", "mtu-commit.json"} {
+		var control routerVPNDesktopMTUControl
+		read, err := f.readContext(ctx, name, &control, current)
+		if err != nil {
+			return err
+		}
+		if !read {
+			continue
+		}
+		if name == "mtu-cancel.json" && control.PathKey == "" && control.MTU == 0 {
+			err = f.owner.cancelContextOn(ctx, f.lifetime, control)
+			if err != nil && !(mobiletor.ObservationContextOnly(err) && ctx.Err() == nil && time.Now().UnixNano() >= control.DeadlineNS) {
+				return err
+			}
+			continue
+		}
+		operation, stop, err := routerVPNDesktopMTUInputContext(ctx, control.DeadlineNS)
+		if err != nil {
+			if mobiletor.ObservationContextOnly(err) && ctx.Err() == nil {
+				delete(f.inputs, name)
+				continue
+			}
+			return err
+		}
+		if name == "mtu-commit.json" && control.PathKey != "" {
+			err = f.owner.commitContext(operation, control)
+		}
+		expired := mobiletor.ObservationContextExpired(operation, err)
+		stop()
+		if err != nil && !expired {
+			return err
+		}
+	}
+	record, err := f.owner.recordContext(ctx)
+	if err != nil {
+		return err
+	}
+	if f.owner.owner.invalid.Load() {
+		return routerVPNExternalFailure
+	}
+	record.Schema, record.Session, record.SourceSHA256, record.ConfigSHA256 = 1, f.session, f.source, f.config
+	if record.Status.Complete && !record.Status.Running {
+		if !record.Status.Measured && !record.Status.Restored && record.Generation > 0 {
+			actual, err := f.owner.owner.CaptureContext(ctx)
+			if err != nil {
+				return err
+			}
+			if err := mobilemtu.LockContext(ctx, &f.owner.mu); err != nil {
+				return err
+			}
+			original := f.owner.original
+			f.owner.mu.Unlock()
+			if actual.Session != original.Session || actual.Path != original.Path || actual.MTU != original.MTU {
+				f.owner.owner.invalid.Store(true)
+				return routerVPNExternalFailure
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := f.retireContext(ctx); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.files.publish("mtu-status.json", record)
+}
+func (f *routerVPNDesktopMTUFiles) retireContext(ctx context.Context) error {
+	for name, owned := range f.inputs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		info, err := f.files.root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			delete(f.inputs, name)
+			continue
+		}
+		raw, readErr := f.files.read(name, 4096)
+		if err != nil || readErr != nil || !os.SameFile(info, owned.info) || sha256.Sum256(raw) != owned.digest {
+			return routerVPNExternalFailure
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := f.files.root.Remove(name); err != nil {
+			return err
+		}
+		delete(f.inputs, name)
+	}
+	return nil
+}
+func routerVPNOpenDesktopMTUContext(ctx context.Context, files *routerVPNExternalFiles, owner routerVPNExternalOwner, session, source, config string) (*routerVPNDesktopMTUFiles, error) {
+	provider, ok := owner.(routerVPNExternalMTUContextProvider)
+	if !ok {
+		if _, legacy := owner.(routerVPNExternalMTUProvider); legacy {
+			return nil, routerVPNExternalFailure
+		}
+		return nil, nil
+	}
+	return routerVPNOpenDesktopMTUProviderContext(ctx, files, provider, session, source, config)
+}
+func routerVPNOpenDesktopMTUProviderContext(ctx context.Context, files *routerVPNExternalFiles, provider any, session, source, config string) (*routerVPNDesktopMTUFiles, error) {
+	observe, stop := context.WithTimeout(ctx, 2*time.Second)
+	defer stop()
+	bounded, ok := provider.(routerVPNExternalMTUContextProvider)
+	if !ok || files == nil {
+		return nil, routerVPNExternalFailure
+	}
+	mtu, err := bounded.DesktopMTUContext(observe)
+	if err != nil {
+		return nil, err
+	}
+	result := &routerVPNDesktopMTUFiles{lifetime: ctx, files: files, owner: mtu, session: session, source: source, config: config, inputs: map[string]routerVPNDesktopMTUInput{}}
+	return result, result.tickContext(observe)
 }

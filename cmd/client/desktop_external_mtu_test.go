@@ -39,6 +39,9 @@ func desktopMTUChildFixture(kind, directory string, expected mobilemultihop.Exte
 		}
 		var request desktopMTURequest
 		if active == "" && read("mtu-request.json", &request) && request.Schema == 1 && request.Session == expected.SessionID && request.SourceSHA256 == expected.SourceSHA256 && request.ConfigSHA256 == expected.ConfigSHA256 && request.Generation == record.Generation+1 {
+			if strings.HasPrefix(kind, "mtu-deadline") {
+				write("mtu-observed-request.json", request)
+			}
 			active, record.Generation = request.Request, request.Generation
 			record.Status = mobilemtu.Status{Request: active, Running: true, Phase: "measuring", OriginalMTU: record.Status.EffectiveMTU, EffectiveMTU: record.Status.EffectiveMTU, Source: "unmeasured", PathKey: strings.Repeat("b", 64), Candidates: []mobilemtu.Candidate{}}
 			if kind != "mtu-hold" {

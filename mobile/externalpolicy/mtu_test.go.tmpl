@@ -2,9 +2,12 @@ package box
 
 import (
 	"context"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRouterVPNExternalMTUAndMeasurementsCannotOverlap(t *testing.T) {
@@ -92,5 +95,73 @@ func TestRouterVPNExternalEmptyMTULeaseCannotMintOwnership(t *testing.T) {
 		}
 		lease.Close()
 		lease.Close()
+	}
+}
+
+func TestRouterVPNMTUFinalizationContextPreservesOriginalCleanup(t *testing.T) {
+	for _, phase := range []string{"readback", "physical-rebind", "mixed-failure", "cleanup-expired"} {
+		t.Run(phase, func(t *testing.T) {
+			work, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Second, 30*time.Millisecond)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			work, cancel := context.WithCancel(work)
+			defer cancel()
+			calls := 0
+			genuine := errors.New("original native policy identity changed")
+			var retained context.Context
+			limit := time.Now().Add(time.Second)
+			err = routerVPNMTUFinalizeContext(work, limit, func(call context.Context) error {
+				calls++
+				if calls == 1 {
+					if call != work {
+						t.Error("native read lost original caller")
+					}
+					if phase == "cleanup-expired" {
+						retained, err = mobilemtu.OperationCleanupContext(work)
+						if err != nil {
+							t.Fatal(err)
+						}
+						<-retained.Done()
+					}
+					cancel()
+					if phase == "mixed-failure" {
+						return errors.Join(genuine, call.Err())
+					}
+					return call.Err()
+				}
+				if !mobilemtu.SameOperationContext(work, call) || call.Err() != nil {
+					t.Fatal("retry lost original cleanup authority")
+				}
+				retained, err = mobilemtu.OperationCleanupContext(work)
+				if err != nil {
+					t.Fatal(err)
+				}
+				deadline, _ := call.Deadline()
+				originalDeadline, _ := retained.Deadline()
+				if deadline.After(limit) || !deadline.Equal(originalDeadline) {
+					t.Fatal("finalization renewed cleanup allowance")
+				}
+				return nil
+			})
+			if !errors.Is(work.Err(), context.Canceled) {
+				t.Fatal("successful cleanup erased work cancellation")
+			}
+			switch phase {
+			case "readback", "physical-rebind":
+				if err != nil || calls != 2 {
+					t.Fatal("original native result could not finalize under cleanup", calls, err)
+				}
+			case "mixed-failure":
+				if calls != 1 || !errors.Is(err, genuine) {
+					t.Fatal("real native loss was retried or hidden", calls, err)
+				}
+			case "cleanup-expired":
+				if calls != 1 || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, context.Canceled) {
+					t.Fatal("expired original cleanup was renewed or errorlost", calls, err)
+				}
+			}
+		})
 	}
 }

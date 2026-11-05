@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`d4a37bb4`, the integrated observation change in `a94cde9d`, and the installed
+`2f2149e1`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -40,8 +40,12 @@ protection. Controller-monitor admission and the service MTU coordinator retain
 separate integration obligations; the focused tests do not close those paths.
 
 This is not all-requirement completion. Installed Linux standard-service MTU
-Retest/Cancel remains unimplemented, and broader MTU operation admission still
-needs bounded Capture/start/status paths. Current exact-SHA release publication,
+Retest/Cancel remains unimplemented. The accepted native MTU command now has
+bounded capture/start/status/cancel/cache and replacement paths, transported
+original deadlines and one shared cleanup allowance. Forty-seven actual prepared
+native race verdicts and both Darwin TUN architecture compilations passed.
+The earlier client snapshot/proof caller chain is a separate remaining closure.
+Current exact-SHA release publication,
 physical/device/private acceptance and the other surviving platform/graph work
 remain separate requirements. The older continuation below is retained as history.
 

@@ -1,0 +1,170 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func (l *desktopMTULeaseFixture) HealthyContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if l.closed.Load() {
+		return errors.New("original lease retired")
+	}
+	return nil
+}
+func (l *desktopMTULeaseFixture) InboundContext(ctx context.Context) (adapter.Inbound, error) {
+	if err := mobilemtu.LockContext(ctx, &l.mu); err != nil {
+		return nil, err
+	}
+	defer l.mu.Unlock()
+	if err := l.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	return l.current, nil
+}
+func desktopMTUContextFixture(t *testing.T, mtu int) (*routerVPNDesktopMTU, *desktopMTULeaseFixture, *atomic.Value) {
+	t.Helper()
+	physical := &atomic.Value{}
+	physical.Store(strings.Repeat("c", 64))
+	config := strings.Replace(desktopExternalSource, `"mtu":1280`, fmt.Sprintf(`"mtu":%d`, mtu), 1)
+	lease := &desktopMTULeaseFixture{current: &desktopMTUTUNFixture{index: 17, mtu: mtu}, config: config, blockAt: 2}
+	owner, err := newRouterVPNDesktopMTUOwnerContext(context.Background(), lease, desktopExternalSession, func(ctx context.Context) (string, error) { return physical.Load().(string), ctx.Err() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &routerVPNDesktopMTUCache{}
+	controller, err := mobilemtu.NewExternalContext(context.Background(), owner, lease.Config(), lease.Authority(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &routerVPNDesktopMTU{owner: owner, controller: controller, cache: cache}
+	t.Cleanup(func() { lease.closed.Store(true); _ = result.close() })
+	return result, lease, physical
+}
+func TestDesktopMTUContextCaptureOwnsDeadlineAndPreservesHealthyReader(t *testing.T) {
+	m, lease, physical := desktopMTUContextFixture(t, 1380)
+	for _, boundary := range []string{"owner", "lease"} {
+		t.Run(boundary, func(t *testing.T) {
+			if boundary == "owner" {
+				m.owner.mu.Lock()
+			} else {
+				lease.mu.Lock()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := m.owner.CaptureContext(ctx); done <- err }()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("original expiry replaced: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Error("context capture waited beyond caller")
+			}
+			if boundary == "owner" {
+				m.owner.mu.Unlock()
+			} else {
+				lease.mu.Unlock()
+			}
+			if m.owner.invalid.Load() {
+				t.Fatal("pure expiry poisoned healthy owner")
+			}
+			if _, err := m.owner.CaptureContext(context.Background()); err != nil {
+				t.Fatal("same reader did not recover", err)
+			}
+		})
+	}
+	physical.Store(strings.Repeat("d", 64))
+	if _, err := m.owner.CaptureContext(context.Background()); err == nil || !m.owner.invalid.Load() {
+		t.Fatal("real physical generation replacement was accepted")
+	}
+}
+
+type lateMTULease struct {
+	*desktopMTULeaseFixture
+	after func()
+}
+
+func (l *lateMTULease) ChangeMTU(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	reader, err := l.desktopMTULeaseFixture.ChangeMTU(ctx, expected, mtu)
+	if l.after != nil {
+		after := l.after
+		l.after = nil
+		after()
+	}
+	return reader, err
+}
+func TestDesktopMTUContextRollbackOnlyRetainsOriginalPendingReader(t *testing.T) {
+	for _, mutation := range []string{"original", "new-caller", "new-reader"} {
+		t.Run(mutation, func(t *testing.T) {
+			m, base, _ := desktopMTUContextFixture(t, 1380)
+			lease := &lateMTULease{desktopMTULeaseFixture: base}
+			m.owner.lease = lease
+			original, err := m.owner.CaptureContext(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			work, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Second, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			work, cancel := context.WithCancel(work)
+			defer cancel()
+			lease.after = cancel
+			returned, err := m.owner.ChangeMTU(work, original, 1500)
+			if !errors.Is(err, context.Canceled) || returned != original {
+				t.Fatal("late readback became accepted candidate", returned, err)
+			}
+			if m.owner.invalid.Load() {
+				t.Fatal("original expiry discarded retained native owner")
+			}
+			cleanup, err := mobilemtu.OperationCleanupContext(work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mutation == "new-caller" {
+				var end context.CancelFunc
+				cleanup, end, err = mobilemtu.WithOperationContext(context.Background(), time.Second, time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer end()
+			}
+			if mutation == "new-reader" {
+				base.mu.Lock()
+				replacement := *base.current
+				replacement.index++
+				base.current = &replacement
+				base.mu.Unlock()
+			}
+			actual, err := m.owner.RollbackStateContext(cleanup, original)
+			if mutation != "original" {
+				if err == nil {
+					t.Fatal("unrelated caller or replacement inherited rollback authority")
+				}
+				return
+			}
+			if err != nil || actual.MTU != 1500 || actual.Interface == original.Interface {
+				t.Fatal("original pending native reader lost", actual, err)
+			}
+			restored, err := m.owner.ChangeMTU(cleanup, actual, original.MTU)
+			if err != nil || restored.MTU != original.MTU {
+				t.Fatal("original cleanup did not restore exact MTU", restored, err)
+			}
+			if m.owner.pendingBefore != nil {
+				t.Fatal("completed cleanup retained stale pending operation")
+			}
+		})
+	}
+}

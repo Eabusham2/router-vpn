@@ -63,8 +63,13 @@ def execute():
                   "func (l *RouterVPNDesktopTorMTULease) currentLifetimeContext(",
                   "func (l *RouterVPNDesktopTorMTULease) currentLifetime(",
                   "func (l *RouterVPNDesktopTorMTULease) RegisterOperation(",
+                  "func (l *RouterVPNDesktopTorMTULease) RegisterOperationContext(",
                   "func (l *RouterVPNDesktopTorMTULease) Lifetime("]
-    actual = 'package box\nimport("context";"encoding/hex";"errors";"sync";"sync/atomic";"leasecontrol/mobiletor";"leasecontrol/desktopnetwork")\ntype routerVPNDesktopTorMTUActivityKey struct{}\n' + "\n\n".join(declaration(source, s) for s in signatures)
+    actual = 'package box\nimport("context";"encoding/hex";"errors";"sync";"sync/atomic";"leasecontrol/mobiletor";"leasecontrol/desktopnetwork";"leasecontrol/adapter")\ntype routerVPNDesktopTorMTUActivityKey struct{}\n' + "\n\n".join(declaration(source, s) for s in signatures)
+    native_locks = (ROOT / "mobile/strategy/observation.go.tmpl").read_text()
+    locks = 'package adapter\nimport("context";"errors";"sync";"time")\n' + "\n\n".join(
+        declaration(native_locks, signature) for signature in
+        ("func RouterVPNLockContext(", "func routerVPNObserveLock("))
     test = 'package box\nimport("context";"errors";"strings";"sync";"testing";"time")\n' + declaration(tests, "func TestRouterVPNDesktopTorMTUReleaseWithHeldOwner(")
     before = "\t\t\tl.active.Add(-1)\n"
     if actual.count(before) != 1:
@@ -79,6 +84,8 @@ def execute():
         (folder / "go.mod").write_text("module leasecontrol\n\ngo 1.24.0\n")
         (folder / "mobiletor").mkdir()
         (folder / "desktopnetwork").mkdir()
+        (folder / "adapter").mkdir()
+        (folder / "adapter/lock.go").write_text(locks)
         (folder / "desktopnetwork/lock.go").write_bytes((ROOT / "internal/desktopnetwork/desktop_network_lock.go").read_bytes())
         (folder / "mobiletor/transition.go").write_text("package mobiletor\ntype DesktopBridgeMTUTransition struct{}\n")
         (folder / "boundary_test.go").write_text(BOUNDARY)

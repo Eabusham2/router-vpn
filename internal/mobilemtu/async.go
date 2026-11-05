@@ -3,11 +3,13 @@ package mobilemtu
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type operation struct {
 	ctx    context.Context
 	cancel context.CancelFunc
+	finish context.CancelFunc
 	done   chan struct{}
 	config string
 }
@@ -15,10 +17,30 @@ type operation struct {
 // begin publishes the cancellable generation before native IPC can return.
 // Both synchronous and asynchronous callers acquire the same exclusive owner.
 func (c *Controller) begin(request string) (*operation, error) {
+	return c.beginContext(context.Background(), request, false)
+}
+func (c *Controller) beginContext(parent context.Context, request string, strict bool) (*operation, error) {
+	return c.beginContextAdmission(parent, request, strict, nil)
+}
+func (c *Controller) beginContextAdmission(parent context.Context, request string, strict bool, admit func(context.Context) error) (*operation, error) {
+	return c.beginContextAdmissionOn(parent, parent, request, strict, admit)
+}
+func (c *Controller) beginContextAdmissionOn(admission, parent context.Context, request string, strict bool, admit func(context.Context) error) (*operation, error) {
+	if parent == nil || admission == nil {
+		return nil, errors.New("MTU operation has no caller")
+	}
+	if strict {
+		if _, ok := c.owner.(ContextOwner); !ok {
+			return nil, errors.New("MTU owner has no bounded capture")
+		}
+	}
+
 	if !requestPattern.MatchString(request) {
 		return nil, errors.New("invalid MTU request identity")
 	}
-	c.mu.Lock()
+	if err := LockContext(admission, &c.mu); err != nil {
+		return nil, err
+	}
 	defer c.mu.Unlock()
 	if c.closed || c.invalid || c.status.Running {
 		return nil, errors.New("MTU owner is busy, stopped or invalidated")
@@ -30,8 +52,42 @@ func (c *Controller) begin(request string) (*operation, error) {
 		return nil, errors.New("MTU request identifiers cannot be reused")
 	}
 	budget, _, _ := c.measurementBudgets()
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	op := &operation{ctx: ctx, cancel: cancel, done: make(chan struct{}), config: c.currentConfig}
+	ctx, finish, err := WithOperationContext(parent, budget, 8*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	ctx = context.WithValue(ctx, boundedOperationKey{}, strict)
+	op := &operation{ctx: ctx, cancel: cancel, finish: finish, done: make(chan struct{}), config: c.currentConfig}
+	if admit != nil {
+		call, stopCall := context.WithCancel(ctx)
+		stopAdmission := context.AfterFunc(admission, stopCall)
+		if deadline, ok := admission.Deadline(); ok {
+			bounded, stopDeadline := context.WithDeadline(call, deadline)
+			call = bounded
+			defer stopDeadline()
+		}
+		if err := admission.Err(); err != nil {
+			stopCall()
+		}
+		admissionErr := call.Err()
+		if admissionErr == nil {
+			admissionErr = admit(call)
+		}
+		// Preserve successful native admission so its exact generation drains,
+		// but never let a late acknowledgement admit work after its caller left.
+		acknowledgementErr := errors.Join(call.Err(), admission.Err())
+		stopAdmission()
+		stopCall()
+		if err := admissionErr; err != nil {
+			cancel()
+			finish()
+			return nil, err
+		}
+		if acknowledgementErr != nil {
+			cancel()
+		}
+	}
 	c.cancel = cancel
 	c.done = op.done
 	c.status = Status{Request: request, Phase: "capturing", Running: true, Source: "unmeasured", Candidates: []Candidate{}}
@@ -39,7 +95,8 @@ func (c *Controller) begin(request string) (*operation, error) {
 }
 func (c *Controller) execute(op *operation, force bool) error {
 	defer op.cancel()
-	err := c.run(op.ctx, op.config, force)
+	defer op.finish()
+	err := errors.Join(c.run(op.ctx, op.config, force), op.ctx.Err())
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.status.Running = false

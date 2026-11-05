@@ -112,6 +112,42 @@ physical fixtures and the live OpenVPN TLS fixture therefore could not exercise
 their runtime assertions here. Their platform CI gates remain mandatory; no
 assertion was disabled and no unsuccessful setup is recorded as a pass.
 
+## Native MTU operation admission and original cleanup
+
+The commit containing this section connects bounded MTU capture, command-mailbox
+admission, status, cancellation, cache commit, native replacement and restoration.
+The accepted command retains its original lifetime and transported absolute
+deadline; a short maintenance poll cannot cancel it or give it a new deadline.
+Tor registration and worker publication share one generation. If an admission
+acknowledgement arrives after the polling caller expires, that accepted worker
+is still published for owned cleanup but is canceled before measurement.
+
+Each admitted operation has one lazily activated cleanup allowance. Native
+replacement, failed-candidate retirement, readback, physical rebind and rollback
+share its remainder. A cleanup read cannot renew it. Late candidate results
+cannot become winners, and a missing/expired allowance or replaced owner cannot
+report successful restoration. A valid original owner still restores after
+cancellation: the actual returned transaction is retained even when cancellation
+prevented ordinary post-change observation. Unused rollback-reader closure cannot
+publish an expired winner or resurrect the closed rollback reader.
+
+The final combined prepared native composition includes the already-published
+FD11 launch changes. It passed all 47 required parent/leaf verdicts under race
+across generated mobilemtu, inbound manager, TUN, native command and Box
+finalization packages. Both Darwin architecture TUN packages compiled with the
+changed native control methods. The merged routing runner passed 39 checks and
+the Tor audit passed 42 checks. Earlier focused causal controls rejected lost
+authorized rollback, late publication, renewed cleanup, held manager/startup
+admission, lost finalization retry and a live worker after late admission.
+
+These results cover the accepted native MTU command and its transport. The
+earlier client snapshot/proof-dispatch chain still has contextless observation
+dependencies; a separate client closure is being implemented and tested. The
+installed persistent service still needs its actual operation worker and public
+Retest/Cancel integration. Neither requirement is closed by this native unit.
+The original Tor authenticated reply drain retains its separate five-second
+ownership allowance; fixed native syscalls are not claimed hard-interruptible.
+
 ## Installed Linux service: original operation channel foundation
 
 Commit [`f76382cf`](https://github.com/Eabusham2/router-vpn/commit/f76382cf57fb9c12851b5962a108b49beaf31f51)
@@ -175,7 +211,8 @@ uses the existing explicit model. Reverting the two production files failed five
 intended observation cases. Removing only the final startup failure latch failed
 the final-admission case. The merged mandatory service runner passed four checks.
 
-The following service-watcher correction carries this distinction to the actual
+Commit [`2f2149e1`](https://github.com/Eabusham2/router-vpn/commit/2f2149e16952b1f1983ef2019acdb9d6dab5238f)
+carries this distinction to the actual
 background caller. It classifies the returned error before canceling its own
 observation context. Pure read expiry keeps the same original engine and reader
 for the next poll; confirmed reader failure joined with expiry still retires the
@@ -193,7 +230,7 @@ integration obligations.
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
 |---|---|---|
-| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs and exact tests above cover observations, original Stop and receipt adoption. | Separate MTU Capture/start/status and mutation-admission paths still contain contextless reads. The next unit must wire bounded operations through actual callers. |
+| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | Earlier client snapshot/proof dispatch still needs its separate complete context dependency closure; controller-monitor and installed-service mutation integration remain distinct. |
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child mutation loop, joined-worker/two-observer settlement, service/controller phase protocol, public Retest/Cancel branch and durable adoption remain unfinished. Safe refusal or an unused transport does not complete this requirement. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. | Published ledger also lists protected cross-adapter transfer, active Always upgrades and same-boot service-crash continuation. This observation change does not implement those features. |

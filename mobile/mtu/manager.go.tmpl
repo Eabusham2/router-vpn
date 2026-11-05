@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"runtime"
 	"sync"
 )
@@ -87,12 +88,16 @@ func (m *Manager) RouterVPNReplaceTun(ctx context.Context, expected, candidate, 
 }
 
 func (m *Manager) RouterVPNReplaceTunOwned(ctx context.Context, expected adapter.Inbound, construct func() (adapter.Inbound, adapter.Inbound, error)) (*RouterVPNTunTransaction, error) {
-	m.routervpnLifecycle.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &m.routervpnLifecycle); err != nil {
+		return nil, err
+	}
 	defer m.routervpnLifecycle.Unlock()
 	if ctx == nil || ctx.Err() != nil || expected == nil || expected.Type() != "tun" || expected.Tag() == "" || construct == nil {
 		return nil, errors.New("TUN transaction lost its original caller or adapter")
 	}
-	m.access.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+		return nil, err
+	}
 	index := -1
 	for i, value := range m.inbounds {
 		if value == expected {
@@ -144,15 +149,50 @@ func (m *Manager) RouterVPNReplaceTunOwned(ctx context.Context, expected adapter
 			m.routervpnMTUPending = append(m.routervpnMTUPending, transaction)
 		}
 	}()
-	capture := func(e *RouterVPNTunEvidence) error { return routervpnMTUEvidence(ctx, e) }
+
+	resourceCtx := ctx
+	cleanupActive := false
+	useCleanup := func() error {
+		if cleanupActive {
+			return resourceCtx.Err()
+		}
+		if !mobilemtu.SameOperationContext(ctx, ctx) {
+			if !routervpnBoundedMTU(expected) && !mobilemtu.StrictOperationContext(ctx) {
+				return nil
+			}
+			return ctx.Err()
+		}
+		cleanup, err := mobilemtu.OperationCleanupContext(ctx)
+		if err != nil {
+			return err
+		}
+		resourceCtx = cleanup
+		cleanupActive = true
+		return nil
+	}
+	capture := func(e *RouterVPNTunEvidence) error { return routervpnMTUEvidence(resourceCtx, e) }
+	settled := func(e *RouterVPNTunEvidence) {
+		e.Pending = false
+		for i, value := range m.routervpnRetired {
+			if value == e.Inbound {
+				m.routervpnRetired = append(m.routervpnRetired[:i], m.routervpnRetired[i+1:]...)
+				break
+			}
+		}
+	}
 	closeOwned := func(e *RouterVPNTunEvidence) error {
-		if e.Inbound == nil || e.Retired {
+		if e.Inbound == nil {
 			return nil
 		}
-		// Preserve any available actual live evidence, including an adapter whose
-		// final startup stage reported failure after native construction completed.
+		if e.Retired {
+			err := capture(e)
+			if err == nil {
+				settled(e)
+			}
+			return err
+		}
 		before := capture(e)
-		if err := routervpnCloseTunContext(ctx, e.Inbound); err != nil {
+		if err := routervpnCloseTunContext(resourceCtx, e.Inbound); err != nil {
 			remember(e)
 			return errors.Join(before, err)
 		}
@@ -160,18 +200,46 @@ func (m *Manager) RouterVPNReplaceTunOwned(ctx context.Context, expected adapter
 		after := capture(e)
 		if after != nil {
 			remember(e)
+		} else {
+			settled(e)
 		}
 		return errors.Join(before, after)
 	}
 	if reused || constructionErr != nil || candidate == nil || rollback == nil || candidate.Type() != "tun" || rollback.Type() != "tun" || candidate.Tag() != expected.Tag() || rollback.Tag() != expected.Tag() {
-		return transaction, errors.Join(constructionErr, errors.New("TUN transaction did not construct its distinct native readers"), closeOwned(&transaction.readers[1]), closeOwned(&transaction.readers[2]))
+		cleanupErr := useCleanup()
+		return transaction, errors.Join(constructionErr, cleanupErr, errors.New("TUN transaction did not construct its distinct native readers"), closeOwned(&transaction.readers[1]), closeOwned(&transaction.readers[2]))
 	}
 	if err := capture(&transaction.readers[0]); err != nil {
-		return transaction, errors.Join(err, closeOwned(&transaction.readers[1]), closeOwned(&transaction.readers[2]))
+		cleanupErr := useCleanup()
+		return transaction, errors.Join(err, cleanupErr, closeOwned(&transaction.readers[1]), closeOwned(&transaction.readers[2]))
 	}
-	publish := func(value adapter.Inbound) {
-		m.access.Lock()
+	publish := func(value adapter.Inbound) error {
+		admission := ctx
+		restored := value == rollback && cleanupActive
+		// Borrowed mobile handles keep their established rollback contract. Strict
+		// operations restore only with the original captured cleanup capability.
+		borrowedRollback := value == rollback && !routervpnBoundedMTU(expected) && !mobilemtu.StrictOperationContext(ctx)
+		if restored {
+			admission = resourceCtx
+		} else if borrowedRollback {
+			admission = context.WithoutCancel(ctx)
+		}
+		if value == nil {
+			transaction.current = nil
+			if ctx.Err() != nil {
+				if err := useCleanup(); err != nil {
+					return err
+				}
+				admission = resourceCtx
+			}
+		}
+		if err := adapter.RouterVPNLockContext(admission, &m.access); err != nil {
+			return err
+		}
 		defer m.access.Unlock()
+		if value != nil && !restored && !borrowedRollback && ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if value == nil {
 			delete(m.inboundByTag, expected.Tag())
 			m.inbounds = append(m.inbounds[:index], m.inbounds[index+1:]...)
@@ -180,12 +248,20 @@ func (m *Manager) RouterVPNReplaceTunOwned(ctx context.Context, expected adapter
 			m.inboundByTag[expected.Tag()] = value
 		}
 		transaction.current = value
+		return nil
+	}
+	unpublished := func(e *RouterVPNTunEvidence, err error) error {
+		if e.Inbound != nil && !e.Retired {
+			remember(e)
+		}
+		transaction.current = nil
+		return errors.Join(err, publish(nil))
 	}
 	start := func(e *RouterVPNTunEvidence, checkCancel bool) error {
 		e.StartAttempted = true
 		for _, stage := range adapter.ListStartStages {
-			if checkCancel && ctx.Err() != nil {
-				return ctx.Err()
+			if checkCancel && resourceCtx.Err() != nil {
+				return resourceCtx.Err()
 			}
 			if err := adapter.LegacyStart(e.Inbound, stage); err != nil {
 				return err
@@ -194,36 +270,62 @@ func (m *Manager) RouterVPNReplaceTunOwned(ctx context.Context, expected adapter
 		if err := capture(e); err != nil {
 			return err
 		}
-		if checkCancel && ctx.Err() != nil {
-			return ctx.Err()
+		if checkCancel && resourceCtx.Err() != nil {
+			return resourceCtx.Err()
 		}
 		e.Started = true
 		return nil
 	}
+	restore := func(cause error) (*RouterVPNTunTransaction, error) {
+		if err := useCleanup(); err != nil {
+			return transaction, errors.Join(cause, err, publish(nil), closeOwned(&transaction.readers[1]), closeOwned(&transaction.readers[2]))
+		}
+		// Never overlap a still-live original or partial candidate with rollback.
+		if err := closeOwned(&transaction.readers[0]); err != nil {
+			return transaction, errors.Join(cause, err, publish(nil), closeOwned(&transaction.readers[1]), closeOwned(&transaction.readers[2]))
+		}
+		if err := closeOwned(&transaction.readers[1]); err != nil {
+			return transaction, errors.Join(cause, err, publish(nil), closeOwned(&transaction.readers[2]))
+		}
+		if cleanupActive {
+			if prepared, ok := rollback.(interface{ RouterVPNDesktopMTUStartupContext(context.Context) error }); ok {
+				if err := prepared.RouterVPNDesktopMTUStartupContext(resourceCtx); err != nil {
+					return transaction, unpublished(&transaction.readers[2], errors.Join(cause, err))
+				}
+			} else if routervpnBoundedMTU(expected) {
+				return transaction, unpublished(&transaction.readers[2], errors.Join(cause, errors.New("original native rollback omitted bounded startup capability")))
+			}
+		}
+		if err := start(&transaction.readers[2], cleanupActive || routervpnBoundedMTU(expected)); err != nil {
+			return transaction, errors.Join(cause, err, publish(nil), closeOwned(&transaction.readers[2]))
+		}
+		if err := publish(rollback); err != nil {
+			return transaction, unpublished(&transaction.readers[2], errors.Join(cause, err))
+		}
+		return transaction, fmt.Errorf("TUN candidate rejected; prior reader restored: %w", cause)
+	}
 	if err := closeOwned(&transaction.readers[0]); err != nil {
-		publish(nil)
-		return transaction, errors.Join(fmt.Errorf("old TUN teardown is unverified: %w", err), closeOwned(&transaction.readers[1]), closeOwned(&transaction.readers[2]))
+		return restore(fmt.Errorf("old TUN teardown is unverified: %w", err))
 	}
 	if err := start(&transaction.readers[1], true); err != nil {
-		if closeErr := closeOwned(&transaction.readers[1]); closeErr != nil {
-			publish(nil)
-			return transaction, errors.Join(fmt.Errorf("failed candidate could not be retired: %w", closeErr), closeOwned(&transaction.readers[2]))
-		}
-		// Cancellation never authorizes a fresh rollback construction beyond the
-		// original operation. Captured partial owners remain available to Stop.
-		if restoreErr := start(&transaction.readers[2], routervpnBoundedMTU(expected)); restoreErr != nil {
-			publish(nil)
-			return transaction, errors.Join(fmt.Errorf("TUN rollback failed after candidate rejection: %w", restoreErr), closeOwned(&transaction.readers[2]))
-		}
-		publish(rollback)
-		return transaction, fmt.Errorf("TUN candidate rejected; prior reader restored: %w", err)
+		return restore(err)
+	}
+	// This is provisional manager ownership, not an optimizer winner. Install
+	// the exact candidate while work is still live, before closing the unused
+	// rollback instance. A cancellation in that close returns this same retained
+	// candidate with its error so the original upper cleanup can restore it.
+	if err := publish(candidate); err != nil {
+		return restore(err)
 	}
 	unusedErr := closeOwned(&transaction.readers[2])
-	publish(candidate)
-	if !routervpnBoundedMTU(expected) {
-		return transaction, nil
+	if unusedErr != nil && mobilemtu.SameOperationContext(ctx, ctx) {
+		if cleanupErr := useCleanup(); cleanupErr == nil {
+			unusedErr = errors.Join(unusedErr, closeOwned(&transaction.readers[2]))
+		} else {
+			unusedErr = errors.Join(unusedErr, cleanupErr)
+		}
 	}
-	return transaction, unusedErr
+	return transaction, errors.Join(unusedErr, ctx.Err())
 }
 
 func routervpnMTUEvidence(ctx context.Context, e *RouterVPNTunEvidence) error {
@@ -258,12 +360,16 @@ func routervpnMTUEvidence(ctx context.Context, e *RouterVPNTunEvidence) error {
 // Retry only failed resources already held by this exact manager transaction.
 // The current reader is never selected by tag or implicitly retired here.
 func (m *Manager) RouterVPNRetryTunTransaction(ctx context.Context, t *RouterVPNTunTransaction) error {
-	m.routervpnLifecycle.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &m.routervpnLifecycle); err != nil {
+		return err
+	}
 	defer m.routervpnLifecycle.Unlock()
 	if ctx == nil || ctx.Err() != nil || t == nil || t.manager != m {
 		return errors.New("MTU cleanup lost its original manager or caller")
 	}
-	t.mu.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &t.mu); err != nil {
+		return err
+	}
 	defer t.mu.Unlock()
 	if !t.pending {
 		return nil
@@ -282,7 +388,9 @@ func (m *Manager) RouterVPNRetryTunTransaction(ctx context.Context, t *RouterVPN
 		if !e.Pending {
 			continue
 		}
-		m.access.Lock()
+		if err := adapter.RouterVPNLockContext(ctx, &m.access); err != nil {
+			return err
+		}
 		current := m.inboundByTag[e.Inbound.Tag()]
 		m.access.Unlock()
 		if current == e.Inbound {

@@ -59,7 +59,22 @@ func NewTor(owner ExternalOwner, config, authority string, cache Cache) (*Contro
 	return newPublic(owner, config, authority, cache, true)
 }
 
+func NewExternalContext(ctx context.Context, owner ExternalOwner, config, authority string, cache Cache) (*Controller, error) {
+	if ctx == nil {
+		return nil, errors.New("MTU constructor has no caller")
+	}
+	return newPublicContext(ctx, owner, config, authority, cache, false)
+}
+func NewTorContext(ctx context.Context, owner ExternalOwner, config, authority string, cache Cache) (*Controller, error) {
+	if ctx == nil {
+		return nil, errors.New("MTU constructor has no caller")
+	}
+	return newPublicContext(ctx, owner, config, authority, cache, true)
+}
 func newPublic(owner ExternalOwner, config, authority string, cache Cache, tor bool) (*Controller, error) {
+	return newPublicContext(nil, owner, config, authority, cache, tor)
+}
+func newPublicContext(ctx context.Context, owner ExternalOwner, config, authority string, cache Cache, tor bool) (*Controller, error) {
 	if owner == nil {
 		return nil, errors.New("external MTU requires a proved native owner")
 	}
@@ -85,7 +100,13 @@ func newPublic(owner ExternalOwner, config, authority string, cache Cache, tor b
 		return nil, errors.New("external MTU policy is invalid")
 	}
 	policy := Profile{ID: profile.ID, Proof: profile.SourceSHA256, Automatic: profile.MTUPolicy == "auto" && profile.EntryFixedMTU == 0, Jumbo: profile.Jumbo}
-	controller, err := newController(owner, config, policy, cache)
+	var controller *Controller
+	var err error
+	if ctx == nil {
+		controller, err = newController(owner, config, policy, cache)
+	} else {
+		controller, err = newControllerContext(ctx, owner, config, policy, cache)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +166,9 @@ func (c *Controller) measurementBudgets() (operation, candidate, reserve time.Du
 
 func (c *Controller) measureExternal(ctx context.Context, engine *probeEngine, mtu int) Candidate {
 	result := Candidate{MTU: mtu, LatencyKind: "https-response"}
+	capturedEngine := *engine
+	engine = &capturedEngine
+	engine.ctx = ctx
 	if owner, ok := c.external.owner.(ExternalMeasurementOwner); ok {
 		parent := ctx
 		captured, release, err := owner.BeginExternalMeasurement(ctx, engine.state)
@@ -166,6 +190,7 @@ func (c *Controller) measureExternal(ctx context.Context, engine *probeEngine, m
 		result.Failure = "captured external public exit or DNS proof failed"
 		return result
 	}
+	engine.ctx = ctx
 	measurement, err := c.external.measure(ctx, engine, c.external.hop(), 256<<10)
 	if err != nil || !c.live(ctx, engine.state) || !measurement.Ready || measurement.Kind != "public-path" ||
 		measurement.ID != c.profile.ID || measurement.Role != "exit" || measurement.Idle == nil ||

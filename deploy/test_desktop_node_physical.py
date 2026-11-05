@@ -29,6 +29,27 @@ BOOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOT)
 PREP = BOOT.PREP
 TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq", "routervpn_windows_physical_composition"))
+MTU_CONTEXT_VERDICTS = {
+    "mtu-operation-context": [
+        "TestContextOperationAdmissionAndStatusDoNotLeaveWaiters",
+        "TestContextOwnerRequiredWithoutLegacyFallback", "TestContextCaptureLateResultCannotAdmitMutation",
+        "TestContextOriginalCleanupDeadlineCannotBeRenewed", "TestContextRollbackUsesReturnedTransactionAfterUnpublishedCandidate",
+        "TestContextAdmissionCallbackAndWorkerPublishOneGeneration", "TestContextMailboxAdmissionDoesNotOwnAcceptedWorkerLifetime",
+        "TestContextLateAdmissionAcknowledgementDrainsWithoutMutation",
+        *["TestContextOperationAdmissionAndStatusDoNotLeaveWaiters/" + name for name in ("start", "status", "cancel", "close")],
+        *["TestContextRollbackUsesReturnedTransactionAfterUnpublishedCandidate/" + name for name in ("cancel-after-mutation", "failed-candidate", "replaced-owner")]],
+    "mtu-owner-context": [
+        "TestDesktopMTUContextCaptureOwnsDeadlineAndPreservesHealthyReader", "TestDesktopMTUContextRollbackOnlyRetainsOriginalPendingReader",
+        *["TestDesktopMTUContextCaptureOwnsDeadlineAndPreservesHealthyReader/" + name for name in ("owner", "lease")],
+        *["TestDesktopMTUContextRollbackOnlyRetainsOriginalPendingReader/" + name for name in ("original", "new-caller", "new-reader")]],
+    "mtu-manager-context": [
+        "TestRouterVPNTunContextRejectsLatePublicationAfterUnusedClose", "TestRouterVPNTunContextAdmissionLocksDoNotConstructLate",
+        *["TestRouterVPNTunContextAdmissionLocksDoNotConstructLate/" + name for name in ("lifecycle", "access")]],
+    "mtu-cleanup-context": ["TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance", "TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation",
+        *["TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance/" + name for name in ("restores", "expired-cleanup")]],
+    "mtu-startup-context": ["TestRouterVPNDesktopMTUStartupContextLifecycleDeadline"],
+    "mtu-finalization-context": ["TestRouterVPNMTUFinalizationContextPreservesOriginalCleanup", *["TestRouterVPNMTUFinalizationContextPreservesOriginalCleanup/" + name for name in ("readback", "physical-rebind", "mixed-failure", "cleanup-expired")]],
+}
 LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
                     if mode in ("shadowsocks", "hysteria2") or layer != "off")
@@ -907,6 +928,14 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, names, "native manager observation")
     if name == "network-context":
         require_native_verdicts(output, NETWORK_CONTEXT_TESTS + NETWORK_CONTEXT_LEAVES, "original network observation")
+    if name in MTU_CONTEXT_VERDICTS:
+        require_native_verdicts(output, MTU_CONTEXT_VERDICTS[name], "original MTU operation and cleanup")
+    if name == "mtu-command-context":
+        parents = ["TestRouterVPNDesktopMTUCallerContextWaits", "TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline",
+                   "TestRouterVPNDesktopMTUCacheExpiredSaveIsNotACommit", "TestRouterVPNDesktopMTURestoreContextCancelsAndReprovesOriginal"]
+        names = parents + [parents[0] + "/" + case for case in ("start", "record", "commit", "cancel", "cache")]
+        names += [parents[1] + "/" + case for case in ("accepted-worker", "already-expired")]
+        require_native_verdicts(output, names, "MTU caller deadline and captured cleanup")
     if name == "physical-mutation-context":
         root = "TestRouterVPNPhysicalTunnelOriginalMutationContext"
         names = [root] + [root + "/" + family + "/" + phase + "/" + operation for family in ("tor", "external")
@@ -973,6 +1002,14 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
+        ("mtu-operation-context", "./experimental/libbox/routervpn/mobilemtu", "^TestContext", tuple(name for name in MTU_CONTEXT_VERDICTS["mtu-operation-context"] if "/" not in name)),
+        ("mtu-owner-context", "./cmd/sing-box", "^TestDesktopMTUContext", tuple(name for name in MTU_CONTEXT_VERDICTS["mtu-owner-context"] if "/" not in name)),
+        ("mtu-manager-context", "./adapter/inbound", "^TestRouterVPNTunContext(RejectsLatePublicationAfterUnusedClose|AdmissionLocksDoNotConstructLate)$", tuple(name for name in MTU_CONTEXT_VERDICTS["mtu-manager-context"] if "/" not in name)),
+        ("mtu-finalization-context", ".", "^TestRouterVPNMTUFinalizationContextPreservesOriginalCleanup$", ("TestRouterVPNMTUFinalizationContextPreservesOriginalCleanup",)),
+        ("mtu-startup-context", "./protocol/tun", "^TestRouterVPNDesktopMTUStartupContextLifecycleDeadline$", tuple(MTU_CONTEXT_VERDICTS["mtu-startup-context"])),
+        ("mtu-command-context", "./cmd/sing-box", "^TestRouterVPNDesktopMTU(CallerContextWaits|MailboxKeepsOriginalDeadline|CacheExpiredSaveIsNotACommit|RestoreContextCancelsAndReprovesOriginal)$",
+         ("TestRouterVPNDesktopMTUCallerContextWaits", "TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline",
+          "TestRouterVPNDesktopMTUCacheExpiredSaveIsNotACommit", "TestRouterVPNDesktopMTURestoreContextCancelsAndReprovesOriginal")),
         ("physical-mutation-context", "./routervpn/desktoppt", "^TestRouterVPNPhysicalTunnelOriginalMutationContext$", ("TestRouterVPNPhysicalTunnelOriginalMutationContext",)),
         ("external-lease-observation", "./experimental/libbox/routervpn/mobilemultihop", "^TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation$",
          ("TestOpenVPNLeaseObservationKeepsGenuineFailureAlongsideCancellation",)),
@@ -1036,6 +1073,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     suites.append(("network-context", "./protocol/tun", "^TestRouterVPNDesktopNetwork(ReceiptOriginalContext|ReceiptHeldLifecycle|ContextClaimRetainsGuard|ReceiptUnavailable)$", NETWORK_CONTEXT_TESTS))
     suites.append(("native-monitor-context", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeMonitorOriginalContext$", ("TestRouterVPNNativeMonitorOriginalContext",)))
     if platform.system() == "Linux":
+        suites.append(("mtu-cleanup-context", "./adapter/inbound", "^TestRouterVPNTunContext(RestoresOnlyWithOriginalCleanupAllowance|ControllerRestoresAfterUnusedCloseCancellation)$", ("TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance", "TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation")))
         suites.append(("native-mtu-transaction", ".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", (NATIVE_MTU_TEST,)))
         suites.append(("mtu-transaction-model", "./adapter/inbound", "^TestRouterVPNTun", NATIVE_MTU_MODEL_TESTS))
         suites.append(("mtu-startup-budget", "./protocol/tun", "^TestRouterVPNMTUStartupReceiptKeepsOriginalOperation$", ("TestRouterVPNMTUStartupReceiptKeepsOriginalOperation",)))

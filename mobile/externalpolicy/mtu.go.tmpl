@@ -12,6 +12,8 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 // A successful proof grants at most one MTU controller. Only this lease may
@@ -48,7 +50,12 @@ func (a *routerVPNExternalActivity) beginMeasurement() (func(), error) {
 	return func() { once.Do(func() { a.mu.Lock(); a.measurements--; a.mu.Unlock() }) }, nil
 }
 func (a *routerVPNExternalActivity) beginMTU() (func(), error) {
-	a.mu.Lock()
+	return a.beginMTUContext(context.Background())
+}
+func (a *routerVPNExternalActivity) beginMTUContext(ctx context.Context) (func(), error) {
+	if err := adapter.RouterVPNLockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	if a.changing || a.measurements != 0 {
 		a.mu.Unlock()
 		return nil, errors.New("external measurement still owns the TUN")
@@ -89,6 +96,45 @@ func (s *Box) RouterVPNExternalClaimMTU(proof *RouterVPNExternalProofRequest, so
 	return lease, nil
 }
 
+func (s *Box) RouterVPNExternalClaimMTUContext(caller context.Context, proof *RouterVPNExternalProofRequest, source, capture string) (*RouterVPNExternalMTULease, error) {
+	if s == nil || proof == nil || proof.engine == nil || proof.engine.box != s {
+		return nil, errors.New("external MTU proof does not own this native Box")
+	}
+	if err := proof.HealthyContext(caller); err != nil {
+		return nil, err
+	}
+	config, authority, err := proof.request.MTUAuthorityContext(caller, source, capture)
+	if err != nil {
+		return nil, err
+	}
+	if proof.engine.physical != nil {
+		bounded, ok := proof.engine.physical.(interface {
+			mtuAuthorityContext(context.Context, string, string) (string, string, error)
+		})
+		if !ok {
+			return nil, errors.New("external MTU physical authority omitted bounded capability")
+		}
+		config, authority, err = bounded.mtuAuthorityContext(caller, config, authority)
+		if err != nil {
+			return nil, err
+		}
+	}
+	ctx, cancel, err := proof.request.MTULifetimeContext(caller, s.ctx)
+	if err != nil {
+		return nil, err
+	}
+	lease := &RouterVPNExternalMTULease{proof: proof, box: s, ctx: ctx, cancel: cancel, config: config, authority: authority}
+	if !proof.mtu.CompareAndSwap(nil, lease) {
+		cancel()
+		return nil, errors.New("external proof already owns an MTU controller")
+	}
+	if err := lease.HealthyContext(caller); err != nil {
+		lease.Close()
+		return nil, err
+	}
+	return lease, nil
+}
+
 func (l *RouterVPNExternalMTULease) Config() string {
 	if l == nil {
 		return ""
@@ -104,6 +150,35 @@ func (l *RouterVPNExternalMTULease) Authority() string {
 func (l *RouterVPNExternalMTULease) Healthy() bool {
 	return l != nil && l.ctx != nil && l.proof != nil && !l.closed.Load() && l.ctx.Err() == nil && l.proof.mtu.Load() == l && l.proof.Healthy()
 }
+func (l *RouterVPNExternalMTULease) HealthyContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("external MTU observation lost caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if l == nil || l.ctx == nil || l.proof == nil || l.closed.Load() || l.ctx.Err() != nil || l.proof.mtu.Load() != l {
+		return errors.New("external MTU lease retired")
+	}
+	return l.proof.HealthyContext(ctx)
+}
+func (l *RouterVPNExternalMTULease) InboundContext(ctx context.Context) (adapter.Inbound, error) {
+	if err := l.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	e := l.proof.engine
+	if err := adapter.RouterVPNRLockContext(ctx, &e.mu); err != nil {
+		return nil, err
+	}
+	defer e.mu.RUnlock()
+	if _, err := e.identityLockedContext(ctx); err != nil {
+		return nil, err
+	}
+	if l.ctx.Err() != nil || l.closed.Load() {
+		return nil, errors.New("external MTU lease retired")
+	}
+	return e.tun, ctx.Err()
+}
 func (l *RouterVPNExternalMTULease) Close() {
 	if l != nil && !l.closed.Swap(true) {
 		if l.cancel != nil {
@@ -115,15 +190,15 @@ func (l *RouterVPNExternalMTULease) Close() {
 	}
 }
 func (l *RouterVPNExternalMTULease) Lifetime(parent context.Context) (context.Context, context.CancelFunc, error) {
-	if parent == nil || parent.Err() != nil || !l.Healthy() {
-		return nil, nil, errors.New("external MTU lease retired")
+	if err := l.HealthyContext(parent); err != nil {
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
 	stop := context.AfterFunc(l.ctx, cancel)
 	release := func() { stop(); cancel() }
-	if !l.Healthy() {
+	if err := l.HealthyContext(ctx); err != nil {
 		release()
-		return nil, nil, errors.New("external MTU lease retired during capture")
+		return nil, nil, err
 	}
 	return ctx, release, nil
 }
@@ -154,12 +229,20 @@ func (l *RouterVPNExternalMTULease) changeMTU(parent context.Context, expected a
 	if change == nil || mtu < 1280 || mtu > 9000 {
 		return expected, errors.New("external MTU candidate is invalid")
 	}
+	if !mobilemtu.SameOperationContext(parent, parent) {
+		compatibility, finish, err := mobilemtu.WithCleanupContext(parent, 3*time.Second)
+		if err != nil {
+			return expected, err
+		}
+		defer finish()
+		parent = compatibility
+	}
 	ctx, release, err := l.Lifetime(parent)
 	if err != nil {
-		return nil, err
+		return expected, err
 	}
 	defer release()
-	end, err := l.proof.activity.beginMTU()
+	end, err := l.proof.activity.beginMTUContext(ctx)
 	if err != nil {
 		return expected, err
 	}
@@ -167,20 +250,32 @@ func (l *RouterVPNExternalMTULease) changeMTU(parent context.Context, expected a
 	// The retained lease owns the TUN, but a remote provider may reconnect
 	// without replacing that TUN. Read its fresh native generation before
 	// taking the engine lock or changing any interface state.
-	if err := l.proof.VerifyCurrentPath(); err != nil {
+	if err := l.proof.VerifyCurrentPathContext(ctx); err != nil {
 		return expected, err
 	}
 	e := l.proof.engine
-	e.mu.Lock()
-	if ctx.Err() != nil || l.closed.Load() || l.proof.mtu.Load() != l || e.identityLocked() == "" || e.tun != expected {
+	if err := adapter.RouterVPNWriteLockContext(ctx, &e.mu); err != nil {
+		return expected, err
+	}
+	if _, err := e.identityLockedContext(ctx); err != nil {
 		e.mu.Unlock()
-		return nil, errors.New("external MTU captured reader changed")
+		return expected, err
+	}
+	if l.closed.Load() || l.proof.mtu.Load() != l || e.tun != expected {
+		e.mu.Unlock()
+		return expected, errors.New("external MTU captured reader changed")
 	}
 	if e.physical != nil {
 		if err := e.physical.retireTUN(ctx, expected); err != nil {
+			failure := err
+			if mobiletor.ObservationContextExpired(ctx, err) {
+				failure = errors.Join(err, routerVPNMTUFinalizeContext(ctx, time.Time{}, func(call context.Context) error { return e.physical.adoptTUN(call, expected) }))
+			}
 			e.mu.Unlock()
-			l.proof.Cancel()
-			return expected, err
+			if !mobiletor.ObservationContextOnly(failure) {
+				l.proof.Cancel()
+			}
+			return expected, failure
 		}
 	}
 	current, changeErr := change(ctx, expected, mtu)
@@ -190,42 +285,60 @@ func (l *RouterVPNExternalMTULease) changeMTU(parent context.Context, expected a
 	if current == nil || current.Tag() != e.tunTag || current.Type() != C.TypeTun {
 		e.mu.Unlock()
 		l.proof.Cancel()
-		return nil, errors.New("external MTU lost the native reader")
+		return nil, errors.Join(changeErr, ctx.Err(), errors.New("external MTU lost the native reader"))
 	}
-	if e.physical != nil {
-		if err := e.physical.adoptTUN(ctx, current); err != nil {
-			e.mu.Unlock()
-			l.proof.Cancel()
-			return current, err
-		}
-	}
+	// The manager returned this exact transaction's reader. Keep it even if
+	// the caller expired before readback; only original cleanup may finalize it.
 	e.tun = current
-	valid := e.identityLocked() != "" && !l.closed.Load() && l.proof.mtu.Load() == l
+	finalErr := routerVPNMTUFinalizeContext(ctx, time.Time{}, func(finalCtx context.Context) error {
+		if err := finalCtx.Err(); err != nil {
+			return err
+		}
+		if e.physical != nil {
+			if err := e.physical.adoptTUN(finalCtx, current); err != nil {
+				return err
+			}
+		}
+		if _, err := e.identityLockedContext(finalCtx); err != nil {
+			return err
+		}
+		if l.closed.Load() || l.proof.mtu.Load() != l {
+			return errors.New("external MTU changed another native owner")
+		}
+		return finalCtx.Err()
+	})
 	e.mu.Unlock()
-	if !valid {
-		l.proof.Cancel()
-		return nil, errors.New("external MTU changed another native owner")
+	if finalErr != nil {
+		if !mobiletor.ObservationContextOnly(finalErr) {
+			l.proof.Cancel()
+			return nil, errors.Join(changeErr, ctx.Err(), finalErr)
+		}
+		return current, errors.Join(changeErr, ctx.Err(), finalErr)
 	}
-	if ctx.Err() != nil || !l.Healthy() {
-		return current, errors.New("external MTU transaction was canceled")
+	if err := ctx.Err(); err != nil {
+		return current, errors.Join(changeErr, err)
 	}
-	if err := l.proof.VerifyCurrentPath(); err != nil {
-		return current, err
+	if err := l.HealthyContext(ctx); err != nil {
+		return current, errors.Join(changeErr, err)
+	}
+	if err := l.proof.VerifyCurrentPathContext(ctx); err != nil {
+		return current, errors.Join(changeErr, err)
 	}
 	return current, changeErr
 }
 func (l *RouterVPNExternalMTULease) Verify(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) error {
-	if !l.Healthy() {
-		return errors.New("external MTU proof retired")
+	if err := l.HealthyContext(ctx); err != nil {
+		return err
 	}
-	err := l.proof.request.VerifyMTU(ctx, dial)
-	if err != nil || !l.Healthy() {
-		return errors.New("external MTU path verification failed")
-	}
-	return nil
+	err := l.proof.request.VerifyMTUContext(ctx, dial)
+	return errors.Join(err, l.HealthyContext(ctx), ctx.Err())
 }
+
 func (l *RouterVPNExternalMTULease) Resolve(parent context.Context, host string) ([]netip.Addr, error) {
-	if !l.Healthy() || host != hopmeasure.PublicHost {
+	if err := l.HealthyContext(parent); err != nil {
+		return nil, err
+	}
+	if host != hopmeasure.PublicHost {
 		return nil, errors.New("unowned external MTU DNS target")
 	}
 	owned, release, err := l.Lifetime(parent)
@@ -238,8 +351,11 @@ func (l *RouterVPNExternalMTULease) Resolve(parent context.Context, host string)
 	e := l.proof.engine
 	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: e.tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
 	addresses, err := l.box.dnsRouter.Lookup(ctx, host, adapter.DNSQueryOptions{})
-	if err != nil || ctx.Err() != nil || !l.Healthy() {
-		return nil, errors.New("captured external MTU DNS failed")
+	if err != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err())
+	}
+	if err := l.HealthyContext(ctx); err != nil {
+		return nil, err
 	}
 	result := make([]netip.Addr, 0, len(addresses))
 	for _, ip := range addresses {
@@ -251,4 +367,34 @@ func (l *RouterVPNExternalMTULease) Resolve(parent context.Context, host string)
 		return nil, errors.New("external MTU resolver returned no public target")
 	}
 	return result, nil
+}
+
+// Finalize only the already-returned native transaction. Pure work expiry may
+// enter its single original cleanup allowance; native identity/policy failures
+// never receive a retry that hides their failure. No caller obtains a winner
+// from this helper: work cancellation is preserved separately by the lease.
+func routerVPNMTUFinalizeContext(work context.Context, limit time.Time, finalize func(context.Context) error) error {
+	if work == nil || finalize == nil {
+		return errors.New("MTU finalization lost its original transaction")
+	}
+	err := finalize(work)
+	if err == nil || !mobiletor.ObservationContextExpired(work, err) {
+		return err
+	}
+	cleanup, cleanupErr := mobilemtu.OperationCleanupContext(work)
+	if cleanupErr != nil {
+		return errors.Join(err, cleanupErr)
+	}
+	if !limit.IsZero() {
+		bounded, stop := context.WithDeadline(cleanup, limit)
+		defer stop()
+		cleanup = bounded
+	}
+	if cleanupErr := cleanup.Err(); cleanupErr != nil {
+		return errors.Join(err, cleanupErr)
+	}
+	if cleanupErr := finalize(cleanup); cleanupErr != nil {
+		return errors.Join(err, cleanupErr)
+	}
+	return nil
 }

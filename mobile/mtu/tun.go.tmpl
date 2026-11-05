@@ -18,13 +18,21 @@ func (t *Inbound) RouterVPNMTUReaders(mtu int) (adapter.Inbound, adapter.Inbound
 // rollback. The Box lifetime remains unchanged; only native construction reads
 // use this exact bounded transaction context.
 func (t *Inbound) RouterVPNMTUReadersContext(ctx context.Context, mtu int) (adapter.Inbound, adapter.Inbound, error) {
-	t.routervpnLifecycle.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return nil, nil, err
+	}
 	defer t.routervpnLifecycle.Unlock()
 	if ctx == nil || ctx.Err() != nil || !t.routervpnReady || t.platformInterface == nil && !t.routervpnDesktop || t.autoRedirect != nil || mtu < 1280 || mtu > 9000 {
 		return nil, nil, errors.New("MTU replacement requires a live platform-owned TUN")
 	}
 	if t.routervpnDesktop {
-		if _, _, _, err := t.routervpnDesktopInterface(); err != nil {
+		bounded, ok := any(t).(interface {
+			routervpnDesktopInterfaceContext(context.Context) (string, int, int, error)
+		})
+		if !ok {
+			return nil, nil, errors.New("desktop MTU replacement has no bounded native reader")
+		}
+		if _, _, _, err := bounded.routervpnDesktopInterfaceContext(ctx); err != nil {
 			return nil, nil, err
 		}
 	}

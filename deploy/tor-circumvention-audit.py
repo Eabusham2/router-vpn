@@ -236,8 +236,9 @@ def need_desktop_tor_maintenance() -> None:
         go_contract_at(native, "if err := tor.VerifyCurrentPath(ctx); err != nil")
         go_contract_at(native, "return n.HealthyContext(ctx)")
         path = go_contract_block(go_contract_tokens(read("mobile/desktop/mtu_tor.go.tmpl")), "func (p *routerVPNTorFreshPath) VerifyCurrentPathContext(")
-        go_contract_at(path, "state, err := mtu.owner.Capture()")
-        go_contract_at(path, "mtu.owner.VerifyExternal(ctx, state) != nil")
+        go_contract_at(path, "mtu, err := provider.DesktopMTUContext(ctx)")
+        go_contract_at(path, "state, err := mtu.owner.CaptureContext(ctx)")
+        go_contract_at(path, "if err := mtu.owner.VerifyExternal(ctx, state); err != nil")
         fixtures = go_contract_tokens(read("mobile/desktop/external_tor_transition_test.go.tmpl"))
         for marker in ("func TestRouterVPNDesktopTorMTUTransitionRejectsForeignExpiredAndReplacedAdmission(",
                        "func TestRouterVPNDesktopTorMTUTransitionKeepsControlResponsiveAndJoinsSlowReader(",

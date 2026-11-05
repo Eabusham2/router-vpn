@@ -253,20 +253,27 @@ func (p *routerVPNTorFreshPath) VerifyCurrentPath() error {
 	return p.VerifyCurrentPathContext(context.Background())
 }
 func (p *routerVPNTorFreshPath) VerifyCurrentPathContext(parent context.Context) error {
-	if err := p.HealthyContext(parent); err != nil {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	if err := p.HealthyContext(ctx); err != nil {
 		return err
 	}
-	mtu, err := p.owner.DesktopMTU()
+	provider, ok := p.owner.(routerVPNExternalMTUContextProvider)
+	if !ok {
+		return routerVPNTorFailure
+	}
+	mtu, err := provider.DesktopMTUContext(ctx)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
-	defer cancel()
 	stop := context.AfterFunc(p.ctx, cancel)
 	defer stop()
-	state, err := mtu.owner.Capture()
-	if err != nil || mtu.owner.VerifyExternal(ctx, state) != nil {
-		return routerVPNTorFailure
+	state, err := mtu.owner.CaptureContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := mtu.owner.VerifyExternal(ctx, state); err != nil {
+		return err
 	}
 	return p.HealthyContext(ctx)
 }
@@ -286,4 +293,69 @@ func (p *routerVPNTorFreshPath) HealthyContext(ctx context.Context) error {
 		return routerVPNTorFailure
 	}
 	return p.owner.HealthyContext(ctx)
+}
+
+func newRouterVPNDesktopTorMTUContext(ctx context.Context, lease routerVPNDesktopMTULease, session string, physical func(context.Context) (string, error)) (*routerVPNDesktopMTU, error) {
+	if _, ok := lease.(routerVPNDesktopTorMTULease); !ok {
+		return nil, routerVPNExternalFailure
+	}
+	owner, err := newRouterVPNDesktopMTUOwnerContext(ctx, lease, session, physical)
+	if err != nil {
+		return nil, err
+	}
+	cache := &routerVPNDesktopMTUCache{}
+	controller, err := mobilemtu.NewTorContext(ctx, owner, lease.Config(), lease.Authority(), cache)
+	if err != nil {
+		return nil, err
+	}
+	return &routerVPNDesktopMTU{owner: owner, controller: controller, cache: cache, tor: true}, nil
+}
+func (n *routerVPNTorNative) DesktopMTUContext(ctx context.Context) (*routerVPNDesktopMTU, error) {
+	if err := mobilemtu.LockContext(ctx, &n.mu); err != nil {
+		return nil, err
+	}
+	defer n.mu.Unlock()
+	if n.ctx.Err() != nil || n.processExited() || n.tor == nil || n.box == nil || n.boxClosed {
+		return nil, routerVPNTorFailure
+	}
+	if err := n.tor.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	if n.mtu != nil {
+		return n.mtu, nil
+	}
+	lease, err := n.tor.ClaimMTUContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := lease.SetTransitionHandlerContext(ctx, n.admitMTUTransition); err != nil {
+		lease.Close()
+		return nil, err
+	}
+	mtu, err := newRouterVPNDesktopTorMTUContext(ctx, lease, n.files.inputs.Capture().SessionID, func(ctx context.Context) (string, error) { return routerVPNDesktopPhysicalPathContext(ctx, n.box) })
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		lease.Close()
+		return nil, err
+	}
+	n.mtu = mtu
+	return mtu, nil
+}
+func (m *routerVPNDesktopMTU) registerContext(ctx context.Context, request routerVPNDesktopMTURequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !m.tor {
+		return nil
+	}
+	lease, ok := m.owner.lease.(interface {
+		RegisterOperationContext(context.Context, uint64, string) error
+	})
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	return lease.RegisterOperationContext(ctx, request.Generation, request.Request)
 }

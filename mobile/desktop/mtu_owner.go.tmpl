@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"net"
@@ -56,12 +57,16 @@ type routerVPNDesktopMTUTUN interface {
 }
 
 type routerVPNDesktopMTUOwner struct {
-	mu            sync.Mutex
-	invalid       atomic.Bool
-	lease         routerVPNDesktopMTULease
-	inbound       routerVPNDesktopMTUTUN
-	session, path string
-	physical      func() string
+	mu              sync.Mutex
+	invalid         atomic.Bool
+	lease           routerVPNDesktopMTULease
+	inbound         routerVPNDesktopMTUTUN
+	session, path   string
+	physical        func() string
+	physicalContext func(context.Context) (string, error)
+	pendingBefore   *mobilemtu.State
+	pendingReader   routerVPNDesktopMTUTUN
+	pendingContext  context.Context
 }
 
 func routerVPNDesktopPhysicalPath(instance *box.Box) string {
@@ -138,6 +143,174 @@ func newRouterVPNDesktopMTUOwner(lease routerVPNDesktopMTULease, session string,
 	return owner, nil
 }
 
+type routerVPNDesktopMTUContextLease interface {
+	HealthyContext(context.Context) error
+	InboundContext(context.Context) (adapter.Inbound, error)
+}
+type routerVPNDesktopMTUContextTUN interface {
+	routerVPNDesktopMTUTUN
+	RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
+	RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+}
+
+func newRouterVPNDesktopMTUOwnerContext(ctx context.Context, lease routerVPNDesktopMTULease, session string, physical func(context.Context) (string, error)) (*routerVPNDesktopMTUOwner, error) {
+	capability, ok := lease.(routerVPNDesktopMTUContextLease)
+	if !ok || physical == nil || !routerVPNExternalSession.MatchString(session) {
+		return nil, routerVPNExternalFailure
+	}
+	if err := capability.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	path, err := physical(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(path) != 64 {
+		return nil, routerVPNExternalFailure
+	}
+	current, err := capability.InboundContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := current.(routerVPNDesktopMTUContextTUN)
+	if !ok || reader.Type() != "tun" {
+		return nil, routerVPNExternalFailure
+	}
+	owner := &routerVPNDesktopMTUOwner{lease: lease, inbound: reader, session: session, path: path, physicalContext: physical}
+	// Legacy read callers still observe this retained lifetime; bounded calls
+	// always enter the explicit physicalContext capability below.
+	owner.physical = func() string { value, _ := physical(context.Background()); return value }
+	if retained, ok := lease.(interface {
+		MTUReadbackContext(context.Context) (mobiletor.DesktopBridgeMTUReadback, error)
+	}); ok {
+		state, err := retained.MTUReadbackContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if state.InterfaceName != name || state.InterfaceIndex != index || state.EffectiveMTU != mtu {
+			return nil, routerVPNExternalFailure
+		}
+	} else if retained, ok := lease.(interface {
+		ClaimDesktopTUNContext(context.Context, func(context.Context) error) (string, int, int, error)
+	}); ok {
+		name, index, mtu, err := retained.ClaimDesktopTUNContext(ctx, owner.pathCurrentContext)
+		if err != nil {
+			return nil, err
+		}
+		actualName, actualIndex, actualMTU, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if name != actualName || index != actualIndex || mtu != actualMTU {
+			return nil, routerVPNExternalFailure
+		}
+	} else {
+		if _, _, _, err := reader.RouterVPNDesktopMTUContext(ctx, owner.pathCurrentContext); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := owner.CaptureContext(ctx); err != nil {
+		return nil, err
+	}
+	return owner, nil
+}
+func (o *routerVPNDesktopMTUOwner) pathCurrentContext(ctx context.Context) error {
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if o == nil || o.invalid.Load() || o.physicalContext == nil || o.path == "" {
+		return routerVPNExternalFailure
+	}
+	path, err := o.physicalContext(ctx)
+	if err != nil {
+		return err
+	}
+	if path != o.path {
+		o.invalid.Store(true)
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+func (o *routerVPNDesktopMTUOwner) captureLockedContext(ctx context.Context) (mobilemtu.State, error) {
+	fail := func(err error) (mobilemtu.State, error) {
+		if err != nil && !mobiletor.ObservationContextExpired(ctx, err) {
+			o.invalid.Store(true)
+		}
+		return mobilemtu.State{}, err
+	}
+	if err := o.pathCurrentContext(ctx); err != nil {
+		return fail(err)
+	}
+	lease, ok := o.lease.(routerVPNDesktopMTUContextLease)
+	if !ok {
+		return fail(routerVPNExternalFailure)
+	}
+	if err := lease.HealthyContext(ctx); err != nil {
+		return fail(err)
+	}
+	current, err := lease.InboundContext(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	if current != o.inbound {
+		o.invalid.Store(true)
+		return fail(routerVPNExternalFailure)
+	}
+	reader, ok := o.inbound.(routerVPNDesktopMTUContextTUN)
+	if !ok {
+		return fail(routerVPNExternalFailure)
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	if name == "" || index < 1 || mtu < 1280 || mtu > 9000 {
+		o.invalid.Store(true)
+		return fail(routerVPNExternalFailure)
+	}
+	if err := o.pathCurrentContext(ctx); err != nil {
+		return fail(err)
+	}
+	if err := lease.HealthyContext(ctx); err != nil {
+		return fail(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	return mobilemtu.State{Session: o.session, Path: o.path, Interface: fmt.Sprintf("%s/%d", name, index), MTU: mtu}, nil
+}
+func (o *routerVPNDesktopMTUOwner) CaptureContext(ctx context.Context) (mobilemtu.State, error) {
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return mobilemtu.State{}, err
+	}
+	defer o.mu.Unlock()
+	return o.captureLockedContext(ctx)
+}
+func (o *routerVPNDesktopMTUOwner) RollbackStateContext(ctx context.Context, expected mobilemtu.State) (mobilemtu.State, error) {
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return mobilemtu.State{}, err
+	}
+	defer o.mu.Unlock()
+	actual, err := o.captureLockedContext(ctx)
+	if err != nil {
+		return actual, err
+	}
+	if actual == expected {
+		return actual, nil
+	}
+	if !mobilemtu.SameOperationContext(ctx, o.pendingContext) || o.pendingBefore == nil || *o.pendingBefore != expected || o.pendingReader != o.inbound || actual.Session != expected.Session || actual.Path != expected.Path {
+		return mobilemtu.State{}, routerVPNExternalFailure
+	}
+	return actual, nil
+}
+
 func (o *routerVPNDesktopMTUOwner) pathCurrent() bool {
 	return o != nil && !o.invalid.Load() && o.physical != nil && o.path != "" && o.physical() == o.path
 }
@@ -164,6 +337,50 @@ func (o *routerVPNDesktopMTUOwner) Capture() (mobilemtu.State, error) {
 }
 
 func (o *routerVPNDesktopMTUOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State, mtu int) (mobilemtu.State, error) {
+	if o.physicalContext == nil {
+		return o.changeMTULegacy(ctx, expected, mtu)
+	}
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return expected, err
+	}
+	defer o.mu.Unlock()
+	before, err := o.captureLockedContext(ctx)
+	if err != nil {
+		return before, err
+	}
+	if before != expected || mtu < 1280 || mtu > 9000 {
+		return before, routerVPNExternalFailure
+	}
+	original := expected
+	o.pendingBefore = &original
+	o.pendingContext = ctx
+	o.pendingReader = o.inbound
+	current, changeErr := o.lease.ChangeMTU(ctx, o.inbound, mtu)
+	reader, ok := current.(routerVPNDesktopMTUTUN)
+	if !ok || reader.Tag() != o.inbound.Tag() || reader.Type() != "tun" {
+		o.invalid.Store(true)
+		return mobilemtu.State{}, errors.Join(changeErr, ctx.Err(), routerVPNExternalFailure)
+	}
+	// Retain the native result even when its caller expired. Only the separate
+	// rollback context can now read that same pending pointer; no late winner.
+	o.inbound = reader
+	o.pendingReader = reader
+	if err := ctx.Err(); err != nil {
+		return before, errors.Join(changeErr, err)
+	}
+	after, err := o.captureLockedContext(ctx)
+	if err != nil {
+		return before, errors.Join(changeErr, err)
+	}
+	if changeErr != nil || after.MTU != mtu {
+		return after, errors.Join(changeErr, routerVPNExternalFailure)
+	}
+	o.pendingBefore = nil
+	o.pendingContext = nil
+	o.pendingReader = nil
+	return after, nil
+}
+func (o *routerVPNDesktopMTUOwner) changeMTULegacy(ctx context.Context, expected mobilemtu.State, mtu int) (mobilemtu.State, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	before, err := o.captureLocked()
@@ -190,8 +407,11 @@ func (o *routerVPNDesktopMTUOwner) ChangeMTU(ctx context.Context, expected mobil
 }
 
 func (o *routerVPNDesktopMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.State) error {
-	state, err := o.Capture()
-	if err != nil || state != expected || ctx.Err() != nil {
+	state, err := o.observe(ctx)
+	if err != nil || ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	if state != expected {
 		return routerVPNExternalFailure
 	}
 	proofTag, proofAddress, err := o.verificationTarget()
@@ -204,8 +424,11 @@ func (o *routerVPNDesktopMTUOwner) VerifyExternal(ctx context.Context, expected 
 		}
 		return o.DialThroughTunnel(call, expected, "tcp", address)
 	})
-	after, captureErr := o.Capture()
-	if err != nil || captureErr != nil || after != expected || ctx.Err() != nil {
+	after, captureErr := o.observe(ctx)
+	if err != nil || captureErr != nil || ctx.Err() != nil {
+		return errors.Join(err, captureErr, ctx.Err())
+	}
+	if after != expected {
 		return routerVPNExternalFailure
 	}
 	return nil
@@ -223,8 +446,14 @@ func (o *routerVPNDesktopMTUOwner) verificationTarget() (string, string, error) 
 }
 
 func (o *routerVPNDesktopMTUOwner) BeginExternalMeasurement(parent context.Context, expected mobilemtu.State) (context.Context, context.CancelFunc, error) {
-	state, err := o.Capture()
-	if err != nil || state != expected || parent == nil || parent.Err() != nil {
+	if parent == nil {
+		return nil, nil, routerVPNExternalFailure
+	}
+	state, err := o.observe(parent)
+	if err != nil || parent.Err() != nil {
+		return nil, nil, errors.Join(err, parent.Err())
+	}
+	if state != expected {
 		return nil, nil, routerVPNExternalFailure
 	}
 	var ctx context.Context
@@ -234,10 +463,13 @@ func (o *routerVPNDesktopMTUOwner) BeginExternalMeasurement(parent context.Conte
 	} else {
 		ctx, release = context.WithCancel(parent)
 	}
-	after, captureErr := o.Capture()
+	after, captureErr := o.observe(parent)
 	if err != nil || captureErr != nil || ctx == nil || release == nil || ctx.Err() != nil || after != expected {
 		if release != nil {
 			release()
+		}
+		if err != nil || captureErr != nil || parent.Err() != nil {
+			return nil, nil, errors.Join(err, captureErr, parent.Err())
 		}
 		return nil, nil, routerVPNExternalFailure
 	}
@@ -251,7 +483,7 @@ func (o *routerVPNDesktopMTUOwner) DialThroughTunnel(parent context.Context, exp
 	}
 	ctx, release, err := o.lease.Lifetime(parent)
 	if err != nil {
-		return nil, routerVPNExternalFailure
+		return nil, err
 	}
 	retained := false
 	defer func() {
@@ -267,7 +499,7 @@ func (o *routerVPNDesktopMTUOwner) DialThroughTunnel(parent context.Context, exp
 	if _, parseErr := netip.ParseAddr(host); parseErr != nil {
 		addresses, err := o.lease.Resolve(ctx, host)
 		if err != nil {
-			return nil, routerVPNExternalFailure
+			return nil, err
 		}
 		targets = nil
 		for _, ip := range addresses {
@@ -281,9 +513,9 @@ func (o *routerVPNDesktopMTUOwner) DialThroughTunnel(parent context.Context, exp
 		if err == nil && conn != nil {
 			owned := &routerVPNDesktopMTUSocket{Conn: conn, release: release, closed: make(chan struct{})}
 			owned.stop = context.AfterFunc(ctx, owned.closeOwned)
-			if ctx.Err() != nil || !o.lease.Healthy() {
+			if healthErr := o.healthyContext(ctx); healthErr != nil {
 				_ = owned.Close()
-				return nil, routerVPNExternalFailure
+				return nil, healthErr
 			}
 			retained = true
 			return owned, nil
@@ -291,8 +523,8 @@ func (o *routerVPNDesktopMTUOwner) DialThroughTunnel(parent context.Context, exp
 		if conn != nil {
 			_ = conn.Close()
 		}
-		if ctx.Err() != nil || !o.lease.Healthy() {
-			break
+		if healthErr := o.healthyContext(ctx); healthErr != nil {
+			return nil, healthErr
 		}
 	}
 	return nil, routerVPNExternalFailure
@@ -309,32 +541,43 @@ func (o *routerVPNDesktopMTUOwner) dialBound(ctx context.Context, expected mobil
 		network = "tcp6"
 	}
 	dialer := net.Dialer{ControlContext: func(call context.Context, network, address string, raw syscall.RawConn) error {
-		o.mu.Lock()
+		if err := desktopnetwork.LockContext(call, &o.mu); err != nil {
+			return err
+		}
 		defer o.mu.Unlock()
-		before, err := o.captureLocked()
-		if err != nil || before != expected || call.Err() != nil {
+		before, err := o.captureLockedContext(call)
+		if err != nil || call.Err() != nil {
+			return errors.Join(err, call.Err())
+		}
+		if before != expected {
 			return routerVPNExternalFailure
 		}
-		name, index, _, err := o.inbound.RouterVPNDesktopMTUInterface()
+		name, index, _, err := o.inbound.(routerVPNDesktopMTUContextTUN).RouterVPNDesktopMTUInterfaceContext(call)
 		if err != nil {
-			return routerVPNExternalFailure
+			return err
 		}
 		if err := control.BindToInterface(nil, name, index)(network, address, raw); err != nil {
 			return routerVPNExternalFailure
 		}
-		after, err := o.captureLocked()
-		if err != nil || after != expected || call.Err() != nil {
+		after, err := o.captureLockedContext(call)
+		if err != nil || call.Err() != nil {
+			return errors.Join(err, call.Err())
+		}
+		if after != expected {
 			return routerVPNExternalFailure
 		}
 		return nil
 	}}
 	conn, err := dialer.DialContext(ctx, network, address)
 	if err != nil {
-		return nil, routerVPNExternalFailure
+		return nil, err
 	}
-	after, err := o.Capture()
+	after, err := o.CaptureContext(ctx)
 	if err != nil || after != expected || ctx.Err() != nil {
 		_ = conn.Close()
+		if err != nil || ctx.Err() != nil {
+			return nil, errors.Join(err, ctx.Err())
+		}
 		return nil, routerVPNExternalFailure
 	}
 	return conn, nil
@@ -391,4 +634,28 @@ func routerVPNDesktopPhysicalPathContext(ctx context.Context, instance *box.Box)
 	sort.Strings(parts)
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(digest[:]), ctx.Err()
+}
+
+func (o *routerVPNDesktopMTUOwner) healthyContext(ctx context.Context) error {
+	lease, ok := o.lease.(routerVPNDesktopMTUContextLease)
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	return lease.HealthyContext(ctx)
+}
+
+// Legacy owners retain their compatibility path. Strict desktop constructors
+// install physicalContext; their observations never enter a legacy callback.
+func (o *routerVPNDesktopMTUOwner) observe(ctx context.Context) (mobilemtu.State, error) {
+	if o.physicalContext != nil {
+		return o.CaptureContext(ctx)
+	}
+	if ctx == nil {
+		return mobilemtu.State{}, routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return mobilemtu.State{}, err
+	}
+	state, err := o.Capture()
+	return state, errors.Join(err, ctx.Err())
 }

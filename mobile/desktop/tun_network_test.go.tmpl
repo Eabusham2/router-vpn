@@ -183,3 +183,24 @@ func TestRouterVPNDesktopNetworkReceiptUnavailable(t *testing.T) {
 		t.Fatal("missing bounded guard was treated as optional inventory", err)
 	}
 }
+
+func TestRouterVPNDesktopMTUStartupContextLifecycleDeadline(t *testing.T) {
+	inbound := &Inbound{}
+	inbound.routervpnLifecycle.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- inbound.RouterVPNDesktopMTUStartupContext(ctx) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("startup replaced original deadline: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Error("startup blocked on native lifecycle")
+	}
+	inbound.routervpnLifecycle.Unlock()
+	if inbound.tunOptions.RouterVPNNetworkContext != nil {
+		t.Fatal("expired startup adopted original native construction")
+	}
+}

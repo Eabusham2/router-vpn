@@ -36,6 +36,32 @@ func (r *ExternalProofRequest) MTUAuthority(source, capture string) (string, str
 	return policy.Config(), string(authority), nil
 }
 
+func (r *ExternalProofRequest) MTUAuthorityContext(ctx context.Context, source, capture string) (string, string, error) {
+	if err := r.VerifyCurrentPathContext(ctx); err != nil {
+		return "", "", err
+	}
+	policy, err := NewExternalPolicy(source, capture)
+	if err != nil || policy.Config() != r.policy.Config() || policy.Metadata() != r.policy.Metadata() || policy.SourceSHA256() != r.policy.SourceSHA256() {
+		return "", "", errors.New("external MTU selection differs from its proved graph")
+	}
+	jumbo, _ := r.policy.capture.Profile["jumbo_tun"].(bool)
+	if entryJumbo, _ := r.policy.capture.Entry["jumbo_tun"].(bool); entryJumbo {
+		jumbo = true
+	}
+	authority, err := json.Marshal(map[string]any{
+		"schema": 1, "id": r.meta.ExitID, "source_sha256": r.meta.SourceSHA256,
+		"expected_public_ip": r.meta.ExpectedPublicIP, "mtu_policy": r.meta.MTUPolicy,
+		"jumbo_tun": jumbo,
+	})
+	if err != nil {
+		return "", "", errors.New("external MTU authority retired before delivery")
+	}
+	if err := r.VerifyCurrentPathContext(ctx); err != nil {
+		return "", "", err
+	}
+	return policy.Config(), string(authority), ctx.Err()
+}
+
 // MTULifetime propagates proof cancellation into an already-running native
 // interface transaction or through-TUN socket. The caller must release it.
 func (r *ExternalProofRequest) MTULifetime(parent context.Context) (context.Context, context.CancelFunc, error) {
@@ -48,6 +74,25 @@ func (r *ExternalProofRequest) MTULifetime(parent context.Context) (context.Cont
 	if !r.Healthy() {
 		release()
 		return nil, nil, errors.New("external MTU proof retired during capture")
+	}
+	return ctx, release, nil
+}
+
+// MTULifetimeContext observes under the caller while retaining the original
+// connection lifetime; ending an admission read must not close the lease.
+func (r *ExternalProofRequest) MTULifetimeContext(caller, parent context.Context) (context.Context, context.CancelFunc, error) {
+	if parent == nil {
+		return nil, nil, errors.New("MTU lifetime has no original parent")
+	}
+	if err := r.HealthyContext(caller); err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(r.ctx, cancel)
+	release := func() { stop(); cancel() }
+	if err := r.HealthyContext(caller); err != nil {
+		release()
+		return nil, nil, err
 	}
 	return ctx, release, nil
 }
@@ -78,6 +123,47 @@ func (r *ExternalProofRequest) verifyMTU(parent context.Context, dial func(conte
 	data, err := externalProofHTTP(ctx, dial, ExternalFinalTag, "https://1.1.1.1/cdn-cgi/trace?routervpn_mtu="+hex.EncodeToString(nonce[:]), "", testTLS)
 	if err != nil || externalTraceAddress(data, r.meta.ExpectedPublicIP) != nil || r.verifyCurrentPath(ctx) != nil || !r.Healthy() || ctx.Err() != nil {
 		return errors.New("external MTU public exit changed or proof failed")
+	}
+	return nil
+}
+
+func (r *ExternalProofRequest) VerifyMTUContext(parent context.Context, dial func(context.Context, string, string) (net.Conn, error)) error {
+	return r.verifyMTUContext(parent, dial, nil)
+}
+
+func (r *ExternalProofRequest) verifyMTUContext(parent context.Context, dial func(context.Context, string, string) (net.Conn, error), testTLS *tls.Config) error {
+	if dial == nil {
+		return errors.New("external MTU has no captured system TUN dialer")
+	}
+	ctx, release, err := r.MTULifetimeContext(parent, parent)
+	if err != nil {
+		return err
+	}
+	defer release()
+	for _, observe := range []func(context.Context) error{r.VerifyCurrentPathContext, func(ctx context.Context) error { return r.engine.DNSProof(ctx, r.meta.TUNTag) }, r.VerifyCurrentPathContext, r.HealthyContext} {
+		if err := observe(ctx); err != nil {
+			return err
+		}
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return errors.New("external MTU proof nonce unavailable")
+	}
+	data, err := externalProofHTTP(ctx, dial, ExternalFinalTag, "https://1.1.1.1/cdn-cgi/trace?routervpn_mtu="+hex.EncodeToString(nonce[:]), "", testTLS)
+	if err != nil {
+		return err
+	}
+	if err := externalTraceAddress(data, r.meta.ExpectedPublicIP); err != nil {
+		return err
+	}
+	if err := r.VerifyCurrentPathContext(ctx); err != nil {
+		return err
+	}
+	if err := r.HealthyContext(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return nil
 }

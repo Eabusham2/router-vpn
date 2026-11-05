@@ -12,12 +12,12 @@ func (r *RouterVPNDesktopTor) bindPhysicalTunnel(ctx context.Context, reader rou
 		return r.network.BindPhysicalTunnel(ctx, name, index)
 	}
 	control, ok := reader.(interface {
-		RouterVPNDesktopTunnelControl(func() bool) (*os.File, error)
+		RouterVPNDesktopTunnelControlContext(context.Context, func(context.Context) error) (*os.File, error)
 	})
 	if !ok {
 		return errors.New("Darwin physical protection requires its actual owned utun control")
 	}
-	file, err := control.RouterVPNDesktopTunnelControl(r.readerLifetimeCurrent)
+	file, err := control.RouterVPNDesktopTunnelControlContext(ctx, r.readerLifetimeCurrentContext)
 	if file != nil {
 		defer file.Close()
 	}

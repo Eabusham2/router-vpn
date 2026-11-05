@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"sync"
 	"testing"
 	"time"
@@ -148,5 +149,93 @@ func TestRouterVPNTunBorrowedPlatformKeepsCapturedRollback(t *testing.T) {
 	}
 	if err := m.Close(); err != nil || rollback.closed != 1 || rollback.alive {
 		t.Fatal("ordinary manager did not close its exact borrowed reader once", err, rollback.closed)
+	}
+}
+
+type mtuCloseCallback struct {
+	*mtuTestInbound
+	afterClose func()
+}
+
+func (t *mtuCloseCallback) Close() error {
+	err := t.mtuTestInbound.Close()
+	if t.afterClose != nil {
+		t.afterClose()
+	}
+	return err
+}
+func TestRouterVPNTunContextRejectsLatePublicationAfterUnusedClose(t *testing.T) {
+	m, original, candidate, unused := mtuFixture()
+	work, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Second, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	work, cancel := context.WithCancel(work)
+	defer cancel()
+	checked := false
+	rollback := &mtuCloseCallback{mtuTestInbound: unused, afterClose: func() {
+		checked = true
+		if work.Err() != nil || m.inboundByTag[original.Tag()] != candidate {
+			t.Error("candidate was not owned before unused-reader close")
+		}
+		cancel()
+	}}
+	transaction, err := m.RouterVPNReplaceTunOwned(work, original, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+	if !checked || !errors.Is(err, context.Canceled) || transaction == nil || transaction.Current() != candidate || m.inboundByTag[original.Tag()] != candidate {
+		t.Fatal("cancellation discarded original provisional reader or error", err)
+	}
+	evidence := transaction.Evidence()
+	if !candidate.alive || !evidence[1].Started || evidence[1].Retired || !evidence[2].Retired {
+		t.Fatal("provisional candidate or unused-reader retirement was inferred", evidence)
+	}
+	cleanup, err := mobilemtu.OperationCleanupContext(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := &mtuTestInbound{tag: "tun", kind: "tun"}
+	unusedAgain := &mtuTestInbound{tag: "tun", kind: "tun"}
+	restore, err := m.RouterVPNReplaceTunOwned(cleanup, candidate, func() (adapter.Inbound, adapter.Inbound, error) { return restored, unusedAgain, nil })
+	if err != nil || restore.Current() != restored || !restored.alive || candidate.alive {
+		t.Fatal("original cleanup could not replace exact provisional candidate", err)
+	}
+	if unused.started != 0 || unused.closed != 1 {
+		t.Fatal("retired unused rollback was restarted")
+	}
+}
+func TestRouterVPNTunContextAdmissionLocksDoNotConstructLate(t *testing.T) {
+	for _, boundary := range []string{"lifecycle", "access"} {
+		t.Run(boundary, func(t *testing.T) {
+			m, original, candidate, rollback := mtuFixture()
+			if boundary == "lifecycle" {
+				m.routervpnLifecycle.Lock()
+			} else {
+				m.access.Lock()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			called := false
+			done := make(chan error, 1)
+			go func() {
+				_, err := m.RouterVPNReplaceTunOwned(ctx, original, func() (adapter.Inbound, adapter.Inbound, error) { called = true; return candidate, rollback, nil })
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("original context lost: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Error("mutation admission ignored caller deadline")
+			}
+			if boundary == "lifecycle" {
+				m.routervpnLifecycle.Unlock()
+			} else {
+				m.access.Unlock()
+			}
+			if called || original.closed != 0 || candidate.started != 0 {
+				t.Fatal("expired admission acquired native resources")
+			}
+		})
 	}
 }

@@ -14,10 +14,17 @@ import (
 type routerVPNDesktopMTUEngine struct {
 	owner *routerVPNDesktopMTUOwner
 	state mobilemtu.State
+	ctx   context.Context
 }
 
 func (e *routerVPNDesktopMTUEngine) Identity() string {
-	current, err := e.owner.Capture()
+	var current mobilemtu.State
+	var err error
+	if e.ctx != nil {
+		current, err = e.owner.CaptureContext(e.ctx)
+	} else {
+		current, err = e.owner.Capture()
+	}
 	if err != nil || current != e.state {
 		return ""
 	}
@@ -152,4 +159,139 @@ func (m *routerVPNDesktopMTU) recapture() (*mobilemtu.Controller, error) {
 		return mobilemtu.NewTor(m.owner, config, m.owner.lease.Authority(), m.cache)
 	}
 	return mobilemtu.NewExternal(m.owner, config, m.owner.lease.Authority(), m.cache)
+}
+
+func (m *routerVPNDesktopMTU) recaptureContext(ctx context.Context) (*mobilemtu.Controller, error) {
+	state, err := m.owner.CaptureContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var graph struct {
+		Inbounds []struct {
+			Type string `json:"type"`
+			MTU  int    `json:"mtu"`
+		} `json:"inbounds"`
+	}
+	if json.Unmarshal([]byte(m.owner.lease.Config()), &graph) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	configured, count := 0, 0
+	for _, inbound := range graph.Inbounds {
+		if inbound.Type == "tun" {
+			configured = inbound.MTU
+			count++
+		}
+	}
+	if count != 1 {
+		return nil, routerVPNExternalFailure
+	}
+	plan, err := mobilemtu.NewPlan(m.owner.lease.Config(), configured)
+	if err != nil {
+		return nil, err
+	}
+	config, err := plan.Config(state.MTU)
+	if err != nil {
+		return nil, err
+	}
+	if m.tor {
+		return mobilemtu.NewTorContext(ctx, m.owner, config, m.owner.lease.Authority(), m.cache)
+	}
+	return mobilemtu.NewExternalContext(ctx, m.owner, config, m.owner.lease.Authority(), m.cache)
+}
+
+func (m *routerVPNDesktopMTU) restoreCapturedContext(ctx context.Context, request routerVPNDesktopMTURequest, before mobilemtu.State) {
+	current, err := m.owner.ChangeMTU(ctx, before, request.RestoreMTU)
+	rollbackExpected := before
+	if err == nil {
+		rollbackExpected = current
+	}
+	status := mobilemtu.Status{Request: request.Request, Complete: true, OriginalMTU: before.MTU, EffectiveMTU: before.MTU, Phase: "failed", Source: "unmeasured", Candidates: []mobilemtu.Candidate{}}
+	if err == nil {
+		var result hopmeasure.Result
+		result, err = m.measureCapturedContext(ctx, current)
+		if err == nil {
+			status.Candidates = []mobilemtu.Candidate{{MTU: request.RestoreMTU, Working: true, LatencyKind: "https-response", MedianRTT: result.Idle.Median, Download: result.Download, Upload: result.Upload}}
+		}
+	}
+	finishContext := ctx
+	if err == nil && ctx.Err() == nil {
+		status.Phase, status.Source, status.EffectiveMTU, status.Restored = "restored-captured-mtu", "restored-captured-system-tun", request.RestoreMTU, true
+	} else {
+		cleanup, cleanupErr := mobilemtu.OperationCleanupContext(ctx)
+		if cleanupErr == nil {
+			finishContext = cleanup
+			actual, captureErr := m.owner.RollbackStateContext(cleanup, rollbackExpected)
+			if captureErr == nil && actual.Session == before.Session && actual.Path == before.Path {
+				state, changeErr := m.owner.ChangeMTU(cleanup, actual, before.MTU)
+				if changeErr == nil && state.MTU == before.MTU && m.owner.VerifyExternal(cleanup, state) == nil {
+					status.Restored, status.Source, status.Phase = true, "restored-unmeasured", "restored"
+				}
+			}
+		}
+		status.Failure = "Captured MTU restoration did not complete its fresh selected-path verification"
+		if !status.Restored {
+			status.EffectiveMTU = 0
+			m.owner.invalid.Store(true)
+		}
+	}
+	if err := mobilemtu.LockContext(finishContext, &m.mu); err != nil {
+		m.owner.invalid.Store(true)
+		return
+	}
+	defer m.mu.Unlock()
+	m.rolling, m.restoring = false, false
+	if m.closed || request.Request != m.request.Request || request.Generation != m.request.Generation {
+		return
+	}
+	if m.restoreCancel != nil {
+		defer m.restoreCancel()
+		m.restoreCancel = nil
+	}
+	if status.Restored {
+		err := m.controller.CloseContext(finishContext)
+		if err == nil {
+			var fresh *mobilemtu.Controller
+			fresh, err = m.recaptureContext(finishContext)
+			if err == nil {
+				m.controller = fresh
+			}
+		}
+		if err != nil {
+			m.owner.invalid.Store(true)
+			status.Restored, status.EffectiveMTU = false, 0
+			status.Failure = "Restored native MTU controller could not be recaptured"
+		}
+	}
+	m.restored = &status
+}
+func (m *routerVPNDesktopMTU) measureCapturedContext(parent context.Context, current mobilemtu.State) (hopmeasure.Result, error) {
+	ctx, release, err := m.owner.BeginExternalMeasurement(parent, current)
+	if err != nil {
+		return hopmeasure.Result{}, err
+	}
+	defer release()
+	if err := m.owner.VerifyExternal(ctx, current); err != nil {
+		return hopmeasure.Result{}, err
+	}
+	var authority struct {
+		ID string `json:"id"`
+	}
+	tag, _, err := m.owner.verificationTarget()
+	if err != nil || json.Unmarshal([]byte(m.owner.lease.Authority()), &authority) != nil || authority.ID == "" {
+		return hopmeasure.Result{}, routerVPNExternalFailure
+	}
+	result, err := hopmeasure.MeasurePath(ctx, &routerVPNDesktopMTUEngine{owner: m.owner, state: current, ctx: ctx}, hopmeasure.Hop{ID: authority.ID, Role: "exit", Tag: tag, Kind: "public-path", Label: "Restored captured system TUN MTU"}, 256<<10)
+	if err != nil {
+		return hopmeasure.Result{}, err
+	}
+	if !result.Ready || result.Idle == nil || result.Download == nil || result.Upload == nil {
+		return hopmeasure.Result{}, routerVPNExternalFailure
+	}
+	if err := m.owner.VerifyExternal(ctx, current); err != nil {
+		return hopmeasure.Result{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return hopmeasure.Result{}, err
+	}
+	return result, nil
 }

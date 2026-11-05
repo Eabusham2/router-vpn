@@ -64,6 +64,7 @@ type Status struct {
 
 type Controller struct {
 	owner         Owner
+	bounded       bool
 	profile       Profile
 	frozenConfig  string
 	cache         Cache
@@ -90,13 +91,19 @@ func New(owner Owner, config, profile string, cache Cache) (*Controller, error) 
 
 func newController(owner Owner, config string, policy Profile, cache Cache) (*Controller, error) {
 	state, err := owner.Capture()
-	if err != nil || state.Session == "" || state.Path == "" || state.Interface == "" || state.MTU < MinMTU || state.MTU > MaxMTU {
+	if err != nil {
+		return nil, err
+	}
+	return newControllerState(owner, config, policy, cache, state)
+}
+func newControllerState(owner Owner, config string, policy Profile, cache Cache, state State) (*Controller, error) {
+	if state.Session == "" || state.Path == "" || state.Interface == "" || state.MTU < MinMTU || state.MTU > MaxMTU {
 		return nil, errors.New("MTU must capture a running native VPN interface")
 	}
 	// A fixed or Jumbo connection does not enter the optimizer. Keep it visible
 	// without interpreting its stored effective_mtu as a current measurement.
 	if policy.Automatic && !policy.Jumbo {
-		if _, err = NewPlan(config, state.MTU); err != nil {
+		if _, err := NewPlan(config, state.MTU); err != nil {
 			return nil, err
 		}
 	}
@@ -107,15 +114,19 @@ func (c *Controller) live(ctx context.Context, expected State) bool {
 	if ctx.Err() != nil {
 		return false
 	}
-	c.mu.Lock()
+	if err := LockContext(ctx, &c.mu); err != nil {
+		return false
+	}
 	valid := !c.closed && !c.invalid
 	c.mu.Unlock()
 	if !valid {
 		return false
 	}
-	current, err := c.owner.Capture()
+	current, err := c.capture(ctx)
 	// A platform read may synchronously race a Stop or network callback.
-	c.mu.Lock()
+	if err := LockContext(ctx, &c.mu); err != nil {
+		return false
+	}
 	valid = !c.closed && !c.invalid
 	c.mu.Unlock()
 	return valid && ctx.Err() == nil && err == nil && current == expected && current.Session != "" && current.Path != "" && current.Interface != ""
@@ -124,24 +135,40 @@ func (c *Controller) sessionLive(ctx context.Context, expected State) (State, bo
 	if ctx.Err() != nil {
 		return State{}, false
 	}
-	c.mu.Lock()
+	if err := LockContext(ctx, &c.mu); err != nil {
+		return State{}, false
+	}
 	valid := !c.closed && !c.invalid
 	c.mu.Unlock()
 	if !valid {
 		return State{}, false
 	}
-	current, err := c.owner.Capture()
-	c.mu.Lock()
+	var current State
+	var err error
+	recovered := false
+	strict, _ := ctx.Value(boundedOperationKey{}).(bool)
+	if owner, ok := c.owner.(RollbackOwner); ok && (c.bounded || strict) {
+		current, err = owner.RollbackStateContext(ctx, expected)
+		recovered = err == nil
+	} else {
+		current, err = c.capture(ctx)
+	}
+	if err := LockContext(ctx, &c.mu); err != nil {
+		return State{}, false
+	}
 	valid = !c.closed && !c.invalid
 	c.mu.Unlock()
-	return current, valid && ctx.Err() == nil && err == nil && current.Session == expected.Session && current.Path == expected.Path && current.Interface == expected.Interface
+	return current, valid && ctx.Err() == nil && err == nil && current.Session == expected.Session && current.Path == expected.Path && (current.Interface == expected.Interface || recovered)
 }
-func (c *Controller) phase(value string) {
-	c.mu.Lock()
+func (c *Controller) phase(ctx context.Context, value string) error {
+	if err := LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	defer c.mu.Unlock()
 	if !c.closed && !c.invalid {
 		c.status.Phase = value
 	}
+	return ctx.Err()
 }
 
 // Run and native asynchronous Start use the same published operation and
@@ -154,9 +181,9 @@ func (c *Controller) Run(request string, force bool) error {
 	return c.execute(op, force)
 }
 func (c *Controller) run(ctx context.Context, config string, force bool) (runErr error) {
-	original, err := c.owner.Capture()
+	original, err := c.capture(ctx)
 	if err != nil || !c.live(ctx, original) {
-		return errors.New("MTU interface changed before capture")
+		return errors.Join(err, ctx.Err(), errors.New("MTU interface changed before capture"))
 	}
 	plan, err := NewPlan(config, original.MTU)
 	if err != nil {
@@ -165,7 +192,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 	keyPlan := *plan
 	keyPlan.source = c.frozenConfig
 	key := keyPlan.PathKey(c.profile, original.Path)
-	c.mu.Lock()
+	if err := LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	c.status.OriginalMTU = original.MTU
 	c.status.EffectiveMTU = original.MTU
 	c.status.PathKey = key
@@ -177,16 +206,22 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		if adopted || !dirty {
 			return
 		}
-		rollbackCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
+		rollbackCtx, cleanupErr := OperationCleanupContext(ctx)
+		if cleanupErr != nil {
+			c.mu.Lock()
+			c.status.Failure = "Original MTU cleanup allowance expired"
+			c.mu.Unlock()
+			return
+		}
 		// A stop, replaced runtime, or changed path is never undone by rollback.
-		if _, ok := c.sessionLive(rollbackCtx, expected); !ok {
+		rollbackState, ok := c.sessionLive(rollbackCtx, expected)
+		if !ok {
 			c.mu.Lock()
 			c.status.Failure = "MTU owner or path changed; no stale interface was restarted"
 			c.mu.Unlock()
 			return
 		}
-		state, err := c.owner.ChangeMTU(rollbackCtx, expected, original.MTU)
+		state, err := c.owner.ChangeMTU(rollbackCtx, rollbackState, original.MTU)
 		if err != nil || state.MTU != original.MTU || state.Session != original.Session || state.Path != original.Path || !c.live(rollbackCtx, state) {
 			c.mu.Lock()
 			c.status.Failure = "Exact pre-test MTU rollback could not be confirmed"
@@ -205,7 +240,7 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		c.status.Phase = "restored"
 		c.mu.Unlock()
 	}()
-	engine := &probeEngine{controller: c, state: expected}
+	engine := &probeEngine{controller: c, state: expected, ctx: ctx}
 	hop := hopmeasure.Hop{ID: c.profile.ID, Role: "exit", Tag: "proxy", API: c.profile.API, Token: c.profile.Token, Proof: c.profile.Proof}
 	if c.external != nil {
 		hop = c.external.hop()
@@ -218,7 +253,19 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 	}
 	cached := 0
 	if c.cache != nil && !force {
-		if value, ok := c.cache.Lookup(key); ok {
+		if strict, _ := ctx.Value(boundedOperationKey{}).(bool); c.bounded || strict {
+			bounded, ok := c.cache.(ContextCache)
+			if !ok {
+				return errors.New("MTU cache has no bounded lookup")
+			}
+			value, found, err := bounded.LookupContext(ctx, key)
+			if err != nil {
+				return err
+			}
+			if found {
+				cached = value
+			}
+		} else if value, ok := c.cache.Lookup(key); ok {
 			cached = value
 		}
 	}
@@ -231,7 +278,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		if !c.live(ctx, expected) {
 			return context.Canceled
 		}
-		c.phase("applying " + strconv.Itoa(mtu))
+		if err := c.phase(ctx, "applying "+strconv.Itoa(mtu)); err != nil {
+			return err
+		}
 		dirty = true
 		state, err := c.owner.ChangeMTU(ctx, expected, mtu)
 		// The native adapter returns its owned post-error state as well. It cannot
@@ -243,7 +292,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		if err != nil || state.MTU != mtu || !c.live(ctx, expected) {
 			return errors.New("candidate did not become the actual owned system TUN MTU")
 		}
-		c.phase("measuring " + strconv.Itoa(mtu))
+		if err := c.phase(ctx, "measuring "+strconv.Itoa(mtu)); err != nil {
+			return err
+		}
 		candidate := Candidate{MTU: mtu}
 		candidateCtx, stop := context.WithTimeout(ctx, candidateBudget)
 		if c.external != nil {
@@ -267,7 +318,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 			}
 		}
 		stop()
-		c.mu.Lock()
+		if err := LockContext(ctx, &c.mu); err != nil {
+			return err
+		}
 		c.status.Candidates = append(c.status.Candidates, candidate)
 		c.mu.Unlock()
 		if !c.live(ctx, expected) {
@@ -284,7 +337,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 	if !winner.Working {
 		return errors.New("no finite eligible MTU measurement remained")
 	}
-	c.phase("adopting " + strconv.Itoa(winner.MTU))
+	if err := c.phase(ctx, "adopting "+strconv.Itoa(winner.MTU)); err != nil {
+		return err
+	}
 	if !c.live(ctx, expected) {
 		return context.Canceled
 	}
@@ -315,7 +370,24 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		return context.Canceled
 	}
 	if c.cache != nil {
-		if err = c.cache.Save(key, winner.MTU, valid); err != nil {
+		if strict, _ := ctx.Value(boundedOperationKey{}).(bool); c.bounded || strict {
+			bounded, ok := c.cache.(ContextCache)
+			if !ok {
+				return errors.New("MTU cache has no bounded commit")
+			}
+			err = bounded.SaveContext(ctx, key, winner.MTU, func(call context.Context) error {
+				if !c.live(call, expected) {
+					if call.Err() != nil {
+						return call.Err()
+					}
+					return errors.New("MTU winner lost its original reader")
+				}
+				return nil
+			})
+		} else {
+			err = c.cache.Save(key, winner.MTU, valid)
+		}
+		if err != nil {
 			return errors.New("fresh MTU result could not be durably saved")
 		}
 	}
@@ -326,7 +398,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
+	if err := LockContext(ctx, &c.mu); err != nil {
+		return err
+	}
 	if c.closed || c.invalid || ctx.Err() != nil {
 		c.mu.Unlock()
 		return context.Canceled
@@ -445,10 +519,18 @@ func Choose(candidates []Candidate, original int) Candidate {
 type probeEngine struct {
 	controller *Controller
 	state      State
+	ctx        context.Context
 }
 
 func (e *probeEngine) Identity() string {
-	if !e.controller.live(context.Background(), e.state) {
+	ctx := e.ctx
+	if ctx == nil {
+		if e.controller.bounded {
+			return ""
+		}
+		ctx = context.Background()
+	}
+	if !e.controller.live(ctx, e.state) {
 		return ""
 	}
 	return e.state.Session + ":" + e.state.Path + ":" + e.state.Interface

@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"context"
 	"errors"
 	"os"
 	"syscall"
@@ -31,4 +32,21 @@ func (t *NativeTun) RouterVPNRetainControl() (*os.File, error) {
 		return nil, errors.Join(err, captureErr)
 	}
 	return os.NewFile(uintptr(fd), "routervpn-owned-utun-control"), nil
+}
+
+func (t *NativeTun) RouterVPNRetainControlContext(ctx context.Context) (*os.File, error) {
+	if ctx == nil {
+		return nil, errors.New("Darwin native control lost its caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := t.RouterVPNRetainControl()
+	if err != nil || ctx.Err() != nil {
+		if file != nil {
+			file.Close()
+		}
+		return nil, errors.Join(err, ctx.Err())
+	}
+	return file, nil
 }

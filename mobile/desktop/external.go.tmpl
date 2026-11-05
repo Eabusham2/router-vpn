@@ -765,7 +765,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
-			mtuFiles, err = routerVPNOpenDesktopMTU(files, owner, session, measurementSource, measurementConfig)
+			mtuFiles, err = routerVPNOpenDesktopMTUContext(parent, files, owner, session, measurementSource, measurementConfig)
 			if err != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
@@ -802,7 +802,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				}
 			}
 			if connected && mtuFiles != nil {
-				if err := mtuFiles.tick(); err != nil {
+				if err := mtuFiles.tickContext(parent); err != nil {
 					failure, stopping = routerVPNExternalFailure, true
 					break
 				}

@@ -273,7 +273,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				break
 			}
 			if measured, ok := owner.(routerVPNTorMeasurementOwner); ok {
-				mtuFiles, err = routerVPNOpenDesktopMTUProvider(routerVPNTorOutputFiles(files), measured, session, metadata.SourceSHA256, metadata.ConfigSHA256)
+				mtuFiles, err = routerVPNOpenDesktopMTUProviderContext(parent, routerVPNTorOutputFiles(files), measured, session, metadata.SourceSHA256, metadata.ConfigSHA256)
 				if err == nil {
 					pathFiles, err = routerVPNOpenDesktopPath(routerVPNTorOutputFiles(files), measured.FreshPathOwner(), session, metadata.SourceSHA256, metadata.ConfigSHA256)
 				}

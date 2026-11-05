@@ -133,7 +133,7 @@ func desktopTorMTUFixtureForPolicy(t *testing.T, policy *mobiletor.DesktopBridge
 	lease := &desktopTorMTULeaseFixture{desktopMTULeaseFixture: base, policy: policy}
 	physical := &atomic.Value{}
 	physical.Store(strings.Repeat("c", 64))
-	mtu, err := newRouterVPNDesktopTorMTU(lease, meta.SessionID, func() string { return physical.Load().(string) })
+	mtu, err := newRouterVPNDesktopTorMTUContext(context.Background(), lease, meta.SessionID, func(ctx context.Context) (string, error) { return physical.Load().(string), ctx.Err() })
 	if err != nil {
 		t.Fatal("Tor adapter tried to reclaim the already-proved reader", err)
 	}
@@ -368,5 +368,26 @@ func (f *desktopTorPathRuntimeFixture) HealthyContext(ctx context.Context) error
 	if !f.Healthy() {
 		return routerVPNTorFailure
 	}
+	return nil
+}
+
+func (f *desktopTorPathRuntimeFixture) DesktopMTUContext(ctx context.Context) (*routerVPNDesktopMTU, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.mtu, nil
+}
+func (l *desktopTorMTULeaseFixture) RegisterOperationContext(ctx context.Context, generation uint64, request string) error {
+	if err := desktopnetwork.LockContext(ctx, &l.mu); err != nil {
+		return err
+	}
+	defer l.mu.Unlock()
+	if generation != l.generation+1 || !routerVPNExternalSession.MatchString(request) || l.active || l.closed.Load() || l.policy.Metadata().MTUPolicy != "auto" || l.policy.Metadata().JumboTUN {
+		return errors.New("unowned Tor request")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.generation, l.request = generation, request
 	return nil
 }

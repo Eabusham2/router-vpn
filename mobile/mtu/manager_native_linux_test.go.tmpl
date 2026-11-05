@@ -4,10 +4,13 @@ package inbound
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -257,5 +260,241 @@ func TestRouterVPNTunFullSearchRetainsEveryOriginalAttempt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Native cleanup may change only the context of the original unstarted rollback
+// adapter. No replacement factory or current-reader lookup creates its authority.
+type mtuCleanupInbound struct {
+	*mtuTestInbound
+	label      string
+	startup    context.Context
+	afterStart func()
+}
+
+func (e *mtuCleanupInbound) RouterVPNDesktopMTUBoundedTransaction() bool { return true }
+func (e *mtuCleanupInbound) RouterVPNDesktopMTUStartupContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if e.started != 0 || e.closed != 0 {
+		return errors.New("rollback was already started or retired")
+	}
+	e.startup = ctx
+	return nil
+}
+func (e *mtuCleanupInbound) Start(stage adapter.StartStage) error {
+	if e.startup != nil && e.startup.Err() != nil {
+		return e.startup.Err()
+	}
+	if err := e.mtuTestInbound.Start(stage); err != nil {
+		return err
+	}
+	if stage == adapter.StartStateStarted && e.afterStart != nil {
+		e.afterStart()
+	}
+	return nil
+}
+func (e *mtuCleanupInbound) RouterVPNDesktopMTUReceiptContext(ctx context.Context) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	if e.alive {
+		return "ready:" + e.label, "", nil
+	}
+	if e.closed > 0 {
+		return "", "retired:" + e.label, nil
+	}
+	return "", "", nil
+}
+func (e *mtuCleanupInbound) RouterVPNDesktopTunCloseContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return e.mtuTestInbound.Close()
+}
+func TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance(t *testing.T) {
+	for _, expire := range []bool{false, true} {
+		t.Run(map[bool]string{false: "restores", true: "expired-cleanup"}[expire], func(t *testing.T) {
+			work, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Second, 30*time.Millisecond)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer finish()
+			work, cancel := context.WithCancel(work)
+			defer cancel()
+			makeReader := func(label string) *mtuCleanupInbound {
+				return &mtuCleanupInbound{mtuTestInbound: &mtuTestInbound{tag: "tun", kind: "tun"}, label: label, startup: work}
+			}
+			original, candidate, rollback := makeReader("original"), makeReader("candidate"), makeReader("rollback")
+			original.alive = true
+			m := &Manager{started: true, stage: adapter.StartStateStarted, inbounds: []adapter.Inbound{original}, inboundByTag: map[string]adapter.Inbound{"tun": original}}
+			candidate.afterStart = func() {
+				if expire {
+					cleanup, err := mobilemtu.OperationCleanupContext(work)
+					if err != nil {
+						t.Fatal(err)
+					}
+					<-cleanup.Done()
+				}
+				cancel()
+			}
+			calls := 0
+			transaction, err := m.RouterVPNReplaceTunOwned(work, original, func() (adapter.Inbound, adapter.Inbound, error) { calls++; return candidate, rollback, nil })
+			if !errors.Is(err, context.Canceled) || calls != 1 || transaction == nil {
+				t.Fatal("original mutation lost cancellation or recreated readers", err, calls)
+			}
+			if !expire {
+				if transaction.Current() != rollback || m.inboundByTag[original.Tag()] != rollback || !rollback.alive || candidate.alive {
+					t.Fatal("original cleanup did not restore preconstructed rollback")
+				}
+				if !mobilemtu.SameOperationContext(work, rollback.startup) || !mobilemtu.StrictOperationContext(rollback.startup) {
+					t.Fatal("rollback acquired fresh authority")
+				}
+				cleanup, err := mobilemtu.OperationCleanupContext(work)
+				if err != nil || cleanup != rollback.startup {
+					t.Fatal("rollback renewed cleanup deadline", err)
+				}
+			} else {
+				if transaction.Current() != nil || rollback.started != 0 || !candidate.alive || len(m.routervpnMTUPending) != 1 {
+					t.Fatal("expired cleanup restarted rollback or discarded live candidate")
+				}
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("cleanup expiry was overwritten", err)
+				}
+				stopCtx, stop := context.WithTimeout(context.Background(), time.Second)
+				defer stop()
+				if err := m.RouterVPNRetryTunTransaction(stopCtx, transaction); err != nil || candidate.alive {
+					t.Fatal("original Stop did not settle pending reader", err)
+				}
+			}
+		})
+	}
+}
+
+type mtuControllerManagerOwner struct {
+	manager  *Manager
+	current  *mtuCleanupInbound
+	mtu      map[*mtuCleanupInbound]int
+	cancel   context.CancelFunc
+	original mobilemtu.State
+	pending  context.Context
+	history  []*RouterVPNTunTransaction
+	test     *testing.T
+}
+
+func (o *mtuControllerManagerOwner) Capture() (mobilemtu.State, error) {
+	return mobilemtu.State{}, errors.New("strict controller entered legacy capture")
+}
+func (o *mtuControllerManagerOwner) CaptureContext(ctx context.Context) (mobilemtu.State, error) {
+	if err := adapter.RouterVPNLockContext(ctx, &o.manager.access); err != nil {
+		return mobilemtu.State{}, err
+	}
+	defer o.manager.access.Unlock()
+	if o.manager.inboundByTag["tun"] != o.current || o.current == nil || !o.current.alive {
+		return mobilemtu.State{}, errors.New("original manager lost retained reader")
+	}
+	return mobilemtu.State{Session: "original-native-session", Path: "original-physical-path", Interface: o.current.label, MTU: o.mtu[o.current]}, nil
+}
+func (o *mtuControllerManagerOwner) RollbackStateContext(ctx context.Context, expected mobilemtu.State) (mobilemtu.State, error) {
+	if !mobilemtu.SameOperationContext(ctx, o.pending) || expected != o.original {
+		return mobilemtu.State{}, errors.New("cleanup cannot adopt another original transaction")
+	}
+	return o.CaptureContext(ctx)
+}
+func (o *mtuControllerManagerOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State, mtu int) (mobilemtu.State, error) {
+	before, err := o.CaptureContext(ctx)
+	if err != nil || before != expected {
+		return mobilemtu.State{}, errors.Join(err, errors.New("mutation changed captured original"))
+	}
+	original := o.current
+	makeReader := func(label string, mtu int) *mtuCleanupInbound {
+		reader := &mtuCleanupInbound{mtuTestInbound: &mtuTestInbound{tag: "tun", kind: "tun"}, label: fmt.Sprintf("%s-%d", label, len(o.history)), startup: ctx}
+		o.mtu[reader] = mtu
+		return reader
+	}
+	candidate, rollback := makeReader("candidate", mtu), makeReader("rollback", before.MTU)
+	var unused adapter.Inbound = rollback
+	if len(o.history) == 0 {
+		o.pending = ctx
+		o.original = before
+		unused = &mtuCleanupCloseCallback{mtuCleanupInbound: rollback, afterClose: func() {
+			if o.manager.inboundByTag["tun"] != candidate || ctx.Err() != nil {
+				o.test.Error("strict native candidate not owned before unused close")
+			}
+			o.cancel()
+		}}
+	}
+	transaction, changeErr := o.manager.RouterVPNReplaceTunOwned(ctx, original, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, unused, nil })
+	if transaction == nil {
+		return before, changeErr
+	}
+	o.history = append(o.history, transaction)
+	current, ok := transaction.Current().(*mtuCleanupInbound)
+	if !ok {
+		return mobilemtu.State{}, errors.Join(changeErr, errors.New("transaction has no retained reader"))
+	}
+	o.current = current
+	if ctx.Err() != nil {
+		return before, errors.Join(changeErr, ctx.Err())
+	}
+	after, err := o.CaptureContext(ctx)
+	return after, errors.Join(changeErr, err)
+}
+func (o *mtuControllerManagerOwner) VerifyExternal(ctx context.Context, expected mobilemtu.State) error {
+	actual, err := o.CaptureContext(ctx)
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return errors.New("public proof changed captured native reader")
+	}
+	return nil
+}
+func (o *mtuControllerManagerOwner) DialThroughTunnel(context.Context, mobilemtu.State, string, string) (net.Conn, error) {
+	return nil, errors.New("cancelled work must not enter measurement")
+}
+
+type mtuCleanupCloseCallback struct {
+	*mtuCleanupInbound
+	afterClose func()
+}
+
+func (e *mtuCleanupCloseCallback) RouterVPNDesktopTunCloseContext(ctx context.Context) error {
+	err := e.mtuCleanupInbound.RouterVPNDesktopTunCloseContext(ctx)
+	if err == nil {
+		e.afterClose()
+	}
+	return err
+}
+func TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	original := &mtuCleanupInbound{mtuTestInbound: &mtuTestInbound{tag: "tun", kind: "tun", alive: true}, label: "original", startup: parent}
+	manager := &Manager{started: true, stage: adapter.StartStateStarted, inbounds: []adapter.Inbound{original}, inboundByTag: map[string]adapter.Inbound{"tun": original}}
+	owner := &mtuControllerManagerOwner{manager: manager, current: original, mtu: map[*mtuCleanupInbound]int{original: 1380}, cancel: cancel, test: t}
+	config := `{"inbounds":[{"type":"tun","tag":"tun","mtu":1380,"auto_route":true,"strict_route":true}],"outbounds":[{"type":"shadowsocks","tag":"custom-exit","server":"192.0.2.1","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":"captured-test-key"}],"route":{"final":"custom-exit"}}`
+	authority := `{"schema":1,"id":"captured-exit","source_sha256":"` + strings.Repeat("a", 64) + `","expected_public_ip":"198.51.100.9","mtu_policy":"auto","jumbo_tun":false}`
+	controller, err := mobilemtu.NewExternalContext(parent, owner, config, authority, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	err = controller.RunContext(parent, strings.Repeat("a", 32), true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("native cancellation lost caller error", err)
+	}
+	var status mobilemtu.Status
+	if json.Unmarshal([]byte(controller.StatusJSON()), &status) != nil || status.Measured || !status.Restored || status.EffectiveMTU != 1380 {
+		t.Fatal("strict shared controller did not restore original native MTU", status)
+	}
+	if len(owner.history) != 2 || owner.current == original || owner.mtu[owner.current] != 1380 || !owner.current.alive {
+		t.Fatal("strict cleanup lost exact original operation history")
+	}
+	for _, transaction := range owner.history {
+		history := transaction.Evidence()
+		if !history[0].Retired || !history[1].Started || !history[2].Retired {
+			t.Fatal("cleanup discarded actual native evidence", history)
+		}
 	}
 }

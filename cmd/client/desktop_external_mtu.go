@@ -25,6 +25,7 @@ import (
 // The child removes only the exact consumed inputs; a new request cannot
 // replace an in-flight request, cancel another generation or grow a journal.
 type desktopMTURequest struct {
+	DeadlineNS   int64             `json:"deadline_ns,omitempty"`
 	Schema       int               `json:"schema"`
 	Session      string            `json:"session_id"`
 	SourceSHA256 string            `json:"source_sha256"`
@@ -41,6 +42,7 @@ type desktopMTUCached struct {
 	TestedAt int64  `json:"tested_at"`
 }
 type desktopMTUControl struct {
+	DeadlineNS   int64  `json:"deadline_ns,omitempty"`
 	Schema       int    `json:"schema"`
 	Session      string `json:"session_id"`
 	SourceSHA256 string `json:"source_sha256"`
@@ -86,7 +88,9 @@ type desktopMTUSnapshot struct {
 // Complete its Auto policy before the operation's final drain: a concurrent
 // transition may cancel that drain, but it must not discard the proved result.
 func (owner *desktopMTUSession) retainCompletedMTU(ctx context.Context, identifier string, generation uint64) error {
-	owner.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
 	defer owner.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
@@ -195,7 +199,9 @@ func (s desktopMTUSnapshot) currentContext(ctx context.Context, a *app) error {
 	if err := a.waitDesktopMeasurementProof(ctx, s.launch); err != nil {
 		return err
 	}
-	a.mu.Lock()
+	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	return s.currentLocked(a)
 }
@@ -362,7 +368,7 @@ func writeDesktopMTUControl(launch *desktopNodeLaunch, name string, value any) e
 }
 
 func desktopMTUControlFor(request desktopMTURequest) desktopMTUControl {
-	return desktopMTUControl{Schema: 1, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: request.Generation, Request: request.Request}
+	return desktopMTUControl{Schema: 1, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: request.Generation, Request: request.Request, DeadlineNS: request.DeadlineNS}
 }
 
 func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeLaunch, force bool) (result desktopMTURecord, failure error) {
@@ -410,14 +416,15 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 	if err != nil {
 		return result, err
 	}
-	request := desktopMTURequest{Schema: 1, Session: identity.session, SourceSHA256: identity.source, ConfigSHA256: identity.config, Generation: generation, Request: identifier, Force: force}
+	deadline, _ := ctx.Deadline()
+	request := desktopMTURequest{DeadlineNS: deadline.UnixNano(), Schema: 1, Session: identity.session, SourceSHA256: identity.source, ConfigSHA256: identity.config, Generation: generation, Request: identifier, Force: force}
 	if tested, e := time.Parse(time.RFC3339Nano, snapshot.profile.EffectiveMTUTestedAt); e == nil && len(snapshot.profile.EffectiveMTUPathKey) == 64 && snapshot.profile.EffectiveMTU >= 1280 && snapshot.profile.EffectiveMTU <= 9000 {
 		request.Cache = &desktopMTUCached{PathKey: snapshot.profile.EffectiveMTUPathKey, MTU: snapshot.profile.EffectiveMTU, TestedAt: tested.Unix()}
 	}
 	if err := snapshot.currentContext(ctx, a); err != nil {
 		return result, err
 	}
-	if err := writeDesktopMTUControl(launch, "mtu-request.json", request); err != nil {
+	if err := writeDesktopMTUControlContext(ctx, launch, "mtu-request.json", request); err != nil {
 		return result, err
 	}
 	updateMTUViewPhase(ctx, "measuring", initial.Status.EffectiveMTU)
@@ -473,7 +480,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 				if err == nil && ctx.Err() == nil {
 					commit := desktopMTUControlFor(request)
 					commit.MTU, commit.PathKey = record.PreparedMTU, record.PreparedPathKey
-					err = writeDesktopMTUControl(launch, "mtu-commit.json", commit)
+					err = writeDesktopMTUControlContext(ctx, launch, "mtu-commit.json", commit)
 				}
 				a.operationMu.Unlock()
 				if err != nil {
@@ -511,22 +518,24 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 }
 
 func (a *app) cancelDesktopMTU(launch *desktopNodeLaunch, control desktopMTUControl) error {
-	if err := writeDesktopMTUControl(launch, "mtu-cancel.json", control); err != nil {
-		return err
-	}
 	drainBudget := 12 * time.Second
 	if launch != nil && launch.tor != nil {
 		drainBudget = 40 * time.Second // Native Tor rollback owns up to 30s.
 	}
-	deadline := time.NewTimer(drainBudget)
-	defer deadline.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), drainBudget)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	control.DeadlineNS = deadline.UnixNano()
+	if err := writeDesktopMTUControlContext(ctx, launch, "mtu-cancel.json", control); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		record, err := readDesktopMTURecord(launch)
 		if err == nil && record.Generation == control.Generation && record.Status.Request == control.Request && record.Status.Complete && !record.Status.Running && !record.Status.Measured && record.Status.Source != "restored-captured-system-tun" {
 			if record.Status.EffectiveMTU > 0 && record.Status.OriginalMTU == record.Status.EffectiveMTU {
-				return a.waitDesktopTorMTUReadback(context.Background(), launch, record)
+				return a.waitDesktopTorMTUReadback(ctx, launch, record)
 			}
 			return errors.New("native MTU canceled, but exact interface rollback could not be verified")
 		}
@@ -537,7 +546,7 @@ func (a *app) cancelDesktopMTU(launch *desktopNodeLaunch, control desktopMTUCont
 			return errors.New("native MTU process exited before rollback acknowledgement")
 		}
 		select {
-		case <-deadline.C:
+		case <-ctx.Done():
 			return errors.New("native MTU rollback is still pending")
 		case <-ticker.C:
 		}
@@ -728,4 +737,71 @@ func (a *app) cancelDesktopMTURoute(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "request_id": request.Request, "phase": "canceling", "note": "Cancellation is pending until the captured native rollback finishes."})
+}
+
+func writeDesktopMTUControlContext(ctx context.Context, launch *desktopNodeLaunch, name string, value any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) > 4096 {
+		return errors.New("invalid native MTU command")
+	}
+	if name == "mtu-request.json" && launch != nil && launch.tor != nil {
+		request, ok := value.(desktopMTURequest)
+		if !ok {
+			return errors.New("Tor MTU request has no typed captured identity")
+		}
+		if err := authorizeDesktopTorMTURequestContext(ctx, launch, request); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	writeErr := writeDesktopRuntimeFile(launch, name, encoded, true)
+	if writeErr == nil {
+		return ctx.Err()
+	}
+	// The child may consume a complete input before the parent's final file
+	// identity read. Accept that race only with its exact, validated native
+	// acknowledgement; never retry by overwriting another input or directory.
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		record, err := readDesktopMTURecord(launch)
+		if err == nil {
+			accepted := false
+			switch command := value.(type) {
+			case desktopMTURequest:
+				accepted = name == "mtu-request.json" && record.Schema == command.Schema && record.Session == command.Session && record.SourceSHA256 == command.SourceSHA256 && record.ConfigSHA256 == command.ConfigSHA256 && record.Generation == command.Generation && record.Status.Request == command.Request
+			case desktopMTUControl:
+				if record.Schema == command.Schema && record.Session == command.Session && record.SourceSHA256 == command.SourceSHA256 && record.ConfigSHA256 == command.ConfigSHA256 && record.Generation == command.Generation && record.Status.Request == command.Request && record.Status.Complete && !record.Status.Running {
+					if name == "mtu-commit.json" {
+						accepted = record.Status.Measured && record.Status.EffectiveMTU == command.MTU && record.Status.PathKey == command.PathKey
+					} else if name == "mtu-cancel.json" {
+						accepted = !record.Status.Measured && record.Status.Source != "restored-captured-system-tun" && record.Status.EffectiveMTU > 0 && record.Status.EffectiveMTU == record.Status.OriginalMTU
+					}
+				}
+			}
+			if accepted {
+				return ctx.Err()
+			}
+		}
+		if desktopExternalDirectoryCurrent(launch) != nil {
+			return writeErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return writeErr
+		case <-ticker.C:
+		}
+	}
 }

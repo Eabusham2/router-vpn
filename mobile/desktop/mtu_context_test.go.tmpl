@@ -1,0 +1,257 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+type desktopMTUEnteredContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *desktopMTUEnteredContext) Err() error {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Err()
+}
+
+func (c *desktopMTUEnteredContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestRouterVPNDesktopMTUCallerContextWaits(t *testing.T) {
+	for _, name := range []string{"start", "record", "commit", "cancel", "cache"} {
+		t.Run(name, func(t *testing.T) {
+			m, lease, _ := desktopMTUContextFixture(t, 1400)
+			original := m.request
+			base, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &desktopMTUEnteredContext{Context: base, entered: make(chan struct{})}
+			request := routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("a", 32), Force: true, DeadlineNS: time.Now().Add(time.Minute).UnixNano()}
+			control := routerVPNDesktopMTUControl{Generation: 1, Request: request.Request, DeadlineNS: request.DeadlineNS}
+			lock := &m.mu
+			if name == "cache" {
+				lock = &m.cache.mu
+			}
+			lock.Lock()
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				switch name {
+				case "start":
+					err = m.startContext(ctx, request)
+				case "record":
+					_, err = m.recordContext(ctx)
+				case "commit":
+					err = m.commitContext(ctx, control)
+				case "cancel":
+					err = m.cancelContext(ctx, control)
+				case "cache":
+					_, _, err = m.cache.LookupContext(ctx, strings.Repeat("b", 64))
+				}
+				done <- err
+			}()
+			select {
+			case <-ctx.entered:
+			case <-time.After(time.Second):
+				lock.Unlock()
+				cancel()
+				<-done
+				t.Fatal("context boundary was not entered before waiting for owner lock")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("caller cancellation lost: %v", err)
+				}
+			case <-time.After(time.Second):
+				lock.Unlock()
+				<-done
+				t.Fatal("caller waited for held owner lock")
+			}
+			lock.Unlock()
+			if m.request != original || m.owner.invalid.Load() || lease.closed.Load() {
+				t.Fatal("read expiry mutated original owner")
+			}
+		})
+	}
+}
+func desktopMTUContextMailbox(t *testing.T, m *routerVPNDesktopMTU) (*routerVPNDesktopMTUFiles, string) {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { files.root.Close() })
+	return &routerVPNDesktopMTUFiles{lifetime: context.Background(), files: files, owner: m, session: desktopExternalSession, source: strings.Repeat("a", 64), config: strings.Repeat("b", 64), inputs: map[string]routerVPNDesktopMTUInput{}}, directory
+}
+func TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline(t *testing.T) {
+	for _, expired := range []bool{true, false} {
+		name := "accepted-worker"
+		if expired {
+			name = "already-expired"
+		}
+		t.Run(name, func(t *testing.T) {
+			m, lease, _ := desktopMTUContextFixture(t, 1400)
+			lease.blocked = make(chan struct{})
+			lease.blockAt = 2
+			mailbox, directory := desktopMTUContextMailbox(t, m)
+			deadline := time.Now().Add(300 * time.Millisecond)
+			if expired {
+				deadline = time.Now().Add(-time.Second)
+			}
+			request := routerVPNDesktopMTURequest{Schema: 1, Session: mailbox.session, SourceSHA256: mailbox.source, ConfigSHA256: mailbox.config, Generation: 1, Request: strings.Repeat("d", 32), Force: true, DeadlineNS: deadline.UnixNano()}
+			raw, _ := json.Marshal(request)
+			if err := os.WriteFile(filepath.Join(directory, "mtu-request.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			observation, finishObservation := context.WithCancel(context.Background())
+			if err := mailbox.tickContext(observation); err != nil {
+				t.Fatal(err)
+			}
+			finishObservation()
+			if expired {
+				if m.request.Generation != 0 || m.controller.Running() || len(mailbox.inputs) != 0 || m.owner.invalid.Load() {
+					t.Fatal("expired input was adopted or retired owner")
+				}
+				return
+			}
+			select {
+			case <-lease.blocked:
+			case <-time.After(time.Second):
+				t.Fatal("accepted worker was canceled at mailbox return")
+			}
+			if !m.controller.Running() {
+				t.Fatal("accepted operation lost original lifetime")
+			}
+			// A separate expired status observation cannot cancel the accepted operation.
+			observer, stop := context.WithCancel(context.Background())
+			stop()
+			if _, err := m.recordContext(observer); !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+			if !m.controller.Running() || m.owner.invalid.Load() {
+				t.Fatal("observer expiry retired operation")
+			}
+			limit := time.NewTimer(2 * time.Second)
+			defer limit.Stop()
+			tick := time.NewTicker(time.Millisecond)
+			defer tick.Stop()
+			for {
+				record, err := m.recordContext(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if record.Status.Complete && !record.Status.Running {
+					if !record.Status.Restored || record.Status.Measured || record.Status.EffectiveMTU != 1400 || time.Now().Before(deadline) {
+						t.Fatalf("original deadline/rollback not preserved: %+v", record)
+					}
+					break
+				}
+				select {
+				case <-limit.C:
+					t.Fatal("transported deadline did not drain original worker")
+				case <-tick.C:
+				}
+			}
+		})
+	}
+}
+func TestRouterVPNDesktopMTUCacheExpiredSaveIsNotACommit(t *testing.T) {
+	cache := &routerVPNDesktopMTUCache{}
+	ctx, cancel := context.WithCancel(context.Background())
+	validated := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- cache.SaveContext(ctx, strings.Repeat("c", 64), 1380, func(ctx context.Context) error {
+			select {
+			case validated <- struct{}{}:
+			default:
+			}
+			return ctx.Err()
+		})
+	}()
+	<-validated
+	// Wait for the actual pending durable-decision publication, not a timer guess.
+	for {
+		cache.mu.Lock()
+		pending := cache.pending != nil
+		cache.mu.Unlock()
+		if pending {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, ok, err := cache.LookupContext(context.Background(), strings.Repeat("c", 64)); err != nil || ok {
+		t.Fatal("expired save persisted a winner", err)
+	}
+	m, _, _ := desktopMTUContextFixture(t, 1400)
+	m.cache = cache
+	record, err := m.recordContext(context.Background())
+	if err != nil || record.WaitingCommit {
+		t.Fatal("expired decision remained adoptable", err)
+	}
+}
+
+func TestRouterVPNDesktopMTURestoreContextCancelsAndReprovesOriginal(t *testing.T) {
+	m, lease, _ := desktopMTUContextFixture(t, 1400)
+	lease.blocked = make(chan struct{})
+	lease.blockAt = 1
+	request := routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("e", 32), Force: true, RestoreMTU: 1380, DeadlineNS: time.Now().Add(time.Second).UnixNano()}
+	if err := m.startContext(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-lease.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("restoration did not mutate the captured reader before proof")
+	}
+	control := routerVPNDesktopMTUControl{Generation: request.Generation, Request: request.Request, DeadlineNS: request.DeadlineNS}
+	if err := m.cancelContext(context.Background(), control); err != nil {
+		t.Fatal(err)
+	}
+	limit := time.NewTimer(2 * time.Second)
+	defer limit.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		record, err := m.recordContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.Status.Complete && !record.Status.Running {
+			if !record.Status.Restored || record.Status.EffectiveMTU != 1400 || record.Status.Source != "restored-unmeasured" || m.owner.invalid.Load() {
+				t.Fatalf("exact cleanup failed: %+v", record)
+			}
+			break
+		}
+		select {
+		case <-limit.C:
+			t.Fatal("captured restoration cleanup did not drain")
+		case <-tick.C:
+		}
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if len(lease.changes) != 2 || lease.changes[0] != 1380 || lease.changes[1] != 1400 || lease.current.mtu != 1400 {
+		t.Fatal("cleanup lost exact operation reader", lease.changes)
+	}
+}

@@ -199,7 +199,9 @@ class TorMaintenanceAuditTests(unittest.TestCase):
 
     def test_native_adapter_and_fresh_path_keep_actual_selected_path_proof(self):
         self.reject(NATIVE, "tor.VerifyCurrentPath(ctx)", "func() error { return nil }()")
-        self.reject(PATH, "mtu.owner.VerifyExternal(ctx, state) != nil", "false")
+        self.reject(PATH, "if err := mtu.owner.VerifyExternal(ctx, state); err != nil", "if false")
+        self.reject(PATH, "mtu, err := provider.DesktopMTUContext(ctx)", "mtu, err := p.owner.DesktopMTU()")
+        self.reject(PATH, "state, err := mtu.owner.CaptureContext(ctx)", "state, err := mtu.owner.Capture()")
 
     def test_real_slow_control_and_transition_regressions_remain_required(self):
         for name in ("TestRouterVPNDesktopTorMTUTransitionRejectsForeignExpiredAndReplacedAdmission",

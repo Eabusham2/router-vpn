@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
@@ -133,6 +134,52 @@ func (r *RouterVPNDesktopTor) ClaimMTU() (*RouterVPNDesktopTorMTULease, error) {
 	return lease, nil
 }
 
+func (r *RouterVPNDesktopTor) ClaimMTUContext(caller context.Context) (*RouterVPNDesktopTorMTULease, error) {
+	if r == nil {
+		return nil, errors.New("desktop Tor MTU owner is unavailable")
+	}
+	if err := adapter.RouterVPNLockContext(caller, &r.mu); err != nil {
+		return nil, err
+	}
+	defer r.mu.Unlock()
+	// Failed observation during construction may close an otherwise unused
+	// logical lease. Only this serialized, never-registered lease can be retried;
+	// an operation or active reader keeps its original retained owner forever.
+	if previous := r.mtuLease.Load(); previous != nil && previous.closed.Load() && previous.generation == 0 && previous.active.Load() == 0 {
+		r.mtuLease.CompareAndSwap(previous, nil)
+	}
+	if r.closing || r.mtuLease.Load() != nil {
+		return nil, errors.New("desktop Tor MTU requires one successful retained native proof")
+	}
+	if err := r.HealthyContext(caller); err != nil {
+		return nil, err
+	}
+	if _, _, _, err := r.readbackContext(caller); err != nil {
+		return nil, err
+	}
+	meta := r.policy.Metadata()
+	parameters := map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID,
+		"source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": meta.JumboTUN || meta.EntryJumboTUN}
+	if meta.EntryFixedMTU != 0 {
+		parameters["entry_fixed_mtu"] = meta.EntryFixedMTU
+	}
+	authority, err := json.Marshal(parameters)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	lease := &RouterVPNDesktopTorMTULease{owner: r, ctx: ctx, cancel: cancel, authority: string(authority)}
+	if !r.mtuLease.CompareAndSwap(nil, lease) {
+		cancel()
+		return nil, errors.New("desktop Tor connection already granted its MTU lease")
+	}
+	if err := lease.HealthyContext(caller); err != nil {
+		lease.Close()
+		return nil, err
+	}
+	return lease, nil
+}
+
 func (l *RouterVPNDesktopTorMTULease) Healthy() bool {
 	return l.currentLifetime() && l.owner.Healthy()
 }
@@ -175,22 +222,55 @@ func (l *RouterVPNDesktopTorMTULease) SetTransitionHandler(handler func(context.
 	return nil
 }
 
+func (l *RouterVPNDesktopTorMTULease) SetTransitionHandlerContext(ctx context.Context, handler func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error)) error {
+	if l == nil || l.owner == nil || handler == nil {
+		return errors.New("desktop Tor MTU transition requires its command owner")
+	}
+	r := l.owner
+	if err := adapter.RouterVPNLockContext(ctx, &r.mu); err != nil {
+		return err
+	}
+	defer r.mu.Unlock()
+	if err := l.currentLifetimeContext(ctx); err != nil {
+		return err
+	}
+	if l.transition != nil || l.generation != 0 || l.active.Load() != 0 || r.closing {
+		return errors.New("desktop Tor MTU transition admission is already captured or retired")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.transition = handler
+	return nil
+}
+
 // RegisterOperation precedes controller.Start and every candidate mutation.
 // The host may not relabel still-running work with a newer generation/nonce.
 func (l *RouterVPNDesktopTorMTULease) RegisterOperation(generation uint64, request string) error {
-	if !l.currentLifetime() {
-		return errors.New("desktop Tor MTU lease retired")
+	return l.RegisterOperationContext(l.ctx, generation, request)
+}
+func (l *RouterVPNDesktopTorMTULease) RegisterOperationContext(ctx context.Context, generation uint64, request string) error {
+	if err := l.currentLifetimeContext(ctx); err != nil {
+		return err
 	}
 	raw, err := hex.DecodeString(request)
 	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != request {
 		return errors.New("desktop Tor MTU requires a captured request nonce")
 	}
 	r := l.owner
-	r.mu.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &r.mu); err != nil {
+		return err
+	}
 	defer r.mu.Unlock()
 	policy := r.policy.Metadata()
-	if !l.currentLifetime() || r.closing || l.active.Load() != 0 || l.generation == ^uint64(0) || generation != l.generation+1 || !policy.AllowMTUOptimization() || !l.Healthy() {
+	if err := l.HealthyContext(ctx); err != nil {
+		return err
+	}
+	if r.closing || l.active.Load() != 0 || l.generation == ^uint64(0) || generation != l.generation+1 || !policy.AllowMTUOptimization() {
 		return errors.New("desktop Tor MTU request is stale or another operation is still draining")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	l.generation, l.request = generation, request
 	return nil
@@ -272,6 +352,24 @@ func (l *RouterVPNDesktopTorMTULease) Inbound() (adapter.Inbound, error) {
 	return e.tun, nil
 }
 
+func (l *RouterVPNDesktopTorMTULease) InboundContext(ctx context.Context) (adapter.Inbound, error) {
+	if err := l.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	e := l.owner.engine
+	if err := adapter.RouterVPNRLockContext(ctx, &e.mu); err != nil {
+		return nil, err
+	}
+	defer e.mu.RUnlock()
+	if _, err := e.identityLockedContext(ctx); err != nil {
+		return nil, err
+	}
+	if l.ctx.Err() != nil || l.closed.Load() {
+		return nil, errors.New("desktop Tor MTU lease retired")
+	}
+	return e.tun, ctx.Err()
+}
+
 // The desktop Tor owner already claimed this exact TUN before proving it.
 // A second RouterVPNDesktopMTU claim would weaken or replace its lifetime guard.
 func (l *RouterVPNDesktopTorMTULease) MTUReadback() (mobiletor.DesktopBridgeMTUReadback, error) {
@@ -339,6 +437,14 @@ func (l *RouterVPNDesktopTorMTULease) changeMTU(parent context.Context, expected
 
 func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, expected adapter.Inbound, mtu int,
 	change func(context.Context, adapter.Inbound, int) (adapter.Inbound, error), budget time.Duration) (adapter.Inbound, error) {
+	if !mobilemtu.SameOperationContext(parent, parent) {
+		compatibility, finish, err := mobilemtu.WithCleanupContext(parent, 8*time.Second)
+		if err != nil {
+			return expected, err
+		}
+		defer finish()
+		parent = compatibility
+	}
 	ctx, release, err := l.Lifetime(parent)
 	if err != nil {
 		return expected, err
@@ -351,7 +457,7 @@ func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, e
 		}
 	}()
 	r := l.owner
-	end, err := r.activity.beginMTU()
+	end, err := r.activity.beginMTUContext(ctx)
 	if err != nil {
 		return expected, err
 	}
@@ -359,29 +465,52 @@ func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, e
 	if mtu < 1280 || mtu > 9000 || change == nil || budget <= 0 || budget > mobiletor.DesktopBridgeMTUTransitionLimit {
 		return expected, errors.New("desktop Tor MTU candidate is invalid")
 	}
+	if err := ctx.Err(); err != nil {
+		return expected, err
+	}
 	if err := r.VerifyCurrentPath(ctx); err != nil {
 		return expected, err
 	}
+	if err := ctx.Err(); err != nil {
+		return expected, err
+	}
 	verifiedAt := time.Now()
-	r.mu.Lock()
+	if err := adapter.RouterVPNLockContext(ctx, &r.mu); err != nil {
+		return expected, err
+	}
 	policy := r.policy.Metadata()
 	registered := l.generation != 0 && l.request != "" && !r.closing && policy.AllowMTUOptimization()
 	generation, request, transition := l.generation, l.request, l.transition
 	r.mu.Unlock()
-	r.interfaceMu.Lock()
+	if err := adapter.RouterVPNWriteLockContext(ctx, &r.interfaceMu); err != nil {
+		return expected, err
+	}
 	defer r.interfaceMu.Unlock()
 	e := r.engine
-	e.mu.Lock()
+	if err := adapter.RouterVPNWriteLockContext(ctx, &e.mu); err != nil {
+		return expected, err
+	}
 	defer e.mu.Unlock()
-	if ctx.Err() != nil || !l.currentLifetime() || !registered ||
-		r.mtuRevision == ^uint64(0) || r.mtuTransition == ^uint64(0) || e.identityLocked() == "" || e.tun != expected || !r.readerLifetimeCurrent() {
+	if err := l.currentLifetimeContext(ctx); err != nil {
+		return expected, err
+	}
+	if _, err := e.identityLockedContext(ctx); err != nil {
+		return expected, err
+	}
+	if !registered || r.mtuRevision == ^uint64(0) || r.mtuTransition == ^uint64(0) || e.tun != expected {
 		return expected, errors.New("desktop Tor MTU candidate lacks its exact registered reader")
 	}
 	if transition == nil || time.Since(verifiedAt) >= 3*time.Second {
 		return expected, errors.New("desktop Tor MTU reader has no fresh captured transition admission")
 	}
-	name, index, actual, readErr := r.tun.RouterVPNDesktopMTUInterface()
-	if readErr != nil || name != r.name || index != r.index || actual != r.mtu || !r.readerLifetimeCurrent() {
+	name, index, actual, readErr := r.tun.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if readErr != nil {
+		return expected, readErr
+	}
+	if err := r.readerLifetimeCurrentContext(ctx); err != nil {
+		return expected, err
+	}
+	if name != r.name || index != r.index || actual != r.mtu {
 		r.Cancel()
 		return expected, errors.New("desktop Tor MTU pre-change reader no longer matches its proof")
 	}
@@ -405,46 +534,75 @@ func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, e
 	stopBounded := context.AfterFunc(bounded, cancelOperation)
 	defer stopBounded()
 	finished, err = transition(operation, admission)
-	if err != nil || finished == nil || operation.Err() != nil || !r.readerLifetimeCurrent() {
+	if err != nil || operation.Err() != nil {
+		return expected, errors.Join(err, operation.Err())
+	}
+	if finished == nil {
 		return expected, errors.New("desktop Tor MTU transition was not published by its captured command")
 	}
+	if err := r.readerLifetimeCurrentContext(operation); err != nil {
+		return expected, err
+	}
 	if err := r.network.RetirePhysicalTunnel(operation, name, uint32(index)); err != nil {
-		r.Cancel()
-		return expected, errors.New("desktop Tor MTU transition could not retire the captured tunnel policy")
+		failure := err
+		if mobiletor.ObservationContextExpired(operation, err) {
+			deadline, _ := bounded.Deadline()
+			failure = errors.Join(err, routerVPNMTUFinalizeContext(operation, deadline, func(call context.Context) error { return r.bindPhysicalTunnel(call, r.tun, name, uint32(index)) }))
+		}
+		if !mobiletor.ObservationContextOnly(failure) {
+			r.Cancel()
+		}
+		return expected, failure
 	}
 	current, changeErr := change(operation, expected, mtu)
 	if errors.Is(bounded.Err(), context.DeadlineExceeded) {
 		r.Cancel()
 	}
 	reader, ok := current.(routerVPNDesktopTorTUN)
-	if !ok || current.Tag() != e.tunTag || current.Type() != C.TypeTun || !r.readerLifetimeCurrent() {
+	if !ok || current.Tag() != e.tunTag || current.Type() != C.TypeTun {
 		r.Cancel()
-		return nil, errors.New("desktop Tor MTU transaction lost its native reader")
+		return current, errors.Join(changeErr, ctx.Err(), errors.New("desktop Tor MTU transaction lost its native reader"))
 	}
-	name, index, actual, readErr = reader.RouterVPNDesktopMTUInterface()
-	if readErr != nil || name != r.name || index < 1 || actual < 1280 || actual > 9000 {
-		r.Cancel()
-		return nil, errors.New("desktop Tor MTU transaction has no valid native readback")
-	}
-	// Only this serialized result may advance the reader and its revision.
-	// A rollback can have the original MTU and a new interface index.
+	// Retain only the manager's returned reader. Cancellation may prevent its
+	// public adoption, but cannot erase the original transaction's cleanup owner.
 	e.tun = current
-	r.tun, r.name, r.index, r.mtu = reader, name, index, actual
-	if current != expected {
-		r.mtuRevision++
+	deadline, _ := bounded.Deadline()
+	finalErr := routerVPNMTUFinalizeContext(operation, deadline, func(finalCtx context.Context) error {
+		if err := r.readerLifetimeCurrentContext(finalCtx); err != nil {
+			return err
+		}
+		var err error
+		name, index, actual, err = reader.RouterVPNDesktopMTUInterfaceContext(finalCtx)
+		if err != nil {
+			return err
+		}
+		if name != r.name || index < 1 || actual < 1280 || actual > 9000 {
+			return errors.New("desktop Tor MTU transaction has no valid native readback")
+		}
+		changed := r.tun != reader
+		r.tun, r.name, r.index, r.mtu = reader, name, index, actual
+		if changed {
+			r.mtuRevision++
+		}
+		if err := r.bindPhysicalTunnel(finalCtx, reader, name, uint32(index)); err != nil {
+			return err
+		}
+		if _, err := e.identityLockedContext(finalCtx); err != nil {
+			return err
+		}
+		return r.readerLifetimeCurrentContext(finalCtx)
+	})
+	if finalErr != nil {
+		if !mobiletor.ObservationContextOnly(finalErr) {
+			r.Cancel()
+			return nil, errors.Join(changeErr, ctx.Err(), finalErr)
+		}
+		return current, errors.Join(changeErr, ctx.Err(), finalErr)
 	}
-	if err := r.bindPhysicalTunnel(operation, reader, name, uint32(index)); err != nil {
-		r.Cancel()
-		return nil, errors.New("desktop Tor MTU replacement could not prove its actual tunnel policy")
+	if changeErr != nil || ctx.Err() != nil {
+		return current, errors.Join(changeErr, ctx.Err())
 	}
-	if e.identityLocked() == "" || !r.readerLifetimeCurrent() {
-		r.Cancel()
-		return nil, errors.New("desktop Tor MTU transaction changed another native owner")
-	}
-	if changeErr != nil {
-		return current, changeErr
-	}
-	if ctx.Err() != nil || actual != mtu || l.closed.Load() {
+	if actual != mtu || l.closed.Load() {
 		return current, errors.New("desktop Tor MTU transaction did not retain its requested value")
 	}
 	return current, nil
@@ -480,19 +638,31 @@ func (l *RouterVPNDesktopTorMTULease) verify(parent context.Context, dial func(c
 	}
 	tag, target := l.VerificationTarget()
 	proof, err := prove(ctx, l.owner.policy.Metadata().SessionID, func(call context.Context, network, address string) (net.Conn, error) {
-		if network != "tcp" || address != target || call.Err() != nil || !l.Healthy() {
+		if err := l.HealthyContext(call); err != nil {
+			return nil, err
+		}
+		if network != "tcp" || address != target {
 			return nil, errors.New("desktop Tor MTU proof attempted another target")
 		}
 		return dial(call, tag, address)
 	})
-	if err != nil || !proof.IsTor || proof.SessionID != l.owner.policy.Metadata().SessionID || proof.CheckedAt.IsZero() || !l.Healthy() {
+	if err != nil {
+		return err
+	}
+	if err := l.HealthyContext(ctx); err != nil {
+		return err
+	}
+	if !proof.IsTor || proof.SessionID != l.owner.policy.Metadata().SessionID || proof.CheckedAt.IsZero() {
 		return errors.New("desktop Tor MTU fresh exit proof failed or became stale")
 	}
 	if err := l.owner.VerifyCurrentPath(ctx); err != nil {
 		return err
 	}
 	after, err := l.MTUReadbackContext(ctx)
-	if err != nil || after != before || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	if after != before {
 		return errors.New("desktop Tor MTU reader changed during public proof")
 	}
 	return nil
@@ -516,7 +686,13 @@ func (l *RouterVPNDesktopTorMTULease) Resolve(parent context.Context, host strin
 	e := l.owner.engine
 	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: e.tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
 	addresses, err := e.box.dnsRouter.Lookup(ctx, host, adapter.DNSQueryOptions{})
-	if err != nil || ctx.Err() != nil || !l.Healthy() || !activity.current(l) {
+	if err != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err())
+	}
+	if err := l.HealthyContext(ctx); err != nil {
+		return nil, err
+	}
+	if !activity.current(l) {
 		return nil, errors.New("desktop Tor MTU selected DNS lookup failed")
 	}
 	result := make([]netip.Addr, 0, len(addresses))

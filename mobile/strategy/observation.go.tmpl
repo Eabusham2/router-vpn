@@ -12,6 +12,9 @@ import (
 func RouterVPNLockContext(ctx context.Context, mu *sync.Mutex) error {
 	return routerVPNObserveLock(ctx, mu.TryLock, mu.Unlock)
 }
+func RouterVPNWriteLockContext(ctx context.Context, mu *sync.RWMutex) error {
+	return routerVPNObserveLock(ctx, mu.TryLock, mu.Unlock)
+}
 func RouterVPNRLockContext(ctx context.Context, mu *sync.RWMutex) error {
 	return routerVPNObserveLock(ctx, mu.TryRLock, mu.RUnlock)
 }

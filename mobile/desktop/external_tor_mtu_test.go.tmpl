@@ -153,7 +153,7 @@ func TestRouterVPNDesktopTorMTUCommandPublishesExactRollbackAndFreshPath(t *test
 	if json.Unmarshal(desktopExternalWaitFile(t, f.directory, "mtu-status.json"), &idle) != nil || idle.Generation != 0 || !idle.Requested || idle.MTUReadback != nil {
 		t.Fatal("native Tor command did not expose its actual unmeasured Auto state", idle)
 	}
-	request := routerVPNDesktopMTURequest{Schema: 1, Session: initial.SessionID, SourceSHA256: initial.SourceSHA256, ConfigSHA256: initial.ConfigSHA256,
+	request := routerVPNDesktopMTURequest{DeadlineNS: time.Now().Add(time.Minute).UnixNano(), Schema: 1, Session: initial.SessionID, SourceSHA256: initial.SourceSHA256, ConfigSHA256: initial.ConfigSHA256,
 		Generation: 1, Request: strings.Repeat("d", 32), Force: true}
 	write := func(name string, value any) {
 		t.Helper()
@@ -175,7 +175,7 @@ func TestRouterVPNDesktopTorMTUCommandPublishesExactRollbackAndFreshPath(t *test
 		working.Policy != initial.Policy || working.Proof != initial.Proof || working.SourceSHA256 != initial.SourceSHA256 || working.ConfigSHA256 != initial.ConfigSHA256 {
 		t.Fatal("Tor heartbeat changed immutable identity or mixed interface receipts", working)
 	}
-	write("mtu-cancel.json", routerVPNDesktopMTUControl{Schema: 1, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: 1, Request: request.Request})
+	write("mtu-cancel.json", routerVPNDesktopMTUControl{DeadlineNS: request.DeadlineNS, Schema: 1, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: 1, Request: request.Request})
 	restored := desktopTorWaitMTUProof(t, f, func(p mobiletor.DesktopBridgeProof) bool {
 		return p.MTUReadback != nil && p.MTUReadback.Revision == 2
 	})
@@ -333,7 +333,7 @@ func TestRouterVPNDesktopTorMTUHeartbeatAdoptsCompleteReceipt(t *testing.T) {
 					}
 					return
 				}
-				if err != nil || calls != 1 || receipt.MTUReadback == nil || *receipt.MTUReadback != valid ||
+				if err != nil || calls != 1 || readbacks != 2 || receipt.MTUReadback == nil || *receipt.MTUReadback != valid ||
 					receipt.InterfaceName != valid.InterfaceName || receipt.InterfaceIndex != valid.InterfaceIndex || receipt.EffectiveMTU != valid.EffectiveMTU || receipt.NetworkReceipt != network {
 					t.Fatal("successful observation did not adopt its complete exact receipt", err, receipt)
 				}
@@ -372,4 +372,11 @@ func (f *desktopTorReceiptCommandFixture) DesktopNetworkReceiptContext(ctx conte
 		return "", err
 	}
 	return f.network()
+}
+
+func (f *desktopTorMeasuredCommandFixture) DesktopMTUContext(ctx context.Context) (*routerVPNDesktopMTU, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.mtu, nil
 }

@@ -208,7 +208,14 @@ func routerVPNTorMaintain(ctx context.Context, owner routerVPNTorOwner, files *r
 		result.observationExpired = mobiletor.ObservationContextExpired(ctx, err)
 		return result
 	}
-	if files.current() != nil || mtu != nil && mtu.tick() != nil || path != nil && path.tick() != nil || dns.tick() != nil || latency.tick() != nil {
+	if mtu != nil {
+		if err := mtu.tickContext(ctx); err != nil {
+			result.err = err
+			result.observationExpired = mobiletor.ObservationContextExpired(ctx, err)
+			return result
+		}
+	}
+	if files.current() != nil || path != nil && path.tick() != nil || dns.tick() != nil || latency.tick() != nil {
 		result.err = routerVPNTorFailure
 		return result
 	}

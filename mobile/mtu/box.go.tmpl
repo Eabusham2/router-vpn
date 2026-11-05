@@ -27,7 +27,10 @@ func (s *Box) RouterVPNChangeMTUTransaction(ctx context.Context, expected adapte
 	if !ok {
 		return nil, errors.New("captured inbound is not the native TUN")
 	}
-	current, exists := s.inbound.Get(expected.Tag())
+	current, exists, err := adapter.RouterVPNInboundContext(ctx, s.inbound, expected.Tag())
+	if err != nil {
+		return nil, err
+	}
 	if !exists || current != expected || ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("MTU inbound ownership changed")
 	}

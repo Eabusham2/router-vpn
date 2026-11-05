@@ -88,6 +88,32 @@ class NativeObservationVerdicts(unittest.TestCase):
                                 NODE.execute_baseline_suite(baseline, suite)
 
 
+class NativeMTUOperationVerdicts(unittest.TestCase):
+    def test_each_original_operation_and_cleanup_verdict_is_required(self):
+        expected = {
+            "mtu-operation-context": 15, "mtu-owner-context": 7,
+            "mtu-manager-context": 4, "mtu-cleanup-context": 4, "mtu-startup-context": 1, "mtu-finalization-context": 5,
+        }
+        self.assertEqual(set(expected), set(NODE.MTU_CONTEXT_VERDICTS))
+        for family, count in expected.items():
+            names = NODE.MTU_CONTEXT_VERDICTS[family]
+            self.assertEqual(len(names), count)
+            self.assertEqual(len(set(names)), count)
+            suite = (family, "exact-generated-package", "original-context-selector", tuple(name for name in names if "/" not in name))
+            lines = [line for name in names for line in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n")]
+            baseline = Mock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                baseline.execute.return_value = (0, "".join(lines))
+                NODE.execute_baseline_suite(baseline, suite)
+                for line in lines:
+                    for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line,
+                                    "".join(lines).replace(line, line.replace("Test", "ForeignTest", 1), 1)):
+                        with self.subTest(family=family, verdict=line):
+                            baseline.execute.return_value = (0, changed)
+                            with self.assertRaisesRegex(ValueError, "omitted"):
+                                NODE.execute_baseline_suite(baseline, suite)
+
+
 class NativePhysicalMutationVerdicts(unittest.TestCase):
     def test_physical_mutation_context_requires_every_original_verdict(self):
         parent = "TestRouterVPNPhysicalTunnelOriginalMutationContext"
@@ -109,6 +135,25 @@ class NativePhysicalMutationVerdicts(unittest.TestCase):
 
 
 class NativeMTUVerdicts(unittest.TestCase):
+    def test_mtu_command_context_requires_every_original_verdict(self):
+        parents = ["TestRouterVPNDesktopMTUCallerContextWaits", "TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline",
+                   "TestRouterVPNDesktopMTUCacheExpiredSaveIsNotACommit", "TestRouterVPNDesktopMTURestoreContextCancelsAndReprovesOriginal"]
+        names = parents + [parents[0] + "/" + case for case in ("start", "record", "commit", "cancel", "cache")]
+        names += [parents[1] + "/" + case for case in ("accepted-worker", "already-expired")]
+        suite = ("mtu-command-context", "./cmd/sing-box", "exact-context-selector", tuple(parents))
+        lines = [line for test in names for line in ("=== RUN   " + test + "\n", "--- PASS: " + test + " (0.01s)\n")]
+        baseline = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            baseline.execute.return_value = (0, "".join(lines))
+            NODE.execute_baseline_suite(baseline, suite)
+            for line in lines:
+                for changed in ("".join(lines).replace(line, "", 1), "".join(lines) + line,
+                                "".join(lines).replace(line, line.replace("Test", "ForeignTest", 1), 1)):
+                    with self.subTest(line=line):
+                        baseline.execute.return_value = (0, changed)
+                        with self.assertRaisesRegex(ValueError, "omitted"):
+                            NODE.execute_baseline_suite(baseline, suite)
+
     def test_actual_tor_lease_release_ignores_held_owner_and_rejects_old_lock(self):
         spec = importlib.util.spec_from_file_location("tor_lease_control", ROOT / "deploy/test_tor_mtu_release.py")
         control = importlib.util.module_from_spec(spec)

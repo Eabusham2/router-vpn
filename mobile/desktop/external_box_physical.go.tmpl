@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"runtime"
-	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
@@ -229,19 +228,22 @@ func (b *routerVPNDesktopExternalBinding) cancel() {
 }
 
 func (b *routerVPNDesktopExternalBinding) bindTUN(ctx context.Context, reader routerVPNDesktopTorTUN, name string, index uint32) error {
-	if !b.current() || ctx == nil || ctx.Err() != nil || reader == nil || name == "" || index == 0 {
+	if err := b.currentContext(ctx); err != nil {
+		return err
+	}
+	if reader == nil || name == "" || index == 0 {
 		return errors.New("ordinary desktop physical TUN binding is retired")
 	}
 	if runtime.GOOS != "darwin" {
 		return b.network.BindPhysicalTunnel(ctx, name, index)
 	}
 	control, ok := reader.(interface {
-		RouterVPNDesktopTunnelControl(func() bool) (*os.File, error)
+		RouterVPNDesktopTunnelControlContext(context.Context, func(context.Context) error) (*os.File, error)
 	})
 	if !ok {
 		return errors.New("ordinary Darwin protection requires its actual owned utun control")
 	}
-	file, err := control.RouterVPNDesktopTunnelControl(b.current)
+	file, err := control.RouterVPNDesktopTunnelControlContext(ctx, b.currentContext)
 	if file != nil {
 		defer file.Close()
 	}
@@ -268,11 +270,16 @@ func (b *routerVPNDesktopExternalBinding) validTUN(expected adapter.Inbound) boo
 }
 
 func (b *routerVPNDesktopExternalBinding) retireTUN(ctx context.Context, expected adapter.Inbound) error {
-	name, index, _, err := b.readback(expected)
+	name, index, _, err := b.readbackContext(ctx, expected)
 	if err != nil {
 		return err
 	}
 	if err := b.network.RetirePhysicalTunnel(ctx, name, uint32(index)); err != nil {
+		// A cancelled acknowledgement may follow the actual permit removal. Keep
+		// that original transition recoverable by re-binding only this same reader.
+		if mobiletor.ObservationContextExpired(ctx, err) {
+			b.detached = true
+		}
 		return err
 	}
 	b.detached = true
@@ -280,26 +287,31 @@ func (b *routerVPNDesktopExternalBinding) retireTUN(ctx context.Context, expecte
 }
 
 func (b *routerVPNDesktopExternalBinding) adoptTUN(ctx context.Context, current adapter.Inbound) error {
-	if !b.current() || !b.detached || ctx == nil || current == nil || current.Type() != C.TypeTun {
-		return errors.New("ordinary desktop TUN replacement lost its captured physical lifetime")
+	if err := b.currentContext(ctx); err != nil {
+		return err
 	}
-	// RouterVPNChangeMTU may return its exact rollback reader after the user's
-	// operation was cancelled. Rebind that reader using this captured network
-	// lifetime's bounded cleanup context. The caller still reports cancellation;
-	// a real proof/network cancellation revokes this context and remains fatal.
-	restore, cancel := context.WithTimeout(b.ctx, 3*time.Second)
-	defer cancel()
+	if !b.detached && current == b.inbound {
+		_, _, _, err := b.readbackContext(ctx, current)
+		return err
+	}
+	if !b.detached || current == nil || current.Type() != C.TypeTun {
+		return errors.New("ordinary desktop replacement lost its captured transaction")
+	}
 	reader, ok := current.(routerVPNDesktopTorTUN)
 	if !ok {
-		return errors.New("ordinary desktop replacement has no native interface readback")
+		return errors.New("ordinary desktop replacement has no bounded native reader")
 	}
-	// The native transaction carries the existing reader guard to its exact
-	// candidate or rollback reader. Claiming it again would replace that owner.
-	name, index, mtu, err := reader.RouterVPNDesktopMTUInterface()
-	if err != nil || name == "" || index < 1 || mtu < 1280 || mtu > 9000 || b.interfaceName != "" && name != b.interfaceName {
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil {
+		return err
+	}
+	if name == "" || index < 1 || mtu < 1280 || mtu > 9000 || b.interfaceName != "" && name != b.interfaceName {
 		return errors.New("ordinary desktop replacement has an invalid actual TUN identity")
 	}
-	if err := b.bindTUN(restore, reader, name, uint32(index)); err != nil {
+	if err := b.bindTUN(ctx, reader, name, uint32(index)); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	b.inbound, b.reader, b.name, b.index, b.mtu, b.detached = current, reader, name, index, mtu, false
@@ -327,6 +339,40 @@ func (b *routerVPNDesktopExternalBinding) mtuAuthority(config, authority string)
 	raw, err := EJSON.Marshal(fields)
 	if err != nil || !b.current() {
 		return "", "", errors.New("ordinary desktop MTU authority retired before delivery")
+	}
+	return b.policy.Config(), string(raw), nil
+}
+
+// Measurements keep the successful original proof's source authority while
+// verifying the actual, separately sealed desktop graph. Only the retained
+// physical binding can perform this translation; imported options cannot.
+func (b *routerVPNDesktopExternalBinding) mtuAuthorityContext(ctx context.Context, config, authority string) (string, string, error) {
+	if err := b.currentContext(ctx); err != nil {
+		return "", "", err
+	}
+	if b.policy == nil || b.policy.Validate() != nil || config != b.policy.OriginalPolicy().Config() {
+		return "", "", errors.New("ordinary desktop MTU authority belongs to another original graph")
+	}
+	// This JSON was produced by the successful shared proof, never accepted
+	// from a host. Preserve every field while changing only the source binding
+	// to the actual desktop graph supplied alongside it.
+	var fields map[string]EJSON.RawMessage
+	var source string
+	if EJSON.Unmarshal([]byte(authority), &fields) != nil || len(fields) != 6 || EJSON.Unmarshal(fields["source_sha256"], &source) != nil || source != b.policy.Metadata().OriginalSourceSHA256 {
+		return "", "", errors.New("ordinary desktop MTU authority lost its original source identity")
+	}
+	for _, key := range []string{"schema", "id", "expected_public_ip", "mtu_policy", "jumbo_tun"} {
+		if _, exists := fields[key]; !exists {
+			return "", "", errors.New("ordinary desktop MTU authority lost its captured policy fields")
+		}
+	}
+	fields["source_sha256"], _ = EJSON.Marshal(b.policy.Metadata().SourceSHA256)
+	raw, err := EJSON.Marshal(fields)
+	if err != nil {
+		return "", "", errors.New("ordinary desktop MTU authority retired before delivery")
+	}
+	if err := b.currentContext(ctx); err != nil {
+		return "", "", err
 	}
 	return b.policy.Config(), string(raw), nil
 }
@@ -366,4 +412,39 @@ func (l *RouterVPNExternalMTULease) ClaimDesktopTUN(guard func() bool) (string, 
 		return "", 0, 0, errors.New("ordinary desktop MTU has no native reader")
 	}
 	return reader.RouterVPNDesktopMTU(guard)
+}
+
+func (l *RouterVPNExternalMTULease) ClaimDesktopTUNContext(ctx context.Context, guard func(context.Context) error) (string, int, int, error) {
+	if guard == nil {
+		return "", 0, 0, errors.New("MTU claim has no captured guard")
+	}
+	if err := guard(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	if err := l.HealthyContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	e := l.proof.engine
+	if err := adapter.RouterVPNRLockContext(ctx, &e.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer e.mu.RUnlock()
+	if _, err := e.identityLockedContext(ctx); err != nil {
+		return "", 0, 0, err
+	}
+	reader, ok := e.tun.(interface {
+		RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return "", 0, 0, errors.New("MTU claim has no bounded native reader")
+	}
+	if e.physical != nil {
+		binding, ok := e.physical.(*routerVPNDesktopExternalBinding)
+		if !ok {
+			return "", 0, 0, errors.New("ordinary desktop MTU has another physical reader owner")
+		}
+		return binding.readbackContext(ctx, e.tun)
+	}
+	return reader.RouterVPNDesktopMTUContext(ctx, guard)
 }

@@ -3,7 +3,9 @@
 package tun
 
 import (
+	"context"
 	"errors"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"os"
 )
 
@@ -29,6 +31,41 @@ func (t *Inbound) RouterVPNDesktopTunnelControl(guard func() bool) (*os.File, er
 			file.Close()
 		}
 		return nil, errors.Join(err, errors.New("Darwin native control retired during capture"))
+	}
+	return file, nil
+}
+
+// The caller owns this lifecycle lock and the native duplicate; a late duplicate
+// is closed before returning, never handed to a guardian as accepted evidence.
+func (t *Inbound) RouterVPNDesktopTunnelControlContext(ctx context.Context, guard func(context.Context) error) (*os.File, error) {
+	if err := desktopnetwork.LockContext(ctx, &t.routervpnLifecycle); err != nil {
+		return nil, err
+	}
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnDesktop || guard == nil || t.platformInterface != nil {
+		return nil, errors.New("Darwin tunnel control has no captured native reader")
+	}
+	if err := guard(ctx); err != nil {
+		return nil, err
+	}
+	if _, _, _, err := t.routervpnDesktopInterfaceContext(ctx); err != nil {
+		return nil, err
+	}
+	native, ok := t.tunIf.(interface {
+		RouterVPNRetainControlContext(context.Context) (*os.File, error)
+	})
+	if !ok {
+		return nil, errors.New("Darwin native control omitted bounded ownership")
+	}
+	file, err := native.RouterVPNRetainControlContext(ctx)
+	if err == nil {
+		err = guard(ctx)
+	}
+	if err != nil || ctx.Err() != nil {
+		if file != nil {
+			file.Close()
+		}
+		return nil, errors.Join(err, ctx.Err())
 	}
 	return file, nil
 }

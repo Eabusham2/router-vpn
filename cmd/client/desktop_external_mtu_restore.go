@@ -78,7 +78,8 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 	owner.generation = initial.Generation + 1
 	generation, target := owner.generation, owner.restoreMTU
 	owner.mu.Unlock()
-	request := desktopMTURequest{Schema: 1, Session: identity.session, SourceSHA256: identity.source, ConfigSHA256: identity.config, Generation: generation, Request: identifier, Force: true, RestoreMTU: target}
+	deadline, _ := ctx.Deadline()
+	request := desktopMTURequest{DeadlineNS: deadline.UnixNano(), Schema: 1, Session: identity.session, SourceSHA256: identity.source, ConfigSHA256: identity.config, Generation: generation, Request: identifier, Force: true, RestoreMTU: target}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	issued, completed := false, false
@@ -118,7 +119,7 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 			if !record.Requested {
 				return errors.New("fixed or Jumbo MTU differs from captured restoration value")
 			}
-			if err = writeDesktopMTUControl(launch, "mtu-request.json", request); err != nil {
+			if err = writeDesktopMTUControlContext(ctx, launch, "mtu-request.json", request); err != nil {
 				return err
 			}
 			issued = true
