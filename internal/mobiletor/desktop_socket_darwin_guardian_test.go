@@ -1828,6 +1828,61 @@ func TestDesktopDarwinGuardianKernelForegroundAdmission(t *testing.T) {
 	}
 }
 
+func TestDesktopDarwinGuardianKernelCreatorAdmission(t *testing.T) {
+	for _, mode := range []string{"live", "cancelled", "expired"} {
+		t.Run(mode, func(t *testing.T) {
+			fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			syscall.CloseOnExec(fd)
+			file := os.NewFile(uintptr(fd), "creator-completion-admission")
+			defer file.Close()
+			identity, err := desktopDarwinSocketIdentity(file)
+			if err != nil {
+				t.Fatal("actual original socket identity", err)
+			}
+			capture := desktopSocketFixtureCapture()
+			creation := DesktopSocketCreation{Capture: capture, SocketID: strings.Repeat("6", 32), Network: "udp"}
+			retained := &desktopDarwinOwnedSocket{creation: DesktopSocketCreation{SocketID: strings.Repeat("7", 32)}}
+			guardian := &desktopDarwinGuardian{capture: capture, uid: identity.uid,
+				sockets: map[string]*desktopDarwinOwnedSocket{retained.creation.SocketID: retained}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var want error
+			if mode == "cancelled" {
+				cancel()
+				want = context.Canceled
+			} else if mode == "expired" {
+				var stop context.CancelFunc
+				ctx, stop = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				defer stop()
+				want = context.DeadlineExceeded
+			}
+			// Model arrival at the post-join admission boundary with a real,
+			// independently inspected kernel descriptor. No child or PF verdict
+			// is fabricated by this completion-lifetime regression.
+			adopted, err := guardian.adoptCreatedSocket(ctx, creation, file)
+			if guardian.sockets[retained.creation.SocketID] != retained {
+				t.Fatal("late completion changed a previously retained owner")
+			}
+			if want != nil {
+				if adopted != nil || !errors.Is(err, want) || len(guardian.sockets) != 1 {
+					t.Fatal("late creator completion acquired socket authority", adopted, err)
+				}
+				if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+					t.Fatal("rejected creator completion retained its descriptor", err)
+				}
+				return
+			}
+			owned := guardian.sockets[creation.SocketID]
+			if err != nil || adopted != file || len(guardian.sockets) != 2 || owned == nil || owned.file != file || owned.creation != creation || owned.identity != identity {
+				t.Fatal("live creator completion lost its original descriptor or identity", err)
+			}
+		})
+	}
+}
+
 func TestDesktopDarwinGuardianKernelSocketRetirementReusesCapacity(t *testing.T) {
 	remote := desktopDarwinKernelPeer(t, "udp4")
 	policy := desktopDarwinKernelPolicy(t, []DesktopDarwinSocketDestination{{Network: "udp", Address: remote}})

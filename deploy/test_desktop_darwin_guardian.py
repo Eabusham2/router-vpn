@@ -32,7 +32,7 @@ UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
 CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'PFGenerationRetirement', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'FrameAdmission', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
-         'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
+         'CreatorAdmission', 'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
          'StaleCaptureAndReplacement')

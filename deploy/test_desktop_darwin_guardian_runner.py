@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -373,6 +374,80 @@ class DarwinOriginalControlLifetime(unittest.TestCase):
         regression = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(regression)
         regression.execute(ROOT)
+
+
+class DarwinCreatorAdmission(unittest.TestCase):
+    def test_actual_admission_rejects_expired_completion_and_cancellation_during_identity(self):
+        # Execute the shipping method with actual owned file descriptors.
+        # Only Darwin's libproc identity read is modeled; the native suite
+        # separately checks this same method with real kernel socket identity.
+        source = (ROOT/'internal/mobiletor/desktop_socket_darwin_helper.go').read_text()
+        start = 'func (g *desktopDarwinGuardian) adoptCreatedSocket('
+        end = '\nfunc (g *desktopDarwinGuardian) bind('
+        self.assertEqual(source.count(start), 1)
+        self.assertEqual(source.count(end), 1)
+        method = source[source.index(start):source.index(end)]
+        header = r'''package creator
+import("context";"errors";"os")
+type DesktopSocketCreation struct{SocketID,Network string}
+type DesktopSocketGrant struct{}
+type desktopDarwinKernelSocket struct{uid uint32;network string}
+type desktopDarwinOwnedSocket struct{creation DesktopSocketCreation;file *os.File;identity desktopDarwinKernelSocket;grants map[string]DesktopSocketGrant}
+type desktopDarwinGuardian struct{uid uint32;sockets map[string]*desktopDarwinOwnedSocket}
+var inspect func(*os.File)(desktopDarwinKernelSocket,error)
+func desktopDarwinSocketIdentity(f *os.File)(desktopDarwinKernelSocket,error){return inspect(f)}
+'''
+        test = r'''package creator
+import("context";"errors";"os";"testing";"time")
+func TestShippingCreatorAdmission(t *testing.T){
+ for _,mode:=range []string{"live","cancelled","expired","during-identity","identity-error"}{t.Run(mode,func(t *testing.T){
+  f,err:=os.CreateTemp(t.TempDir(),"original");if err!=nil{t.Fatal(err)};defer f.Close()
+  retained:=&desktopDarwinOwnedSocket{};g:=&desktopDarwinGuardian{uid:41,sockets:map[string]*desktopDarwinOwnedSocket{"retained":retained}}
+  c:=DesktopSocketCreation{"original","udp"};ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+  var want error
+  switch mode{case "cancelled":cancel();want=context.Canceled
+  case "expired":var stop context.CancelFunc;ctx,stop=context.WithDeadline(context.Background(),time.Now().Add(-time.Second));defer stop();want=context.DeadlineExceeded
+  case "during-identity","identity-error":want=context.Canceled}
+  calls:=0;identity:=desktopDarwinKernelSocket{41,"udp"}
+  inspect=func(actual *os.File)(desktopDarwinKernelSocket,error){calls++;if actual!=f{t.Fatal("replaced original descriptor")};if mode=="during-identity"||mode=="identity-error"{cancel()};if mode=="identity-error"{return identity,os.ErrClosed};return identity,nil}
+  got,err:=g.adoptCreatedSocket(ctx,c,f)
+  if g.sockets["retained"]!=retained{t.Fatal("changed retained owner")}
+  if want!=nil{
+   if got!=nil||!errors.Is(err,want)||len(g.sockets)!=1{t.Fatal("late creator completion acquired socket authority",got,err)}
+   if _,err:=f.Stat();!errors.Is(err,os.ErrClosed){t.Fatal("late descriptor was not closed",err)}
+   if (mode=="cancelled"||mode=="expired")&&calls!=0{t.Fatal("expired creator completion entered kernel inspection")}
+   if mode=="identity-error"&&!errors.Is(err,os.ErrClosed){t.Fatal("identity error was discarded",err)}
+  }else{owned:=g.sockets[c.SocketID];if err!=nil||got!=f||len(g.sockets)!=2||owned==nil||owned.creation!=c||owned.file!=f||owned.identity!=identity{t.Fatal("live completion lost original authority",err)};if _,err:=f.Stat();err!=nil{t.Fatal("live descriptor was closed",err)}}
+ })}
+}
+'''
+        guard = '\tif err := ctx.Err(); err != nil {\n\t\tfile.Close()\n\t\treturn nil, err\n\t}\n'
+        self.assertEqual(method.count(guard), 2)
+        variants = [('baseline', method, None),
+                    ('expired-inspection', method.replace(guard, '', 1), 'expired creator completion entered kernel inspection'),
+                    ('late-adoption', method[:method.rindex(guard)]+method[method.rindex(guard)+len(guard):],
+                     'late creator completion acquired socket authority')]
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for shipping creator admission regression')
+        with tempfile.TemporaryDirectory(prefix='darwin-creator-admission-') as directory:
+            folder = Path(directory)
+            implementation, regression = folder/'creator.go', folder/'creator_test.go'
+            regression.write_text(test)
+            for label, selected, witness in variants:
+                implementation.write_text(header+selected)
+                result = subprocess.run([compiler, 'test', '-race', '-v', '-timeout=20s', str(implementation), str(regression)],
+                                        capture_output=True, text=True, timeout=120,
+                                        env=dict(os.environ, GOTOOLCHAIN='local'))
+                output = result.stdout+result.stderr
+                if witness is None:
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertEqual(output.count('--- PASS: TestShippingCreatorAdmission/'), 5, output)
+                else:
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertIn(witness, output)
+                    for invalid in ('panic:', 'fatal error:', 'WARNING: DATA RACE', '[build failed]'):
+                        self.assertNotIn(invalid, output)
+                print('Darwin creator admission: '+label+' verified', flush=True)
 
 
 if __name__ == '__main__':

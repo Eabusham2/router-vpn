@@ -341,16 +341,31 @@ func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreat
 		command.Process.Kill()
 	}
 	joinErr := command.Wait()
-	if err != nil || joinErr != nil || file == nil || reply.Sequence != 1 || reply.Capture != g.capture || reply.Creation != c {
+	if err != nil || joinErr != nil || ctx.Err() != nil || file == nil || reply.Sequence != 1 || reply.Capture != g.capture || reply.Creation != c {
 		if file != nil {
 			file.Close()
 		}
-		return nil, errors.Join(err, joinErr, errors.New("Darwin isolated transfer did not join"))
+		return nil, errors.Join(err, joinErr, ctx.Err(), errors.New("Darwin isolated transfer did not join"))
+	}
+	return g.adoptCreatedSocket(ctx, c, file)
+}
+
+// Child exit and a complete transfer do not extend the original operation.
+// Keep the descriptor private until both its kernel identity and that same
+// caller's lifetime have been checked; a late result must never enter sockets.
+func (g *desktopDarwinGuardian) adoptCreatedSocket(ctx context.Context, c DesktopSocketCreation, file *os.File) (*os.File, error) {
+	if err := ctx.Err(); err != nil {
+		file.Close()
+		return nil, err
 	}
 	identity, err := desktopDarwinSocketIdentity(file)
 	if err != nil || identity.uid != g.uid || identity.network != c.Network {
 		file.Close()
-		return nil, errors.New("Darwin creator changed its actual kernel socket owner")
+		return nil, errors.Join(err, ctx.Err(), errors.New("Darwin creator changed its actual kernel socket owner"))
+	}
+	if err := ctx.Err(); err != nil {
+		file.Close()
+		return nil, err
 	}
 	g.sockets[c.SocketID] = &desktopDarwinOwnedSocket{creation: c, file: file, identity: identity, grants: make(map[string]DesktopSocketGrant)}
 	return file, nil
