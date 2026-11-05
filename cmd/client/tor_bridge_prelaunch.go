@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -80,6 +81,13 @@ func (owner *torBridgePrelaunch) close() {
 // The caller owns its connection transaction. Prelaunch failures retire only
 // this unstarted workspace; a successful Start transfers it to native teardown.
 func (owner *torBridgePrelaunch) start(check func() error) error {
+	operation := context.Background()
+	if owner != nil && owner.app != nil {
+		operation = owner.app.connectionOperationContextOrBackground()
+	}
+	return owner.startContext(operation, check)
+}
+func (owner *torBridgePrelaunch) startContext(operation context.Context, check func() error) error {
 	if owner == nil {
 		return errors.New("Tor launch has no captured prepared workspace")
 	}
@@ -128,6 +136,16 @@ func (owner *torBridgePrelaunch) start(check func() error) error {
 		if err := registerActiveDNSRuntimeConfig(owner.app, owner.dns.ProfileID, owner.dns.RuntimeID, owner.dns.Config); err != nil {
 			desktopNodeOwners.CompareAndDelete(owner.app, launch)
 			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
+		}
+	}
+	if owner.workspace.tor != nil {
+		startup, err := captureDesktopNativeStartup(operation, owner.workspace)
+		if err == nil {
+			owner.command.Env, err = desktopNativeStartupEnvironment(startup, owner.workspace, owner.command.Env)
+		}
+		if err != nil {
+			desktopNodeOwners.CompareAndDelete(owner.app, owner.workspace)
+			return errors.Join(err, owner.cleanup())
 		}
 	}
 	if err := owner.command.Start(); err != nil {

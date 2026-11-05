@@ -386,6 +386,15 @@ func desktopExternalRunCompiledFixture(t *testing.T, kind, root string, launch *
 	command.Stdout, command.Stderr = io.Discard, &childOutput
 	launch.command = command
 	launch.external.started = time.Now()
+	startup, startupErr := captureDesktopNativeStartup(context.Background(), launch)
+	if startupErr != nil {
+		t.Fatal(startupErr)
+	}
+	t.Cleanup(launch.startup.Load().stop)
+	command.Env, startupErr = desktopNativeStartupEnvironment(startup, launch, command.Env)
+	if startupErr != nil {
+		t.Fatal(startupErr)
+	}
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}

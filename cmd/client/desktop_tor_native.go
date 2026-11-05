@@ -348,17 +348,22 @@ func (a *app) readDesktopTorProofContext(ctx context.Context, launch *desktopNod
 }
 
 func (a *app) readDesktopTorProgress(launch *desktopNodeLaunch) error {
-	if err := a.desktopTorCurrent(launch); err != nil {
+	return a.readDesktopTorProgressContext(context.Background(), launch)
+}
+func (a *app) readDesktopTorProgressContext(ctx context.Context, launch *desktopNodeLaunch) error {
+	if err := a.desktopTorCurrentContext(ctx, launch); err != nil {
 		return err
 	}
-	raw, err := readDesktopRuntimeFile(launch, "progress.json", 8192)
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "progress.json", 8192)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	launch.tor.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &launch.tor.mu); err != nil {
+		return err
+	}
 	launch.tor.admissionObserved = true
 	launch.tor.mu.Unlock()
 	var progress desktopTorProgress
@@ -371,10 +376,12 @@ func (a *app) readDesktopTorProgress(launch *desktopNodeLaunch) error {
 	default:
 		return errors.New("Tor progress has an unowned lifecycle stage")
 	}
-	if err := a.desktopTorCurrent(launch); err != nil {
+	if err := a.desktopTorCurrentContext(ctx, launch); err != nil {
 		return err
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if a.cmd != launch.command {
 		return errors.New("Tor progress completed for a replacement connection")
@@ -389,7 +396,10 @@ func (a *app) waitDesktopTorProof(ctx context.Context, launch *desktopNodeLaunch
 	if ctx == nil {
 		return desktopTorProof{}, errors.New("Tor proof has no captured operation context")
 	}
-	deadline, cancel := context.WithTimeout(ctx, 150*time.Second)
+	deadline, cancel, err := desktopNativeStartupObservation(ctx, launch)
+	if err != nil {
+		return desktopTorProof{}, err
+	}
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -397,22 +407,24 @@ func (a *app) waitDesktopTorProof(ctx context.Context, launch *desktopNodeLaunch
 		if err := deadline.Err(); err != nil {
 			return desktopTorProof{}, err
 		}
-		if err := a.readDesktopTorProgress(launch); err != nil {
+		if err := a.readDesktopTorProgressContext(deadline, launch); err != nil {
 			return desktopTorProof{}, err
 		}
-		proof, err := a.readDesktopTorProof(launch)
+		proof, err := a.readDesktopTorProofContext(deadline, launch)
 		if err == nil {
 			if err := deadline.Err(); err != nil {
 				return desktopTorProof{}, err
 			}
-			if err := a.desktopTorCurrent(launch); err != nil {
+			if err := a.desktopTorCurrentContext(deadline, launch); err != nil {
 				return desktopTorProof{}, err
 			}
-			launch.tor.mu.Lock()
+			if err := desktopnetwork.LockContext(deadline, &launch.tor.mu); err != nil {
+				return desktopTorProof{}, err
+			}
 			captured := proof
 			launch.tor.adopted = &captured
 			launch.tor.mu.Unlock()
-			return proof, nil
+			return proof, deadline.Err()
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return desktopTorProof{}, err

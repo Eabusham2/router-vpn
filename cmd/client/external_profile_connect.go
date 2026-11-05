@@ -515,11 +515,20 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		if nativeRetained != nil {
-			err = nativeRetained.Start(a.connectionOperationContextOrBackground())
-			realCmd = native.command
-		} else {
-			err = realCmd.Start()
+		if native != nil && native.external != nil {
+			var startup context.Context
+			startup, err = captureDesktopNativeStartup(operation, native)
+			if err == nil && nativeRetained == nil {
+				realCmd.Env, err = desktopNativeStartupEnvironment(startup, native, realCmd.Env)
+			}
+		}
+		if err == nil {
+			if nativeRetained != nil {
+				err = nativeRetained.Start(a.connectionOperationContextOrBackground())
+				realCmd = native.command
+			} else {
+				err = realCmd.Start()
+			}
 		}
 		if err != nil {
 			if native != nil && nativeRetained == nil && native.directory != "" {

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"os"
 	"runtime"
 	"strings"
+	"time"
 )
 
 func routerVPNDesktopNetworkProjection(ctx context.Context, owner any) (string, error) {
@@ -177,4 +180,57 @@ func routerVPNNodeMTUDiagnosticReason(message string) string {
 		}
 	}
 	return "unclassified"
+}
+
+// Only public command entry marks the serialized host admission as required.
+// Private composed callers can supply their original bounded context directly;
+// native startup still rejects an absent deadline in either case.
+type routerVPNStartupEnvironmentKey struct{}
+type routerVPNStartupCallerKey struct{}
+type routerVPNStartupEnvironment struct{ raw string }
+
+func routerVPNRequireStartupEnvironment(parent context.Context, raw string) context.Context {
+	return context.WithValue(parent, routerVPNStartupEnvironmentKey{}, routerVPNStartupEnvironment{raw})
+}
+func routerVPNBindStartup(parent, lifetime context.Context, kind, session, source, config string) (context.Context, context.Context, context.CancelFunc, error) {
+	if parent == nil || lifetime == nil {
+		return nil, nil, nil, errors.New("native startup lost its original caller or lifetime")
+	}
+	if err := parent.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	startup := parent
+	stop := func() {}
+	if value, required := parent.Value(routerVPNStartupEnvironmentKey{}).(routerVPNStartupEnvironment); required {
+		admission, err := mobilemultihop.ParseDesktopStartupAdmission(value.raw, kind, session, source, config)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		startup, stop, err = admission.Context(parent)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return context.WithValue(lifetime, routerVPNStartupCallerKey{}, startup), startup, stop, nil
+}
+func routerVPNNativeStartupCaller(ctx context.Context) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	if startup, ok := ctx.Value(routerVPNStartupCallerKey{}).(context.Context); ok {
+		return startup
+	}
+	return ctx
+}
+
+func routerVPNDesktopNetworkHeartbeat(parent context.Context, owner any) (string, bool, error) {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	raw, err := routerVPNDesktopNetworkProjection(ctx, owner)
+	err = errors.Join(err, ctx.Err())
+	expired := mobiletor.ObservationContextExpired(ctx, err)
+	cancel()
+	if expired {
+		return "", true, err
+	}
+	return raw, false, err
 }

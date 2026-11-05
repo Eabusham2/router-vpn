@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"time"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
 // Start requires the caller to retain operationMu and to have already joined
@@ -21,6 +23,17 @@ func (h *desktopLinuxNodeHost) Start(ctx context.Context, journal *desktopLinuxN
 // durable journal and native source admission always use the shipping owners.
 func (h *desktopLinuxNodeHost) startWithVerifier(ctx context.Context, journal *desktopLinuxNodeJournal,
 	predecessor *desktopLinuxNodeTransaction, environment []string, verify func(context.Context, string) (string, error)) error {
+	if h != nil && h.launch != nil && h.launch.external != nil {
+		var err error
+		ctx, err = captureDesktopNativeStartup(ctx, h.launch)
+		if err != nil {
+			return err
+		}
+		environment, err = desktopNativeStartupEnvironment(ctx, h.launch, environment)
+		if err != nil {
+			return err
+		}
+	}
 	if err := h.enter(ctx); err != nil {
 		return err
 	}
@@ -66,7 +79,7 @@ func (h *desktopLinuxNodeHost) startWithVerifier(ctx context.Context, journal *d
 		return err
 	}
 	if h.external != nil {
-		h.transaction, err = newDesktopLinuxExternalTransaction(h, journal, predecessor)
+		h.transaction, err = newDesktopLinuxExternalTransactionContext(ctx, h, journal, predecessor)
 	} else {
 		h.transaction, err = newDesktopLinuxNodeTransaction(h.operation, h.parent, journal, h.process, h.policy, predecessor)
 	}
@@ -90,7 +103,9 @@ func (h *desktopLinuxNodeHost) unoccupied(ctx context.Context) error {
 		return err
 	}
 	a := h.parent.app
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if a.cmd != nil || a.state.Connected {
 		return errors.New("Linux Node start cannot replace an unjoined active connection")
@@ -106,7 +121,9 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 		return err
 	}
 	a := h.parent.app
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(h.launch.profileID)
 	if a.checkCapturedConnectionOperationLocked(h.operation) != nil || !exists || a.cmd != nil || a.state.Connected ||

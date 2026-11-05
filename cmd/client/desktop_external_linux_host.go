@@ -297,12 +297,38 @@ func prepareDesktopLinuxExternalHost(operation context.Context, a *app, launch *
 
 func newDesktopLinuxExternalTransaction(h *desktopLinuxNodeHost, journal *desktopLinuxNodeJournal,
 	predecessor *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
-	if h == nil || h.current(h.operation) != nil || h.policy != nil || h.external == nil || h.process == nil || !h.process.Started() ||
+	return newDesktopLinuxExternalTransactionWithStartup(nil, h, journal, predecessor)
+}
+func newDesktopLinuxExternalTransactionContext(ctx context.Context, h *desktopLinuxNodeHost, journal *desktopLinuxNodeJournal, predecessor *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
+	if ctx == nil {
+		return nil, errors.New("external startup transaction has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return nil, errors.New("external startup transaction has no original deadline")
+	}
+	return newDesktopLinuxExternalTransactionWithStartup(ctx, h, journal, predecessor)
+}
+func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *desktopLinuxNodeHost, journal *desktopLinuxNodeJournal, predecessor *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
+	if h == nil {
+		return nil, errors.New("external transaction has no original host")
+	}
+	call := startup
+	if call == nil {
+		call = h.operation
+	}
+	if err := h.current(call); err != nil {
+		return nil, err
+	}
+
+	if h.policy != nil || h.external == nil || h.process == nil || !h.process.Started() ||
 		journal == nil || !sameDesktopLinuxParentCapture(h.parent, journal.parent) || !sameDesktopLinuxParentCapture(h.parent, h.process.parent) {
 		return nil, errors.New("Linux external transaction lost its original typed source and process")
 	}
 	t := &desktopLinuxNodeTransaction{gate: make(chan struct{}, 1), parent: h.parent, journal: journal, process: h.process,
-		external: h.external, mode: h.launch.mode, operation: h.operation, selection: h.selection, profileID: h.launch.profileID,
+		external: h.external, mode: h.launch.mode, operation: h.operation, startup: startup, selection: h.selection, profileID: h.launch.profileID,
 		revision: h.revision, network: h.network, options: h.options, savedOptions: h.savedOptions, predecessor: predecessor}
 	return finishDesktopLinuxNodeTransaction(t)
 }

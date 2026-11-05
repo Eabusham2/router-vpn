@@ -55,6 +55,15 @@ STARTUP_CONTEXT_VERDICTS = {
     "native-startup-box": ["TestRouterVPNDesktopStartupKeepsCallerAndLifetime", *["TestRouterVPNDesktopStartupKeepsCallerAndLifetime/" + leaf for leaf in ("original", "expired", "late-success", "missing-reader", "no-deadline")]],
     "native-startup-command": ["TestRouterVPNRawCommandOriginalStartupDeadline", *["TestRouterVPNRawCommandOriginalStartupDeadline/" + leaf for leaf in ("cli-bound", "shorter-caller", "expired")]],
 }
+STARTUP_TRANSPORT_VERDICTS = {
+    "native-startup-transport": [name for stem, leaves in (
+        ("TestRouterVPNDesktopStartupEnvelopeControlsOriginalCommand", ("missing", "substituted", "late-success")),
+        ("TestRouterVPNDesktopStartupEnvelopeControlsOriginalTor", ("missing", "substituted", "late-success")),
+        ("TestRouterVPNDesktopHeartbeatKeepsObservationBudget", ("healthy", "pure-expiry", "mixed-loss")),
+        ("TestRouterVPNDesktopTorProcessKeepsOriginalStartup", ("held-launch", "held-authentication", "original-authentication-deadline", "healthy-lifetime"))) for name in (stem, *(stem + "/" + leaf for leaf in leaves))],
+    "native-startup-codec": ["TestDesktopStartupAdmissionKeepsOriginalDeadline", *["TestDesktopStartupAdmissionKeepsOriginalDeadline/" + leaf for leaf in
+        ("original", "duplicate", "unknown", "substituted-session", "substituted-source", "substituted-config", "wrong-kind", "expired", "shorter-caller")]],
+}
 LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
                     if mode in ("shadowsocks", "hysteria2") or layer != "off")
@@ -948,6 +957,8 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, names, "native manager observation")
     if name == "network-context":
         require_native_verdicts(output, NETWORK_CONTEXT_TESTS + NETWORK_CONTEXT_LEAVES, "original network observation")
+    if name in STARTUP_TRANSPORT_VERDICTS:
+        require_native_verdicts(output, STARTUP_TRANSPORT_VERDICTS[name], "original supervised startup transport")
     if name in STARTUP_CONTEXT_VERDICTS:
         require_native_verdicts(output, STARTUP_CONTEXT_VERDICTS[name], "original native startup deadline")
     if name in MTU_CONTEXT_VERDICTS:
@@ -1097,6 +1108,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     suites.append(("network-context", "./protocol/tun", "^TestRouterVPNDesktopNetwork(ReceiptOriginalContext|ReceiptHeldLifecycle|ContextClaimRetainsGuard|ReceiptUnavailable)$", NETWORK_CONTEXT_TESTS))
     suites.append(("native-monitor-context", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeMonitorOriginalContext$", ("TestRouterVPNNativeMonitorOriginalContext",)))
     if platform.system() == "Linux":
+        suites.append(("native-startup-transport", "./cmd/sing-box", "^TestRouterVPNDesktop(StartupEnvelopeControlsOriginal(Command|Tor)|HeartbeatKeepsObservationBudget|TorProcessKeepsOriginalStartup)$", tuple(name for name in STARTUP_TRANSPORT_VERDICTS["native-startup-transport"] if "/" not in name)))
+        suites.append(("native-startup-codec", "./experimental/libbox/routervpn/mobilemultihop", "^TestDesktopStartupAdmissionKeepsOriginalDeadline$", ("TestDesktopStartupAdmissionKeepsOriginalDeadline",)))
         suites.append(STANDARD_MTU_SUITE)
         suites.append(("native-startup-command", "./cmd/sing-box", "^TestRouterVPNRawCommandOriginalStartupDeadline$", ("TestRouterVPNRawCommandOriginalStartupDeadline",)))
         suites.append(("mtu-cleanup-context", "./adapter/inbound", "^TestRouterVPNTunContext(RestoresOnlyWithOriginalCleanupAllowance|ControllerRestoresAfterUnusedCloseCancellation)$", ("TestRouterVPNTunContextRestoresOnlyWithOriginalCleanupAllowance", "TestRouterVPNTunContextControllerRestoresAfterUnusedCloseCancellation")))

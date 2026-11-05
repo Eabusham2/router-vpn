@@ -45,6 +45,9 @@ func routerVPNNewExternalCommand() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
+			if runtime.GOOS == "linux" {
+				ctx = routerVPNRequireStartupEnvironment(ctx, os.Getenv(mobilemultihop.DesktopStartupAdmissionEnvironment))
+			}
 			return routerVPNRunExternalOwnedCommand(ctx, directory, session, physicalSource, config, transfer, linux, journal, darwin)
 		}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
@@ -219,6 +222,7 @@ type routerVPNExternalFactory func(context.Context, *mobilemultihop.ExternalPoli
 
 type routerVPNExternalNative struct {
 	mu           sync.Mutex
+	startup      context.Context
 	box          *box.Box
 	proof        *box.RouterVPNExternalProofRequest
 	physical     *mobilemultihop.DesktopExternalPolicy
@@ -297,7 +301,7 @@ func routerVPNNewExternalNativeWithPreparation(ctx context.Context, policy *mobi
 			return nil, routerVPNExternalFailure
 		}
 	}
-	native := &routerVPNExternalNative{cancel: cancel, physical: physical, source: source, capture: capture, session: session}
+	native := &routerVPNExternalNative{startup: routerVPNNativeStartupCaller(ctx), cancel: cancel, physical: physical, source: source, capture: capture, session: session}
 	instance, err := box.New(box.Options{Context: owned, Options: options})
 	if err != nil {
 		for _, partial := range routerVPNExternalConstructed(owned) {
@@ -331,8 +335,16 @@ func (n *routerVPNExternalNative) Start() error {
 	if n.box == nil {
 		return routerVPNExternalFailure
 	}
+	if runtime.GOOS == "linux" {
+		if err := n.box.RouterVPNDesktopStartupContext(n.startup); err != nil {
+			return errors.Join(routerVPNExternalFailure, err)
+		}
+	}
 	if err := n.box.RouterVPNStrategyStart(); err != nil {
 		return routerVPNExternalFailure
+	}
+	if err := n.startup.Err(); err != nil {
+		return err
 	}
 	var proof *box.RouterVPNExternalProofRequest
 	var err error
@@ -687,7 +699,13 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 	}
 	parent, joinStop := routerVPNWatchCommandStop(parent, files, session, policy.SourceSHA256())
 	defer joinStop()
-	owner, factoryErr := factory(ctx, policy, physical, string(source), string(capture), session)
+	ctx, startup, stopStartup, bindErr := routerVPNBindStartup(parent, ctx, "external", session, policy.SourceSHA256(), configSHA)
+	var owner routerVPNExternalOwner
+	factoryErr := bindErr
+	if bindErr == nil {
+		defer stopStartup()
+		owner, factoryErr = factory(ctx, policy, physical, string(source), string(capture), session)
+	}
 	if owner == nil {
 		// Factory errors with partial native ownership must return that owner.
 		// A nil owner means native parsing failed before any construction.
@@ -697,7 +715,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 			progress.Stage = "cleanup-pending"
 			_ = files.publish("progress.json", progress)
 		}
-		return routerVPNExternalFailure
+		return errors.Join(routerVPNExternalFailure, factoryErr)
 	}
 	type result struct {
 		raw string
@@ -723,6 +741,11 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	finished, connected, stopping := false, false, false
+	defer func() {
+		if !connected {
+			failure = errors.Join(failure, startup.Err())
+		}
+	}()
 	var receipt routerVPNExternalProofRecord
 	var heartbeat time.Time
 	var mtuFiles *routerVPNDesktopMTUFiles
@@ -733,7 +756,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 		select {
 		case outcome := <-done:
 			finished = true
-			if outcome.err != nil || parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) || routerVPNExternalHealthyContext(parent, owner) != nil {
+			if outcome.err != nil || startup.Err() != nil || parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) || routerVPNExternalHealthyContext(startup, owner) != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
@@ -746,7 +769,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 			}
 			heartbeat = time.Now()
 			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, Physical: physicalMetadata, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
-			receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(parent, owner)
+			receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(startup, owner)
 			if err != nil {
 				if parent.Err() != nil {
 					stopping = true
@@ -755,7 +778,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
-			if files.publish("proof.json", receipt) != nil {
+			if startup.Err() != nil || files.publish("proof.json", receipt) != nil || startup.Err() != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
@@ -765,7 +788,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
-			mtuFiles, err = routerVPNOpenDesktopMTUContext(parent, files, owner, session, measurementSource, measurementConfig)
+			mtuFiles, err = routerVPNOpenDesktopMTUContext(startup, files, owner, session, measurementSource, measurementConfig)
 			if err != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
@@ -783,7 +806,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 		case <-parent.Done():
 			stopping = true
 		case <-ticker.C:
-			if parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) {
+			if !connected && startup.Err() != nil || parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) {
 				stopping = true
 				break
 			}
@@ -823,7 +846,11 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				heartbeat = time.Now()
 				next := receipt
 				next.HeartbeatAt, next.Progress = heartbeat.UnixMilli(), routerVPNExternalProgress(owner)
-				next.NetworkReceipt, err = routerVPNDesktopNetworkProjection(parent, owner)
+				var observationExpired bool
+				next.NetworkReceipt, observationExpired, err = routerVPNDesktopNetworkHeartbeat(parent, owner)
+				if observationExpired {
+					break
+				}
 				if err != nil {
 					if parent.Err() != nil {
 						stopping = true

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -57,11 +58,18 @@ func routerVPNTorChildEnvironment() []string {
 	return environment
 }
 
-func (p *routerVPNTorProcess) launch(ctx context.Context) error {
+func (p *routerVPNTorProcess) launch(ctx context.Context) (failure error) {
+	defer func() {
+		if ctx != nil {
+			failure = errors.Join(failure, ctx.Err())
+		}
+	}()
 	if p == nil || ctx == nil || ctx.Err() != nil || p.files.current() != nil || p.binary.current() != nil {
 		return routerVPNTorFailure
 	}
-	p.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &p.mu); err != nil {
+		return err
+	}
 	if p.used || p.retired {
 		p.mu.Unlock()
 		return routerVPNTorFailure
@@ -84,7 +92,7 @@ func (p *routerVPNTorProcess) launch(ctx context.Context) error {
 	p.mu.Unlock()
 	// Exec was given a path, so recheck both actual byte and file identity after
 	// launch and before any authenticated operation can enable networking.
-	if ctx.Err() != nil || p.binary.current() != nil || p.files.current() != nil || p.exited() {
+	if ctx.Err() != nil || p.binary.current() != nil || p.files.current() != nil || p.aliveContext(ctx) != nil {
 		return routerVPNTorFailure
 	}
 	return nil
@@ -108,6 +116,26 @@ func (p *routerVPNTorProcess) exited() bool {
 	}
 }
 
+func (p *routerVPNTorProcess) aliveContext(ctx context.Context) error {
+	if p == nil || ctx == nil {
+		return routerVPNTorFailure
+	}
+	if err := desktopnetwork.LockContext(ctx, &p.mu); err != nil {
+		return err
+	}
+	done := p.done
+	p.mu.Unlock()
+	if done == nil {
+		return routerVPNTorFailure
+	}
+	select {
+	case <-done:
+		return routerVPNTorFailure
+	default:
+		return ctx.Err()
+	}
+}
+
 func routerVPNTorControlAddress(raw []byte) (string, error) {
 	text := string(raw)
 	if strings.HasSuffix(text, "\r\n") {
@@ -128,8 +156,13 @@ func routerVPNTorControlAddress(raw []byte) (string, error) {
 	return value, nil
 }
 
-func (p *routerVPNTorProcess) authenticate(parent context.Context) error {
-	if p == nil || parent == nil || parent.Err() != nil || p.exited() {
+func (p *routerVPNTorProcess) authenticate(parent context.Context) (failure error) {
+	defer func() {
+		if parent != nil {
+			failure = errors.Join(failure, parent.Err())
+		}
+	}()
+	if p == nil || parent == nil || parent.Err() != nil || p.aliveContext(parent) != nil {
 		return routerVPNTorFailure
 	}
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
@@ -140,7 +173,7 @@ func (p *routerVPNTorProcess) authenticate(parent context.Context) error {
 	var address string
 	var cookieInfo os.FileInfo
 	for {
-		if ctx.Err() != nil || p.files.current() != nil || p.exited() {
+		if ctx.Err() != nil || p.files.current() != nil || p.aliveContext(ctx) != nil {
 			return routerVPNTorFailure
 		}
 		port, portErr := p.files.read("tor-control.port", 128)
@@ -174,7 +207,9 @@ func (p *routerVPNTorProcess) authenticate(parent context.Context) error {
 		}
 	}
 	defer clear(cookie)
-	p.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &p.mu); err != nil {
+		return err
+	}
 	command, joined := p.command, p.done
 	p.mu.Unlock()
 	if command == nil || command.Process == nil || joined == nil {
@@ -192,7 +227,7 @@ func (p *routerVPNTorProcess) authenticate(parent context.Context) error {
 	p.control = control
 	p.port = address
 	p.cookie = &routerVPNTorInput{info: cookieInfo, hash: sha256.Sum256(cookie)}
-	if p.exited() || ctx.Err() != nil || p.files.current() != nil {
+	if p.aliveContext(ctx) != nil || ctx.Err() != nil || p.files.current() != nil {
 		return routerVPNTorFailure
 	}
 	p.session, err = mobiletor.NewDesktopBridgeSessionWithNativeJoin(control, p.files.inputs.Policy(), joined)

@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`508ce9ed`, the integrated observation change in `a94cde9d`, and the installed
+`65167920`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -46,7 +46,12 @@ source and activation locks, preserves exact connection intent, and retains mixe
 loss across rechecks. Its integrated race selection and four causal controls pass.
 The retained peer checker likewise preserves a pure task-read expiry without
 inventing an image/namespace mismatch; its actual child/pidfd regression is
-mandatory. The service MTU coordinator retains its separate integration obligation.
+mandatory. External/Tor startup now transports the original accepted deadline
+through the actual native child and Box/TUN composition, with late-result and
+heartbeat regressions. The LinkSetUp address-policy failure observed on both
+architectures at `c2839a15` has a separate source repair in `508ce9ed`; newer
+exact-SHA native acceptance remains required. The current service MTU integration
+retains its bounded cancellation and native acceptance obligations.
 
 Native partial-startup retirement now captures exact successful address effects
 and refuses occupied addresses. A retained transition capability preserves both

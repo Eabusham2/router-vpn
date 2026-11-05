@@ -268,6 +268,15 @@ func desktopTorRunningFixture(t *testing.T, kind string, changes ...func(*common
 	launch.command = command
 	launch.tor.started = time.Now()
 	a := &app{profiles: common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}, state: state{Mode: "external-node", RuntimeMode: launch.mode, RouterID: profile.ID}}
+	startup, startupErr := captureDesktopNativeStartup(context.Background(), launch)
+	if startupErr != nil {
+		t.Fatal(startupErr)
+	}
+	t.Cleanup(launch.startup.Load().stop)
+	command.Env, startupErr = desktopNativeStartupEnvironment(startup, launch, command.Env)
+	if startupErr != nil {
+		t.Fatal(startupErr)
+	}
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -912,11 +912,20 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	if err := a.checkConnectionOperation(); err != nil {
 		return speedLabPath{}, err
 	}
-	if nativeRetained != nil {
-		err = nativeRetained.Start(a.connectionOperationContextOrBackground())
-		cmd = native.command
-	} else {
-		err = cmd.Start()
+	if native != nil && native.external != nil {
+		var startup context.Context
+		startup, err = captureDesktopNativeStartup(operation, native)
+		if err == nil && nativeRetained == nil {
+			cmd.Env, err = desktopNativeStartupEnvironment(startup, native, cmd.Env)
+		}
+	}
+	if err == nil {
+		if nativeRetained != nil {
+			err = nativeRetained.Start(a.connectionOperationContextOrBackground())
+			cmd = native.command
+		} else {
+			err = cmd.Start()
+		}
 	}
 	if err != nil {
 		return speedLabPath{}, err

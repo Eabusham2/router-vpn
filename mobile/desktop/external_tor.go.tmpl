@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/spf13/cobra"
 )
@@ -19,6 +22,9 @@ func init() {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
+			if runtime.GOOS == "linux" {
+				ctx = routerVPNRequireStartupEnvironment(ctx, os.Getenv(mobilemultihop.DesktopStartupAdmissionEnvironment))
+			}
 			return routerVPNRunTor(ctx, directory, session, binary, os.Getenv, routerVPNNewTorNative)
 		}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
@@ -113,6 +119,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	}
 	ctx = context.WithoutCancel(ctx)
 	started := time.Now()
+	ctx, startup, stopStartup, err := routerVPNBindStartup(parent, ctx, "tor", session, metadata.SourceSHA256, metadata.ConfigSHA256)
+	if err != nil {
+		return errors.Join(err, finish())
+	}
+	defer stopStartup()
 	owner, factoryErr := factory(ctx, files, binary)
 	if owner == nil {
 		_ = finish()
@@ -138,6 +149,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	finished, connected, stopping := false, false, false
+	defer func() {
+		if !connected {
+			failure = errors.Join(failure, startup.Err())
+		}
+	}()
 	var receipt mobiletor.DesktopBridgeProof
 	var heartbeat time.Time
 	var paddingPublished time.Time
@@ -248,11 +264,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 			}
 		case result := <-done:
 			finished = true
-			if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
+			if startup.Err() != nil || parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
 				stopping = true
 				break
 			}
-			if result.err != nil || files.current() != nil || routerVPNTorHealthyContext(parent, owner) != nil || !routerVPNTorValidProof(result.proof, metadata, started, time.Now()) {
+			if result.err != nil || files.current() != nil || routerVPNTorHealthyContext(startup, owner) != nil || !routerVPNTorValidProof(result.proof, metadata, started, time.Now()) {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
@@ -273,7 +289,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				break
 			}
 			if measured, ok := owner.(routerVPNTorMeasurementOwner); ok {
-				mtuFiles, err = routerVPNOpenDesktopMTUProviderContext(parent, routerVPNTorOutputFiles(files), measured, session, metadata.SourceSHA256, metadata.ConfigSHA256)
+				mtuFiles, err = routerVPNOpenDesktopMTUProviderContext(startup, routerVPNTorOutputFiles(files), measured, session, metadata.SourceSHA256, metadata.ConfigSHA256)
 				if err == nil {
 					pathFiles, err = routerVPNOpenDesktopPath(routerVPNTorOutputFiles(files), measured.FreshPathOwner(), session, metadata.SourceSHA256, metadata.ConfigSHA256)
 				}
@@ -289,14 +305,14 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					break
 				}
 			}
-			if routerVPNTorRefreshReadback(parent, owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(parent, owner, &receipt, started, time.Now()) != nil {
+			if routerVPNTorRefreshReadback(startup, owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(startup, owner, &receipt, started, time.Now()) != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
 			heartbeat = time.Now()
 			paddingPublished = heartbeat
 			receipt.HeartbeatAt = heartbeat.UnixMilli()
-			if files.publish("proof.json", receipt) != nil {
+			if startup.Err() != nil || files.publish("proof.json", receipt) != nil || startup.Err() != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
@@ -304,7 +320,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 		case <-parent.Done():
 			stopping = true
 		case <-tick.C:
-			if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
+			if !connected && startup.Err() != nil || parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
 				stopping = true
 				break
 			}

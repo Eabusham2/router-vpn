@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/linuxprocess"
 	"router-vpn/internal/linuxprotection"
 	"router-vpn/internal/mobilemultihop"
@@ -33,6 +34,7 @@ type desktopLinuxNodeTransaction struct {
 	external      *mobilemultihop.DesktopExternalPolicy
 	mode          string
 	operation     context.Context
+	startup       context.Context // original startup budget; operation remains request identity
 	selection     linuxprotection.NodeSelection
 	engine        linuxprocess.Observation
 	engineState   linuxprotection.ProcessRecord
@@ -138,6 +140,9 @@ func newDesktopLinuxNodeTransaction(operation context.Context, parent *desktopLi
 // entering this common original-process/journal handshake.
 func finishDesktopLinuxNodeTransaction(t *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
 	operation, parent, process, journal, selection, predecessor := t.operation, t.parent, t.process, t.journal, t.selection, t.predecessor
+	if t.startup != nil {
+		operation = t.startup
+	}
 	var err error
 	p := parent.parent
 	select {
@@ -233,15 +238,30 @@ func (t *desktopLinuxNodeTransaction) enter(ctx context.Context) error {
 // Cancellation intent is checked under the same app lock as final adoption,
 // including the interval before the original cancel callback executes.
 func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
-	if t == nil || ctx == nil || ctx.Err() != nil || t.operation == nil || t.operation.Err() != nil || t.stopRequested.Load() || t.retiring || t.retired || t.closed ||
-		t.validatePolicy() != nil || t.network == "" || physicalNetworkIdentity() != t.network {
+	if ctx == nil {
+		return errors.New("native admission has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if t == nil || t.operation == nil || t.operation.Err() != nil || t.stopRequested.Load() || t.retiring || t.retired || t.closed ||
+		t.validatePolicy() != nil || t.network == "" {
 		return errors.New("Linux Node preparation lost its accepted captured policy or network")
+	}
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil {
+		return err
+	}
+	if network != t.network {
+		return errors.New("Linux preparation changed its physical network")
 	}
 	if err := t.parent.Current(ctx); err != nil {
 		return err
 	}
 	a := t.parent.app
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(t.profileID)
 	if err := a.checkCapturedConnectionOperationLocked(t.operation); err != nil || a.connectionCancelIntent == t.operation || !exists || a.cmd != t.process.command ||
@@ -251,7 +271,7 @@ func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != t.options {
 		return errors.Join(err, errors.New("Linux Node preparation belongs to another saved profile, request or command"))
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (t *desktopLinuxNodeTransaction) nextRecord() linuxprotection.JournalRecord {
@@ -317,6 +337,12 @@ func (t *desktopLinuxNodeTransaction) checkHead(ctx context.Context) error {
 }
 
 func (t *desktopLinuxNodeTransaction) createBaseline(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxNodeCreationRecord, error) {
+	call, stop, err := t.startupCall(ctx)
+	if err != nil {
+		return mobiletor.DesktopLinuxNodeCreationRecord{}, err
+	}
+	defer stop()
+	ctx = call
 	if err := t.accepted(ctx); err != nil {
 		return mobiletor.DesktopLinuxNodeCreationRecord{}, err
 	}
@@ -341,7 +367,6 @@ func (t *desktopLinuxNodeTransaction) createBaseline(ctx context.Context, captur
 	}
 	// Once this captured bounded native operation enters, a user cancellation
 	// prevents admission but does not erase its result or durable receipt.
-	var err error
 	t.baseline, err = mobiletor.NewDesktopLinuxNodeBaseline(ctx, capture, t.selection.HomeLAN)
 	if err != nil {
 		return mobiletor.DesktopLinuxNodeCreationRecord{}, err
@@ -372,6 +397,12 @@ func (t *desktopLinuxNodeTransaction) candidate(prepared linuxprotection.NodePre
 }
 
 func (t *desktopLinuxNodeTransaction) admitSource(ctx context.Context, prepared linuxprotection.NodePreparedRecord) error {
+	call, stop, err := t.startupCall(ctx)
+	if err != nil {
+		return err
+	}
+	defer stop()
+	ctx = call
 	if err := t.accepted(ctx); err != nil {
 		return err
 	}
@@ -439,4 +470,37 @@ func (t *desktopLinuxNodeTransaction) ServePreparation(ctx context.Context) erro
 		t.admitted = true
 	}
 	return err
+}
+
+func (t *desktopLinuxNodeTransaction) startupCall(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if parent == nil {
+		return nil, nil, errors.New("native admission has no dialogue")
+	}
+	if t == nil || t.startup == nil {
+		ctx, cancel := context.WithCancel(parent)
+		if err := ctx.Err(); err != nil {
+			cancel()
+			return nil, nil, err
+		}
+		return ctx, cancel, nil
+	}
+	if err := t.startup.Err(); err != nil {
+		return nil, nil, err
+	}
+	deadline, ok := t.startup.Deadline()
+	if !ok {
+		return nil, nil, errors.New("native admission lost original startup deadline")
+	}
+	ctx, cancel := context.WithDeadline(parent, deadline)
+	stop := context.AfterFunc(t.startup, func() {
+		if t.startup.Err() != context.DeadlineExceeded {
+			cancel()
+		}
+	})
+	done := func() { stop(); cancel() }
+	if err := ctx.Err(); err != nil {
+		done()
+		return nil, nil, err
+	}
+	return ctx, done, nil
 }

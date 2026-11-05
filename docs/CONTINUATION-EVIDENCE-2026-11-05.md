@@ -391,8 +391,8 @@ The runner requires all 14 startup verdicts; parser controls reject missing and
 duplicated results. Full raw successful startup reaches a netlink operation that
 this local environment denies. Its true positive and real namespace Node/TUN
 acceptance remain mandatory in CI, rather than being replaced by a modeled pass.
-External/Tor host-to-child startup deadline transport remains a separate active
-shipping-path repair; this unit does not claim that transport is finished.
+External/Tor host-to-child startup deadline transport is recorded separately below;
+the Node/raw-startup commit did not itself implement that transport.
 
 ## Installed-service MTU execution and public controls
 
@@ -479,6 +479,45 @@ original record is rejected. The old error-joining implementation fails this
 same causal witness. The test is mandatory in the installed-service runner.
 This observation repair is retained by the service MTU transaction and
 controller integration described above.
+
+## External and Tor native startup admission
+
+The accepted external and Tor launch now captures its existing 180-second or
+150-second startup allowance once, before starting the child. The exact absolute
+deadline, session, source hash and compiled-configuration hash cross the Linux
+host/child boundary in a canonical bounded envelope. The child validates these
+against its independently compiled captured graph, then supplies the original
+startup context to the actual Box/TUN reader. Proof waits borrow that remaining
+allowance instead of starting a second full timeout. The graph's connection
+lifetime remains separate from startup admission.
+
+Host source, application, progress and proof observations retain their caller's
+budget. Linux preparation callbacks also use that original startup admission,
+while the refusal dialogue and original connection identity stay independent.
+A success returned after admission expires cannot become Connected. Recurring
+native network observations have a separate two-second observation allowance;
+pure observation expiry retains the last valid proof, while genuine mixed loss
+still follows original retirement.
+
+Focused host/codec race tests pass all 35 required verdicts; generated native
+external/Tor envelope, late-success, heartbeat and original Tor process-admission
+tests pass all 17 required verdicts. The existing actual authenticated Tor child
+and joined-cleanup case also passes. Process admission uses the startup deadline
+without using it as the healthy child lifetime. The real Unix wrapper preserves the exact startup envelope. All 44
+runner checks pass with the existing standard-MTU and Node/raw startup gates
+preserved. An independent mutant that renews the actual child's deadline fails
+both the external and Tor late-success witnesses for that intended reason.
+These are source and executable-composition results, not device acceptance or
+an exact-SHA completed release. Legacy pre-start Box service/NetworkOwner
+registration locks retain a separate caller-budget audit; this unit does not
+claim every constructor or preparation syscall is interruptible.
+
+The exact `c2839a15` Linux Node jobs now pass the former missing-startup-deadline
+point but fail at the retained address-generation policy comparison after
+LinkSetUp on both architectures. Upstream `508ce9ed` supplies the narrow
+first-link address-policy repair, including a mandatory actual namespace
+witness. That newer source and the current integrated head require their own
+native CI acceptance; transport tests do not establish that result.
 
 ## Remaining requirement/evidence ledger
 

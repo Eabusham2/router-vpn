@@ -496,7 +496,10 @@ func (a *app) readDesktopExternalProofRecord(launch *desktopNodeLaunch) (desktop
 }
 
 func readDesktopExternalStopped(launch *desktopNodeLaunch) (bool, error) {
-	raw, err := readDesktopRuntimeFile(launch, "stopped.json", 4096)
+	return readDesktopExternalStoppedContext(context.Background(), launch)
+}
+func readDesktopExternalStoppedContext(ctx context.Context, launch *desktopNodeLaunch) (bool, error) {
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "stopped.json", 4096)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -508,14 +511,19 @@ func readDesktopExternalStopped(launch *desktopNodeLaunch) (bool, error) {
 	if decodeRelayControlJSON(raw, &closed) != nil || !closed.Closed || closed.Schema != 1 || closed.SessionID != owner.session || closed.SourceSHA256 != owner.expected.SourceSHA256 {
 		return false, errors.New("native external teardown acknowledgement has another owner")
 	}
-	owner.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &owner.mu); err != nil {
+		return false, err
+	}
 	owner.stopAcknowledged = true
 	owner.mu.Unlock()
 	return true, nil
 }
 
 func (a *app) readDesktopExternalProgress(launch *desktopNodeLaunch) error {
-	raw, err := readDesktopRuntimeFile(launch, "progress.json", 64<<10)
+	return a.readDesktopExternalProgressContext(context.Background(), launch)
+}
+func (a *app) readDesktopExternalProgressContext(ctx context.Context, launch *desktopNodeLaunch) error {
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "progress.json", 64<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -553,7 +561,9 @@ func (a *app) readDesktopExternalProgress(launch *desktopNodeLaunch) error {
 			measurement.Failure = "candidate did not pass its routed proof"
 		}
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if a.cmd != launch.command {
 		return errors.New("external progress belongs to a retired connection")
@@ -562,7 +572,9 @@ func (a *app) readDesktopExternalProgress(launch *desktopNodeLaunch) error {
 		a.state.Phase = "external-node:" + stage
 	}
 	if owner.progress != nil {
-		owner.progress.mu.Lock()
+		if err := desktopnetwork.LockContext(ctx, &owner.progress.mu); err != nil {
+			return err
+		}
 		owner.progress.value.Stage = stage
 		owner.progress.value.Complete = record.Progress.Complete || record.Stage == "closed"
 		owner.progress.value.Measurements = append([]routechoice.Measurement{}, record.Progress.Measurements...)
@@ -584,12 +596,17 @@ func (a *app) waitDesktopExternalProof(ctx context.Context, launch *desktopNodeL
 	defer func() {
 		if failure != nil && launch.external.progress != nil {
 			progress := launch.external.progress
-			progress.mu.Lock()
+			if !progress.mu.TryLock() {
+				return
+			}
 			progress.value.Stage, progress.value.Complete, progress.value.Failure = "failed", true, "captured external execution did not complete"
 			progress.mu.Unlock()
 		}
 	}()
-	deadline, cancel := context.WithTimeout(ctx, 180*time.Second)
+	deadline, cancel, err := desktopNativeStartupObservation(ctx, launch)
+	if err != nil {
+		return result, err
+	}
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -597,31 +614,48 @@ func (a *app) waitDesktopExternalProof(ctx context.Context, launch *desktopNodeL
 		if deadline.Err() != nil {
 			return desktopExternalProof{}, deadline.Err()
 		}
-		if err := a.checkConnectionOperation(); err != nil {
+		if err := a.checkNativeStartupConnectionContext(deadline); err != nil {
 			return desktopExternalProof{}, err
 		}
-		closed, err := readDesktopExternalStopped(launch)
+		closed, err := readDesktopExternalStoppedContext(deadline, launch)
 		if err != nil {
 			return desktopExternalProof{}, err
 		}
 		if closed {
 			return desktopExternalProof{}, errors.New("native external startup failed and its captured resources were closed")
 		}
-		if err := a.readDesktopExternalProgress(launch); err != nil {
+		if err := a.readDesktopExternalProgressContext(deadline, launch); err != nil {
 			return desktopExternalProof{}, err
 		}
-		proof, err := a.readDesktopExternalProof(launch)
+		proof, err := a.readDesktopExternalProofContext(deadline, launch)
 		if err == nil {
-			launch.external.mu.Lock()
+			if err := desktopnetwork.LockContext(deadline, &launch.external.mu); err != nil {
+				return result, err
+			}
+			progress := launch.external.progress
+			if progress != nil {
+				if err := desktopnetwork.LockContext(deadline, &progress.mu); err != nil {
+					launch.external.mu.Unlock()
+					return result, err
+				}
+			}
+			// Acquire all publication locks before changing the captured result.
+			// Expiry waiting for progress must not leave an adopted execution.
+			if err := deadline.Err(); err != nil {
+				if progress != nil {
+					progress.mu.Unlock()
+				}
+				launch.external.mu.Unlock()
+				return result, err
+			}
 			launch.external.execution = proof.Execution
 			launch.external.checkedAt = proof.CheckedAt
-			launch.external.mu.Unlock()
-			if progress := launch.external.progress; progress != nil {
-				progress.mu.Lock()
+			if progress != nil {
 				progress.value.Stage, progress.value.Complete, progress.value.Execution, progress.value.Failure = "selected", true, proof.Execution, ""
 				progress.mu.Unlock()
 			}
-			return proof, nil
+			launch.external.mu.Unlock()
+			return proof, deadline.Err()
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return desktopExternalProof{}, err

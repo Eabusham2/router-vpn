@@ -34,7 +34,7 @@ DIGEST_KEYS = ("HOMEVPN_TOR_SOURCE_SHA256", *DIGEST_FILES, "HOMEVPN_TOR_BINARY_S
 OBSERVED_ENV = (
     "HOMEVPN_ROOT", "HOMEVPN_PROFILE_ID", "HOMEVPN_POLICY_PROFILE_ID",
     "HOMEVPN_ENDPOINT", "HOMEVPN_NATIVE_ENDPOINTS_JSON", "HOMEVPN_NATIVE_EGRESS_JSON", "HOMEVPN_EXTERNAL_SESSION",
-    "HOMEVPN_STANDARD_ENGINE", "HOMEVPN_NATIVE_CONTROLLER", "HOMEVPN_NATIVE_PACKAGE",
+    "HOMEVPN_STANDARD_ENGINE", "HOMEVPN_NATIVE_CONTROLLER", "HOMEVPN_NATIVE_PACKAGE", "HOMEVPN_NATIVE_STARTUP",
     "HOMEVPN_TOR_SESSION", "HOMEVPN_TOR_PHYSICAL_BROKER", *DIGEST_KEYS, "ROUTERVPN_WRAPPER_LITERAL", "ROUTERVPN_WRAPPER_EMPTY",
 )
 
@@ -174,6 +174,8 @@ class Fixture:
             "FIXTURE_EVENTS": str(self.events), "FIXTURE_EXPECTED": str(self.expected_path),
         })
         self.env.update({key: sha(self.runtime / name) for key, name in DIGEST_FILES.items()})
+        self.env["HOMEVPN_NATIVE_STARTUP"] = json.dumps({"schema": 1, "kind": "tor", "session": self.env["HOMEVPN_TOR_SESSION"],
+            "source_sha256": source_sha, "config_sha256": self.env["HOMEVPN_TOR_CONFIG_SHA256"], "deadline_ns": 9223372036854770000}, separators=(",", ":"))
         self.native_argv = ["routervpn-tor", "--runtime-dir", str(self.runtime), "--session", "a" * 32, "--tor-binary", str(self.tor)]
         self.tor_argument = str(self.tor)
         self.expected = {

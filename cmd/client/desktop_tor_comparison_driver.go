@@ -239,7 +239,7 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	if err := check(); err != nil {
 		return session, err
 	}
-	if err := prelaunch.start(check); err != nil {
+	if err := prelaunch.startContext(ctx, check); err != nil {
 		return session, err
 	}
 	a, launch := d.app, prelaunch.workspace

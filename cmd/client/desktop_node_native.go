@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"router-vpn/internal/applexray"
@@ -24,6 +25,7 @@ import (
 )
 
 type desktopNodeLaunch struct {
+	startup                    atomic.Pointer[desktopNativeStartup]
 	command                    *exec.Cmd
 	stop                       []string
 	directory, profileID, mode string

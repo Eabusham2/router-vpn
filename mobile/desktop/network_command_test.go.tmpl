@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 )
 
@@ -398,6 +399,162 @@ func TestRouterVPNDesktopStopInterruptsOriginalNetworkObserver(t *testing.T) {
 			release.Do(unlock)
 			if !files.stopRequested(desktopExternalSession, policy.SourceSHA256()) {
 				t.Fatal("watcher changed its captured Stop record")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopStartupEnvelopeControlsOriginalCommand(t *testing.T) {
+	for _, mode := range []string{"missing", "substituted", "late-success"} {
+		t.Run(mode, func(t *testing.T) {
+			directory, policy := desktopExternalWorkspace(t)
+			owner := desktopExternalOwner(t, policy, false)
+			var result mobilemultihop.ExternalProofResult
+			if err := json.Unmarshal([]byte(owner.result), &result); err != nil {
+				t.Fatal(err)
+			}
+			admission, err := mobilemultihop.NewDesktopStartupAdmission("external", desktopExternalSession, policy.SourceSHA256(), result.ConfigSHA256, time.Now().Add(time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "substituted" {
+				admission.ConfigSHA256 = strings.Repeat("d", 64)
+			}
+			raw, err := admission.Canonical()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "missing" {
+				raw = ""
+			}
+			parent, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			parent = routerVPNRequireStartupEnvironment(parent, raw)
+			calls := 0
+			err = routerVPNRunExternal(parent, directory, desktopExternalSession, "", func(ctx context.Context, _ *mobilemultihop.ExternalPolicy, _ *mobilemultihop.DesktopExternalPolicy, _, _, _ string) (routerVPNExternalOwner, error) {
+				calls++
+				startup := routerVPNNativeStartupCaller(ctx)
+				deadline, ok := startup.Deadline()
+				if !ok || deadline.UnixNano() != admission.DeadlineNS {
+					t.Error("child renewed transported deadline")
+				}
+				owner.beforeStart = func() error { <-startup.Done(); return nil }
+				return owner, nil
+			})
+			if err == nil {
+				t.Fatal("invalid or expired command admitted success")
+			}
+			if mode == "late-success" {
+				if !errors.Is(err, context.DeadlineExceeded) || calls != 1 || owner.closes.Load() != 1 {
+					t.Fatal("expired original did not join exact owner", err, calls, owner.closes.Load())
+				}
+			}
+			if mode != "late-success" && calls != 0 {
+				t.Fatal("unbound startup reached native factory")
+			}
+			if _, err := os.Stat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("late or foreign startup published proof", err)
+			}
+		})
+	}
+}
+
+type desktopStartupReceiptObserver struct {
+	read func(context.Context) (string, error)
+}
+
+func (o *desktopStartupReceiptObserver) DesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	return o.read(ctx)
+}
+func TestRouterVPNDesktopHeartbeatKeepsObservationBudget(t *testing.T) {
+	for _, mode := range []string{"healthy", "pure-expiry", "mixed-loss"} {
+		t.Run(mode, func(t *testing.T) {
+			parent, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			owner := &desktopStartupReceiptObserver{read: func(ctx context.Context) (string, error) {
+				got, ok := ctx.Deadline()
+				want, _ := parent.Deadline()
+				if !ok || !got.Equal(want) {
+					t.Error("heartbeat renewed original observer")
+				}
+				if mode == "healthy" {
+					return "original", nil
+				}
+				<-ctx.Done()
+				if mode == "mixed-loss" {
+					return "", errors.Join(ctx.Err(), errors.New("original interface replaced"))
+				}
+				return "", ctx.Err()
+			}}
+			raw, expired, err := routerVPNDesktopNetworkHeartbeat(parent, owner)
+			if mode == "healthy" {
+				if err != nil || expired || raw != "original" {
+					t.Fatal("healthy read failed", err)
+				}
+				return
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || expired != (mode == "pure-expiry") {
+				t.Fatal("observation expiry hid real loss or retired healthy owner", err, expired)
+			}
+		})
+	}
+}
+
+type desktopStartupTorOwner struct {
+	*routerVPNTorCommandFixture
+	startup context.Context
+}
+
+func (o *desktopStartupTorOwner) Start() error {
+	o.base.starts.Add(1)
+	<-o.startup.Done()
+	return nil
+}
+
+func TestRouterVPNDesktopStartupEnvelopeControlsOriginalTor(t *testing.T) {
+	for _, mode := range []string{"missing", "substituted", "late-success"} {
+		t.Run(mode, func(t *testing.T) {
+			files := routerVPNNewTorFileFixture(t)
+			owner := routerVPNNewTorCommandFixture(t, files, false)
+			meta := files.inputs.Policy().Metadata()
+			admission, err := mobilemultihop.NewDesktopStartupAdmission("tor", meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, time.Now().Add(time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "substituted" {
+				admission.SourceSHA256 = strings.Repeat("d", 64)
+			}
+			raw, err := admission.Canonical()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "missing" {
+				raw = ""
+			}
+			parent, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			parent = routerVPNRequireStartupEnvironment(parent, raw)
+			calls := 0
+			err = routerVPNRunTor(parent, files.directory, meta.SessionID, files.binary, files.getenv, func(ctx context.Context, _ *routerVPNTorFiles, _ *routerVPNTorBinary) (routerVPNTorOwner, error) {
+				calls++
+				startup := routerVPNNativeStartupCaller(ctx)
+				deadline, ok := startup.Deadline()
+				if !ok || deadline.UnixNano() != admission.DeadlineNS {
+					t.Error("Tor child renewed transported deadline")
+				}
+				return &desktopStartupTorOwner{routerVPNTorCommandFixture: owner, startup: startup}, nil
+			})
+			if err == nil {
+				t.Fatal("invalid or expired Tor command admitted success")
+			}
+			if mode == "late-success" && (!errors.Is(err, context.DeadlineExceeded) || calls != 1 || owner.base.closes.Load() != 1) {
+				t.Fatal("expired Tor original did not join exact owner", err, calls, owner.base.closes.Load())
+			}
+			if mode != "late-success" && calls != 0 {
+				t.Fatal("unbound Tor startup reached native factory")
+			}
+			if _, err := os.Stat(filepath.Join(files.directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("late or foreign Tor startup published proof", err)
 			}
 		})
 	}

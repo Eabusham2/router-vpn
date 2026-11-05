@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
 	"io"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -30,6 +31,7 @@ type routerVPNTorFactory func(context.Context, *routerVPNTorFiles, *routerVPNTor
 type routerVPNTorNative struct {
 	mu              sync.Mutex
 	ctx             context.Context
+	startup         context.Context
 	cancel          context.CancelFunc
 	boxCancel       context.CancelFunc
 	files           *routerVPNTorFiles
@@ -68,7 +70,7 @@ func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary
 			return nil, routerVPNTorFailure
 		}
 	}
-	n := &routerVPNTorNative{ctx: owned, cancel: cancel, files: files, process: process, transitions: make(chan routerVPNTorMTUTransitionRequest)}
+	n := &routerVPNTorNative{startup: routerVPNNativeStartupCaller(ctx), ctx: owned, cancel: cancel, files: files, process: process, transitions: make(chan routerVPNTorMTUTransitionRequest)}
 	n.stage.Store("starting")
 	boxContext := owned
 	if files.inputs.Policy().ServerPolicy() != nil {
@@ -95,12 +97,18 @@ func (n *routerVPNTorNative) Start() error {
 	if n == nil || n.box == nil || n.ctx.Err() != nil {
 		return routerVPNTorFailure
 	}
+	if n.startup == nil {
+		return routerVPNTorFailure
+	}
+	if err := n.startup.Err(); err != nil {
+		return err
+	}
 	n.stage.Store("authenticating")
 	if n.process != nil {
-		if err := n.process.launch(n.ctx); err != nil {
+		if err := n.process.launch(n.startup); err != nil {
 			return routerVPNTorFailure
 		}
-		if err := n.process.authenticate(n.ctx); err != nil {
+		if err := n.process.authenticate(n.startup); err != nil {
 			return routerVPNTorFailure
 		}
 	}
@@ -108,8 +116,16 @@ func (n *routerVPNTorNative) Start() error {
 		return routerVPNTorFailure
 	}
 	n.stage.Store("starting-tun")
+	if runtime.GOOS == "linux" {
+		if err := n.box.RouterVPNDesktopStartupContext(n.startup); err != nil {
+			return err
+		}
+	}
 	if err := n.box.RouterVPNStrategyStart(); err != nil {
 		return routerVPNTorFailure
+	}
+	if err := n.startup.Err(); err != nil {
+		return err
 	}
 	tor, err := n.box.RouterVPNDesktopTorCreate(n.files.inputs.Policy())
 	if err != nil {

@@ -178,7 +178,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		http.Error(w, failure.Error(), http.StatusInternalServerError)
 		return
 	}
-	err = prelaunch.start(check)
+	err = prelaunch.startContext(operation, check)
 	if err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		status := http.StatusInternalServerError

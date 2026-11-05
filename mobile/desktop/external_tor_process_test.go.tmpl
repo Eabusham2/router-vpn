@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -380,5 +381,71 @@ func TestRouterVPNDesktopTorControlFileRequiresOneCanonicalLoopbackListener(t *t
 		if _, err := routerVPNTorControlAddress([]byte(raw)); err == nil {
 			t.Fatal("unowned listener admitted", raw)
 		}
+	}
+}
+
+func TestRouterVPNDesktopTorProcessKeepsOriginalStartup(t *testing.T) {
+	for _, mode := range []string{"held-launch", "held-authentication", "original-authentication-deadline", "healthy-lifetime"} {
+		t.Run(mode, func(t *testing.T) {
+			childMode := ""
+			if mode == "original-authentication-deadline" {
+				childMode = "no-control"
+			}
+			_, owner := routerVPNNewTorProcessFixture(t, childMode)
+			if mode != "held-launch" {
+				launch, stop := context.WithTimeout(context.Background(), 8*time.Second)
+				defer stop()
+				if err := owner.launch(launch); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "healthy-lifetime" {
+				startup, stop := context.WithTimeout(context.Background(), 8*time.Second)
+				if err := owner.authenticate(startup); err != nil {
+					stop()
+					t.Fatal(err)
+				}
+				stop()
+				if owner.exited() || owner.control == nil || owner.session == nil {
+					t.Fatal("completed startup became child lifetime")
+				}
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			held := mode == "held-launch" || mode == "held-authentication"
+			if held {
+				owner.mu.Lock()
+			}
+			done := make(chan error, 1)
+			go func() {
+				if mode == "held-launch" {
+					done <- owner.launch(ctx)
+				} else {
+					done <- owner.authenticate(ctx)
+				}
+			}()
+			select {
+			case err := <-done:
+				if held {
+					owner.mu.Unlock()
+				}
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("Tor helper lost original startup deadline", err)
+				}
+			case <-time.After(3 * time.Second):
+				if held {
+					owner.mu.Unlock()
+				}
+				<-done
+				t.Fatal("Tor helper retained an unbounded startup waiter")
+			}
+			if mode == "held-launch" && (owner.used || owner.command != nil) {
+				t.Fatal("expired launch admitted a late child")
+			}
+			if mode != "held-launch" && (owner.exited() || owner.control != nil || owner.session != nil) {
+				t.Fatal("expired authentication killed original child or adopted a late session")
+			}
+		})
 	}
 }
