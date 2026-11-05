@@ -29,7 +29,7 @@ for marker in (
     'AndroidNodeStore.deriveId(bundle,updatedBundle)',
     'legacy Router node has no stable proof-bound identity',
     'All validation above is complete before any selection, node-file, preset or preference mutation.',
-    'nodes.importBundle(updatedBundle)', 'putString(MULTI_MODE,multiMode)',
+    'nodes.applyProfileBundle(update.id,update.original,updatedBundle)', 'putString(MULTI_MODE,multiMode)',
     'prior connection state was restored.', 'rollback is incomplete',
     'nodes.snapshotSelection()', 'nodes.restoreSelection(originalSelection)',
     'snapshotPreferences()', 'restorePreferences(originalPreferences)',
@@ -44,7 +44,8 @@ for marker in (
     'AndroidImportedRouterPath.compile(updatedOrdinary,finalBundle,multiMode,execution)',
     'routerFinal?schema<6', 'The imported path lost its independent paired final policy.',
     'if(!ours.equals(current))', 'exits.saveIfUnchanged(original,ours)',
-    'nodes.importBundle(originalBundle)',
+    'nodes.restoreProfileBundle(update.id,update.original,update.updated)',
+    'nodes.restoreProfileSelection(originalSelection,attemptedSelections)',
     'requireIdle("saving a connection profile")', 'requireIdle("loading a connection profile")',
     'requireIdle("updating a connection profile")', 'requireIdle("deleting a connection profile")',
 ):
@@ -60,7 +61,7 @@ for forbidden in ('Os.rename(', 'FileOutputStream', 'requirePrivateRegularFile',
 load = store.split('synchronized Record load(String id)', 1)[1].split('synchronized void delete', 1)[0]
 for validation in ('normalizeMultiMode', 'findNode(entry)', 'findNode(exit)', 'prepareCustomPresetJSON', 'stageNode', 'validateExternalGraph'):
     assert validation in load, f"Android profile load lost preflight validation {validation!r}"
-first_mutation = load.find('nodes.importBundle(updatedBundle)')
+first_mutation = load.find('nodes.applyProfileBundle(update.id,update.original,updatedBundle)')
 assert first_mutation > 0
 for validation in ('normalizeMultiMode', 'findNode(entry)', 'findNode(exit)', 'prepareCustomPresetJSON', 'stageNode', 'validateExternalGraph'):
     assert load.find(validation) < first_mutation, f"{validation} moved after node mutation"

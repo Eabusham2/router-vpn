@@ -92,6 +92,24 @@ final class AndroidNodeStore {
         }
     }
 
+    /** Apply profile policy only to the exact node source captured by that load. */
+    synchronized Node applyProfileBundle(String id, byte[] original, byte[] updated) throws Exception { synchronized (STORE_LOCK) {
+        requireMutable("applying a connection profile's Router node");
+        if (!safeId(id) || original == null || updated == null || original.length == 0
+                || original.length > MAX_BUNDLE || updated.length == 0 || updated.length > MAX_BUNDLE) {
+            throw new IllegalArgumentException("Profile apply lost its bounded original node source.");
+        }
+        if (!java.util.Arrays.equals(snapshotOptional(nodeFile(id)), original)) {
+            throw new IllegalStateException("A linked Router node changed before profile apply; its newer source was preserved.");
+        }
+        if (!id.equals(deriveId(new JSONObject(new String(updated, StandardCharsets.UTF_8)), updated))) {
+            throw new IllegalStateException("Profile apply changed the captured Router node identity.");
+        }
+        // Reentrant on this instance and the shared writer lock; import keeps
+        // its original strict decoder, validation and partial-write rollback.
+        return importBundle(updated);
+    } }
+
     synchronized List<Node> list() throws Exception {
         ensureRoot();
         File[] files = root.listFiles((dir, name) -> name.matches("[0-9a-f]{32}\\.json"));

@@ -48,8 +48,8 @@ public class Context {
 }''',
     "android/content/MemoryPreferences.java": r'''package android.content;
 public final class MemoryPreferences implements SharedPreferences {
- public final java.util.Map<String,Object> values=new java.util.LinkedHashMap<>();public int writes;public int failures;public Runnable beforeFailure;
- public java.util.Map<String,?> getAll(){return new java.util.LinkedHashMap<>(values);}public String getString(String key,String fallback){return (String)values.getOrDefault(key,fallback);}
+ public final java.util.Map<String,Object> values=new java.util.LinkedHashMap<>();public int writes;public int failures;public Runnable beforeFailure;public Runnable beforeRead;
+ public java.util.Map<String,?> getAll(){Runnable hook=beforeRead;beforeRead=null;if(hook!=null)hook.run();return new java.util.LinkedHashMap<>(values);}public String getString(String key,String fallback){return (String)values.getOrDefault(key,fallback);}
  public boolean getBoolean(String key,boolean fallback){return (Boolean)values.getOrDefault(key,fallback);}
  public Editor edit(){return new Editor(){final java.util.Map<String,Object> staged=new java.util.LinkedHashMap<>();
   public Editor putString(String key,String value){staged.put(key,value);return this;}public Editor putBoolean(String key,boolean value){staged.put(key,value);return this;}
@@ -338,6 +338,21 @@ public final class ConnectionProfilesHarness {
    }finally{AndroidVpnMutationGuard.busy=false;AndroidImportedRouterPath.afterValidation=null;}
   }
  }
+ static void profileApply(Path root)throws Exception{
+  Fixture f=new Fixture(root);mixedSetup(f,"shadowsocks");var saved=f.store.add("Owned forward apply");f.changeNode(f.first);f.otherSelection();
+  JSONObject newer=bundle(f.first);AndroidProfileSelection.selectedRouterProfile(newer).put("api_token","independent forward successor");byte[] successor=newer.toString().getBytes(StandardCharsets.UTF_8);
+  var snapshot=new java.util.concurrent.CountDownLatch(1);var proceed=new java.util.concurrent.CountDownLatch(1);final Throwable[] failure={null};
+  f.prefs.beforeRead=()->{snapshot.countDown();try{if(!proceed.await(5,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("profile snapshot barrier missing");}catch(InterruptedException error){throw new IllegalStateException(error);}};
+  var field=AndroidNodeStore.class.getDeclaredField("STORE_LOCK");field.setAccessible(true);Object lock=field.get(null);
+  Thread load=new Thread(()->{try{f.store.load(saved.id);}catch(Throwable error){failure[0]=error;}},"captured-profile-apply");
+  try{load.start();check(snapshot.await(5,java.util.concurrent.TimeUnit.SECONDS),"profile did not retain original selection before apply");
+   synchronized(lock){proceed.countDown();long end=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5);boolean blocked=false;while(load.isAlive()&&System.nanoTime()<end){StackTraceElement[] stack=load.getStackTrace();if(load.getState()==Thread.State.BLOCKED&&stack.length>0&&stack[0].getClassName().equals("com.eabusham.routervpn.AndroidNodeStore")&&(stack[0].getMethodName().equals("importBundle")||stack[0].getMethodName().equals("applyProfileBundle"))){blocked=true;break;}Thread.yield();}check(blocked,"profile did not reach original node apply admission");new AndroidNodeStore(f.context).importBundle(successor);}
+   load.join(5000);check(!load.isAlive(),"profile apply did not join");
+   check(Arrays.equals(Files.readAllBytes(f.first.file.toPath()),successor),"profile forward apply overwrote the successor node credentials");
+   check(f.nodes.activeId().equals(f.first.id)&&Arrays.equals(Files.readAllBytes(new File(f.context.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE).toPath()),successor),"profile forward apply overwrote successor selection");
+   check(failure[0]!=null,"profile accepted an obsolete original node source");
+  }finally{proceed.countDown();load.join(5000);f.prefs.beforeRead=null;}
+ }
  static void profileRollback(Path root)throws Exception{
   Fixture f=new Fixture(root);var entry=mixedSetup(f,"shadowsocks");var saved=f.store.add("Retained rollback");f.changeNode(f.first);f.otherSelection();
   final byte[][] successor={null};final Throwable[] editFailure={null};
@@ -621,14 +636,14 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("imported-router")){importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);System.out.println("Android imported-Router actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("profile-apply")){profileApply(root);System.out.println("Android profile apply: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("imported-router")){importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);System.out.println("Android imported-Router actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "imported-router", "profile-rollback"), default="all")
+    parser.add_argument("--case-family", choices=("all", "imported-router", "profile-rollback", "profile-apply"), default="all")
     args = parser.parse_args()
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
@@ -667,11 +682,34 @@ def main():
         data.mkdir()
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
         # Each complete case family retains the original finite JVM budget.
+        if args.case_family in ("all", "profile-apply"):
+            subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "profile-apply"], env=env, check=True, timeout=180)
+            original_store = (app / "AndroidConnectionProfileStore.java").read_text()
+            guarded = "nodes.applyProfileBundle(update.id,update.original,updatedBundle).id"
+            if original_store.count(guarded) != 1:
+                raise AssertionError("Original profile apply admission changed")
+            original_node = (app / "AndroidNodeStore.java").read_text()
+            admission = "synchronized Node applyProfileBundle(String id, byte[] original, byte[] updated) throws Exception { synchronized (STORE_LOCK)"
+            if original_node.count(admission) != 1:
+                raise AssertionError("Shared atomic profile apply boundary changed")
+            controls = (("caller", "AndroidConnectionProfileStore", original_store.replace(guarded, "nodes.importBundle(updatedBundle).id")),
+                        ("atomic", "AndroidNodeStore", original_node.replace(admission, admission.replace("STORE_LOCK", "new Object()"))))
+            for name, target, changed in controls:
+                negative = work / ("apply-negative-" + name); shutil.copytree(classes, negative)
+                mutation = work / ("apply-source-" + name) / (target + ".java"); mutation.parent.mkdir(); mutation.write_text(changed)
+                classpath = str(negative) + os.pathsep + str(jar)
+                subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative), str(mutation)], check=True, timeout=60)
+                result = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "profile-apply"], env=env, capture_output=True, text=True, timeout=180)
+                if result.returncode == 0 or "profile forward apply overwrote the successor node credentials" not in result.stderr:
+                    raise AssertionError("Profile apply causal control missed its exact defect: " + name + "\n" + result.stderr)
+                print("Android node profile apply causal control rejected: " + name)
+            if args.case_family == "profile-apply":
+                return
         if args.case_family in ("all", "profile-rollback"):
             subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "profile-rollback"], env=env, check=True, timeout=180)
             original_node = (app / "AndroidNodeStore.java").read_text()
             guard = '\n        if (!java.util.Arrays.equals(current, published)) {\n            throw new IllegalStateException("A concurrent Router-node update prevents safe rollback; its source was preserved.");\n        }'
-            if original_node.count(guard) != 1 or original_node.count('synchronized (STORE_LOCK)') != 7:
+            if original_node.count(guard) != 1 or original_node.count('synchronized (STORE_LOCK)') != 8:
                 raise AssertionError("Owned node rollback publication boundary changed")
             controls = (("source", original_node.replace(guard, ""), "profile rollback overwrote the successor node credentials"),
                         ("atomic", original_node.replace('synchronized (STORE_LOCK)', 'synchronized (new Object())'), "node rollback compare and publication did not exclude the competing store"))

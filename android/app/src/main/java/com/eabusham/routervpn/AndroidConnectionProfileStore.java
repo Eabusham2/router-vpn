@@ -115,7 +115,7 @@ final class AndroidConnectionProfileStore {
                 applied.add(update);selectionAttempted=true;
                 byte[] updatedBundle=update.updated;
                 attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(update.id,updatedBundle));
-                if(!update.id.equals(nodes.importBundle(updatedBundle).id))throw new IllegalStateException("Router node identity changed during connection-profile apply.");
+                if(!update.id.equals(nodes.applyProfileBundle(update.id,update.original,updatedBundle).id))throw new IllegalStateException("Router node identity changed during connection-profile apply.");
             }
             if(updatedOrdinary!=null){ordinaryAttempted=true;exits.saveIfUnchanged(updatedOrdinary,AndroidStandardExitStore.snapshot(originalOrdinary));}
             if(updatedExternal!=null){externalAttempted=true;exits.saveIfUnchanged(updatedExternal,AndroidStandardExitStore.snapshot(originalExternal));}
