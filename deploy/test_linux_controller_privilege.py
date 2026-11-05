@@ -101,7 +101,7 @@ def check_empty_recovery_verdict(output, *, native=False):
 
 
 def source_identity():
-    names = sorted(set([*BUNDLE.builder().inputs(), ROOT/'go.mod', ROOT/'go.sum', ROOT/'modes/kill-switch.py', ROOT/'modes/profile_id.py', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
+    names = sorted(set([*BUNDLE.builder().inputs(), *(ROOT/name for name in SERVICE.SOURCE), ROOT/'go.mod', ROOT/'go.sum', ROOT/'modes/kill-switch.py', ROOT/'modes/profile_id.py', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
                     *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, *TRANSACTION.RUNNERS, 'test_linux_controller_privilege.py',
                                                      'test_linux_empty_recovery_runner.py', 'test_linux_sealed_process_runner.py', *SERVICE.RUNNERS))]))
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()

@@ -2,9 +2,11 @@
 """Reject silent missing, renamed, duplicate, failed or skipped service gates."""
 from pathlib import Path
 import importlib.util
+import hashlib
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('standard_service_gate',ROOT/'deploy/linux_standard_service_gate.py')
@@ -131,6 +133,64 @@ class StandardServiceGateTests(unittest.TestCase):
                 'TestLinuxStandardServiceNamespaceImageUpgradeOmitted', 1))
             with self.assertRaises(ValueError):
                 gate.validate_inventory(copy)
+
+    def test_shipping_identity_captures_actual_installer_bytes(self):
+        spec = importlib.util.spec_from_file_location(
+            'standard_service_privilege_identity', ROOT/'deploy/test_linux_controller_privilege.py')
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        # Exercise the shipping identity function, including all declared
+        # service sources. Broader engine inputs are independently captured by
+        # the builder; this fixture isolates the service closure on real bytes.
+        with tempfile.TemporaryDirectory() as temporary:
+            copy = Path(temporary)
+            for name in gate.SOURCE:
+                target = copy/name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT/name).read_bytes())
+            with mock.patch.object(runner, 'ROOT', copy), mock.patch.object(
+                    runner.BUNDLE, 'builder') as builder:
+                builder.return_value.inputs.return_value = []
+                before = runner.source_identity()
+                self.assertTrue(gate.SOURCE.issubset(before),
+                                'Shipping identity omitted declared service source bytes')
+                for name in ('client/install-linux-native.py', 'deploy/test_linux_native_install.py'):
+                    with self.subTest(source=name):
+                        target = copy/name
+                        original = target.read_bytes()
+                        self.assertEqual(before[name], hashlib.sha256(original).hexdigest())
+                        changed = original + b'\n# exact original-byte mutation witness\n'
+                        target.write_bytes(changed)
+                        after = runner.source_identity()
+                        self.assertEqual(after[name], hashlib.sha256(changed).hexdigest())
+                        self.assertEqual({key for key in before if before[key] != after[key]}, {name})
+                        target.write_bytes(original)
+                        self.assertEqual(runner.source_identity(), before)
+
+    def test_shipping_identity_rejects_missing_required_source(self):
+        spec = importlib.util.spec_from_file_location(
+            'standard_service_privilege_missing', ROOT/'deploy/test_linux_controller_privilege.py')
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        with tempfile.TemporaryDirectory() as temporary:
+            copy = Path(temporary)
+            for name in gate.SOURCE:
+                target = copy/name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT/name).read_bytes())
+            with mock.patch.object(runner, 'ROOT', copy), mock.patch.object(
+                    runner.BUNDLE, 'builder') as builder, mock.patch.object(runner.UID, 'run') as execute:
+                builder.return_value.inputs.return_value = []
+                for name in ('client/install-linux-native.py', 'deploy/test_linux_native_install.py'):
+                    with self.subTest(source=name):
+                        target = copy/name
+                        original = target.read_bytes()
+                        target.unlink()
+                        self.assertNotIn(name, runner.source_identity())
+                        with self.assertRaisesRegex(ValueError, 'original source inventory is incomplete'):
+                            runner.execute()
+                        execute.assert_not_called()
+                        target.write_bytes(original)
 
     def test_shipping_runner_executes_same_captured_candidate(self):
         runner=(ROOT/'deploy/test_linux_controller_privilege.py').read_text()
