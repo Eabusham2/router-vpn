@@ -289,12 +289,18 @@ class LinuxChildTUNDiagnostics(unittest.TestCase):
             language = re.search(r'^go ([0-9]+\.[0-9]+(?:\.[0-9]+)?)$', (ROOT/'go.mod').read_text(), re.MULTILINE)
             self.assertIsNotNone(language)
             (module/'go.mod').write_text('module native-first-diagnostic\n\ngo '+language.group(1)+'\n')
+            # Keep the qualified production marker dependency as well as the
+            # existing local parser projection. Do not substitute its text or
+            # its cross-package capability/error identity with a test stub.
+            dependency = module/'desktopnetwork'
+            dependency.mkdir()
             for name in ('desktop_network_receipt.go', 'desktop_network_wire.go'):
                 source = (ROOT/'internal/desktopnetwork'/name).read_text()
                 self.assertEqual(source.count('package desktopnetwork\n'), 1)
+                (dependency/name).write_bytes((ROOT/'internal/desktopnetwork'/name).read_bytes())
                 (module/name).write_text(source.replace('package desktopnetwork\n', 'package diagnostic\n', 1))
             (module/'diagnostic.go').write_text('''package diagnostic
-import ("encoding/base64"; "encoding/binary"; "fmt"; "io"; "net"; "net/netip"; "os"; "runtime"; "slices"; "strings"; "sync"; "syscall")
+import ("encoding/base64"; "encoding/binary"; "fmt"; "io"; "net"; "net/netip"; "os"; "runtime"; "slices"; "strings"; "sync"; "syscall"; "native-first-diagnostic/desktopnetwork")
 type routerVPNNodeMTURecord struct { Generation, Reader uint64; Index, MTU int; Session, Config, Path, Request string }
 type routerVPNNodeMTU struct { record routerVPNNodeMTURecord; networkReceiptDiagnosticReader uint64 }
 type routerVPNNativeNetworkLedger struct { mu sync.Mutex; failure error; objects map[string]DesktopNetworkObject }
@@ -306,7 +312,12 @@ func TestReasonsRedactEveryKnownAndUnknownNativeError(t *testing.T) {
  for _, c := range []struct{message, want string}{
 '''+cases+'''
  {"private-key=secret-token", "unclassified"},
- } { if got:=routerVPNNodeMTUDiagnosticReason(c.message);got!=c.want {t.Fatal("private or incorrect diagnostic reason",got)} }
+ } {
+  for _, prefix:=range []string{"",ErrNetworkReceiptUnavailable.Error()+"\\n"} {
+   if got:=routerVPNNodeMTUDiagnosticReason(prefix+c.message);got!=c.want {t.Fatal("private or incorrect diagnostic reason",got)}
+  }
+  if got:=routerVPNNodeMTUDiagnosticReason("private-key=secret-token\\n"+c.message);got!="unclassified" {t.Fatal("unrecognized prefix became a trusted diagnostic reason",got)}
+ }
 }
 func capture(t *testing.T, run func()) string {
  t.Helper(); r,w,e:=os.Pipe(); if e!=nil {t.Fatal(e)}; defer r.Close()
