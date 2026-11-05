@@ -100,11 +100,19 @@ final class AndroidConnectionProfileStore {
                     :AndroidImportedRouterPath.finalBundle(nodes.file(exit));
             AndroidImportedRouterPath.compile(updatedOrdinary,finalBundle,multiMode,execution);
         }
-        AndroidNodeStore.SelectionSnapshot originalSelection=nodes.snapshotSelection();
-        Map<String,Object> originalPreferences=snapshotPreferences();
+        AndroidNodeStore.SelectionSnapshot originalSelection;Map<String,Object> originalPreferences;
+        synchronized(prefs()){originalSelection=nodes.snapshotSelection();originalPreferences=snapshotPreferences();}
+        Map<String,Object> nextPreferences=new LinkedHashMap<>(originalPreferences);
+        nextPreferences.put(SELECTED_KIND,kind);nextPreferences.put(SELECTED_ID,nodeId);nextPreferences.put(MODE_KEY,external?"external":mode);
+        nextPreferences.put(MULTI_ON,multi);nextPreferences.put(MULTI_ENTRY,entry);nextPreferences.put(MULTI_EXIT,exit);nextPreferences.put(MULTI_MODE,multiMode);
+        nextPreferences.put(MULTI_ENTRY_KIND,entryKind);nextPreferences.put("multihop_execution",execution);nextPreferences.put("multihop_entry_mode",entryMode);
+        if(preparedCustom!=null)nextPreferences.put(CUSTOM_KEY,preparedCustom);
+        PreferenceUpdate preferenceUpdate=new PreferenceUpdate(originalPreferences,nextPreferences);
         // All validation above is complete before any selection, node-file, preset or preference mutation.
         List<NodeUpdate> applied=new ArrayList<>();List<AndroidNodeStore.SelectionSnapshot> attemptedSelections=new ArrayList<>();boolean externalAttempted=false,ordinaryAttempted=false,selectionAttempted=false;
+        synchronized(prefs()) {
         try{
+            if(!preferenceUpdate.original.equals(snapshotPreferences()))throw new IllegalStateException("The selected connection changed before profile mutation.");
             requireIdle("loading a connection profile");
             // Both ordinary sources are captured before either row is written.
             // A later atomic save also guards each row against a competing editor.
@@ -123,19 +131,23 @@ final class AndroidConnectionProfileStore {
             if(!external){attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(nodeId,readLimited(nodes.file(nodeId),AndroidNodeStore.MAX_BUNDLE)));nodes.select(nodeId);}
             else if(!originalSelection.id.isEmpty()){attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(originalSelection.id,readLimited(nodes.file(originalSelection.id),AndroidNodeStore.MAX_BUNDLE)));nodes.select(originalSelection.id);}
             else nodes.restoreSelection(originalSelection);
-            SharedPreferences.Editor edit=prefs().edit().putString(SELECTED_KIND,kind).putString(SELECTED_ID,nodeId).putString(MODE_KEY,external?"external":mode)
-                    .putBoolean(MULTI_ON,multi).putString(MULTI_ENTRY,entry).putString(MULTI_EXIT,exit).putString(MULTI_MODE,multiMode).putString(MULTI_ENTRY_KIND,entryKind).putString("multihop_execution",execution).putString("multihop_entry_mode",entryMode);
-            if(preparedCustom!=null)edit.putString(CUSTOM_KEY,preparedCustom);
-            if(!edit.commit())throw new IllegalStateException("Could not persist loaded connection choices.");
+            publishPreferences(preferenceUpdate);
         }catch(Exception failure){
             Exception rollback=null;
+            synchronized(prefs()) {
+            if(!ownsPreferences(preferenceUpdate)) {
+                rollback=new IllegalStateException("A newer connection choice prevents profile rollback; its selection and sources were preserved.");
+            } else {
             if(externalAttempted)try{restoreExternal(originalExternal,updatedExternal);}catch(Exception error){rollback=append(rollback,error);}
             if(ordinaryAttempted)try{restoreExternal(originalOrdinary,updatedOrdinary);}catch(Exception error){rollback=append(rollback,error);}
             for(int i=applied.size()-1;i>=0;i--)try{NodeUpdate update=applied.get(i);nodes.restoreProfileBundle(update.id,update.original,update.updated);}catch(Exception error){rollback=append(rollback,error);}
             if(selectionAttempted)try{nodes.restoreProfileSelection(originalSelection,attemptedSelections);}catch(Exception error){rollback=append(rollback,error);}
-            try{restorePreferences(originalPreferences);}catch(Exception error){rollback=append(rollback,error);}
+            try{rollbackPreferences(preferenceUpdate);}catch(Exception error){rollback=append(rollback,error);}
+            }
+            }
             IllegalStateException result=new IllegalStateException(rollback==null?"Could not load the connection profile; prior connection state was restored.":"Could not load the connection profile and rollback is incomplete; inspect the linked nodes before connecting.",failure);
             if(rollback!=null)result.addSuppressed(rollback);throw result;
+        }
         }
         return toRecord(row);
     }
@@ -214,24 +226,31 @@ final class AndroidConnectionProfileStore {
         if(expectedFinal==null||!expectedFinal.isEmpty()&&(!expectedFinal.matches("[0-9a-f]{64}")
                 ||!expectedFinal.equals(AndroidTorProfile.digest(originalFinal))))throw new IllegalStateException("The final node changed after its transports were offered.");
         AndroidImportedRouterPath.compile(original,new JSONObject(AndroidTorProfile.strictText(originalFinal)),mode,"local");
-        AndroidNodeStore.SelectionSnapshot selected=nodes.snapshotSelection();Map<String,Object> previous=snapshotPreferences();
+        AndroidNodeStore.SelectionSnapshot selected;Map<String,Object> previous;
+        synchronized(prefs()){selected=nodes.snapshotSelection();previous=snapshotPreferences();}
         Map<String,Object> next=new LinkedHashMap<>(previous);
         next.put(SELECTED_KIND,"router-vpn");next.put(SELECTED_ID,last.id);next.put(MODE_KEY,mode);next.put(MULTI_ON,true);
         next.put(MULTI_ENTRY,original.id);next.put(MULTI_EXIT,last.id);next.put(MULTI_MODE,mode);next.put(MULTI_ENTRY_KIND,"external");
         next.put("multihop_execution","local");next.put("multihop_entry_mode",original.protocol);
         requireExternalUnchanged(original);
         if(!java.util.Arrays.equals(originalFinal,readLimited(last.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("The paired final node changed before selection.");
-        boolean attempted=false;
+        PreferenceUpdate preferenceUpdate=new PreferenceUpdate(previous,next);boolean attempted=false;
+        synchronized(prefs()) {
         try{
+            if(!preferenceUpdate.original.equals(snapshotPreferences()))throw new IllegalStateException("The selected connection changed before imported path mutation.");
             requireIdle("choosing an imported entry path");attempted=true;nodes.select(last.id);
-            restorePreferences(next);
+            publishPreferences(preferenceUpdate);
             if(!originalEntry.equals(AndroidStandardExitStore.snapshot(exits.get(original.id)))
                     ||!java.util.Arrays.equals(originalFinal,readLimited(last.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("A source changed during imported path selection.");
         }catch(Exception failure){
-            Map<String,Object> current=snapshotPreferences();
-            if(attempted&&last.id.equals(nodes.activeId())&&(next.equals(current)||previous.equals(current))){try{nodes.restoreSelection(selected);}catch(Exception rollback){failure.addSuppressed(rollback);}
-                try{restorePreferences(previous);}catch(Exception rollback){failure.addSuppressed(rollback);}}
+            synchronized(prefs()){
+                if(ownsPreferences(preferenceUpdate)){
+                    if(attempted)try{nodes.restoreProfileSelection(selected,java.util.Collections.singletonList(new AndroidNodeStore.SelectionSnapshot(last.id,originalFinal)));}catch(Exception rollback){failure.addSuppressed(rollback);}
+                    try{rollbackPreferences(preferenceUpdate);}catch(Exception rollback){failure.addSuppressed(rollback);}
+                }else failure.addSuppressed(new IllegalStateException("A newer connection choice prevents imported path rollback; its selection was preserved."));
+            }
             throw failure;
+        }
         }
     }
 
@@ -251,13 +270,15 @@ final class AndroidConnectionProfileStore {
         if(!AndroidStandardExitStore.snapshot(exit).equals(AndroidStandardExitStore.snapshot(current)))throw new IllegalStateException("The selected external node changed; select its path again.");
         if(entry!=null){AndroidNodeStore.Node currentEntry=findNode(entry.id);if(currentEntry==null||!java.util.Arrays.equals(readLimited(entry.file,AndroidNodeStore.MAX_BUNDLE),readLimited(currentEntry.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("The selected entry changed.");requireEntryMode(currentEntry,entryMode);}
         validateExternalGraph(current,entry,entryMode,execution);
-        Map<String,Object> original=snapshotPreferences();
+        Map<String,Object> original=snapshotPreferences(),next=new LinkedHashMap<>(original);
+        next.put(SELECTED_KIND,"external");next.put(SELECTED_ID,current.id);next.put(MODE_KEY,"external");
+        next.put(MULTI_ON,entry!=null);next.put(MULTI_ENTRY,entry==null?"":entry.id);next.put(MULTI_EXIT,entry==null?"":current.id);
+        next.put(MULTI_MODE,current.protocol);next.put(MULTI_ENTRY_KIND,"router-vpn");next.put("multihop_execution",execution);next.put("multihop_entry_mode",entry==null?"wg":entryMode);
+        PreferenceUpdate preferenceUpdate=new PreferenceUpdate(original,next);
         try{
             requireIdle("selecting an external path");
-            if(!prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,current.id).putString(MODE_KEY,"external")
-                    .putBoolean(MULTI_ON,entry!=null).putString(MULTI_ENTRY,entry==null?"":entry.id).putString(MULTI_EXIT,entry==null?"":current.id)
-                    .putString(MULTI_MODE,current.protocol).putString(MULTI_ENTRY_KIND,"router-vpn").putString("multihop_execution",execution).putString("multihop_entry_mode",entry==null?"wg":entryMode).commit())throw new IllegalStateException("Could not persist the selected external path.");
-        }catch(Exception failure){try{restorePreferences(original);}catch(Exception rollback){IllegalStateException error=new IllegalStateException("External path selection failed and rollback is incomplete.",failure);error.addSuppressed(rollback);throw error;}throw failure;}
+            publishPreferences(preferenceUpdate);
+        }catch(Exception failure){try{rollbackPreferences(preferenceUpdate);}catch(Exception rollback){IllegalStateException error=new IllegalStateException("External path selection failed and rollback is incomplete.",failure);error.addSuppressed(rollback);throw error;}throw failure;}
     }
 
     /** Ordinary predecessors retain their own private source and never acquire Router authority. */
@@ -268,13 +289,15 @@ final class AndroidConnectionProfileStore {
         if(!AndroidStandardExitStore.snapshot(exit).equals(AndroidStandardExitStore.snapshot(current))||!AndroidStandardExitStore.snapshot(ordinaryEntry).equals(AndroidStandardExitStore.snapshot(currentEntry)))throw new IllegalStateException("An ordinary Tor source changed; select the path again.");
         String mode=AndroidExternalPolicy.protocol(currentEntry.protocol);
         validateExternalGraph(current,null,currentEntry,mode,"local");
-        Map<String,Object> original=snapshotPreferences();
+        Map<String,Object> original=snapshotPreferences(),next=new LinkedHashMap<>(original);
+        next.put(SELECTED_KIND,"external");next.put(SELECTED_ID,current.id);next.put(MODE_KEY,"external");
+        next.put(MULTI_ON,true);next.put(MULTI_ENTRY,currentEntry.id);next.put(MULTI_EXIT,current.id);next.put(MULTI_MODE,current.protocol);
+        next.put(MULTI_ENTRY_KIND,"external");next.put("multihop_execution","local");next.put("multihop_entry_mode",mode);
+        PreferenceUpdate preferenceUpdate=new PreferenceUpdate(original,next);
         try{
             requireIdle("selecting an ordinary Tor path");requireExternalUnchanged(currentEntry);requireExternalUnchanged(current);
-            if(!prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,current.id).putString(MODE_KEY,"external")
-                    .putBoolean(MULTI_ON,true).putString(MULTI_ENTRY,currentEntry.id).putString(MULTI_EXIT,current.id).putString(MULTI_MODE,current.protocol)
-                    .putString(MULTI_ENTRY_KIND,"external").putString("multihop_execution","local").putString("multihop_entry_mode",mode).commit())throw new IllegalStateException("Could not persist the selected ordinary Tor path.");
-        }catch(Exception failure){try{restorePreferences(original);}catch(Exception rollback){IllegalStateException error=new IllegalStateException("Ordinary Tor path selection failed and rollback is incomplete.",failure);error.addSuppressed(rollback);throw error;}throw failure;}
+            publishPreferences(preferenceUpdate);
+        }catch(Exception failure){try{rollbackPreferences(preferenceUpdate);}catch(Exception rollback){IllegalStateException error=new IllegalStateException("Ordinary Tor path selection failed and rollback is incomplete.",failure);error.addSuppressed(rollback);throw error;}throw failure;}
     }
 
     synchronized ExternalSelection currentExternalPath(String id)throws Exception{
@@ -305,16 +328,16 @@ final class AndroidConnectionProfileStore {
         next.put(MULTI_EXIT,path.direct()?"":path.exit.id);next.put(MULTI_MODE,path.exit.protocol);
         next.put(MULTI_ENTRY_KIND,path.ordinaryEntry==null?"router-vpn":"external");next.put("multihop_execution",path.execution);
         next.put("multihop_entry_mode",path.direct()?"wg":path.entryMode);
+        PreferenceUpdate preferenceUpdate=new PreferenceUpdate(original,next);
         try{
             receipt.requireBeforeSelection();
-            if(!original.equals(snapshotPreferences()))throw new IllegalStateException("The user's selected connection changed before fastest adoption.");
-            restorePreferences(next);
+            publishPreferences(preferenceUpdate);
             if(!next.equals(snapshotPreferences()))throw new IllegalStateException("The measured selection did not persist exactly.");
             receipt.requireAfterSelection();
         }catch(Exception failure){
             // Roll back only our exact selection write. A concurrent newer
             // choice is not authority to overwrite the user's preferences.
-            if(next.equals(snapshotPreferences()))try{restorePreferences(original);}catch(Exception rollback){failure.addSuppressed(rollback);}
+            try{rollbackPreferences(preferenceUpdate);}catch(Exception rollback){failure.addSuppressed(rollback);}
             throw failure;
         }
     }
@@ -403,11 +426,33 @@ final class AndroidConnectionProfileStore {
         if(entry==null&&(dns.isEmpty()||"home".equals(dns)))throw new IllegalArgumentException("Home AdGuard needs a selected Router VPN entry; choose it in Edit hops.");
     }
 
-    private Map<String,Object> snapshotPreferences(){Map<String,?> current=prefs().getAll();Map<String,Object> result=new LinkedHashMap<>();for(String key:SELECTION_KEYS)if(current.containsKey(key)){Object value=current.get(key);if(MULTI_ON.equals(key)?!(value instanceof Boolean):!(value instanceof String))throw new IllegalStateException("Saved selection preferences have an invalid type.");result.put(key,value);}return result;}
-    private void restorePreferences(Map<String,Object> original){
+    private static final class PreferenceUpdate {
+        final Map<String,Object> original,next;boolean attempted;
+        PreferenceUpdate(Map<String,Object> original,Map<String,Object> next){this.original=new LinkedHashMap<>(original);this.next=new LinkedHashMap<>(next);}
+    }
+    // All Product and profile selection publishers share the same original
+    // preference monitor as AndroidCustomPresetCommit. Editors may be staged
+    // independently; their actual publication is serialized here.
+    static void applySelection(SharedPreferences preferences,SharedPreferences.Editor editor){synchronized(preferences){editor.apply();}}
+    private Map<String,Object> snapshotPreferences(){synchronized(prefs()){Map<String,?> current=prefs().getAll();Map<String,Object> result=new LinkedHashMap<>();for(String key:SELECTION_KEYS)if(current.containsKey(key)){Object value=current.get(key);if(MULTI_ON.equals(key)?!(value instanceof Boolean):!(value instanceof String))throw new IllegalStateException("Saved selection preferences have an invalid type.");result.put(key,value);}return result;}}
+    private void publishPreferences(PreferenceUpdate update){synchronized(prefs()){
+        if(!update.original.equals(snapshotPreferences()))throw new IllegalStateException("The selected connection changed before profile publication.");
+        update.attempted=true;
+        restorePreferences(update.next);
+        if(!update.next.equals(snapshotPreferences()))throw new IllegalStateException("The selected connection changed during profile publication.");
+    }}
+    private boolean ownsPreferences(PreferenceUpdate update){synchronized(prefs()){
+        Map<String,Object> current=snapshotPreferences();
+        return update.original.equals(current)||(update.attempted&&update.next.equals(current));
+    }}
+    private void rollbackPreferences(PreferenceUpdate update){synchronized(prefs()){
+        if(!ownsPreferences(update))throw new IllegalStateException("A newer connection choice prevents preference rollback; its selection was preserved.");
+        if(update.attempted&&!update.original.equals(snapshotPreferences()))restorePreferences(update.original);
+    }}
+    private void restorePreferences(Map<String,Object> original){synchronized(prefs()){
         SharedPreferences.Editor edit=prefs().edit();for(String key:SELECTION_KEYS){if(!original.containsKey(key)){edit.remove(key);continue;}Object value=original.get(key);if(value instanceof String)edit.putString(key,(String)value);else if(value instanceof Boolean)edit.putBoolean(key,(Boolean)value);else if(value instanceof Integer)edit.putInt(key,(Integer)value);else if(value instanceof Long)edit.putLong(key,(Long)value);else if(value instanceof Float)edit.putFloat(key,(Float)value);else throw new IllegalStateException("Saved selection preferences have an invalid type.");}
         if(!edit.commit())throw new IllegalStateException("Could not restore previous connection preferences.");
-    }
+    }}
     private static Exception append(Exception aggregate,Exception error){if(aggregate==null)return error;aggregate.addSuppressed(error);return aggregate;}
 
     private void requireIdle(String action){if(AndroidVpnMutationGuard.isBusy(context))throw new IllegalStateException("Disconnect Router VPN or let the active transition finish before "+action+"; live session identity and proof must remain immutable.");}

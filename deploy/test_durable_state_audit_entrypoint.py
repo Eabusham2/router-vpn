@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / "deploy/durable-state-transaction-audit.py"
 CONTRACT = ROOT / "deploy/durable-state-transaction-audit-v1.py"
 ANDROID = "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java"
+PRODUCT = "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java"
 NODE_STORE = "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java"
 ANDROID_TEST = "android/test_android_connection_profiles_contract.py"
 
@@ -46,7 +47,7 @@ class DurableStateEntrypointTests(unittest.TestCase):
 class AndroidDurabilitySourceTests(unittest.TestCase):
     def setUp(self):
         self.tree = ast.parse(CONTRACT.read_text(encoding="utf-8"))
-        self.sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in (ANDROID, NODE_STORE)}
+        self.sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in (ANDROID, NODE_STORE, PRODUCT)}
         self.source = self.sources[ANDROID]
         self.functions = [
             node
@@ -62,7 +63,7 @@ class AndroidDurabilitySourceTests(unittest.TestCase):
             and node.value.func.id in ("require", "forbid", "require_order")
             and node.value.args
             and isinstance(node.value.args[0], ast.Constant)
-            and node.value.args[0].value in (ANDROID, NODE_STORE)
+            and node.value.args[0].value in (ANDROID, NODE_STORE, PRODUCT)
         ]
         self.assertEqual({node.name for node in self.functions}, {"require", "forbid", "require_order"})
         self.assertEqual(
@@ -131,6 +132,71 @@ class AndroidDurabilitySourceTests(unittest.TestCase):
                 changed = scope.replace(write, "").replace(anchor, write + "\n" + anchor, 1)
                 errors = self.audit_source(source[:first] + changed + source[last:], path)
                 self.assertTrue(any("misordered" in error for error in errors), errors)
+
+    def test_preference_owner_and_shared_monitor_bypasses_are_rejected(self):
+        for before, after in (
+            ("synchronized(prefs()) {\n        try{", "{\n        try{"),
+            ("if(!preferenceUpdate.original.equals(snapshotPreferences()))", "if(false)"),
+            ("if(!ownsPreferences(preferenceUpdate))", "if(false)"),
+            ("if(ownsPreferences(preferenceUpdate))", "if(true)"),
+            ("if(!update.original.equals(snapshotPreferences()))", "if(false)"),
+            ("update.attempted=true;", ""),
+            ("if(!update.next.equals(snapshotPreferences()))", "if(false)"),
+            ("return update.original.equals(current)||(update.attempted&&update.next.equals(current))", "return true"),
+            ("if(!ownsPreferences(update))", "if(false)"),
+            ("if(update.attempted&&!update.original.equals(snapshotPreferences()))restorePreferences(update.original)", "restorePreferences(update.original)"),
+            ("synchronized(preferences){editor.apply();}", "editor.apply();"),
+            ("this.original=new LinkedHashMap<>(original);this.next=new LinkedHashMap<>(next)", "this.original=original;this.next=next"),
+        ):
+            with self.subTest(removed=before):
+                self.assertIn(before,self.source)
+                self.assertTrue(self.audit_source(self.source.replace(before,after)))
+
+    def test_other_profile_publishers_keep_captured_preference_transaction(self):
+        for start,end in (
+            ("synchronized void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String entryMode,String execution)","synchronized void selectOrdinaryTorPath("),
+            ("synchronized void selectOrdinaryTorPath(","synchronized ExternalSelection currentExternalPath("),
+            ("synchronized void selectMeasuredExternal(","private static final class NodeUpdate"),
+        ):
+            for before,after in (("publishPreferences(preferenceUpdate)","restorePreferences(next)"),("rollbackPreferences(preferenceUpdate)","restorePreferences(original)")):
+                with self.subTest(method=start,bypass=before):
+                    first=self.source.index(start);last=self.source.index(end,first)
+                    scope=self.source[first:last];self.assertIn(before,scope)
+                    self.assertTrue(self.audit_source(self.source[:first]+scope.replace(before,after)+self.source[last:]))
+
+    def test_preference_publication_and_rollback_cannot_precede_ownership(self):
+        for start,end,write,anchor in (
+            ("private void publishPreferences(","private boolean ownsPreferences(",
+             "restorePreferences(update.next);","if(!update.original.equals(snapshotPreferences()))"),
+            ("private void rollbackPreferences(","private void restorePreferences(",
+             "if(update.attempted&&!update.original.equals(snapshotPreferences()))restorePreferences(update.original);","if(!ownsPreferences(update))"),
+            ("synchronized Record load(String id)","synchronized void delete(String id)",
+             "publishPreferences(preferenceUpdate);","if(!preferenceUpdate.original.equals(snapshotPreferences()))"),
+            ("synchronized void selectImportedRouterPath(AndroidStandardExitStore.Entry first,AndroidNodeStore.Node last,String mode,String expectedFinal)","static final class ExternalSelection",
+             "nodes.select(last.id);","if(!preferenceUpdate.original.equals(snapshotPreferences()))"),
+        ):
+            with self.subTest(publication=write):
+                first=self.source.index(start);last=self.source.index(end,first)
+                scope=self.source[first:last];self.assertEqual(scope.count(write),1)
+                changed=scope.replace(write,"").replace(anchor,write+"\n"+anchor,1)
+                errors=self.audit_source(self.source[:first]+changed+self.source[last:])
+                self.assertTrue(any("misordered" in error for error in errors),errors)
+
+    def test_product_refresh_must_reread_selection_under_the_original_monitor(self):
+        source=self.sources[PRODUCT];first=source.index("private void refreshNodes()");last=source.index("private void refreshMap()",first)
+        scope=source[first:last]
+        for before,after in (
+            ("synchronized(prefs())", "if(true)"),
+            ('selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId())', 'selectedId=cachedSelection'),
+            ("if(selectedId.isEmpty()&&!items.isEmpty()&&!mutationBusy())", "if(!items.isEmpty())"),
+            ("AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit()", "unsafeApply(prefs().edit()"),
+        ):
+            with self.subTest(bypass=before):
+                self.assertIn(before,scope)
+                self.assertTrue(self.audit_source(source[:first]+scope.replace(before,after)+source[last:],PRODUCT))
+        read='selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());'
+        changed=scope.replace(read,"").replace("synchronized(prefs())",read+"synchronized(prefs())",1)
+        self.assertTrue(self.audit_source(source[:first]+changed+source[last:],PRODUCT))
 
     def test_direct_filesystem_writer_is_rejected(self):
         broken = self.source + "\nclass UnsafeWriter { FileOutputStream output; }\n"

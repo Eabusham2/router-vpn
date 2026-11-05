@@ -30,7 +30,7 @@ def method(signature):
 
 METHODS = ['void showAddRouter(', 'void chooseRouterBundle(', 'void receiveRouterBundle(',
            'void showNodeSort(', 'void selectCatalog(AndroidUnifiedNodeCatalog.Item item)',
-           'void refreshDnsSelection(', 'void refreshMultihopSummary(', 'boolean isExternalSelected(',
+           'void refreshNodes(', 'void refreshDnsSelection(', 'void refreshMultihopSummary(', 'boolean isExternalSelected(',
            'AlertDialog.Builder choiceDialog(', 'TextView text(', 'int dp(']
 
 HARNESS = r'''package com.eabusham.routervpn;
@@ -40,6 +40,7 @@ public final class RouterImportUITest extends android.app.Activity implements Au
  static final int IMPORT_ROUTER_BUNDLE=7607;static final String SELECTED_KIND="selected_kind",SELECTED_ID="selected_id",MULTI_ON="multihop_on",MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode";
  String importDecision="",message="",action="";long importGeneration;boolean destroyed;int refreshes,shownNodes;
  final AndroidNodeStore nodeStore;final AndroidStandardExitStore exitStore=new AndroidStandardExitStore();final AndroidUnifiedNodeCatalog catalog;final AndroidTelemetry telemetry;
+ final RouterVpnNodeMapView mapView=new RouterVpnNodeMapView();final Button nodeButton=new Button(this),fastestButton=new Button(this);
  final TextView statusView=new TextView(this),dnsHint=new TextView(this),multihopHint=new TextView(this);final Spinner dnsSpinner=new Spinner(this);final CheckBox multihopToggle=new CheckBox(this);double currentPathMs;
  final BlockingQueue<Runnable> ui=new LinkedBlockingQueue<>();final android.content.ContentResolver documents=new android.content.ContentResolver();final Connection connection=new Connection();
  RouterImportUITest()throws Exception{files=Files.createTempDirectory("router-import-ui-").toFile();AndroidVpnMutationGuard.busy=false;AndroidHomeStateStore.home=new AndroidHomeStateStore.Snapshot();AndroidHomeStateStore.home.connected=false;AndroidHomeStateStore.home.phase="disconnected";nodeStore=new AndroidNodeStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);telemetry=new AndroidTelemetry(this,nodeStore);dnsSpinner.setAdapter(new ArrayAdapter<>(this,0,new String[]{"Home","Fastest","Custom","DoT","DoH","DoH3","Rescue"}));}
@@ -77,12 +78,21 @@ public final class RouterImportUITest extends android.app.Activity implements Au
    if(invalid.equals("cancelled")||invalid.equals("file-uri")||invalid.equals("missing-decision"))check(h.documents.opens==0,"invalid picker reply opened arbitrary document");
   }
  }
+ static void automaticSelectionKeepsNewerOwner()throws Exception{
+  try(RouterImportUITest h=new RouterImportUITest()){
+   var first=h.nodeStore.importBundle(bundle("a".repeat(64),"First automatic row"));var newer=h.nodeStore.importBundle(bundle("b".repeat(64),"Later explicit choice"));h.nodeStore.select(first.id);h.prefs().edit().putString(SELECTED_KIND,"router-vpn").putString(SELECTED_ID,"").apply();
+   Thread refresh=new Thread(h::refreshNodes,"actual-Product-refresh");
+   try{synchronized(h.prefs()){refresh.start();long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);boolean blocked=false;while(refresh.isAlive()&&System.nanoTime()<end){StackTraceElement[] stack=refresh.getStackTrace();if(refresh.getState()==Thread.State.BLOCKED&&stack.length>0&&stack[0].getClassName().equals("com.eabusham.routervpn.RouterImportUITest")&&stack[0].getMethodName().equals("refreshNodes")){blocked=true;break;}Thread.yield();}check(blocked,"actual refresh did not wait for original selection monitor");h.nodeStore.select(newer.id);h.prefs().edit().putString(SELECTED_KIND,"router-vpn").putString(SELECTED_ID,newer.id).apply();}
+    refresh.join(5000);check(!refresh.isAlive(),"actual refresh did not join");check(h.nodeStore.activeId().equals(newer.id)&&h.prefs().getString(SELECTED_ID,"").equals(newer.id),"stale automatic refresh replaced newer selection");check(h.nodeButton.getText().toString().contains("Later explicit choice"),"automatic refresh displayed stale local selection");
+   }finally{refresh.join(5000);}
+  }
+ }
  static void rankingAndPolicies()throws Exception{
   try(RouterImportUITest h=new RouterImportUITest()){var a=h.nodeStore.importBundle(bundle("a".repeat(64),"Slow"));var b=h.nodeStore.importBundle(bundle("b".repeat(64),"Fast"));for(var node:List.of(a,b)){double n=node==a?20:3;AndroidNodeStatistics.save(node,new AndroidNodeStatistics.Record(node.id,AndroidNodeStatistics.source(node),node.endpoint,"direct",System.currentTimeMillis(),n,n,n,n,n,n,50,0));}h.nodeStore.select(a.id);h.showNodeSort();visible(6).clickItem(3);check(h.prefs().getString("node_sort","").equals(AndroidUnifiedNodeCatalog.SORT_LATENCY)&&h.shownNodes==1,"Lowest latency order is not reachable");h.showNodeSort();visible(6).clickItem(4);check(h.nodeStore.activeId().equals(b.id)&&h.message.contains("Press Connect"),"Lowest latency did not select actual durable winner separately");h.showNodeSort();visible(6).clickItem(5);check(h.prefs().getString("node_sort","").equals(AndroidUnifiedNodeCatalog.SORT_MOST_USED)&&h.nodeStore.activeId().equals(b.id),"Most used menu changed selection or lost saved order");h.nodeStore.select(a.id);h.showNodeSort();AlertDialog old=visible(6);Files.writeString(b.file.toPath(),Files.readString(b.file.toPath())+" ");old.clickItem(4);check(h.nodeStore.activeId().equals(a.id)&&h.message.contains("at least two"),"stale record was selected through old sorting dialog");}
   try(RouterImportUITest h=new RouterImportUITest()){h.prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,"exit").apply();for(String protocol:List.of("shadowsocks","tor"))for(String value:new String[]{null,"","  ","home","rescue","custom"}){h.exitStore.entry.protocol=protocol;JSONObject policy=value==null?null:new JSONObject().put("dns_mode",value);h.exitStore.entry.policy=policy;h.exitStore.entry.torPolicy=policy;h.refreshDnsSelection();check(h.dnsSpinner.getSelectedItemPosition()==("rescue".equals(value)?6:"custom".equals(value)?2:0),"missing external DNS did not default Home or explicit choice lost: "+protocol+"/"+value);}
    AndroidConnectionProfileStore.path.entry=h.nodeStore.importBundle(bundle("a".repeat(64),"Entry"));AndroidConnectionProfileStore.path.exit=h.exitStore.entry;AndroidConnectionProfileStore.path.entryMode="max-wg";String[] execution={"local","server","auto"},labels={"Local","Server","Compare"};for(boolean ordinary:new boolean[]{false,true}){if(ordinary){AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=new AndroidStandardExitStore.Entry();AndroidConnectionProfileStore.path.ordinaryEntry.name="Custom entry";}for(int i=0;i<execution.length;i++){AndroidConnectionProfileStore.path.execution=execution[i];h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith((ordinary?"Custom entry":"Entry")+" → "),"external entry summary lost "+ordinary);check(h.multihopHint.getText().toString().endsWith(labels[i]),"external execution summary lost "+labels[i]);}}AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=null;h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith("Direct"),"direct external path summary changed");}
  }
- public static void main(String[] args)throws Exception{imports();rankingAndPolicies();System.out.println("Android Router import and policy UI: "+checks+" shipping callback, atomic store, stale reply, durable ranking, Home default and execution summary checks PASS");}
+ public static void main(String[] args)throws Exception{imports();rankingAndPolicies();automaticSelectionKeepsNewerOwner();System.out.println("Android Router import and policy UI: "+checks+" shipping callback, atomic store, stale reply, durable ranking, Home default and execution summary checks PASS");}
 }
 '''
 
@@ -95,7 +105,12 @@ def run(overrides=None):
     sources['android/graphics/Color.java']='package android.graphics;public final class Color {public static final int WHITE=-1;}'
     sources['android/widget/Spinner.java']=sources['android/widget/Spinner.java'].replace('public void setSelection(int value){','public void setSelection(int value,boolean animate){setSelection(value);}public void setSelection(int value){')
     sources['com/eabusham/routervpn/AndroidStandardExitStore.java']=r'''package com.eabusham.routervpn;public class AndroidStandardExitStore {static class Entry{String id="exit",name="External",server="192.0.2.2",protocol="shadowsocks",expectedPublicIp="";String location="";Double latitude,longitude;int serverPort=443;org.json.JSONObject policy,torPolicy;}final Entry entry=new Entry();Entry get(String id){return entry;}java.util.List<Entry> list(){return java.util.List.of();}}'''
-    sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=r'''package com.eabusham.routervpn;final class AndroidTorProfile{static boolean isTor(String protocol){return protocol.startsWith("tor");}}final class AndroidConnectionProfileStore{static class ExternalSelection{AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String entryMode,execution;boolean direct(){return entry==null&&ordinaryEntry==null;}}static final ExternalSelection path=new ExternalSelection();AndroidConnectionProfileStore(android.content.Context c,AndroidNodeStore n,AndroidStandardExitStore e){}ExternalSelection currentExternalPath(String id){return path;}}final class Connection{boolean isMultihopConnected(){return false;}String activeMultihopEntryId(){return "";}String activeMultihopExitId(){return "";}String activeMultihopExitMode(){return "";}String activeMultihopEntryMode(){return "";}}'''
+    sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=r'''package com.eabusham.routervpn;final class AndroidTorProfile{static boolean isTor(String protocol){return protocol.startsWith("tor");}}final class AndroidConnectionProfileStore{static class ExternalSelection{AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String entryMode,execution;boolean direct(){return entry==null&&ordinaryEntry==null;}}static final ExternalSelection path=new ExternalSelection();AndroidConnectionProfileStore(android.content.Context c,AndroidNodeStore n,AndroidStandardExitStore e){}ExternalSelection currentExternalPath(String id){return path;}}final class Connection{AndroidStandardExitStore.Entry activeImportedMultihopEntry(){return null;}boolean isMultihopConnected(){return false;}String activeMultihopEntryId(){return "";}String activeMultihopExitId(){return "";}String activeMultihopExitMode(){return "";}String activeMultihopEntryMode(){return "";}}'''
+    profile_source=(JAVA/'AndroidConnectionProfileStore.java').read_text()
+    start=profile_source.index('    static void applySelection(')
+    selection_publication=profile_source[start:profile_source.index('\n',start)]
+    sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=sources['com/eabusham/routervpn/PolicyUIBoundaries.java'].replace('package com.eabusham.routervpn;', 'package com.eabusham.routervpn;import android.content.SharedPreferences;').replace('final class AndroidConnectionProfileStore{','final class AndroidConnectionProfileStore{'+selection_publication)
+    sources['com/eabusham/routervpn/RouterVpnNodeMapView.java']=r'''package com.eabusham.routervpn;final class RouterVpnNodeMapView{static final String ROLE_ENTRY="entry",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";static final class Marker{Marker(String id,String name,double latitude,double longitude,String role,double latency,boolean external){}}void setMarkers(java.util.List<Marker> markers){}}'''
     handlers='\n'.join(method(signature) for signature in METHODS)
     for before,after in (overrides or []):
         assert handlers.count(before)==1,before
@@ -117,7 +132,7 @@ def main():
     assert 'out.putString(STATE_IMPORT_DECISION,importDecision)' in SOURCE
     result=run();assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())
     mutations=[
-        [('if(error!=null)throw new IllegalStateException(safe(error));AndroidRouterBundleImport.requireCurrent(this,nodeStore,captured);','if(error!=null)throw new IllegalStateException(safe(error));')],
+        [('synchronized(prefs()){AndroidRouterBundleImport.requireCurrent(this,nodeStore,captured);node=nodeStore.importBundle(ready);','synchronized(prefs()){node=nodeStore.importBundle(ready);')],
         [('if(ticket!=importGeneration||isFinishing()||isDestroyed())return;','if(ticket!=importGeneration)return;')],
         [('p.optString("dns_mode","home")','p.optString("dns_mode","rescue")')],
         [('("server".equals(path.execution)?"Server":"auto".equals(path.execution)?"Compare":"Local")','"Local"')],
@@ -126,6 +141,10 @@ def main():
     for mutation in mutations:
         failed=run(mutation)
         assert failed.returncode!=0 and ('stale or destroyed import adopted' in failed.stderr or 'missing external DNS' in failed.stderr or 'external execution summary lost' in failed.stderr or 'external entry summary lost' in failed.stderr),failed.stdout+failed.stderr
-    print('Android Router import UI: all five stale-adoption and policy-summary negative controls rejected')
+    selected='String selectedKind,selectedId;synchronized(prefs()){selectedKind=prefs().getString(SELECTED_KIND,"router-vpn");selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());'
+    stale='String selectedKind=prefs().getString(SELECTED_KIND,"router-vpn"),selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());synchronized(prefs()){'
+    failed=run([(selected,stale)])
+    assert failed.returncode!=0 and 'stale automatic refresh replaced newer selection' in failed.stderr,failed.stdout+failed.stderr
+    print('Android Router import UI: all six stale-adoption, selection-owner and policy-summary negative controls rejected')
 
 if __name__=='__main__':main()

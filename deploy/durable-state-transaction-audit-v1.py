@@ -164,13 +164,68 @@ forbid(
 require_order(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
     "synchronized Record load(String id)", "synchronized void delete(String id)",
-    "stageNode(updates", "nodes.snapshotSelection()", "applied.add(update)",
+    "stageNode(updates", "synchronized(prefs()){originalSelection=nodes.snapshotSelection();originalPreferences=snapshotPreferences();}",
+    "PreferenceUpdate preferenceUpdate=new PreferenceUpdate(originalPreferences,nextPreferences)",
+    "synchronized(prefs()) {\n        try{", "if(!preferenceUpdate.original.equals(snapshotPreferences()))",
+    "applied.add(update)",
     "attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(update.id,updatedBundle))",
     "nodes.applyProfileBundle(update.id,update.original,updatedBundle)",
-    "}catch(Exception failure){", "nodes.restoreProfileBundle(update.id,update.original,update.updated)",
+    "publishPreferences(preferenceUpdate)", "}catch(Exception failure){", "synchronized(prefs()) {\n            if(!ownsPreferences(preferenceUpdate))", "restoreExternal(originalExternal,updatedExternal)",
+    "nodes.restoreProfileBundle(update.id,update.original,update.updated)",
     "nodes.restoreProfileSelection(originalSelection,attemptedSelections)",
-    "restorePreferences(originalPreferences)", "result.addSuppressed(rollback)",
+    "rollbackPreferences(preferenceUpdate)", "result.addSuppressed(rollback)",
 )
+
+# Preference ownership is checked under the original shared monitor before any
+# node publication, and again before rollback of captured sources/selection.
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "synchronized void selectImportedRouterPath(AndroidStandardExitStore.Entry first,AndroidNodeStore.Node last,String mode,String expectedFinal)", "static final class ExternalSelection",
+    "synchronized(prefs()){selected=nodes.snapshotSelection();previous=snapshotPreferences();}", "PreferenceUpdate preferenceUpdate=new PreferenceUpdate(previous,next)", "synchronized(prefs()) {\n        try{", "if(!preferenceUpdate.original.equals(snapshotPreferences()))", "nodes.select(last.id)", "publishPreferences(preferenceUpdate)", "}catch(Exception failure){", "synchronized(prefs()){\n                if(ownsPreferences(preferenceUpdate))", "nodes.restoreProfileSelection(selected,java.util.Collections.singletonList(new AndroidNodeStore.SelectionSnapshot(last.id,originalFinal)))", "rollbackPreferences(preferenceUpdate)", "throw failure",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "private void publishPreferences(", "private boolean ownsPreferences(",
+    "synchronized(prefs())", "if(!update.original.equals(snapshotPreferences()))", "update.attempted=true", "restorePreferences(update.next)", "if(!update.next.equals(snapshotPreferences()))",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "private boolean ownsPreferences(", "private void rollbackPreferences(",
+    "synchronized(prefs())", "Map<String,Object> current=snapshotPreferences()", "return update.original.equals(current)||(update.attempted&&update.next.equals(current))",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "private void rollbackPreferences(", "private void restorePreferences(",
+    "synchronized(prefs())", "if(!ownsPreferences(update))", "if(update.attempted&&!update.original.equals(snapshotPreferences()))restorePreferences(update.original)",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "private void restorePreferences(", "private static Exception append(",
+    "synchronized(prefs())", "SharedPreferences.Editor edit=prefs().edit()", "if(!edit.commit())throw",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "static void applySelection(", "private Map<String,Object> snapshotPreferences(",
+    "synchronized(preferences)", "editor.apply()",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "synchronized void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String entryMode,String execution)", "synchronized void selectOrdinaryTorPath(", "PreferenceUpdate preferenceUpdate=new PreferenceUpdate(original,next)", "publishPreferences(preferenceUpdate)", "}catch(Exception failure){", "rollbackPreferences(preferenceUpdate)",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "synchronized void selectOrdinaryTorPath(", "synchronized ExternalSelection currentExternalPath(", "PreferenceUpdate preferenceUpdate=new PreferenceUpdate(original,next)", "publishPreferences(preferenceUpdate)", "}catch(Exception failure){", "rollbackPreferences(preferenceUpdate)",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "synchronized void selectMeasuredExternal(", "private static final class NodeUpdate", "PreferenceUpdate preferenceUpdate=new PreferenceUpdate(original,next)", "publishPreferences(preferenceUpdate)", "}catch(Exception failure){", "rollbackPreferences(preferenceUpdate)",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "this.original=new LinkedHashMap<>(original);this.next=new LinkedHashMap<>(next)",
+    "if(MULTI_ON.equals(key)?!(value instanceof Boolean):!(value instanceof String))throw",
+)
+
 require_order(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java",
     "synchronized Node applyProfileBundle(", "synchronized List<Node> list()",
@@ -197,6 +252,10 @@ require_order(
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java",
     "left.id.equals(right.id) && java.util.Arrays.equals(left.activeBundle, right.activeBundle)",
+)
+require_order(
+    "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+    "private void refreshNodes()", "private void refreshMap()", "synchronized(prefs())", "selectedKind=prefs().getString(SELECTED_KIND,\"router-vpn\")", "selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId())", "if(selectedId.isEmpty()&&!items.isEmpty()&&!mutationBusy())", "nodeStore.select(first.id)", "AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit()",
 )
 run_test("android/test_android_connection_profiles_contract.py")
 run_test("android/test_android_node_store_transaction_contract.py")

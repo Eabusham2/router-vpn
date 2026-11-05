@@ -321,6 +321,10 @@ def main():
     boundaries = boundaries.replace('final class AndroidStandardExitRuntime {', 'final class AndroidStandardExitRuntime {' + P.UNOWNED_EXTERNAL_RESTORE_SOURCE)
     callback = S.block((JAVA / 'ProductActivity.java').read_text(), '    private AndroidUnifiedConnectionController.Callback callback(')
     product=(JAVA / 'ProductActivity.java').read_text()
+    publication=S.block((JAVA/'AndroidConnectionProfileStore.java').read_text(),'    static void applySelection(')
+    assert boundaries.count('final class AndroidConnectionProfileStore {')==1
+    boundaries=boundaries.replace('import android.content.Context;','import android.content.Context;import android.content.SharedPreferences;').replace('final class AndroidConnectionProfileStore {','final class AndroidConnectionProfileStore {'+publication)
+
     map_constants='\n'.join(line for line in product.splitlines() if any(key in line for key in ('private static final String PREFS=', 'private static final String MODE_KEY=', 'private static final String MULTI_ON=')))
     with tempfile.TemporaryDirectory(prefix='routervpn-usage-') as directory, tempfile.TemporaryDirectory(prefix='.usage-json-', dir=ROOT) as validator_directory:
         root = Path(directory)

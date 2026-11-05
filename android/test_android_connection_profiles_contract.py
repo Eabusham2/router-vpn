@@ -29,10 +29,10 @@ for marker in (
     'AndroidNodeStore.deriveId(bundle,updatedBundle)',
     'legacy Router node has no stable proof-bound identity',
     'All validation above is complete before any selection, node-file, preset or preference mutation.',
-    'nodes.applyProfileBundle(update.id,update.original,updatedBundle)', 'putString(MULTI_MODE,multiMode)',
+    'nodes.applyProfileBundle(update.id,update.original,updatedBundle)', 'nextPreferences.put(MULTI_MODE,multiMode)',
     'prior connection state was restored.', 'rollback is incomplete',
     'nodes.snapshotSelection()', 'nodes.restoreSelection(originalSelection)',
-    'snapshotPreferences()', 'restorePreferences(originalPreferences)',
+    'snapshotPreferences()', 'rollbackPreferences(preferenceUpdate)', 'publishPreferences(preferenceUpdate)', 'if(!ownsPreferences(preferenceUpdate))',
     '"external_policy"', '"entry_policy"', '"exit_policy"',
     'requireExternalIdentity', 'selectExternalPath', 'currentExternalPath',
     'AndroidConnectionProfilePolicy.external', 'exits.saveIfUnchanged(updatedExternal', 'restoreExternal(originalExternal,updatedExternal)',
@@ -88,8 +88,10 @@ for marker in ('schema<5', 'AndroidTorProfile.isTor', 'entry_policy', 'entry_pro
     assert marker in rows, f"Imported Router migration lost existing typed policy guard {marker!r}"
 select_imported = store.split('synchronized void selectImportedRouterPath(', 1)[1].split('static final class ExternalSelection', 1)[0]
 assert select_imported.index('AndroidImportedRouterPath.compile(') < select_imported.index('nodes.select(last.id)')
-assert 'next.equals(current)||previous.equals(current)' in select_imported
-assert 'last.id.equals(nodes.activeId())' in select_imported
+assert 'PreferenceUpdate(previous,next)' in select_imported
+assert 'synchronized(prefs())' in select_imported and 'if(ownsPreferences(preferenceUpdate))' in select_imported
+assert 'nodes.restoreProfileSelection(selected,java.util.Collections.singletonList(new AndroidNodeStore.SelectionSnapshot(last.id,originalFinal)))' in select_imported
+assert 'rollbackPreferences(preferenceUpdate)' in select_imported
 
 # Only explicitly whitelisted policy fields may be copied; node/dataplane secrets
 # stay in the private linked node stores.

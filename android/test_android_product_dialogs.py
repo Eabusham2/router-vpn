@@ -288,6 +288,12 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
                 depth+=(via_source[end]=="{")-(via_source[end]=="}");end+=1
             ranking.append(via_source[start:end])
         sources["com/eabusham/routervpn/ProductBoundaries.java"] = BOUNDARIES.replace("  // SHIPPING_VIA_RANKING", "\n".join(ranking))
+        profile_source=(JAVA/"AndroidConnectionProfileStore.java").read_text()
+        start=profile_source.index("    static void applySelection(");end=profile_source.index("{",start)+1;depth=1
+        while depth:
+            depth+=(profile_source[end]=="{")-(profile_source[end]=="}");end+=1
+        sources["com/eabusham/routervpn/AndroidConnectionProfileStore.java"]="package com.eabusham.routervpn;import android.content.SharedPreferences;final class AndroidConnectionProfileStore{"+profile_source[start:end]+"}"
+
         for name, text in sources.items():
             path = tmp / name;path.parent.mkdir(parents=True, exist_ok=True);path.write_text(text)
         target = tmp / "com/eabusham/routervpn/ProductDialogHarness.java"
