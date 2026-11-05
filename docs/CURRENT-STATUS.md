@@ -6,6 +6,18 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 5 workspace interruption and unfinished source
+
+The execution workspace became unavailable while three source units were still
+uncommitted. Their exact paths, available hashes, completed checks and unfinished
+validation are recorded in
+[RECOVERY-WORKSPACE-2026-11-05.md](RECOVERY-WORKSPACE-2026-11-05.md) and its
+[JSON manifest](RECOVERY-WORKSPACE-2026-11-05.json). The metadata is not a patch
+bundle and does not establish that the former workspace is currently accessible.
+The last locally adopted published source was `68011cbb`; later remote commits
+require safe adoption when access returns. Full source and release completion
+remain open.
+
 ## Mobile imported entry → paired Router final
 
 Android and Apple source supports ordinary imported Shadowsocks 2022, Hysteria2,

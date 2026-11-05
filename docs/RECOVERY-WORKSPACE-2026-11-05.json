@@ -1,0 +1,494 @@
+{
+  "schema": 1,
+  "recorded_at_utc": "2026-11-05T12:52:54Z",
+  "repository": "Eabusham2/router-vpn",
+  "branch": "main",
+  "source_base": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+  "workspace_last_known": "/workspace/scratch/05aa14a2dde2/router-vpn",
+  "workspace_access": "unavailable; observed exec-server disconnect and 45-second recovery timeout",
+  "full_pending_patch_preserved": false,
+  "source_files_readable_now": false,
+  "hash_basis": "A hashes were printed and reviewed before the outage; B/C final hashes were not recovered. This manifest contains metadata only and cannot recreate source.",
+  "units": [
+    {
+      "id": "A",
+      "name": "Linux original systemd-resolved authority and fixed read-only command",
+      "source_base": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+      "status": "frozen, incomplete verification, uncommitted",
+      "snapshot_last_known": "/workspace/scratch/05aa14a2dde2/resolved-native-final-source",
+      "manifest_last_known": "/workspace/scratch/05aa14a2dde2/resolved-native-final-source.json",
+      "files": [
+        {
+          "path": "internal/standardengine/resolved_policy.go",
+          "sha256": "fd88a54be96ee02dba6f65b11090057105eff49d45b0308ba001b4ac1c1252c4"
+        },
+        {
+          "path": "internal/standardengine/resolved_policy_test.go",
+          "sha256": "76de993889f0e2bd41ac17ed9a993049f57ee49e84bda035011eedaa7690efc9"
+        },
+        {
+          "path": "internal/standardengine/resolved_protocol.go",
+          "sha256": "aefd11ed659617a8b7c4f8809891a4c7ed421b11a52587e22c0f4af9359cd354"
+        },
+        {
+          "path": "internal/standardengine/resolved_protocol_test.go",
+          "sha256": "b29c829ed80fac587bd3bc2879b9acf7705cc58d160912879ed09c19d4384337"
+        },
+        {
+          "path": "internal/desktopnetwork/resolved_links.go",
+          "sha256": "e5f9606e074d5493e889b87575609da7ba970ec4bbf355d4a97807cfdc66a5dc"
+        },
+        {
+          "path": "internal/desktopnetwork/resolved_links_test.go",
+          "sha256": "970aeb84908145b4313fc92ffcddc48e8627c471c0ce55f07ba84a721210ead2"
+        },
+        {
+          "path": "mobile/desktop/sing_tun_resolved_authority_linux.go.tmpl",
+          "sha256": "e9ce3292cad90c814534820aa0ae391f0a9bff8aa9ca1b6374d113aeed4fae06"
+        },
+        {
+          "path": "mobile/desktop/sing_tun_resolved_authority_linux_test.go.tmpl",
+          "sha256": "0e3f4cfe1ec9ad139269aba3ff33ef2e6f0aa16b49cec7d2c407bc7d9bdffd3f"
+        },
+        {
+          "path": "mobile/desktop/standard_resolved_linux.go.tmpl",
+          "sha256": "2be0955c13dcc858a07676b7484637b4d77c5d79df4de44c590c0b9b342ce1ef"
+        },
+        {
+          "path": "mobile/desktop/standard_resolved_linux_test.go.tmpl",
+          "sha256": "cac512c84f36882beceef3d1cb338c5cdbc78d3e8f3a1f5122ef46246bf2722a"
+        },
+        {
+          "path": "mobile/desktop/sing_tun_resolver_linux.go.tmpl",
+          "sha256": "493a63bbd559d32b22e06ea3e0439b4b18b8241b75fa860a51d43f54058e5a84"
+        },
+        {
+          "path": "deploy/prepare-desktop-mtu.py",
+          "sha256": "43405480d43f413f524451b5a69c2cff4d922f1d4c1aa0c978add191ab60b585"
+        },
+        {
+          "path": "deploy/test_desktop_node_physical.py",
+          "sha256": "7b416cada9d78df2ab511300b442246094c481eee71b7bc130bcfad25b9d0ac7"
+        },
+        {
+          "path": "deploy/test_desktop_node_routing_runner.py",
+          "sha256": "42546d650b13d109534fde24fab581c80a14e0f7afe74011b456bb86328c81ec"
+        },
+        {
+          "path": "deploy/linux_standard_service_gate.py",
+          "sha256": "6b628e0757ed58fe48744c5f3fa0d3b2cef35a72ab55552b0fae226d03903749"
+        }
+      ],
+      "completed_checks": [
+        {
+          "check": "ordinary native preparation",
+          "session": 65640,
+          "status": "joined exit 0",
+          "projected_source_records": 2067,
+          "unchanged_xray_files": 1019
+        },
+        {
+          "check": "standardengine selected race tests",
+          "passed": 19,
+          "seconds": 1.325
+        },
+        {
+          "check": "desktopnetwork selected race tests",
+          "passed": 6,
+          "seconds": 1.061
+        },
+        {
+          "check": "reachable native signal/security/gate race tests",
+          "passed": 14,
+          "seconds": 1.056
+        },
+        {
+          "check": "physical runner inventory controls",
+          "passed": 2,
+          "seconds": 0.112
+        },
+        {
+          "check": "service auxiliary inventory control",
+          "passed": 1,
+          "seconds": 0.034
+        }
+      ],
+      "unfinished_checks": [
+        {
+          "check": "fixed read-only command suite",
+          "required_verdicts": 9,
+          "session": 12665,
+          "status": "last observed compiling; not joined; completion unknown",
+          "last_observed_seconds": 372,
+          "build_timeout_seconds": 600,
+          "test_timeout_seconds": 90
+        },
+        {
+          "check": "observer-hook causal control",
+          "status": "had not started"
+        }
+      ],
+      "failed_check": {
+        "check": "earlier full native authority fixture",
+        "status": "FAIL",
+        "seconds": 0.087,
+        "passed_verdicts": 14,
+        "blocked_socket_cases": 10,
+        "error": "net.ListenUnix: socket: operation not permitted",
+        "stage": "before authentication/capture assertions",
+        "skipped": false
+      },
+      "remaining_scope": [
+        "original-daemon local-only synthetic/hosts-name preflight before scoped upstream admission",
+        "daemon/helper network-namespace provenance before treating equal numeric ifindex as the same physical link",
+        "actual named-system-bus and native-command namespace acceptance"
+      ],
+      "logs_last_known": [
+        "/workspace/scratch/05aa14a2dde2/resolved-native-final-preparation.json",
+        "/workspace/scratch/05aa14a2dde2/resolved-native-final-verification.json",
+        "/workspace/scratch/05aa14a2dde2/resolved-native-final-pure.log",
+        "/workspace/scratch/05aa14a2dde2/resolved-native-final-component.log",
+        "/workspace/scratch/05aa14a2dde2/resolved-native-final-command.log",
+        "/workspace/scratch/05aa14a2dde2/resolved-original-authority.log"
+      ]
+    },
+    {
+      "id": "B",
+      "name": "Windows retained SS2022 entry with SS/HTTP/HTTPS finals",
+      "source_base": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+      "status": "unfinished draft, uncommitted, no Go compiler launched",
+      "snapshot_last_known": "/workspace/scratch/05aa14a2dde2/windows-entry-source",
+      "manifest_last_known": "/workspace/scratch/05aa14a2dde2/windows-entry-manifest.json",
+      "snapshot_status": "creation session 30723 joined exit 0, but node_layer_peer_test.go.tmpl changed afterward; refresh before testing",
+      "files": [
+        {
+          "path": "cmd/client/desktop_external_native.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/desktop_external_owned.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/desktop_external_owned_dns.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/desktop_external_owned_stop.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/desktop_external_wg_entry.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/desktop_node_owned.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/desktop_external_owned_sources.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/desktop_external_owned_entry_test.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/mobilemultihop/desktop_external_policy.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/mobilemultihop/desktop_external_ss_entry_policy_test.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/mobilemultihop/desktop_external_ss_connect_policy_test.go",
+          "sha256": null
+        },
+        {
+          "path": "deploy/prepare-desktop-external.py",
+          "sha256": null
+        },
+        {
+          "path": "deploy/test_windows_node_physical.py",
+          "sha256": null
+        },
+        {
+          "path": "deploy/test_windows_node_physical_runner.py",
+          "sha256": null
+        },
+        {
+          "path": "mobile/desktop/external_box_windows_hysteria2_test.go.tmpl",
+          "sha256": null
+        },
+        {
+          "path": "mobile/desktop/node_layer_peer_test.go.tmpl",
+          "sha256": null
+        },
+        {
+          "path": "mobile/desktop/external_box_windows_ss_entry_test.go.tmpl",
+          "sha256": null
+        },
+        {
+          "path": "mobile/desktop/node_external_ss_entry_windows_test.go.tmpl",
+          "sha256": null
+        }
+      ],
+      "completed_checks": [
+        {
+          "check": "NativeSSEntryGate Python runner tests",
+          "passed": 2,
+          "seconds": 0.035
+        },
+        {
+          "check": "three Python gate/runner/preparer syntax checks",
+          "status": "passed"
+        }
+      ],
+      "unfinished_checks": [
+        "controller/shared Go compilation and execution",
+        "native Windows fixture cross-compilation",
+        "actual Windows WFP/Wintun acceptance"
+      ],
+      "remaining_scope": [
+        "correct provider output-drain cleanup ordering with bounded process/drain join",
+        "strengthen Speed Lab response, cancellation, restored MTU and original-child lifecycle assertions",
+        "assert final environment policy identity independently of captured physical entry",
+        "explicit paired Always-to-Off and original-owner retry coverage",
+        "refresh isolated snapshot/hashes before finite Go selection and causal controls"
+      ],
+      "gate_inventory_only": {
+        "protocol_runs_required_verdicts": [
+          19,
+          19,
+          21
+        ],
+        "compiled_negative_controls": 2,
+        "executed": false
+      }
+    },
+    {
+      "id": "C",
+      "name": "Linux scoped resolved-policy bootstrap query adapter",
+      "source_base": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+      "status": "unfinished draft, uncommitted, no compilation completed",
+      "snapshot_last_known": "/workspace/scratch/05aa14a2dde2/resolved-scoped-first/source",
+      "manifest_last_known": "/workspace/scratch/05aa14a2dde2/resolved-scoped-first/manifest.json",
+      "snapshot_status": "creation command joined exit 0; final hash read failed after execution outage",
+      "files": [
+        {
+          "path": "cmd/client/linux_standard_service_resolved_linux.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/linux_standard_service_resolved_linux_test.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/linux_standard_service_boot_bootstrap_linux.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/linux_standard_service_boot_resolver_linux.go",
+          "sha256": null
+        },
+        {
+          "path": "cmd/client/linux_standard_service_boot_resolver_adapter_linux.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/systembootstrap/config_linux.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/systembootstrap/resolve_linux.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/systembootstrap/resolved_linux.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/systembootstrap/resolved_linux_test.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/mobiletor/desktop_standard_linux_bootstrap.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/mobiletor/desktop_standard_linux_bootstrap_link.go",
+          "sha256": null
+        },
+        {
+          "path": "internal/mobiletor/desktop_standard_linux_bootstrap_link_test.go",
+          "sha256": null
+        }
+      ],
+      "dependencies": [
+        "A typed resolved policy",
+        "A bounded fixed-command protocol"
+      ],
+      "completed_checks": [],
+      "remaining_scope": [
+        "original-daemon local-only preflight before public upstream queries",
+        "daemon/helper network-namespace provenance for per-link binding",
+        "all new draft tests need compilation/execution",
+        "actual DoT/DNSSEC support, equal-best parallel scopes and link-local DNS remain unfinished"
+      ],
+      "important_draft_properties": [
+        "same captured helper/process/absolute operation deadline without RPC lifetime renewal",
+        "read-only daemon never killed; cleanup belongs only to the created native helper",
+        "exact 127.0.0.53 opt-in separate from strict direct machine resolver capture",
+        "policy preserves scope, DNSEx endpoint port/SNI, domain/default/fallback/security distinctions",
+        "first planned executable path limited to one eligible ordinary DNS scope with DNSSEC=no and DNSOverTLS=no",
+        "link callback inside original baseline gate must not recursively call p.Current",
+        "retains original 68011cbb conditional-removal transaction",
+        "copies mutable hardware-address bytes; projects Linux raw IFF bits into Go net.Flags explicitly"
+      ]
+    }
+  ],
+  "recovery_rules": [
+    "Do not treat this metadata record as a source patch or guaranteed available sandbox archive.",
+    "Read live main and actual workspace before editing; preserve unrelated newer upstream work.",
+    "If the workspace returns, first determine the real status and process result of session 12665; do not assume it completed or launch overlapping compilers.",
+    "Hash recovered A files and compare every value before applying; do not overwrite mismatching files.",
+    "Refresh B snapshot because a declared source file changed after its successful creation.",
+    "Recover and hash C actual source; preserve the already published 68011cbb bootstrap-removal code.",
+    "Compare ancestry/content before restoring any earlier snapshot; do not reset main or replay already pushed commits.",
+    "Run the missing focused checks, then commit and push each coherent unit with a normal expected-head update."
+  ],
+  "ci_observation": {
+    "source_sha": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+    "observed_at_utc": "2026-11-05T12:40:08Z",
+    "total_workflow_runs": 28,
+    "counts": {
+      "success": 13,
+      "in_progress": 5,
+      "pending": 4,
+      "queued": 4,
+      "failure": 2
+    },
+    "authoritative_release": {
+      "run_id": 42024718919,
+      "status": "pending"
+    },
+    "failures": [
+      {
+        "run_id": 42024718876,
+        "name": "MTU policy contract",
+        "job_id": 127235939981,
+        "cause": "startup hold fixture counts both startMultihop and newly inserted startImportedEntryMultihop in one range; both shipping methods have their own hold",
+        "repair": "separate all four startup sections and require one missing-hold rejection per captured method; publication recorded in companion document"
+      },
+      {
+        "run_id": 42024718884,
+        "name": "Aux proxies and setup assets ARM64",
+        "cause": "failure newly observed; diagnosis pending"
+      }
+    ],
+    "limitations": "A workflow success applies only to the work actually executed by that workflow. No all-platform exact-head release is established."
+  },
+  "concurrent_apple_fixture_fix": {
+    "published_sha": "d06193a61f41537b51c8b530e779a33e77ed95f7",
+    "parent": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+    "tree": "f86aaf3de2835032170b56f53b832a1dd1a16693",
+    "file": "deploy/test_ios_mtu_control.py",
+    "source_predicate_review": {
+      "paths": 4,
+      "negative_controls": 20,
+      "equivalent_javascript_only": true,
+      "python_swift_not_run_locally": true
+    },
+    "unpublished_duplicate_candidate": "b258f6a00887785d913681cca02afead2f80a05a",
+    "unpublished_candidate_status": "commit object only; excluded from main; do not replay",
+    "local_adoption": "not performed because execution workspace is unavailable"
+  },
+  "remote_head_at_recovery_preparation": "176d1fa1bc44b7427c99a959744e652042348eb7",
+  "later_published_fixture_repairs": [
+    {
+      "sha": "d06193a61f41537b51c8b530e779a33e77ed95f7",
+      "parent": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+      "file": "deploy/test_ios_mtu_control.py",
+      "change": "four independent startup hold paths and twenty targeted source controls",
+      "verification": "independent source review and equivalent JavaScript source predicates; Python/Swift not executed locally"
+    },
+    {
+      "sha": "3dcdc4deb3dd8bce1b620253a1098f22239f9f6c",
+      "parent": "d06193a61f41537b51c8b530e779a33e77ed95f7",
+      "file": "android/test_android_external_node_comparison.py",
+      "change": "mutate actual PreferenceUpdate rollback owner and require intended newer-selection assertion",
+      "verification": "exact source and unique mutation boundary reviewed; no local Java execution"
+    },
+    {
+      "sha": "6a6cd1001b1d9dea6ea4af1aba2aa4dd5bf8eb77",
+      "parent": "3dcdc4deb3dd8bce1b620253a1098f22239f9f6c",
+      "file": "mobile/desktop/external_tor_comparison_whole_test.go.tmpl",
+      "change": "fixture follows Linux-only TUN startup setter; original native owner retains startup on other platforms",
+      "verification": "independently reviewed against actual native owner and Windows failing job; fixed native CI remains required"
+    },
+    {
+      "sha": "3e6953a3bb24d6fe2b8ca5f3a0536e30ff5c6438",
+      "parent": "6a6cd1001b1d9dea6ea4af1aba2aa4dd5bf8eb77",
+      "tree": "fb212a46d3fa903512de1a835d4113f50e315026",
+      "file": "mobile/wireguard/stack_close_test.go.tmpl",
+      "change": "deterministic original delivery read-lock witness before Close starts",
+      "verification": "root and two independent source reviews; exact remote source, parent and tree verified; no local Go execution"
+    },
+    {
+      "sha": "176d1fa1bc44b7427c99a959744e652042348eb7",
+      "parent": "3e6953a3bb24d6fe2b8ca5f3a0536e30ff5c6438",
+      "file": "deploy/test_ios_libbox_delivery.py",
+      "change": "ordinary Libbox test startup records its actual configuration through existing recorder",
+      "verification": "exact upstream one-line diff reviewed; no local Swift execution"
+    }
+  ],
+  "later_ci_diagnosis": {
+    "basis_sha": "68011cbbed42a4b5391bf96a2fce09c2aa6d5511",
+    "linux_run_id": 42024718931,
+    "arm64": {
+      "job_id": 127240172756,
+      "current_wireguard_drain_baseline": "passed",
+      "failed_boundary": "old-delivery causal control",
+      "failure": "late Write nil-dispatcher panic instead of required retained-delivery witness",
+      "source_repair": "3e6953a3bb24d6fe2b8ca5f3a0536e30ff5c6438",
+      "fixed_execution": "not yet established"
+    },
+    "amd64": {
+      "job_id": 127240172518,
+      "failed_test": "TestRouterVPNStandardMTUNativeClaimFailureNamespace",
+      "children": [
+        "post-grant-failure",
+        "post-grant-cancel"
+      ],
+      "failure": "inherited original namespace descriptor stat and own /proc/thread-self/ns/net stat returned permission denied after CLONE_NEWUSER|CLONE_NEWNET",
+      "stage": "before selected child subtest, TUN creation or native claim",
+      "source_repair": null,
+      "required_next_step": "separate original-FD fstat/Fstatfs, current namespace open/stat, UID/GID mappings, capability and security-context diagnostics; preserve mandatory isolation and identity checks"
+    },
+    "conditional_removal_native_cases": {
+      "stale_ruleset": "not reached on either architecture",
+      "same_handle_replacement": "not reached on either architecture",
+      "cancelled": "not reached on either architecture",
+      "committed": "not reached on either architecture",
+      "retired_handle": "not reached on either architecture",
+      "closed_endpoint": "not reached on either architecture",
+      "zero_generation_control": "not reached on either architecture"
+    },
+    "authoritative_run": {
+      "id": 42024718919,
+      "result": "no publication",
+      "aggregate_native_candidate": "cancelled",
+      "immutable_release_publication": "cancelled",
+      "arm64_images": "skipped",
+      "production_compose": "skipped"
+    },
+    "latest_published_release": {
+      "sha": "745b3e41e5a78d734391976af9b7cd0637660a0b",
+      "tag": "router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b",
+      "prerelease": true,
+      "asset_count": 12,
+      "published_at": "2026-10-24T03:29:25Z"
+    }
+  }
+}
