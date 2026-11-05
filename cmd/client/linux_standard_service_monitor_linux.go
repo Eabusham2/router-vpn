@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 var linuxStandardServiceMonitors sync.Map // map[*linuxStandardServiceLaunch]*linuxStandardServiceMonitor
@@ -35,6 +36,7 @@ type linuxStandardServiceMonitor struct {
 	probe        func(context.Context) error // caller holds the original owner.mu
 	stop         func() error
 	observations atomic.Uint64
+	pendingLoss  error // owned only by the original serial watch loop
 }
 
 func (o *linuxStandardServiceLaunch) ActivateMonitor(operation context.Context) error {
@@ -47,15 +49,17 @@ func (o *linuxStandardServiceLaunch) ActivateMonitor(operation context.Context) 
 // private callbacks let tests exercise ownership and joined cancellation without
 // substituting a fabricated native service or physical network acceptance.
 func (o *linuxStandardServiceLaunch) activateMonitor(operation context.Context, probe func(context.Context) error, stop func() error) error {
-	if o == nil || operation == nil || operation.Err() != nil || probe == nil || stop == nil {
+	if o == nil || operation == nil || probe == nil || stop == nil {
 		return errors.New("standard service monitor has no original live activation")
 	}
-	o.mu.Lock()
+	if err := desktopnetwork.LockContext(operation, &o.mu); err != nil {
+		return err
+	}
 	defer o.mu.Unlock()
 	if !o.registered || !o.attempted || o.joined || o.copiesClosed || !o.dnsProved || o.prepared == nil || o.prepared.dns == nil || o.request.Session == "" {
 		return errors.New("standard service monitor preceded original proved activation")
 	}
-	if err := o.currentIntent(operation, o.Command()); err != nil {
+	if err := o.currentIntentContext(operation, operation, o.Command()); err != nil {
 		return err
 	}
 	raw, exists := sessionTrackers.Load(o.app)
@@ -67,10 +71,19 @@ func (o *linuxStandardServiceLaunch) activateMonitor(operation context.Context, 
 	m := &linuxStandardServiceMonitor{owner: o, app: o.app, prepared: o.prepared, dns: o.prepared.dns,
 		command: o.Command(), request: o.request, tracker: tracker, profileToken: o.prepared.dns.profileToken,
 		ctx: ctx, cancel: cancel, watchDone: make(chan struct{}), finished: make(chan struct{}), probe: probe, stop: stop}
-	o.app.mu.Lock()
+	if err := desktopnetwork.LockContext(operation, &o.app.mu); err != nil {
+		cancel()
+		return err
+	}
 	current := o.app.state.Connected && o.app.state.Phase == "connected" && o.app.connectionCancelIntent != operation
 	o.app.mu.Unlock()
-	if !current || !m.selectedLocked() || m.sourceLocked() != nil {
+	selected, selectedErr := m.selectedLocked(operation)
+	sourceErr := m.sourceLocked(operation)
+	if err := errors.Join(selectedErr, sourceErr, operation.Err()); err != nil {
+		cancel()
+		return err
+	}
+	if !current || !selected {
 		cancel()
 		return errors.New("standard service monitor lost its exact connected source")
 	}
@@ -84,100 +97,177 @@ func (o *linuxStandardServiceLaunch) activateMonitor(operation context.Context, 
 
 // Caller holds owner.mu. This is identity comparison, not readiness proof.
 // A failed original service/engine still belongs to this exact Stop owner.
-func (m *linuxStandardServiceMonitor) selectedLocked() bool {
+func (m *linuxStandardServiceMonitor) selectedLocked(ctx context.Context) (bool, error) {
 	if m == nil || m.owner == nil || m.ctx == nil || m.ctx.Err() != nil || m.app == nil || m.prepared == nil || m.command == nil {
-		return false
+		return false, nil
 	}
 	o := m.owner
 	if o.app != m.app || o.prepared != m.prepared || o.prepared.dns != m.dns || o.Command() != m.command || o.request != m.request ||
 		!o.registered || !o.attempted || o.joined || o.copiesClosed || !o.dnsProved {
-		return false
+		return false, nil
 	}
 	owner, exists := linuxStandardServiceOwners.Load(m.app)
 	tracker, tracked := sessionTrackers.Load(m.app)
 	if !exists || owner != o || !tracked || tracker != m.tracker {
-		return false
+		return false, nil
 	}
-	m.app.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &m.app.mu); err != nil {
+		return false, err
+	}
 	defer m.app.mu.Unlock()
 	return m.app.cmd == m.command && m.app.state.RouterID == m.prepared.routerID &&
-		m.app.state.RuntimeMode == m.prepared.runtimeMode && m.app.state.Base == m.prepared.base
+		m.app.state.RuntimeMode == m.prepared.runtimeMode && m.app.state.Base == m.prepared.base, ctx.Err()
 }
 
 // Caller holds owner.mu. Source replacement is a failed proof of the original
 // runtime, distinct from a different runtime acquiring the application.
-func (m *linuxStandardServiceMonitor) sourceLocked() error {
+func (m *linuxStandardServiceMonitor) sourceLocked(ctx context.Context) error {
 	if m.dns == nil || m.dns.profileToken != m.profileToken || m.prepared.session != m.request.Session ||
 		m.prepared.digest != m.request.ConfigSHA256 || m.dns.networkID != m.request.NetworkID {
 		return errors.New("standard service monitor changed its captured source or network")
 	}
-	m.app.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &m.app.mu); err != nil {
+		return err
+	}
 	profile, exists := m.app.profileByIDLocked(m.request.ProfileID)
 	m.app.mu.Unlock()
 	if !exists || asyncMeasurementProfileToken(profile) != m.profileToken {
 		return errors.New("standard service monitor's original profile changed")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (m *linuxStandardServiceMonitor) lockOwner(ctx context.Context) error {
-	if ctx == nil || ctx.Err() != nil {
-		return errors.New("standard service monitor observation was cancelled")
-	}
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if m.owner.mu.TryLock() {
-			if ctx.Err() != nil {
-				m.owner.mu.Unlock()
-				return ctx.Err()
-			}
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
+	return desktopnetwork.LockContext(ctx, &m.owner.mu)
 }
 
-func (m *linuxStandardServiceMonitor) observe() (failure error, selected bool) {
-	ctx, cancel := context.WithTimeout(m.ctx, 4*time.Second)
-	defer cancel()
+func (m *linuxStandardServiceMonitor) observe(ctx context.Context) (failure error, selected bool) {
 	if err := m.lockOwner(ctx); err != nil {
 		return err, false
 	}
 	defer m.owner.mu.Unlock()
-	if !m.selectedLocked() {
-		return nil, false
+	current, err := m.selectedLocked(ctx)
+	if err != nil || !current {
+		return err, false
 	}
-	failure = m.sourceLocked()
+	failure = m.sourceLocked(ctx)
 	if failure == nil {
 		failure = m.probe(ctx)
 	}
-	if ctx.Err() != nil {
-		failure = errors.Join(failure, ctx.Err())
-	}
-	// The callback can complete after cancellation or a new application owner.
-	// Neither completion may publish failure or acquire Stop over that owner.
-	if !m.selectedLocked() {
+	failure = errors.Join(failure, ctx.Err())
+	// If selection cannot finish within this same caller budget, retain any
+	// already witnessed real loss for bounded original-owner confirmation. This
+	// incomplete read cannot adopt success or authorize Stop over a replacement.
+	current, err = m.selectedLocked(ctx)
+	if err == nil && !current {
 		return nil, false
 	}
-	if failure == nil {
-		failure = m.sourceLocked()
-	}
+	failure = errors.Join(failure, err, m.sourceLocked(ctx), ctx.Err())
 	if failure == nil {
 		m.observations.Add(1)
-	} else if common.ObservationContextExpired(ctx, failure) {
-		// This was a read of an already proved activation. An expired read
-		// neither proves the runtime healthy nor authorizes its retirement.
-		// Classify before the deferred cancel: a genuine source/engine error,
-		// including one joined with cancellation, still needs the final owned
-		// transaction recheck. The next tick keeps this same original monitor.
-		return nil, true
 	}
 	return failure, true
+}
+
+func (m *linuxStandardServiceMonitor) claimOperation(ctx context.Context) (func(), bool, error) {
+	if err := desktopnetwork.LockContext(ctx, &m.app.mu); err != nil {
+		return nil, false, err
+	}
+	defer m.app.mu.Unlock()
+	if m.app.cmd != m.command {
+		return nil, false, nil
+	}
+	if !m.app.operationMu.TryLock() {
+		return nil, true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		m.app.operationMu.Unlock()
+		return nil, true, err
+	}
+	return m.app.operationMu.Unlock, true, nil
+}
+
+// One tick uses its supplied observation budget. A proved mixed loss survives
+// that expired read; a later original transaction may confirm ownership and
+// retire it, but cannot reinterpret the expired read as a healthy result.
+func (m *linuxStandardServiceMonitor) poll(ctx context.Context) bool {
+	failure, selected := m.pendingLoss, true
+	if failure == nil {
+		failure, selected = m.observe(ctx)
+	}
+	if m.ctx.Err() != nil {
+		return false
+	}
+	if common.ObservationContextExpired(ctx, failure) {
+		return true
+	}
+	if !selected {
+		return false
+	}
+	if failure == nil {
+		return true
+	}
+	if ctx.Err() != nil {
+		m.pendingLoss = failure
+	}
+	// This is the existing second, transaction-owned confirmation step. It
+	// neither extends the earlier read nor repeats native work after its expiry.
+	confirmation, cancel := context.WithTimeout(m.ctx, 4*time.Second)
+	defer cancel()
+	release, current, err := m.claimOperation(confirmation)
+	if err != nil {
+		return common.ObservationContextExpired(confirmation, err)
+	}
+	if !current {
+		return false
+	}
+	if release == nil {
+		return true
+	}
+	defer release()
+	if m.pendingLoss != nil {
+		if err = m.lockOwner(confirmation); err != nil {
+			return common.ObservationContextExpired(confirmation, err)
+		}
+		selected, err = m.selectedLocked(confirmation)
+		if selected && err == nil {
+			err = m.sourceLocked(confirmation)
+		}
+		m.owner.mu.Unlock()
+		if common.ObservationContextExpired(confirmation, err) {
+			return true
+		}
+		if !selected || m.ctx.Err() != nil {
+			return false
+		}
+		failure = errors.Join(m.pendingLoss, err)
+	} else {
+		failure, selected = m.observe(confirmation)
+		if common.ObservationContextExpired(confirmation, failure) {
+			return true
+		}
+		if !selected || m.ctx.Err() != nil {
+			return false
+		}
+		if failure == nil {
+			return true
+		}
+		if confirmation.Err() != nil {
+			m.pendingLoss = failure
+			return true
+		}
+	}
+	if confirmation.Err() != nil {
+		return true
+	}
+	// Stop joins observation, never itself; operationMu still owns this exact
+	// command until cleanup and guarded failure publication finish. Keep
+	// On-connect protection, as with every automatic original-runtime failure.
+	m.endWatch()
+	invalidateDesktopDNSResults(m.app)
+	stopErr := m.stop()
+	m.publishFailure(stopErr)
+	return false
 }
 
 func (m *linuxStandardServiceMonitor) endWatch() {
@@ -196,41 +286,10 @@ func (m *linuxStandardServiceMonitor) run() {
 			return
 		case <-ticker.C:
 		}
-		failure, selected := m.observe()
-		if !selected {
-			if m.ctx.Err() == nil && errors.Is(failure, context.DeadlineExceeded) {
-				continue // A busy owner did not admit a native observation.
-			}
-			return
-		}
-		if failure == nil {
-			continue
-		}
-		release, current := m.app.claimRuntimeMonitorOperation(m.command)
-		if !current {
-			return
-		}
-		if release == nil {
-			continue
-		}
-		retired := func() bool {
-			defer release()
-			failure, selected = m.observe()
-			if !selected || m.ctx.Err() != nil {
-				return !(m.ctx.Err() == nil && errors.Is(failure, context.DeadlineExceeded))
-			}
-			if failure == nil {
-				return false
-			}
-			// Stop joins observation, never itself. The exact operation mutex
-			// remains held until cleanup and guarded failure publication finish.
-			m.endWatch()
-			invalidateDesktopDNSResults(m.app)
-			stopErr := m.stop()
-			m.publishFailure(stopErr)
-			return true
-		}()
-		if retired {
+		ctx, cancel := context.WithTimeout(m.ctx, 4*time.Second)
+		keep := m.poll(ctx)
+		cancel()
+		if !keep {
 			return
 		}
 	}

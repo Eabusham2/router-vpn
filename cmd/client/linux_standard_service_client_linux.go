@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
 var linuxStandardServiceOwners sync.Map // map[*app]*linuxStandardServiceLaunch
@@ -57,9 +59,22 @@ func prepareLinuxStandardServiceLaunch(a *app, local *linuxLegacyStandardExitOwn
 func (o *linuxStandardServiceLaunch) Command() *exec.Cmd { return o.prepared.command }
 
 func (o *linuxStandardServiceLaunch) currentIntent(operation context.Context, command *exec.Cmd) error {
-	actual, ok := linuxStandardServiceOwners.Load(o.app)
 	o.app.mu.Lock()
 	defer o.app.mu.Unlock()
+	return o.currentIntentLocked(operation, command)
+}
+
+// The observer budget and the exact connection-operation identity are distinct.
+// Stop may legitimately retain a nil operation after Connect has completed.
+func (o *linuxStandardServiceLaunch) currentIntentContext(ctx, operation context.Context, command *exec.Cmd) error {
+	if err := desktopnetwork.LockContext(ctx, &o.app.mu); err != nil {
+		return err
+	}
+	defer o.app.mu.Unlock()
+	return errors.Join(o.currentIntentLocked(operation, command), ctx.Err())
+}
+func (o *linuxStandardServiceLaunch) currentIntentLocked(operation context.Context, command *exec.Cmd) error {
+	actual, ok := linuxStandardServiceOwners.Load(o.app)
 	if !ok || actual != o || o.app.cmd != command || (command != nil && command != o.Command()) || o.app.connectionContext != operation {
 		return errors.New("standard service request belongs to a replaced controller operation")
 	}

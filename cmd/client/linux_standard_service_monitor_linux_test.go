@@ -269,61 +269,6 @@ func TestLinuxStandardServiceMonitorRechecksUnderOriginalTransaction(t *testing.
 	}
 }
 
-func TestLinuxStandardServiceMonitorPreservesOnlyPureObservationExpiry(t *testing.T) {
-	for _, outcome := range []string{"pure-expiry", "mixed-runtime-failure"} {
-		t.Run(outcome, func(t *testing.T) {
-			t.Parallel()
-			f := newStandardMonitorFixture(t)
-			var calls atomic.Int32
-			resumed := make(chan struct{})
-			var resumedOnce sync.Once
-			fault := errors.New("original runtime proof was independently lost")
-			f.start(t, func(ctx context.Context) error {
-				attempt := calls.Add(1)
-				if attempt <= 2 {
-					<-ctx.Done()
-					if outcome == "mixed-runtime-failure" {
-						return errors.Join(ctx.Err(), fault)
-					}
-					return fmt.Errorf("original observation: %w", ctx.Err())
-				}
-				resumedOnce.Do(func() { close(resumed) })
-				return nil
-			}, nil)
-			f.finish()
-			// Exercise two actual unchanged four-second observation budgets.
-			// A single expired read followed by success would also pass the old
-			// double-check-before-Stop code and would miss this regression.
-			wait, cancel := context.WithTimeout(context.Background(), 13*time.Second)
-			defer cancel()
-			if outcome == "pure-expiry" {
-				select {
-				case <-resumed:
-				case <-f.m.finished:
-					t.Fatal("two expired reads retired the healthy original activation")
-				case <-wait.Done():
-					t.Fatal("expired original observation was never retried")
-				}
-				if err := f.o.stopMonitor(wait); err != nil {
-					t.Fatal("explicit monitor cancellation failed", err)
-				}
-			}
-			select {
-			case <-f.m.finished:
-			case <-wait.Done():
-				t.Fatal("original monitor did not finish its owned operation")
-			}
-			if outcome == "pure-expiry" {
-				if f.stops.Load() != 0 || !f.a.state.Connected || f.a.cmd != f.o.Command() || f.m.observations.Load() != 1 {
-					t.Fatal("read expiry changed the engine or was counted as successful proof", f.stops.Load(), f.m.observations.Load(), f.a.state)
-				}
-			} else if f.stops.Load() != 1 || f.a.state.Connected || f.a.state.Phase != "failed" || f.m.observations.Load() != 0 {
-				t.Fatal("cancellation hid the independently witnessed runtime failure", f.stops.Load(), f.a.state)
-			}
-		})
-	}
-}
-
 func TestLinuxStandardServiceMonitorFailureRetainsRetryOwner(t *testing.T) {
 	f := newStandardMonitorFixture(t)
 	f.start(t, func(context.Context) error { return errors.New("original native proof lost") }, func() error {
@@ -462,6 +407,281 @@ func TestLinuxStandardServiceMonitorShippingActivationOrderAndRefusal(t *testing
 				if response.Code != http.StatusInternalServerError || activations != 0 {
 					t.Fatal("monitor started before final profile persistence", response.Code, activations, response.Body.String())
 				}
+			}
+		})
+	}
+}
+
+// Exercise the same serial poll used by run with an explicit short caller.
+// This fixture supplies no native acceptance; the retained service and process
+// tests separately cover those boundaries.
+func standardMonitorPollFixture(t *testing.T) *standardMonitorFixture {
+	t.Helper()
+	f := newStandardMonitorFixture(t)
+	raw, _ := sessionTrackers.Load(f.a)
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &linuxStandardServiceMonitor{owner: f.o, app: f.a, prepared: f.o.prepared, dns: f.o.prepared.dns, command: f.o.Command(), request: f.o.request, tracker: raw.(*sessionTracker), profileToken: f.o.prepared.dns.profileToken, ctx: ctx, cancel: cancel, watchDone: make(chan struct{}), finished: make(chan struct{}), probe: func(context.Context) error { return nil }, stop: f.cleanup}
+	f.m = m
+	close(m.finished) // This fixture calls the original serial poll synchronously.
+	linuxStandardServiceMonitors.Store(f.o, m)
+	t.Cleanup(func() { m.endWatch(); linuxStandardServiceMonitors.CompareAndDelete(f.o, m) })
+	f.finish()
+	return f
+}
+
+func TestLinuxStandardServiceMonitorObservationExpiryKeepsProvedOwner(t *testing.T) {
+	for _, scenario := range []string{"owner-lock", "selection-lock", "source-lock", "probe-expiry", "late-success", "final-selection-lock", "transaction-lock"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := standardMonitorPollFixture(t)
+			m := f.m
+			var deadline time.Time
+			var unlock func()
+			entered := make(chan struct{})
+			switch scenario {
+			case "owner-lock":
+				f.o.mu.Lock()
+				unlock = f.o.mu.Unlock
+			case "selection-lock", "source-lock", "transaction-lock":
+				f.a.mu.Lock()
+				unlock = f.a.mu.Unlock
+			case "probe-expiry", "late-success", "final-selection-lock":
+				if scenario == "final-selection-lock" {
+					unlock = func() {
+						select {
+						case <-entered:
+							f.a.mu.Unlock()
+						default:
+						}
+					}
+				}
+				m.probe = func(call context.Context) error {
+					got, _ := call.Deadline()
+					if !got.Equal(deadline) {
+						t.Error("monitor replaced original observer deadline")
+					}
+					if scenario == "final-selection-lock" {
+						f.a.mu.Lock()
+						close(entered)
+					}
+					<-call.Done()
+					if scenario == "probe-expiry" {
+						return call.Err()
+					}
+					return nil
+				}
+			}
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					if unlock != nil {
+						unlock()
+					}
+				})
+			}
+			defer release()
+			type result struct {
+				keep     bool
+				err      error
+				admitted bool
+			}
+			done := make(chan result, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				defer cancel()
+				deadline, _ = ctx.Deadline()
+				outcome := result{keep: true}
+				if scenario == "source-lock" {
+					f.o.mu.Lock()
+					outcome.err = m.sourceLocked(ctx)
+					f.o.mu.Unlock()
+				} else if scenario == "transaction-lock" {
+					unlock, _, err := m.claimOperation(ctx)
+					outcome.err = err
+					outcome.admitted = unlock != nil
+					if unlock != nil {
+						unlock()
+					}
+				} else {
+					outcome.keep = m.poll(ctx)
+				}
+				done <- outcome
+			}()
+			var outcome result
+			select {
+			case outcome = <-done:
+			case <-time.After(time.Second):
+				release()
+				<-done
+				t.Fatal("monitor observation waited beyond its original caller on a retained lock")
+			}
+			release()
+			if scenario == "source-lock" || scenario == "transaction-lock" {
+				if !errors.Is(outcome.err, context.DeadlineExceeded) || outcome.admitted {
+					t.Fatal("monitor lock lost original deadline", outcome.err)
+				}
+			}
+			if !outcome.keep || m.ctx.Err() != nil || m.pendingLoss != nil || f.stops.Load() != 0 || !f.a.state.Connected || f.a.cmd != m.command || m.observations.Load() != 0 {
+				t.Fatal("pure observation expiry retired, invalidated or adopted over a proved owner", scenario)
+			}
+			m.probe = func(context.Context) error { return nil }
+			retry, stop := context.WithTimeout(context.Background(), time.Second)
+			defer stop()
+			if !m.poll(retry) || m.observations.Load() != 1 || f.stops.Load() != 0 {
+				t.Fatal("healthy original owner could not be observed after expiry")
+			}
+		})
+	}
+}
+
+func TestLinuxStandardServiceMonitorMixedExpiryKeepsOriginalRetirement(t *testing.T) {
+	for _, scenario := range []string{"mixed-probe", "changed-source", "replacement"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := standardMonitorPollFixture(t)
+			m := f.m
+			calls := 0
+			replacement := exec.Command("replacement-monitor-runtime")
+			realLoss := errors.New("original native proof failed")
+			m.probe = func(ctx context.Context) error {
+				calls++
+				<-ctx.Done()
+				if scenario == "changed-source" {
+					m.dns.profileToken = "changed-source"
+					return ctx.Err()
+				}
+				if scenario == "replacement" {
+					f.a.mu.Lock()
+					f.a.cmd = replacement
+					f.a.mu.Unlock()
+				}
+				return errors.Join(ctx.Err(), realLoss)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			if m.poll(ctx) {
+				t.Fatal("confirmed original loss did not finish its monitor")
+			}
+			if calls != 1 {
+				t.Fatal("expired native read was retried to erase real loss", calls)
+			}
+			if scenario == "replacement" {
+				if f.stops.Load() != 0 || f.a.cmd != replacement || !f.a.state.Connected {
+					t.Fatal("late mixed failure retired replacement")
+				}
+			} else if f.stops.Load() != 1 || f.a.state.Connected || f.a.state.Phase != "failed" || f.a.cmd != nil {
+				t.Fatal("mixed failure lost original cleanup or failure publication", f.stops.Load(), f.a.state)
+			}
+		})
+	}
+}
+
+func TestLinuxStandardServiceMonitorActivationKeepsExactIntentAndDeadline(t *testing.T) {
+	for _, scenario := range []string{"owner-lock", "app-lock", "derived-intent"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newStandardMonitorFixture(t)
+			duration := 20 * time.Millisecond
+			if scenario == "derived-intent" {
+				duration = time.Second
+			}
+			ctx, cancel := context.WithTimeout(f.op, duration)
+			defer cancel()
+			if scenario != "derived-intent" {
+				f.a.connectionContext = ctx
+			}
+			var unlock func()
+			if scenario == "owner-lock" {
+				f.o.mu.Lock()
+				unlock = f.o.mu.Unlock
+			}
+			if scenario == "app-lock" {
+				f.a.mu.Lock()
+				unlock = f.a.mu.Unlock
+			}
+			var once sync.Once
+			release := func() {
+				once.Do(func() {
+					if unlock != nil {
+						unlock()
+					}
+				})
+			}
+			defer release()
+			done := make(chan error, 1)
+			go func() {
+				done <- f.o.activateMonitor(ctx, func(context.Context) error { t.Error("unadmitted monitor observed native runtime"); return nil }, f.cleanup)
+			}()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(time.Second):
+				release()
+				<-done
+				t.Fatal("monitor activation ignored its original caller deadline")
+			}
+			release()
+			f.a.connectionContext = f.op
+			if err == nil {
+				t.Fatal("expired or derived activation acquired original monitor")
+			}
+			if scenario != "derived-intent" && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("activation lost original caller deadline", err)
+			}
+			if _, exists := linuxStandardServiceMonitors.Load(f.o); exists {
+				t.Fatal("failed activation published monitor")
+			}
+		})
+	}
+}
+
+func TestLinuxStandardServiceMonitorPreservesOnlyPureObservationExpiry(t *testing.T) {
+	for _, outcome := range []string{"pure-expiry", "mixed-runtime-failure"} {
+		t.Run(outcome, func(t *testing.T) {
+			t.Parallel()
+			f := newStandardMonitorFixture(t)
+			var calls atomic.Int32
+			resumed := make(chan struct{})
+			var resumedOnce sync.Once
+			fault := errors.New("original runtime proof was independently lost")
+			f.start(t, func(ctx context.Context) error {
+				attempt := calls.Add(1)
+				if attempt <= 2 {
+					<-ctx.Done()
+					if outcome == "mixed-runtime-failure" {
+						return errors.Join(ctx.Err(), fault)
+					}
+					return fmt.Errorf("original observation: %w", ctx.Err())
+				}
+				resumedOnce.Do(func() { close(resumed) })
+				return nil
+			}, nil)
+			f.finish()
+			// Exercise two actual unchanged four-second observation budgets.
+			// A single expired read followed by success would also pass the old
+			// double-check-before-Stop code and would miss this regression.
+			wait, cancel := context.WithTimeout(context.Background(), 13*time.Second)
+			defer cancel()
+			if outcome == "pure-expiry" {
+				select {
+				case <-resumed:
+				case <-f.m.finished:
+					t.Fatal("two expired reads retired the healthy original activation")
+				case <-wait.Done():
+					t.Fatal("expired original observation was never retried")
+				}
+				if err := f.o.stopMonitor(wait); err != nil {
+					t.Fatal("explicit monitor cancellation failed", err)
+				}
+			}
+			select {
+			case <-f.m.finished:
+			case <-wait.Done():
+				t.Fatal("original monitor did not finish its owned operation")
+			}
+			if outcome == "pure-expiry" {
+				if f.stops.Load() != 0 || !f.a.state.Connected || f.a.cmd != f.o.Command() || f.m.observations.Load() != 1 {
+					t.Fatal("read expiry changed the engine or was counted as successful proof", f.stops.Load(), f.m.observations.Load(), f.a.state)
+				}
+			} else if f.stops.Load() != 1 || f.a.state.Connected || f.a.state.Phase != "failed" || f.m.observations.Load() != 0 {
+				t.Fatal("cancellation hid the independently witnessed runtime failure", f.stops.Load(), f.a.state)
 			}
 		})
 	}

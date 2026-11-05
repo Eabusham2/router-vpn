@@ -327,7 +327,7 @@ networking or a published release for this commit.
 
 ## Selective native MTU preparation repair
 
-Exact-SHA CI at `05800c84` exposed a missing dependency in the standalone MTU
+Commit [`619133c5`](https://github.com/Eabusham2/router-vpn/commit/619133c51df1b8e984b6c0b3c77028c97b7196bf) repairs a missing dependency exposed by exact-SHA CI at `05800c84` in the standalone MTU
 preparer: its retained inbound manager called `adapter.RouterVPNLockContext`,
 but only the full strategy preparer installed that helper. The Linux and macOS
 Native MTU integration jobs failed to compile. The selective retained-TUN
@@ -345,11 +345,33 @@ and the later exact-SHA release remain CI obligations. The separate Linux Node
 TUN startup failure at the same SHA requires transporting its original startup
 deadline to native admission; it is not closed by this preparation change.
 
+## Controller monitor preserves the original observation and intent
+
+The controller's installed-service monitor now carries its supplied observation
+context through source, application, launch and activation admission. It retains
+the exact original connection-intent object separately from the temporary
+observation context, including a legitimate idle nil intent. Pure observation
+expiry keeps the already-proved owner. A genuine loss joined with expiry is
+retained for bounded confirmation against that same owner; a later successful
+probe cannot erase it. Late success after the original deadline is refused.
+The existing On-connect stop/hold behavior and upstream `b7753f07` regression
+remain intact.
+
+The integrated actual client race selection passed in 15.156 seconds. It covers
+held original source and activation gates, unchanged intent, pure expiry and
+mixed genuine loss, together with the existing shipping monitor cases. Four
+causal controls each failed the intended executable case without a compile
+failure: suppressing genuine mixed loss, retiring on pure expiry, restoring an
+unbounded source lock, and replacing exact intent with a derived context. The
+mandatory service runner includes all three new parent cases. The selected
+network/event fixture boundaries remain explicit; no real installed-device
+acceptance is claimed by this source regression.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
 |---|---|---|
-| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor and installed-service mutation integration remain distinct. |
+| Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor admission is now integrated and locally verified; installed-service mutation integration remains unfinished. |
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child mutation loop, joined-worker/two-observer settlement, service/controller phase protocol, public Retest/Cancel branch and durable adoption remain unfinished. Safe refusal or an unused transport does not complete this requirement. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. | Published ledger also lists protected cross-adapter transfer, active Always upgrades and same-boot service-crash continuation. This observation change does not implement those features. |
