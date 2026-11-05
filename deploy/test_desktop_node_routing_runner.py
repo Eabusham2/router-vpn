@@ -128,7 +128,7 @@ class StandardServiceMTUVerdicts(unittest.TestCase):
 class NativeAddressRetirementVerdicts(unittest.TestCase):
     def test_partial_and_foreign_address_verdicts_cannot_be_omitted(self):
         names = NODE.NATIVE_ADDRESS_RETIREMENT_VERDICTS
-        self.assertEqual(len(names), 54)
+        self.assertEqual(len(names), 67)
         output = "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
         NODE.require_native_verdicts(output, names, "partial addresses")
         for name in names:

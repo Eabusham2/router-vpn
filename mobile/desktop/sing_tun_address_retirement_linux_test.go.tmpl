@@ -489,3 +489,89 @@ func TestRouterVPNNativeLinuxAddressWatchWake(t *testing.T) {
 		})
 	}
 }
+
+// Schedule original DELADDR at either actual post-close drain. The observer
+// model preserves native effects explicitly; the production retirement method
+// still closes the retained file, verifies absence and joins the observer.
+func TestRouterVPNNativeLinuxAddressRetirementClosedEvents(t *testing.T) {
+	for _, scenario := range []string{"first-close", "late-final-ipv4", "late-final-ipv6", "late-final-linklocal", "duplicate-first", "duplicate-final", "owned-add", "foreign-address", "changed-native", "before-close", "file-open", "guard-open"} {
+		t.Run(scenario, func(t *testing.T) {
+			native, model, rows, _ := retirementAddressFixture(t)
+			prefix, auto := "192.0.2.7/24", false
+			if scenario == "late-final-ipv6" {
+				prefix = "fd00::7/64"
+			}
+			if scenario == "late-final-linklocal" {
+				prefix, auto = "fe80::1234/64", true
+			}
+			original := retirementAddress(t, prefix, auto, nil)
+			if err := retirementAddressAdd(native, model, rows, original); err != nil {
+				t.Fatal(err)
+			}
+			state := &native.routervpnRetirement
+			event := routerVPNLinuxRoutingEvent{address: &original, delete: true}
+			if scenario == "before-close" || scenario == "file-open" || scenario == "guard-open" {
+				if scenario != "before-close" {
+					state.closed = true
+				}
+				if scenario == "guard-open" {
+					if err := state.file.Close(); err != nil {
+						t.Fatal(err)
+					}
+					state.fileClosed = true
+					guard, err := os.CreateTemp(t.TempDir(), "original-guard")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer guard.Close()
+					state.guard = guard
+				}
+				if err := native.routervpnLinuxClosedEvents([]routerVPNLinuxRoutingEvent{event}, true); err == nil || len(state.addressDeleted) != 0 {
+					t.Fatal("drain phase substituted for original descriptor close", err)
+				}
+				return
+			}
+			watch := &retirementClosedEventModel{retirementModel: model, native: native}
+			state.watch = watch
+			success := false
+			switch scenario {
+			case "first-close":
+				watch.first, success = []routerVPNLinuxRoutingEvent{event}, true
+			case "late-final-ipv4", "late-final-ipv6", "late-final-linklocal":
+				watch.final, success = []routerVPNLinuxRoutingEvent{event}, true
+			case "duplicate-first":
+				watch.first = []routerVPNLinuxRoutingEvent{event, event}
+			case "duplicate-final":
+				watch.first, watch.final = []routerVPNLinuxRoutingEvent{event}, []routerVPNLinuxRoutingEvent{event}
+			case "owned-add":
+				event.delete = false
+				watch.final = []routerVPNLinuxRoutingEvent{event}
+			case "foreign-address":
+				foreign := original
+				foreign.prefix = "192.0.2.8/24"
+				event.address = &foreign
+				watch.final = []routerVPNLinuxRoutingEvent{event}
+			case "changed-native":
+				foreign := original
+				foreign.native += "changed"
+				event.address = &foreign
+				watch.final = []routerVPNLinuxRoutingEvent{event}
+			}
+			raw, err := native.RouterVPNDesktopNetworkRetire(retirementStop(t))
+			if !state.closed || !state.fileClosed {
+				t.Fatal("test did not execute original descriptor close", err)
+			}
+			if _, statErr := state.file.Stat(); !errors.Is(statErr, os.ErrClosed) {
+				t.Fatal("original descriptor remains open", statErr)
+			}
+			if success {
+				receipt, parseErr := ParseDesktopNetworkRetirementReceipt(raw)
+				if err != nil || parseErr != nil || !model.closed || !state.readbackComplete || !state.addressDeleted[original.prefix] || len(state.addressDeleted) != 1 || !slices.Equal(receipt.Addresses, []string{original.prefix}) {
+					t.Fatal("original once-only late address deletion lost joined retirement", err, parseErr, state.addressDeleted)
+				}
+			} else if err == nil || raw != "" || model.closed || state.readbackComplete || state.receipt != "" {
+				t.Fatal("changed or repeated address event fabricated retirement", err, raw)
+			}
+		})
+	}
+}

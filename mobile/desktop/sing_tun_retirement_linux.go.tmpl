@@ -1037,7 +1037,12 @@ func (t *NativeTun) routervpnLinuxClosedEvents(events []routerVPNLinuxRoutingEve
 	s := &t.routervpnRetirement
 	for _, event := range events {
 		if event.address != nil {
-			if err := t.routervpnLinuxAddressEvent(event, implicit); err != nil {
+			// Both drains follow the same original descriptor close. Their
+			// diagnostic phase is not deletion authority: a late DELADDR still
+			// needs these actual close milestones and the exact one-use address
+			// record. Adds and duplicate/changed deletions remain refusals.
+			closed := s.created && s.closed && s.fileClosed && (s.guard == nil || s.guardClosed)
+			if err := t.routervpnLinuxAddressEvent(event, closed); err != nil {
 				s.failure = err
 				return err
 			}

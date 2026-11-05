@@ -152,6 +152,10 @@ NATIVE_ADDRESS_RETIREMENT_VERDICTS += [name for root, leaves in (
     ("TestRouterVPNNativeLinuxAutomaticAddressWait", ("delayed", "cancel-then-retire", "missing", "foreign", "duplicate", "dad-failed", "changed-readback")),
     ("TestRouterVPNNativeLinuxAddressWatchWake", ("queued", "wake", "cancel", "joined"))) for name in (root, *(root + "/" + leaf for leaf in leaves))]
 
+NATIVE_ADDRESS_RETIREMENT_TESTS += ("TestRouterVPNNativeLinuxAddressRetirementClosedEvents",)
+NATIVE_ADDRESS_RETIREMENT_VERDICTS += ["TestRouterVPNNativeLinuxAddressRetirementClosedEvents", *["TestRouterVPNNativeLinuxAddressRetirementClosedEvents/" + leaf for leaf in (
+    "first-close", "late-final-ipv4", "late-final-ipv6", "late-final-linklocal", "duplicate-first", "duplicate-final", "owned-add", "foreign-address", "changed-native", "before-close", "file-open", "guard-open")]]
+
 NATIVE_CLOSED_EVENT_ROOT = "TestRouterVPNNativeLinuxRoutingRetirementClosedEventDiagnostics"
 NATIVE_CLOSED_EVENT_CASES = ("first-close", "late-final", "late-final-ipv6", "late-final-linklocal", "duplicate-first", "duplicate-final", "owned-add", "foreign-first", "foreign-final", "changed-native", "changed-address-policy", "disjoint")
 NATIVE_CLOSED_EVENT_VERDICTS = (NATIVE_CLOSED_EVENT_ROOT, *(NATIVE_CLOSED_EVENT_ROOT + "/" + case for case in NATIVE_CLOSED_EVENT_CASES))
