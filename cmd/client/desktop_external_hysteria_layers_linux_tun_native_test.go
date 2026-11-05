@@ -28,10 +28,10 @@ var linuxHostTUNExternalLayerCases = func() []string {
 }()
 
 func linuxHostTUNExternalLayerMode(scenario string) string {
-	if strings.HasPrefix(scenario, "external-hy2aes-") {
+	if strings.HasPrefix(scenario, "external-hy2aes-") || strings.HasPrefix(scenario, "external-wghy2aes-") {
 		return common.StartLayerAES256GCM
 	}
-	if strings.HasPrefix(scenario, "external-hy2xor-") {
+	if strings.HasPrefix(scenario, "external-hy2xor-") || strings.HasPrefix(scenario, "external-wghy2xor-") {
 		return common.StartLayerAES256GCMXOR
 	}
 	return ""
@@ -57,6 +57,10 @@ func linuxHostTUNExternalLayerRead(t *testing.T, peer *linuxExternalTUNPeer, rep
 	if peer.protocol != "hysteria2" || reply.Layer == nil {
 		t.Fatal("installed layer lost its selected HY2 provider")
 	}
+	if peer.entry != nil {
+		linuxHostTUNExternalWGHysteriaLayerRead(t, peer, reply)
+		return
+	}
 	layer := reply.Layer
 	inner, err := netip.ParseAddrPort(layer.InnerAddress)
 	if err != nil || inner.Addr() != peer.address.Addr() || inner.Port() == 0 || inner == peer.address ||
@@ -76,6 +80,12 @@ func linuxHostTUNExternalLayerObserved(t *testing.T, peer *linuxExternalTUNPeer,
 		t.Fatal("layer observation absent")
 	}
 	layer := reply.Layer
+	if peer.entry != nil && action == "wrong-entry-public" {
+		if layer.Raw != 0 || layer.Authenticated != 0 || layer.Forwarded != 0 || layer.Rejected != 0 {
+			t.Fatal("unproved entry reached authenticated final layer", reply)
+		}
+		return
+	}
 	if action == "source" {
 		if layer.Raw != 0 || layer.Authenticated != 0 || layer.Forwarded != 0 || layer.Rejected != 0 || reply.PhysicalUDP != 0 {
 			t.Fatal("changed private layer source reached its physical peer", reply)
@@ -93,6 +103,9 @@ func linuxHostTUNExternalLayerAuthority(native *desktopNodeLaunch) error {
 	profile := native.external.profile
 	if profile.StartLayer == "" || profile.StartLayer == common.StartLayerOff {
 		return nil
+	}
+	if desktopExternalLinuxEntryOwner(native.external) {
+		return linuxHostTUNExternalWGHysteriaLayerAuthority(native)
 	}
 	bad := errors.New("installed HY2 layer changed its exact original keys, inner graph or physical root")
 	if profile.External == nil || profile.External.Protocol != "hysteria2" || profile.External.Hysteria2 == nil || profile.External.StartLayer == nil {

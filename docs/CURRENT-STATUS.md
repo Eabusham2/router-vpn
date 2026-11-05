@@ -42,8 +42,8 @@ original operation, deadline, command, directory/root identities and config hash
 failed planning retains only its own workspace cleanup handle. Nine mandatory
 reverse scenarios cover actual handoff, lost prepare/commit/Start replies,
 cancellation, changed deadline, post-removal failure and Always abort/explicit
-Off. They preserve the 429 original cases; with the three new boot scenarios
-below, the current inventory is 432 host scenarios plus nine reverse scenarios.
+Off. They preserve the 429 original cases; the three boot scenarios and 25
+layered-entry scenarios below give 457 host plus nine reverse scenarios.
 The final composition passes 65 client race verdicts and all 43 runner checks;
 Windows AMD64 and Darwin ARM64 affected-client test binaries also compile.
 Actual private encrypted traffic, selected DNS, native guards and joined
@@ -145,14 +145,19 @@ their Java/Swift/process-inspection checks remain environment-blocked here.
 Both actual GitHub UI workflows subsequently passed on the published `0f46cb02`.
 
 Linux now retains the Local imported WireGuard entry to Hysteria2 final with
-Start Layers Off and On-connect or Always protection. Independent credentials,
-final TLS/SNI, exit-routed UDP/TCP selected DNS, original source observations,
-measurement ownership and complete restoration remain captured. Focused client
-and policy races, actual native startup/authentication/TLS tests and all 31
-installed-runner checks pass. Nine mandatory namespace cases extend the
-inventory from 420 to 429; those privileged cases have not executed locally.
-Other graph families, layered Linux paths, Server/Compare and device acceptance
-retain their own unfinished requirements.
+Start Layers Off, AES-256-GCM or AES-256-GCM plus XOR whitening, and On-connect
+or Always protection. The final layer stays behind the original entry; it does
+not gain a second physical root. Independent credentials, final TLS/SNI,
+exit-routed selected DNS, source observations, measurements and complete
+restoration remain captured. The layered addition passes 270 client/policy race
+verdicts, 18 generated-native race verdicts and 39 runner checks. The native
+physical-owner fixture uses an explicit kernel-source model; cipher carrier and
+Hysteria2 authentication/TLS checks use actual local sockets. Both former
+admission conditions independently fail their exact assertions when restored.
+Twenty-five new mandatory namespace scenarios give 457 host plus nine reverse
+scenarios, with 17 compiled-authority and three physical-owner verdicts required.
+Those privileged cases and full production static linkage remain CI evidence.
+Other graph families, Server/Compare and device acceptance remain separate.
 
 The native Stop fixture now retains its actual open directory handle when
 Windows refuses directory replacement with ERROR_SHARING_VIOLATION. It verifies

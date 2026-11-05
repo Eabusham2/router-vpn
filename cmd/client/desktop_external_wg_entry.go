@@ -99,7 +99,7 @@ func desktopExternalPathProfileID(launch *desktopNodeLaunch) string {
 // Linux retains this bounded ordinary pair through its original Node session.
 // The final peer never becomes a physical root or a replacement entry owner.
 func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
-	if !desktopExternalPacketEntryOwner(owner) || owner.entry.External.Protocol != "wireguard" || owner.profile.StartLayer != "" && owner.profile.StartLayer != common.StartLayerOff {
+	if !desktopExternalPacketEntryOwner(owner) || owner.entry.External.Protocol != "wireguard" {
 		return false
 	}
 	switch owner.profile.External.Protocol {

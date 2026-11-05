@@ -1881,6 +1881,59 @@ ARM64 job `127122213436` failed at step 7 in run `41990774043` for `dc2ad7f5`.
 That current failure requires its own log diagnosis; the component results
 above do not establish kernel acceptance or close the current release gate.
 
+## Linux WireGuard entry with a captured layered Hysteria2 final
+
+The external-node/graph requirements and independently selected Start Layer
+choices require the complete captured path. Linux already ran the ordinary
+WireGuard-entry/Hysteria2 pair and direct layered Hysteria2, while two Linux
+admission predicates still rejected their supported composition. They now admit
+the exact Local ordinary WireGuard entry with a Hysteria2 final using either
+AES-256-GCM or AES-256-GCM plus XOR whitening. Existing common validation still
+requires the captured layer mode/parameters, separate original entry and final
+credentials, a single physical entry root, supported policy and complete graph.
+Other entry layers and unsupported final-layer protocols do not acquire support
+from this change. Selected exit-routed DNS, MTU, proof, cancellation, replacement
+and restoration retain the same original owners.
+
+The isolated application source is `87c9940d` plus sixteen frozen files. Normal
+full preparation from fresh native pin `1ac1a339cb1223e9c70eae14c44411c75033c02d`
+passes, and the complete shipping source checker verifies 2,034 generated/shared
+files. These are source-provenance records, not requirement completion counts.
+All sixteen file hashes match the final isolated source and shared workspace.
+
+Verification records **270 client/shared-policy RUN/PASS verdicts** under race
+(12.952s and 6.254s), and **18 generated-native RUN/PASS verdicts** (1.424s and
+2.619s). The physical-owner test uses the existing explicit kernel-source model.
+The cipher carrier and Hysteria2 checks use actual local sockets and reject
+wrong layer keys, destinations, whitening keys, HY2 passwords, SNI and trust.
+Restoring only the former client gate causes its exact admission assertion
+(three RUN/FAIL verdicts, 0.164s); restoring only the former native gate causes
+its exact captured-policy refusal (two RUN/FAIL verdicts, 0.042s). Neither
+control relies on a build error, panic, timeout, race or skipped test.
+
+All **39 focused Python checks pass (40.084s)**. The installed inventory preserves
+the earlier cases and adds 25 layered scenarios, for 457 host plus nine reverse
+scenarios. The new cases cover both layers, Always protection, public route,
+cancellation, wrong entry proof, layer key, HY2 credentials, TLS name/CA, selected
+DNS failure, changed source, replacement and wrong whitening. The actual runner
+requires all seventeen compiled-authority and three generated physical-owner
+verdicts; missing, duplicate, foreign, skipped and failed verdicts are rejected.
+
+An existing valid physical fixture omitted the mandatory transport tag. It now
+supplies that tag while the strict production six-field validator remains intact.
+A non-pristine preparation retry also failed and was discarded as a scratch
+generation; the final sixteen-file version was rebuilt normally from a fresh
+pinned checkout. The original logs remain separate from the final evidence.
+An unrelated broader sealed-restore test could not obtain a physical network
+identity. An independent stdlib probe confirms `net.Interfaces` fails here with
+`netlinkrib: operation not permitted`; no fabricated identity or relaxed
+activation was used to turn that failure into a pass.
+
+The frozen contribution/evidence manifest is `linux-wghy-layer-publication.json`.
+The native focused check uses supported purego linkage. Full production static
+linkage and real installed namespace/TUN execution remain mandatory exact-SHA
+CI; local NET_ADMIN and physical-device acceptance are not claimed.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -1888,7 +1941,7 @@ above do not establish kernel acceptance or close the current release gate.
 | Original lifecycle and later captured-owner/cancellation corrections | The integrated Context APIs cover observations, original Stop and receipt adoption. Accepted native MTU command capture/start/status, replacement and original cleanup now have bounded APIs and executable regression coverage. | The client snapshot/proof dependency closure is implemented and locally verified; controller-monitor admission is now integrated and locally verified; installed-service mutation and public controls are now integrated; successful installed native/network acceptance remains separate. |
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
-| Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
+| Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. Linux Local ordinary WireGuard entry with a captured AES/AES+XOR Hysteria2 final now has source, client/policy, real carrier and native-model evidence described above. | Full static linkage and its 25 new installed namespace cases need exact-SHA CI. Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
 | Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node, reverse Node-to-standard and retained prior-boot service-guard transfers use actual original creators, durable intent and bounded resolution. Active Always image upgrades now coordinate the two retained native creators, exact code journal, readiness and process joins. | Actual installed/native acceptance remains required, including eleven mandatory two-generation upgrade scenarios. Protected hostname bootstrap, other boot-owner paths and same-boot service-crash continuation remain unfinished. Source integration and modeled transactions do not establish private systemd/host acceptance. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Actual later evidence includes both Linux generated Node/TUN architecture jobs at `b2a9a3c1`, both Windows Wintun/WFP stages at `bed21f7e`, and all five Windows ARM64 MAX suites at `f041b241`, with their distinct boundaries recorded above. | Each later source change requires its own exact-SHA native/build/publication result. No current full release or remaining device acceptance is established; cancelled workflows are not passes. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |

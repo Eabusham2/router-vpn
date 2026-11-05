@@ -100,6 +100,9 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 				}
 				if layer != "" {
 					for _, foreign := range []string{"linux", "windows"} {
+						if foreign == "linux" && variant == "wireguard" && protocol == "hysteria2" {
+							continue // Exact complete Linux graph is asserted below.
+						}
 						if unsupported, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), foreign); err == nil || unsupported != nil {
 							t.Fatal("Darwin layered entry expanded another host", foreign)
 						}
@@ -162,7 +165,7 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 				}
 				for _, target := range []string{"linux", "windows"} {
 					p, e := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), target)
-					if target == "linux" && variant == "wireguard" && (protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2") && layer == "" {
+					if target == "linux" && variant == "wireguard" && (protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2") && (layer == "" || protocol == "hysteria2") {
 						if e != nil || p == nil || p.Validate() != nil {
 							t.Fatal("Linux lost its exact imported WG/final pair", e)
 						}
@@ -170,7 +173,8 @@ func desktopExternalPacketEntryLayerOwnsPolicy(t *testing.T, variant, protocol, 
 						if p.Metadata().TargetOS != "linux" || p.OriginalPolicy() != original ||
 							!reflect.DeepEqual(externalTestFind(t, linux, "external-entry"), entry) ||
 							!reflect.DeepEqual(externalTestFind(t, linux, ExternalFinalTag), exit) ||
-							!reflect.DeepEqual(linux["dns"], derived["dns"]) {
+							!reflect.DeepEqual(linux["dns"], derived["dns"]) ||
+							layer != "" && !reflect.DeepEqual(externalTestFind(t, linux, multihoprelay.ExitStartLayerTag), externalTestFind(t, derived, multihoprelay.ExitStartLayerTag)) {
 							t.Fatal("Linux changed captured entry keys, final credentials/TLS or selected DNS")
 						}
 					} else if e == nil || p != nil {

@@ -83,6 +83,27 @@ class NativeLifecycleAdmissionVerdicts(unittest.TestCase):
             NODE.require_native_verdicts(output+output, names, "lifecycle admission")
 
 
+class LinuxLayeredEntryVerdicts(unittest.TestCase):
+    def test_generated_original_entry_runs_and_passes_exactly_once(self):
+        suite = NODE.LINUX_LAYERED_ENTRY_SUITE
+        self.assertEqual(len(suite[3]), 3)
+        output = ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in suite[3])
+        baseline = Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            baseline.execute.return_value = (0, output)
+            NODE.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+            for line in output.splitlines(True):
+                for changed in (output.replace(line, '', 1), output + line, output.replace(line, line.replace('Root', 'ForeignRoot'), 1)):
+                    baseline.execute.return_value = (0, changed)
+                    with self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
+            for marker in ('--- SKIP:', '--- FAIL:', 'DATA RACE', 'panic:'):
+                baseline.execute.return_value = (0, output + marker + ' foreign\n')
+                with self.assertRaises(ValueError):
+                    NODE.execute_baseline_suite(baseline, suite)
+
+
 class StandardServiceMTUVerdicts(unittest.TestCase):
     def test_actual_standard_reader_verdict_cannot_be_omitted_or_substituted(self):
         suite = NODE.STANDARD_MTU_SUITE

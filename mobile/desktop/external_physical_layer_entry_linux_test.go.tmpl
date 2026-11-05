@@ -1,0 +1,36 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	M "github.com/sagernet/sing/common/metadata"
+	"testing"
+)
+
+// This exercises the generated shipping physical owner, with the existing
+// explicit kernel-source model. Actual encrypted layered packets and native
+// installed TUN retirement remain mandatory in the namespace acceptance gate.
+func TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot(t *testing.T) {
+	for _, kind := range []string{"wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor"} {
+		t.Run(kind, func(t *testing.T) {
+			policy := externalPhysicalDeviceFixture(t, kind, "192.168.50.7", 8443, false, "linux", "off", "always")
+			f := newExternalPhysicalFixture(t, policy)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			ctx := f.start(t, source)
+			if _, err := f.physical.current(ctx, "udp", M.ParseSocksaddr("192.168.50.7:8443")); err != nil {
+				t.Fatal("original WireGuard entry lost physical authority", err)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, address := range []string{"198.51.100.240:8388", "198.51.100.240:8389", "10.93.0.1:8388", "127.0.0.1:8389"} {
+					if _, err := f.physical.current(ctx, network, M.ParseSocksaddr(address)); err == nil {
+						t.Fatal("layered final borrowed original WireGuard physical authority", network, address)
+					}
+				}
+			}
+			f.network.Cancel()
+			if _, err := f.physical.current(ctx, "udp", M.ParseSocksaddr("192.168.50.7:8443")); err == nil {
+				t.Fatal("cancelled original entry retained authority")
+			}
+		})
+	}
+}

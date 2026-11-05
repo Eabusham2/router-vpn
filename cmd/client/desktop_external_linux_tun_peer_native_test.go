@@ -36,7 +36,7 @@ var linuxHostTUNExternalWGCONNECTCases = []string{
 	"external-wghttps-on-connect", "external-wghttps-always", "external-wghttps-public", "external-wghttps-cancelled", "external-wghttps-wrong-entry-public", "external-wghttps-wrong-proxy-password", "external-wghttps-wrong-proxy-username", "external-wghttps-dns-failure", "external-wghttps-wrong-proxy-sni", "external-wghttps-wrong-proxy-trust",
 }
 var linuxHostTUNExternalWGHysteriaCases = []string{"external-wghy2-on-connect", "external-wghy2-always", "external-wghy2-public", "external-wghy2-cancelled", "external-wghy2-wrong-entry-public", "external-wghy2-wrong-key", "external-wghy2-wrong-trust", "external-wghy2-wrong-ca", "external-wghy2-dns-failure"}
-var linuxHostTUNExternalCases = append(append(append([]string{
+var linuxHostTUNExternalCases = append(append(append(append([]string{
 	"external-ss-on-connect", "external-http-on-connect", "external-https-on-connect",
 	"external-ss-always", "external-http-always", "external-https-always",
 	"external-ss-cancelled", "external-ss-replacement", "external-ss-source", "external-ss-dns-failure",
@@ -70,7 +70,7 @@ var linuxHostTUNExternalCases = append(append(append([]string{
 	"external-socks-on-connect", "external-socks-always", "external-socks-public", "external-socks-cancelled",
 	"external-socks-wrong-auth", "external-socks-auth-downgrade", "external-socks-relay-domain", "external-socks-control-eof",
 	"external-socks-dns-failure", "external-socks-replacement", "external-socks-source",
-}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...)
+}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...)
 
 func linuxHostTUNExternalCase(scenario string) bool {
 	for _, candidate := range linuxHostTUNExternalCases {
@@ -154,7 +154,7 @@ func linuxHostTUNExternalWGEntry(scenario string) bool {
 }
 
 func linuxHostTUNExternalWGHysteria(scenario string) bool {
-	return strings.HasPrefix(scenario, "external-wghy2-")
+	return strings.HasPrefix(scenario, "external-wghy2-") || linuxHostTUNExternalWGHysteriaLayerCase(scenario)
 }
 func linuxHostTUNExternalWGCONNECT(scenario string) bool {
 	return strings.HasPrefix(scenario, "external-wghttp-") || strings.HasPrefix(scenario, "external-wghttps-")
@@ -606,7 +606,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 				clear(other[:])
 			}
 			profile.External.StartLayer = &common.ExternalStartLayer{Mode: peer.layerMode, API: "http://10.93.0.1:8787", Transport: map[string]any{
-				"type": "shadowsocks", "tag": "captured-private-layer", "server": "11.77.0.2", "server_port": int(peer.address.Port()),
+				"type": "shadowsocks", "tag": "captured-private-layer", "server": peer.address.Addr().String(), "server_port": int(peer.address.Port()),
 				"method": "2022-blake3-aes-256-gcm", "password": password}}
 		}
 		if linuxHostTUNExternalAction(scenario) == "wrong-key" {
@@ -805,7 +805,11 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	}
 	if peer.entry != nil {
 		entry := observed.PacketEntry
-		if entry == nil || entry.PhysicalUDP == 0 || entry.Streams == 0 || entry.PublicReplies == 0 || (entry.Packets > 0) != (linuxHostTUNExternalWGHysteria(scenario) && action != "wrong-entry-public") {
+		if action == "source" {
+			if entry == nil || entry.PhysicalUDP != 0 || entry.Streams != 0 || entry.Packets != 0 || entry.PublicReplies != 0 {
+				t.Fatal("changed complete graph reached original WireGuard entry", observed)
+			}
+		} else if entry == nil || entry.PhysicalUDP == 0 || entry.Streams == 0 || entry.PublicReplies == 0 || (entry.Packets > 0) != (linuxHostTUNExternalWGHysteria(scenario) && action != "wrong-entry-public") {
 			t.Fatal("entry proof or final flow bypassed its actual encrypted WireGuard owner", observed)
 		}
 	}
@@ -872,7 +876,9 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		t.Fatal("retired external proof was adopted after cancellation", end)
 	}
 	if peer.entry != nil {
-		if linuxHostTUNExternalWGHysteria(scenario) {
+		if linuxHostTUNExternalWGHysteriaLayerCase(scenario) {
+			t.Log("verified installed host independent WireGuard entry and layered Hysteria2 final:", scenario)
+		} else if linuxHostTUNExternalWGHysteria(scenario) {
 			t.Log("verified installed host independent WireGuard entry and Hysteria2 final:", scenario)
 		} else if linuxHostTUNExternalWGCONNECT(scenario) {
 			t.Log("verified installed host independent WireGuard entry and CONNECT final:", scenario)

@@ -21,10 +21,13 @@ func TestDesktopLinuxWireGuardCONNECTRetainsBothSavedSources(t *testing.T) {
 func TestDesktopLinuxWireGuardHysteriaRetainsBothSavedSources(t *testing.T) {
 	desktopLinuxPacketEntryRetainsBothSavedSources(t, "hysteria2")
 }
-func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol string) {
+func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol string, layers ...string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		t.Run(kill, func(t *testing.T) {
 			profile, entry, launch := desktopExternalPacketEntryExitFixture(t, kill, "wireguard", protocol)
+			if len(layers) != 0 {
+				profile, entry, launch = desktopExternalPacketEntryLayerExitFixture(t, kill, "wireguard", protocol, layers[0])
+			}
 			if !desktopLinuxExternalEligible(launch) {
 				t.Fatal("original captured WG/final pair was not admitted")
 			}
@@ -51,10 +54,22 @@ func desktopLinuxPacketEntryRetainsBothSavedSources(t *testing.T, protocol strin
 			if protocol == "hysteria2" {
 				faults = append(faults, "exit-address", "exit-sni")
 			}
+			if len(layers) != 0 {
+				faults = append(faults, "layer-key", "layer-port", "layer-mode", "inner-address")
+			}
 			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
 					p, e := cloneRouterProfile(profile), cloneRouterProfile(entry)
 					switch fault {
+					case "layer-key":
+						p.External.StartLayer.Transport["password"] = testWGKey('x')
+					case "layer-port":
+						p.External.StartLayer.Transport["server_port"] = 18443
+					case "layer-mode":
+						p.External.StartLayer.Mode = "off"
+					case "inner-address":
+						p.External.Hysteria2.Server = "10.93.0.2"
+
 					case "entry-key":
 						e.External.WireGuard.PrivateKey = testWGKey('y')
 					case "entry-peer":
@@ -139,14 +154,6 @@ func TestDesktopLinuxWireGuardEntryKeepsOtherGraphsClosed(t *testing.T) {
 }
 func TestDesktopLinuxWireGuardHysteriaKeepsOtherGraphsClosed(t *testing.T) {
 	desktopLinuxPacketEntryKeepsOtherGraphsClosed(t, "hysteria2")
-	for _, layer := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
-		t.Run("complete-"+layer, func(t *testing.T) {
-			_, _, launch := desktopExternalPacketEntryLayerExitFixture(t, "always", "wireguard", "hysteria2", layer)
-			if !desktopExternalPacketEntryOwner(launch.external) || desktopLinuxExternalEligible(launch) {
-				t.Fatal("Linux admitted an independently complete but unsupported final layer")
-			}
-		})
-	}
 }
 func desktopLinuxPacketEntryKeepsOtherGraphsClosed(t *testing.T, protocol string) {
 	for _, fault := range []string{"server", "auto", "off", "predecessor", "entry-layer", "final-layer", "final-protocol", "entry-protocol"} {

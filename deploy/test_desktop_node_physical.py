@@ -103,6 +103,8 @@ NETWORK_CONTEXT_LEAVES = tuple(NETWORK_CONTEXT_TESTS[0] + "/" + name for name in
     "live", "guard-cancel", "interface-cancel", "receipt-cancel", "changed-index"))
 
 NATIVE_MTU_TEST = "TestRouterVPNNativeLinuxMTUTransactionNamespace"
+LINUX_LAYERED_ENTRY_SUITE = ("linux-layered-external-entry", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot$",
+    ("TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot", *("TestRouterVPNExternalPhysicalLinuxLayeredEntryOwnsOnlyOriginalRoot/" + case for case in ("wg-entry-hysteria2-aes", "wg-entry-hysteria2-aes-xor"))))
 STANDARD_MTU_SUITE = ("standard-mtu-original-reader", "./cmd/sing-box",
                       "^TestRouterVPNStandardMTUActualBox(KeepsOriginalReader|RequiresNativeClaim|RetiresUnstartedReader)$",
                       ("TestRouterVPNStandardMTUActualBoxKeepsOriginalReader", "TestRouterVPNStandardMTUActualBoxRequiresNativeClaim",
@@ -961,6 +963,8 @@ def execute_baseline_suite(baselines, suite):
     if name == 'native-retirement-bound':
         root = 'TestDesktopNetworkRetirementKeepsSeparateBound'
         require_native_verdicts(output, [root] + [root + '/' + case for case in ('complete-history', 'oversized-writer', 'oversized-parser', 'ready-stays-bounded')], 'native retirement evidence bound')
+    if name == LINUX_LAYERED_ENTRY_SUITE[0]:
+        require_native_verdicts(output, required, "Linux original layered entry")
     if name in (STANDARD_MTU_SUITE[0], STANDARD_MTU_NATIVE_SUITE[0]):
         require_native_verdicts(output, required, "standard service original MTU reader")
     if name == "native-address-retirement":
@@ -1164,6 +1168,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(("native-startup-codec", "./experimental/libbox/routervpn/mobilemultihop", "^TestDesktopStartupAdmissionKeepsOriginalDeadline$", ("TestDesktopStartupAdmissionKeepsOriginalDeadline",)))
         suites.append(("tor-registration-policy", "./routervpn/desktoppt", "^TestRouterVPNLinuxPhysicalPolicyRegistrationContext$", ("TestRouterVPNLinuxPhysicalPolicyRegistrationContext",)))
         suites.append(("tor-registration-box", ".", "^TestRouterVPNDesktopTorPhysicalRegistrationContext$", ("TestRouterVPNDesktopTorPhysicalRegistrationContext",)))
+        suites.append(LINUX_LAYERED_ENTRY_SUITE)
         suites.append(STANDARD_MTU_SUITE)
         suites.append(STANDARD_MTU_NATIVE_SUITE)
         suites.append(('native-retirement-bound', 'github.com/sagernet/sing-tun', '^TestDesktopNetworkRetirementKeepsSeparateBound$', ('TestDesktopNetworkRetirementKeepsSeparateBound',)))

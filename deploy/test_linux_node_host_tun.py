@@ -139,6 +139,13 @@ CASES += BOOT_TRANSFER_CASES
 PUBLIC_CASES += BOOT_TRANSFER_CASES
 ACTIVE_CASES += BOOT_TRANSFER_CASES
 OFF_CASES += BOOT_TRANSFER_CASES
+EXTERNAL_WG_HYSTERIA_LAYER_CASES = tuple('external-' + mode + '-' + action
+    for mode in ('wghy2aes', 'wghy2xor')
+    for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-entry-public',
+                   'wrong-layer-key', 'wrong-key', 'wrong-trust', 'wrong-ca', 'dns-failure', 'source', 'replacement')) + ('external-wghy2xor-wrong-whitening',)
+EXTERNAL_CASES += EXTERNAL_WG_HYSTERIA_LAYER_CASES
+CASES += EXTERNAL_WG_HYSTERIA_LAYER_CASES
+WHITENING_CASES += tuple(case for case in EXTERNAL_WG_HYSTERIA_LAYER_CASES if case.startswith("external-wghy2xor-"))
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -159,6 +166,8 @@ def checked_sources(source):
     required = {'cmd/client/linux_standard_service_boot_transfer_linux.go', 'cmd/client/linux_standard_service_boot_transfer_linux_test.go', 'cmd/client/linux_standard_service_boot_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_reverse_planning_linux.go', 'cmd/client/linux_standard_service_reverse_planning_linux_test.go', 'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
+                'cmd/client/desktop_external_wg_hysteria_layer_linux_tun_native_test.go',
+                'cmd/client/desktop_external_wg_hysteria_layer_linux_test.go',
                 'cmd/client/desktop_external_linux_host.go', 'cmd/client/desktop_external_linux_lifecycle.go',
                 'cmd/client/desktop_external_wg_entry.go', 'cmd/client/desktop_external_wg_entry_linux_test.go',
                 'cmd/client/desktop_external_retained.go', 'cmd/client/external_profile_connect.go', 'cmd/client/speed_lab_paths.go',
@@ -220,6 +229,16 @@ LAYER_PEER_CASES = tuple('TestRouterVPNDesktopExternalInstalledLayerCarrier/' + 
 
 LAYER_AUTHORITY_CASES = tuple('TestDesktopLinuxInstalledLayerFixtureKeepsCompiledAuthority/' + mode
                               for mode in ('aes-256-gcm', 'aes-256-gcm+xor-whitening'))
+
+
+LAYERED_ENTRY_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledLayeredEntryFixtureKeepsCompiledAuthority'
+LAYERED_ENTRY_AUTHORITY_CASES = (LAYERED_ENTRY_AUTHORITY_ROOT, *(LAYERED_ENTRY_AUTHORITY_ROOT + '/' + mode + suffix
+    for mode in ('aes-256-gcm', 'aes-256-gcm+xor-whitening')
+    for suffix in ('', '/entry-root', '/inner-key', '/outer-key', '/outer-port', '/outer-address', '/private-peer', '/layer-mode')))
+
+
+def check_layered_entry_authority_verdict(output):
+    NODE.require_native_verdicts(output, LAYERED_ENTRY_AUTHORITY_CASES, 'installed layered entry authority')
 
 
 def check_layer_peer_verdict(output, authority=False):
@@ -291,10 +310,14 @@ def check_verdict(output, case=None):
     transfer_receipts = []
     boot_transfer_receipts = []
     hysteria_receipts = []
+    layered_entry_receipts = []
+    layered_entry_passes = re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"(external-wghy2(?:aes|xor)-[a-z-]+) \([0-9.]+s\)$", output)
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('independent WireGuard entry and layered Hysteria2 final: '):
+                layered_entry_receipts.append(suffix.removeprefix('independent WireGuard entry and layered Hysteria2 final: '))
             if suffix.startswith('independent WireGuard entry and Hysteria2 final: '):
                 hysteria_receipts.append(suffix.removeprefix('independent WireGuard entry and Hysteria2 final: '))
             if suffix.startswith("original boot service transfer: "):
@@ -304,6 +327,9 @@ def check_verdict(output, case=None):
     if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
     for value in cases:
+        if value in EXTERNAL_WG_HYSTERIA_LAYER_CASES:
+            if layered_entry_receipts.count(value) != 1 or layered_entry_passes.count(value) != 1:
+                raise ValueError('Installed layered WG/Hysteria graph omitted or duplicated original native completion: ' + value)
         if value in EXTERNAL_WG_HYSTERIA_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
@@ -356,7 +382,7 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux WG entry lacks its independent entry/final native proof and joined lifecycle')
         if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted actual external DNS/exit, source, cancellation, replacement or exact Router restoration: ' + value)
-        if value in EXTERNAL_HYSTERIA2_LAYER_CASES and 'verified installed host retained layered Hysteria2: ' + value + '\n' not in receipts:
+        if value in (*EXTERNAL_HYSTERIA2_LAYER_CASES, *EXTERNAL_WG_HYSTERIA_LAYER_CASES) and 'verified installed host retained layered Hysteria2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact retained external HY2 layer and physical/private authentication: ' + value)
 
 
@@ -481,6 +507,13 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Installed layer compiled authority witness failed:\n' + authority_output[-16384:])
         check_layer_peer_verdict(authority_output, authority=True)
         print(authority_output, end='' if authority_output.endswith('\n') else '\n')
+        status, layered_entry_authority_output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
+                                             '-test.run=^' + LAYERED_ENTRY_AUTHORITY_ROOT + '$'],
+                                            cwd=ROOT, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed layered entry authority witness failed:\n' + layered_entry_authority_output[-16384:])
+        check_layered_entry_authority_verdict(layered_entry_authority_output)
+        print(layered_entry_authority_output, end='' if layered_entry_authority_output.endswith('\n') else '\n')
         status, layer_output = NODE.run([str(peer), '-test.v', '-test.timeout=30s',
                                         '-test.run=^TestRouterVPNDesktopExternalInstalledLayerCarrier$'],
                                        cwd=source, env=captured, timeout=40)
@@ -529,6 +562,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'native_bundle': payloads,
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
                                 (('installed-controller-test', binary), ('independent-wg-awg2-ss2022-and-hysteria2-peers', peer), ('shipping-whitening-relay', whitening))},
+                  'layered_entry_authority_cases': list(LAYERED_ENTRY_AUTHORITY_CASES), 'layered_entry_authority_output_sha256': hashlib.sha256(layered_entry_authority_output.encode()).hexdigest(),
                   'layer_authority_cases': list(LAYER_AUTHORITY_CASES), 'layer_authority_output_sha256': hashlib.sha256(authority_output.encode()).hexdigest(),
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
