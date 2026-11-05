@@ -261,8 +261,15 @@ class LinuxChildTUNDiagnostics(unittest.TestCase):
         # fixtures. No TUN, route inventory, owner proof or acceptance is mocked
         # into passing by this small standard-library gate.
         command = (ROOT/'mobile/desktop/network_command.go.tmpl').read_text()
-        start = command.index('func (owner *routerVPNNodeMTU) reportNetworkReceiptFailure(')
-        functions = command[start:]
+        # Project these complete shipping declarations, not the rest of the
+        # file: unrelated startup helpers may follow or sit between them.
+        functions = ''
+        for signature in ('func (owner *routerVPNNodeMTU) reportNetworkReceiptFailure(',
+                          'func routerVPNNodeMTUDiagnosticReason('):
+            self.assertEqual(command.count(signature), 1)
+            start = command.index(signature)
+            end = command.index('\n}\n', start) + 3
+            functions += command[start:end] + '\n'
         native = (ROOT/'mobile/desktop/sing_tun_network_linux.go.tmpl').read_text()
         start = native.index('func (t *NativeTun) routervpnLinuxAdditionFailure(')
         end = native.index('// RuleAdd of our final NOP', start)
