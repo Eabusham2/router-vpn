@@ -702,6 +702,20 @@ wrong-key cases with original TUN retirement on AMD64 (23.99s) and ARM64 (24.39s
 That earlier source identity does not establish acceptance of the later native
 service grant or replacement-startup correction.
 
+## Native external launch audit follows startup admission
+
+The previous shared-start source audit expected the retained/direct branch at
+its enclosing block's top level. Original startup admission now correctly wraps
+both starts in one `err == nil` block, so the audit rejected the shipping source
+at `b88449dc` before exercising its negative controls. The audit now identifies
+that exact success wrapper and its single retained/direct branch while retaining
+the shared prelaunch guard, publication and post-publication ordering checks.
+The pre-publication mutation follows the actual wrapper, and an additional
+negative case rejects admitting a failed startup. Both parents and all eight
+negative leaves pass against the actual shipping source (10 race verdicts,
+2.199 seconds). This is source-audit repair; it neither changes runtime behavior
+nor establishes native network or release acceptance.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

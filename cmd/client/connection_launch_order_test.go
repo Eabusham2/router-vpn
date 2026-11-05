@@ -120,10 +120,16 @@ func sharedNativeExternalLaunchGuards(fn string) error {
 			if value.Init != nil && text(value.Init) == "err = a.checkConnectionOperation()" {
 				after = index
 			}
-			if text(value.Cond) == "nativeRetained != nil" && value.Else != nil &&
-				strings.Contains(text(value.Body), "err = nativeRetained.Start(a.connectionOperationContextOrBackground())") &&
-				strings.Contains(text(value.Else), "err = realCmd.Start()") {
-				launch = index
+			// Startup capture can refuse before either native branch starts. Both
+			// actual starts must remain in the same exact success-gated pair;
+			// an unrelated nested start or branch-local guard is insufficient.
+			if text(value.Cond) == "err == nil" && value.Init == nil && value.Else == nil && len(value.Body.List) == 1 {
+				pair, ok := value.Body.List[0].(*ast.IfStmt)
+				if ok && pair.Init == nil && text(pair.Cond) == "nativeRetained != nil" && pair.Else != nil &&
+					strings.Contains(text(pair.Body), "err = nativeRetained.Start(a.connectionOperationContextOrBackground())") &&
+					strings.Contains(text(pair.Else), "err = realCmd.Start()") {
+					launch = index
+				}
 			}
 		}
 	}
@@ -150,6 +156,7 @@ func TestNativeExternalSharedLaunchGuardsRejectMutations(t *testing.T) {
 	for _, mutation := range []struct{ name, old, replacement string }{
 		{"retained start omitted", "err = nativeRetained.Start(a.connectionOperationContextOrBackground())", "err = nil"},
 		{"direct start omitted", "err = realCmd.Start()", "err = nil"},
+		{"failed startup admitted", "if err == nil {\n\t\t\tif nativeRetained != nil {", "if err != nil {\n\t\t\tif nativeRetained != nil {"},
 		{"shared prelaunch guard omitted", "err = a.checkConnectionOperation()\n", "err = nil\n"},
 		{"shared post-publication guard omitted", "if err = a.checkConnectionOperation(); err != nil {", "if err = error(nil); err != nil {"},
 		{"wrong command published", "a.cmd = realCmd", "a.cmd = nil"},
@@ -169,7 +176,7 @@ func TestNativeExternalSharedLaunchGuardsRejectMutations(t *testing.T) {
 	})
 	t.Run("publication before launch", func(t *testing.T) {
 		broken := replaceLast(fn, "a.cmd = realCmd", "a.cmd = nil")
-		broken = replaceLast(broken, "if nativeRetained != nil {\n\t\t\terr = nativeRetained.Start", "a.cmd = realCmd\n\t\tif nativeRetained != nil {\n\t\t\terr = nativeRetained.Start")
+		broken = replaceLast(broken, "if err == nil {\n\t\t\tif nativeRetained != nil {", "a.cmd = realCmd\n\t\tif err == nil {\n\t\t\tif nativeRetained != nil {")
 		if err := sharedNativeExternalLaunchGuards(broken); err == nil {
 			t.Fatal("unstarted native command was accepted as published ownership")
 		}
