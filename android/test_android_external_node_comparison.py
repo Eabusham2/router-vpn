@@ -313,7 +313,7 @@ def main():
             ("keep measured execution", "positive", (("AndroidSpeedLabController", "if(externalWork!=null&&externalWork.target!=null){connection.restoreCaptured", "if(false&&externalWork!=null&&externalWork.target!=null){connection.restoreCaptured"),)),
             ("single borrowed lease", "positive", (("AndroidSpeedLabController", "if(!borrowed){AndroidMTUMeasurementGate.release(lease);", "if(true){AndroidMTUMeasurementGate.release(lease);"),)),
             ("post-save fresh proof", "commit", (("AndroidConnectionProfileStore", "            receipt.requireAfterSelection();", "            // defect: omit final fresh proof"),)),
-            ("owned selection rollback", "commit", (("AndroidConnectionProfileStore", "if(next.equals(snapshotPreferences()))try{restorePreferences(original);}", "if(true)try{restorePreferences(original);}"),)),
+            ("owned selection rollback", "commit", (("AndroidConnectionProfileStore", "if(!ownsPreferences(update))", "if(false)"),)),
             ("adoption-only usage", "positive", (("AndroidUnifiedConnectionController", "default boolean recordsNodeUsage() { return false; }", "default boolean recordsNodeUsage() { return true; }"),)),
             ("retained observer cleanup", "cleanup", (("AndroidExternalNodeComparison", "if(job.cleanupAttempts<3)main.postDelayed(()->finish(job,null,null),250);\n            return;", "if(job.cleanupAttempts<3)main.postDelayed(()->finish(job,null,null),250);"),)),
             ("truthful committed result", "cleanup", (("AndroidExternalNodeComparison", "job.terminalResult=job.adopted?new Result(job):result;", "job.terminalResult=null;"),)),
@@ -336,6 +336,8 @@ def main():
                 command=run[:1]+['-Dfixture.case='+case]+run[1:]
                 completed=subprocess.run(command,capture_output=True,text=True,timeout=45)
                 assert completed.returncode!=0 and 'AssertionError' in completed.stderr,label+' negative control escaped: '+completed.stdout+completed.stderr
+                if label=='owned selection rollback':
+                    assert 'selection rollback overwrote newer choice' in completed.stderr, label+' failed before its ownership assertion: '+completed.stdout+completed.stderr
             finally:
                 for path,source in originals.items():path.write_text(source)
         print('Android external comparison negative controls: '+str(len(mutants))+' rejected')
