@@ -21,6 +21,7 @@ import (
 	"time"
 	"unsafe"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -423,8 +424,13 @@ func (o *linuxLegacyStandardExitOwner) tunAbsentInNamespace() error {
 }
 
 func (o *linuxLegacyStandardExitOwner) current(command *exec.Cmd) error {
+	return o.currentContext(context.Background(), command)
+}
+func (o *linuxLegacyStandardExitOwner) currentContext(ctx context.Context, command *exec.Cmd) error {
 	current, ok := legacyStandardExitOwners.Load(o.app)
-	o.app.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &o.app.mu); err != nil {
+		return err
+	}
 	same := o.app.cmd == command
 	o.app.mu.Unlock()
 	if !ok || current != o || command != o.command || !same {
@@ -445,11 +451,15 @@ func (o *linuxLegacyStandardExitOwner) current(command *exec.Cmd) error {
 	return o.namespaceCurrent()
 }
 
-func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if ctx == nil || ctx.Err() != nil || o.started || o.registered {
-		return errors.New("legacy standard exit launch was cancelled or reused")
+func (o *linuxLegacyStandardExitOwner) prepareProtectionLocked(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("legacy standard exit launch has no original context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if o.started {
+		return errors.New("legacy standard exit launch was reused")
 	}
 	if err := o.legacyDNSNetworkCurrent(); err != nil {
 		return err
@@ -463,7 +473,16 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 	if err := o.tunAbsentInNamespace(); err != nil {
 		return err
 	}
-	o.app.mu.Lock()
+	if o.registered {
+		actual, present := legacyStandardExitOwners.Load(o.app)
+		if !present || actual != o {
+			return errors.New("standard guard preparation lost its original registration")
+		}
+		return o.applyProtection(ctx)
+	}
+	if err := desktopnetwork.LockContext(ctx, &o.app.mu); err != nil {
+		return err
+	}
 	if o.app.cmd != nil || o.app.checkCapturedConnectionOperationLocked(ctx) != nil || o.app.connectionCancelIntent == ctx {
 		o.app.mu.Unlock()
 		return errors.New("legacy standard exit cannot replace another command")
@@ -480,10 +499,29 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 	if err := o.applyProtection(ctx); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (o *linuxLegacyStandardExitOwner) prepareProtection(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
+	defer o.mu.Unlock()
+	return o.prepareProtectionLocked(ctx)
+}
+
+func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
+	if err := desktopnetwork.LockContext(ctx, &o.mu); err != nil {
+		return err
+	}
+	defer o.mu.Unlock()
+	if err := o.prepareProtectionLocked(ctx); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := o.current(o.command); err != nil {
+	if err := o.currentContext(ctx, o.command); err != nil {
 		return err
 	}
 	if err := desktopExternalDirectoryCurrent(o.launch); err != nil {
@@ -502,11 +540,18 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 		runtime.LockOSThread()
 		defer close(creatorDone)
 		defer runtime.UnlockOSThread()
-		err := o.current(o.command)
+		err := o.currentContext(ctx, o.command)
 		if err == nil {
 			err = o.legacyDNSNetworkCurrent()
 		}
-		o.app.mu.Lock()
+		lockErr := desktopnetwork.LockContext(ctx, &o.app.mu)
+		if lockErr != nil {
+			err = errors.Join(err, lockErr)
+			started <- err
+			completion.failure = err
+			close(done)
+			return
+		}
 		if err == nil {
 			err = o.app.checkCapturedConnectionOperationLocked(ctx)
 		}
@@ -545,7 +590,7 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return o.current(o.command)
+	return o.currentContext(ctx, o.command)
 }
 
 func (o *linuxLegacyStandardExitOwner) Discard() error {

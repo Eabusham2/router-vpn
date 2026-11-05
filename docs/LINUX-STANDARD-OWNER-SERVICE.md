@@ -211,12 +211,42 @@ Resolver calls retain their original connection and pending reply ownership.
 See [LINUX-NATIVE-RETIREMENT.md](LINUX-NATIVE-RETIREMENT.md) for the implementation,
 native gate inventory and the remaining kernel and older-bus boundaries.
 
+## Protected Node-to-service succession
+
+The reverse direction captures the original installed Node parent, selected
+policy and private exit before Stop joins the old engine. After that join, it
+reserves the same closed Node creator and records a durable transfer intent.
+The installed service authenticates that original parent and exact native
+inventory, creates its own protected successor without starting an engine,
+and returns a pinned inventory for the original controller to verify.
+
+Only the original Node creator removes its own table, beside the exact service
+successor in one stable native generation. The service independently observes
+source absence before acknowledging commit. Both processes retain their original
+creator capabilities; serialized journal entries and receipts only compare
+identities. Normal standard Start then resumes the same prepared service owner
+under the original transfer deadline, followed by the ordinary selected-DNS,
+current-path and connected-state checks.
+
+Cancellation and lost replies retain the original reservation, native result
+and durable intent. Abort proves the original Node guard still exists before
+releasing only the prepared service guard. Unknown aborts fence delayed prepares;
+ordinary Start, release and upgrade cannot bypass an unresolved transfer. A
+completed transfer's current check reobserves its retained successor. Retrying an
+old native Finish cannot clear a newer reservation. Unknown native deletion
+acknowledgement remains pending; a missing reply never proves removal.
+
+Focused tests cover actual peer processes, pidfds, files and bounded admission
+with explicit native-effect models. Separate mandatory nft tests exercise both
+actual creators, cancellation, changed/lost successors and repeated completion.
+These tests do not establish installed end-to-end or physical-device acceptance.
+
 The following are still separate unfinished requirements, not closed by this
 unit's refusals:
 
-- Reverse retained Node-to-standard transfer and other adapter/generic legacy
-  boot-owner succession. The service-to-Node direction above is implemented;
-  its actual installed/native acceptance remains separate.
+- Other adapter/generic legacy boot-owner succession. Both protected Node and
+  installed standard-service directions above are implemented; their actual
+  installed/native acceptance remains separate.
 - Active Always service/image upgrade with authenticated live authority
   handoff. This unit completes the proved-idle/Off upgrade path.
 - Same-boot service crash continuation for orphaned protection. A replacement

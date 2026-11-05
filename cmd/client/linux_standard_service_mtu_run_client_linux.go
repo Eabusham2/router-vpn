@@ -305,7 +305,7 @@ func (r *linuxStandardMTUClientRun) rpc(ctx context.Context, action string) (*li
 	if err != nil {
 		return nil, err
 	}
-	if response.authenticatedPeer != r.peer || response.MTU == nil || response.Protection != nil || response.Startup != nil || response.MTU.ObservationError != "" {
+	if response.authenticatedPeer != r.peer || response.MTU == nil || response.Protection != nil || response.Startup != nil || response.Reverse != nil || response.MTU.ObservationError != "" {
 		return nil, errors.New("standard MTU run response lost original service authority")
 	}
 	if err = r.peer.Current(ctx); err != nil {

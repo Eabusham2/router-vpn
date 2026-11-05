@@ -105,6 +105,9 @@ func (t *linuxStandardServiceNodeTransfer) rpcLocked(ctx context.Context, action
 		}
 	}
 	response, err := exchange(ctx, request, nil, func() { t.attempted = true })
+	if response.Reverse != nil {
+		return nil, errors.Join(err, errors.New("forward transfer received reverse authority"))
+	}
 	result := response.Transfer
 	if result != nil {
 		expected := result.Intent

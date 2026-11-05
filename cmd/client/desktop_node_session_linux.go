@@ -17,6 +17,7 @@ import (
 // table name can create this owner. Callers retain operationMu around changes;
 // gate also joins terminal parent cleanup with any entered change.
 type desktopLinuxNodeSession struct {
+	reverse       *linuxStandardNodeReverseTransfer
 	gate          chan struct{}
 	parent        *desktopLinuxNodeParentCapture
 	journal       *desktopLinuxNodeJournal
@@ -175,6 +176,13 @@ func (s *desktopLinuxNodeSession) selectedPredecessorLocked(ctx context.Context,
 		if transfer := s.journal.transfer; transfer != nil && !transfer.committed.Load() {
 			return nil, transfer.current(ctx, false)
 		}
+		if s.reverse != nil && s.reverse.committed.Load() {
+			if err := s.reverse.current(ctx); err == nil {
+				return nil, nil
+			}
+			// A later explicit Off may have removed that successor. Only complete
+			// independent absence can then admit a new creator; no old table is adopted.
+		}
 		return nil, mobiletor.ReadDesktopLinuxProtectionAbsence(ctx)
 	}
 	if candidate == nil || !sameDesktopLinuxParentCapture(candidate.parent, s.parent) || candidate.journal != s.journal {
@@ -200,6 +208,9 @@ func (s *desktopLinuxNodeSession) selectedPredecessorLocked(ctx context.Context,
 // already joined, for an explicit Disconnect releasing retained On-connect.
 // Always remains closed until its original successor or saved-policy change.
 func (s *desktopLinuxNodeSession) Retire(ctx context.Context, host *desktopLinuxNodeHost, disconnect bool) error {
+	if err := s.drainStandardReverse(ctx); err != nil {
+		return err
+	}
 	if err := s.enter(ctx); err != nil {
 		return err
 	}

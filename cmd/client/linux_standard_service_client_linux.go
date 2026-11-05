@@ -20,6 +20,7 @@ import (
 var linuxStandardServiceOwners sync.Map // map[*app]*linuxStandardServiceLaunch
 
 type linuxStandardServiceLaunch struct {
+	reverse                                     *linuxStandardNodeReverseTransfer
 	exchange                                    func(context.Context, linuxStandardServiceRequest, *os.File, func()) (linuxStandardServiceResponse, error) // explicit native test channel; nil uses fixed installed RPC
 	mu                                          sync.Mutex
 	app                                         *app
@@ -108,6 +109,10 @@ func (o *linuxStandardServiceLaunch) currentIntentLocked(operation context.Conte
 }
 
 func (o *linuxStandardServiceLaunch) call(ctx context.Context, request linuxStandardServiceRequest, directory *os.File) error {
+	return o.callIntent(ctx, ctx, request, directory)
+}
+
+func (o *linuxStandardServiceLaunch) callIntent(ctx, operation context.Context, request linuxStandardServiceRequest, directory *os.File) error {
 	if request.Action != "start" && request.Action != "stop" {
 		if err := o.prepared.requestEpoch.current(ctx, true); err != nil {
 			return err
@@ -136,11 +141,11 @@ func (o *linuxStandardServiceLaunch) call(ctx context.Context, request linuxStan
 	if err := o.peer.Current(ctx); err != nil {
 		return err
 	}
-	if response.Protection != nil {
+	if response.Protection != nil || response.Reverse != nil {
 		return errors.New("standard runtime response supplied unrelated protection view")
 	}
 	if request.Action == "start" {
-		if err := o.currentIntent(ctx, o.Command()); err != nil {
+		if err := o.currentIntentContext(ctx, operation, o.Command()); err != nil {
 			return err
 		}
 		if err := o.prepared.requestEpoch.admit(ctx, response.Startup, response.transmittedDeadline); err != nil {
@@ -255,7 +260,18 @@ func linuxStandardServiceExchange(ctx context.Context, channel *net.UnixConn, im
 }
 
 func (o *linuxStandardServiceLaunch) Start(ctx context.Context) error {
-	o.mu.Lock()
+	if ctx == nil {
+		return errors.New("standard Start omitted original context")
+	}
+	work := ctx
+	if o.reverse != nil {
+		bounded, cancel := context.WithDeadline(ctx, o.reverse.deadline)
+		defer cancel()
+		work = bounded
+	}
+	if err := desktopnetwork.LockContext(work, &o.mu); err != nil {
+		return err
+	}
 	defer o.mu.Unlock()
 	if o.registered || ctx == nil || ctx.Err() != nil {
 		return errors.New("standard service launch was cancelled or reused")
@@ -263,19 +279,44 @@ func (o *linuxStandardServiceLaunch) Start(ctx context.Context) error {
 	if err := desktopExternalDirectoryCurrent(o.prepared.launch); err != nil {
 		return err
 	}
+	// Capture the prior pointer before publication, then take its owner lock
+	// outside app.mu. Stop holds prior.mu before app.mu; preserve that order.
+	if err := desktopnetwork.LockContext(work, &o.app.mu); err != nil {
+		return err
+	}
+	rawPrior, hasPrior := linuxStandardServiceOwners.Load(o.app)
+	o.app.mu.Unlock()
 	var prior *linuxStandardServiceLaunch
-	o.app.mu.Lock()
+	if hasPrior {
+		var ok bool
+		prior, ok = rawPrior.(*linuxStandardServiceLaunch)
+		if !ok || prior == nil || prior == o {
+			return errors.New("standard service already has another original owner")
+		}
+		if err := desktopnetwork.LockContext(work, &prior.mu); err != nil {
+			return err
+		}
+	}
+	unlockPrior := func() {
+		if prior != nil {
+			prior.mu.Unlock()
+		}
+	}
+	if err := desktopnetwork.LockContext(work, &o.app.mu); err != nil {
+		unlockPrior()
+		return err
+	}
 	if o.app.cmd != nil || o.app.checkCapturedConnectionOperationLocked(ctx) != nil || o.app.connectionCancelIntent == ctx {
 		o.app.mu.Unlock()
+		unlockPrior()
 		return errors.New("standard service cannot replace another captured operation")
 	}
-	if old, exists := linuxStandardServiceOwners.Load(o.app); exists {
-		previous, ok := old.(*linuxStandardServiceLaunch)
-		if !ok || !previous.joined || !linuxStandardServiceOwners.CompareAndSwap(o.app, previous, o) {
+	if prior != nil {
+		if !prior.joined || !linuxStandardServiceOwners.CompareAndSwap(o.app, prior, o) {
 			o.app.mu.Unlock()
+			unlockPrior()
 			return errors.New("standard service already has a retained unjoined owner")
 		}
-		prior = previous
 	} else if _, loaded := linuxStandardServiceOwners.LoadOrStore(o.app, o); loaded {
 		o.app.mu.Unlock()
 		return errors.New("standard service owner changed before admission")
@@ -284,31 +325,41 @@ func (o *linuxStandardServiceLaunch) Start(ctx context.Context) error {
 	o.app.state.Mode, o.app.state.LogicalMode, o.app.state.RuntimeMode, o.app.state.Base, o.app.state.RouterID = "standard-exit", "standard-exit", o.prepared.runtimeMode, o.prepared.base, o.prepared.routerID
 	o.app.state.Connected, o.app.state.Phase, o.app.state.LastError = false, "standard-exit:starting", ""
 	o.registered = true
-	o.app.mu.Unlock()
 	if prior != nil {
-		// Continue through the original authenticated service capability. A
-		// successor never forgets a retained peer and then trusts a replacement
-		// service solely because it occupies the same socket path.
-		prior.mu.Lock()
+		// Publish only while the exact prior peer remains locked and reachable.
 		o.peer, prior.peer = prior.peer, nil
-		prior.mu.Unlock()
 	}
-	if err := o.prepared.requestEpoch.begin(ctx); err != nil {
-		return err
-	}
-	if err := o.call(ctx, o.request, o.prepared.directory); err != nil {
-		return err
-	}
-	if err := o.currentIntent(ctx, o.Command()); err != nil {
-		return err
-	}
-	o.app.mu.Lock()
-	cancelled := o.app.connectionCancelIntent == ctx
 	o.app.mu.Unlock()
+	unlockPrior()
+	if o.reverse != nil {
+		if err := o.reverse.startLocked(work); err != nil {
+			return err
+		}
+	}
+	if err := o.prepared.requestEpoch.begin(work); err != nil {
+		return err
+	}
+	if err := o.callIntent(work, ctx, o.request, o.prepared.directory); err != nil {
+		return err
+	}
+	cancelled, err := o.finishStartContext(work, ctx)
+	if err != nil {
+		return err
+	}
 	if cancelled {
 		return errConnectionOperationCancelled
 	}
-	return ctx.Err()
+	return errors.Join(work.Err(), ctx.Err())
+}
+
+// The final reply does not renew the original admission budget. This read keeps
+// the same application mutex and exact connection-operation identity.
+func (o *linuxStandardServiceLaunch) finishStartContext(work, operation context.Context) (bool, error) {
+	if err := desktopnetwork.LockContext(work, &o.app.mu); err != nil {
+		return false, err
+	}
+	defer o.app.mu.Unlock()
+	return o.app.connectionCancelIntent == operation, errors.Join(o.currentIntentLocked(operation, o.Command()), work.Err())
 }
 
 func (o *linuxStandardServiceLaunch) Current(ctx context.Context) error {
@@ -415,6 +466,11 @@ func (s *linuxStandardServiceStop) Retire(ctx context.Context, command *exec.Cmd
 	if err := o.currentIntentContext(ctx, s.operation, s.command); err != nil {
 		return err
 	}
+	if o.reverse != nil && !o.reverse.resolved.Load() {
+		if err := o.reverse.resolveLocked(ctx); err != nil {
+			return err
+		}
+	}
 	// The original service must receive FD10 Stop before waiting for a held
 	// native call. Retain the controller token until actual joined history is
 	// returned by that same service's retirement-only evidence path.
@@ -442,7 +498,7 @@ func (s *linuxStandardServiceStop) Retire(ctx context.Context, command *exec.Cmd
 	if err := o.currentIntentContext(ctx, s.operation, s.command); err != nil {
 		return err
 	}
-	held := o.attempted && (o.prepared.protectionPolicy == "always" || !release && o.prepared.protectionPolicy == "on-connect")
+	held := o.attempted && (o.reverse == nil || o.reverse.committed.Load()) && (o.prepared.protectionPolicy == "always" || !release && o.prepared.protectionPolicy == "on-connect")
 	if !held && o.peer != nil {
 		if err := o.peer.Close(); err != nil {
 			return err

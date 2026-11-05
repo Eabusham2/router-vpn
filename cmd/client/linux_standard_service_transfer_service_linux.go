@@ -80,7 +80,7 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 	default:
 		return nil, errors.New("standard transfer action is unavailable")
 	}
-	if ctx == nil || ctx.Err() != nil || q == nil || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || request.Schema != 1 || !validControllerOwnerToken(request.Session) || !validControllerOwnerToken(q.ID) || request.MTU != nil || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.ProfileID != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
+	if ctx == nil || ctx.Err() != nil || q == nil || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || request.Schema != 1 || !validControllerOwnerToken(request.Session) || !validControllerOwnerToken(q.ID) || request.Reverse != nil || request.MTU != nil || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.ProfileID != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return nil, errors.New("standard transfer request changed its fixed original scope")
 	}
 	if q.DeadlineNS <= 0 || q.Destination.Validate() != nil || !validProfileID(q.ProfileID) || len(q.ProfileRevision) != 64 {
@@ -106,6 +106,9 @@ func (s *linuxStandardService) transferRequest(ctx context.Context, peer *linuxS
 	ns, err := os.Stat("/proc/thread-self/ns/net")
 	if err != nil || !os.SameFile(ns, s.namespace) {
 		return nil, errors.Join(err, errors.New("standard transfer changed its original namespace"))
+	}
+	if s.reversePending() {
+		return nil, errors.New("reverse transfer must resolve before forward transfer")
 	}
 	t := s.transfer
 	if old, exists := s.transferHistory[q.ID]; exists {

@@ -34,12 +34,14 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
-STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer')
+STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer')
 STANDARD_PARSER_CASES = ('CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority', 'ScopedAbsenceNeverClaimsNodeOrMalformedAbsence', 'NodeTransferRejectsChangedInventory', 'NodeTransferUnknownResultRetainsPins')
 STANDARD_TRANSFER_INVENTORY = ('original', 'session', 'handle', 'uid', 'baseline', 'home-lan', 'unknown-field', 'noncanonical', 'widened-baseline')
 STANDARD_TRANSFER_UNKNOWN = ('unknown-removal', 'cancelled-finish', 'closed-creator')
 STANDARD_TRANSFER_NATIVE = ('original', 'repeated-result', 'cancelled-finish', 'successor-lost-before', 'successor-lost-after', 'changed-inventory')
-STANDARD_SOURCE_FILES = frozenset({'desktop_standard_node_transfer_linux.go', 'desktop_standard_node_transfer_linux_test.go', 'desktop_standard_node_transfer_native_linux_test.go', 'desktop_standard_linux_protection.go',
+REVERSE_TRANSFER_NATIVE = ('original', 'lost-ack-retry', 'abort', 'cancelled', 'changed-successor', 'successor-lost')
+REVERSE_TRANSFER_PARSER = ('ClosedInventory', 'ClosedInventory/node', 'ClosedInventory/standard', *(f'ClosedInventory/{kind}/{case}' for kind in ('node', 'standard') for case in ('original','handle-zero','capture','endpoint','wide-rule','extra-set','noncanonical','namespace')), 'CancellationKeepsBothPins')
+STANDARD_SOURCE_FILES = frozenset({'desktop_standard_node_reverse_transfer_linux.go', 'desktop_standard_node_reverse_transfer_linux_test.go', 'desktop_standard_node_reverse_transfer_native_linux_test.go', 'desktop_standard_node_transfer_linux.go', 'desktop_standard_node_transfer_linux_test.go', 'desktop_standard_node_transfer_native_linux_test.go', 'desktop_standard_linux_protection.go',
                                   'desktop_standard_linux_protection_test.go',
                                   'desktop_standard_linux_protection_native_test.go', 'desktop_standard_linux_absence_test.go'})
 KERNEL_CASES += STANDARD_KERNEL_CASES
@@ -422,12 +424,13 @@ def execute(source: Path, go='go', *, env=None):
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o022 or info.st_size == 0:
             raise ValueError('Linux guardian compiler did not produce its owned executable')
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestLinuxStandard|TestDesktopLinuxRunning|TestDesktopLinuxSOCKS)', '-test.count=1',
+        baseline_output = UID.run([str(binary), '-test.run=^(TestLinuxBaseline|TestLinuxStandard|TestLinuxNodeStandardTransfer|TestDesktopLinuxRunning|TestDesktopLinuxSOCKS)', '-test.count=1',
                                    '-test.timeout=20s', '-test.v'], cwd=source)
         if any('--- PASS: TestLinuxBaseline' + name + ' (' not in baseline_output for name in BASELINE_CASES) or '--- SKIP:' in baseline_output:
             raise ValueError('Linux baseline receipt gate omitted an owned transaction boundary')
         if any('--- PASS: TestDesktopLinuxRunningPolicy' + name + ' (' not in baseline_output for name in RUNNING_PARSER_CASES):
             raise ValueError('Linux running inventory gate omitted its complete native JSON contract')
+        require_socks_verdicts(baseline_output, 'TestLinuxNodeStandardTransfer', REVERSE_TRANSFER_PARSER)
         require_socks_verdicts(baseline_output, 'TestLinuxStandard', STANDARD_PARSER_CASES)
         require_socks_verdicts(baseline_output, 'TestLinuxStandardNodeTransferRejectsChangedInventory/', STANDARD_TRANSFER_INVENTORY)
         require_socks_verdicts(baseline_output, 'TestLinuxStandardNodeTransferUnknownResultRetainsPins/', STANDARD_TRANSFER_UNKNOWN)
@@ -445,6 +448,7 @@ def execute(source: Path, go='go', *, env=None):
         if any('--- PASS: TestDesktopLinuxGuardianKernel' + name + ' (' not in output for name in KERNEL_CASES) or '--- SKIP:' in output:
             raise ValueError('Linux guardian kernel gate did not execute every required boundary')
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernel', STANDARD_KERNEL_CASES)
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeStandardTransfer/', REVERSE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardNodeTransfer/', STANDARD_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelSOCKSAssociation/', SOCKS_CASES)
         for network in ('tcp4', 'udp4', 'tcp6', 'udp6'):

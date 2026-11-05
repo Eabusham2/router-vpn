@@ -61,7 +61,7 @@ func (s *linuxStandardService) protectionAbsent(ctx context.Context, lease *lega
 }
 
 func (s *linuxStandardService) protectionRequest(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest) (*linuxStandardServiceProtectionData, error) {
-	if ctx == nil || ctx.Err() != nil || peer == nil || request.MTU != nil || request.Transfer != nil || request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" {
+	if ctx == nil || ctx.Err() != nil || peer == nil || request.MTU != nil || request.Reverse != nil || request.Transfer != nil || request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.Release || request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" {
 		return nil, errors.New("standard protection request changed its captured scope")
 	}
 	if err := peer.Current(ctx); err != nil {
@@ -84,6 +84,9 @@ func (s *linuxStandardService) protectionRequest(ctx context.Context, peer *linu
 	ns, err := os.Stat("/proc/thread-self/ns/net")
 	if err != nil || !os.SameFile(ns, s.namespace) {
 		return nil, errors.Join(err, errors.New("standard protection left its original namespace"))
+	}
+	if s.reversePending() {
+		return nil, errors.New("reverse guard transfer must resolve before protection changes")
 	}
 	if err = s.loadProfiles(); err != nil {
 		return nil, err
@@ -364,7 +367,7 @@ func (c *linuxStandardServiceProtectionClient) request(ctx context.Context, requ
 	if err != nil {
 		return nil, err
 	}
-	if response.Protection == nil || !validControllerOwnerToken(response.Protection.Token) {
+	if response.Reverse != nil || response.Protection == nil || !validControllerOwnerToken(response.Protection.Token) {
 		return nil, errors.New("standard protection response lost its original view")
 	}
 	return response.Protection, nil

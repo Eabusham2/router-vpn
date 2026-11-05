@@ -117,7 +117,7 @@ func (o *linuxStandardServiceMTUOwner) rpcLocked(ctx context.Context, action str
 	if err != nil {
 		return nil, err
 	}
-	if response.authenticatedPeer == nil || response.authenticatedPeer != o.launch.peer || response.MTU == nil || response.Protection != nil || response.Startup != nil {
+	if response.authenticatedPeer == nil || response.authenticatedPeer != o.launch.peer || response.MTU == nil || response.Reverse != nil || response.Protection != nil || response.Startup != nil {
 		return nil, errors.New("standard MTU response lost original service authority")
 	}
 	if err := o.launch.peer.Current(ctx); err != nil {

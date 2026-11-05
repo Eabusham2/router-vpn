@@ -5,11 +5,17 @@ import re
 PREFIX = 'TestLinuxStandardService'
 MTU_PREFIX = 'TestLinuxStandardMTU'
 CORE = {
+    "StartKeepsOriginalAdmission": ("application", "prior-owner", "post-reply"),
     'SpeedLabRestoreRejectsChangedSource': ('original', 'profile', 'exit', 'selection', 'intent', 'captured-profile', 'mtu', 'held-app', 'cancelled'),
     'SpeedLabPolicyCapture': ('original', 'profile', 'exit', 'hopped', 'late', 'duplicate', 'cancelled'),
     'SpeedLabHeldCaptureKeepsCaller': ('capture', 'current', 'dial', 'options'),
     'SpeedLabRestoreKeepsPolicySelection': (),
     'SpeedLabSessionKeepsCaller': ('held', 'cancelled', 'missing', 'replaced'),
+    'ReverseRetainsPreparedOriginal': ('commit-start', 'abort', 'lost-prepare', 'wrong-peer', 'changed-intent', 'held-gate', 'held-app', 'held-owner', 'pending-release', 'foreign-scope', 'late-start', 'source-still-live', 'pending-native'),
+    'ReverseAbortFencesUnsentPrepare': (),
+    'ReverseClientKeepsOriginalPeer': ('original', 'lost-ack-retry', 'foreign-peer', 'changed-intent', 'transport-expiry', 'mixed-failure', 'late-response', 'replacement'),
+    'ReverseStopKeepsBoundedOwner': (),
+    'ReverseCaptureKeepsBoundedIntent': (),
     'TransferKeepsOriginalStartupBudget': ('earlier-startup', 'earlier-transfer', 'cancelled-startup'),
     'TransferResumesFinishedNativeCleanup': ('native-close', 'saved-close'),
     'TransferRequiresNativeAndDurableSettlement': ('reserved', 'entered', 'committed', 'aborted-before-native-finish', 'aborted-pending-write', 'settled-pending-write', 'aborted', 'settled'),
@@ -188,6 +194,10 @@ AUXILIARY = {
         'TestSpeedLabCapturedTunnelRejectsLateHTTPResponse': (),
         'TestSpeedLabCapturedTunnelSeparatesAdmissionAndSocketLifetime': ('request', 'factory'),
     }),
+    'node-standard-journal': ('./internal/linuxprotection', {
+        'TestLinuxNodeStandardTransferJournalRequiresOriginalClosedSource': ('original', 'engine-live', 'foreign-source', 'foreign-profile', 'foreign-config', 'foreign-request', 'no-transfer', 'candidate-widened'),
+        'TestLinuxNodeStandardTransferJournalKeepsOutcomeAndIntent': ('commit', 'abort', 'changed-deadline', 'changed-destination', 'dropped-intent', 'foreign-outcome'),
+    }),
     'standard-node-journal': ('./internal/linuxprotection', {
         'TestLinuxStandardNodeTransferJournalKeepsOriginalIntent': ('original', 'changed-deadline', 'changed-source', 'changed-destination', 'new-idle-request', 'active-replacement'),
     }),
@@ -205,6 +215,7 @@ AUXILIARY = {
 AUXILIARY_TESTS = {
     'cmd/client/speed_lab_service_caller_linux_test.go': 'speedlab-caller',
     'cmd/client/speed_lab_tunnel_transport_test.go': 'speedlab-transport',
+    'internal/linuxprotection/node_standard_transfer_test.go': 'node-standard-journal',
     'internal/linuxprotection/standard_node_transfer_test.go': 'standard-node-journal',
     'internal/desktopnetwork/desktop_network_retirement_limit_test.go': 'retirement-bound',
     'internal/desktopnetwork/routing_history_retirement_linux_test.go': 'routing-history',
@@ -231,6 +242,7 @@ SOURCE = {'cmd/client/linux_standard_service_' + name for name in (
     'monitor_linux.go','monitor_linux_test.go','boot_retry_linux.go','boot_retry_linux_test.go','protection_linux.go','protection_native_test.go','absence_linux.go','absence_linux_test.go','legacy_boot_linux.go','legacy_boot_test.go','network_linux.go','network_native_test.go','network_namespace_test.go','startup_native_test.go','startup_config_test.go','startup_namespace_test.go','controller_epoch_linux.go','controller_epoch_native_test.go','observation_context_native_test.go','watcher_context_native_test.go','retirement_native_test.go')}
 SOURCE.update({'internal/standardengine/operation.go', 'internal/standardengine/operation_linux.go', 'internal/standardengine/operation_linux_test.go', 'internal/standardengine/protocol.go', 'internal/standardengine/protocol_test.go', 'mobile/desktop/standard_owned_linux.go.tmpl', 'internal/standardengine/cleanup_linux.go', 'internal/standardengine/cleanup_loop_linux.go', 'internal/standardengine/cleanup_linux_test.go', 'internal/standardengine/cleanup_loop_linux_test.go', 'internal/desktopnetwork/desktop_network_retirement.go', 'mobile/desktop/standard_cleanup_linux.go.tmpl', 'cmd/client/linux_standard_engine_linux.go', 'cmd/client/linux_standard_engine_retirement_linux.go', 'cmd/client/legacy_standard_exit_preparation_linux.go', 'modes/kill-switch.py', 'modes/profile_id.py', 'cmd/client/profile_protection_standard_service_linux.go', 'cmd/client/profile_protection_standard_service_native_test.go', 'cmd/client/profile_protection_platform_linux.go'})
 SOURCE.add('cmd/client/linux_standard_service_mtu_peer_native_test.go')
+SOURCE.add('cmd/client/linux_standard_service_start_admission_native_test.go')
 SOURCE.update({'internal/desktopnetwork/desktop_network_retirement_limit_test.go', 'internal/standardengine/cleanup_retirement_bound_linux_test.go'})
 SOURCE.add('internal/standardengine/worker_stop_linux_test.go')
 RUNNERS = ('test_standard_run_clock.py', 'test_standard_worker_stop.py', 'linux_standard_service_gate.py', 'test_linux_standard_service_runner.py', 'linux_standard_service_bundle.py', 'test_linux_standard_service_bundle.py')
@@ -275,6 +287,14 @@ SOURCE.update({'cmd/client/' + name for name in (
     'speed_lab_path_context.go', 'connection_launch_order_test.go',
 )})
 SOURCE.update({'client/linux/routervpn-speed-lab-path-v19.inc', 'deploy/test_desktop_speed_lab_forms.py'})
+SOURCE.update({'cmd/client/linux_standard_service_reverse_' + name for name in (
+    'linux.go', 'native_test.go', 'client_linux.go', 'client_native_test.go', 'protocol_linux.go')})
+SOURCE.update({'cmd/client/standard_exit_reverse.go', 'cmd/client/standard_exit_reverse_other.go',
+    'internal/mobiletor/desktop_standard_node_reverse_transfer_linux.go',
+    'internal/mobiletor/desktop_standard_node_reverse_transfer_linux_test.go',
+    'internal/mobiletor/desktop_standard_node_reverse_transfer_native_linux_test.go',
+    'internal/linuxprotection/node_standard_transfer.go', 'internal/linuxprotection/node_standard_transfer_test.go',
+    'cmd/client/legacy_standard_exit_owner_linux.go'})
 NATIVE_MTU_SOURCES = {'cmd/client/linux_standard_service_mtu_run_native_test.go', 'cmd/client/linux_standard_service_speed_lab_native_test.go', 'cmd/client/linux_standard_service_mtu_stop_native_test.go', 'cmd/client/linux_standard_service_mtu_admission_native_test.go',
                       'cmd/client/linux_standard_service_mtu_namespace_native_test.go'}
 

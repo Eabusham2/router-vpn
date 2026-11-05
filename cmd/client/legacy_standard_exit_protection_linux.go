@@ -323,7 +323,7 @@ func (o *linuxLegacyStandardExitOwner) applyProtection(ctx context.Context) erro
 		return err
 	}
 	defer l.Close()
-	if err = o.current(o.command); err != nil {
+	if err = o.currentContext(ctx, o.command); err != nil {
 		return err
 	}
 	if o.protection == nil {
@@ -383,7 +383,7 @@ func (o *linuxLegacyStandardExitOwner) applyProtection(ctx context.Context) erro
 			return err
 		}
 	}
-	return o.protection.publish(ctx, l, func() error { return o.current(o.command) })
+	return o.protection.publish(ctx, l, func() error { return o.currentContext(ctx, o.command) })
 }
 func (o *linuxLegacyStandardExitOwner) currentProtection(ctx context.Context) error {
 	if o.protectionPolicy == "off" {

@@ -169,6 +169,11 @@ func (a *app) platformStandardExitConnectCaptured(w http.ResponseWriter, r *http
 	// A captured stock standard exit must never run generic global release before
 	// its original protection admission or succession. Existing owned runtimes still join normally.
 	holdProtection := runtime.GOOS == "linux" && q.Direct && exit.Protocol != "openvpn" && exit.Protocol != "amneziawg" && exit.StartLayer == nil
+	reverse, err := captureStandardReverse(operation, a, control, exit, holdProtection)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err = a.stopModeWithIntent(holdProtection); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -197,6 +202,15 @@ func (a *app) platformStandardExitConnectCaptured(w http.ResponseWriter, r *http
 		tracker.markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if reverse != nil {
+		if err := reverse.Bind(retained); err != nil {
+			if retained != nil {
+				_ = retained.Discard()
+			}
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 	}
 	if retained != nil {
 		defer retained.Discard()

@@ -1243,6 +1243,73 @@ The two proposed production defect controls were not run because this constructo
 block would not establish their required assertions. Actual native CI must
 execute this fixture and its retained negative cases on the published source.
 
+## Original Node-to-standard service succession
+
+The shipping standard connection captures the installed Node parent, selected
+policy and private exit before Stop joins the original engine. Its retained
+closed Node creator then reserves an immutable destination and durable intent.
+The service authenticates the actual parent/installation/namespaces and complete
+closed source inventory, prepares its own guard without starting an engine, and
+returns its pinned successor inventory. Only the original Node creator can
+remove its source table beside that exact successor in a stable native
+generation. The service independently proves source absence before acknowledging
+commit; normal Start resumes the same prepared owner and original deadline.
+
+Source, destination, process birth/image, namespace, configuration and policy
+identities remain distinct. Lost replies retain both original capabilities and
+the actual result; metadata never reconstructs a creator. Abort verifies the
+source guard remains present before releasing the prepared successor. Unknown
+aborts fence delayed prepares, unrelated protocol scopes reject reverse
+authority, and unresolved transfers block ordinary release/replacement/upgrade.
+Committed current queries reobserve the original guard. An old native Finish
+retry cannot clear a newer reservation. Unknown native deletion acknowledgement
+stays pending rather than becoming fabricated removal evidence.
+
+Integration review also identified three ordinary mutex waits in the existing
+standard Start path. They now retain the captured work deadline. Prior-owner
+admission happens before replacement publication, outside the application lock;
+the application lock then rechecks the original map and operation. Peer movement
+occurs with both original locks held. Expiry leaves the prior registry entry and
+authenticated peer reachable. Final reply identity and cancellation share one
+bounded application read, with no new allowance.
+
+The complete merged composition on preserved `88be1f34` passes 110 client race
+verdicts in 87.672s, with no failures or skips. This includes reverse service and
+peer lifecycle, all three held startup admissions, actual original wire/child
+Start, prior Off/protected lifecycle, installed Speed Lab and shipping launch
+guards. The separate native-inventory/journal selection passes all 36 verdicts
+(mobiletor 1.416s; linuxprotection 2.746s). All 10 merged service-runner checks
+pass in 36.294s, including the unchanged shared clock/worker causal witnesses.
+The captured backend audit and all 26 shipping-audit tests pass (8.030s).
+Guardian verdict checks reject omitted, renamed, repeated and failed required
+results. Windows AMD64 and Darwin ARM64 client test binaries compile with
+Go1.26.3 and CGO disabled; those binaries were not executed.
+
+Eight targeted defect controls reject widened native policy, changed journal
+identity/deadline, cancellation laundering, unbounded capture, fabricated source
+absence, and the three unbounded startup waits. Each fails its intended
+assertion; compiler/watchdog failures are not counted as negative proof. The
+last three return after their explicit test release barriers and preserve the
+original peer/registry assertions in the corrected positive run.
+
+The controller/service fixtures exercise real child processes, pidfds, files,
+descriptor transfer and file locks, with explicit native-effect models. Six new
+actual nft cases remain mandatory in the guardian runner. The privileged test
+binary compiles, but this workspace rejects isolated UID-map creation with
+EPERM, so actual native transfer and installed end-to-end acceptance are not
+claimed. Other/generic boot owners, active Always upgrades and same-boot orphan
+continuation remain separate requirements.
+
+Frozen contribution manifests are SHA256
+`938a2c083fb7c288cb5d9dcc817497ae87351d437c481767b53a3424f0351138`
+(original Node/controller/native),
+`bf9b39122483340d5550f2a863cbf993f84ac43103f8c5bfc8760df7f62241d5`
+(service receiver), and
+`d947f4b21fd256991e09995fbbd9e43cb410d9a5d1f648500d4e321324c21cb7`
+(bounded Start). Integration retains the published shared MTU clock, complete
+Speed Lab capture/restore and newer graph/fixture changes. The later-clock
+response also rejects unrelated reverse authority.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
@@ -1251,7 +1318,7 @@ execute this fixture and its retained negative cases on the published source.
 | MTU Auto/Fixed/Retest/Cancel, measured active path and complete rollback | Direct native owner/transaction and Tor receipt/release mechanisms exist. The installed service now inherits and authenticates the bounded original FD11 history/control foundation. | The fixed-child worker, both original observers, service/controller phase protocol, public controls and bounded durable history are integrated. Exact-SHA native acceptance, successful TUN-bound measurements and device/network-transition checks remain required; the 32-transaction per-connection history limit is explicit. |
 | Original Speed Lab current/temporary measurements and complete-state restoration | Installed standard-service capture now binds the original private exit, policy, selected DNS, native TUN, caller and MTU. Temporary restoration preserves the exact proved value and publishes only after actual shared-run closure. Focused race, private TLS/bytes and cross-compile checks pass. | Full physical-network regression, native GTK and the two required public namespace cases need exact-SHA CI; physical-device/off-LAN performance and transitions remain unproved. |
 | Original all-device, graph and external-node scope | Current source and previous evidence contain substantial native implementations; older claims that all Tor/MAX/AWG paths are absent are superseded. | Remaining graph families/platform compositions retain individual runtime, lifecycle and acceptance obligations. A smaller source gate cannot close the entire audit. |
-| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected installed service-to-Node transfer now retains both original creators, durable intent and bounded resolution. | The new transfer requires privileged installed/native acceptance. Reverse Node-to-standard transfer, other/generic boot-owner succession, active Always upgrades and same-boot service-crash continuation remain unfinished. |
+| Linux persistent ownership | The installed service retains original child, protection, selected-DNS and network observer authority. Protected service-to-Node and reverse Node-to-standard transfers retain both original creators, durable intent and bounded resolution. | Both directions require privileged installed/native acceptance. Other/generic boot-owner succession, active Always upgrades and same-boot service-crash continuation remain unfinished. |
 | Exact-SHA native packages, server images, compose and publication | Historical release `745b3e41` exists. Linux generated Node command/TUN acceptance passed on both architectures at `1704b4f2` and passed again at `eed2c44a`. The latter exact-SHA query returned 24 workflow runs with no completed failure and several unfinished runs. | Each later source change requires its own exact-SHA native/build/publication result. These observations do not establish a completed release or remaining device acceptance. |
 | Physical/off-LAN/private acceptance and legitimate signing/distribution | No live target, router configuration, AdGuard or deployment was changed in this continuation. | Actual devices, off-LAN Methods, leak/reconnect/transitions, visual/accessibility, private services/providers, signing/upgrades, deliberate deployment and ASUS fail-open acceptance remain separate evidence gates. |
 

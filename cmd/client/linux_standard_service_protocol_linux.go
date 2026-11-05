@@ -37,6 +37,7 @@ type linuxStandardServiceRequest struct {
 	Release         bool                                 `json:"release,omitempty"`
 	ProfileRevision string                               `json:"profile_revision,omitempty"`
 	ResultRevision  string                               `json:"result_revision,omitempty"`
+	Reverse         *linuxStandardServiceReverseRequest  `json:"reverse,omitempty"`
 	Transfer        *linuxStandardServiceTransferRequest `json:"transfer,omitempty"`
 	MTU             *linuxStandardServiceMTURequest      `json:"mtu,omitempty"`
 }
@@ -51,6 +52,7 @@ type linuxStandardServiceResponse struct {
 	Complete            bool                                  `json:"complete"`
 	Error               string                                `json:"error,omitempty"`
 	Protection          *linuxStandardServiceProtectionData   `json:"protection,omitempty"`
+	Reverse             *linuxStandardServiceReverseResponse  `json:"reverse,omitempty"`
 	Transfer            *linuxStandardServiceTransferResponse `json:"transfer,omitempty"`
 	MTU                 *linuxStandardServiceMTUResponse      `json:"mtu,omitempty"`
 }

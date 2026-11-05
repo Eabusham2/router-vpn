@@ -425,7 +425,7 @@ func (m *linuxStandardServiceMTU) acknowledge(ctx context.Context, request *linu
 }
 
 func (s *linuxStandardService) mtuRequest(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest) (*linuxStandardServiceMTUResponse, error) {
-	if request.Schema != 1 || request.Transfer != nil || request.MTU == nil || !validControllerOwnerToken(request.Session) || request.Release || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() ||
+	if request.Schema != 1 || request.Reverse != nil || request.Transfer != nil || request.MTU == nil || !validControllerOwnerToken(request.Session) || request.Release || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() ||
 		request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileID != "" || request.ProfileSHA256 != "" || request.NetworkID != "" || request.RouterID != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return nil, errors.New("standard MTU RPC changed its bounded original scope")
 	}

@@ -24,8 +24,15 @@ replies and partial cleanup. The exact source passes focused client/native/
 journal race tests. Six native nft cases and three installed transfer cases are
 mandatory but have not executed locally; the installed inventory is now 429 cases
 including the separately verified Hysteria2 graph addition below.
-Reverse Node-to-standard transfer, generic boot-owner succession, active Always
-upgrades and same-boot crash continuation remain separate source requirements.
+The reverse Node-to-standard path now retains the original closed Node creator,
+durable intent and authenticated service peer. It prepares and pins the service
+guard before source removal, independently proves that removal, then starts the
+same service owner under the captured deadline. Lost replies and cancellation
+keep the original result and cleanup authority; unrelated runtime, MTU, policy
+and upgrade requests cannot bypass unresolved transfer. Focused merged tests
+pass, while actual installed/native acceptance remains separate. Generic
+boot-owner succession, active Always upgrades and same-boot crash continuation
+remain unfinished source requirements.
 
 The MAX TLS reference now retains actual native TCP/UDP pairs for its variable
 packet and middle endpoints instead of assuming fixed ports are available.

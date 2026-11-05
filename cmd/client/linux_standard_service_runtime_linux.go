@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobiletor"
 )
 
 type linuxStandardServiceSession struct {
@@ -37,28 +39,33 @@ type linuxStandardServiceSession struct {
 // created, started and waited by this process, never reconstructed from a
 // client's PID or represented by a controller-side exec.Cmd.Process.
 type linuxStandardService struct {
-	gate              chan struct{}
-	app               *app
-	root              string
-	image, namespace  os.FileInfo
-	session           *linuxStandardServiceSession
-	boot              *legacyExitProtectionSlot
-	legacyBoot        *linuxStandardServiceLegacyBoot
-	retired           map[string]struct{}
-	prepare           func(*app, *exec.Cmd, string, string, string) (legacyStandardExitLaunch, error)
-	workers           sync.WaitGroup
-	quiescing         bool
-	shutdown          chan struct{}
-	shutdownOnce      sync.Once
-	bootFailure       error
-	readiness         string
-	bootRetryAfter    time.Time
-	transferHistory   map[string]linuxStandardServiceTransferResponse
-	transfer          *linuxStandardServiceTransfer
-	protectionView    *linuxStandardServiceProtection
-	protectionAbsence func(context.Context) error
-	tunAbsent         func() error
-	openNetwork       func(context.Context, context.Context) (linuxStandardNetworkObserver, error) // explicit native-observer fixture boundary; nil uses the kernel
+	gate                 chan struct{}
+	app                  *app
+	root                 string
+	image, namespace     os.FileInfo
+	session              *linuxStandardServiceSession
+	boot                 *legacyExitProtectionSlot
+	legacyBoot           *linuxStandardServiceLegacyBoot
+	retired              map[string]struct{}
+	prepare              func(*app, *exec.Cmd, string, string, string) (legacyStandardExitLaunch, error)
+	workers              sync.WaitGroup
+	quiescing            bool
+	shutdown             chan struct{}
+	shutdownOnce         sync.Once
+	bootFailure          error
+	readiness            string
+	bootRetryAfter       time.Time
+	reverse              *linuxStandardServiceReverse
+	reverseHistory       map[string]*linuxStandardServiceReverse
+	reverseSourceOnly    func(context.Context, mobiletor.DesktopLinuxClosedTransferSnapshot) error
+	reverseSourcePresent func(context.Context, mobiletor.DesktopLinuxClosedTransferSnapshot) error
+	reversePin           func(context.Context, *linuxLegacyStandardExitOwner, string) (linuxStandardReversePin, error)
+	transferHistory      map[string]linuxStandardServiceTransferResponse
+	transfer             *linuxStandardServiceTransfer
+	protectionView       *linuxStandardServiceProtection
+	protectionAbsence    func(context.Context) error
+	tunAbsent            func() error
+	openNetwork          func(context.Context, context.Context) (linuxStandardNetworkObserver, error) // explicit native-observer fixture boundary; nil uses the kernel
 }
 
 func newLinuxStandardService(root string, image, namespace os.FileInfo) *linuxStandardService {
@@ -85,6 +92,13 @@ func linuxStandardProfileDigest(profile common.RouterProfile) (string, error) {
 }
 
 func (s *linuxStandardService) loadProfiles() error {
+	return s.loadProfilesContext(context.Background())
+}
+
+func (s *linuxStandardService) loadProfilesContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	body, err := readPrivateRegular(filepath.Join(s.root, "routers.json"), maxPrivateStoreBytes)
 	if err != nil {
 		return err
@@ -99,10 +113,12 @@ func (s *linuxStandardService) loadProfiles() error {
 		}
 		applyProfileDefaults(&store.Profiles[i])
 	}
-	s.app.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &s.app.mu); err != nil {
+		return err
+	}
 	s.app.profiles = store
 	s.app.mu.Unlock()
-	return nil
+	return ctx.Err()
 }
 
 func (s *linuxStandardService) operation(ctx context.Context) func() {
@@ -220,6 +236,10 @@ func (s *linuxStandardService) previous(ctx context.Context, peer *linuxStandard
 }
 
 func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, directory *os.File) error {
+	return s.startPreparedMode(ctx, peer, request, directory, false)
+}
+
+func (s *linuxStandardService) startPreparedMode(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, directory *os.File, guardOnly bool) error {
 	if s.protectionView != nil && s.protectionView.data.Pending {
 		return errors.New("finish the accepted original standard protection Off change before connecting")
 	}
@@ -245,7 +265,26 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 		if !reflect.DeepEqual(original, request) || s.session.joined {
 			return errors.New("standard service launch identity was reused for different work")
 		}
-		finish := s.operation(ctx)
+		if s.reverse != nil && s.reverse.session == s.session && !s.session.owner.started {
+			if guardOnly {
+				return errors.New("reverse guard preparation is already retained")
+			}
+			if !s.reverse.committed || s.reverse.phase != "committed" || time.Now().UnixNano() >= s.reverse.request.Intent.DeadlineNS {
+				return errors.New("reverse Start has no unexpired source-absence acknowledgement")
+			}
+			work, cancel := context.WithDeadline(ctx, time.Unix(0, s.reverse.request.Intent.DeadlineNS))
+			defer cancel()
+			finish, err := s.operationContext(work)
+			if err != nil {
+				return err
+			}
+			defer finish()
+			return s.startPreparedOwner(work, peer, s.session.owner)
+		}
+		finish, err := s.operationContext(ctx)
+		if err != nil {
+			return err
+		}
 		defer finish()
 		if err := s.session.owner.Current(ctx); err != nil {
 			return err
@@ -257,10 +296,12 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 			return err
 		}
 	}
-	if err := s.loadProfiles(); err != nil {
+	if err := s.loadProfilesContext(ctx); err != nil {
 		return err
 	}
-	s.app.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &s.app.mu); err != nil {
+		return err
+	}
 	profile, ok := s.app.profileByIDLocked(request.ProfileID)
 	s.app.mu.Unlock()
 	digest, err := linuxStandardProfileDigest(profile)
@@ -276,7 +317,10 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 	command.Dir = s.root
 	command.Env = []string{"HOME=/root", "LANG=C.UTF-8", "PATH=" + filepath.Join(s.root, "bin") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOMEVPN_ROOT=" + s.root, "HOMEVPN_PROFILE_ID=" + request.ProfileID, "HOMEVPN_POLICY_PROFILE_ID=" + request.ProfileID, "HOMEVPN_STANDARD_ENGINE=stock", "HOMEVPN_ENDPOINT=" + request.Endpoint}
-	finish := s.operation(ctx)
+	finish, err := s.operationContext(ctx)
+	if err != nil {
+		return err
+	}
 	defer finish()
 	prepared, err := s.prepare(s.app, command, request.RuntimeMode, request.Base, request.RouterID)
 	if err != nil {
@@ -314,18 +358,27 @@ func (s *linuxStandardService) start(ctx context.Context, peer *linuxStandardSer
 		native := owner.native
 		s.session.network = &linuxStandardServiceNetwork{session: s.session, owner: owner, observer: native.tracker, lifetime: native.lifetime, cancel: native.cancel}
 		native.adopted = true
-		if err = native.prepareStart(ctx); err != nil {
+	}
+	if guardOnly {
+		return s.prepareReverseGuard(ctx, owner)
+	}
+	return s.startPreparedOwner(ctx, peer, owner)
+}
+
+func (s *linuxStandardService) startPreparedOwner(ctx context.Context, peer *linuxStandardServicePeer, owner *linuxLegacyStandardExitOwner) error {
+	if owner.native != nil {
+		if err := owner.native.prepareStart(ctx); err != nil {
 			return err
 		}
 	}
-	if err = peer.Current(ctx); err != nil {
+	if err := peer.Current(ctx); err != nil {
 		return err
 	}
-	if err = owner.Start(ctx); err != nil {
+	if err := owner.Start(ctx); err != nil {
 		return err
 	}
 	if owner.native != nil {
-		if err = owner.native.finishStart(ctx); err != nil {
+		if err := owner.native.finishStart(ctx); err != nil {
 			return err
 		}
 	}
@@ -340,7 +393,7 @@ func (s *linuxStandardService) handle(ctx context.Context, peer *linuxStandardSe
 }
 
 func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File, startup **linuxStandardServiceStartup) (failure error) {
-	if request.ProfileRevision != "" || request.ResultRevision != "" || request.MTU != nil || request.Transfer != nil {
+	if request.ProfileRevision != "" || request.ResultRevision != "" || request.MTU != nil || request.Transfer != nil || request.Reverse != nil {
 		return errors.New("runtime request supplied unrelated protection source")
 	}
 	if request.Schema != 1 || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() {
@@ -369,6 +422,9 @@ func (s *linuxStandardService) handleWithStartup(ctx context.Context, peer *linu
 	current, err := os.Stat("/proc/thread-self/ns/net")
 	if err != nil || !os.SameFile(current, s.namespace) {
 		return errors.Join(err, errors.New("standard service left its original network namespace"))
+	}
+	if s.reversePending() && (request.Action == "start" || request.Action == "stop") {
+		return errors.New("reverse guard transfer must resolve before ordinary engine actions")
 	}
 	if s.transferPending() && (request.Action == "start" || request.Action == "stop" && request.Release) {
 		return errors.New("original cross-adapter transfer must settle before release or replacement")
@@ -487,7 +543,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	}
 	defer func() {
 		<-s.gate
-		retained := s.session != nil && s.session.peer == peer || s.protectionView != nil && s.protectionView.peer == peer
+		retained := s.session != nil && s.session.peer == peer || s.protectionView != nil && s.protectionView.peer == peer || s.reverse != nil && s.reverse.peer == peer
 		s.gate <- struct{}{}
 		if !retained {
 			_ = peer.Close()
@@ -526,9 +582,12 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 	var startup *linuxStandardServiceStartup
 	var mtu *linuxStandardServiceMTUResponse
 	var transfer *linuxStandardServiceTransferResponse
+	var reverse *linuxStandardServiceReverseResponse
 	if upgrade {
 		err = s.handleIdleUpgrade(live, peer, request, files)
 		shutdownAccepted = err == nil
+	} else if strings.HasPrefix(request.Action, "reverse-") {
+		reverse, err = s.reverseRequest(live, peer, request, files)
 	} else if standardTransferAction(request.Action) {
 		if len(files) != 0 {
 			err = errors.New("transfer request supplied unexpected descriptors")
@@ -575,7 +634,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 		startup = nil
 		mtu = nil
 	}
-	response := linuxStandardServiceResponse{Startup: startup, MTU: mtu, Transfer: transfer, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
+	response := linuxStandardServiceResponse{Startup: startup, MTU: mtu, Transfer: transfer, Reverse: reverse, Schema: 1, Session: request.Session, Action: request.Action, Complete: err == nil, Protection: protection}
 	if err != nil {
 		response.Error = err.Error()
 		if len(response.Error) > 2048 {
@@ -589,7 +648,7 @@ func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arg
 }
 
 func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linuxStandardServicePeer, request linuxStandardServiceRequest, files []*os.File) error {
-	if request.Schema != 1 || request.Action != "shutdown-idle" || request.MTU != nil || request.Transfer != nil || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
+	if request.Schema != 1 || request.Action != "shutdown-idle" || request.MTU != nil || request.Transfer != nil || request.Reverse != nil || request.Release || !validControllerOwnerToken(request.Session) || request.BudgetMS < 1 || request.BudgetMS > 120000 || request.DeadlineNS <= time.Now().UnixNano() || len(files) != 0 ||
 		request.Directory != "" || request.ConfigSHA256 != "" || request.ProfileID != "" || request.ProfileSHA256 != "" || request.Endpoint != "" || request.RuntimeMode != "" || request.Base != "" || request.NetworkID != "" || request.RouterID != "" || request.ProfileRevision != "" || request.ResultRevision != "" {
 		return errors.New("standard service idle-upgrade request changed its fixed scope")
 	}
@@ -605,7 +664,7 @@ func (s *linuxStandardService) handleIdleUpgrade(ctx context.Context, peer *linu
 	if s.quiescing {
 		return errors.New("standard service already retired admission")
 	}
-	if s.transferPending() {
+	if s.transferPending() || s.reversePending() {
 		return errors.New("finish original service-to-Node transfer before upgrade")
 	}
 	if err := s.prepareIdleShutdown(ctx); err != nil {

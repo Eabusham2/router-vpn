@@ -55,16 +55,17 @@ type JournalIntent struct {
 }
 
 type JournalRecord struct {
-	Schema         int                   `json:"schema"`
-	Kind           string                `json:"kind"`
-	JournalID      string                `json:"journal_id"`
-	Sequence       uint64                `json:"sequence"`
-	PreviousSHA256 string                `json:"previous_sha256"`
-	Controller     ParentRecord          `json:"controller"`
-	Phase          string                `json:"phase"`
-	Committed      JournalState          `json:"committed"`
-	Intent         *JournalIntent        `json:"intent"`
-	Transfer       *StandardNodeTransfer `json:"standard_transfer,omitempty"`
+	ReverseTransfer *NodeStandardTransfer `json:"node_standard_transfer,omitempty"`
+	Schema          int                   `json:"schema"`
+	Kind            string                `json:"kind"`
+	JournalID       string                `json:"journal_id"`
+	Sequence        uint64                `json:"sequence"`
+	PreviousSHA256  string                `json:"previous_sha256"`
+	Controller      ParentRecord          `json:"controller"`
+	Phase           string                `json:"phase"`
+	Committed       JournalState          `json:"committed"`
+	Intent          *JournalIntent        `json:"intent"`
+	Transfer        *StandardNodeTransfer `json:"standard_transfer,omitempty"`
 }
 
 func profileID(value string) bool {
@@ -102,7 +103,7 @@ func (s JournalState) Validate() error {
 func (r JournalRecord) Validate() error {
 	if r.Schema != JournalRecordSchema || r.Kind != JournalRecordKind || !lowerHex(r.JournalID, 32) || r.Sequence == 0 ||
 		(r.Sequence == 1 && r.PreviousSHA256 != "") || (r.Sequence > 1 && !lowerHex(r.PreviousSHA256, 64)) ||
-		r.Controller.Validate() != nil || r.Committed.Validate() != nil || r.Transfer != nil && r.Transfer.Validate() != nil {
+		r.Controller.Validate() != nil || r.Committed.Validate() != nil || r.ReverseTransfer != nil && r.ReverseTransfer.Validate() != nil || r.Transfer != nil && r.Transfer.Validate() != nil {
 		return errors.New("Linux journal lost its bounded record, retained creator or committed state")
 	}
 	if r.Committed.Engine != nil && !processBelongsToParent(*r.Committed.Engine, r.Controller) {
@@ -143,6 +144,11 @@ func (r JournalRecord) Validate() error {
 		} else if i.Preparation != nil {
 			return errors.New("fixed Linux baseline cannot adopt a per-session creation receipt")
 		}
+	case "standard-transfer":
+		x := r.ReverseTransfer
+		if x == nil || x.Validate() != nil || i.Preparation != nil || r.Committed.Target == nil || r.Committed.Engine != nil || i.RequestID != x.ID || i.ProfileID != r.Committed.ProfileID || i.ProfileRevision != r.Committed.ProfileRevision || i.ResultProfileRevision != i.ProfileRevision || x.SourceProfileID != i.ProfileID || x.SourceProfileRevision != i.ProfileRevision || x.Source.SessionID != r.Committed.Target.Native.Capture.SessionID || x.Source.SourceSHA256 != r.Committed.Target.Native.Capture.SourceSHA256 || x.Source.ConfigSHA256 != r.Committed.Target.ConfigSHA256 || x.Source.Policy != r.Committed.Target.Policy || !sameState(i.Candidate, JournalState{}) {
+			return errors.New("reverse transfer changed its original closed Node checkpoint")
+		}
 	case "release", "off":
 		if i.Preparation != nil || r.Committed.Target == nil || i.ProfileID != r.Committed.ProfileID ||
 			i.Action == "release" && (i.ProfileRevision != r.Committed.ProfileRevision || i.ResultProfileRevision != i.ProfileRevision) {
@@ -179,6 +185,10 @@ func CloneState(s JournalState) JournalState {
 }
 func CloneRecord(r JournalRecord) JournalRecord {
 	r.Committed = CloneState(r.Committed)
+	if r.ReverseTransfer != nil {
+		copy := *r.ReverseTransfer
+		r.ReverseTransfer = &copy
+	}
 	if r.Transfer != nil {
 		copy := *r.Transfer
 		r.Transfer = &copy
@@ -249,7 +259,7 @@ func JournalRecordSHA256(body []byte) (string, error) {
 func CheckJournalTransition(previous, next JournalRecord) error {
 	if previous.Validate() != nil || next.Validate() != nil || previous.Sequence == math.MaxUint64 || next.Sequence != previous.Sequence+1 ||
 		next.JournalID != previous.JournalID || next.Controller != previous.Controller ||
-		!validTransferCheckpoint(previous, next) {
+		!validTransferCheckpoint(previous, next) || !validReverseTransferCheckpoint(previous, next) {
 		return errors.New("Linux journal transition changed its retained creator or sequence")
 	}
 	body, err := CanonicalJournalRecord(previous)
