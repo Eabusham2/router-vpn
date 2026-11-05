@@ -13,12 +13,12 @@ type importedEntry struct {
 	source, metadata, profile, publicIP string
 }
 
-// NewImportedEntry composes an imported SS2022 or Hysteria2 predecessor and a paired
+// NewImportedEntry composes an imported SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
 // Shadowsocks or Hysteria2 final. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
-	bad := errors.New("imported entry requires a captured standalone SS2022 or Hysteria2 source and paired Shadowsocks or Hysteria2 final in Local execution")
+	bad := errors.New("imported entry requires a captured standalone SS2022, Hysteria2, WireGuard or AmneziaWG source and paired Shadowsocks or Hysteria2 final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2") {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2") {
 		return nil, bad
 	}
 	// An imported operator address is a public-path proof, never a paired API.
@@ -74,31 +74,40 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	// All predecessor edges were checked by ExternalPolicy; copy only its actual
 	// transport closure. Its DNS and proof listener are not application policy.
-	rows, _ := first["outbounds"].([]any)
 	names := map[string]string{ExternalFinalTag: "entry-wg"}
-	for _, raw := range rows {
-		node := raw.(map[string]any)
-		tag := predecessorText(node, "tag")
-		if tag != ExternalFinalTag {
-			names[tag] = "imported-entry-" + tag
+	for _, family := range []string{"endpoints", "outbounds"} {
+		rows, _ := first[family].([]any)
+		for _, raw := range rows {
+			node := raw.(map[string]any)
+			tag := predecessorText(node, "tag")
+			if tag != ExternalFinalTag {
+				names[tag] = "imported-entry-" + tag
+			}
 		}
 	}
 	var original map[string]any
-	for _, raw := range rows {
-		node := raw.(map[string]any)
-		tag := predecessorText(node, "tag")
-		if tag == ExternalFinalTag {
-			original = node
-		}
-		node["tag"] = names[tag]
-		if d := predecessorText(node, "detour"); d != "" {
-			if names[d] == "" {
-				return nil, bad
+	for _, family := range []string{"endpoints", "outbounds"} {
+		rows, _ := first[family].([]any)
+		for _, raw := range rows {
+			node := raw.(map[string]any)
+			tag := predecessorText(node, "tag")
+			if tag == ExternalFinalTag {
+				original = node
 			}
-			node["detour"] = names[d]
+			node["tag"] = names[tag]
+			if d := predecessorText(node, "detour"); d != "" {
+				if names[d] == "" {
+					return nil, bad
+				}
+				node["detour"] = names[d]
+			}
 		}
 	}
-	if original == nil || selection.Protocol == "shadowsocks" && !importedSS2022Method(predecessorText(original, "method")) || selection.Protocol == "hysteria2" && original["type"] != "hysteria2" {
+	expectedType := selection.Protocol
+	if selection.Protocol == "amneziawg" {
+		expectedType = AmneziaType
+	}
+	if original == nil || original["type"] != expectedType || selection.Protocol == "shadowsocks" && !importedSS2022Method(predecessorText(original, "method")) {
 		return nil, bad
 	}
 	// Each transport has its own authenticated layer. Attach the final's outer
@@ -127,7 +136,14 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		}
 	}
 	outer["detour"] = "entry-wg"
-	last["outbounds"] = append(outs, rows...)
+	for _, family := range []string{"endpoints", "outbounds"} {
+		rows, _ := first[family].([]any)
+		if len(rows) == 0 {
+			continue
+		}
+		existing, _ := last[family].([]any)
+		last[family] = append(existing, rows...)
+	}
 	tun := last["inbounds"].([]any)[0].(map[string]any)
 	mtu, _, policy, err := externalMTUPolicy(tun, final, original, exit.profile, selection.Profile)
 	if err != nil {

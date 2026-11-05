@@ -147,7 +147,7 @@ final class AndroidMultihopController {
 final class AndroidImportedRouterPath {
  static int prepared;static Runnable afterPrepare;static boolean failPreparation;
  static final class PreparationFailure extends Exception{final String sessionId;PreparationFailure(String id){super("retained original private staging");sessionId=id;}}
- static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{if(!java.util.List.of("shadowsocks","hysteria2").contains(e.protocol))throw new IllegalArgumentException("SS2022 or Hysteria2 entry required");return new AndroidMultihopController.Source(e);}
+ static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{if(!java.util.List.of("shadowsocks","hysteria2","wireguard","amneziawg").contains(e.protocol))throw new IllegalArgumentException("SS2022 or Hysteria2 entry required");return new AndroidMultihopController.Source(e);}
  static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{s.require(null);return AndroidStandardExitStore.copy(AndroidStandardExitStore.saved.get(s.importedId));}
  static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{
   e.require(null);last.require(x);if(!java.util.List.of("shadowsocks","hysteria2").contains(mode)||!execution.equals("local"))throw new IllegalArgumentException("mixed Local proxy required");prepared++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=entry(c,e).protocol;var result=new AndroidMultihopController.Prepared(e,x,mode);if(failPreparation)throw new PreparationFailure(result.session.sessionId);if(afterPrepare!=null)afterPrepare.run();return result;
@@ -401,7 +401,7 @@ public final class RuntimeTeardownHarness {
             try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();if(fault.equals("duplicate"))exit.id=entry.id;if(fault.equals("wrong-exit"))exit.protocol="socks5";if(fault.equals("tor-entry"))entry.protocol="tor";Callback cb=new Callback(0);owner.external.connectOrdinary(entry,exit,fault.equals("server")||fault.equals("auto")?fault:"local",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidTorProfile.ordinaryPreparations==0,"ordinary input acquired unavailable path authority");}
         });
     }
-    static void importedRouterRuntimeTests(){for(String protocol:new String[]{"shadowsocks","hysteria2"})for(String finalMode:new String[]{"shadowsocks","hysteria2"}){
+    static void importedRouterRuntimeTests(){for(String protocol:new String[]{"shadowsocks","hysteria2","wireguard","amneziawg"})for(String finalMode:new String[]{"shadowsocks","hysteria2"}){
         test("imported Router runtime captures and restores original typed owner",()->{
             try(Owner owner=new Owner("multihop")){
                 AndroidStandardExitStore.Entry first=ordinary(protocol);AndroidNodeStore.Node last=new AndroidNodeStore.Node("paired-final");Callback connected=new Callback(0);

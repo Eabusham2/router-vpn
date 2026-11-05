@@ -387,15 +387,26 @@ enum IOSImportedEntryMultihop {
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func validate(entry: [String: Any], final: [String: Any]) throws {
         guard let imported = entry["external"] as? [String: Any],
-              let kind = imported["protocol"] as? String, ["shadowsocks", "hysteria2"].contains(kind) else { throw issue() }
+              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(kind) else { throw issue() }
         if kind == "shadowsocks" {
             guard let transport = imported[kind] as? [String: Any], methods.contains(transport["method"] as? String ?? "") else { throw issue() }
-        } else {
+        } else if kind == "hysteria2" {
             guard let transport = imported[kind] as? [String: Any],
                   let password = transport["password"] as? String, !password.isEmpty,
                   let name = transport["tls_server_name"] as? String, !name.isEmpty, name.utf8.count <= 253,
                   name.range(of: "^[A-Za-z0-9.-]+$", options: .regularExpression) != nil,
                   !name.hasPrefix("."), !name.hasSuffix(".") else { throw issue() }
+        }
+        if ["wireguard", "amneziawg"].contains(kind) {
+            guard let transport = imported[kind] as? [String: Any],
+                  let privateKey = transport["private_key"] as? String, !privateKey.isEmpty,
+                  let publicKey = transport["peer_public_key"] as? String, !publicKey.isEmpty,
+                  let endpoint = transport["endpoint"] as? String, !endpoint.isEmpty,
+                  let addresses = transport["addresses"] as? [String], !addresses.isEmpty,
+                  let allowed = transport["allowed_ips"] as? [String], !allowed.isEmpty else { throw issue() }
+            if kind == "amneziawg" {
+                guard let parameters = transport["parameters"] as? [String: String], !parameters.isEmpty else { throw issue() }
+            }
         }
         guard entry["node_kind"] as? String == "external",
               final["node_kind"] == nil || final["node_kind"] is String,
@@ -421,6 +432,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local Shadowsocks 2022 or Hysteria2 imported entry and a different paired Router VPN Shadowsocks or Hysteria2 final node with their original settings."])
+            "Choose a Local WireGuard, AmneziaWG, Shadowsocks 2022 or Hysteria2 imported entry and a different paired Router VPN Shadowsocks or Hysteria2 final node with their original settings."])
     }
 }

@@ -460,7 +460,7 @@ final class AndroidConnectionProfileStore {
                 boolean routerFinal="router-vpn".equals(kind);
                 if(!row.optBoolean("multihop_enabled",false)||!"local".equals(row.optString("multihop_execution","local"))
                         ||(routerFinal?schema<6||!row.getString("node_id").equals(row.optString("multihop_exit_id",""))
-                        ||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(row.optString("multihop_exit_mode",""))||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(row.optString("ordinary_entry_protocol",""))
+                        ||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(row.optString("multihop_exit_mode",""))||!java.util.Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(row.optString("ordinary_entry_protocol",""))
                         :schema<5||!row.has("external_policy")||!row.has("external_startup")||!AndroidTorProfile.isTor(row.optString("external_protocol",""))))
                     throw new IllegalStateException("Saved ordinary entry lost its complete Local path.");
                 for(String key:new String[]{"ordinary_entry_protocol","ordinary_entry_public_ip"})if(!(row.get(key) instanceof String))throw new IllegalStateException("Saved ordinary entry lost its source identity.");

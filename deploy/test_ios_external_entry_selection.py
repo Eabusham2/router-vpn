@@ -123,8 +123,36 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try reject("HY2 selection rejects "+fault){try hyModel.saveIOSMultihop(enabled:true,entryID:hysteria.id,exitID:paired.id,exitMode:"shadowsocks",execution:execution,entryMode:mode)}
    try check("rejected HY2 selection keeps original saved graph",hyModel.writes==hyWrites && encoded(hyModel.bundle!)==savedHY)
   }
+  var packetEntries:[RouterProfile]=[]
+  for kind in ["wireguard","amneziawg"] {
+   var node=try profile("imported-"+kind,"external",kind);node.apiToken="";node.dnsMode="home";node.external?.socks5=nil
+   var block:[String:Any]=["private_key":Data(repeating:11,count:32).base64EncodedString(),"peer_public_key":Data(repeating:12,count:32).base64EncodedString(),"preshared_key":Data(repeating:13,count:32).base64EncodedString(),"addresses":["10.91.0.2/32","fd91::2/128"],"endpoint":"198.51.100.8:51820","allowed_ips":["0.0.0.0/0","::/0"],"mtu":1380,"persistent_keepalive_interval":29]
+   if kind=="wireguard" {node.external?.wireGuard=try JSONDecoder().decode(ExternalWireGuardConfig.self,from:encoded(block))}
+   else {block["parameters"]=["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"];node.external?.amneziaWG=try JSONDecoder().decode(ExternalAmneziaWGConfig.self,from:encoded(block))}
+   packetEntries.append(node)
+   let original=bundle(node),model=RouterVPNModel();model.bundle=finalBundle
+   IOSNodeBundleStore.shared.nodes=[node.id:try encoded(original),paired.id:try encoded(finalBundle)]
+   try model.saveIOSMultihop(enabled:true,entryID:node.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:kind)
+   let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("packet entry captures all original keys/PSK/MTU/parameters without pairing credentials",captured.routerProfiles==original.routerProfiles && captured.profiles==original.profiles && captured.routerAPI.isEmpty && captured.apiToken.isEmpty && captured.nodeProofID.isEmpty)
+   try check("packet entry retains paired final DNS and raw assets",model.bundle?.profiles==finalBundle.profiles && model.bundle?.routerProfiles[0].dnsMode=="home" && model.bundle?.routerProfiles[0].multihopEntryMode==kind)
+   let saved=try encoded(model.bundle!),writes=model.writes
+   for fault in ["server","auto","wrong-mode","private-token","missing-key","empty-routes"] {
+    var changed=node,execution="local",mode=kind
+    switch fault {
+    case "server","auto":execution=fault
+    case "wrong-mode":mode="wg"
+    case "private-token":changed.apiToken="invented paired entry credential"
+    case "missing-key":if kind=="wireguard"{changed.external?.wireGuard?.privateKey=""}else{changed.external?.amneziaWG?.privateKey=""}
+    default:if kind=="wireguard"{changed.external?.wireGuard?.allowedIPs=[]}else{changed.external?.amneziaWG?.allowedIPs=[]}
+    }
+    IOSNodeBundleStore.shared.nodes[node.id]=try encoded(bundle(changed))
+    try reject("packet selection rejects "+kind+fault){try model.saveIOSMultihop(enabled:true,entryID:node.id,exitID:paired.id,exitMode:"shadowsocks",execution:execution,entryMode:mode)}
+    try check("rejected packet selection leaves saved graph untouched",model.writes==writes && encoded(model.bundle!)==saved)
+   }
+  }
   finalBundle.profiles["hysteria2"]=["sing-box.json":try encoded(["outbounds":[["type":"hysteria2","tag":"proxy","server":"192.0.2.44","server_port":8443,"password":" exact paired final password ","tls":["enabled":true,"server_name":"final.example.test","certificate_path":"final.pem"]]]]).base64EncodedString(),"final.pem":Data("original paired certificate bytes".utf8).base64EncodedString()]
-  for originalEntry in [imported,hysteria] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  for originalEntry in [imported,hysteria]+packetEntries {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    var selectedFinal=finalBundle;selectedFinal.routerProfiles[0].startLayer=layer
    let model=RouterVPNModel();model.bundle=selectedFinal
    IOSNodeBundleStore.shared.nodes=[originalEntry.id:try encoded(bundle(originalEntry)),paired.id:try encoded(selectedFinal)]
@@ -449,6 +477,10 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
 
 
 def validate_imported_picker(view):
+    entries = view[view.index('    private var nodes:'):view.index('    private var exitNodes:')]
+    if ('["wireguard", "amneziawg", "hysteria2"].contains($0.external?.protocolName ?? "")' not in entries
+            or 'IOSImportedEntryMultihop.methods.contains' not in entries):
+        raise ValueError('Paired finals must expose exact WG/AWG/HY2 and SS2022 imported entries')
     branch = view[view.index('                    if externalEntryProtocol != nil {'):]
     branch = branch[:branch.index('                    } else {')]
     for required in ('Picker("Exit transport", selection: $exitMode)',

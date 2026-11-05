@@ -189,15 +189,22 @@ public final class NodeUsageTest{
   try(Fixture f=new Fixture(root)){android.net.VpnService.needsPermission=true;Callback temporary=new Callback(f.activity,false);f.controller.connect("wg",List.of(),temporary);Bundle state=new Bundle();f.controller.savePending(state);int code=f.activity.permissionRequest;f.controller.close();f.controller=new AndroidUnifiedConnectionController(f.activity,f.store);f.controller.restorePending(state,f.callback);f.controller.onActivityResult(code,android.app.Activity.RESULT_OK);f.finish();check(f.callback.ok&&!f.usage().exists(),"Activity recreation promoted temporary receipt into user usage");}
   try(Fixture f=new Fixture(root)){android.net.VpnService.needsPermission=true;f.connect();Bundle state=new Bundle();f.controller.savePending(state);int code=f.activity.permissionRequest;f.controller.close();f.controller=new AndroidUnifiedConnectionController(f.activity,f.store);Callback temporary=new Callback(f.activity,false);f.controller.restorePending(state,temporary);f.controller.onActivityResult(code,android.app.Activity.RESULT_OK);f.finish();check(temporary.ok&&f.count("router-vpn",f.a.id)==6,"Activity recreation lost original user usage intent");}
  }
- static void importedExclusions(Path root)throws Exception{for(String protocol:List.of("shadowsocks","hysteria2"))for(String finalMode:List.of("shadowsocks","hysteria2")){
+ static void packetFields(AndroidStandardExitStore.Entry e)throws Exception{
+  if(!List.of("wireguard","amneziawg").contains(e.protocol))return;
+  e.wgPrivateKey=java.util.Base64.getEncoder().encodeToString("x".repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));e.wgPeerPublicKey=java.util.Base64.getEncoder().encodeToString("p".repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  e.wgPreSharedKey=java.util.Base64.getEncoder().encodeToString("k".repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));e.wgMtu=1360;e.wgKeepalive=25;e.wgAddresses.addAll(List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(List.of("0.0.0.0/0","::/0"));
+  if(e.protocol.equals("amneziawg"))e.awgParameters=new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");
+ }
+ static List<String> importedProtocols=List.of("shadowsocks","hysteria2");
+ static void importedExclusions(Path root)throws Exception{for(String protocol:importedProtocols)for(String finalMode:List.of("shadowsocks","hysteria2")){
   try(Fixture f=new Fixture(root)){
-   var imported=AndroidStandardExitStore.copy(f.x);imported.id=f.a.id;imported.protocol=protocol;f.exits.save(imported);
+   var imported=AndroidStandardExitStore.copy(f.x);imported.id=f.a.id;imported.protocol=protocol;packetFields(imported);f.exits.save(imported);
    f.controller.connectImportedMultihop(imported,f.b,finalMode,"local",f.callback);f.finish();
    check(f.callback.ok&&f.count("external",f.a.id)==1&&f.count("router-vpn",f.a.id)==0&&f.count("router-vpn",f.b.id)==2,"imported usage conflated same text IDs across original node kinds: "+protocol);
    byte[] receipt=f.read(f.usage());NativeUsageBoundary.last.run();check(Arrays.equals(receipt,f.read(f.usage())),"duplicate imported completion counted both nodes again");
   }
   for(String fault:List.of("failed","owner","omit-owned","entry-source","final-source","cancelled","temporary"))try(Fixture f=new Fixture(root)){
-   f.x.protocol=protocol;f.exits.save(f.x);
+   f.x.protocol=protocol;packetFields(f.x);f.exits.save(f.x);
    if(fault.equals("failed"))NativeUsageBoundary.fail=true;
    if(fault.equals("owner"))NativeUsageBoundary.fault="owner";
    if(fault.equals("omit-owned"))NativeUsageBoundary.omitOwned=true;
@@ -266,7 +273,7 @@ public final class NodeUsageTest{
    e.latitude=null;e.longitude=null;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.isEmpty()&&f.activity.nodeButton.getText().toString().contains("Chicago"),"clearing coordinates retained the old pin or removed its independent label");
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){if(!args[1].equals("imported-packet"))throw new AssertionError("Unknown usage family");importedProtocols=List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android packet entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -350,6 +357,7 @@ def main():
         (root / 'data').mkdir()
         subprocess.run(compile, check=True, timeout=45)
         subprocess.run(run, check=True, timeout=60)
+        subprocess.run([*run, "imported-packet"], check=True, timeout=60)
         controls = (
             ('AndroidNodeUsage.java', 'Arrays.asList(captureExternal(context,entry),captureRouter(exit))', 'Collections.singletonList(captureRouter(exit))', 'imported multihop did not count both original typed nodes'),
             ('AndroidNodeUsage.java', 'entry.id,exit.id,entry.protocol,"",false)', 'entry.id,exit.id,"shadowsocks","",false)', 'imported usage conflated same text IDs across original node kinds: hysteria2'),

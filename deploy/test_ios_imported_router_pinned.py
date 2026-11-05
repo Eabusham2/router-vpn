@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse forty actual Swift-built imported-entry graphs in pinned Libbox.
+"""Parse seventy-six actual Swift-built imported-entry graphs in pinned Libbox.
 
 This is an executable host/compiler composition gate, not a device traffic test.
 """
@@ -23,6 +23,9 @@ NAMES = {a+'--'+b+'--2022-blake3-aes-256-gcm.json' for a in LAYERS for b in LAYE
     'off--off--2022-blake3-aes-128-gcm.json', 'off--off--2022-blake3-chacha20-poly1305.json'} | {
     'hysteria2--'+a+'--'+b+'.json' for a in LAYERS for b in LAYERS}
 NAMES = NAMES | {'final-hysteria2--'+name for name in NAMES}
+NAMES |= {'packet-'+kind+'--final-'+final+'--'+entry_layer+'--'+final_layer+'.json'
+          for kind in ('wireguard', 'amneziawg') for final in ('shadowsocks', 'hysteria2')
+          for entry_layer in LAYERS for final_layer in LAYERS}
 
 
 def digest():
@@ -41,7 +44,7 @@ def digest():
 
 def require_matrix(root):
     if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != NAMES:
-        raise ValueError('Apple imported matrix must contain exactly forty original host graphs')
+        raise ValueError('Apple imported matrix must contain exactly seventy-six original host graphs')
     for name in NAMES:
         info = (root/name).lstat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4*1024*1024:
@@ -64,8 +67,8 @@ def require_verdicts(raw):
                 completed.append(test)
             else:
                 package_passes += 1
-    if len(completed) != 41 or set(completed) != expected or package_passes != 1:
-        raise ValueError('Native Apple imported proof requires all forty-one exact passing verdicts')
+    if len(completed) != 77 or set(completed) != expected or package_passes != 1:
+        raise ValueError('Native Apple imported proof requires all seventy-seven exact passing verdicts')
 
 
 def run(vendor):
@@ -97,7 +100,7 @@ def run(vendor):
         require_verdicts(result.stdout)
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: forty actual Swift graph exports parsed by pinned Libbox; forty-one exact native verdicts passed')
+    print('Apple imported Router: seventy-six actual Swift graph exports parsed by pinned Libbox; seventy-seven exact native verdicts passed')
 
 
 def main():

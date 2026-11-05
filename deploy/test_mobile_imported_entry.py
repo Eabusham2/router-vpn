@@ -13,8 +13,11 @@ ROOT=Path(__file__).resolve().parents[1]
 PIN='1ac1a339cb1223e9c70eae14c44411c75033c02d'
 LAYERS=('', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
 BASE_FILES={f'{a or "off"}--{b or "off"}.json' for a in LAYERS for b in LAYERS}|{'cipher-aes128.json','cipher-chacha20.json'}|{f'hysteria2--{a or "off"}--{b or "off"}.json' for a in LAYERS for b in LAYERS}
-FILES=BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
+PACKET_FILES={f'packet-{protocol}--final-{final}--{a or "off"}--{b or "off"}.json' for protocol in ("wireguard","amneziawg") for final in ("shadowsocks","hysteria2") for a in LAYERS for b in LAYERS}
+FILES=PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CORE={
+ 'TestImportedEntryPacketCompleteGraphs':sorted(name.removesuffix(".json") for name in PACKET_FILES),
+ 'TestImportedEntryPacketSourceAndMTUOwnership':["private-key","public-key","psk","address","allowed-ips","endpoint","keepalive","awg-parameter","system","foreign-endpoint","entry-fixed","entry-jumbo","retained-source"],
  'TestImportedEntryHysteriaFinalCompleteGraphs':sorted(name.removesuffix(".json") for name in BASE_FILES),
  'TestImportedEntryHysteriaFinalRejectsUnownedLayerAndTrust':["missing-start","wrapped-start","foreign-start","insecure-final","missing-cert","wrong-final-kind","unused-start"],
  'TestImportedEntryHysteriaPairedFinalCompleteLayers':[ (a or "off")+"/"+(b or "off") for a in LAYERS for b in LAYERS],
@@ -26,6 +29,7 @@ CORE={
  'TestImportedEntryRuntimeDistinctProofsAndSelectedDNS': ['success','wrong-public-ip','wrong-paired-final','dns-failure','cancel-during-dns','missing-dns-capability','changed-owner'],
  'TestImportedEntryPairedFinalPolicyAndCipherOwnership': ['2022-blake3-aes-128-gcm','2022-blake3-aes-256-gcm','2022-blake3-chacha20-poly1305','entry-fixed','entry-jumbo','entry-cover-refused','paired-final-cover'],
 }
+PACKET_PEERS=['success-wg-ss','success-awg-hy2','success-entry-layer','private-key','public-key','psk','awg-parameter','entry-route','outer-layer-key','final-key','final-route','dns-route','final-identity','entry-public-ip']
 FINAL_HYSTERIA_PEERS=['success-ss','success-hysteria','success-final-layer','final-password','final-sni','final-trust','outer-layer-key','final-route','dns-route','final-identity']
 HYSTERIA_PEERS=['success','password','sni','trust','final-key','final-route','dns-route','final-identity']
 PEERS=['success','entry-key','final-key','final-route','dns-route','final-identity']
@@ -45,7 +49,7 @@ def require_verdicts(raw, expected):
  if starts!={n:1 for n in expected} or passes!={n:1 for n in expected}:raise ValueError('Missing or duplicated exact native verdict')
 def checked_sources(vendor,peers):
  files={'mobile/routervpn_imported_entry.go.tmpl':'experimental/libbox/routervpn_imported_entry.go','mobile/routervpn_imported_entry_native_test.go.tmpl':'experimental/libbox/routervpn_imported_entry_native_test.go','mobile/strategy/box.go.tmpl':'routervpn_strategy_dns.go','mobile/mtu/bridge.go.tmpl':'experimental/libbox/routervpn_mtu_bridge.go'}
- if peers:files={'mobile/desktop/node_imported_hysteria_final_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_hysteria_final_test.go','mobile/desktop/node_imported_router_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go','mobile/desktop/node_imported_hysteria_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go','mobile/desktop/node_layer_peer_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go','mobile/desktop/node_external_ss_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_test.go'}
+ if peers:files={'mobile/desktop/node_imported_packet_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_packet_test.go','mobile/desktop/node_external_wireguard_installed_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_external_wireguard_installed_test.go','mobile/desktop/node_external_amnezia_installed_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go','mobile/desktop/node_imported_hysteria_final_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_hysteria_final_test.go','mobile/desktop/node_imported_router_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go','mobile/desktop/node_imported_hysteria_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go','mobile/desktop/node_layer_peer_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go','mobile/desktop/node_external_ss_entry_test.go.tmpl':'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_test.go'}
  for source,target in files.items():
   path=vendor/target
   if path.is_symlink() or not path.is_file() or path.read_bytes()!=(ROOT/source).read_bytes():raise ValueError('Changed native imported-entry source: '+target)
@@ -92,7 +96,7 @@ def run(vendor,peers=False,android=False):
   base=['go','test','-mod=readonly','-json','-ldflags=-checklinkname=0','-tags',tags]
   selector='^('+'|'.join(groups)+')$'
   if not peers:execute(base+['./experimental/libbox','-run',selector,'-count=1','-timeout=90s'],vendor,env,names(groups))
-  if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImported(EntryPairedFinal|HysteriaPairedFinal|HysteriaFinal)NativeTraffic$','-count=1','-timeout=60s'],vendor,env,names({'TestRouterVPNImportedEntryPairedFinalNativeTraffic':PEERS,'TestRouterVPNImportedHysteriaPairedFinalNativeTraffic':HYSTERIA_PEERS,'TestRouterVPNImportedHysteriaFinalNativeTraffic':FINAL_HYSTERIA_PEERS}))
+  if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImported(EntryPairedFinal|HysteriaPairedFinal|HysteriaFinal|Packet)NativeTraffic$','-count=1','-timeout=60s'],vendor,env,names({'TestRouterVPNImportedPacketNativeTraffic':PACKET_PEERS,'TestRouterVPNImportedEntryPairedFinalNativeTraffic':PEERS,'TestRouterVPNImportedHysteriaPairedFinalNativeTraffic':HYSTERIA_PEERS,'TestRouterVPNImportedHysteriaFinalNativeTraffic':FINAL_HYSTERIA_PEERS}))
  checked_sources(vendor,peers)
  print('Exact imported-entry source, independent layers, distinct proofs, selected DNS and native verdicts passed; no OS device grant inferred.')
 if __name__=='__main__':

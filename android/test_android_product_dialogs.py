@@ -219,7 +219,7 @@ HARNESS_SUFFIX = r'''
   check(note.contains("Router VPN will then briefly establish and prove this entry")&&note.contains("disconnect")&&note.contains("press Connect"),"Router entry discloses temporary proved measurement before selection");
   d.clickItem(2);check(h.entry.equals("c")&&h.exit.equals("3"),"chosen entry and complete candidate list passed to measurement");
   h=new ProductDialogHarness();h.busy=true;h.configureMultihop();check(h.entry.isEmpty(),"busy multihop setup cannot create temporary tunnel");
-  for(String protocol:new String[]{"shadowsocks","hysteria2"})for(int routers:new int[]{1,3}){
+  for(String protocol:new String[]{"shadowsocks","hysteria2","wireguard","amneziawg"})for(int routers:new int[]{1,3}){
    h=new ProductDialogHarness();while(h.nodeStore.nodes.size()>routers)h.nodeStore.nodes.remove(h.nodeStore.nodes.size()-1);
    AndroidStandardExitStore.Entry first=new AndroidStandardExitStore.Entry("provider",protocol);h.exitStore.entries.add(first);
    h.configureMultihop();d=shown(routers+1,"Multihop entry");check(d.items[routers].contains("Imported provider")&&d.items[routers].contains(protocol),"imported entry keeps its own visible identity");

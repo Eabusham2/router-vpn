@@ -256,14 +256,15 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     private synchronized void connectCaptured(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String policy, String entryMode,
                                              AndroidMultihopController.Source expectedEntry, AndroidMultihopController.Source expectedExit, String expectedPins,
                                              AndroidHomeStateStore.Snapshot expectedIdle, boolean remember, Callback callback) {
-        if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
+        boolean imported=expectedEntry!=null&&expectedEntry.imported();
+        if (imported ? !java.util.Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode)
+                : !NativeSingBoxController.nativeMultihopEntry(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
         if(!java.util.Arrays.asList("local","server","auto").contains(execution)){callback.finished(false,"Invalid multihop execution.");return;}
         if (closed.get()) { callback.finished(false, "Android multihop runtime is closed."); return; }
         reconcileRuntimeLocked();
         if (transitioning || connected || !pendingPreparedSession.isEmpty() || (active != null && !active.isDone())) { callback.finished(false, "Another Android multihop session or private staging cleanup is still owned."); return; }
-        boolean imported=expectedEntry!=null&&expectedEntry.imported();
         if (exit==null || (imported ? entry!=null||expectedEntry.importedId.equals(exit.id)||!"local".equals(execution)||!"local".equals(policy)
-                ||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(entryMode)||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(exitMode)||expectedExit==null
+                ||!java.util.Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode)||!java.util.Arrays.asList("shadowsocks","hysteria2").contains(exitMode)||expectedExit==null
                 : entry==null||entry.id.equals(exit.id))) { callback.finished(false, "Multihop requires its exact two different stored sources."); return; }
         final String entryId=imported?expectedEntry.importedId:entry.id;
         if (exitMode == null || exitMode.trim().isEmpty()) { callback.finished(false, "Choose a supported multihop exit transport."); return; }
@@ -546,7 +547,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     private synchronized void restoreFromPersistedState() {
         AndroidHomeStateStore.Snapshot state = AndroidHomeStateStore.snapshot(context);
-        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && NativeSingBoxController.nativeMultihopEntry(state.activeEntryMode) && "UP".equals(singBox.getState())) {
+        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && (NativeSingBoxController.nativeMultihopEntry(state.activeEntryMode) || java.util.Arrays.asList("wireguard","amneziawg").contains(state.activeEntryMode)) && "UP".equals(singBox.getState())) {
             connected = true;
             transitioning = false;
             activeEntryId = state.activeEntryId;

@@ -18,9 +18,9 @@ final class AndroidImportedRouterPath {
             "exit_profile", "exit_start", "dns_bootstrap", "source_sha256"};
 
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {
-        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2").contains(entry.protocol)
+        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg").contains(entry.protocol)
                 || "shadowsocks".equals(entry.protocol) && !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
-            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022 or Hysteria2.");
+            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard or AmneziaWG.");
         }
         AndroidStandardExitStore.validate(entry);
     }
@@ -81,7 +81,7 @@ final class AndroidImportedRouterPath {
                 }
                 JSONObject selected = new JSONObject(metadata);
                 String entryMode = new JSONObject(input.getString("entry_capture")).getString("protocol");
-                if (!Arrays.asList("shadowsocks", "hysteria2").contains(entryMode)
+                if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg").contains(entryMode)
                         || !"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
                         || !entryMode.equals(selected.getString("entry_mode")) || !input.getString("exit_mode").equals(selected.getString("exit_mode"))
                         || !Arrays.asList("shadowsocks", "hysteria2").contains(selected.getString("exit_mode"))) {

@@ -160,7 +160,12 @@ enum IOSRuntimeSelector {
             throw IOSRuntimeSelectionError.unsupportedMode("Choose a valid multihop graph or disable multihop before selecting an individual raw mode.")
         }
         let entryMode = profile.multihopEntryMode ?? "wg"
-        guard multihopModeIDs.contains(entryMode) else {
+        // Imported packet labels are not paired raw profile IDs. The model
+        // captures their independent entry bundle before provider startup.
+        let importedPacket = ["wireguard", "amneziawg"].contains(entryMode) &&
+            ["shadowsocks", "hysteria2"].contains(mode) &&
+            (profile.multihopExecution ?? "local") == "local"
+        guard multihopModeIDs.contains(entryMode) || importedPacket else {
             throw IOSRuntimeSelectionError.unsupportedMode("Choose an exact native multihop entry transport.")
         }
         _ = try selectRaw(bundle: bundle, rawProfileID: mode)

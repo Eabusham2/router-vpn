@@ -707,7 +707,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let finalTransport:[String:Any]=["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":key]
   let base:[String:Any]=["inbounds":[["type":"tun","tag":"tun-in","auto_route":true,"strict_route":true,"mtu":1280]],"outbounds":[finalTransport,["type":"direct","tag":"direct"]],"route":["auto_detect_interface":true,"final":"proxy","rules":[["protocol":"dns","action":"hijack-dns"]]],"dns":["servers":[["type":"udp","tag":"home-dns","server":"10.77.0.1","detour":"proxy"]],"final":"home-dns"]]
   let assets=["sing-box.json":try json(base).base64EncodedString()]
-  let cases: [(String,String,String,String)] = layers.flatMap { first in layers.map { (first,$0,"shadowsocks","2022-blake3-aes-256-gcm") } } + [("off","off","shadowsocks","2022-blake3-aes-128-gcm"),("off","off","shadowsocks","2022-blake3-chacha20-poly1305")] + layers.flatMap { first in layers.map { (first,$0,"hysteria2","") } }
+  var cases: [(String,String,String,String)] = layers.flatMap { first in layers.map { (first,$0,"shadowsocks","2022-blake3-aes-256-gcm") } } + [("off","off","shadowsocks","2022-blake3-aes-128-gcm"),("off","off","shadowsocks","2022-blake3-chacha20-poly1305")] + layers.flatMap { first in layers.map { (first,$0,"hysteria2","") } }
+  for kind in ["wireguard","amneziawg"] {
+   cases += layers.flatMap { first in layers.map { (first,$0,kind,"") } }
+  }
   let composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
   let certificate=((composite["profiles"] as! [String:[String:String]])["split"]!)["cert.pem"]!
   var hyBase=base
@@ -717,6 +720,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    let entryKey=Data(repeating:105,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
    var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
    if kind == "hysteria2" {imported=["protocol":kind,"expected_public_ip":"203.0.113.88","hysteria2":["server":"203.0.113.20","port":443,"password":" exact HY2 password ","tls_server_name":"entry.example.test"]]}
+   if ["wireguard","amneziawg"].contains(kind) {
+    var packet:[String:Any]=["private_key":Data(repeating:11,count:32).base64EncodedString(),"peer_public_key":Data(repeating:12,count:32).base64EncodedString(),"preshared_key":Data(repeating:13,count:32).base64EncodedString(),"addresses":["10.91.0.2/32","fd91::2/128"],"endpoint":"203.0.113.20:51820","allowed_ips":["0.0.0.0/0","::/0"],"mtu":1380,"persistent_keepalive_interval":29]
+    if kind=="amneziawg" {packet["parameters"]=["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]}
+    imported=["protocol":kind,"expected_public_ip":"203.0.113.88",kind:packet]
+   }
    if entryLayer != "off" {imported["start_layer"]=["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"203.0.113.20","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key]]}
    let entry:[String:Any]=["id":"imported-entry","node_kind":"external","start_layer":entryLayer,"dns_mode":"home","mtu_policy":"auto","external":imported]
    let final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact-paired-token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":kind,"multihop_exit_id":"paired-final","multihop_exit_mode":finalMode,"multihop_execution":"local"]
@@ -724,6 +732,20 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry)
    let finalSource=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:["shadowsocks":assets,"hysteria2":hyAssets])
    try check("HY2 final layer uses original raw same-node SS map",finalSource.start == (finalMode=="hysteria2" && finalLayer != "off" ? String(decoding:try json(assets),as:UTF8.self):""))
+   if ["wireguard","amneziawg"].contains(kind) {
+    var profileJSON=final
+    profileJSON["name"]="Captured final";profileJSON["adguard_ipv6"]="";profileJSON["socks_host"]="";profileJSON["socks_port"]=0;profileJSON["socks_username"]="";profileJSON["socks_password"]=""
+    var selected=ClientBundle.empty
+    selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profileJSON))]
+    selected.selectedRouterID="paired-final";selected.profiles=["shadowsocks":assets,"hysteria2":hyAssets]
+    let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+    try check("public Connect selector admits only captured packet entry label",selection.engine == .multihop && selection.rawProfileID==finalMode && selection.multihopEntryMode==kind && !IOSRuntimeSelector.multihopModeIDs.contains(kind))
+    for execution in ["server","auto"] {
+     var wrong=selected;wrong.routerProfiles[0].multihopExecution=execution
+     reject("packet public Connect cannot change Local to "+execution){_ = try IOSRuntimeSelector.selectMultihop(bundle:wrong,rawProfileID:nil)}
+    }
+    reject("packet public Connect cannot silently select individual raw mode"){_ = try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:finalMode)}
+   }
    let args=["config":raw.config,"capture":raw.capture,"mode":finalSource.mode,"files":finalSource.files,"start":finalSource.start,"profile":String(decoding:try json(final),as:UTF8.self)]
    let encoded=try bridge(["Op":"imported-router","Config":String(decoding:try json(args),as:UTF8.self)])
    let graph=try object(Data(encoded.utf8)),inbounds=graph["inbounds"] as! [[String:Any]],outs=graph["outbounds"] as! [[String:Any]]
@@ -734,6 +756,42 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    try check("imported Router keeps paired final Home DNS",servers[0]["server"] as? String=="192.168.50.133" && servers[0]["detour"] as? String=="proxy")
    let captured=try object(Data(raw.capture.utf8))["profile"] as! [String:Any]
    try check("entry capture preserves independent original policy",try json(captured)==json(entry))
+   if ["wireguard","amneziawg"].contains(kind) {
+    let endpoints=graph["endpoints"] as! [[String:Any]],native=endpoints.first{$0["tag"] as? String=="entry-wg"}!
+    let packet=imported[kind] as! [String:Any],peer=(native["peers"] as! [[String:Any]])[0]
+    try check("packet entry remains one exact native endpoint",endpoints.count==1 && native["type"] as? String==(kind=="amneziawg" ? "routervpn-amneziawg":"wireguard") && !outs.contains{["wireguard","routervpn-amneziawg"].contains($0["type"] as? String ?? "")})
+    try check("packet keys and PSK survive composition",native["private_key"] as? String==packet["private_key"] as? String && peer["public_key"] as? String==packet["peer_public_key"] as? String && peer["pre_shared_key"] as? String==packet["preshared_key"] as? String)
+    try check("packet routes and keepalive stay captured",native["address"] as? [String]==packet["addresses"] as? [String] && peer["allowed_ips"] as? [String]==packet["allowed_ips"] as? [String] && peer["persistent_keepalive_interval"] as? Int==29)
+    try check("packet endpoint MTU remains independent of single VPN",native["mtu"] as? Int==1380 && inbounds.first{$0["type"] as? String=="tun"}?["mtu"] as? Int==1280)
+    if entryLayer=="off" {
+     try check("packet peer address stays captured",peer["address"] as? String=="203.0.113.20" && peer["port"] as? Int==51820 && native["detour"]==nil)
+    } else {
+     let wrapper=outs.first{$0["tag"] as? String==native["detour"] as? String}!
+     try check("packet layer retains original physical destination and private inside peer",wrapper["server"] as? String=="203.0.113.20" && wrapper["detour"]==nil && peer["address"] as? String=="10.93.0.1" && peer["port"] as? Int==51820)
+    }
+    if kind=="amneziawg" {try check("all original AWG parameters survive",native["amnezia"] as? [String:String]==packet["parameters"] as? [String:String])}
+    for fault in ["missing-private-key","missing-peer-key","empty-addresses","empty-routes","missing-parameters","wrong-entry-mode","private-token"] {
+     if fault=="missing-parameters" && kind != "amneziawg" {continue}
+     var changed=entry,external=imported,transport=packet,selection=final
+     switch fault {
+     case "missing-private-key":transport.removeValue(forKey:"private_key")
+     case "missing-peer-key":transport.removeValue(forKey:"peer_public_key")
+     case "empty-addresses":transport["addresses"]=[] as [String]
+     case "empty-routes":transport["allowed_ips"]=[] as [String]
+     case "missing-parameters":transport.removeValue(forKey:"parameters")
+     case "wrong-entry-mode":selection["multihop_entry_mode"]="wg"
+     default:changed["api_token"]="invented paired credential"
+     }
+     external[kind]=transport;changed["external"]=external
+     reject("packet source preflight rejects "+fault){try IOSImportedEntryMultihop.validate(entry:changed,final:selection)}
+    }
+    var replaced=entry,external=imported,transport=packet
+    transport["preshared_key"]=Data(repeating:14,count:32).base64EncodedString();external[kind]=transport;replaced["external"]=external
+    let changed=try RouterVPNExternalExitBuilder.importedRouterSource(profile:replaced)
+    try check("packet credential replacement changes original capture and graph",changed.capture != raw.capture && changed.config != raw.config)
+    transport["endpoint"]="unowned.example.test:51820";external[kind]=transport;replaced["external"]=external
+    reject("packet entry cannot resolve uncaptured host outside native path"){_ = try RouterVPNExternalExitBuilder.importedRouterSource(profile:replaced)}
+   }
    if kind == "hysteria2" {
     let native=outs.first{$0["tag"] as? String=="entry-wg"}!
     try check("HY2 original TLS and password survive graph composition",native["password"] as? String==" exact HY2 password " && (native["tls"] as? [String:Any])?["server_name"] as? String=="entry.example.test" && (native["tls"] as? [String:Any])?["insecure"] as? Bool != true)
@@ -772,7 +830,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
     }
    }
    if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
-    try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent((finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")))
+    let name: String
+    if ["wireguard","amneziawg"].contains(kind) {name="packet-"+kind+"--final-"+finalMode+"--"+entryLayer+"--"+finalLayer+".json"}
+    else {name=(finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")}
+    try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(name))
    }
   }}
  }
@@ -780,7 +841,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (40 graphs: original20 SS finals plus20 HY2 finals with independent layer combinations; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (76 graphs: preserved40 proxy-entry graphs plus36 WG/AWG entries with independent layers and SS/HY2 finals; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

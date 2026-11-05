@@ -19,13 +19,20 @@ class ImportedGate(unittest.TestCase):
     def encode(self, events):
         return '\n'.join(json.dumps(e) for e in events)
 
-    def test_preserved_ss_and_complete_hysteria_matrix(self):
+    def test_preserved_proxy_and_complete_packet_matrix(self):
         ss = {a+'--'+b+'--2022-blake3-aes-256-gcm.json' for a in G.LAYERS for b in G.LAYERS} | {'off--off--2022-blake3-aes-128-gcm.json', 'off--off--2022-blake3-chacha20-poly1305.json'}
         hy = {'hysteria2--'+a+'--'+b+'.json' for a in G.LAYERS for b in G.LAYERS}
-        self.assertEqual(G.NAMES, ss | hy | {"final-hysteria2--"+name for name in ss | hy})
+        original = ss | hy | {"final-hysteria2--"+name for name in ss | hy}
+        packet = {'packet-'+kind+'--final-'+final+'--'+a+'--'+b+'.json'
+                  for kind in ('wireguard', 'amneziawg') for final in ('shadowsocks', 'hysteria2')
+                  for a in G.LAYERS for b in G.LAYERS}
+        self.assertEqual(len(original), 40)
+        self.assertEqual(len(packet), 36)
+        self.assertFalse(original & packet)
+        self.assertEqual(G.NAMES, original | packet)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 42)
+        self.assertEqual(len(self.events()), 78)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

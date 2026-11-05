@@ -21,8 +21,8 @@ deployment acceptance.
 ## November 5 mobile imported-entry source increment
 
 The original August 19 Router/custom choice for each hop now has a first mobile
-reverse direction: imported SS2022 or Hysteria2 entry → independently paired
-Router Shadowsocks or Hysteria2 final, Local execution. The source preserves
+reverse direction: imported SS2022, Hysteria2, WireGuard or AmneziaWG entry →
+independently paired Router Shadowsocks or Hysteria2 final, Local execution. The source preserves
 distinct public-entry
 and private-final proof, independent Start Layers, complete captured policy,
 selected DNS, typed measurements/MTU, permission ownership and exact restoration.
@@ -30,16 +30,26 @@ See [MOBILE-IMPORTED-ROUTER-PATH.md](MOBILE-IMPORTED-ROUTER-PATH.md) for source 
 mandatory actual graph/peer gates and the separation of local evidence from
 Apple/device/package acceptance.
 
-The Hysteria2-final increment retains original TLS/password/certificate capture,
-all independent Start Layers, final-mode permission recreation, exact usage
-receipts and source-bound final transport selection. Forty shared and forty
-actual Android-produced source graphs pass pinned native constructor, parser
-and MTU planning. Real encrypted peers pass 27 verdicts across both entry/final
-families, including an AES-wrapped Hysteria2 final, and reject wrong credentials,
-certificate identity/trust, route, selected DNS and private identity. Actual
-profile persistence and Product selection callbacks pass 771 checks across 81
-cases. Apple-generated graphs remain a mandatory native CI gate; local source
-and Go checks do not substitute for Swift or physical tunnel execution.
+The Hysteria2 final retains original TLS/password/certificate capture and its
+same-node raw SS outer-layer assets. The packet-entry increment preserves exact
+WG/AWG endpoint credentials, MTU and obfuscation parameters in the native graph.
+The original forty proxy graphs plus thirty-six packet graphs pass shared and
+actual Android constructor/parser/MTU verification: 154 exact verdicts. Shared
+race tests pass 143 verdicts; actual encrypted peers pass 42, including fourteen
+new packet scenarios plus their parent. Negative controls reject wrong keys,
+PSK, AWG parameters, certificate identity/trust, route, selected DNS, private
+identity and public-entry identity. Profile persistence and Product callbacks
+pass 771/81 existing checks/cases plus 437/47 for each packet protocol. Home,
+startup and permission retain ordinary packet labels without changing the
+paired raw-mode catalogue. Apple-generated graphs remain a mandatory native CI
+gate; local source and Go checks do not substitute for Swift or physical tunnels.
+
+The packet-native test exposed a pre-existing stack delivery/teardown race;
+`d7bff4ae` fixes and causally tests that separate runtime issue. Profile source
+rollback (`799a6f30`) and forward apply (`5c06b361`) retain exact byte ownership
+under the shared node lock. Their strict audit (`ed717fc4`) preserves existing
+behavior gates. These source fixes do not establish complete preference-owner
+transaction behavior, which remains its own active implementation unit.
 
 The remaining graph ledger is unchanged in scope: other imported protocols,
 other paired final transports, Server/Compare and complete requested-platform

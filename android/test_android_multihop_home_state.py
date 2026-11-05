@@ -94,8 +94,8 @@ public final class MultihopHomeHarness {
  static void check(boolean value,String message){checks++;if(!value)throw new AssertionError(message);}
  static String base(String mode){
   switch(mode){
-   case"wg":case"wg-pq":case"max-tls-wg":case"max-quic-wg":return"wg";
-   case"awg2-fast":case"awg2-strong":case"awg2-pq":case"max-tls-awg":case"max-quic-awg":return"awg";
+   case"wireguard":case"wg":case"wg-pq":case"max-tls-wg":case"max-quic-wg":return"wg";
+   case"amneziawg":case"awg2-fast":case"awg2-strong":case"awg2-pq":case"max-tls-awg":case"max-quic-awg":return"awg";
    default:return"libbox";
   }
  }
@@ -328,6 +328,10 @@ public final class MultihopHomeHarness {
    check(supported.contains(required),"shipping captured catalog lost required entry "+required);
   }
   for(String entry:supported)for(String exit:supported)try{pair(entry,exit);}catch(Throwable error){failures.add(entry+" -> "+exit+": "+error);}
+  for(String packet:List.of("wireguard","amneziawg")){
+   check(!NativeSingBoxController.nativeMultihopEntry(packet)&&!supported.contains(packet),"ordinary packet label entered private profile catalogue");
+   for(String exit:List.of("shadowsocks","hysteria2"))try{pair(packet,exit);}catch(Throwable error){failures.add(packet+" -> "+exit+": "+error);}
+  }
   tor("direct");for(String entry:supported)tor(entry);
   externalPolicy("direct");for(String entry:supported)externalPolicy(entry);
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","http"},{"expected_external_ip","9.9.9.9"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})externalStale(change[0],change[1]);

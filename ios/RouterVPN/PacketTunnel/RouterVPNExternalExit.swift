@@ -161,12 +161,17 @@ enum RouterVPNExternalExitBuilder {
     static func importedRouterSource(profile: [String: Any]) throws -> (config: String, capture: String) {
         guard profile["node_kind"] as? String == "external", profile["multihop_enabled"] as? Bool != true,
               let imported = profile["external"] as? [String: Any],
-              let kind = imported["protocol"] as? String, ["shadowsocks", "hysteria2"].contains(kind),
+              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(kind),
               let id = profile["id"] as? String, !id.isEmpty else { throw error("Imported Router entry lost its original standalone source.") }
         try IOSStartLayer.validateExternal(profile: profile)
         let expected = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
-        let outbound = try customExit(external: imported, protocolName: kind)
-        let data = try rawConfiguration(external: imported, protocolName: kind, endpoints: [], outbounds: [outbound])
+        let transport = try customExit(external: imported, protocolName: kind)
+        // Packet entries keep their captured native endpoint. Only the final
+        // compiler adds the single VPN TUN and selects payload DNS.
+        let packet = ["wireguard", "amneziawg"].contains(kind)
+        let data = try rawConfiguration(external: imported, protocolName: kind,
+                                        endpoints: packet ? [transport] : [],
+                                        outbounds: packet ? [] : [transport])
         var original = profile
         let bootstrap = original.removeValue(forKey: "dns_bootstrap")
         var capture: [String: Any] = ["schema": 1, "exit_id": id, "protocol": kind,
