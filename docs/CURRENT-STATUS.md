@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 [The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
 original-source reconciliation, individually verified pushes through
-`0f46cb02`, the integrated observation change in `a94cde9d`, and the installed
+`4adff97f`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
 The lost November 4 patch was reconstructed and tested against current
 source; its old test counts were not reused as new evidence.
@@ -59,6 +59,13 @@ installed-runner checks pass. Nine mandatory namespace cases extend the
 inventory from 420 to 429; those privileged cases have not executed locally.
 Other graph families, layered Linux paths, Server/Compare and device acceptance
 retain their own unfinished requirements.
+
+The Windows SOCKS missing-grant control now observes original I/O and descriptor
+closure before proof completion, which correctly remains blocked by the retained
+permit. Exact source identity and independent WFP filter readback are required;
+timeouts and failed observations cannot stand in for the defect. All 36 focused
+runner tests pass, including 76 portable Go race verdicts. Production socket
+policy and deadlines are unchanged. Actual Windows WFP execution remains CI work.
 
 The real loopback comparison fixture now gives both candidate responses a
 measurable interval. Windows AMD64 and ARM64 had each rejected a zero-time

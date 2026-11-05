@@ -46,6 +46,8 @@ func desktopSocketSOCKSControlMatches(a,b grant)bool{return a==b}
 type native struct {closed bool}
 func (n *native) SyscallConn()(syscall.RawConn,error){if n.closed{return nil,net.ErrClosed};return nil,nil}
 type socket struct {mu sync.Mutex;closed bool}
+type socketConnection struct {io *socket}
+type socketRecord struct {creation creation;original,returned *native;connect *socketConnection}
 type engine struct {handle uintptr;closed atomic.Bool;done chan struct{}}
 func (e *engine) Absent(key string)error{if e!=observed.reader{return errors.New("read used production engine")};observed.filters=append(observed.filters,key);return observed.filterErr}
 func (e *engine) Assert(rule desktopWFPRule)error{
@@ -66,7 +68,7 @@ func (*api) endpointProperties(handle uintptr,id uint64)(int,[]byte,error){
 type DesktopSocketCapture struct {SessionID,SourceSHA256,NetworkID string}
 type DesktopSocketKernelOwner struct {Kind,IdentitySHA256 string;Generation uint64;ProcessID uint32}
 const DesktopSocketReadbackAge=3*time.Second
-type DesktopWindowsSocketIdentity struct {ctx context.Context;cancel context.CancelFunc;gate chan struct{};closed bool;sockets map[string]bool;engine uintptr;api *api;capture DesktopSocketCapture;mu sync.Mutex;owner atomic.Pointer[DesktopSocketKernelOwner];current,closing atomic.Bool;observed atomic.Int64}
+type DesktopWindowsSocketIdentity struct {ctx context.Context;cancel context.CancelFunc;gate chan struct{};closed bool;sockets map[string]*socketRecord;engine uintptr;api *api;capture DesktopSocketCapture;mu sync.Mutex;owner atomic.Pointer[DesktopSocketKernelOwner];current,closing atomic.Bool;observed atomic.Int64}
 type DesktopWindowsSocketPolicy struct {
  ctx context.Context;gate chan struct{};retired atomic.Bool
  capture,owner string;metadata,fixtureScope []byte
@@ -104,7 +106,7 @@ func fixture(closed bool)*DesktopWindowsNodeSocketRetirement{
  observed.openErr=nil;observed.closeErr=nil;observed.activeErr=nil;observed.retainedErr=nil;observed.retained=0;observed.filters=nil;observed.endpoints=nil;observed.entered=nil;observed.release=nil
  p:=&DesktopWindowsSocketPolicy{ctx:context.Background(),gate:make(chan struct{},1),capture:"source",owner:"owner",metadata:[]byte("exact baseline"),fixtureScope:[]byte("original executable"),closed:closed,locked:!closed,installed:true,baselineDone:closed,permits:map[string]*permit{},bindings:map[string]creation{},baselineEngine:&engine{}}
  p.gate<-struct{}{};p.options.KillSwitchPolicy="always"
- p.identity=&DesktopWindowsSocketIdentity{ctx:context.Background(),gate:make(chan struct{},1),closed:closed,sockets:map[string]bool{},api:&api{}}
+ p.identity=&DesktopWindowsSocketIdentity{ctx:context.Background(),gate:make(chan struct{},1),closed:closed,sockets:map[string]*socketRecord{},api:&api{}}
  p.identity.gate<-struct{}{}
  if !closed{p.baselineEngine.handle=11;p.identity.engine=12}
  r:=&DesktopWindowsNodeSocketRetirement{policy:p,identity:p.identity,target:target{p.capture,p.options.KillSwitchPolicy,append([]byte(nil),p.metadata...)},scope:append([]byte(nil),p.fixtureScope...),creation:creation{"socket"},rules:[]string{"captured-filter"},endpoints:[]uint64{91},original:&native{true},returned:&native{true},io:&socket{closed:true}}
@@ -134,7 +136,7 @@ func TestRetirementRejectsUnprovedAbsence(t *testing.T){
  "grant":func(r *DesktopWindowsNodeSocketRetirement){r.policy.permits["original"]=&permit{r.grant}},
  "native baseline mismatch":func(r *DesktopWindowsNodeSocketRetirement){observed.retainedErr=errors.New("kernel baseline replaced")},
  "unclosed identity":func(r *DesktopWindowsNodeSocketRetirement){r.identity.closed=false},
- "source record":func(r *DesktopWindowsNodeSocketRetirement){r.identity.sockets["socket"]=true},
+ "source record":func(r *DesktopWindowsNodeSocketRetirement){r.identity.sockets["socket"]=&socketRecord{}},
  "original descriptor":func(r *DesktopWindowsNodeSocketRetirement){r.original.closed=false},
  "returned descriptor":func(r *DesktopWindowsNodeSocketRetirement){r.returned.closed=false},
  "native IO":func(r *DesktopWindowsNodeSocketRetirement){r.io.closed=false},
@@ -166,6 +168,39 @@ func TestCompletedRefusalClassifiesExactRetainedGrant(t *testing.T){
  r=grantFixture();delete(r.policy.permits,desktopWindowsPermitKey(r.grant))
  retained,err=r.RetainedGrant(context.Background())
  if retained||err!=nil||len(observed.asserted)!=0{t.Fatal("removed grant misclassified",retained,err)}
+}
+func joinedIOGrantFixture()*DesktopWindowsNodeSocketRetirement{
+ r:=grantFixture();r.original.closed=false
+ r.identity.sockets[r.creation.SocketID]=&socketRecord{r.creation,r.original,r.returned,&socketConnection{r.io}}
+ return r
+}
+func TestJoinedIOClassifiesRetainedGrantBeforeProofCanComplete(t *testing.T){
+ r:=joinedIOGrantFixture()
+ retained,err:=r.RetainedGrantAfterIOClose(context.Background())
+ if !retained||err!=nil{t.Fatal("joined native I/O did not expose exact retained grant before proof completion",retained,err)}
+ if r.original.closed||!r.returned.closed||!r.io.closed||len(observed.asserted)!=1||observed.asserted[0]!=observed.originalRule||!observed.reader.closed.Load(){t.Fatal("classification changed original ownership or omitted independent exact filter read")}
+ for _,name:=range []string{"native-io-pending","returned-descriptor-pending","grant-removed"}{t.Run(name,func(t *testing.T){
+  r:=joinedIOGrantFixture()
+  switch name{case "native-io-pending":r.io.closed=false;case "returned-descriptor-pending":r.returned.closed=false;case "grant-removed":delete(r.policy.permits,r.grant.SocketID)}
+  retained,err:=r.RetainedGrantAfterIOClose(context.Background())
+  if retained||err!=nil||len(observed.asserted)!=0{t.Fatal("unfinished native I/O or absent grant became a revocation defect",retained,err)}
+ })}
+}
+func TestJoinedIOGrantRejectsChangedOriginalOwnership(t *testing.T){
+ changes:=map[string]func(*DesktopWindowsNodeSocketRetirement){
+ "missing-source":func(r *DesktopWindowsNodeSocketRetirement){delete(r.identity.sockets,r.creation.SocketID)},
+ "changed-creation":func(r *DesktopWindowsNodeSocketRetirement){r.identity.sockets[r.creation.SocketID].creation=creation{"replacement"}},
+ "changed-original":func(r *DesktopWindowsNodeSocketRetirement){r.identity.sockets[r.creation.SocketID].original=&native{}},
+ "changed-returned":func(r *DesktopWindowsNodeSocketRetirement){r.identity.sockets[r.creation.SocketID].returned=&native{true}},
+ "changed-io":func(r *DesktopWindowsNodeSocketRetirement){r.identity.sockets[r.creation.SocketID].connect=&socketConnection{&socket{closed:true}}},
+ "missing-connection":func(r *DesktopWindowsNodeSocketRetirement){r.identity.sockets[r.creation.SocketID].connect=nil},
+ "original-already-closed":func(r *DesktopWindowsNodeSocketRetirement){r.original.closed=true},
+ "filter-read-failed":func(r *DesktopWindowsNodeSocketRetirement){observed.filterErr=errors.New("original filter not proved")},
+ }
+ for name,change:=range changes{t.Run(name,func(t *testing.T){r:=joinedIOGrantFixture();change(r);retained,err:=r.RetainedGrantAfterIOClose(context.Background());if retained&&err==nil||err==nil{t.Fatal("changed native ownership classified as exact revocation defect",retained,err)}})}
+ r:=joinedIOGrantFixture();ctx,cancel:=context.WithCancel(context.Background());cancel()
+ retained,err:=r.RetainedGrantAfterIOClose(ctx)
+ if retained||!errors.Is(err,context.Canceled)||len(observed.asserted)!=0{t.Fatal("joined-I/O observation renewed canceled caller",retained,err)}
 }
 func TestRetainedGrantRejectsUnrelatedOrFailedEvidence(t *testing.T){
  tests:=map[string]func(*DesktopWindowsNodeSocketRetirement){
@@ -229,6 +264,8 @@ def execute(observer=OBSERVER, identity_path=None):
     selected = [function(source, 'func (r *DesktopWindowsNodeSocketRetirement) originalClosed()'),
                 function(source, 'func (r *DesktopWindowsNodeSocketRetirement) RequireRetired('),
                 function(source, 'func (r *DesktopWindowsNodeSocketRetirement) RetainedGrant('),
+                function(source, 'func (r *DesktopWindowsNodeSocketRetirement) RetainedGrantAfterIOClose('),
+                function(source, 'func (r *DesktopWindowsNodeSocketRetirement) retainedGrant('),
                 function(policy, 'func desktopWindowsPolicyCall['),
                 function(identity, 'func (p *DesktopWindowsSocketIdentity) call('),
                 function(identity, 'func desktopWindowsIdentityContextError('),

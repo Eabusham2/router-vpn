@@ -392,6 +392,18 @@ func (r *DesktopWindowsNodeSocketRetirement) ReadyToRelease(ctx context.Context)
 // independent native filter readback. An observation error cannot witness the
 // missing-revocation defect, and this reader grants no retirement authority.
 func (r *DesktopWindowsNodeSocketRetirement) RetainedGrant(ctx context.Context) (bool, error) {
+	return r.retainedGrant(ctx, false)
+}
+
+// A skipped revoke cannot complete the proof: the unchanged ReleaseSocket
+// refuses its still-live permit. Observe that defect only after the actual
+// imported I/O and returned descriptor close, which occur after broker revoke
+// acknowledgement. An ordinary live grant before that boundary is not a defect.
+func (r *DesktopWindowsNodeSocketRetirement) RetainedGrantAfterIOClose(ctx context.Context) (bool, error) {
+	return r.retainedGrant(ctx, true)
+}
+
+func (r *DesktopWindowsNodeSocketRetirement) retainedGrant(ctx context.Context, requireIOClose bool) (bool, error) {
 	if r == nil || ctx == nil || len(r.originalRules) == 0 {
 		return false, errors.New("socket retirement lacks its original grant observation")
 	}
@@ -421,6 +433,38 @@ func (r *DesktopWindowsNodeSocketRetirement) RetainedGrant(ctx context.Context) 
 		creation, exists := p.bindings[r.creation.SocketID]
 		if !exists || creation != r.creation || !desktopSocketSOCKSControlMatches(permit.request, r.grant) {
 			return false, errors.New("socket retirement observation lost its original grant binding")
+		}
+		if requireIOClose {
+			if r.original == nil || r.returned == nil || r.io == nil {
+				return false, errors.New("retained grant observation omitted original native I/O")
+			}
+			joined := false
+			err := r.identity.call(ctx, true, func() error {
+				record := r.identity.sockets[r.creation.SocketID]
+				if record == nil || record.creation != r.creation || record.original != r.original || record.returned != r.returned || record.connect == nil || record.connect.io != r.io {
+					return errors.New("retained grant observation lost original native I/O ownership")
+				}
+				_, returnedErr := r.returned.SyscallConn()
+				if returnedErr != nil && !errors.Is(returnedErr, net.ErrClosed) {
+					return returnedErr
+				}
+				r.io.mu.Lock()
+				closed := r.io.closed
+				r.io.mu.Unlock()
+				if !errors.Is(returnedErr, net.ErrClosed) || !closed {
+					return nil
+				}
+				// The actual source still retains this original because the
+				// permit prevents ReleaseSocket from reaching descriptor close.
+				if _, err := r.original.SyscallConn(); err != nil {
+					return errors.Join(err, errors.New("retained grant lost its original source descriptor"))
+				}
+				joined = true
+				return nil
+			})
+			if err != nil || !joined {
+				return false, err
+			}
 		}
 		reader, err := desktopWFPOpen(false)
 		if reader != nil {

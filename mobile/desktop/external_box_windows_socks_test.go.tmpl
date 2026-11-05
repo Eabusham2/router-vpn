@@ -934,6 +934,18 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 					if ready {
 						break
 					}
+					// Missing revoke leaves ReleaseSocket correctly blocked, so
+					// the proof cannot complete. Diagnose only after actual native
+					// I/O/returned-descriptor close and independent exact WFP readback.
+					observeCtx, stopObserve := context.WithDeadline(context.Background(), deadline)
+					retainedAfterIO, observationErr := nativeRetirement.RetainedGrantAfterIOClose(observeCtx)
+					stopObserve()
+					if observationErr != nil {
+						t.Fatal("native retirement grant observation failed", observationErr)
+					}
+					if retainedAfterIO {
+						t.Fatal("joined native I/O retained its original grant and exact WFP filters")
+					}
 					select {
 					case <-done:
 						// Classify the original state after completion, within this

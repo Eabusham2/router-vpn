@@ -333,6 +333,17 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
 
 
 class OrdinarySOCKSScope(unittest.TestCase):
+    def test_retained_grant_observation_precedes_impossible_proof_completion(self):
+        source = (ROOT / 'mobile/desktop/external_box_windows_socks_test.go.tmpl').read_text()
+        start = source.index('ready, failure := nativeRetirement.ReadyToRelease(probeCtx)')
+        joined = source.index('nativeRetirement.RetainedGrantAfterIOClose(observeCtx)', start)
+        witness = source.index('joined native I/O retained its original grant and exact WFP filters', joined)
+        completion = source.index('case <-done:', start)
+        self.assertLess(joined, witness)
+        self.assertLess(witness, completion)
+        self.assertIn('context.WithDeadline(context.Background(), deadline)', source[start:joined])
+        self.assertIn('nativeRetirement.ReleaseHeldEndpoint()', source[completion:])
+
     def test_exact_retirement_observer_after_full_close_and_during_timeout(self):
         subprocess.run([sys.executable, str(ROOT / 'deploy/test_windows_socket_retirement_observer.py')],
                        check=True, timeout=100)
@@ -437,7 +448,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
             "missing-durable-intent": ("always", "actual SOCKS source skipped its durable WFP intent"),
             "missing-socket-release": ("reject/relay-other-private", "native retirement bypassed exact socket release or grant join"),
             "missing-endpoint-readback": ("reject/relay-other-private", "native retirement bypassed independent endpoint readback"),
-            "missing-grant-removal": ("reject/relay-other-private", "completed native refusal retained its original grant and exact WFP filters"),
+            "missing-grant-removal": ("reject/relay-other-private", "joined native I/O retained its original grant and exact WFP filters"),
         }
 
         def run(command, **kwargs):
@@ -477,9 +488,10 @@ class OrdinarySOCKSScope(unittest.TestCase):
             if fault == "witness":
                 return 1, output.replace(witness, "unrelated failure")
             if label == "missing-grant-removal" and fault in (
-                    "grant-old-completion", "grant-old-timeout", "grant-observation-error"):
+                    "grant-old-completion", "grant-completed-only", "grant-old-timeout", "grant-observation-error"):
                 refused = {
                     "grant-old-completion": "native retirement bypassed exact socket release or grant join",
+                    "grant-completed-only": "completed native refusal retained its original grant and exact WFP filters",
                     "grant-old-timeout": "native retirement did not reach exact socket release and grant join",
                     "grant-observation-error": "native retirement grant observation failed: native read refused",
                 }[fault]
@@ -511,6 +523,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
                                ("missing-socket-release", "exact defect"), ("missing-endpoint-readback", "exact defect"),
                                ("missing-grant-removal", "exact defect"),
                                ("grant-old-completion", "exact defect"), ("grant-old-timeout", "exact defect"),
+                               ("grant-completed-only", "exact defect"),
                                ("grant-observation-error", "exact defect"),
                                ("timeout", "exact defect"), ("witness", "exact defect"),
                                ("prefixed-failure", "exact defect"), ("duplicate-failure", "exact defect"),

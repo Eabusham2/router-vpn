@@ -1192,6 +1192,31 @@ selected verdicts. These local results do not replace the actual Windows
 AMD64/ARM64 reruns; the original Windows failures were not reproduced as a
 local clock-resolution experiment.
 
+## Windows retained-grant control observes the actual I/O boundary
+
+At `b88449dc`, Windows physical-bootstrap job `127059380936` passed the
+production SOCKS suite, including `reject/relay-other-private` in 3.62s, and
+rejected the first five deliberate defects. Its sixth control skipped grant
+removal. The unchanged production `ReleaseSocket` correctly refused the
+still-live permit, so proof completion could never precede the fixture's old
+retained-grant check. The resulting timeout was not accepted as defect evidence.
+
+The fixture now observes that specific defect after the original imported I/O
+and returned descriptor have closed. It requires the exact original source
+record, descriptor and I/O identities, a still-retained original source handle,
+and independent native readback of the exact original WFP filters. Only that
+joined-I/O/retained-grant combination produces the required failure witness.
+Pending I/O, replaced ownership, failed readback, cancellation and generic
+timeouts remain rejected. The positive held-endpoint release test, independent
+endpoint-absence requirement, production socket code and deadlines are unchanged.
+
+An isolated `88be1f34` tree plus only these five fixture/runner files passes all
+36 Python runner tests in 10.463s. The exact extracted observer methods and real
+call gates pass 76 named Go race verdicts across 12 parents; the existing
+publication-mutex causal control still fails at its required assertion. These
+portable tests double OS readback. Actual Windows WFP positive execution and all
+six native defect controls remain mandatory CI evidence, not local acceptance.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |

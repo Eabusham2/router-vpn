@@ -330,7 +330,7 @@ def execute_external_socks(source, workspace, build, captured):
             ("missing-durable-intent", "missing-durable-intent", "always", "actual SOCKS source skipped its durable WFP intent"),
             ("missing-socket-release", "missing-socks-release", "reject/relay-other-private", "native retirement bypassed exact socket release or grant join"),
             ("missing-endpoint-readback", "missing-socks-readback", "reject/relay-other-private", "native retirement bypassed independent endpoint readback"),
-            ("missing-grant-removal", "missing-socks-grant-removal", "reject/relay-other-private", "completed native refusal retained its original grant and exact WFP filters")):
+            ("missing-grant-removal", "missing-socks-grant-removal", "reject/relay-other-private", "joined native I/O retained its original grant and exact WFP filters")):
         changed = workspace / ("external-socks-" + label)
         changed.mkdir()
         selected = external_overlay(source, changed, mutation)
