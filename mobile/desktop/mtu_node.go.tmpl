@@ -688,7 +688,16 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 			heartbeat = time.Now()
 			next := owner.record
 			next.Heartbeat = heartbeat.UnixMilli()
-			next.NetworkReceipt, err = owner.DesktopNetworkReceiptContext(observe)
+			// A heartbeat is one bounded observation of the retained graph,
+			// not its lifetime. Carry the native dump's existing two-second
+			// bound through the entire receipt, including every owner check;
+			// lower readers must not renew it or outlive the original Stop.
+			heartbeatContext, stopHeartbeat := context.WithTimeout(observe, 2*time.Second)
+			next.NetworkReceipt, err = owner.DesktopNetworkReceiptContext(heartbeatContext)
+			if err == nil {
+				err = heartbeatContext.Err()
+			}
+			stopHeartbeat()
 			if err != nil {
 				// The owned Stop watcher can cancel the graph while native
 				// readback is in flight. Join that requested shutdown without

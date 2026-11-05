@@ -826,6 +826,13 @@ func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopMTUInterfaceContext(ctx
 	return "router-vpn", 17, 1420, nil
 }
 func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopNetworkReceiptContext(ctx context.Context) (string, error) {
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		return "", errors.New("native receipt requires its operation deadline")
+	}
+	if time.Until(deadline) > 2*time.Second {
+		return "", errors.New("heartbeat extended its original native observation bound")
+	}
 	f.once.Do(func() { close(f.entered) })
 	select {
 	case <-ctx.Done():

@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -40,6 +41,9 @@ class NativeRetirementVerdicts(unittest.TestCase):
 
 
 class NativeObservationVerdicts(unittest.TestCase):
+    def test_actual_heartbeat_caller_budget_and_original_stop(self):
+        subprocess.run([sys.executable, str(ROOT/'deploy/test_node_heartbeat_context.py')], check=True, timeout=190)
+
     def test_bounded_native_observations_require_each_selected_verdict(self):
         identity = "TestRouterVPNNativeIdentityObservationPreservesHealthyOwner"
         command = ["TestRouterVPNDesktopNetworkProjectionContextPreservesObservationErrors",
