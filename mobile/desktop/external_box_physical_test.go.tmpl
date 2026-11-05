@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
@@ -22,6 +23,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -427,23 +429,70 @@ func TestRouterVPNDesktopExternalPhysicalBoxMTUReadbackKeepsGuardAndDerivedPolic
 	if f.source.binds != 2 || f.source.retires != 1 {
 		t.Fatal("MTU rollback bypassed exact physical retirement/rebind")
 	}
-	if err := binding.adoptTUN(context.Background(), f.tun); err == nil {
-		t.Fatal("arbitrary TUN adoption bypassed owned retirement")
+	// An attached original may be read again, but it cannot bind twice or
+	// replace the captured reader merely because its visible fields match.
+	if err := binding.adoptTUN(context.Background(), f.tun); err != nil || f.source.binds != 2 || f.source.retires != 1 {
+		t.Fatal("idempotent adoption lost exact attached readback or rebound physical ownership", err)
 	}
-	if err := binding.retireTUN(context.Background(), f.tun); err != nil {
+	foreign := &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, "tun-in"), name: f.tun.name, index: f.tun.index, mtu: f.tun.mtu}
+	if err := binding.adoptTUN(context.Background(), foreign); err == nil || binding.inbound != f.tun || f.source.binds != 2 {
+		t.Fatal("foreign TUN inherited attached reader ownership", err)
+	}
+	for _, mutation := range []string{"name", "index", "mtu"} {
+		f.tun.mu.Lock()
+		name, index, mtu := f.tun.name, f.tun.index, f.tun.mtu
+		switch mutation {
+		case "name":
+			f.tun.name += "-replaced"
+		case "index":
+			f.tun.index++
+		case "mtu":
+			f.tun.mtu++
+		}
+		f.tun.mu.Unlock()
+		failure := binding.adoptTUN(context.Background(), f.tun)
+		f.tun.mu.Lock()
+		f.tun.name, f.tun.index, f.tun.mtu = name, index, mtu
+		f.tun.mu.Unlock()
+		if failure == nil || f.source.binds != 2 || f.source.retires != 1 {
+			t.Fatal("idempotent adoption bypassed original native readback", mutation, failure)
+		}
+	}
+	// Reserve one operation's cleanup authority before retirement. Work
+	// cancellation cannot observe or mutate, even when rollback is still owed.
+	original, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Second, time.Second)
+	if err != nil {
 		t.Fatal(err)
 	}
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := binding.adoptTUN(cancelled, f.tun); err != nil || !binding.validTUN(f.tun) || !f.network.Current() || f.source.binds != 3 {
-		t.Fatal("cancelled MTU operation destroyed its valid retained rollback reader", err)
+	defer finish()
+	work, cancel := context.WithCancel(original)
+	defer cancel()
+	if err := binding.retireTUN(work, f.tun); err != nil {
+		t.Fatal(err)
 	}
-	if err := binding.retireTUN(context.Background(), f.tun); err != nil {
+	cancel()
+	if err := binding.adoptTUN(work, f.tun); !errors.Is(err, context.Canceled) || !binding.detached || f.source.binds != 2 || f.source.retires != 2 || !f.network.Current() {
+		t.Fatal("cancelled work observed or rebound the retained rollback reader", err)
+	}
+	if _, _, _, err := binding.readbackContext(work, f.tun); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled work obtained a TUN observation", err)
+	}
+	cleanup, err := mobilemtu.OperationCleanupContext(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := binding.adoptTUN(cleanup, f.tun); err != nil || !binding.validTUN(f.tun) || !f.network.Current() || f.source.binds != 3 || f.source.retires != 2 {
+		t.Fatal("original cleanup lost its exact retained rollback reader", err)
+	}
+	if err := binding.adoptTUN(work, f.tun); !errors.Is(err, context.Canceled) || f.source.binds != 3 {
+		t.Fatal("attached rollback reader revived cancelled work", err)
+	}
+	if err := binding.retireTUN(cleanup, f.tun); err != nil {
 		t.Fatal(err)
 	}
 	proof.Cancel()
-	if err := binding.adoptTUN(cancelled, f.tun); err == nil {
-		t.Fatal("real physical-generation cancellation admitted a stale rollback reader")
+	if err := binding.adoptTUN(cleanup, f.tun); err == nil || f.source.binds != 3 || f.source.retires != 3 || f.network.Current() {
+		t.Fatal("real physical-generation cancellation admitted a stale rollback reader", err)
 	}
 	if _, _, err := binding.mtuAuthority(f.policy.OriginalPolicy().Config(), string(authority)); err == nil {
 		t.Fatal("retired physical proof retained derived MTU authority")

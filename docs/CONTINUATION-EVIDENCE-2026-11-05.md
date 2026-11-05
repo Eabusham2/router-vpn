@@ -1217,6 +1217,32 @@ publication-mutex causal control still fails at its required assertion. These
 portable tests double OS readback. Actual Windows WFP positive execution and all
 six native defect controls remain mandatory CI evidence, not local acceptance.
 
+## MTU fixture retains original work and cleanup authority
+
+The actual physical-Box fixture still expected a second observation of its
+already-attached original TUN to fail, and expected canceled work to rebind a
+retained reader. Current production instead permits idempotent observation of
+that exact attached reader and requires a separate original cleanup context
+for rollback after work cancellation. The old assertion failed in Windows
+physical-bootstrap job `127059380740` at `b88449dc`.
+
+The fixture now checks idempotent readback without a second physical bind,
+rejects a foreign reader with identical visible fields, and rejects changed
+name, index or MTU. It reserves the original operation's cleanup authority
+before retirement. Canceled work must neither observe nor adopt the reader;
+only that original cleanup context may rebind it. Actual network-generation
+cancellation still rejects both adoption and derived MTU authority. No
+production admission, rollback, timeout or protection code is changed.
+
+An isolated `88be1f34` tree plus only the changed fixture completed ordinary
+pinned native preparation, module verification and compilation of the actual
+Box test. Execution then failed at native construction with `create netlink
+socket: operation not permitted`, before the new assertions and before the
+unchanged rejection/cancellation cases. No local behavioral pass is claimed.
+The two proposed production defect controls were not run because this constructor
+block would not establish their required assertions. Actual native CI must
+execute this fixture and its retained negative cases on the published source.
+
 ## Remaining requirement/evidence ledger
 
 | Requirement authority | Current implementation/evidence | Actual next gap |
