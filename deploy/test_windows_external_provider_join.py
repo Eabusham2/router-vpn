@@ -2,6 +2,7 @@
 """Run the exact native provider drain helper against real bounded child pipes."""
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -68,6 +69,196 @@ func TestBoundedDiagnostics(t *testing.T){
             subprocess.run(
                 [str(binary), "-test.count=1", "-test.timeout=15s", "-test.v"],
                 cwd=path, env=env, check=True, timeout=60)
+
+
+
+
+class OpenVPNIPC(unittest.TestCase):
+    def test_original_serialized_exchange(self):
+        raw = (ROOT / "mobile/desktop/external_box_openvpn_reference_test.go.tmpl").read_text()
+        records = raw[raw.index("type desktopOpenVPNCompositionPeerInput struct {"):raw.index("func desktopOpenVPNCompositionProviderBox(")]
+        helper = raw[raw.index("type desktopOpenVPNCompositionProcess struct {"):raw.index("type desktopOpenVPNCompositionFixture struct {")]
+        test = r'''
+func TestOpenVPNIPCChild(t *testing.T) {
+ mode := os.Getenv("ROUTERVPN_IPC_CHILD")
+ if mode == "" { return }
+ fmt.Fprintln(os.Stderr, "ready")
+ if mode == "write-blocked" { time.Sleep(30*time.Second); return }
+ reader := json.NewDecoder(os.Stdin)
+ count := int32(0)
+ for {
+  var request json.RawMessage
+  if err := reader.Decode(&request); err != nil {
+   if errors.Is(err, io.EOF) { return }
+   t.Fatal("child input failed")
+  }
+  fmt.Fprintln(os.Stderr, "entered")
+  switch mode {
+  case "read-blocked": time.Sleep(30*time.Second); return
+  case "slow":
+   if count == 0 {
+    for {
+     if _,err:=os.Stat(os.Getenv("ROUTERVPN_IPC_RELEASE"));err==nil{break}
+     time.Sleep(time.Millisecond)
+    }
+   }
+  case "malformed": fmt.Fprintln(os.Stdout, "{}"); continue
+  case "oversized": fmt.Fprintln(os.Stdout, strings.Repeat("x", (16<<10)+2)); continue
+  }
+  count++
+  reply := desktopOpenVPNCompositionPeerReply{Schema:1, Network:"udp", Remote:"127.0.0.1:12001", UnavailableRemote:"127.0.0.1:12002", AppID:[]byte{1,2}, PublicAttempts:count}
+  if mode == "changed" { reply.Remote = "127.0.0.1:12003" }
+  if err := json.NewEncoder(os.Stdout).Encode(reply); err != nil { return }
+ }
+}
+func ipcNotice(t *testing.T, reader *bufio.Reader, file io.Closer, wanted string) {
+ t.Helper()
+ result := make(chan string, 1)
+ go func() { line, _ := reader.ReadString('\n'); result <- strings.TrimSpace(line) }()
+ select {
+ case value := <-result:
+  if value != wanted { t.Fatal("child phase changed") }
+ case <-time.After(3*time.Second):
+  _ = file.Close()
+  select { case <-result: case <-time.After(time.Second): t.Error("notice reader unjoined") }
+  t.Fatal("child phase missing")
+ }
+}
+func ipcProcess(t *testing.T, mode string) (*desktopOpenVPNCompositionProcess, *bufio.Reader, io.Closer) {
+ t.Helper()
+ ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+ p := &desktopOpenVPNCompositionProcess{address:"127.0.0.1", cancel:cancel, done:make(chan struct{}), permit:make(chan struct{},1), closeDone:make(chan struct{})}
+ p.permit <- struct{}{}
+ p.command = exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOpenVPNIPCChild$")
+ p.command.Env = append(os.Environ(), "ROUTERVPN_IPC_CHILD="+mode, "ROUTERVPN_IPC_RELEASE="+t.TempDir()+"/release", "GORACE=atexit_sleep_ms=0")
+ var err error
+ p.input, err = p.command.StdinPipe()
+ if err != nil { cancel(); t.Fatal(err) }
+ var writer *os.File
+ p.output, writer, err = os.Pipe()
+ if err != nil { cancel(); _=p.input.Close(); t.Fatal(err) }
+ stderr, err := p.command.StderrPipe()
+ if err != nil { cancel(); _=p.input.Close(); _=p.output.Close(); _=writer.Close(); t.Fatal(err) }
+ p.reader = bufio.NewReaderSize(p.output, (16<<10)+1)
+ p.command.Stdout = writer
+ if err := p.command.Start(); err != nil { cancel(); _=p.input.Close(); _=p.output.Close(); _=writer.Close(); _=stderr.Close(); t.Fatal(err) }
+ _ = writer.Close()
+ go func(){ p.waitErr=p.command.Wait(); close(p.done) }()
+ t.Cleanup(func(){ _=p.close(); _=stderr.Close() })
+ notices := bufio.NewReader(stderr)
+ ipcNotice(t,notices,stderr,"ready")
+ return p,notices,stderr
+}
+func ipcJoined(t *testing.T,p *desktopOpenVPNCompositionProcess) {
+ t.Helper()
+ p.mu.Lock(); worker, stopped := p.worker,p.stopped; p.mu.Unlock()
+ if !stopped { t.Fatal("failed exchange did not retire reader") }
+ if worker == nil { t.Fatal("exchange never entered original worker") }
+ select {case <-worker: default: t.Fatal("original IPC worker still running")}
+ select {case <-p.done: default: t.Fatal("original process still running")}
+ original := p.command
+ ctx,cancel := context.WithTimeout(context.Background(),time.Second); defer cancel()
+ if _,err:=p.observeContext(ctx,"stats"); !errors.Is(err,net.ErrClosed) { t.Fatal("retired reader reused",err) }
+ if p.command != original { t.Fatal("original process replaced") }
+ first,second:=p.close(),p.close()
+ if fmt.Sprint(first)!=fmt.Sprint(second) {t.Fatal("close result changed")}
+}
+func TestOpenVPNIPC(t *testing.T) {
+ t.Run("normal-and-idempotent-close",func(t *testing.T){
+  p:=desktopOpenVPNReferenceStart(t,desktopOpenVPNCompositionPeerInput{Schema:1,Network:"udp"},"127.0.0.1",func(ctx context.Context)*exec.Cmd{
+   command:=exec.CommandContext(ctx,os.Args[0],"-test.run=^TestOpenVPNIPCChild$")
+   command.Env=append(os.Environ(),"ROUTERVPN_IPC_CHILD=normal")
+   return command
+  })
+  if p.initial.PublicAttempts!=1 {t.Fatal("initial receipt failed")}
+  if reply:=p.observe(t,"stats");reply.PublicAttempts!=2 {t.Fatal("serialized receipt failed")}
+  if err:=p.close();err!=nil {t.Fatal(err)}
+  if err:=p.close();err!=nil {t.Fatal(err)}
+  ipcJoined(t,p)
+ })
+ t.Run("queued-cancel-preserves-active",func(t *testing.T){
+  p,notices,stderr:=ipcProcess(t,"slow")
+  ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second);defer cancel()
+  result:=make(chan error,1)
+  go func(){reply,err:=p.observeContext(ctx,"stats");if err==nil&&reply.PublicAttempts!=1 {err=errors.New("active reply changed")};result<-err}()
+  ipcNotice(t,notices,stderr,"entered")
+  queued,stop:=context.WithTimeout(context.Background(),50*time.Millisecond);defer stop()
+  if _,err:=p.observeContext(queued,"stats");!errors.Is(err,context.DeadlineExceeded){t.Fatal("queued deadline lost",err)}
+  p.mu.Lock(); stopped:=p.stopped; p.mu.Unlock()
+  if stopped {t.Fatal("queued timeout retired active process")}
+  release:=""
+  for _,value:=range p.command.Env {
+   if strings.HasPrefix(value,"ROUTERVPN_IPC_RELEASE="){release=strings.TrimPrefix(value,"ROUTERVPN_IPC_RELEASE=")}
+  }
+  if release=="" {t.Fatal("original child release missing")}
+  if err:=os.WriteFile(release,[]byte("release"),0600);err!=nil{t.Fatal(err)}
+  if err:=<-result;err!=nil{t.Fatal("active exchange killed",err)}
+  reply,err:=p.observeContext(ctx,"stats")
+  if err!=nil||reply.PublicAttempts!=2{t.Fatal("cancelled waiter wrote or retired original",err)}
+  if err:=p.close();err!=nil{t.Fatal(err)}
+ })
+ t.Run("blocked-read",func(t *testing.T){
+  p,notices,stderr:=ipcProcess(t,"read-blocked")
+  ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel()
+  result:=make(chan error,1)
+  go func(){_,err:=p.observeContext(ctx,"stats");result<-err}()
+  ipcNotice(t,notices,stderr,"entered")
+  if err:=<-result;!errors.Is(err,context.DeadlineExceeded){t.Fatal("read timeout lost",err)}
+  ipcJoined(t,p)
+ })
+ t.Run("blocked-write",func(t *testing.T){
+  p,_,_:=ipcProcess(t,"write-blocked")
+  ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel()
+  _,err:=p.exchange(ctx,map[string]string{"large":strings.Repeat("x",2<<20)})
+  if !errors.Is(err,context.DeadlineExceeded){t.Fatal("write timeout lost",err)}
+  ipcJoined(t,p)
+ })
+ t.Run("active-close",func(t *testing.T){
+  p,notices,stderr:=ipcProcess(t,"read-blocked")
+  ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second);defer cancel()
+  result:=make(chan error,1)
+  go func(){_,err:=p.observeContext(ctx,"stats");result<-err}()
+  ipcNotice(t,notices,stderr,"entered")
+  closed:=make(chan error,1)
+  go func(){closed<-p.close()}()
+  select {case err:=<-result: if err==nil{t.Fatal("active close accepted receipt")};case <-time.After(4*time.Second):t.Fatal("active exchange did not join")}
+  select {case <-closed:case <-time.After(4*time.Second):t.Fatal("active close did not join")}
+  ipcJoined(t,p)
+ })
+ for _,mode:=range []string{"malformed","oversized","changed"}{
+  t.Run(mode,func(t *testing.T){
+   p,_,_:=ipcProcess(t,mode)
+   p.initial=desktopOpenVPNCompositionPeerReply{Schema:1,Network:"udp",Remote:"127.0.0.1:12001",UnavailableRemote:"127.0.0.1:12002",AppID:[]byte{1,2}}
+   ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel()
+   if _,err:=p.observeContext(ctx,"stats");err==nil{t.Fatal("invalid receipt accepted")}
+   ipcJoined(t,p)
+  })
+ }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="routervpn-openvpn-ipc-") as tmp:
+            path = Path(tmp)
+            (path / "go.mod").write_text("module openvpnipc\n\ngo 1.24.13\n")
+            (path / "ipc_test.go").write_text('package openvpnipc\nimport("bufio";"context";"encoding/json";"errors";"fmt";"io";"net";"net/netip";"os";"os/exec";"reflect";"strings";"sync";"testing";"time")\n' + records + helper + test)
+            env = dict(os.environ, GOMAXPROCS="2", GOWORK="off", GOFLAGS="")
+            compiler = shutil.which("go")
+            host_os, host_arch = subprocess.check_output([compiler, "env", "GOHOSTOS", "GOHOSTARCH"], env=env, text=True, timeout=15).split()
+            race = [] if (host_os, host_arch) == ("windows", "arm64") else ["-race"]
+            env.update(GOOS=host_os, GOARCH=host_arch, CGO_ENABLED="1" if race else "0")
+            binary = path / ("openvpn-ipc.test.exe" if host_os == "windows" else "openvpn-ipc.test")
+            print("OpenVPN IPC phase=compile", flush=True)
+            subprocess.run([compiler, "test", "-c", *race, "-p=1", "-o", str(binary), "."],
+                           cwd=path, env=env, check=True, timeout=180)
+            print("OpenVPN IPC phase=execute", flush=True)
+            result = subprocess.run([str(binary), "-test.run=^TestOpenVPNIPC$", "-test.count=1", "-test.timeout=30s", "-test.v"],
+                                    cwd=path, env=env, capture_output=True, text=True, timeout=60)
+            output = result.stdout + result.stderr
+            print(output, end="" if output.endswith("\n") else "\n", flush=True)
+            required = ["TestOpenVPNIPC", *("TestOpenVPNIPC/" + leaf for leaf in (
+                "normal-and-idempotent-close", "queued-cancel-preserves-active",
+                "blocked-read", "blocked-write", "active-close", "malformed", "oversized", "changed"))]
+            if result.returncode or any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(case) + r" \(", output)) != 1 for case in required) or re.search(r"--- FAIL:|--- SKIP:|DATA RACE|panic:|fatal error:|\[build failed\]", output):
+                raise AssertionError("Original OpenVPN IPC omitted its complete owned-process contract")
 
 
 if __name__ == "__main__":

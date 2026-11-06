@@ -422,67 +422,167 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte, unavailable
 }
 
 type desktopOpenVPNCompositionProcess struct {
-	address string
-	command *exec.Cmd
-	input   io.WriteCloser
-	output  *os.File
-	reader  *bufio.Reader
-	done    chan struct{}
-	waitErr error
-	cancel  context.CancelFunc
-	initial desktopOpenVPNCompositionPeerReply
+ address string
+ command *exec.Cmd
+ input io.WriteCloser
+ output *os.File
+ reader *bufio.Reader
+ done chan struct{}
+ waitErr error
+ cancel context.CancelFunc
+ initial desktopOpenVPNCompositionPeerReply
+ permit chan struct{}
+ mu sync.Mutex
+ stopped bool
+ worker chan struct{}
+ poisonOnce sync.Once
+ closeOnce sync.Once
+ closeDone chan struct{}
+ closeErr error
 }
 
-func (p *desktopOpenVPNCompositionProcess) read(t *testing.T) desktopOpenVPNCompositionPeerReply {
-	t.Helper()
-	type readResult struct {
-		raw []byte
-		err error
-	}
-	done := make(chan readResult, 1)
-	go func() { raw, err := p.reader.ReadSlice('\n'); done <- readResult{raw, err} }()
-	var raw []byte
-	var err error
-	select {
-	case result := <-done:
-		raw, err = result.raw, result.err
-	case <-time.After(10 * time.Second):
-		p.cancel()
-		_ = p.output.Close()
-		<-done
-		t.Fatal("owned OpenVPN provider reply did not join its original pipe")
-	}
-	var reply desktopOpenVPNCompositionPeerReply
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.DisallowUnknownFields()
-	var trailing any
-	if err != nil || len(raw) > 16<<10 || decoder.Decode(&reply) != nil || decoder.Decode(&trailing) != io.EOF || reply.Schema != 1 || reply.Network != "tcp" && reply.Network != "udp" {
-		t.Fatal("owned OpenVPN provider lost bounded reply", err)
-	}
-	remote, e1 := netip.ParseAddrPort(reply.Remote)
-	unavailable, e2 := netip.ParseAddrPort(reply.UnavailableRemote)
-	if e1 != nil || e2 != nil || remote.Addr().String() != p.address || unavailable.Addr() != remote.Addr() || remote.Port() == 0 || unavailable.Port() == 0 || unavailable == remote ||
-		p.initial.Schema != 0 && (reply.Network != p.initial.Network || reply.Remote != p.initial.Remote || reply.UnavailableRemote != p.initial.UnavailableRemote || !reflect.DeepEqual(reply.AppID, p.initial.AppID)) {
-		t.Fatal("owned OpenVPN provider changed captured transport")
-	}
-	return reply
+// Only an entered exchange may retire the original pipes/process. A caller
+// cancelled while queued never changes the exchange already holding permit.
+func (p *desktopOpenVPNCompositionProcess) poison() {
+ p.mu.Lock()
+ p.stopped = true
+ p.mu.Unlock()
+ p.poisonOnce.Do(func() {
+  p.cancel()
+  _ = p.input.Close()
+  _ = p.output.Close()
+ })
 }
-
+func (p *desktopOpenVPNCompositionProcess) join(ctx context.Context) error {
+ p.mu.Lock()
+ worker := p.worker
+ p.mu.Unlock()
+ if worker != nil {
+  select {
+  case <-worker:
+  case <-ctx.Done(): return errors.New("OpenVPN original IPC worker did not join")
+  }
+ }
+ select {
+ case <-p.done: return nil
+ case <-ctx.Done(): return errors.New("OpenVPN original provider process did not join")
+ }
+}
+func (p *desktopOpenVPNCompositionProcess) failed(err error) error {
+ p.poison()
+ cleanup, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+ defer cancel()
+ return errors.Join(err, p.join(cleanup))
+}
+func (p *desktopOpenVPNCompositionProcess) readReply() (desktopOpenVPNCompositionPeerReply, error) {
+ raw, err := p.reader.ReadSlice('\n')
+ var reply desktopOpenVPNCompositionPeerReply
+ decoder := json.NewDecoder(strings.NewReader(string(raw)))
+ decoder.DisallowUnknownFields()
+ var trailing any
+ if err != nil || len(raw) > 16<<10 || decoder.Decode(&reply) != nil || decoder.Decode(&trailing) != io.EOF || reply.Schema != 1 || reply.Network != "tcp" && reply.Network != "udp" {
+  return reply, errors.New("owned OpenVPN provider lost bounded reply")
+ }
+ remote, e1 := netip.ParseAddrPort(reply.Remote)
+ unavailable, e2 := netip.ParseAddrPort(reply.UnavailableRemote)
+ if e1 != nil || e2 != nil || remote.Addr().String() != p.address || unavailable.Addr() != remote.Addr() || remote.Port() == 0 || unavailable.Port() == 0 || unavailable == remote ||
+  p.initial.Schema != 0 && (reply.Network != p.initial.Network || reply.Remote != p.initial.Remote || reply.UnavailableRemote != p.initial.UnavailableRemote || !reflect.DeepEqual(reply.AppID, p.initial.AppID)) {
+  return reply, errors.New("owned OpenVPN provider changed captured transport")
+ }
+ return reply, nil
+}
+func (p *desktopOpenVPNCompositionProcess) exchange(ctx context.Context, request any) (desktopOpenVPNCompositionPeerReply, error) {
+ var zero desktopOpenVPNCompositionPeerReply
+ if ctx == nil { return zero, errors.New("OpenVPN IPC requires a bounded caller") }
+ if _, ok := ctx.Deadline(); !ok { return zero, errors.New("OpenVPN IPC requires a bounded caller") }
+ select {
+ case <-ctx.Done(): return zero, ctx.Err()
+ case <-p.permit:
+ }
+ defer func() { p.permit <- struct{}{} }()
+ if err := ctx.Err(); err != nil { return zero, err }
+ p.mu.Lock()
+ if p.stopped { p.mu.Unlock(); return zero, net.ErrClosed }
+ if err := ctx.Err(); err != nil { p.mu.Unlock(); return zero, err }
+ worker := make(chan struct{})
+ p.worker = worker
+ p.mu.Unlock()
+ type result struct { reply desktopOpenVPNCompositionPeerReply; err error }
+ finished := make(chan result, 1)
+ go func() {
+  defer close(worker)
+  if err := json.NewEncoder(p.input).Encode(request); err != nil {
+   finished <- result{err: errors.New("OpenVPN original IPC write failed")}
+   return
+  }
+  reply, err := p.readReply()
+  finished <- result{reply: reply, err: err}
+ }()
+ select {
+ case value := <-finished:
+  select { case <-worker: case <-ctx.Done(): return zero, p.failed(ctx.Err()) }
+  if err := ctx.Err(); err != nil { return zero, p.failed(err) }
+  p.mu.Lock()
+  stopped := p.stopped
+  p.mu.Unlock()
+  if stopped { return zero, p.failed(net.ErrClosed) }
+  if value.err != nil { return zero, p.failed(value.err) }
+  return value.reply, nil
+ case <-ctx.Done(): return zero, p.failed(ctx.Err())
+ }
+}
+func (p *desktopOpenVPNCompositionProcess) observeContext(ctx context.Context, action string) (desktopOpenVPNCompositionPeerReply, error) {
+ if action != "stats" && action != "release" { return desktopOpenVPNCompositionPeerReply{}, errors.New("unowned provider observation") }
+ return p.exchange(ctx, map[string]string{"action": action})
+}
 func (p *desktopOpenVPNCompositionProcess) observe(t *testing.T, action string) desktopOpenVPNCompositionPeerReply {
-	t.Helper()
-	if action != "stats" && action != "release" {
-		t.Fatal("unowned provider observation")
-	}
-	if err := json.NewEncoder(p.input).Encode(map[string]string{"action": action}); err != nil {
-		t.Fatal(err)
-	}
-	return p.read(t)
+ t.Helper()
+ ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+ defer cancel()
+ reply, err := p.observeContext(ctx, action)
+ if err != nil { t.Fatal("owned OpenVPN provider observation failed", err) }
+ return reply
+}
+// A normal close first gives this original provider its existing EOF cleanup
+// budget. Failed exchanges have already closed both pipes and cancelled it.
+// No timeout permits a replacement process or reader.
+func (p *desktopOpenVPNCompositionProcess) close() error {
+ p.closeOnce.Do(func() {
+  defer close(p.closeDone)
+  p.mu.Lock()
+  p.stopped = true
+  worker := p.worker
+  p.mu.Unlock()
+  active := false
+  if worker != nil { select { case <-worker: default: active = true } }
+  if active { p.poison() } else { _ = p.input.Close() }
+  cleanup, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+  err := p.join(cleanup)
+  cancel()
+  if err != nil {
+   p.poison()
+   cleanup, cancel = context.WithTimeout(context.Background(), 8*time.Second)
+   err = errors.Join(err, p.join(cleanup))
+   cancel()
+  }
+  p.cancel()
+  _ = p.output.Close()
+  select {
+  case <-p.done:
+   if p.waitErr != nil { err = errors.Join(err, errors.New("actual OpenVPN provider failed")) }
+  default: err = errors.Join(err, errors.New("actual OpenVPN provider remains unjoined"))
+  }
+  p.closeErr = err
+ })
+ <-p.closeDone
+ return p.closeErr
 }
 
 func desktopOpenVPNReferenceStart(t *testing.T, request desktopOpenVPNCompositionPeerInput, address string, build func(context.Context) *exec.Cmd) *desktopOpenVPNCompositionProcess {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
-	p := &desktopOpenVPNCompositionProcess{address: address, cancel: cancel, done: make(chan struct{})}
+	p := &desktopOpenVPNCompositionProcess{address: address, cancel: cancel, done: make(chan struct{}), permit: make(chan struct{}, 1), closeDone: make(chan struct{})}
+	p.permit <- struct{}{}
 	p.command = build(ctx)
 	if p.command.Env == nil {
 		p.command.Env = os.Environ()
@@ -514,24 +614,13 @@ func desktopOpenVPNReferenceStart(t *testing.T, request desktopOpenVPNCompositio
 	_ = writer.Close()
 	go func() { p.waitErr = p.command.Wait(); close(p.done) }()
 	t.Cleanup(func() {
-		_ = p.input.Close()
-		select {
-		case <-p.done:
-			if p.waitErr != nil {
-				t.Error("actual OpenVPN provider failed", p.waitErr)
-			}
-		case <-time.After(8 * time.Second):
-			cancel()
-			<-p.done
-			t.Error("actual OpenVPN provider failed joined shutdown")
-		}
-		cancel()
-		_ = p.output.Close()
+		if err := p.close(); err != nil { t.Error("actual OpenVPN provider failed joined shutdown", err) }
 	})
-	if err := json.NewEncoder(p.input).Encode(request); err != nil {
-		t.Fatal(err)
-	}
-	p.initial = p.read(t)
+	initialContext, initialCancel := context.WithTimeout(ctx, 10*time.Second)
+	initial, err := p.exchange(initialContext, request)
+	initialCancel()
+	if err != nil { t.Fatal("owned OpenVPN provider startup exchange failed", err) }
+	p.initial = initial
 	if p.initial.Network != request.Network || p.initial.DNS != 0 || p.initial.PublicRequests != 0 || p.initial.TLS != 0 || p.initial.LatencyRequests != 0 {
 		t.Fatal("provider reported traffic before captured native connection")
 	}

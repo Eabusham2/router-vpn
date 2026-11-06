@@ -1167,3 +1167,20 @@ Validation before publication: root traced the actual production call, revoke, c
 
 Evidence: [earlier ARM64 retirement hang](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932409218), [prior c602 ARM64 run that passed capacity and its retirement control](https://github.com/Eabusham2/router-vpn/actions/runs/42220221121/job/127900106780).
 
+
+## 2026-11-06 — Bound and serialize the actual OpenVPN provider IPC lifecycle
+
+The native OpenVPN fixture previously wrote requests without a shared operation deadline and then started a separate read timeout. A pipe blocked during Encode could outlive the observation, and simultaneous observers could consume each other's replies.
+
+The original provider process now owns one serialized request/reply permit. The same absolute caller deadline bounds queue admission, write, strict reply framing and the successful worker join. Cancellation while queued does not write a request or stop the active caller. Once an exchange has entered, a failed write, read, frame or deadline irrevocably poisons that original process: cancel the child first, close both owned pipes, and join its worker and process under a separate bounded cleanup context. No replacement reader or process adopts the operation. Idle Close retains graceful EOF cleanup; active Close cancels first, and repeated Close is idempotent.
+
+Existing 16 KiB newline framing, exact transport and original tuple checks, AppID attribution, provider lifetime and the 10-second initial/observation budgets remain unchanged. Error reporting records fixed failure classes and context errors without dumping requests or private configuration.
+
+The existing mandatory provider-join tests remain intact. Eight additional real-pipe and owned-subprocess regression leaves cover normal/idempotent use, a genuinely queued deadline while the active exchange is latched, blocked reads, a 2 MiB blocked write, active Close, malformed replies, oversized replies and changed transport identity. The runner requires exactly one PASS for the parent and each leaf and rejects missing, duplicate, skipped, failed, race, panic or build results. Each failure checks that the original worker/process has joined and that its reader cannot be reused.
+
+Validation before publication: root inspected the actual prepared source and original baseline; a second Astra agent independently reread the concrete two-file review commit and confirmed the original source semantics, cancellation ordering, queue latch and exact eight-leaf inventory. The execution workspace remains unavailable, so no compilation or regression execution is claimed for this change. Actual CI must execute it.
+
+Separately verified upstream native evidence: both Windows ALL jobs at 101aa60e completed all 26 required positive verdicts and eight causal controls. The 6aac340a AMD64 OpenVPN job passed the new unavailable-TCP reservation leaf, all nine TCP cases, all nine UDP cases and eight mixed cases. Its remaining mixed/control-key failure still reports the initial TCP socket's strict native readback error; the final UDP MAC-rejection witness is separate pending work. These results do not establish completion of the newer IPC source or all product requirements.
+
+Evidence: [Windows ALL AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/42238536335/job/127962465505), [Windows ALL ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/42238536335/job/127962465697), [6aac340a OpenVPN AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/42238149378/job/127961121286).
+
