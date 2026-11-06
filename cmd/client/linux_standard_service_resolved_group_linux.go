@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"router-vpn/internal/common"
@@ -40,6 +41,10 @@ func resolveOriginalScopes(ctx context.Context, group resolvedQueryGroup, upstre
 	return resolveOriginalScopesOwned(ctx, group, upstreams, question, nil)
 }
 func resolveOriginalScopesOwned(ctx context.Context, group resolvedQueryGroup, upstreams []resolvedQueryScope, question []byte, retire func(context.Context) error) ([]byte, error) {
+	return resolveOriginalScopesClassified(ctx, group, upstreams, question, retire, systembootstrap.ResolvedResponseSuccess)
+}
+
+func resolveOriginalScopesClassified(ctx context.Context, group resolvedQueryGroup, upstreams []resolvedQueryScope, question []byte, retire func(context.Context) error, classify func([]byte, []byte) (bool, error)) ([]byte, error) {
 	query, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
@@ -72,9 +77,14 @@ func resolveOriginalScopesOwned(ctx context.Context, group resolvedQueryGroup, u
 				server.Network = "tcp"
 				answer, err = group.Exchange(query, server.DesktopLinuxBootstrapDNSUpstream, question)
 			}
+			// Only a local validator may set AD on these direct upstream replies.
+			if err == nil && server.validate == nil && len(answer) >= 12 {
+				answer = bytes.Clone(answer)
+				answer[3] &^= 0x20
+			}
 			positive := false
 			if err == nil {
-				positive, err = systembootstrap.ResolvedResponseSuccess(question, answer)
+				positive, err = classify(question, answer)
 			}
 			results <- result{index, answer, positive, err}
 		}(i, upstream)
@@ -125,13 +135,18 @@ collect:
 	select {
 	case <-joined:
 	case <-cleanup.Done():
-		return nil, cleanup.Err()
+		return nil, &resolvedGroupRetirementError{cleanup.Err()}
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if winner != nil {
 		return winner, nil
+	}
+	// An alias still needs a local proof; a competing NXDOMAIN cannot erase it.
+	var alias *resolvedDNSSECAliasProofRequired
+	if errors.As(failures, &alias) {
+		return nil, failures
 	}
 	for _, answer := range negatives {
 		if answer != nil {

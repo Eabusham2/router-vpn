@@ -31,6 +31,7 @@ import (
 	"router-vpn/internal/common"
 	"router-vpn/internal/dnsmeasure"
 	"router-vpn/internal/standardengine"
+	"router-vpn/internal/systembootstrap"
 )
 
 const bootHostnameFixtureName = "node.transport-bootstrap.invalid"
@@ -60,6 +61,23 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 	reply := func(query []byte, truncated bool) ([]byte, error) {
 		if len(query) < 12 {
 			return nil, errors.New("short bootstrap question")
+		}
+		if mode == "dnssec-cname" || mode == "dnssec-dname" {
+			body, target, proof, err := bootHostnameAliasDNSReply(query, mode, ip)
+			if err != nil {
+				return nil, err
+			}
+			mu.Lock()
+			count++
+			err = os.WriteFile(countFile, []byte(strconv.Itoa(count)), 0600)
+			if err == nil && target {
+				err = bootHostnameAliasCount(countFile + ".alias-target")
+			}
+			if err == nil && proof {
+				err = bootHostnameAliasCount(countFile + ".alias-proof")
+			}
+			mu.Unlock()
+			return body, err
 		}
 		var original []byte
 		ipv6 := false
@@ -174,6 +192,7 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 					return
 				}
 				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
 				if mode == "opportunistic-fallback" {
 					var header [5]byte
 					_, e = io.ReadFull(conn, header[:])
@@ -255,8 +274,8 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	if scenario == "service-boot-resolved-opportunistic-fallback" {
 		mode = "opportunistic-fallback"
 	}
-	if scenario == "service-boot-resolved-dnssec-nta" {
-		mode = "dnssec-nta"
+	if strings.HasPrefix(scenario, "service-boot-resolved-dnssec-") {
+		mode = strings.TrimPrefix(scenario, "service-boot-resolved-")
 	}
 	hostsOnly := scenario == "service-boot-hosts"
 	resolved := linuxHostTUNResolvedCase(scenario)
@@ -375,6 +394,16 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			}
 			if e != nil || parse != nil || count < minimum {
 				t.Error("public Node Connect omitted actual A/AAAA bootstrap", e, parse, count)
+			}
+			if mode == "dnssec-cname" || mode == "dnssec-dname" {
+				for _, suffix := range []string{".alias-target", ".alias-proof"} {
+					raw, err := os.ReadFile(countFile + suffix)
+					n, parse := strconv.Atoi(string(raw))
+					if err != nil || parse != nil || n < 2 {
+						t.Error("alias omitted real target or typed proof queries", suffix, err, parse, n)
+					}
+				}
+				t.Logf("verified installed DNSSEC alias original proof and target wire queries: %s", scenario)
 			}
 			if mode == "opportunistic-fallback" {
 				b, err := os.ReadFile(countFile + ".tls")
@@ -519,4 +548,126 @@ func bootHostnameParallelDNS(reply func([]byte, bool) ([]byte, error), countFile
 	}
 	fmt.Println("ready")
 	return <-errorsOut
+}
+
+const bootHostnameAliasTarget = "node.alias-bootstrap.invalid"
+
+func bootHostnameAliasCount(path string) error {
+	old, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	n := 0
+	if err == nil {
+		n, err = strconv.Atoi(string(old))
+		if err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, []byte(strconv.Itoa(n+1)), 0600)
+}
+func bootHostnameAliasName(name string) []byte {
+	var wire []byte
+	for _, label := range strings.Split(name, ".") {
+		wire = append(wire, byte(len(label)))
+		wire = append(wire, label...)
+	}
+	return append(wire, 0)
+}
+
+// These unsigned NTA fixtures deliberately send AD. Only the original local
+// validator may establish trust; the upstream's AD bit is never authority.
+func bootHostnameAliasDNSReply(query []byte, mode string, ip net.IP) ([]byte, bool, bool, error) {
+	name := ""
+	kind := uint16(0)
+	for _, candidate := range []string{bootHostnameFixtureName, bootHostnameAliasTarget} {
+		for _, typ := range []uint16{1, 28, 5} {
+			if typ == 5 && candidate != bootHostnameFixtureName {
+				continue
+			}
+			_, err := standardengine.ResolvedDNSSECQuestionFromWire(candidate, typ, query)
+			if typ == 5 {
+				_, err = standardengine.ResolvedDNSSECAliasQuestionFromWire(candidate, query)
+			}
+			if err == nil {
+				name, kind = candidate, typ
+				break
+			}
+		}
+		if name != "" {
+			break
+		}
+	}
+	if name == "" || (mode != "dnssec-cname" && mode != "dnssec-dname") || ip.To4() == nil {
+		return nil, false, false, errors.New("alias fixture refused foreign name/type")
+	}
+	answer := make([]byte, 12)
+	copy(answer[:2], query[:2])
+	answer[2], answer[3], answer[5] = 0x81, 0xa0, 1
+	answer = append(answer, bootHostnameAliasName(name)...)
+	answer = append(answer, byte(kind>>8), byte(kind), 0, 1)
+	record := func(owner string, typ uint16, data []byte) {
+		answer[7]++
+		answer = append(answer, bootHostnameAliasName(owner)...)
+		answer = append(answer, byte(typ>>8), byte(typ), 0, 1, 0, 0, 0, 30, byte(len(data)>>8), byte(len(data)))
+		answer = append(answer, data...)
+	}
+	if name == bootHostnameFixtureName {
+		if mode == "dnssec-dname" {
+			record("transport-bootstrap.invalid", 39, bootHostnameAliasName("alias-bootstrap.invalid"))
+		}
+		record(name, 5, bootHostnameAliasName(bootHostnameAliasTarget))
+	} else if kind == 1 {
+		record(name, 1, ip.To4())
+	}
+	return answer, name == bootHostnameAliasTarget, kind == 5, nil
+}
+
+func TestLinuxStandardServiceBootHostnameAliasFixtureWire(t *testing.T) {
+	for _, mode := range []string{"dnssec-cname", "dnssec-dname"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, six := range []bool{false, true} {
+				original, err := dnsmeasure.TransportBootstrapQuery(bootHostnameFixtureName, six)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, proof := range []bool{false, true} {
+					query := original
+					if proof {
+						query, err = systembootstrap.ResolvedAliasQuery(original, bootHostnameFixtureName, 5)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					response, target, typed, err := bootHostnameAliasDNSReply(query, mode, net.ParseIP("192.0.2.44"))
+					if err != nil || target || typed != proof || response[3]&0x20 == 0 {
+						t.Fatal("alias fixture lost deliberately untrusted AD or exact question", err)
+					}
+					step, err := systembootstrap.ResolvedAliasStep(query, response)
+					if err != nil || step == nil || step.Target != bootHostnameAliasTarget || step.DNAME != (mode == "dnssec-dname") {
+						t.Fatal("alias fixture wire changed substitution", step, err)
+					}
+				}
+				kind := uint16(1)
+				if six {
+					kind = 28
+				}
+				query, err := systembootstrap.ResolvedAliasQuery(original, bootHostnameAliasTarget, kind)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, target, typed, err := bootHostnameAliasDNSReply(query, mode, net.ParseIP("192.0.2.44"))
+				if err != nil || !target || typed || !six && (binary.BigEndian.Uint16(response[6:8]) != 1 || !bytes.Equal(response[len(response)-4:], []byte{192, 0, 2, 44})) || six && binary.BigEndian.Uint16(response[6:8]) != 0 {
+					t.Fatal("target did not retain original Node address", err)
+				}
+				query, err = systembootstrap.ResolvedAliasQuery(original, "foreign.alias-bootstrap.invalid", 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, _, err = bootHostnameAliasDNSReply(query, mode, net.ParseIP("192.0.2.44")); err == nil {
+					t.Fatal("foreign alias target answered")
+				}
+			}
+		})
+	}
 }

@@ -5,16 +5,18 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta"}
+var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta", "service-boot-resolved-dnssec-cname", "service-boot-resolved-dnssec-dname"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNResolvedCases...) }
 func linuxHostTUNResolvedCase(scenario string) bool {
@@ -84,8 +86,11 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	if scenario == "service-boot-resolved-opportunistic-tls" || scenario == "service-boot-resolved-opportunistic-fallback" {
 		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC=1")
 	}
-	if scenario == "service-boot-resolved-dnssec-nta" {
+	if strings.HasPrefix(scenario, "service-boot-resolved-dnssec-") {
 		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA=1")
+		if scenario != "service-boot-resolved-dnssec-nta" {
+			command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_ALIAS="+strings.TrimPrefix(scenario, "service-boot-resolved-dnssec-"))
+		}
 	}
 	command.Stderr = os.Stderr
 	output, err := command.StdoutPipe()
@@ -117,10 +122,33 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		if scenario == "service-boot-resolved-dnssec-nta" {
 			body, err := os.ReadFile(countFile + ".anchors")
 			count, parse := strconv.Atoi(string(body))
-			if err != nil || parse != nil || count < 16 || count%8 != 0 {
+			if err != nil || parse != nil || count < 24 || count%24 != 0 {
 				t.Error("installed DNSSEC omitted full original absent-anchor capture/recheck", err, parse, count)
 			}
 			t.Log("verified installed DNSSEC original NTA and absent-anchor recheck")
+		}
+		if scenario == "service-boot-resolved-dnssec-cname" || scenario == "service-boot-resolved-dnssec-dname" {
+			raw, err := os.ReadFile(countFile + ".anchor-names")
+			var names map[string]int
+			if err != nil || json.Unmarshal(raw, &names) != nil {
+				t.Error("alias trust observations missing", err)
+			}
+			for _, name := range []string{"node.transport-bootstrap.invalid", "transport-bootstrap.invalid", "node.alias-bootstrap.invalid", "alias-bootstrap.invalid"} {
+				ds, key := names[name+"/43"], names[name+"/48"]
+				if ds < 3 || ds%3 != 0 || ds != key {
+					t.Error("alias target omitted original capture/postjoin/adoption", name, ds, key)
+				}
+			}
+			for _, suffix := range []string{"invalid", "."} {
+				total := names["node.transport-bootstrap.invalid/43"] + names["node.alias-bootstrap.invalid/43"]
+				if names[suffix+"/43"] != total || names[suffix+"/48"] != total {
+					t.Error("alias trust cohort omitted a common ancestor", suffix, names)
+				}
+			}
+			if names["target-local"] < 3 || names["node.transport-bootstrap.invalid/43"] < names["node.alias-bootstrap.invalid/43"] {
+				t.Error("alias reused original name authority", names)
+			}
+			t.Logf("verified installed DNSSEC alias target independently captured and adopted: %s", scenario)
 		}
 		t.Logf("verified installed resolved helper original broker and scoped upstream: %s", scenario)
 	})

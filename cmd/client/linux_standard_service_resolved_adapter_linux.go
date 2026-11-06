@@ -129,23 +129,13 @@ func (o *linuxBootBootstrapExchange) exchangeResolved(ctx context.Context, netwo
 	if server != netip.MustParseAddrPort("127.0.0.53:53") || resolver.helper == nil || o.resolvedName == "" || !systembootstrap.QuestionMatchesName(question, o.resolvedName) {
 		return nil, errors.New("resolved exchange escaped original source question")
 	}
-	policy, local, err := resolver.helper.observe(ctx, o.resolvedName)
-	if err != nil {
-		return nil, err
-	}
-	if local.Local {
-		return nil, errors.New("original daemon supplied a local answer before upstream admission")
-	}
-	routes, err := policy.ResolvedRoutes(o.resolvedName)
-	if err != nil {
-		return nil, err
-	}
-	for _, route := range routes {
-		if route.DNSSEC == "yes" || route.DNSSEC == "allow-downgrade" {
-			return o.exchangeResolvedDNSSEC(ctx, policy, network, question)
-		}
-	}
-	upstreams, err := resolvedSelectedUpstreams(policy, o.resolvedName, network)
+	chain := &linuxResolvedAliasChain{owner: o, network: network}
+	return resolveCapturedAliasChain(ctx, o.resolvedName, question, chain)
+}
+
+func (o *linuxBootBootstrapExchange) exchangeResolvedPlain(ctx context.Context, policy standardengine.ResolvedPolicy, name, network string, question []byte) ([]byte, error) {
+	resolver := o.original.resolver
+	upstreams, err := resolvedSelectedUpstreams(policy, name, network)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +145,7 @@ func (o *linuxBootBootstrapExchange) exchangeResolved(ctx context.Context, netwo
 				if err := check.Err(); err != nil {
 					return err
 				}
-				observed, local, err := resolver.helper.observeScoped(check, o.operation, o.resolvedName)
+				observed, local, err := resolver.helper.observeScoped(check, o.operation, name)
 				if err != nil {
 					return err
 				}
@@ -182,12 +172,11 @@ func (o *linuxBootBootstrapExchange) exchangeResolved(ctx context.Context, netwo
 	}
 	// The live owner is checked after every physical exchange, even a failed
 	// one. Neither an answer nor a cached policy hash masks original-owner loss.
-	_, after, observed := resolver.helper.observe(ctx, o.resolvedName)
-	if observed != nil || after.Local {
-		return nil, errors.Join(err, observed, errors.New("resolved owner or local-source decision changed during physical query"))
+	if observed := observeResolvedDNSSECPolicy(ctx, o.operation, resolver.helper, policy, name); observed != nil {
+		return nil, &resolvedAliasAuthorityError{errors.Join(err, observed)}
 	}
 	if current := o.Current(ctx); current != nil {
-		return nil, errors.Join(err, current)
+		return nil, &resolvedAliasAuthorityError{errors.Join(err, current)}
 	}
 	return answer, err
 }

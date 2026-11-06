@@ -6,17 +6,16 @@ import (
 	"errors"
 )
 
-// MaxResolvedRequests covers at most 16 fresh alias cohorts for each of 7
-// searched names, 2 address families and 5 attempts. Each cohort has at most
-// 257 scopes, 256 validator queries with 4 live policy guards each, plus two
-// complete trust captures (256 DS/DNSKEY suffix observations + 2 policy reads).
-// Two additional cohort observations and 11 greeting/preflight/retirement
-// frames give 443275851 operations. The next power of two is finite and fits
-// uint32 without overflow. No frame history is retained and the original
-// two-minute deadline never renews. Alias admission still requires separate
-// validated RR proof; this budget grants no additional query authority.
-const resolvedCompleteRequestBudget uint64 = 16*7*2*5*(257*(256*4+2*(256+2))+2) + 11
-const MaxResolvedRequests uint32 = 1 << 29
+// MaxResolvedRequests covers at most 32 original address/alias-proof cohorts
+// for each of 7 searched names, 2 address families and 5 attempts. Each cohort
+// has at most 257 scopes, 256 validator queries with 4 live policy guards each,
+// and three complete trust observations: capture, joined-cohort recheck, and
+// final chain adoption (256 DS/DNSKEY suffix results plus 2 policy reads each).
+// Two cohort observations and 11 greeting/preflight/retirement frames bring the
+// bound below 1<<30. The original two-minute deadline never renews; no frame
+// history or extra query authority is created by this finite sequence budget.
+const resolvedCompleteRequestBudget uint64 = 32*7*2*5*(257*(256*4+3*(256+2))+2) + 11
+const MaxResolvedRequests uint32 = 1 << 30
 
 // The fixed resolver helper receives these bytes through the existing sealed
 // capture descriptor and authenticates their digest with its original parent.

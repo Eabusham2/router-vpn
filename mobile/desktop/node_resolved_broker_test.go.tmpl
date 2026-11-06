@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	dbus "github.com/godbus/dbus/v5"
@@ -56,6 +57,11 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 	var mu sync.Mutex
 	count := 0
 	anchorCount := 0
+	anchorNames := map[string]int{}
+	alias := os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_ALIAS")
+	if alias != "" && alias != "cname" && alias != "dname" {
+		t.Fatal("unknown original alias fixture")
+	}
 	observers := 0
 	observationRetired := make(chan struct{})
 	var retireOnce sync.Once
@@ -116,6 +122,9 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA") == "1" {
 				values["DNSSEC"] = dbus.MakeVariant("yes")
 				values["DNSSECNegativeTrustAnchors"] = dbus.MakeVariant([]string{"transport-bootstrap.invalid"})
+				if alias != "" {
+					values["DNSSECNegativeTrustAnchors"] = dbus.MakeVariant([]string{"transport-bootstrap.invalid", "alias-bootstrap.invalid"})
+				}
 			}
 			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC") == "1" {
 				values["DNSOverTLS"] = dbus.MakeVariant("opportunistic")
@@ -207,24 +216,42 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 				return nil, "", errors.New("trust observation escaped original no-network anchor query")
 			}
 			name, ok := request.Body[1].(string)
-			if !ok || (name != "node.transport-bootstrap.invalid" && name != "transport-bootstrap.invalid" && name != "invalid" && name != ".") {
+			if !ok || (name != "node.transport-bootstrap.invalid" && name != "transport-bootstrap.invalid" && name != "invalid" && name != "." && !(alias != "" && (name == "node.alias-bootstrap.invalid" || name == "alias-bootstrap.invalid"))) {
 				return nil, "", errors.New("trust observation changed original suffix")
 			}
 			mu.Lock()
 			anchorCount++
+			anchorNames[fmt.Sprintf("%s/%d", name, request.Body[3].(uint16))]++
 			writeErr := os.WriteFile(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT")+".anchors", []byte(strconv.Itoa(anchorCount)), 0600)
+			if writeErr == nil {
+				raw, e := json.Marshal(anchorNames)
+				writeErr = e
+				if e == nil {
+					writeErr = os.WriteFile(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT")+".anchor-names", raw, 0600)
+				}
+			}
 			mu.Unlock()
 			if writeErr != nil {
 				return nil, "", writeErr
 			}
 			return []any{"no original positive trust source"}, "org.freedesktop.resolve1.NoSource", nil
 		case "ResolveHostname":
-			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || request.Body[1] != "node.transport-bootstrap.invalid" || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
+			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || (request.Body[1] != "node.transport-bootstrap.invalid" && !(alias != "" && request.Body[1] == "node.alias-bootstrap.invalid")) || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
 				return nil, "", errors.New("local preflight escaped exact original question or NO_NETWORK/NO_CACHE/NO_SEARCH")
 			}
 			mu.Lock()
 			count++
+			if request.Body[1] == "node.alias-bootstrap.invalid" {
+				anchorNames["target-local"]++
+			}
 			err := os.WriteFile(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT"), []byte(strconv.Itoa(count)), 0600)
+			if err == nil && alias != "" {
+				raw, e := json.Marshal(anchorNames)
+				err = e
+				if e == nil {
+					err = os.WriteFile(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT")+".anchor-names", raw, 0600)
+				}
+			}
 			mu.Unlock()
 			if err != nil {
 				return nil, "", err

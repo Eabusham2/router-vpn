@@ -136,7 +136,7 @@ func TestResolvedFixedCommandBoundedCohortSequence(t *testing.T) {
 }
 
 func TestResolvedFixedCommandDNSSECSequenceBudget(t *testing.T) {
-	if resolvedCompleteRequestBudget != 443275851 || uint64(MaxResolvedRequests) < resolvedCompleteRequestBudget || uint64(MaxResolvedRequests)/2 >= resolvedCompleteRequestBudget {
+	if resolvedCompleteRequestBudget != 1035077131 || uint64(MaxResolvedRequests) < resolvedCompleteRequestBudget || uint64(MaxResolvedRequests)/2 >= resolvedCompleteRequestBudget {
 		t.Fatal("complete guarded DNSSEC cohort budget was truncated or arbitrarily widened")
 	}
 	capture := strings.Repeat("a", 64)

@@ -692,3 +692,29 @@ AUXILIARY['resolved-server-state']=('./internal/standardengine',{
 AUXILIARY['resolved-server-state-owner']=('./cmd/client',{'TestResolvedServerStateCancelledAdmission':()})
 AUXILIARY_TESTS.update({'internal/standardengine/resolved_server_state_test.go':'resolved-server-state',
  'cmd/client/linux_standard_service_resolved_server_state_linux_test.go':'resolved-server-state-owner'})
+
+# Shipping alias cohorts recapture target policy and recheck every trust owner.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_alias_linux.go',
+ 'cmd/client/linux_standard_service_resolved_alias_linux_test.go',
+ 'internal/systembootstrap/resolved_alias_linux.go',
+ 'internal/systembootstrap/resolved_alias_linux_test.go'})
+AUXILIARY['resolved-alias-wire']=('./internal/systembootstrap',{
+ 'TestResolvedAliasFirstStep':('cname','dname','dname-only','closest-dname',
+ 'unrelated','label-boundary','self','conflict','dname-conflict','synthesis-conflict',
+ 'address-and-alias','bad-compression','embedded-label-dot','truncated','overlong-substitution'),
+ 'TestResolvedAliasComposition':('ipv4','ipv6','insecure','nxdomain','nodata','dname',
+ 'foreign-final','wrong-family','unresolved-final','cycle','changed-owner','changed-substitution'),
+ 'TestResolvedAliasQueryPurpose':()})
+AUXILIARY['resolved-alias-caller']=('./cmd/client',{
+ 'TestResolvedAliasChainFreshTarget':('secure-cname','secure-dname','original-nta',
+ 'plain-original','target-no','target-local','target-nxdomain'),
+ 'TestResolvedAliasChainRefusals':('bogus-proof','missing-proof','unjoined-original',
+ 'changed-original','cancelled-before-proof','changed-ancestor-final','target-failure','cycle','bound'),
+ 'TestResolvedAliasProofCannotInheritNTA':(),
+ 'TestResolvedAliasPendingSurvivesNegativeScope':(),
+ 'TestResolvedAliasProofClassifierWaitsForAlias':(),
+ 'TestResolvedAliasTrustCheckpoint':('unchanged','absent-to-present','present-to-absent',
+ 'daemon-lost','local-decision','cancelled','wrong-name','duplicate-scope')})
+AUXILIARY_TESTS.update({'internal/systembootstrap/resolved_alias_linux_test.go':'resolved-alias-wire',
+ 'cmd/client/linux_standard_service_resolved_alias_linux_test.go':'resolved-alias-caller'})
+CORE['BootHostnameAliasFixtureWire']=('dnssec-cname','dnssec-dname')

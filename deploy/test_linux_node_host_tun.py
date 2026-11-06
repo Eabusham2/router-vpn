@@ -191,7 +191,7 @@ SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT +
 def check_ss_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
 
-RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta')
+RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname')
 CASES += RESOLVED_CASES
 HOSTNAME_CASES += RESOLVED_CASES
 PUBLIC_CASES += RESOLVED_CASES
@@ -422,6 +422,11 @@ def check_verdict(output, case=None):
             marker = 'verified installed DNSSEC original NTA and absent-anchor recheck'
             if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
                 raise ValueError('Installed DNSSEC omitted exact original trust-plan recheck')
+        if value in ('service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname'):
+            for alias_prefix in ('verified installed DNSSEC alias target independently captured and adopted: ', 'verified installed DNSSEC alias original proof and target wire queries: '):
+                marker = alias_prefix + value
+                if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
+                    raise ValueError('Installed DNSSEC alias omitted original target authority or typed proof')
         if value in RESOLVED_CASES:
             marker = 'verified installed resolved helper original broker and scoped upstream: ' + value
             if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:

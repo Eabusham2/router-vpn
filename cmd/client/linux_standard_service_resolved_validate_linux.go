@@ -54,6 +54,9 @@ type resolvedDNSSECExchangeGroup interface {
 // Insecure is a cryptographic result under the captured positive/NTA inputs;
 // the upstream AD bit and a bogus verdict can never grant this result.
 func resolvedValidatedAnswer(question []byte, v standardengine.DNSSECVerdict) ([]byte, error) {
+	return resolvedValidatedPacket(question, v, false)
+}
+func resolvedValidatedPacket(question []byte, v standardengine.DNSSECVerdict, aliasProof bool) ([]byte, error) {
 	if len(v.Packet) < 12 || len(question) < 12 {
 		return nil, errors.New("validator omitted original DNS message")
 	}
@@ -61,7 +64,7 @@ func resolvedValidatedAnswer(question []byte, v standardengine.DNSSECVerdict) ([
 	if err != nil {
 		return nil, err
 	}
-	if alias {
+	if alias && !aliasProof {
 		return nil, &resolvedDNSSECAliasProofRequired{append([]byte(nil), v.Packet...)}
 	}
 	if v.State != 1 && v.State != 2 {
@@ -88,15 +91,17 @@ func resolvedValidatedAnswer(question []byte, v standardengine.DNSSECVerdict) ([
 	return answer, nil
 }
 
-func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSEC(ctx context.Context, policy standardengine.ResolvedPolicy, network string, question []byte) ([]byte, error) {
+func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Context, policy standardengine.ResolvedPolicy, network, name string, question []byte, aliasProof bool, remember func(func(context.Context) error)) ([]byte, error) {
 	resolver := o.original.resolver
 	if network != "udp" && network != "tcp" {
 		return nil, errors.New("DNSSEC caller changed original transport")
 	}
-	name := o.resolvedName
 	query, err := standardengine.ResolvedDNSSECQuestionFromWire(name, 1, question)
 	if err != nil {
 		query, err = standardengine.ResolvedDNSSECQuestionFromWire(name, 28, question)
+	}
+	if aliasProof {
+		query, err = standardengine.ResolvedDNSSECAliasQuestionFromWire(name, question)
 	}
 	if err != nil {
 		return nil, err
@@ -125,15 +130,28 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSEC(ctx context.Context,
 	if len(plans) == 0 {
 		return nil, errors.New("DNSSEC cohort omitted validating scopes")
 	}
+	finalCheck, err := resolvedAliasTrustRecheck(o.operation, resolver.helper, policy, name, plans)
+	if err != nil {
+		return nil, err
+	}
+	remember(finalCheck)
 	if err = o.Current(ctx); err != nil {
 		return nil, err
 	}
-	group, err := o.native.BeginBootstrapDNSSECGroup(o.operation, o.lease.lock, policy, plans, kind)
+	var group *mobiletor.DesktopLinuxBootstrapDNSGroup
+	if aliasProof {
+		group, err = o.native.BeginBootstrapDNSSECAliasGroup(o.operation, o.lease.lock, policy, plans)
+	} else {
+		group, err = o.native.BeginBootstrapDNSSECGroup(o.operation, o.lease.lock, policy, plans, kind)
+	}
 	if err != nil {
 		return nil, err
 	}
 	scopes := make([]resolvedQueryScope, 0, len(routes))
 	for _, route := range routes {
+		if aliasProof && route.DNSSEC == "no" {
+			continue
+		}
 		route := route
 		current := func(check context.Context) error {
 			return observeResolvedDNSSECPolicy(check, o.operation, resolver.helper, policy, name)
@@ -170,7 +188,13 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSEC(ctx context.Context,
 					if request.CaptureSHA256 != expectedCapture || request.PlanSHA256 != captured.PlanSHA256 || request.Name != captured.Name || request.Type != kind {
 						return nil, errors.New("validator callback changed original plan or question")
 					}
-					typed, err := mobiletor.NewDesktopLinuxBootstrapDNSSECQuestion(policy, plan, kind, request.Packet)
+					var typed *mobiletor.DesktopLinuxBootstrapDNSSECQuestion
+					var err error
+					if aliasProof {
+						typed, err = mobiletor.NewDesktopLinuxBootstrapDNSSECAliasQuestion(policy, plan, request.Packet)
+					} else {
+						typed, err = mobiletor.NewDesktopLinuxBootstrapDNSSECQuestion(policy, plan, kind, request.Packet)
+					}
 					if err != nil {
 						return nil, err
 					}
@@ -183,6 +207,9 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSEC(ctx context.Context,
 							return nil, err
 						}
 						answer, err := group.ExchangeOpportunisticDNSSEC(check, selected, typed, guard)
+						if aliasProof {
+							return answer, err
+						}
 						return resolvedDNSSECOriginalReply(answer, err)
 					}
 					upstream, err := resolvedRouteTransport(route, network)
@@ -190,12 +217,15 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSEC(ctx context.Context,
 						return nil, err
 					}
 					answer, err := group.ExchangeDNSSEC(check, upstream, typed, guard)
+					if aliasProof {
+						return answer, err
+					}
 					return resolvedDNSSECOriginalReply(answer, err)
 				})
 				if err != nil {
 					return nil, err
 				}
-				return resolvedValidatedAnswer(question, verdict)
+				return resolvedValidatedPacket(question, verdict, aliasProof)
 			}
 		}
 		if err != nil {
@@ -205,7 +235,14 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSEC(ctx context.Context,
 		}
 		scopes = append(scopes, scope)
 	}
-	answer, err := resolveOriginalScopesOwned(ctx, group, scopes, question, resolver.closeDNSSECChildren)
+	classify := systembootstrap.ResolvedResponseSuccess
+	if aliasProof {
+		classify = func(q, r []byte) (bool, error) {
+			step, err := systembootstrap.ResolvedAliasStep(q, r)
+			return step != nil, err
+		}
+	}
+	answer, err := resolveOriginalScopesClassified(ctx, group, scopes, question, resolver.closeDNSSECChildren, classify)
 	var retained *resolvedGroupRetirementError
 	if errors.As(err, &retained) {
 		return nil, err
@@ -213,11 +250,11 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSEC(ctx context.Context,
 	// The group baseline is released here. Only now may physical Current run.
 	for _, plan := range plans {
 		if check := recheckLinuxResolvedDNSSECPlan(ctx, o.operation, resolver.helper, policy, plan); check != nil {
-			return nil, errors.Join(err, check)
+			return nil, &resolvedAliasAuthorityError{errors.Join(err, check)}
 		}
 	}
 	if check := o.Current(ctx); check != nil {
-		return nil, errors.Join(err, check)
+		return nil, &resolvedAliasAuthorityError{errors.Join(err, check)}
 	}
 	return answer, err
 }

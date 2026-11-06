@@ -49,7 +49,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_resolved_composition_requires_original_helper_receipt(self):
         self.assertEqual(G.CASES[524:524+len(G.RESOLVED_CASES)], G.RESOLVED_CASES)
         self.assertEqual(G.CASES[524+len(G.RESOLVED_CASES):], G.EXTERNAL_SS_LAYER_CASES + G.EXTERNAL_SS_HYSTERIA_LAYER_CASES)
-        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta'))
+        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname'))
         for case in G.RESOLVED_CASES:
             self.assertIn(case, G.HOSTNAME_CASES)
             self.assertIn(case, G.PUBLIC_CASES)
@@ -60,6 +60,16 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             line = next(line for line in good.splitlines(True) if marker in line)
             with self.assertRaises(ValueError): G.check_verdict(good.replace(line, '', 1), case)
             with self.assertRaises(ValueError): G.check_verdict(good + line, case)
+
+    def test_alias_requires_separate_target_capture_and_original_wire_proof(self):
+        for case in ('service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname'):
+            good = self.completed((case,))
+            G.check_verdict(good, case)
+            lines = [line for line in good.splitlines(True) if 'verified installed DNSSEC alias' in line]
+            self.assertEqual(len(lines), 2)
+            for line in lines:
+                for changed in (good.replace(line, '', 1), good + line, good.replace(line, line.replace(case, case+'-foreign'), 1)):
+                    with self.subTest(case=case), self.assertRaises(ValueError): G.check_verdict(changed, case)
 
     def completed(self, cases=None):
         cases = G.CASES if cases is None else cases
@@ -91,6 +101,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:25: verified installed host captured resolver policy: ' + case for case in cases if case in G.HOSTNAME_CASES),
                           *('    native_test.go:26: verified installed resolved helper original broker and scoped upstream: ' + case for case in cases if case in G.RESOLVED_CASES),
                           *('    native_test.go:27: verified installed DNSSEC original NTA and absent-anchor recheck' for case in cases if case == 'service-boot-resolved-dnssec-nta'),
+                          *('    native_test.go:28: '+prefix+case for case in cases if case in ('service-boot-resolved-dnssec-cname','service-boot-resolved-dnssec-dname') for prefix in ('verified installed DNSSEC alias target independently captured and adopted: ', 'verified installed DNSSEC alias original proof and target wire queries: ')),
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
                           *('    native_test.go:21: verified installed host independent WireGuard entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_WG_CONNECT_CASES),
