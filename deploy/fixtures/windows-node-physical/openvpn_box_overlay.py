@@ -11,12 +11,13 @@ SPEC = importlib.util.spec_from_file_location(
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 BOX = RESOURCES / "openvpn_box_witness.go.tmpl"
+PROOF = ROOT / "mobile/externalpolicy/box.go.tmpl"
 BOX_TAG = b"//go:build windows && routervpn_windows_node_composition && with_openvpn\n"
-CONTROL_MUTATIONS = ("missing-mac-callback", "missing-session-correlation")
+CONTROL_MUTATIONS = ("missing-mac-callback", "missing-session-correlation", "missing-proof-read")
 
 
 def inputs():
-    return [Path(__file__).resolve(), BOX, *MODULE.inputs()]
+    return [Path(__file__).resolve(), BOX, PROOF, *MODULE.inputs()]
 
 
 def source_inputs():
@@ -51,7 +52,31 @@ def provider_source(raw):
     raw = replace(raw, "if p.initial.Network != request.Network || p.initial.DNS != 0",
                   "if p.initial.Network != request.Network || p.initial.ControlMode != request.Control || "
                   "p.initial.ControlRejects.Invalid || p.initial.ControlRejects.Overflow || len(p.initial.ControlRejects.Events) != 0 || p.initial.DNS != 0")
+    raw = replace(raw, "type desktopOpenVPNCompositionProcess struct {\n",
+                  "type desktopOpenVPNCompositionProcess struct {\n lifetime context.Context\n")
+    raw = replace(raw, "p := &desktopOpenVPNCompositionProcess{address: address, cancel: cancel,",
+                  "p := &desktopOpenVPNCompositionProcess{address: address, cancel: cancel, lifetime: ctx,")
     return raw
+
+
+def proof_source(raw, mutation=None):
+    replace = MODULE.replace_once
+    raw = replace(raw, "type routerVPNExternalNativeEngine struct {\n",
+                  "type routerVPNExternalNativeEngine struct {\n"
+                  "\trouterVPNTestOpenVPNProofRead atomic.Pointer[func(string, adapter.Outbound, nativeopenvpn.RemoteReceipt, error)]\n")
+    old = "\treceipt, err := endpoint.RouterVPNConnectedRemote()\n\tcurrent, exists := e.box.outbound.Outbound(tag)\n"
+    new = (
+        "\tobserver := e.routerVPNTestOpenVPNProofRead.Load()\n"
+        "\treceipt, err := endpoint.RouterVPNConnectedRemote()\n"
+        "\tcurrent, exists := e.box.outbound.Outbound(tag)\n"
+        "\tif observer != nil && e.routerVPNTestOpenVPNProofRead.Load() == observer &&\n"
+        "\t\texists && current == owner && e.Identity() != \"\" &&\n"
+        "\t\t(tag != mobilemultihop.LocalTag || e.Selected() == tag) {\n"
+        "\t\t(*observer)(tag, owner, receipt, err)\n"
+        "\t}\n")
+    if mutation == "missing-proof-read":
+        new = replace(new, "if observer != nil", "if false && observer != nil")
+    return replace(raw, old, new)
 
 
 def rejection_source(raw):
@@ -61,7 +86,7 @@ def rejection_source(raw):
     raw = replace(raw, "desktopExternalWFPOpenVPNReject(t, f, peer, remotes, name)",
                   "desktopExternalWFPOpenVPNReject(t, f, peer, remotes, name, alias.original.Address.Addr())")
     old = '\tif provider.network != peer.initial.Network || provider.remote.String() != peer.initial.Remote {\n\t\tt.Fatal("OpenVPN rejection changed its captured final provider")\n\t}\n'
-    new = old + '\tif fault == "reject/control-key" && provider.network == "udp" {\n\t\tif err := desktopExternalWFPOpenVPNRejectControl(t, f, peer, provider, originalSource); err != nil { t.Fatal(err) }\n\t\treturn\n\t}\n'
+    new = old + '\tif fault == "reject/control-key" && provider.network == "udp" {\n\t\tif err := desktopExternalWFPOpenVPNRejectControl(t, f, peer, provider, remotes, originalSource); err != nil { t.Fatal(err) }\n\t\treturn\n\t}\n'
     return replace(raw, old, new)
 
 
@@ -133,6 +158,11 @@ def compose(source, directory, existing, mutation=None):
         if MODULE.read_regular(source / target) != original:
             raise ValueError("OpenVPN witness lost its exact original prepared fixture")
         stage(source / target, patch(original.decode("utf-8")).encode("utf-8"))
+    original_proof = MODULE.read_regular(PROOF)
+    proof_target = source / "routervpn_external_policy.go"
+    if MODULE.read_regular(proof_target) != original_proof:
+        raise ValueError("OpenVPN witness lost its exact original proof source")
+    stage(proof_target, proof_source(original_proof.decode("utf-8"), mutation).encode("utf-8"))
     target = source / "routervpn_desktop_external_windows_openvpn_control_witness_test.go"
     if target.exists() or target.is_symlink():
         raise ValueError("Unowned OpenVPN box witness occupies the prepared source")

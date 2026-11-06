@@ -1760,3 +1760,65 @@ the complete original and revised files: line 395 is the sole changed line,
 with no admission, runtime, fixture or assertion changes. Independent source
 review is clear. No execution is claimed for this wording-only correction;
 native builds and rendered-device acceptance remain separate evidence.
+
+
+## Windows OpenVPN mixed retry: transport observation and original pending proof
+
+The actual AMD64 and ARM64 OpenVPN physical jobs at
+`de7967946d89015ac1e0bb489910c2ef4e12615f` failed the mixed
+`reject/control-key` case because two original UDP MAC-rejection sessions were
+not observed within the fixture's ten seconds. The original transport's mixed
+unavailable-TCP/UDP backoff reaches its second UDP session beyond the production
+proof's unchanged 45-second lifetime. Extending observation while starting that
+proof immediately would therefore observe a correctly retired owner.
+
+This four-file fixture repair is reconstructed from the recorded design and
+preserved in review objects `134ac9a2ea06d61bdecaf16b964886f47be258ee`,
+`2a3bd7cb28344c35a1247d1fe47d1cdbbbe4f029`, and
+`a93aab45c876a67f837064b1fa6524b5917351fa`. The publisher read all four complete
+files and independently verified their Git blob identities. The final source
+differs from the last review only in its control-explanation comment.
+
+For the exact original mixed remote sequence, transport observation now precedes
+proof execution and has a 90-second child bound under the provider's existing
+100-second lifetime. UDP-only retains its original concurrent proof and ten-second
+observation. Both paths still require two distinct initialized original UDP
+generations, actual provider MAC failures, independent session/socket correlation
+and strict native WFP/TUN readback. No production timeout or retry changes.
+
+After that evidence, the fixture requires a fresh actual `OpenVPNRemote` call
+from the original proof to return its raw zero receipt and pending error. The
+test-only compiler overlay captures its atomic observer registration before the
+real endpoint call and verifies that same registration and exact route owner
+afterward. Direct fixture getters cannot supply this witness. The original proof
+must remain pending; the same second session brackets another strict native
+inspection before cancellation and the original bounded join. Observer removal
+uses CAS only after that Run joins.
+
+Review found that the same original socket's valid permit renewal can advance
+`DesktopSocketGrant.Sequence`. The comparison now requires one acknowledged
+grant in each snapshot and a nondecreasing positive sequence, privately copies
+the later grant slice, and normalizes only that sequence for whole-readback
+equality. Capture, binding, socket, tuple, WFP owner/options, construction count
+and TUN identity all remain exact. A mandatory ownership leaf checks three
+accepted sequences, nineteen changed-field refusals, zero original sequence and
+preservation of both input snapshots.
+
+The runner retains all nine original mixed leaves, executing eight together and
+the unchanged control-key leaf in a separate invocation with exact hierarchical
+Go run/skip expressions. Alias/witness limits remain 60 seconds and network
+invocations remain 180 seconds. A fifth scoped causal image removes only the
+proof-read observer and must fail its exact UDP control-key leaf with the required
+missing-observation message. Six image receipts and the corresponding aggregate
+budget are mandatory. Duplicate, foreign-partition, missing, skipped, failed and
+aborted results cannot close the gate.
+
+Independent source review is clear. The reconstructed runner tests cover partition
+and dispatch, exact budgets/inventories, source ownership, atomic observation,
+guard-only mutation and compiler-owner collision refusal. **These final four-file
+bytes have not been executed:** the earlier fifteen Python passes and standalone
+Go partition experiment belong to an unavailable earlier local draft and are not
+transferred to this reconstruction. Its interrupted Windows crosscompile has no
+known result. Publication submits the reviewed test repair to mandatory exact-SHA
+CI; Python execution, Windows AMD64/ARM64 compilation, native cases and causal
+controls remain required evidence.
