@@ -30,7 +30,9 @@ def block(source, signature):
     return source[start:end]
 
 
-GO_CASE = r'''case "imported-router":
+GO_CASE = r'''case "ss-service":
+ err=mobilemultihop.ValidateCapturedSSService(args[1],args[2]);if err==nil{out="true"}
+ case "imported-router":
  if len(args)!=8 { panic("missing original sources") }
  var c *mobilemultihop.Controller
  c,err=mobilemultihop.NewImportedEntry(args[1],args[2],args[3],args[4],args[5],args[6],args[7])
@@ -110,6 +112,26 @@ public final class ImportedRouterTest {
   finally{release.countDown();writer.join(5000);executor.shutdownNow();check(executor.awaitTermination(5,java.util.concurrent.TimeUnit.SECONDS),"source checker did not join");}
   check(completed,"source check deadlocked behind store mutation owner");
  }
+ static String serviceSHA(byte[] data)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));}
+ static void configuredCONNECT(AndroidStandardExitStore.Entry entry,JSONObject original)throws Exception{
+  for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String mode:List.of("home","custom"))for(String transport:List.of("udp","tcp")){
+   JSONObject bundle=object(original.toString()),profile=profile(bundle),files=bundle.getJSONObject("profiles").getJSONObject("shadowsocks");
+   profile.put("start_layer",layer).put("dns_mode",mode).put("dns_protocol",transport);
+   if(mode.equals("custom"))profile.put("dns_host","203.0.113.53");
+   byte[] source=Base64.getDecoder().decode(files.getString("sing-box.json"));JSONObject out=object(new String(source,StandardCharsets.UTF_8)).getJSONArray("outbounds").getJSONObject(0);
+   JSONObject claim=new JSONObject().put("schema",1).put("node_id",profile.getString("node_proof_id")).put("configured_image","ghcr.io/sagernet/sing-box:v1.13.12").put("uot_version",2).put("endpoint",out.getString("server")).put("port",out.getInt("server_port")).put("method",out.getString("method")).put("key_sha256",serviceSHA(out.getString("password").getBytes(StandardCharsets.UTF_8))).put("source_sha256",serviceSHA(source));
+   files.put("routervpn-ss-service.json",Base64.getEncoder().encodeToString(claim.toString().getBytes(StandardCharsets.UTF_8)));
+   String before=bundle.toString();AndroidImportedRouterPath.Compiled compiled=AndroidImportedRouterPath.compile(entry,bundle,"shadowsocks","local");
+   JSONObject metadata=object(compiled.metadata),dns=object(compiled.config).getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+   check(metadata.getString("transport_capability").equals("uot-v2")&&dns.getString("type").equals(transport)&&dns.getString("server").equals(profile.getString("dns_host"))&&dns.getInt("server_port")==profile.getInt("dns_port"),"configured CONNECT changed DNS or capability");
+   check(before.equals(bundle.toString())&&object(object(compiled.input).getString("exit_files")).toString().equals(files.toString()),"configured CONNECT changed original source assets");
+   RouterMultihop restored=AndroidImportedRouterPath.prepareExecution(compiled.config,compiled.metadata,compiled.input);restored.close();
+   reject("configured CONNECT source replacement",()->{JSONObject changed=object(compiled.input),assets=object(changed.getString("exit_files"));assets.remove("routervpn-ss-service.json");changed.put("exit_files",assets.toString());AndroidImportedRouterPath.prepareExecution(compiled.config,compiled.metadata,changed.toString());});
+   Libbox.rejectSSService=true;try{reject("false service bridge result",()->AndroidImportedRouterPath.compile(entry,bundle,"shadowsocks","local"));}finally{Libbox.rejectSSService=false;}
+   JSONObject foreign=object(before),claim2=object(claim.toString());claim2.put("node_id","f".repeat(64));foreign.getJSONObject("profiles").getJSONObject("shadowsocks").put("routervpn-ss-service.json",Base64.getEncoder().encodeToString(claim2.toString().getBytes(StandardCharsets.UTF_8)));
+   reject("foreign configured CONNECT owner",()->AndroidImportedRouterPath.compile(entry,foreign,"shadowsocks","local"));
+  }
+ }
  static void one(Path root,Path fixture)throws Exception{
   JSONArray args=new JSONArray(Files.readString(fixture));String finalMode=args.getString(2);AndroidStandardExitStore.Entry e=entry(args);JSONObject b=bundle(args);
   String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,finalMode,"local");
@@ -118,6 +140,7 @@ public final class ImportedRouterTest {
   check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(AndroidMultihopRuntime.importedEntryMode(e))&&selected.getString("exit_mode").equals(finalMode),"host changed selected identities or transport");
   if(List.of("http","https").contains(e.protocol)){
    check(selected.getString("transport_capability").equals("tcp-only"),"CONNECT capability was lost");
+   if(fixture.getFileName().toString().contains("--2022-blake3-aes-256-gcm--home"))configuredCONNECT(e,b);
    JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0),saved=profile(b);
    check(dns.getString("type").equals("tcp")&&dns.getString("server").equals(saved.getString("dns_host"))&&dns.getInt("server_port")==saved.getInt("dns_port")&&dns.getString("detour").equals("proxy"),"CONNECT changed exact saved DNS");
    for(String execution:List.of("server","auto"))reject("CONNECT unsupported execution",()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
@@ -257,7 +280,7 @@ public final class ImportedRouterTest {
 }'''
 
 
-def main():
+def main(phases=None):
     for tool in ("java", "javac", "go"):
         if not shutil.which(tool):
             raise RuntimeError(f"{tool} is required; imported-entry tests cannot be skipped")
@@ -277,7 +300,7 @@ def main():
         subprocess.run(["go", "build", "-o", str(temp / "compiler"), str(temp / "main.go")], cwd=ROOT, check=True, timeout=120)
         stubs = dict(E.STUBS)
         lib = stubs["io/nekohasekai/libbox/Libbox.java"]
-        addition = '''public static RouterMultihop newRouterImportedEntryMultihop(String a,String b,String c,String d,String e,String f,String g)throws Exception{String result=call("imported-router",a,b,c,d,e,f,g);Runnable h=hook;hook=null;if(h!=null)h.run();return new RouterMultihop(result);}'''
+        addition = '''public static boolean rejectSSService; public static boolean routerValidateSSService(String files,String node)throws Exception{return !rejectSSService && "true".equals(call("ss-service",files,node));} public static RouterMultihop newRouterImportedEntryMultihop(String a,String b,String c,String d,String e,String f,String g)throws Exception{String result=call("imported-router",a,b,c,d,e,f,g);Runnable h=hook;hook=null;if(h!=null)h.run();return new RouterMultihop(result);}'''
         stubs["io/nekohasekai/libbox/Libbox.java"] = lib[:lib.rindex("}")] + addition + "}"
         stubs["io/nekohasekai/libbox/RouterMultihop.java"] = OWNER
         for name, source in stubs.items():
@@ -310,7 +333,7 @@ def main():
         private.mkdir()
         command=["java", "-cp", os.pathsep.join((str(classes), str(jar))), "com.eabusham.routervpn.ImportedRouterTest", str(temp / "compiler"), str(private), str(fixtures)]
         # Preserve the original finite bound for each complete final-mode family.
-        for final_mode in ("openvpn--tcp--final-shadowsocks","openvpn--tcp--final-hysteria2","openvpn--tcp--final-wg","openvpn--tcp--final-awg2-fast","openvpn--tcp--final-awg2-strong","openvpn--udp--final-shadowsocks","openvpn--udp--final-hysteria2","openvpn--udp--final-wg","openvpn--udp--final-awg2-fast","openvpn--udp--final-awg2-strong","connect--http-connect", "connect--https-connect", "socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
+        for final_mode in phases or ("openvpn--tcp--final-shadowsocks","openvpn--tcp--final-hysteria2","openvpn--tcp--final-wg","openvpn--tcp--final-awg2-fast","openvpn--tcp--final-awg2-strong","openvpn--udp--final-shadowsocks","openvpn--udp--final-hysteria2","openvpn--udp--final-wg","openvpn--udp--final-awg2-fast","openvpn--udp--final-awg2-strong","connect--http-connect", "connect--https-connect", "socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
             subprocess.run(command+[final_mode], check=True, timeout=180)
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()

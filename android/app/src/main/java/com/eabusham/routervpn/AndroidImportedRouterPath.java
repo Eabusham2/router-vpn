@@ -30,7 +30,7 @@ final class AndroidImportedRouterPath {
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {
         if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn").contains(AndroidExternalPolicy.protocol(entry.protocol))
                 || "shadowsocks".equals(entry.protocol) && !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
-            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5, OpenVPN or a TCP-only HTTP/HTTPS CONNECT entry.");
+            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5, OpenVPN or an HTTP/HTTPS CONNECT entry with a compatible captured final service.");
         }
         AndroidStandardExitStore.validate(entry);
     }
@@ -97,8 +97,19 @@ final class AndroidImportedRouterPath {
                         || !supports(entryMode, selected.getString("exit_mode"))) {
                     throw new IllegalStateException("The imported-entry compiler changed the selected path.");
                 }
-                if (Arrays.asList("http-connect", "https-connect").contains(entryMode) && !"tcp-only".equals(selected.optString("transport_capability"))) {
-                    throw new IllegalStateException("CONNECT lost its captured TCP-only capability.");
+                if (Arrays.asList("http-connect", "https-connect").contains(entryMode)) {
+                    JSONObject files = new JSONObject(input.getString("exit_files"));
+                    String capability = "tcp-only";
+                    if (files.has("routervpn-ss-service.json")) {
+                        String node = new JSONObject(input.getString("exit_profile")).getString("node_proof_id");
+                        if (!Libbox.routerValidateSSService(input.getString("exit_files"), node)) {
+                            throw new IllegalStateException("CONNECT lost its captured final service authority.");
+                        }
+                        capability = "uot-v2";
+                    }
+                    if (!capability.equals(selected.optString("transport_capability"))) {
+                        throw new IllegalStateException("CONNECT changed its captured transport capability.");
+                    }
                 }
                 this.input = input.put("source_sha256", source).toString();
                 if (this.input.getBytes(StandardCharsets.UTF_8).length > MAX_INPUT) throw new IllegalStateException("The captured path exceeds its private staging bound.");

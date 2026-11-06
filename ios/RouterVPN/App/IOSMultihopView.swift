@@ -53,7 +53,7 @@ extension RouterVPNModel {
            let imported = entry.routerProfiles.first(where: { $0.id == entryID }), imported.normalizedNodeKind == "external" {
             let original = try JSONSerialization.jsonObject(with: JSONEncoder().encode(imported)) as! [String: Any]
             let final = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
-            try IOSImportedEntryMultihop.validate(entry: original, final: final)
+            try IOSImportedEntryMultihop.validate(entry: original, final: final, profiles: exitBundle.profiles)
             guard imported.external?.matchesStartLayer(imported.startLayer) == true else { throw IOSImportedEntryMultihop.issue() }
             if imported.external?.startLayer != nil { try IOSExternalExecution.validateLayerDraft(imported) }
             _ = try IOSMultihopStartLayer.capture(profile: final, profiles: exitBundle.profiles)
@@ -355,7 +355,7 @@ struct IOSMultihopView: View {
                         }
                         LabeledContent("Execution", value: "Local")
                         if ["http-connect", "https-connect"].contains(externalEntryProtocol ?? "") {
-                            Text("HTTP/HTTPS CONNECT entries are TCP-only: select SS2022, both layers Off, and Home or custom TCP DNS. Other UDP traffic is blocked; saved DNS is never changed automatically.")
+                            Text("HTTP/HTTPS CONNECT uses SS2022. A captured Router UoT-v2 service enables UDP and final AES or AES+XOR; otherwise the path is TCP-only with both layers Off and TCP DNS. Saved DNS is never changed automatically.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Text("The imported entry keeps its own public-address proof and Start Layer. The paired final node keeps its private identity, DNS and independent Start Layer.")

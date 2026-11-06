@@ -10,6 +10,7 @@ import os
 import platform
 import subprocess
 import tempfile
+import ios_test_crypto_bridge as crypto
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
@@ -18,6 +19,7 @@ T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
 STUBS = r'''
 import Foundation
+import CryptoKit
 import Libbox
 enum IOSRuntimeSelector {
  static let multihopModeIDs:Set<String>=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]
@@ -74,6 +76,55 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
  static func check(_ name:String,_ result:@autoclosure ()throws->Bool)throws{latest=name;guard try result()else{throw NSError(domain:"ExternalSelection",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
  static func reject(_ name:String,_ operation:()throws->Void)throws{latest=name;do{try operation()}catch{checks+=1;return};throw NSError(domain:"ExternalRejection",code:1,userInfo:[NSLocalizedDescriptionKey:name])}
  static func main() { do { try run() } catch { FileHandle.standardError.write(Data(("FAIL after "+String(checks)+" checks at "+latest+": "+error.localizedDescription+"\n").utf8));exit(1) } }
+ static func configured(_ finalBundle:ClientBundle,_ paired:RouterProfile,_ selectedKind:String,_ selectedLayer:String)throws {
+  for kind in [selectedKind] {
+   var source=try profile("service-connect-entry","external",kind);source.apiToken=""
+   let transport=ExternalHTTPConnectConfig(host:"198.51.100.8",port:8443,username:" original user ",password:" original password ",tlsServerName:kind=="https-connect" ? "proxy.example.com":nil)
+   if kind=="http-connect" {source.external?.httpConnect=transport}else{source.external?.httpsConnect=transport}
+   let original=bundle(source)
+   for layer in [selectedLayer] {for dnsMode in ["home","custom"] {for dnsTransport in ["udp","tcp"] {
+    var final=finalBundle
+    final.routerProfiles[0].startLayer=layer;final.routerProfiles[0].dnsMode=dnsMode;final.routerProfiles[0].dnsProtocol=dnsTransport;final.routerProfiles[0].dnsHost=dnsMode=="home" ? "192.168.50.133":"203.0.113.53";final.routerProfiles[0].dnsPort=5353
+    let raw=Data(base64Encoded:final.profiles["shadowsocks"]!["sing-box.json"]!)!,graph=try JSONSerialization.jsonObject(with:raw) as! [String:Any],out=(graph["outbounds"] as! [[String:Any]])[0]
+    func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+    let claim:[String:Any]=["schema":1,"node_id":final.routerProfiles[0].nodeProofID!,"configured_image":"ghcr.io/sagernet/sing-box:v1.13.12","uot_version":2,"endpoint":out["server"]!,"port":out["server_port"]!,"method":out["method"]!,"key_sha256":hash(Data((out["password"] as! String).utf8)),"source_sha256":hash(raw)]
+    final.profiles["shadowsocks"]!["routervpn-ss-service.json"]=try encoded(claim).base64EncodedString()
+    let model=RouterVPNModel();model.bundle=final
+    IOSNodeBundleStore.shared.nodes=[source.id:try encoded(original),paired.id:try encoded(final)]
+    try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:kind)
+    let held=try model.iosMultihopEntryBundle(for:model.bundle!)
+    try check("configured CONNECT retains original sources",held.profiles==original.profiles && held.routerProfiles==original.routerProfiles && model.bundle!.profiles==final.profiles)
+    try check("configured CONNECT retains selected DNS and layer",model.bundle!.routerProfiles[0].dnsProtocol==dnsTransport && model.bundle!.routerProfiles[0].dnsHost==final.routerProfiles[0].dnsHost && model.bundle!.routerProfiles[0].dnsPort==5353 && model.bundle!.routerProfiles[0].startLayer==layer)
+    let configuration:[String:Any]=["engine":"multihop-libbox","mode":"shadowsocks","bundle":try encoded(model.bundle!),"entryBundle":try encoded(original)]
+    _ = try IOSMultihopExecution.Source(configuration:configuration,digest:hash)
+    var malformedBundle=try JSONSerialization.jsonObject(with:encoded(model.bundle!)) as! [String:Any]
+    malformedBundle["profiles"]=["shadowsocks":true]
+    var malformedConfiguration=configuration;malformedConfiguration["bundle"]=try encoded(malformedBundle)
+    try reject("configured source refuses malformed asset container"){_ = try IOSMultihopExecution.Source(configuration:malformedConfiguration,digest:hash)}
+    let firstProfile=try JSONSerialization.jsonObject(with:JSONEncoder().encode(source)) as! [String:Any]
+    let lastProfile=try JSONSerialization.jsonObject(with:JSONEncoder().encode(model.bundle!.routerProfiles[0])) as! [String:Any]
+    for empty in [false,true] {
+     var defaults=lastProfile;defaults["dns_mode"]="home"
+     if empty {defaults["dns_protocol"]=""}else{defaults.removeValue(forKey:"dns_protocol")}
+     try IOSImportedEntryMultihop.validate(entry:firstProfile,final:defaults,profiles:final.profiles)
+     defaults["dns_mode"]="custom"
+     try reject("configured custom DNS requires explicit transport"){try IOSImportedEntryMultihop.validate(entry:firstProfile,final:defaults,profiles:final.profiles)}
+    }
+    var wrongType=lastProfile;wrongType["dns_protocol"]=true
+    try reject("configured DNS transport type is strict"){try IOSImportedEntryMultihop.validate(entry:firstProfile,final:wrongType,profiles:final.profiles)}
+    for fault in ["missing","foreign","stale","malformed"] {
+     var changed=model.bundle!,files=changed.profiles["shadowsocks"]!,badClaim=claim
+     if fault=="missing" {files.removeValue(forKey:"routervpn-ss-service.json");changed.routerProfiles[0].dnsProtocol="udp"}
+     else {if fault=="foreign" {badClaim["node_id"]=String(repeating:"f",count:64)}else{badClaim["source_sha256"]=String(repeating:"0",count:64)};files["routervpn-ss-service.json"]=(fault=="malformed" ? Data("{".utf8):try encoded(badClaim)).base64EncodedString()}
+     changed.profiles["shadowsocks"]=files
+     try reject("configured CONNECT refuses missing or invalid authority "+fault){_ = try model.iosMultihopEntryBundle(for:changed)}
+     var replaced=configuration;replaced["bundle"]=try encoded(changed)
+     try reject("configured CONNECT source capture refuses authority "+fault){_ = try IOSMultihopExecution.Source(configuration:replaced,digest:hash)}
+    }
+   }}}
+  }
+  print("PASS configured CONNECT "+selectedKind+" "+selectedLayer+" "+String(checks)+" checks")
+ }
  static func run()throws {
   defer { RouterVPNTorTestClose() }
   var imported=try profile("imported-first","external","shadowsocks");imported.apiToken="";imported.dnsMode="home"
@@ -81,6 +132,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   var paired=try profile("paired-final","router-vpn");paired.external=nil;paired.dnsMode="home"
   var finalBundle=bundle(paired)
   finalBundle.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:8,count:32).base64EncodedString()]]]).base64EncodedString()]
+  if CommandLine.arguments.count == 4 { try configured(finalBundle,paired,CommandLine.arguments[2],CommandLine.arguments[3]);return }
   let importedBundle=bundle(imported),mixed=RouterVPNModel();mixed.bundle=finalBundle
   IOSNodeBundleStore.shared.nodes=[imported.id:try encoded(importedBundle),paired.id:try encoded(finalBundle)]
   try mixed.saveIOSMultihop(enabled:true,entryID:imported.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:"shadowsocks")
@@ -634,14 +686,30 @@ def main():
     body += '\n' + capture + '\nextension RouterVPNModel {\n' + model_edit + '\n}\n'
     with tempfile.TemporaryDirectory(prefix='.ios-external-selection-', dir=ROOT) as helper, tempfile.TemporaryDirectory(prefix='ios-external-selection-') as directory:
         work = Path(directory); source = work / 'Test.swift'; source.write_text(body)
+        crypto_flags, crypto_env = crypto.prepare(work/'crypto')
         helper = Path(helper) / 'main.go'; helper.write_text(T.GO)
         compiler = work / 'compiler'
         subprocess.run(['go', 'build', '-o', str(compiler), str(helper)], cwd=ROOT, check=True, timeout=180)
         library = work / 'Libbox.swift'; library.write_text(T.LIBBOX)
         suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-emit-module', '-emit-library', '-module-name', 'Libbox', str(library), '-emit-module-path', str(work/'Libbox.swiftmodule'), '-o', str(work/('libLibbox'+suffix))], check=True, timeout=90)
-        subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopExecution.swift'), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
-        subprocess.run([str(work / 'test'), str(compiler)], env=dict(os.environ, ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json')), check=True, timeout=30)
+        subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), *crypto_flags, '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopExecution.swift'), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
+        runtime_env = dict(os.environ, **crypto_env, ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json'))
+        baseline = subprocess.run([str(work / 'test'), str(compiler)], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+        expected_baseline = 'Apple external entry selection: PASS (3231 shipping Swift checks; storage/native-readiness boundaries doubled)\n'
+        if baseline.stdout != expected_baseline:
+            raise ValueError('Missing or foreign baseline Swift verdict: '+repr(baseline.stdout))
+        print(baseline.stdout, end='', flush=True)
+        # Each additional configured transport/layer runs with the original
+        # process budget; all four DNS selections and refusal controls remain.
+        for kind in ('http-connect', 'https-connect'):
+            for layer in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'):
+                result = subprocess.run([str(work / 'test'), str(compiler), kind, layer], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+                expected = f'PASS configured CONNECT {kind} {layer} 56 checks\n'
+                if result.stdout != expected:
+                    raise ValueError('Missing or foreign configured CONNECT Swift verdict: '+repr(result.stdout))
+                print(result.stdout, end='', flush=True)
+        print('Configured CONNECT Swift matrix: PASS (24 combinations, 336 checks across 6 bounded processes)')
 
 
 if __name__ == '__main__':

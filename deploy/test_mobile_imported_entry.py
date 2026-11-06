@@ -26,6 +26,7 @@ def socks_label(mode,a,b):
 SOCKS_FILES={'socks5--final-'+socks_label(mode,a,b)+'.json' for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong') for a in LAYERS for b in LAYERS}
 CONNECT_ROWS=[p+"--"+m+"--"+d for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")]
 CONNECT_FILES={"connect--"+row+".json" for row in CONNECT_ROWS}
+CONNECT_SERVICE_FILES={p+"--"+l+"--"+d+"--"+t+".json" for p in ("http-connect","https-connect") for l in ("off",*LAYERS[1:]) for d in ("home","custom") for t in ("udp","tcp")}
 CONNECT_PEERS=[row+"/success" for row in CONNECT_ROWS]+CONNECT_ROWS
 for protocol in ("http-connect","https-connect"):
  row=protocol+"--2022-blake3-aes-256-gcm--home"
@@ -35,6 +36,9 @@ CONTEXT_CORE={'TestImportedOwnerContextRetiresHeldControllerRead':['identity','s
 CONTEXT_NATIVE={'TestRouterNativeProofContextRetiresHeldReads':['identity','dial','dns','hop-identity','hop-dial','capture','selected','manager-dial','manager-selected'],'TestRouterNativeProofDialClosesLateConnection':['cancel','instance-replaced','outbound-replaced','connection-and-error']}
 FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CORE={
+ "TestImportedEntryCONNECTServiceConfiguredGraphs":[p+"/"+l+"/"+d+"/"+t for p in ("http-connect","https-connect") for l in ("off",*LAYERS[1:]) for d in ("home","custom") for t in ("udp","tcp")],
+ "TestImportedEntryCONNECTServiceAuthorityRefusals":["missing","foreign-node","stale-source","wrong-key","wrong-port","wrong-image","wrong-version","extra-asset","entry-layer","unsupported-layer","inline-uot","dns-h3","wrong-home"],
+ "TestImportedEntryCONNECTServiceDefaultHomeAndInvalidTCPAuthority":["default-home","tcp-foreign-node","tcp-malformed","tcp-stale-source"],
  "TestImportedEntryCONNECTGraphs":CONNECT_ROWS,
  "TestImportedEntryCONNECTBoundaries":["udp-dns","h3-dns","dot-dns","default-dns","hostname-dns","home-owner","entry-layer","final-layer","hy-final","wg-final","awg-final","legacy-cipher","uot-enabled","uot-disabled","uot-malformed","server-execution","retained-source"],
  'TestImportedEntrySOCKSBothLayerMTURetention':[mode+"/"+entry+"/"+final for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for entry in LAYERS[1:] for final in LAYERS[1:]],
@@ -157,13 +161,15 @@ def run(vendor,peers=False,android=False):
  for key in ('GOOS','GOARCH'):env[key]=subprocess.check_output(['go','env','GOHOST'+key[2:]],text=True,env=env).strip()
  with tempfile.TemporaryDirectory(prefix='routervpn-imported-entry-') as temporary:
   fixtures=Path(temporary)/'sources';fixtures.mkdir();env['ROUTERVPN_IMPORTED_ENTRY_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES']='1'
+  service=Path(temporary)/'configured-service';service.mkdir();env['ROUTERVPN_CONNECT_SERVICE_FIXTURES']=str(service)
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedEntry','-count=1','-timeout=60s'],ROOT,env,names(CORE))
   env['ROUTERVPN_IMPORTED_OPENVPN_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES']='1'
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedOpenVPN','-count=1','-timeout=60s'],ROOT,env,names(OPENVPN.CORE))
   execute(['go','test','-mod=readonly','-race','-json','./internal/nativeopenvpn','-run','^TestOpenVPNNativeLayerMapSingleHostKeepsOriginalIdentity$','-count=1','-timeout=20s'],ROOT,env,names(OPENVPN.POLICY_CORE))
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^('+'|'.join(CONTEXT_CORE)+')$','-count=1','-timeout=20s'],ROOT,env,names(CONTEXT_CORE))
   if {p.name for p in fixtures.iterdir()}!=FILES:raise ValueError('Incomplete captured imported source matrix')
-  groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES)}
+  if {p.name for p in service.iterdir()}!=CONNECT_SERVICE_FILES:raise ValueError('Incomplete configured CONNECT service matrix')
+  groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES)}
   if android:
    folder=Path(temporary)/'android';folder.mkdir();env['ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES']=str(folder)
    subprocess.run([sys.executable,str(ROOT/'android/test_android_imported_router.py')],cwd=ROOT,env=env,check=True,timeout=240)

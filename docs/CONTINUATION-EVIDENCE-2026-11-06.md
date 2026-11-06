@@ -1434,3 +1434,101 @@ restoration and original-owner cleanup acceptance remains required. Existing
 native Off fixtures cannot establish the new final-layer scenarios. This
 source milestone does not close the broader native, release, device or
 deployment ledger.
+
+
+## 2026-11-06 17:47 UTC — configured CONNECT UoT and captured mobile-host adoption
+
+This fourteen-file unit uses reviewed source
+`b27e8c4277560b1e2bef25fc503cb7ec65f4379a`,
+tree `354a3b28fd6abbd34e00a77d90373eb491ed9ae2`, following
+`7950cd1f`, `b3029eff` and `b4cdc2b7` on the recorded `17ccb6ac` base.
+Its source manifest SHA256 is
+`0292269b219e667ed6042ac8d744fb173f531c8ffdb85cb556736eac0b72b654`.
+It is applied after the separately published Server cleanup and Windows
+final-layer units, without overlapping their changed paths. No unavailable
+historical CONNECT draft was reconstructed.
+
+An imported HTTP/HTTPS CONNECT entry still has its Start Layer Off. The shared
+compiler can now derive UoT v2 for an SS2022 final only when that paired final
+carries its exact validated original service declaration. The existing
+authority validator binds the original node, source/key hashes, endpoint,
+port, configured image and UoT version. The derived graph receives UoT;
+original source bytes, companion hashes and captured fingerprint are retained.
+A present malformed, foreign or stale authority fails, including when the
+otherwise-selected DNS would permit a TCP-only path. Missing authority keeps
+the existing unlayered TCP-only behavior and UDP refusal.
+
+Authorized configurations preserve the selected Home/custom literal UDP or
+TCP resolver and independently provisioned final Off/AES/AES+XOR layer.
+Android validates the original final files and checks the returned transport
+capability; its existing restoration re-derives the captured graph. Apple
+passes the original final profiles through all three actual selection,
+capture and PacketTunnel callers. Missing/empty transport defaults to UDP
+only for authorized Home DNS. Custom DNS still requires an explicit
+transport, and malformed present types/containers are refused.
+
+The new explicit matrix is HTTP/HTTPS × three final-layer choices ×
+Home/custom × UDP/TCP: twenty-four configured cases. This is an implementation
+matrix, not an invented recovery of the historical six unnamed captures.
+The original 337 exported captures and fifty-one TCP native-peer verdict
+inventory remain separate and unchanged. The additional pinned-parser
+inventory requires its twenty-four uniquely named sources plus parent;
+each label is bound to its actual transport, layer, saved DNS and compiled
+resolver tuple.
+
+**Actual execution:**
+
+- Pure imported compiler gate: 501 exact parent/leaf verdicts passed.
+  Focused CONNECT race execution passed in 1.735 seconds.
+- All twelve original TCP-only exported source/capture/digest/config arrays
+  are byte-identical to the `17ccb6ac` baseline.
+- Android host execution used an actual checksum-verified JDK 17.0.21+9 and
+  the pinned JSON dependency: 972 checks and five existing causal controls
+  passed.
+- Actual Linux Swift 6.4.2/Foundation host execution passed the unchanged
+  3,231-check baseline and 336 additional checks covering all twenty-four
+  configured cases. This is not an Xcode/Apple SDK, device or tunnel run.
+- The first combined Swift execution exceeded the existing thirty-second
+  process bound and was retained as a failure. The fixture now runs the six
+  added transport/layer groups separately, each with the same thirty-second
+  bound. It requires the exact single baseline verdict and every unique
+  fifty-six-check group verdict. The original baseline body is byte-identical
+  to `17ccb6ac`; two RouterProfile fixture values use their actual
+  JSONEncoder representation. After successful real Swift execution, the
+  final Python-only acceptance change passed seven controls using the
+  captured outputs and invalid/missing/duplicate/foreign/failure cases.
+- Seventeen imported-driver inventory tests passed.
+- A fresh pinned mobile core, prepared through the official mobile OpenVPN,
+  multihop, Tor and Apple Xray chain, passed 363 exact CheckConfig parser
+  verdicts: original 337 captures plus parent, and new twenty-four plus
+  parent. Parent execution times were 1.06 and 0.06 seconds; package time
+  1.149 seconds. All 3,332 generated/source/module hashes remained unchanged
+  before and after compilation/execution. Only parser parents were selected;
+  no encrypted provider, peer or tunnel was started.
+
+The official Swift 6.4.2 Debian 13 archive used for the host checks has SHA256
+`8b6fde775b7cfc7a3758739d8abb09bb6fba519c6532d6b1a47faff791646c64`.
+Public signature verification exited 0 against the official Swift 6.x release
+key `52BB7E3DE28A71BE22EC05FFEF80A866B47A981F`; the actual compiler reported
+`x86_64-unknown-linux-gnu`. This toolchain observation is separate from
+native Apple build identity.
+
+**Combined current-source integration also passed.** An isolated checkout
+contained exact `de796794` Server lifecycle source plus the seven frozen
+Windows final-layer files and these fourteen CONNECT files. Go 1.26.3
+`-race -mod=readonly` selected the Windows Router, Imported and ExternalLease
+families: seventy parents and 869 parent/leaf verdicts passed in 15.072 seconds,
+with none missing, duplicated, skipped or failed. All twenty-one frozen file
+hashes matched before and after. The union source manifest SHA256 is
+`982416e40c00612f5f934de2faf9e3aff431d5b7614293dd386f8c23c95590c6`;
+the exact verdict log SHA256 is
+`e97c10295e6554176b0a51c32b5ada77e5b4d352158db16669fa102d44c6915c`.
+These verdict counts are not a measure of requirement completion.
+
+This establishes configured compilation, captured host adoption and pinned
+parser acceptance for the stated scope. Encrypted end-to-end UoT traffic,
+live receiver readiness, physical-device behavior, measured PMTU and native
+Apple/Android package acceptance for the resulting publication remain
+separate requirements. Independent entry layers and other DNS/graph
+combinations are not silently closed by this bounded unit. No private
+deployment or new complete release is claimed.

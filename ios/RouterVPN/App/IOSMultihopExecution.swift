@@ -94,7 +94,13 @@ enum IOSMultihopExecution {
             let ordinaryEntry = (tor || !external) ? try? Self.profile(entry, kind: "external") : nil
             let entryProfile = try ordinaryEntry ?? Self.profile(entry, kind: "router-vpn")
             if let ordinaryEntry, !external {
-                try IOSImportedEntryMultihop.validate(entry: ordinaryEntry, final: exitProfile)
+                guard let original = try JSONSerialization.jsonObject(with: bundle) as? [String: Any] else { throw issue() }
+                var profiles: [String: [String: String]] = [:]
+                if let value = original["profiles"] {
+                    guard let captured = value as? [String: [String: String]] else { throw issue() }
+                    profiles = captured
+                }
+                try IOSImportedEntryMultihop.validate(entry: ordinaryEntry, final: exitProfile, profiles: profiles)
             } else if let ordinaryEntry {
                 guard IOSMultihopExecution.torSelection(exitProfile) == "local",
                       let transport = ordinaryEntry["external"] as? [String: Any],
@@ -393,14 +399,29 @@ enum IOSImportedEntryMultihop {
         }
         return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry) && ["wg", "awg2-fast", "awg2-strong"].contains(final)
     }
-    static func validate(entry: [String: Any], final: [String: Any]) throws {
+    static func configuredCONNECTUoT(final: [String: Any], profiles: [String: [String: String]]) throws -> Bool {
+        guard let files = profiles["shadowsocks"], files["routervpn-ss-service.json"] != nil else { return false }
+        guard let node = final["node_proof_id"] as? String,
+              node.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw issue() }
+        try IOSMultihopStartLayer.validateCapturedSSService(files, node: node)
+        return true
+    }
+    static func validate(entry: [String: Any], final: [String: Any], profiles: [String: [String: String]] = [:]) throws {
         guard let imported = entry["external"] as? [String: Any],
               let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(kind) else { throw issue() }
         if ["http-connect", "https-connect"].contains(kind) {
+            let uot = try configuredCONNECTUoT(final: final, profiles: profiles)
+            let layers = uot ? ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] : ["", "off"]
+            let transports = uot ? ["udp", "tcp"] : ["tcp"]
+            guard entry["start_layer"] == nil || entry["start_layer"] is String,
+                  ["start_layer", "dns_mode", "dns_protocol"].allSatisfy({ final[$0] == nil || final[$0] is String }) else { throw issue() }
+            let dnsMode = final["dns_mode"] as? String ?? ""
+            let savedTransport = final["dns_protocol"] as? String ?? ""
+            let transport = uot && ["", "home"].contains(dnsMode) && savedTransport.isEmpty ? "udp" : savedTransport
             guard ["", "off"].contains(entry["start_layer"] as? String ?? ""),
-                  ["", "off"].contains(final["start_layer"] as? String ?? ""),
+                  layers.contains(final["start_layer"] as? String ?? ""),
                   ["", "home", "custom"].contains(final["dns_mode"] as? String ?? ""),
-                  final["dns_protocol"] as? String == "tcp" else { throw issue() }
+                  transports.contains(transport) else { throw issue() }
         }
         if kind == "shadowsocks" {
             guard let transport = imported[kind] as? [String: Any], methods.contains(transport["method"] as? String ?? "") else { throw issue() }
@@ -446,6 +467,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. HTTP/HTTPS CONNECT requires SS2022, both Start Layers Off and explicitly selected Home or custom TCP DNS; other UDP traffic is blocked. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. HTTP/HTTPS CONNECT requires SS2022 and an Off entry. Captured UoT-v2 service authority permits UDP or TCP DNS and final AES or AES+XOR; without it, both layers must be Off with explicit TCP DNS. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

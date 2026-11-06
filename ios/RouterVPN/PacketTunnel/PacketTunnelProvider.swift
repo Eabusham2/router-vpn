@@ -936,7 +936,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startImportedEntryMultihop(provider: [String: Any], root: [String: Any],
                                            entryProfile: [String: Any], finalProfile: [String: Any],
                                            completionHandler: @escaping (Error?) -> Void) throws {
-        try IOSImportedEntryMultihop.validate(entry: entryProfile, final: finalProfile)
+        guard let originalProfiles = root["profiles"] as? [String: [String: String]] else { throw IOSImportedEntryMultihop.issue() }
+        try IOSImportedEntryMultihop.validate(entry: entryProfile, final: finalProfile, profiles: originalProfiles)
         guard restoredMultihopExecution == nil || restoredMultihopExecution == "local",
               let source = multihopExecutionSource, source.requested == "local",
               let profiles = root["profiles"] as? [String: [String: String]] else { throw IOSImportedEntryMultihop.issue() }

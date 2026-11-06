@@ -32,6 +32,17 @@ class ImportedEntryVerdicts(unittest.TestCase):
   gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
+ def test_configured_connect_parser_is_separate_and_complete(self):
+  self.assertEqual(len(gate.CONNECT_SERVICE_FILES),24)
+  self.assertEqual(len(gate.FILES),337)
+  self.assertEqual(len(gate.names({'TestRouterVPNImportedCONNECTNativeTraffic':gate.CONNECT_PEERS})),51)
+  self.assertEqual(len(gate.CORE['TestImportedEntryCONNECTServiceConfiguredGraphs']),24)
+  expected=gate.names({'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(gate.CONNECT_SERVICE_FILES)})
+  self.assertEqual(len(expected),25)
+  events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
+  gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+  for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
+   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_packet_layer_verdicts(self):
   expected=gate.names({'TestRouterVPNImportedSOCKSPacketLayersNativeTraffic':gate.SOCKS_PACKET_LAYER_PEERS})
   self.assertEqual(len(expected),94)
