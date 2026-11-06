@@ -1056,3 +1056,24 @@ and a future test-specific stall must be investigated as such.
 No router, AdGuard configuration, Portainer stack or private deployment was
 changed for this source continuation. Missing live access does not close source
 requirements, and successful source/build evidence does not close live acceptance.
+
+## 2026-11-06 — Complete Android runtime contract job budget
+
+The Android runtime-truth job for source `9a558ef5873ad7bba983e0a568a2748dd99ea41e` (run 42229596587, job 127931769287) was cancelled near its configured 15-minute job limit: it started at 13:56:45 UTC and logged cancellation at 14:11:58. It had completed script 36 of the runner's 53 sequential executable-contract scripts. Seventeen scripts, four subsequent pinned/graph-host checks, and the final Android SS host-capture command remained. The generic cancellation log alone does not identify the cancelling actor.
+
+The later completed source audit on `0ab1606cf663c7faf215e2a804a76ed652f76322` independently establishes the full workload: Android syntax first reported at 14:25:09 and the complete runtime-truth child passed at 14:48:48, approximately 23 minutes 39 seconds later. It includes the final actual SS source-capture positive and negative controls. This observed complete run exceeds the standalone job's old 15-minute allowance.
+
+Only that standalone job's aggregate allowance changes to 30 minutes. The entire command, all scripts and assertions, existing operation deadlines, and final host-capture command's 300-second bound are unchanged. A new standalone run must still establish sufficiency with job setup included. No production timeout or Android device claim follows from this change.
+
+### Completed evidence for the parent source and related native runs
+
+- The authoritative source audit on `0ab1606c`, job 127932408608, completed successfully. It records all 59 toolchain tests passing in 363.221 seconds and all 18 dependency tests passing in 17.623 seconds, including the corrected all-target notice producer boundary. Its full cmd/client invocation passed in 565.790 seconds. Repository, accounting, and Setup Center/AI steps all completed.
+- The two separately revised Go jobs on `0ab1606c` passed: Release gap cmd/client took 541.159 seconds; Multihop cmd/client took 547.531 seconds and all 26 Python checks passed.
+- Native-Xray job 127932639050 on `9a558ef5` completed successfully. It includes 77 Android SS service checks, the two actual SS source race cases, the native engine build, and validation of 174 Android and 174 Apple graph files through the actual native registry. Graph validation does not establish physical networking.
+- Both AMD64 and ARM64 Server jobs on `bab34e59` passed all six association leaves. Five positive cases reached teardown after actual selected DNS/public proof and native ownership checks. Seven cases per architecture then failed authenticated lease cleanup. The production cancellation/cleanup ordering remains open; no cleanup guard was relaxed.
+- Windows native job 127923331079 on `bab34e59` ran and passed the new refused-Connect observation case and rejected all 18 existing identity mutants. It later failed the first live MTU fixture at its unchanged 25-second subprocess limit. That later failure remains a separate investigation.
+
+The complete source audit is a source and executable-contract result. Native release failures, wider source requirements, package publication for this continuation, private deployment, and physical-device acceptance remain separate.
+
+Evidence: [completed source audit](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408608), [standalone Android cancellation](https://github.com/Eabusham2/router-vpn/actions/runs/42229596587/job/127931769287), [complete native Xray validation](https://github.com/Eabusham2/router-vpn/actions/runs/42229596513/job/127932639050), [Server AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/42226553516/job/127927707983), [Server ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/42226553516/job/127927707569), [Windows native identity and MTU](https://github.com/Eabusham2/router-vpn/actions/runs/42226553579/job/127923331079).
+
