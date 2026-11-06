@@ -836,3 +836,13 @@ AUXILIARY['resolved-private-tld-negative-candidate']=('./internal/systembootstra
  'nodata-aaaa','positive','negative-with-answer','signed','alias','dname','deep',
  'foreign-class','servfail','truncated','foreign-question','trailing')})
 AUXILIARY_TESTS['internal/systembootstrap/resolved_private_tld_negative_linux_test.go']='resolved-private-tld-negative-candidate'
+
+# Original negative candidates preserve rcode and wait for equal-best positives.
+SOURCE.add('cmd/client/linux_standard_service_resolved_private_negative_linux_test.go')
+AUXILIARY['resolved-private-tld-negative-shipping']=('./cmd/client',{
+ 'TestResolvedPrivateTLDNegativeShipping':('nxdomain-a','nxdomain-aaaa','nodata-a',
+ 'nodata-aaaa','nxdomain-positive-sibling','nodata-positive-sibling','metadata-code',
+ 'metadata-nx','metadata-data','child-error','bogus-proof','insecure-proof',
+ 'nodata-proof','retire-error','close-error','postjoin-change','cancelled',
+ 'original-retirement','normal-winner','capacity')})
+AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_private_negative_linux_test.go']='resolved-private-tld-negative-shipping'

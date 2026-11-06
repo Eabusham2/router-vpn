@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"router-vpn/internal/mobiletor"
 	"router-vpn/internal/standardengine"
@@ -27,12 +28,21 @@ type resolvedPrivateCandidates struct {
 // This ledger never converts State3 into success. Only joined original workers
 // can hand its inert candidates to the separate, bounded denial-proof cohort.
 func (c *resolvedPrivateCandidates) retain(policy standardengine.ResolvedPolicy, plan *standardengine.ResolvedDNSSECPlan, question []byte, v standardengine.DNSSECVerdict, validationErr error) {
-	if c == nil || validationErr != nil || plan == nil || v.State != 3 || v.RCode != 0 || v.NXDomain != 0 || v.HaveData != 1 || len(v.Packet) < 12 || len(question) < 12 {
+	if c == nil || validationErr != nil || plan == nil || v.State != 3 || len(v.Packet) < 12 || len(question) < 12 {
 		return
 	}
 	packet := bytes.Clone(v.Packet)
 	copy(packet[:2], question[:2])
-	candidate, err := systembootstrap.NewResolvedPrivateTLDCandidate(question, packet)
+	if v.RCode != uint32(packet[3]&15) || (v.NXDomain == 1) != (v.RCode == 3) || v.NXDomain > 1 || v.HaveData > 1 {
+		return
+	}
+	var candidate *systembootstrap.ResolvedPrivateTLDCandidate
+	var err error
+	if v.HaveData == 0 {
+		candidate, err = systembootstrap.NewResolvedPrivateTLDNegativeCandidate(question, packet)
+	} else {
+		candidate, err = systembootstrap.NewResolvedPrivateTLDCandidate(question, packet)
+	}
 	if err != nil || candidate.Name() != plan.Name() {
 		return
 	}
@@ -110,7 +120,14 @@ func resolvePrivateTLDJoined(ctx context.Context, policy standardengine.Resolved
 			return row.answer.UnsignedAnswer(), nil
 		}})
 	}
-	answer, err := resolveOriginalScopesClassified(ctx, group, scopes, question, retire, systembootstrap.ResolvedResponseSuccess)
+	answer, err := resolveOriginalScopesClassified(ctx, group, scopes, question, retire, func(q, a []byte) (bool, error) {
+		positive, err := systembootstrap.ResolvedResponseSuccess(q, a)
+		if err != nil {
+			return false, err
+		}
+		// Both NXDOMAIN and NODATA wait for independently valid positives.
+		return positive && binary.BigEndian.Uint16(a[6:8]) > 0, nil
+	})
 	var retained *resolvedGroupRetirementError
 	if errors.As(err, &retained) {
 		return nil, err
