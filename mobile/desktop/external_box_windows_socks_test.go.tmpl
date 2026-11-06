@@ -988,6 +988,9 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 			if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() {
 				t.Fatal("invalid actual SOCKS path acquired proof", fault)
 			}
+			// Keep the original native failure before a provider phase assertion
+			// can hide an earlier DNS, socket, or ownership refusal.
+			t.Logf("actual SOCKS %s proof refusal: %v", fault, err)
 			r := p.call(t, "stats", "")
 			// The independent provider may observe client EOF just after Run
 			// returns. Require its authenticated reply phase and completed supplemental
