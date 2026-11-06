@@ -261,5 +261,105 @@ func TestOpenVPNIPC(t *testing.T) {
                 raise AssertionError("Original OpenVPN IPC omitted its complete owned-process contract")
 
 
+class ProviderImageCopy(unittest.TestCase):
+    def test_captured_independent_provider_images(self):
+        raw = (ROOT / "mobile/desktop/external_box_windows_hysteria2_test.go.tmpl").read_text()
+        helper = raw[raw.index("type desktopExternalWFPImage struct {"):raw.index("func desktopExternalWFPStartReferenceCaptured(")]
+        test = r'''
+func TestProviderImage(t *testing.T) {
+	t.Run("captured-independent-images",func(t *testing.T){
+		directory:=t.TempDir()
+		source:=filepath.Join(directory,"original.exe")
+		want:=bytes.Repeat([]byte("original-private-image"),10000)
+		if err:=os.WriteFile(source,want,0700);err!=nil{t.Fatal(err)}
+		image,err:=desktopExternalWFPCaptureImage(source)
+		if err!=nil{t.Fatal(err)}
+		if image.size!=int64(len(want))||image.digest!=sha256.Sum256(want){t.Fatal("source receipt changed")}
+		// Later source-path bytes are not silently adopted by the snapshot.
+		if err:=os.WriteFile(source,[]byte("replacement"),0700);err!=nil{t.Fatal(err)}
+		var infos []os.FileInfo
+		for _,name:=range []string{"first.exe","second.exe"}{
+			path:=filepath.Join(directory,name)
+			owner,err:=image.create(path)
+			if err!=nil{t.Fatal(err)}
+			if err:=owner.close();err!=nil{t.Fatal(err)}
+			raw,err:=os.ReadFile(path)
+			if err!=nil||!bytes.Equal(raw,want)||sha256.Sum256(raw)!=image.digest{t.Fatal("copy lost original bytes",err)}
+			info,err:=os.Stat(path);if err!=nil{t.Fatal(err)};infos=append(infos,info)
+			if duplicate,err:=image.create(path);err==nil||duplicate!=nil{t.Fatal("copy adopted an existing executable")}
+			again,err:=os.ReadFile(path);if err!=nil||!bytes.Equal(again,want){t.Fatal("failed exclusive copy changed existing image")}
+		}
+		if os.SameFile(infos[0],infos[1]){t.Fatal("two providers shared executable file ownership")}
+	})
+	t.Run("bounded-write-and-retained-close",func(t *testing.T){
+		body:=strings.Repeat("x",3*(64<<10)+17)
+		image:=&desktopExternalWFPImage{data:body,size:int64(len(body)),digest:sha256.Sum256([]byte(body))}
+		writer:=&imageFaultWriter{failClose:true}
+		owner,err:=image.write(writer)
+		if err==nil||owner==nil||owner.closed||writer.closes!=1{t.Fatal("failed close lost original writer")}
+		if writer.max>64<<10||writer.writes!=4||writer.String()!=body{t.Fatal("image copy lost bounded complete writes")}
+		if err:=owner.close();err!=nil||!owner.closed||writer.closes!=2{t.Fatal("original close was not retried",err)}
+		if err:=owner.close();err!=nil||writer.closes!=2{t.Fatal("acknowledged close repeated")}
+	})
+	t.Run("failed-copy-never-adopts",func(t *testing.T){
+		body:=strings.Repeat("a",70<<10)
+		image:=&desktopExternalWFPImage{data:body,size:int64(len(body)),digest:sha256.Sum256([]byte(body))}
+		for _,mode:=range []string{"short","write","tamper"}{
+			writer:=&imageFaultWriter{mode:mode}
+			owner,err:=image.write(writer)
+			if err==nil||owner==nil||!owner.closed||writer.closes!=1{t.Fatal("failed copy lost close or returned success",mode)}
+			if image.data!=body||image.digest!=sha256.Sum256([]byte(body)){t.Fatal("writer changed immutable cached source")}
+		}
+		path:=filepath.Join(t.TempDir(),"partial.exe")
+		bad:=&desktopExternalWFPImage{data:"partial",size:1}
+		owner,err:=bad.create(path)
+		if err==nil||owner==nil||!owner.closed{t.Fatal("partial image remained launchable")}
+		if err:=os.Remove(path);err!=nil{t.Fatal("failed copy retained its file handle",err)}
+	})
+}
+type imageFaultWriter struct {
+	bytes.Buffer
+	mode string
+	failClose bool
+	writes,max,closes int
+}
+func(w *imageFaultWriter)Write(raw []byte)(int,error){
+	w.writes++
+	if len(raw)>w.max{w.max=len(raw)}
+	if w.mode=="write"{return 0,errors.New("owned write refused")}
+	if w.mode=="short"{return w.Buffer.Write(raw[:len(raw)-1])}
+	if w.mode=="tamper"{raw[0]^=1}
+	return w.Buffer.Write(raw)
+}
+func(w *imageFaultWriter)Close()error{
+	w.closes++
+	if w.failClose&&w.closes==1{return errors.New("original close unacknowledged")}
+	return nil
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="routervpn-provider-image-") as tmp:
+            path = Path(tmp)
+            (path / "go.mod").write_text("module providerimage\n\ngo 1.24.13\n")
+            (path / "image_test.go").write_text('package providerimage\nimport("bytes";"crypto/sha256";"errors";"io";"os";"path/filepath";"strings";"sync";"testing")\n' + helper + test)
+            env = dict(os.environ, GOMAXPROCS="2", GOWORK="off", GOFLAGS="")
+            compiler = shutil.which("go")
+            host_os, host_arch = subprocess.check_output([compiler, "env", "GOHOSTOS", "GOHOSTARCH"], env=env, text=True, timeout=15).split()
+            race = [] if (host_os, host_arch) == ("windows", "arm64") else ["-race"]
+            env.update(GOOS=host_os, GOARCH=host_arch, CGO_ENABLED="1" if race else "0")
+            binary = path / ("provider-image.test.exe" if host_os == "windows" else "provider-image.test")
+            print("Provider image phase=compile", flush=True)
+            subprocess.run([compiler, "test", "-c", *race, "-p=1", "-o", str(binary), "."],
+                           cwd=path, env=env, check=True, timeout=180)
+            print("Provider image phase=execute", flush=True)
+            result = subprocess.run([str(binary), "-test.run=^TestProviderImage$", "-test.count=1", "-test.timeout=15s", "-test.v"],
+                                    cwd=path, env=env, capture_output=True, text=True, timeout=60)
+            output = result.stdout + result.stderr
+            print(output, end="" if output.endswith("\n") else "\n", flush=True)
+            required = ["TestProviderImage", *("TestProviderImage/" + leaf for leaf in (
+                "captured-independent-images", "bounded-write-and-retained-close", "failed-copy-never-adopts"))]
+            if result.returncode or any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(case) + r" \(", output)) != 1 for case in required) or re.search(r"--- FAIL:|--- SKIP:|DATA RACE|panic:|fatal error:|\[build failed\]", output):
+                raise AssertionError("Provider image copy omitted its independent immutable-source contract")
+
+
 if __name__ == "__main__":
     unittest.main()

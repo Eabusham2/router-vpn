@@ -1207,3 +1207,18 @@ Validation before publication: root reviewed the pinned codecs/parser and actual
 
 Evidence: [6aac340a AMD64 native job](https://github.com/Eabusham2/router-vpn/actions/runs/42238149378/job/127961121286), [6aac340a ARM64 native job](https://github.com/Eabusham2/router-vpn/actions/runs/42238149378/job/127961121250), [pinned raw/static-key parser](https://github.com/SagerNet/sing-openvpn/blob/103eb5fe5eb69b8e747971eaaf0185a6618b7da7/data_codec_static.go).
 
+
+## 2026-11-06 — Preserve independent Windows provider images with smaller copy writes
+
+The 6aac340a AMD64 packet suite reached its three-minute alarm while wireguard/reject/exit had spent about 83 seconds in provider setup. The stack was inside a single WriteFile request for 106,627,584 bytes, before the provider process and its own context were created. The fixture reread and recopied the parent executable for each reference peer. The log does not establish whether storage, scanning or another OS cause produced that delay.
+
+The fixture now captures the original regular executable once per parent process, checking opened/named file identity, size and modification time around the read. The fixture cap is 512 MiB. Only an immutable string, exact size and SHA-256 remain cached; no executable path, descriptor, provider process or mutable byte slice is shared.
+
+Each peer still receives a fresh file in its own TempDir, created exclusively with O_EXCL and the existing permissions. Copy writes use a reusable 64 KiB buffer, explicitly avoiding a whole-image fast path. Exact write counts and the captured digest must agree. A short write, changed bytes or unacknowledged close prevents launch. The original writer remains available to cleanup for a failed Close; cleanup runs before its own directory removal. Every original AppID, provider process/context, protocol assertion and native deadline remains unchanged.
+
+Three extracted-shipping-helper regression leaves exercise independent file identity and exact bytes, refusal to adopt an existing file, captured source stability after path replacement, bounded write sizes, retained/idempotent close, short writes, write errors, tampering and failed-copy handle cleanup. The runner requires the parent and all three leaf verdicts. Existing provider-join and OpenVPN IPC classes are preserved byte-for-byte.
+
+Validation before publication: an Astra agent traced the actual timeout stack and prepared the exact two-file unit; root independently read its full diff and source, checked existing caller behavior and unchanged earlier test classes, and verified both parent files before publication. No local execution or native improvement is claimed. Chunking limits bytes per write, not OS wall time; exact-source CI must show whether the observed packet-suite timeout is resolved.
+
+Evidence: [actual AMD64 packet timeout](https://github.com/Eabusham2/router-vpn/actions/runs/42238149378/job/127961121154). The separate ARM64 job passed all three ordinary packet-family suites before reaching the independently tracked Server lease-cleanup defect: [ARM64 packet and Server job](https://github.com/Eabusham2/router-vpn/actions/runs/42238149378/job/127961121533).
+

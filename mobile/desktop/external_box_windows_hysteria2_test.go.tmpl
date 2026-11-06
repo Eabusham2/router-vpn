@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -695,6 +696,98 @@ func desktopExternalWFPStartReferenceProtocol(t *testing.T, ca *desktopExternalI
 	return desktopExternalWFPStartReferenceCaptured(t, ca, fault, protocol, nil)
 }
 
+// Capture bytes once per parent process. Every provider still receives a new
+// exclusive file and therefore its own executable path/AppID and lifetime.
+type desktopExternalWFPImage struct {
+	data string
+	size int64
+	digest [32]byte
+}
+var desktopExternalWFPImageSource struct {
+	once sync.Once
+	image *desktopExternalWFPImage
+	err error
+}
+func desktopExternalWFPCaptureImage(path string) (*desktopExternalWFPImage, error) {
+	named, err := os.Stat(path)
+	if err != nil { return nil, err }
+	if !named.Mode().IsRegular() || named.Size() <= 0 || named.Size() > 512<<20 {
+		return nil, errors.New("provider source is not a bounded regular image")
+	}
+	file, err := os.Open(path)
+	if err != nil { return nil, err }
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil || !os.SameFile(named,before) || named.Size()!=before.Size() || !named.ModTime().Equal(before.ModTime()) {
+		return nil, errors.Join(err,errors.New("provider source identity changed before capture"))
+	}
+	raw, err := io.ReadAll(io.LimitReader(file,before.Size()+1))
+	if err != nil { return nil, err }
+	after, err := file.Stat()
+	if err != nil { return nil, err }
+	current, err := os.Stat(path)
+	if err != nil { return nil, err }
+	if int64(len(raw))!=before.Size() || !os.SameFile(before,after) || !os.SameFile(before,current) ||
+		after.Size()!=before.Size() || current.Size()!=before.Size() ||
+		!after.ModTime().Equal(before.ModTime()) || !current.ModTime().Equal(before.ModTime()) {
+		return nil, errors.New("provider source changed during capture")
+	}
+	if err:=file.Close(); err!=nil { return nil,err }
+	return &desktopExternalWFPImage{data:string(raw),size:before.Size(),digest:sha256.Sum256(raw)},nil
+}
+func desktopExternalWFPCapturedImage() (*desktopExternalWFPImage,error) {
+	desktopExternalWFPImageSource.once.Do(func(){
+		path,err:=os.Executable()
+		if err!=nil {desktopExternalWFPImageSource.err=err;return}
+		desktopExternalWFPImageSource.image,desktopExternalWFPImageSource.err=desktopExternalWFPCaptureImage(path)
+	})
+	return desktopExternalWFPImageSource.image,desktopExternalWFPImageSource.err
+}
+type desktopExternalWFPImageWriter struct {
+	writer io.WriteCloser
+	closed bool
+}
+func (w *desktopExternalWFPImageWriter) close() error {
+	if w==nil || w.closed {return nil}
+	err:=w.writer.Close()
+	if err==nil || errors.Is(err,os.ErrClosed) {w.closed=true}
+	return err
+}
+// The returned owner is retained even on failure, so cleanup can retry Close
+// on that same object. No partial or unacknowledged copy may be launched.
+func (image *desktopExternalWFPImage) write(writer io.WriteCloser) (*desktopExternalWFPImageWriter,error) {
+	owner:=&desktopExternalWFPImageWriter{writer:writer}
+	var failure error
+	if image==nil || int64(len(image.data))!=image.size || image.size==0 {
+		failure=errors.New("provider source snapshot is incomplete")
+	} else {
+		hash:=sha256.New()
+		buffer:=make([]byte,64<<10)
+		for offset:=0;offset<len(image.data); {
+			end:=min(offset+(64<<10),len(image.data))
+			// Deliberately avoid WriterTo/ReadFrom fast paths which can merge
+			// this into the original whole-image Windows WriteFile call.
+			chunk:=buffer[:end-offset]
+			copy(chunk,image.data[offset:end])
+			n,err:=writer.Write(chunk)
+			if n<0 || n>len(chunk) {failure=errors.New("provider copy returned an invalid byte count");break}
+			_,_=hash.Write(chunk[:n])
+			offset+=n
+			if err!=nil {failure=err;break}
+			if n!=len(chunk) {failure=io.ErrShortWrite;break}
+		}
+		if failure==nil && !bytes.Equal(hash.Sum(nil),image.digest[:]) {
+			failure=errors.New("provider copy changed its captured source bytes")
+		}
+	}
+	return owner,errors.Join(failure,owner.close())
+}
+func (image *desktopExternalWFPImage) create(path string) (*desktopExternalWFPImageWriter,error) {
+	file,err:=os.OpenFile(path,os.O_WRONLY|os.O_CREATE|os.O_EXCL,0700)
+	if err!=nil {return nil,err}
+	return image.write(file)
+}
+
 func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalIntegrationCA, fault, protocol string, layer *desktopExternalWFPLayerRequest) *desktopExternalWFPReference {
 	t.Helper()
 	if (protocol == "hysteria2-layer") != (layer != nil) {
@@ -714,18 +807,16 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	} else if protocol != "hysteria2" {
 		t.Fatal("unknown native external reference protocol")
 	}
-	actual, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(actual)
-	if err != nil {
-		t.Fatal(err)
-	}
+	image, err := desktopExternalWFPCapturedImage()
+	if err != nil { t.Fatal(err) }
 	copyPath := filepath.Join(t.TempDir(), "retained-external-provider.test.exe")
-	if err := os.WriteFile(copyPath, raw, 0700); err != nil {
-		t.Fatal(err)
+	owner, err := image.create(copyPath)
+	if owner != nil {
+		t.Cleanup(func(){
+			if err:=owner.close();err!=nil {t.Error("provider image writer did not close",err)}
+		})
 	}
+	if err != nil { t.Fatal("provider image copy failed",err) }
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	command := exec.CommandContext(ctx, copyPath, "-test.run=^"+peerTest+"$", "-test.count=1", "-test.timeout=85s")
 	command.Env = append(os.Environ(), "ROUTERVPN_EXTERNAL_WFP_PEER=1")
