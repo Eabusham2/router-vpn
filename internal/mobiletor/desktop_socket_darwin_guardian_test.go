@@ -2527,6 +2527,9 @@ func TestDesktopDarwinGuardianKernelSOCKSAssociations(t *testing.T) {
 				}
 				t.Fatal("ordinary UDP borrowed the private TCP selection")
 			}
+			// The broker retains both control and relay sockets. Its registered
+			// failure trace and bounded drain must precede policy retirement;
+			// per-connection Close cleanups could block that LIFO sequence.
 			var controls, relays []net.Conn
 			for i := 0; i < 2; i++ {
 				control, err := broker.DialContext(ctx, "tcp"+family, tcpRemote.String())
@@ -2534,7 +2537,6 @@ func TestDesktopDarwinGuardianKernelSOCKSAssociations(t *testing.T) {
 					t.Fatal("original native TCP control", err)
 				}
 				controls = append(controls, control)
-				t.Cleanup(func() { _ = control.Close() })
 				desktopDarwinExchange(t, control)
 				if escaped, err := broker.DialSOCKSRelay(ctx, control, "127.0.0.1:53"); err == nil || escaped != nil {
 					t.Fatal("SOCKS association widened loopback permission", err)
@@ -2553,7 +2555,6 @@ func TestDesktopDarwinGuardianKernelSOCKSAssociations(t *testing.T) {
 					t.Fatal("actual selected-private UDP association", err)
 				}
 				relays = append(relays, relay)
-				t.Cleanup(func() { _ = relay.Close() })
 				desktopDarwinExchange(t, relay)
 				if repeated, err := broker.DialSOCKSRelay(ctx, control, udpRemote.String()); err == nil || repeated != nil {
 					t.Fatal("one TCP control admitted a second UDP association")

@@ -59,6 +59,15 @@ class DarwinNativeTimeoutDiagnostics(unittest.TestCase):
         self.expired = subprocess.TimeoutExpired(['original-captured-native-test'], 730,
             output=b'old-prefix:' + b'x' * 10000 + b'\xff\noriginal native case entered\n')
 
+    def test_timeout_excerpt_retains_initial_failure_and_final_stack_with_a_bound(self):
+        raw = b'actual selected-private UDP association: original owner failure\n' + b'x'*40000 + b'final joined stack\n'
+        shown = self.gate.native_timeout_excerpt(raw)
+        self.assertIn('actual selected-private UDP association: original owner failure', shown)
+        self.assertIn('final joined stack', shown)
+        self.assertIn('bounded middle omitted', shown)
+        self.assertLess(len(shown), 12400)
+        self.assertEqual(self.gate.native_timeout_excerpt(b'complete short output'), 'complete short output')
+
     def test_success_retains_original_output_without_signalling(self):
         self.process.communicate.return_value = (b'original native result\n', None)
         with mock.patch.object(self.gate.os, 'killpg') as kill:
@@ -74,8 +83,8 @@ class DarwinNativeTimeoutDiagnostics(unittest.TestCase):
             self.assertEqual((pid, signal), (431, self.gate.signal.SIGKILL))
             self.assertIn('original native case entered', shown.getvalue())
             self.assertIn('\ufffd', shown.getvalue())
-            self.assertNotIn('old-prefix:', shown.getvalue())
-            self.assertLess(len(shown.getvalue()), 8500)
+            self.assertIn('old-prefix:', shown.getvalue())
+            self.assertLess(len(shown.getvalue()), 12500)
             raise denied
         with contextlib.redirect_stderr(shown), mock.patch.object(self.gate.os, 'killpg', side_effect=kill), \
              self.assertRaisesRegex(RuntimeError, 'bounded lifetime; original process-group termination failed: PermissionError') as failed:
@@ -637,6 +646,100 @@ class DarwinOriginalControlLifetime(unittest.TestCase):
         regression = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(regression)
         regression.execute(ROOT)
+
+
+class DarwinSOCKSCleanupOwnership(unittest.TestCase):
+    def test_actual_registration_reaches_bounded_owner_before_blocked_connection_close(self):
+        source = (ROOT/'internal/mobiletor/desktop_socket_darwin_guardian_test.go').read_text()
+        start = source.index('func desktopDarwinKernelBroker(')
+        helper = source[start:source.index('\nfunc desktopDarwinKernelTrace(', start)]
+        case = source[source.index('func TestDesktopDarwinGuardianKernelSOCKSAssociations('):]
+        snippets = []
+        for name, collection in (('control', 'controls'), ('relay', 'relays')):
+            begin = f'{collection} = append({collection}, {name})'
+            end = f'desktopDarwinExchange(t, {name})'
+            self.assertEqual(case.count(begin), 1)
+            self.assertEqual(case.count(end), 1)
+            snippets.append(case[case.index(begin):case.index(end)])
+        variants = {'baseline': '\n'.join(snippets)}
+        for selected in ('control', 'relay', 'both'):
+            parts = list(snippets)
+            for index, name in enumerate(('control', 'relay')):
+                if selected in (name, 'both'):
+                    parts[index] += f'\nt.Cleanup(func() {{ _ = {name}.Close() }})\n'
+            variants[selected] = '\n'.join(parts)
+        header = r'''package cleanup
+import("context";"io";"os";"sync";"syscall";"testing";"time")
+type processBoundary struct{}
+func(*processBoundary)Signal(os.Signal)error{return nil}
+type commandBoundary struct{Process *processBoundary}
+type DesktopDarwinSocketPolicy struct{capture int;command commandBoundary}
+type DesktopSocketBroker struct{events chan string;release chan struct{};once sync.Once}
+var original *DesktopSocketBroker
+func NewDesktopSocketBroker(context.Context,int,*DesktopDarwinSocketPolicy,func()bool)(*DesktopSocketBroker,error){return original,nil}
+func(b *DesktopSocketBroker)Close(context.Context)error{b.events<-"bounded-owner-cleanup";b.once.Do(func(){close(b.release)});return nil}
+func desktopDarwinKernelTrace(*testing.T,*DesktopDarwinSocketPolicy,*DesktopSocketBroker){}
+type heldConnection struct{name string;owner *DesktopSocketBroker}
+func(c *heldConnection)Close()error{c.owner.events<-"direct-"+c.name+"-close";<-c.owner.release;return nil}
+'''
+        registrations = ''
+        for name, snippet in variants.items():
+            registrations += ('\nfunc register_'+name+'(t *testing.T,control,relay io.Closer){\n'
+                              'var controls,relays []io.Closer\n'+snippet+'\n_ = controls;_ = relays\n}\n')
+        test = r'''
+func TestShippingSOCKSCleanupRegistration(t *testing.T){
+ original=&DesktopSocketBroker{events:make(chan string,8),release:make(chan struct{})}
+ policy:=&DesktopDarwinSocketPolicy{command:commandBoundary{Process:&processBoundary{}}}
+ control:=&heldConnection{"control",original};relay:=&heldConnection{"relay",original}
+ joined:=make(chan struct{})
+ go func(){defer close(joined);t.Run("actual-cleanup-stack",func(t *testing.T){
+  broker:=desktopDarwinKernelBroker(t,policy);if broker!=original{t.Fatal("cleanup replaced original owner")}
+  switch os.Getenv("ROUTERVPN_CLEANUP_VARIANT"){
+   case "baseline":register_baseline(t,control,relay)
+   case "control":register_control(t,control,relay)
+   case "relay":register_relay(t,control,relay)
+   case "both":register_both(t,control,relay)
+   default:t.Fatal("unknown cleanup variant")
+  }
+ })}()
+ var first string
+ select{case first=<-original.events:case <-time.After(2*time.Second):t.Fatal("cleanup made no observable progress")}
+ // Join even the historical bad ordering: a rejection is the wrong first
+ // retirement event, never a timeout or a deliberately leaked goroutine.
+ original.once.Do(func(){close(original.release)})
+ select{case <-joined:case <-time.After(2*time.Second):t.Fatal("cleanup did not join after captured release")}
+ if first!="bounded-owner-cleanup"{t.Fatal("direct connection cleanup blocked the original bounded broker owner",first)}
+}
+'''
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for actual cleanup registration regression')
+        with tempfile.TemporaryDirectory(prefix='darwin-socks-cleanup-') as directory:
+            folder = Path(directory)
+            implementation, regression = folder/'cleanup.go', folder/'cleanup_test.go'
+            implementation.write_text(header+helper+registrations)
+            regression.write_text('package cleanup\nimport("os";"testing";"time")\n'+test)
+            # Actual testing.T drives the extracted registration sequence.
+            # Native policy/socket boundaries model only ownership ordering.
+            binary = folder/('cleanup.test.exe' if os.name == 'nt' else 'cleanup.test')
+            built = subprocess.run([compiler,'test','-race','-c','-o',str(binary),str(implementation),str(regression)],
+                                   capture_output=True,text=True,timeout=120,
+                                   env=dict(os.environ,GOTOOLCHAIN='local'))
+            self.assertEqual(built.returncode,0,built.stdout+built.stderr)
+            for variant in variants:
+                result = subprocess.run([str(binary),'-test.run=^TestShippingSOCKSCleanupRegistration$','-test.v','-test.timeout=10s'],
+                                        capture_output=True,text=True,timeout=15,
+                                        env=dict(os.environ,ROUTERVPN_CLEANUP_VARIANT=variant))
+                output=result.stdout+result.stderr
+                if variant=='baseline':
+                    self.assertEqual(result.returncode,0,output)
+                    self.assertIn('--- PASS: TestShippingSOCKSCleanupRegistration (',output)
+                else:
+                    self.assertNotEqual(result.returncode,0,output)
+                    self.assertIn('direct connection cleanup blocked the original bounded broker owner',output)
+                    self.assertIn('--- FAIL: TestShippingSOCKSCleanupRegistration (',output)
+                    for invalid in ('panic:','fatal error:','WARNING: DATA RACE','[build failed]','cleanup did not join','cleanup made no observable progress'):
+                        self.assertNotIn(invalid,output)
+                print('Darwin SOCKS cleanup: '+variant+' verified',flush=True)
 
 
 class DarwinCreatorAdmission(unittest.TestCase):

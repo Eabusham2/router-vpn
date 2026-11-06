@@ -331,6 +331,15 @@ def native_timeout_identity(process, binary):
         diagnostic_line('Darwin exact executable inventory error', {'type': type(error).__name__})
 
 
+def native_timeout_excerpt(raw):
+    # A Go timeout stack can push the first actual assertion out of the tail.
+    # Retain bounded admission/failure context as well as the final stack.
+    if len(raw) <= 12288:
+        return raw.decode(errors='replace')
+    return (raw[:4096].decode(errors='replace') + '\n[... bounded middle omitted ...]\n' +
+            raw[-8192:].decode(errors='replace'))
+
+
 def native_test_output(process, binary=None):
     """Retain the original timeout's evidence before fallible group cleanup."""
     try:
@@ -340,8 +349,8 @@ def native_test_output(process, binary=None):
         # communicate retains bytes even when a descendant still owns the
         # pipe. Losing termination authority must not hide that test progress.
         partial = expired.output or b''
-        print('Darwin kernel test timed out; captured partial output (bounded tail):\n' +
-              partial[-8192:].decode(errors='replace'), file=sys.stderr, flush=True)
+        print('Darwin kernel test timed out; captured partial output (bounded head and tail):\n' +
+              native_timeout_excerpt(partial), file=sys.stderr, flush=True)
         try:
             native_timeout_identity(process, binary)
         except Exception:
@@ -355,8 +364,8 @@ def native_test_output(process, binary=None):
             output, _ = process.communicate(timeout=10)
         except (OSError, subprocess.SubprocessError) as cleanup:
             latest = getattr(cleanup, 'output', None) or partial
-            print('Darwin kernel test output join failed; captured partial output (bounded tail):\n' +
-                  latest[-8192:].decode(errors='replace'), file=sys.stderr, flush=True)
+            print('Darwin kernel test output join failed; captured partial output (bounded head and tail):\n' +
+                  native_timeout_excerpt(latest), file=sys.stderr, flush=True)
             raise RuntimeError('Darwin kernel test exceeded its bounded lifetime; original process-group output did not join: ' +
                                repr(cleanup)) from expired
         # A late successful exit cannot turn the expired original run green.
