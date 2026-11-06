@@ -161,7 +161,9 @@ def mutants(source):
          IDENTITY.replace_once(source, "desktopWFPNumber(desktopWFPInterface, 4, luid)",
                                "desktopWFPNumber(desktopWFPInterface, 4, luid^1)")),
         ("stale-reader", "actual Wintun retirement accepted another native reader",
-         IDENTITY.replace_once(source, "p.tunnelName != name || p.tunnelIndex != index || ", "")),
+         IDENTITY.function_mutant(source,
+             "func (p *DesktopWindowsSocketPolicy) RetireTunnel(",
+             "p.tunnelName != name || p.tunnelIndex != index || ", "")),
     )
 
 

@@ -1532,3 +1532,12 @@ Apple/Android package acceptance for the resulting publication remain
 separate requirements. Independent entry layers and other DNS/graph
 combinations are not silently closed by this bounded unit. No private
 deployment or new complete release is claimed.
+
+
+## Windows native retirement control scope — 2026-11-06
+
+The exact-`de7967946d89015ac1e0bb489910c2ef4e12615f` Windows physical-bootstrap run `42260613712` failed the runner prerequisite on AMD64 job `128048387415` and ARM64 job `128048387814`. The Server terminal-cleanup implementation legitimately added another tunnel name/index guard. The Wintun stale-reader negative control still demanded that its guard substring occur once in the entire production file, so it raised an exact-boundary error before the actual Wintun control could execute. This was not a native Wintun acceptance result.
+
+The control now uses the existing strict function-scoped mutation helper and changes only `DesktopWindowsSocketPolicy.RetireTunnel`. The terminal cleanup guard and all production source bytes are preserved. Runner checks require byte-identical code outside that original method, retain the terminal guard, and reject missing or duplicated guards inside the intended method. All 16 focused runner checks passed on the source based at `c76eeadc1c69fb8bcccecad687332f67a267f585` (Python, 0.110 seconds), and `git diff --check` passed. Actual Windows Wintun/WFP execution of the repaired control remains pending the new exact-SHA workflow. No native success is inferred from these Python checks.
+
+Separately, the complete macOS ownership workflow `42260031241` at `cffeed1211f539e9d38eab3a5b39dc6b12be6754` has now passed all four Intel/Apple Silicon anchor and guardian jobs. Intel guardian job `128037223072` completed at 17:48:50 UTC, and its full log verifies rejection of all 45 deliberate broken controls, including descriptor retirement, native finish acknowledgment and authenticated revoke-channel retirement. This is evidence for that exact source and workflow, not an all-platform release of the newer head or proof of physical-device acceptance. The diagnostic change preserves the original inspection error; the passing run alone does not identify a stochastic failure's cause.

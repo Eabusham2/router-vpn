@@ -95,6 +95,28 @@ class ActualWintunSourceBoundary(unittest.TestCase):
         with self.assertRaises(ValueError):
             GATE.mutants(source.replace("desktopWFPNumber(desktopWFPInterface, 4, luid)", "alteredProduction()"))
 
+    def test_stale_reader_control_preserves_terminal_cleanup_guard(self):
+        source = (ROOT / "internal/mobiletor/desktop_socket_windows_tunnel.go").read_text(encoding="utf-8")
+        start = source.index("func (p *DesktopWindowsSocketPolicy) RetireTunnel(")
+        end = source.index("\nfunc ", start + 1)
+        guard = "p.tunnelName != name || p.tunnelIndex != index || "
+        changed = next(raw for name, _, raw in GATE.mutants(source) if name == "stale-reader")
+        self.assertEqual(changed,
+                         source[:start] + source[start:end].replace(guard, "", 1) + source[end:])
+        terminal = source.index("func (t *desktopWindowsLeaseCleanup) Quiesce(")
+        self.assertIn(guard, source[terminal:])
+        self.assertTrue(changed.endswith(source[end:]))
+
+    def test_stale_reader_control_rejects_missing_or_ambiguous_retirement_guard(self):
+        source = (ROOT / "internal/mobiletor/desktop_socket_windows_tunnel.go").read_text(encoding="utf-8")
+        start = source.index("func (p *DesktopWindowsSocketPolicy) RetireTunnel(")
+        end = source.index("\nfunc ", start + 1)
+        guard = "p.tunnelName != name || p.tunnelIndex != index || "
+        for replacement in ("", guard + guard):
+            with self.subTest(replacement=replacement), self.assertRaisesRegex(
+                    ValueError, "lost its exact production boundary"):
+                GATE.mutants(source[:start] + source[start:end].replace(guard, replacement, 1) + source[end:])
+
 
 class PinnedWintunInputAuthority(unittest.TestCase):
     def setUp(self):
