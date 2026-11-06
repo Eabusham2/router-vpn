@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `63644b70`
+## November 6 product continuation through `dc4ab1c1`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`63644b703852357db8ef288acc9fceb49f25ecdd`](https://github.com/Eabusham2/router-vpn/commit/63644b703852357db8ef288acc9fceb49f25ecdd).
+[`dc4ab1c1cd1fc36e8e03ec1427b7f74155820e13`](https://github.com/Eabusham2/router-vpn/commit/dc4ab1c1cd1fc36e8e03ec1427b7f74155820e13).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 29 units.
+with separately attributed contributor evidence; it is not one of these 33 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -216,6 +216,31 @@ It was preserved before `35725083`; its contributor evidence is separate.
   do not establish an uninterrupted full-runtime pass or physical Android
   acceptance; production behavior is unchanged.
 
+- **Apple profile whitelist (unit 30):** published `e7d2b366` includes the
+  existing safe Home DNS capture Boolean while preserving exact key equality.
+  The original Swift failure reproduces; all 105 corrected checks pass, and a
+  causal encoded `apiToken` mutation fails the whitelist. Production is unchanged.
+
+- **Rosenpass fixture erasure observation (unit 31):** published `f97d9d60`
+  observes a copied key after delivery completes on the controller goroutine.
+  The old race reproduces; 100 focused and twenty full-package race repetitions
+  pass, plus `go vet`. Removing actual erasure fails the explicit assertion.
+  Production zeroization and all lifecycle timeouts remain unchanged.
+
+- **Android rollback fixture (unit 32):** published `e9810710` targets only the
+  exact rollback shared lock. All 21 rollback checks and both owner/competing-store
+  controls pass. The complete profile harness also passes all nine imported
+  families and the final 2,212 store checks across 182 cases, including the
+  independent-Activity lost-update control. This is segmented runtime evidence,
+  not an uninterrupted complete run or device result.
+
+- **Windows bounded lifecycle gates (unit 33):** published `dc4ab1c1` splits
+  Speed Lab comparisons, remaining Tor and remaining Speed Lab while retaining
+  every 180-second process bound and blocking failure. Both native/release gates
+  now include the newer Router Server group. All nineteen workflow tests pass;
+  the source inventory selects all 250 parent names exactly once, including
+  platform variants. Actual Windows execution of the new groups remains pending.
+
 Concurrent `ad4da5e7` contributed four final-only SOCKS proxy cases, `dbb0a4ca`
 six final-only packet cases, and `ea460eae` ten entry-only cases. Their exact
 names, original sources and negative inventories are retained in `a08d7d6f`;
@@ -232,6 +257,67 @@ is separate from macOS measurement checks. `c626af1f`, `90a7d70f` and `693cc705`
 advance captured resolved DNSSEC validation through sealed children and original
 alias-proof ownership. These changes do not establish universal protocol/graph
 coverage, installed native acceptance or physical-device readiness.
+
+
+Further concurrent source was preserved before these newer publications:
+[`64d58c6e`](https://github.com/Eabusham2/router-vpn/commit/64d58c6e862e552ddbf24e5a0c9348cb579b8b34)
+adds Windows Router Server execution and relay ownership;
+[`e4be2492`](https://github.com/Eabusham2/router-vpn/commit/e4be249231643daf20bc2653fe328ce0293654d7)
+adds layered imported-SOCKS packet-envelope bounds; and
+[`0a1fab52`](https://github.com/Eabusham2/router-vpn/commit/0a1fab52418fb4fdcc474bfbf1d49e24c9763310)
+adds Linux private-domain native fixtures. Their contributor evidence remains
+separate. This continuation did not independently rerun every contributor suite.
+
+At **2026-11-06 07:05:40 UTC**, the exact `dc4ab1c1` Actions read returned
+22 runs: six successful, four in progress, two queued, one pending and nine
+cancelled. The authoritative
+[Build all Router VPN release gates run 42178231924](https://github.com/Eabusham2/router-vpn/actions/runs/42178231924)
+was in progress, attempt 1. This is a bounded query snapshot, not a complete
+release verdict. The release list still returned the October 24 `745b3e41`
+prerelease with twelve assets as its newest published release.
+
+Newer completed results supersede the older in-progress observations below:
+
+- [Apple graph run 42172902311](https://github.com/Eabusham2/router-vpn/actions/runs/42172902311),
+  job 127746006854 at exact `fde9861a`, passed all 87 Xray graphs / 1,167 checks,
+  then failed the profile fixture's exact serialization whitelist. `e7d2b366`
+  repairs that fixture with the secret-rejection evidence recorded above.
+- [Native Rosenpass run 42174357635](https://github.com/Eabusham2/router-vpn/actions/runs/42174357635),
+  macOS job 127749272182 at exact `a08d7d6f`, passed the pinned native protocol
+  step (2.446 seconds), then failed the lifecycle race step on the fixture's
+  borrowed key read versus deferred production erasure. `f97d9d60` repairs that
+  observation; the production erasure remains intact.
+- [Windows native run 42168681000](https://github.com/Eabusham2/router-vpn/actions/runs/42168681000),
+  job 127732013613 at `f8cd9790`, later failed the aggregate Speed Lab bound.
+  `dc4ab1c1` preserves all cases in bounded groups; this earlier source does not
+  test the newer protocol/descriptor ownership correction.
+- [Windows physical run 42176531078](https://github.com/Eabusham2/router-vpn/actions/runs/42176531078)
+  at `64d58c6e` failed ordinary Shadowsocks selected-DNS admission in both
+  AMD64 job 127757087134 and ARM64 job 127757087101. Wintun IPv4/IPv6 retirement
+  and three causal controls had passed first. Both ordinary paths reached no
+  peer/proof traffic. Inspection found the shared fixture selector had changed
+  ordinary SS DNS to UDP while that fixture still owned only its TCP DNS path;
+  a focused correction was still in progress at this documentation cutoff.
+  This is not evidence that the historical UDP4/TCP identity mismatch is fixed.
+
+Android runtime verification subsequently completed as a **segmented
+continuation**: all 53 child gates have successful results and all four final
+contract suites pass (13, 11, 8 and 4 tests). The actual Speed Lab restore harness
+passes 3,174 checks and nineteen negative controls, including forty ordinary
+graph restores and eight cancellation phases. The original full run at
+`35725083`, the Go VCS-discovery interruption and the later rollback fixture
+failure remain recorded failures, not an uninterrupted full-runtime pass.
+
+The original and final 432-file source manifests differ only in the two intended
+fixture repairs (`test_android_tor_form.py` and `test_android_connection_profiles.py`).
+Comparing that tested checkout to committed `dc4ab1c1` confirms the Android Java
+and harness files are identical, but two existing compiler files (`imported_entry.go`
+and `plan.go`) differ and `e4be2492` also adds the imported SOCKS bounds source and
+test. Its newer native peer retirement/template updates are outside this
+segmented result. Thus the 53-child evidence does **not** certify the newer SOCKS
+packet-bound calculations, a complete current-head Android/native build, or a
+physical device. Original/final manifests and the reconciled child inventory
+were retained with the run records.
 
 At **2026-11-06 06:41:00 UTC**, the Windows runs containing the published
 protocol/duplicate repair had not produced native acceptance. The original
