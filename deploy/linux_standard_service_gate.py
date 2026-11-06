@@ -636,3 +636,22 @@ AUXILIARY['resolved-dnssec-query']=('./internal/standardengine',{
  'TestResolvedDNSSECQueryRejectsExpandedAuthority':(),
  'TestResolvedDNSSECQueryRejectsMalformedWire':('response','opcode','multiple-questions','answer','authority','multiple-edns','compressed-name','class','edns-version','edns-options','edns-flags','edns-size','trailing','truncated')})
 AUXILIARY_TESTS['internal/standardengine/resolved_dnssec_query_test.go']='resolved-dnssec-query'
+
+# Fixed sealed validator child: original process proof, bounded IPC and join.
+SOURCE.update({'internal/standardengine/dnssec_command.go',
+ 'internal/standardengine/dnssec_command_test.go',
+ 'internal/linuxprocess/bootstrap_terminal_linux.go',
+ 'cmd/client/linux_standard_service_dnssec_helper_linux.go',
+ 'cmd/client/linux_standard_service_dnssec_helper_linux_test.go',
+ 'mobile/desktop/standard_dnssec_command_linux.go.tmpl',
+ 'mobile/desktop/standard_dnssec_command_native_linux_test.go.tmpl',
+ 'deploy/test_desktop_dnssec_command.py'})
+AUXILIARY['dnssec-child-protocol']=('./internal/standardengine',{
+ 'TestDNSSECCaptureIdentity':('relative','type','anchor-count','anchor-text','anchor-total','insecure'),
+ 'TestDNSSECFrameBoundaries':(),
+ 'TestDNSSECFrameTampering':('missing','reordered','metadata','payload','unknown')})
+AUXILIARY['dnssec-child-owner']=('./cmd/client',{
+ 'TestDNSSECOriginalChildHardJoin':('cancel','deadline','natural'),
+ 'TestDNSSECCloseRetainsActiveCallback':()})
+AUXILIARY_TESTS.update({'internal/standardengine/dnssec_command_test.go':'dnssec-child-protocol',
+ 'cmd/client/linux_standard_service_dnssec_helper_linux_test.go':'dnssec-child-owner'})

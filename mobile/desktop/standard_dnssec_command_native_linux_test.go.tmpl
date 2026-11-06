@@ -1,0 +1,278 @@
+//go:build linux && with_purego && routervpn_dnssec_native
+
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNDNSSECCommandWorker(t *testing.T) {
+	capture := os.Getenv("ROUTERVPN_DNSSEC_COMMAND_CAPTURE")
+	if capture == "" {
+		return
+	}
+	routerVPNDNSSECSHA = os.Getenv("ROUTERVPN_DNSSEC_COMMAND_SHA")
+	routerVPNDNSSECBytes = os.Getenv("ROUTERVPN_DNSSEC_COMMAND_BYTES")
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	if err := routerVPNRunDNSSECChild(ctx, capture); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
+	libraryPath, peerPath := os.Getenv("ROUTERVPN_DNSSEC_NATIVE_LIBRARY"), os.Getenv("ROUTERVPN_DNSSEC_NATIVE_PEER")
+	if libraryPath == "" || peerPath == "" {
+		t.Fatal("actual pinned library and signed peer required")
+	}
+	library, err := os.ReadFile(libraryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := os.ReadFile("/proc/self/exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedImage := dnssecNativeSeal(t, image)
+	if err := sealedImage.Chmod(0500); err != nil {
+		t.Fatal(err)
+	}
+	sealedLibrary := dnssecNativeSeal(t, library)
+	peerCommand := exec.Command(peerPath)
+	stdin, err := peerCommand.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := peerCommand.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = peerCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stdin.Close()
+		done := make(chan error, 1)
+		go func() { done <- peerCommand.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			peerCommand.Process.Kill()
+			<-done
+			t.Error("signed peer did not join")
+		}
+	}()
+	line, err := bufio.NewReader(stdout).ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info struct {
+		Port   int    `json:"port"`
+		Anchor string `json:"anchor"`
+	}
+	if json.Unmarshal(line, &info) != nil || info.Port < 1 || info.Anchor == "" {
+		t.Fatal("actual signed authority omitted endpoint/anchor")
+	}
+	for _, scenario := range []string{"secure", "bogus", "foreign-terminal-receipt", "closed-terminal-channel"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			name := "good.signed.test."
+			if scenario == "bogus" {
+				name = "bogus.signed.test."
+			}
+			capture := standardengine.DNSSECCapture{Schema: 1, Session: strings.Repeat("a", 32), DeadlineNS: time.Now().Add(8 * time.Second).UnixNano(), PlanSHA256: strings.Repeat("b", 64), Name: name, Type: 1, Anchors: []string{info.Anchor}}
+			raw, err := capture.Canonical()
+			if err != nil {
+				t.Fatal(err)
+			}
+			sum := standardengine.SHA256(raw)
+			sealedCapture := dnssecNativeSeal(t, raw)
+			parent, err := linuxprocess.CaptureSelf(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parent.Close(context.Background())
+			directory, err := parent.DuplicateDirectory(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer directory.Close()
+			channel, childChannel, err := linuxprocess.ChannelPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer childChannel.Close()
+			identity, err := linuxprocess.CaptureSealedImage(sealedImage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			padding, err := os.Open("/dev/null")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer padding.Close()
+			command := exec.CommandContext(ctx, "/proc/self/fd/3", "-test.run=^TestRouterVPNDNSSECCommandWorker$", "-test.count=1", "-test.timeout=11s")
+			command.Env = []string{"PATH=/usr/bin:/bin", "ROUTERVPN_DNSSEC_COMMAND_CAPTURE=" + sum, "ROUTERVPN_DNSSEC_COMMAND_SHA=" + standardengine.SHA256(library), "ROUTERVPN_DNSSEC_COMMAND_BYTES=" + strconv.Itoa(len(library))}
+			command.ExtraFiles = []*os.File{sealedImage, padding, padding, padding, childChannel, directory, sealedCapture, sealedLibrary}
+			var output bytes.Buffer
+			command.Stdout = &output
+			command.Stderr = &output
+			pidfd := -1
+			command.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
+			if err = command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			joined := make(chan struct{})
+			var waitErr error
+			go func() { waitErr = command.Wait(); close(joined) }()
+			defer func() { cancel(); <-joined }()
+			if pidfd < 0 {
+				t.Fatal("original creation pidfd absent")
+			}
+			childChannel.Close()
+			directory.Close()
+			owner, err := linuxprocess.BindCreatedSealedChild(ctx, channel, parent, os.NewFile(uintptr(pidfd), "original-validator-child"), command.Process.Pid, identity, sum)
+			if owner != nil {
+				defer owner.Close(context.Background())
+			}
+			if err != nil {
+				t.Fatal("actual original child authentication", err)
+			}
+			queried := 0
+			for sequence := uint32(1); sequence <= standardengine.MaxDNSSECQueries+1; sequence++ {
+				var frames [][]byte
+				kind := ""
+				for i := uint32(0); i < 8; i++ {
+					body, err := owner.Receive(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					frame, err := standardengine.DecodeDNSSECFrame(body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if i == 0 {
+						kind = frame.Kind
+					}
+					frames = append(frames, body)
+					if i+1 == frame.Parts {
+						break
+					}
+				}
+				message, err := standardengine.DecodeDNSSECFrames(frames, sum, sequence, kind)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "verdict" {
+					// Causal receipt barrier: even a clean early exit is not a joined
+					// acknowledgement of the original terminal message.
+					select {
+					case <-joined:
+						t.Fatal("validator exited before authenticated terminal receipt", waitErr)
+					case <-time.After(250 * time.Millisecond):
+					}
+
+					if queried == 0 {
+						t.Fatal("validator omitted real signed exchange")
+					}
+					receipt, err := standardengine.DNSSECTerminalReceipt(sum, sequence, frames)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if scenario == "foreign-terminal-receipt" {
+						receipt = []byte(`{"foreign":true}`)
+					}
+					if scenario == "closed-terminal-channel" {
+						if err = owner.Close(ctx); err != nil {
+							t.Fatal(err)
+						}
+					}
+					written, sendErr := owner.SendTerminalReceipt(ctx, receipt)
+					select {
+					case <-joined:
+					case <-ctx.Done():
+						t.Fatal("terminal child did not join", ctx.Err())
+					}
+					if scenario == "closed-terminal-channel" {
+						if written || sendErr == nil || waitErr == nil {
+							t.Fatal("failed write or child retirement admitted", written, sendErr, waitErr)
+						}
+						return
+					}
+					if scenario == "foreign-terminal-receipt" {
+						if waitErr == nil {
+							t.Fatal("foreign terminal receipt produced successful child")
+						}
+						return
+					}
+					if !written || waitErr != nil {
+						t.Fatal("original terminal receipt/exit", written, sendErr, waitErr, output.String())
+					}
+					want := uint32(1)
+					if scenario == "bogus" {
+						want = 3
+					}
+					if message.State != want {
+						t.Fatal("actual crypto verdict changed", message.State)
+					}
+					return
+				}
+				if kind != "query" {
+					t.Fatal("foreign child stream kind")
+				}
+				queried++
+				if _, err = standardengine.ResolvedDNSSECQuestionFromWire(name, 1, message.Packet); err != nil {
+					t.Fatal(err)
+				}
+				connection, err := (&net.Dialer{}).DialContext(ctx, "tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(info.Port)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				deadline, _ := ctx.Deadline()
+				connection.SetDeadline(deadline)
+				var header [2]byte
+				binary.BigEndian.PutUint16(header[:], uint16(len(message.Packet)))
+				if _, err = connection.Write(append(header[:], message.Packet...)); err != nil {
+					connection.Close()
+					t.Fatal(err)
+				}
+				if _, err = io.ReadFull(connection, header[:]); err != nil {
+					connection.Close()
+					t.Fatal(err)
+				}
+				answer := make([]byte, binary.BigEndian.Uint16(header[:]))
+				_, err = io.ReadFull(connection, answer)
+				connection.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				replies, err := standardengine.BuildDNSSECFrames(sum, sequence, "reply", standardengine.DNSSECVerdict{Packet: answer})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, reply := range replies {
+					if err = owner.Send(ctx, reply); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			t.Fatal(fmt.Errorf("original validator query budget exhausted"))
+		})
+	}
+}

@@ -1,0 +1,245 @@
+//go:build linux && with_purego
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	"github.com/spf13/cobra"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+)
+
+func init() {
+	var capture string
+	command := &cobra.Command{Use: "routervpn-dnssec-validate", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(_ *cobra.Command, _ []string) error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := routerVPNRunDNSSECChild(ctx, capture); err != nil {
+			return errors.New("original DNSSEC child validation or joined retirement failed")
+		}
+		return nil
+	}}
+	command.Flags().StringVar(&capture, "capture-sha256", "", "original inherited validator capture")
+	mainCommand.AddCommand(command)
+}
+
+func routerVPNRunDNSSECChild(parent context.Context, expected string) (failure error) {
+	captureFile := os.NewFile(standardengine.CaptureFD, "original-resolved-capture")
+	imageFile := os.NewFile(3, "original-resolved-sealed-image")
+	parentFile := os.NewFile(standardengine.ParentFD, "original-resolved-parent")
+	channelFile := os.NewFile(standardengine.ChannelFD, "original-resolved-channel")
+	library := os.NewFile(standardengine.DNSSECLibraryFD, "original-sealed-dnssec-library")
+	defer func() { failure = errors.Join(failure, library.Close()) }()
+	defer func() { failure = errors.Join(failure, captureFile.Close()) }()
+	defer func() { failure = errors.Join(failure, imageFile.Close()) }()
+	var channel *linuxprocess.Channel
+	var witness *linuxprocess.Witness
+	var peer *linuxprocess.Bootstrap
+	var stop context.CancelFunc
+	var watchJoined <-chan struct{}
+	parentFailures := make(chan error, 1)
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+		if watchJoined != nil {
+			<-watchJoined
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if peer != nil {
+			failure = errors.Join(failure, peer.Close(cleanup))
+		}
+		if channel != nil {
+			failure = errors.Join(failure, channel.Close(cleanup))
+		}
+		if witness != nil {
+			failure = errors.Join(failure, witness.Close(cleanup))
+		}
+		if parentFile != nil {
+			failure = errors.Join(failure, parentFile.Close())
+		}
+		if channelFile != nil {
+			failure = errors.Join(failure, channelFile.Close())
+		}
+		select {
+		case err := <-parentFailures:
+			failure = errors.Join(failure, err)
+		default:
+		}
+	}()
+	for _, file := range []*os.File{captureFile, imageFile, parentFile, channelFile, library} {
+		if err := linuxprocess.SetCloseOnExec(file); err != nil {
+			return err
+		}
+	}
+	raw, err := standardengine.ReadSealed(captureFile, standardengine.MaxDNSSECCapture)
+	if err != nil {
+		return err
+	}
+	capture, err := standardengine.DecodeDNSSECCapture(raw, expected)
+	if err != nil {
+		return err
+	}
+	deadline := time.Unix(0, capture.DeadlineNS)
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > 2*time.Minute {
+		return errors.New("resolved helper lost original bounded deadline")
+	}
+	bounded, end := context.WithDeadline(parent, deadline)
+	defer end()
+	lifetime, cancel := context.WithCancel(bounded)
+	stop = cancel
+	channel, err = linuxprocess.CaptureChannel(channelFile)
+	channelFile = nil
+	if err != nil {
+		return err
+	}
+	witness, err = linuxprocess.CaptureDirectory(lifetime, parentFile, channel.CreatorPID())
+	parentFile = nil
+	if err != nil {
+		return err
+	}
+	parentFile, err = witness.DuplicateDirectory(lifetime)
+	if err != nil {
+		return err
+	}
+	image, err := linuxprocess.CaptureSealedImage(imageFile)
+	if err != nil {
+		return err
+	}
+	peer, err = linuxprocess.BindInheritedSealedParent(lifetime, channel, parentFile, expected, image)
+	channel, parentFile = nil, nil
+	if err != nil {
+		return err
+	}
+	originalParent, _, err := peer.ObservationsContext(lifetime, expected)
+	if err != nil {
+		return err
+	}
+	actual, err := witness.Current(lifetime)
+	if err != nil || actual != originalParent {
+		return errors.Join(errors.New("resolved parent observer differs from authenticated original"), err)
+	}
+	joined := make(chan struct{})
+	watchJoined = joined
+	go func() {
+		defer close(joined)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-lifetime.Done():
+				return
+			case <-ticker.C:
+			}
+			check, finish := context.WithTimeout(lifetime, 100*time.Millisecond)
+			actual, err := witness.Current(check)
+			pending := common.ObservationContextExpired(check, err)
+			finish()
+			if pending {
+				continue
+			}
+			if err != nil || actual != originalParent {
+				parentFailures <- errors.Join(errors.New("resolved helper lost original parent"), err)
+				cancel()
+				return
+			}
+		}
+	}()
+
+	api, err := routerVPNLoadDNSSEC(library)
+	if err != nil {
+		return err
+	}
+	defer func() { failure = errors.Join(failure, api.Close()) }()
+	var exchangeMu sync.Mutex
+	sequence := uint32(0)
+	exchange := func(ctx context.Context, question []byte) ([]byte, error) {
+		// The native broker owns all concurrent callbacks; serializing complete
+		// messages prevents one response from being adopted by another query.
+		if err := desktopnetwork.LockContext(ctx, &exchangeMu); err != nil {
+			return nil, err
+		}
+		defer exchangeMu.Unlock()
+		if err := peer.Current(ctx); err != nil {
+			return nil, err
+		}
+		if sequence >= standardengine.MaxDNSSECQueries {
+			return nil, errors.New("original DNSSEC child query budget exhausted")
+		}
+		sequence++
+		frames, err := standardengine.BuildDNSSECFrames(expected, sequence, "query", standardengine.DNSSECVerdict{Packet: question})
+		if err != nil {
+			return nil, err
+		}
+		for _, frame := range frames {
+			if err = peer.Send(ctx, frame); err != nil {
+				return nil, err
+			}
+		}
+		var replies [][]byte
+		for i := uint32(0); i < 8; i++ {
+			raw, err := peer.ReceiveAfterReady(ctx)
+			if err != nil {
+				return nil, err
+			}
+			frame, err := standardengine.DecodeDNSSECFrame(raw)
+			if err != nil {
+				return nil, err
+			}
+			if frame.CaptureSHA256 != expected || frame.Sequence != sequence || frame.Kind != "reply" || frame.Part != i {
+				return nil, errors.New("validator reply changed original query identity")
+			}
+			replies = append(replies, raw)
+			if i+1 == frame.Parts {
+				break
+			}
+		}
+		reply, err := standardengine.DecodeDNSSECFrames(replies, expected, sequence, "reply")
+		if err != nil {
+			return nil, err
+		}
+		if err = peer.Current(ctx); err != nil {
+			return nil, err
+		}
+		return reply.Packet, nil
+	}
+	verdict, err := routerVPNValidateIsolatedDNSSEC(lifetime, api, routerVPNDNSSECSpec{Name: capture.Name, Type: capture.Type, Anchors: capture.Anchors, Insecure: capture.Insecure}, exchange)
+	if err != nil {
+		return err
+	}
+	// The native primitive has already destroyed its C worker and joined every
+	// broker callback before returning. A verdict frame is not parent adoption:
+	// the parent still requires this exact child's successful exit/join.
+	if err = peer.Current(lifetime); err != nil {
+		return err
+	}
+	frames, err := standardengine.BuildDNSSECFrames(expected, sequence+1, "verdict", standardengine.DNSSECVerdict{State: verdict.State, RCode: verdict.RCode, HaveData: verdict.HaveData, NXDomain: verdict.NXDomain, TTL: verdict.TTL, Packet: verdict.Packet})
+	if err != nil {
+		return err
+	}
+	for _, frame := range frames {
+		if err = peer.Send(lifetime, frame); err != nil {
+			return err
+		}
+	}
+	receipt, err := standardengine.DNSSECTerminalReceipt(expected, sequence+1, frames)
+	if err != nil {
+		return err
+	}
+	acknowledged, err := peer.ReceiveAfterReady(lifetime)
+	if err != nil || !bytes.Equal(receipt, acknowledged) {
+		return errors.Join(errors.New("validator terminal receipt changed original verdict"), err)
+	}
+	return nil
+}
