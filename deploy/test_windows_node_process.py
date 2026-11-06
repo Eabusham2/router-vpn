@@ -360,7 +360,7 @@ def execute_all_composition(build, captured, workspace):
             raise ValueError("Prospective ALL did not compile: " + label + "\n" + output[-16384:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         expression = "^(" + "|".join(ALL_GROUPS) + ")$" if test is None else "/".join("^" + re.escape(part) + "$" for part in test.split("/"))
-        duration = 240 if test is None else 60
+        duration = 360 if test is None else 60
         status, output = NATIVE.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
                                     cwd=ROOT / "cmd/client", env=captured, timeout=duration + 15)
         if test is None:

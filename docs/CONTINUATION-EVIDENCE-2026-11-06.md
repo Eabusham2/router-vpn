@@ -1118,3 +1118,16 @@ Validation before publication: root and two independent Astra source reviews, ex
 
 Evidence: [standalone iOS compile failure](https://github.com/Eabusham2/router-vpn/actions/runs/42229778716/job/127932413496), [authoritative iOS compile failure](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408863).
 
+
+## 2026-11-06 — Bound the complete Windows ALL positive composition suite
+
+The authoritative AMD64 ALL job 127932408655 on `0ab1606c` reached Go's four-minute aggregate alarm while running the four positive composition parents in one process. The first three parents had passed in 92.50, 73.33, and 18.92 seconds, leaving approximately 55 seconds for all four restoration leaves. The alarm caught the second restoration leaf ten seconds after it began. Its stack was inside actual durable Windows file-store work; that snapshot does not demonstrate a stuck syscall or a failed per-operation deadline.
+
+The exact same source's ARM64 job 127932408807 passed all 26 required positive verdicts and all eight causal controls. Its four positive parents took approximately 129 seconds in total. The suite retains real store ACL, flush and rename operations alongside virtual operation timers, so aggregate wall time varies with native filesystem work.
+
+Only the complete positive ALL process allowance changes from 240 to 360 seconds, with the existing 15-second process-management margin producing a 375-second outer bound. This matches the runner's existing bounded baseline-group policy. Compilation remains bounded at 240 seconds; each separate mutant remains at 60 seconds with a 75-second outer bound. All 26 verdicts, eight mutants, production deadlines and individual operation timers are unchanged.
+
+The runner's six positive-branch budget expectations change together with the single positive duration expression. Root and independent Astra review checked the exact branches, original source preservation outside those replacements, and both completed native logs. No local execution of the changed runner is claimed. A fresh AMD64 pass and repeat ARM64 execution remain required; this change does not turn controller composition into actual WFP/PQ or device acceptance.
+
+Evidence: [AMD64 aggregate alarm](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408655), [ARM64 complete ALL pass](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408807).
+

@@ -231,9 +231,9 @@ class NodeProcessRunner(unittest.TestCase):
                 return 0, ''
             label = Path(command[0]).name.removesuffix('.test.exe')
             executed.append(label)
-            self.assertEqual(timeout, 255 if label == 'node-all' else 75)
+            self.assertEqual(timeout, 375 if label == 'node-all' else 75)
             if label == 'node-all':
-                self.assertIn('-test.timeout=240s', command)
+                self.assertIn('-test.timeout=360s', command)
                 return 0, '\n'.join('--- PASS: '+case+' (0.01s)' for case in GATE.ALL_EXPECTED)
             self.assertIn('-test.timeout=60s', command)
             test, witness = controls[label]
@@ -359,8 +359,8 @@ class NodeProcessRunner(unittest.TestCase):
             self.assertEqual(timeout, 375)
         for command, timeout in executions[len(groups):]:
             if Path(command[0]).name == "node-all.test.exe":
-                self.assertIn("-test.timeout=240s", command)
-                self.assertEqual(timeout, 255)
+                self.assertIn("-test.timeout=360s", command)
+                self.assertEqual(timeout, 375)
             else:
                 self.assertIn("-test.timeout=60s", command)
                 self.assertEqual(timeout, 75)
@@ -406,8 +406,8 @@ class NodeProcessRunner(unittest.TestCase):
                     return 0, "\n".join("--- PASS: " + case + " (0.01s)" for case in GATE.EXPECTED
                                          if re.fullmatch(selection, case.split("/", 1)[0]))
                 if name == "node-all":
-                    self.assertEqual(timeout, 255)
-                    self.assertIn("-test.timeout=240s", command)
+                    self.assertEqual(timeout, 375)
+                    self.assertIn("-test.timeout=360s", command)
                     return 0, "\n".join("--- PASS: " + case + " (0.01s)" for case in GATE.ALL_EXPECTED)
                 self.assertEqual(timeout, 75)
                 self.assertIn("-test.timeout=60s", command)
