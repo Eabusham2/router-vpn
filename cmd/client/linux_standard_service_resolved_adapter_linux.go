@@ -91,6 +91,10 @@ func resolvedRouteUpstream(route standardengine.ResolvedRoute, network string) (
 	if route.DNSSEC != "no" {
 		return upstream, errors.New("original resolved DNSSEC policy requires local validation before scoped admission")
 	}
+	return resolvedRouteTransport(route, network)
+}
+func resolvedRouteTransport(route standardengine.ResolvedRoute, network string) (mobiletor.DesktopLinuxBootstrapDNSUpstream, error) {
+	var upstream mobiletor.DesktopLinuxBootstrapDNSUpstream
 	if route.CurrentDNS == nil {
 		return upstream, errors.New("original resolved scope has no selected server; daemon selection cannot be invented")
 	}
@@ -131,6 +135,15 @@ func (o *linuxBootBootstrapExchange) exchangeResolved(ctx context.Context, netwo
 	}
 	if local.Local {
 		return nil, errors.New("original daemon supplied a local answer before upstream admission")
+	}
+	routes, err := policy.ResolvedRoutes(o.resolvedName)
+	if err != nil {
+		return nil, err
+	}
+	for _, route := range routes {
+		if route.DNSSEC == "yes" || route.DNSSEC == "allow-downgrade" {
+			return o.exchangeResolvedDNSSEC(ctx, policy, network, question)
+		}
 	}
 	upstreams, err := resolvedSelectedUpstreams(policy, o.resolvedName, network)
 	if err != nil {

@@ -110,6 +110,11 @@ func (s *linuxStandardService) cleanupBootBootstrapLocked(ctx context.Context, t
 	if e = lease.Current(); e != nil {
 		return e
 	}
+	if t.resolver != nil {
+		if e = t.resolver.closeDNSSECChildren(ctx); e != nil {
+			return e
+		}
+	}
 	if e = native.CleanupBootstrap(ctx, lease.lock); e != nil {
 		return e
 	}
@@ -332,6 +337,11 @@ func (s *linuxStandardService) validateBootBootstrapTransfer(ctx context.Context
 		native, ok := t.slot.kernel.(*legacyExitNativeProtection)
 		if !ok || native == nil {
 			return errors.New("bootstrap cleanup lost native creator")
+		}
+		if t.resolver != nil {
+			if e = t.resolver.closeDNSSECChildren(ctx); e != nil {
+				return e
+			}
 		}
 		if e = native.CleanupBootstrap(ctx, lease.lock); e != nil {
 			return e

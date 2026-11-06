@@ -55,6 +55,7 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 	listener.SetDeadline(deadline)
 	var mu sync.Mutex
 	count := 0
+	anchorCount := 0
 	observers := 0
 	observationRetired := make(chan struct{})
 	var retireOnce sync.Once
@@ -111,6 +112,10 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 				"DNSEx": dbus.MakeVariant([]dns{selected}), "FallbackDNSEx": dbus.MakeVariant([]dns{}), "CurrentDNSServerEx": dbus.MakeVariant(selected),
 				"Domains": dbus.MakeVariant([]domain{}), "LLMNRHostname": dbus.MakeVariant("original-resolved"),
 				"LLMNR": dbus.MakeVariant("no"), "MulticastDNS": dbus.MakeVariant("no"), "DNSOverTLS": dbus.MakeVariant("no"), "DNSSEC": dbus.MakeVariant("no"), "DNSSECNegativeTrustAnchors": dbus.MakeVariant([]string{}),
+			}
+			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA") == "1" {
+				values["DNSSEC"] = dbus.MakeVariant("yes")
+				values["DNSSECNegativeTrustAnchors"] = dbus.MakeVariant([]string{"transport-bootstrap.invalid"})
 			}
 			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC") == "1" {
 				values["DNSOverTLS"] = dbus.MakeVariant("opportunistic")
@@ -197,6 +202,22 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 				return nil, "", err
 			}
 			return nil, "", nil
+		case "ResolveRecord":
+			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA") != "1" || destination != ":1.77" || len(request.Body) != 5 || request.Body[0] != int32(0) || request.Body[2] != uint16(1) || (request.Body[3] != uint16(43) && request.Body[3] != uint16(48)) || request.Body[4] != uint64(1|1<<5|1<<11|1<<12|1<<13|1<<15) {
+				return nil, "", errors.New("trust observation escaped original no-network anchor query")
+			}
+			name, ok := request.Body[1].(string)
+			if !ok || (name != "node.transport-bootstrap.invalid" && name != "transport-bootstrap.invalid" && name != "invalid" && name != ".") {
+				return nil, "", errors.New("trust observation changed original suffix")
+			}
+			mu.Lock()
+			anchorCount++
+			writeErr := os.WriteFile(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT")+".anchors", []byte(strconv.Itoa(anchorCount)), 0600)
+			mu.Unlock()
+			if writeErr != nil {
+				return nil, "", writeErr
+			}
+			return []any{"no original positive trust source"}, "org.freedesktop.resolve1.NoSource", nil
 		case "ResolveHostname":
 			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || request.Body[1] != "node.transport-bootstrap.invalid" || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
 				return nil, "", errors.New("local preflight escaped exact original question or NO_NETWORK/NO_CACHE/NO_SEARCH")

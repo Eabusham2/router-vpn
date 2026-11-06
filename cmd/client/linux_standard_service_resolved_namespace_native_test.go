@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback"}
+var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNResolvedCases...) }
 func linuxHostTUNResolvedCase(scenario string) bool {
@@ -84,6 +84,9 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	if scenario == "service-boot-resolved-opportunistic-tls" || scenario == "service-boot-resolved-opportunistic-fallback" {
 		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC=1")
 	}
+	if scenario == "service-boot-resolved-dnssec-nta" {
+		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA=1")
+	}
 	command.Stderr = os.Stderr
 	output, err := command.StdoutPipe()
 	if err != nil {
@@ -110,6 +113,14 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		mutationCount, mutationParse := strconv.Atoi(string(mutations))
 		if mutationErr != nil || mutationParse != nil || mutationCount < 3 || mutationCount%3 != 0 {
 			t.Error("installed TUN omitted original post-helper DNS ownership", mutationErr, mutationParse, mutationCount)
+		}
+		if scenario == "service-boot-resolved-dnssec-nta" {
+			body, err := os.ReadFile(countFile + ".anchors")
+			count, parse := strconv.Atoi(string(body))
+			if err != nil || parse != nil || count < 16 || count%8 != 0 {
+				t.Error("installed DNSSEC omitted full original absent-anchor capture/recheck", err, parse, count)
+			}
+			t.Log("verified installed DNSSEC original NTA and absent-anchor recheck")
 		}
 		t.Logf("verified installed resolved helper original broker and scoped upstream: %s", scenario)
 	})

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"router-vpn/internal/systembootstrap"
+	"sync"
 	"time"
 )
 
@@ -13,8 +14,10 @@ import (
 // selected in-tunnel DNS. Local resolved stubs require their authenticated
 // per-link policy; an upstream-file list is never an equivalent substitute.
 type linuxBootResolver struct {
-	policy *systembootstrap.Capture
-	helper *linuxResolvedHelper
+	policy         *systembootstrap.Capture
+	helper         *linuxResolvedHelper
+	dnssecMu       sync.Mutex
+	dnssecChildren []*linuxDNSSECChild
 }
 
 func captureLinuxBootResolver(ctx context.Context, hostname string) (*linuxBootResolver, error) {
@@ -51,6 +54,9 @@ func (r *linuxBootResolver) close() error {
 func (r *linuxBootResolver) closeContext(ctx context.Context) error {
 	if r == nil || r.policy == nil {
 		return nil
+	}
+	if err := r.closeDNSSECChildren(ctx); err != nil {
+		return err
 	}
 	if r.helper != nil {
 		if err := r.helper.Close(ctx); err != nil {

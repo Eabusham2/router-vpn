@@ -21,6 +21,7 @@ type resolvedQueryScope struct {
 	mobiletor.DesktopLinuxBootstrapDNSUpstream
 	opportunistic *mobiletor.DesktopLinuxOpportunisticDNS
 	current       func(context.Context) error
+	validate      func(context.Context) ([]byte, error)
 }
 type resolvedOpportunisticQueryGroup interface {
 	ExchangeOpportunistic(context.Context, *mobiletor.DesktopLinuxOpportunisticDNS, []byte, func(context.Context) error) ([]byte, error)
@@ -36,6 +37,9 @@ type resolvedQueryGroup interface {
 // provisional until every other scope has completed. The group must release
 // and join its original sockets/grants before any answer can be adopted.
 func resolveOriginalScopes(ctx context.Context, group resolvedQueryGroup, upstreams []resolvedQueryScope, question []byte) ([]byte, error) {
+	return resolveOriginalScopesOwned(ctx, group, upstreams, question, nil)
+}
+func resolveOriginalScopesOwned(ctx context.Context, group resolvedQueryGroup, upstreams []resolvedQueryScope, question []byte, retire func(context.Context) error) ([]byte, error) {
 	query, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
@@ -52,7 +56,9 @@ func resolveOriginalScopes(ctx context.Context, group resolvedQueryGroup, upstre
 			defer workers.Done()
 			var answer []byte
 			var err error
-			if server.opportunistic != nil {
+			if server.validate != nil {
+				answer, err = server.validate(query)
+			} else if server.opportunistic != nil {
 				transport, ok := group.(resolvedOpportunisticQueryGroup)
 				if !ok {
 					err = errors.New("original group omitted captured opportunistic transport")
@@ -62,7 +68,7 @@ func resolveOriginalScopes(ctx context.Context, group resolvedQueryGroup, upstre
 			} else {
 				answer, err = group.Exchange(query, server.DesktopLinuxBootstrapDNSUpstream, question)
 			}
-			if err == nil && server.opportunistic == nil && server.Network == "udp" && common.ValidateDNSForwardResponse(question, answer) == nil && answer[2]&2 != 0 {
+			if err == nil && server.validate == nil && server.opportunistic == nil && server.Network == "udp" && common.ValidateDNSForwardResponse(question, answer) == nil && answer[2]&2 != 0 {
 				server.Network = "tcp"
 				answer, err = group.Exchange(query, server.DesktopLinuxBootstrapDNSUpstream, question)
 			}
@@ -101,11 +107,21 @@ collect:
 	// replace the immutable original deadline held by the group.
 	cleanup, finish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer finish()
+	joined := make(chan struct{})
+	go func() { workers.Wait(); close(joined) }()
+	if retire != nil {
+		select {
+		case <-joined:
+		case <-cleanup.Done():
+			return nil, &resolvedGroupRetirementError{cleanup.Err()}
+		}
+		if err := retire(cleanup); err != nil {
+			return nil, &resolvedGroupRetirementError{errors.Join(failures, err)}
+		}
+	}
 	if err := group.Close(cleanup); err != nil {
 		return nil, &resolvedGroupRetirementError{errors.Join(failures, err)}
 	}
-	joined := make(chan struct{})
-	go func() { workers.Wait(); close(joined) }()
 	select {
 	case <-joined:
 	case <-cleanup.Done():

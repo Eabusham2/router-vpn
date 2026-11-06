@@ -134,3 +134,22 @@ func TestResolvedFixedCommandBoundedCohortSequence(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvedFixedCommandDNSSECSequenceBudget(t *testing.T) {
+	if resolvedCompleteRequestBudget != 443275851 || uint64(MaxResolvedRequests) < resolvedCompleteRequestBudget || uint64(MaxResolvedRequests)/2 >= resolvedCompleteRequestBudget {
+		t.Fatal("complete guarded DNSSEC cohort budget was truncated or arbitrarily widened")
+	}
+	capture := strings.Repeat("a", 64)
+	for _, sequence := range []uint32{uint32(resolvedCompleteRequestBudget), MaxResolvedRequests} {
+		raw, err := (ResolvedRequest{Schema: 1, CaptureSHA256: capture, Sequence: sequence, Action: "observe"}).Canonical()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = DecodeResolvedRequest(raw, capture, sequence); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := (ResolvedRequest{Schema: 1, CaptureSHA256: capture, Sequence: MaxResolvedRequests + 1, Action: "observe"}).Canonical(); err == nil {
+		t.Fatal("finite DNSSEC frame bound renewed")
+	}
+}

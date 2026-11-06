@@ -189,7 +189,7 @@ SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT +
 def check_ss_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
 
-RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback')
+RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta')
 CASES += RESOLVED_CASES
 HOSTNAME_CASES += RESOLVED_CASES
 PUBLIC_CASES += RESOLVED_CASES
@@ -408,6 +408,10 @@ def check_verdict(output, case=None):
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed WG/Hysteria graph omitted or duplicated original native completion: ' + value)
+        if value == 'service-boot-resolved-dnssec-nta':
+            marker = 'verified installed DNSSEC original NTA and absent-anchor recheck'
+            if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
+                raise ValueError('Installed DNSSEC omitted exact original trust-plan recheck')
         if value in RESOLVED_CASES:
             marker = 'verified installed resolved helper original broker and scoped upstream: ' + value
             if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:

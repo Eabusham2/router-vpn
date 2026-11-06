@@ -30,6 +30,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/dnsmeasure"
+	"router-vpn/internal/standardengine"
 )
 
 const bootHostnameFixtureName = "node.transport-bootstrap.invalid"
@@ -62,25 +63,37 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 		}
 		var original []byte
 		ipv6 := false
-		for _, six := range []bool{false, true} {
-			want, e := dnsmeasure.TransportBootstrapQuery(bootHostnameFixtureName, six)
-			if e != nil {
-				return nil, e
+		if mode != "dnssec-nta" {
+			for _, six := range []bool{false, true} {
+				want, e := dnsmeasure.TransportBootstrapQuery(bootHostnameFixtureName, six)
+				if e != nil {
+					return nil, e
+				}
+				copy(want[:2], query[:2])
+				want[3] = query[3]
+				if want[3]&^byte(0x20) != 0 {
+					return nil, errors.New("unexpected bootstrap query flags")
+				}
+				base := append([]byte(nil), want...)
+				if query[11] == 1 {
+					want[11] = 1
+					want = append(want, 0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0)
+				}
+				if bytes.Equal(query, want) {
+					original = base
+					ipv6 = six
+					break
+				}
 			}
-			copy(want[:2], query[:2])
-			want[3] = query[3]
-			if want[3]&^byte(0x20) != 0 {
-				return nil, errors.New("unexpected bootstrap query flags")
-			}
-			base := append([]byte(nil), want...)
-			if query[11] == 1 {
-				want[11] = 1
-				want = append(want, 0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0)
-			}
-			if bytes.Equal(query, want) {
-				original = base
-				ipv6 = six
-				break
+		}
+		if mode == "dnssec-nta" {
+			for _, kind := range []uint16{1, 28} {
+				if _, err := standardengine.ResolvedDNSSECQuestionFromWire(bootHostnameFixtureName, kind, query); err == nil {
+					original, _ = dnsmeasure.TransportBootstrapQuery(bootHostnameFixtureName, kind == 28)
+					copy(original[:2], query[:2])
+					ipv6 = kind == 28
+					break
+				}
 			}
 		}
 		if original == nil {
@@ -241,6 +254,9 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	}
 	if scenario == "service-boot-resolved-opportunistic-fallback" {
 		mode = "opportunistic-fallback"
+	}
+	if scenario == "service-boot-resolved-dnssec-nta" {
+		mode = "dnssec-nta"
 	}
 	hostsOnly := scenario == "service-boot-hosts"
 	resolved := linuxHostTUNResolvedCase(scenario)

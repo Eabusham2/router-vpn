@@ -659,3 +659,13 @@ AUXILIARY_TESTS.update({'internal/standardengine/dnssec_command_test.go':'dnssec
 # Captured DNSSEC groups retain the original finite physical grant owner.
 SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_dnssec'+suffix+'.go'
  for suffix in ('','_test','_native_test'))
+
+# Shipping direct-name DNSSEC orchestration, captured trust and joined owners.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_validate_linux.go',
+ 'cmd/client/linux_standard_service_resolved_validate_linux_test.go'})
+AUXILIARY['resolved-dnssec-caller']=('./cmd/client',{
+ 'TestResolvedDNSSECAdoptionRequiresLocalProof':('secure','proven-insecure','bogus-ad','unknown','changed-question','changed-rcode','alias-before-adoption','bogus-alias-before-adoption'),
+ 'TestResolvedDNSSECChildrenJoinBeforeGroup':('joined','retained-child'),
+ 'TestResolvedDNSSECAliasDiscoveredBeforeVerdict':()})
+AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_validate_linux_test.go']='resolved-dnssec-caller'
+AUXILIARY['resolved-command'][1]['TestResolvedFixedCommandDNSSECSequenceBudget']=()
