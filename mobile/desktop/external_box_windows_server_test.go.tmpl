@@ -29,6 +29,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/outbound"
 	boxService "github.com/sagernet/sing-box/adapter/service"
 	"github.com/sagernet/sing-box/dns"
+	DNSLocal "github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 	"github.com/sagernet/sing-box/option"
@@ -305,7 +306,11 @@ func (r *desktopWFPRouterServer) Start(ctx context.Context, raw []byte, lease mu
 	ir, or := inbound.NewRegistry(), outbound.NewRegistry()
 	SOCKS.RegisterInbound(ir)
 	SS.RegisterOutbound(or)
-	runtime := Context(r.peer.ctx, ir, or, endpoint.NewRegistry(), dns.NewTransportRegistry(), boxService.NewRegistry(), certificate.NewRegistry())
+	// Match the packaged core registry for its required fallback construction.
+	// The compiled relay graph still rejects domain targets from this client.
+	resolvers := dns.NewTransportRegistry()
+	DNSLocal.RegisterTransport(resolvers)
+	runtime := Context(r.peer.ctx, ir, or, endpoint.NewRegistry(), resolvers, boxService.NewRegistry(), certificate.NewRegistry())
 	options, err := SJ.UnmarshalExtendedContext[option.Options](runtime, body)
 	if err != nil {
 		return nil, err
