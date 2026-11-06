@@ -1857,3 +1857,27 @@ assertion or causal-control case changes. The executor remains unavailable;
 no final-file execution is claimed. The same Windows positive suite and all
 eight intended causal controls must pass on the resulting source before this
 fixture change can be credited with resolving the observed native CI failure.
+
+
+## iOS startup-policy fixture: include the actual Start Layer declaration
+
+The earlier external-comparison fixture correction did not cover the separate
+startup-policy compiler. Exact `e4207fb8`
+[iOS native compile job 128099260980](https://github.com/Eabusham2/router-vpn/actions/runs/42277993797/job/128099260980)
+failed because `IOSMultihopExecution.swift` calls
+`IOSMultihopStartLayer.validateCapturedSSService`, but that declaration was
+missing from this fixture's Swift input list. Root read the actual failure log.
+
+Reviewed one-file source `a6099957bce2854aa584b3f1b98ddd42973399fe` adds the
+complete shipping `IOSMultihopStartLayer.swift` immediately before
+`IOSMultihopExecution.swift` in the existing compiler command. The file is
+compiled directly, preserving its Foundation/CoreFoundation dependencies and
+conditional CryptoKit import. No facade, hash substitute or changed validator
+is introduced.
+
+Root compared the complete before/after fixture and confirmed the sole
+source-list substitution. Independent review is clear. All twelve mutation
+definitions, startup assertions, baseline assembly, 90-second compile bound
+and 45-second execution bound remain unchanged. No final-file Swift execution
+is claimed while the executor is unavailable; exact-SHA startup and native
+iOS/iPadOS jobs must still establish that evidence.
