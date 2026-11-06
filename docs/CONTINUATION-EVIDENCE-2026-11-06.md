@@ -836,6 +836,18 @@ replacement check during the workspace outage. No local build, native execution,
 passing provider-join verdict or SOCKS acceptance is claimed for this correction.
 Its next CI execution must supply those distinct results.
 
+### Standalone Windows provider prerequisite trigger
+
+The published provider-join correction in `4299db39` did not schedule the
+standalone Windows physical-bootstrap workflow. Its current workflow runs
+`deploy/test_windows_external_provider_join.py` before the native matrix phase,
+but neither its push nor pull-request path list included that consumed file.
+Both lists now include the exact prerequisite path. Only those two filter
+entries change; jobs, matrices, permissions, concurrency, commands, receipts
+and all execution deadlines remain unchanged. The workflow's existing self-path
+also schedules this correction. Scheduling evidence is separate from a passing
+provider fixture or native network verdict.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.
