@@ -483,15 +483,17 @@ def native_executable(library, pid, *, capture_generation=False):
 def running_executables(generation=None):
     if generation is None:
         return running_executables_once(generation)
-    # An independently witnessed live exec transition invalidates the whole
-    # scan. Retain the same installation scope, but capture every PID and image
+    # A witnessed live exec transition or an empty ESRCH image query with
+    # unchanged live fences invalidates the whole scan. Retain the same
+    # installation scope, but capture every PID and image
     # afresh; no partial paths or earlier foreign-image decisions are reused.
-    # Unknown, disappeared, denied, matching and malformed identities still
-    # fail immediately. No native query or outer operation deadline is renewed.
+    # Other unknown, disappeared, explicit denial, matching and malformed
+    # identities fail immediately; persistent ESRCH fails at the same bound.
+    # No native query or outer operation deadline is renewed.
     for attempt in range(3):
         try:
             return running_executables_once(generation)
-        except GENERATION.IMAGE.MainImageGenerationChanged:
+        except GENERATION.IMAGE.MainImageCaptureRetry:
             if attempt == 2:
                 raise
 

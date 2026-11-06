@@ -224,7 +224,21 @@ def code_identity_library():
     return system
 
 
-class MainImageGenerationChanged(RuntimeError):
+class MainImageCaptureRetry(RuntimeError):
+    """No image authority; only a fresh bounded complete inventory may retry."""
+
+
+class MainImageObservationInterrupted(MainImageCaptureRetry):
+    """An empty ESRCH capture with independently unchanged live fences.
+
+    XNU csops may report ESRCH from proc_find or its audit-token fence. This
+    does not prove process absence, and a security refusal may also persist.
+    The caller must inspect every listed live process again; repeated failure
+    remains fatal. No partial image, path or foreign-image decision is retained.
+    """
+
+
+class MainImageGenerationChanged(MainImageCaptureRetry):
     """A witnessed live-to-live transition invalidated the entire image capture.
 
     This error contains no reusable identity. A caller may only start a fresh
@@ -274,6 +288,9 @@ def main_image_identity(library, pid, state_reader, *, system=None):
         raise RuntimeError('Native main-image process or exec generation changed')
     identity = {'pid': pid, 'start_seconds': before[1], 'start_microseconds': before[2],
                 'uniqueid': unique[0], 'idversion': unique[1], 'main_uuid': unique[2]}
+    if result == -1 and error == errno.ESRCH and not any(digest):
+        raise MainImageObservationInterrupted(
+            f'Cannot capture the native main-image CodeDirectory (pid={pid}, errno={error}, result={result})')
     if result == -1 and error == 85 and not any(digest):
         raise MainImageCodeDirectoryUnavailable(pid, identity)
     if result != 0 or not any(digest):

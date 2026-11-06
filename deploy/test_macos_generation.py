@@ -503,6 +503,30 @@ class ManagedProcessInventory(unittest.TestCase):
                 self.scan_sequence(captured, [first, fresh])
             self.assertEqual(fresh.calls, [], 'A changed original installation was replaced with new authority')
 
+    def test_empty_esrch_reobserves_every_live_process_and_never_grants_absence(self):
+        self.prepare()
+        with self.capture() as captured:
+            first = ManagedProcessLibrary('a' * 40, pids=(101, 102),
+                paths={101: (b'/discarded-partial-image', 0), 102: (b'/interrupted-image', 0)})
+            first.before_hash = lambda: setattr(first, 'error', 3 if len(first.tokens) == 2 else 0)
+            fresh = ManagedProcessLibrary('a' * 40, pids=(101, 102),
+                paths={101: (b'/fresh-first-image', 0), 102: (b'/fresh-second-image', 0)})
+            self.assertEqual(self.scan_sequence(captured, [first, fresh]),
+                             ['/fresh-first-image', '/fresh-second-image'])
+            for library in (first, fresh):
+                self.assertEqual([token[5] for token in library.tokens], [101, 102])
+                self.assertEqual(sum(call[0] == 'inventory' for call in library.calls), 1)
+            denied = [ManagedProcessLibrary('a' * 40, error=3) for _ in range(3)]
+            with self.assertRaises(self.installer.GENERATION.IMAGE.MainImageObservationInterrupted) as failure:
+                self.scan_sequence(captured, denied)
+            self.assertFalse(hasattr(failure.exception, 'identity'))
+            self.assertEqual([len(library.tokens) for library in denied], [1, 1, 1])
+            interrupted = ManagedProcessLibrary('a' * 40, error=3)
+            owned = ManagedProcessLibrary(next(iter(captured.hashes)))
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                self.scan_sequence(captured, [interrupted, owned])
+            self.assertEqual(len(owned.tokens), 1)
+
     def test_whole_inventory_retry_is_bounded_and_does_not_catch_unknown_errors(self):
         self.prepare()
         with self.capture() as captured:
@@ -927,11 +951,11 @@ def main():
          '                pass # accept matching linked renamed image', 'test_linked_renamed_copy_is_compared_by_native_image'),
         ('omit-complete-retry', '            if attempt == 2:\n                raise',
          '            if True:\n                raise', 'test_live_transition_restarts_the_entire_inventory_without_partial_paths'),
-        ('retry-unknown-native-error', '        except GENERATION.IMAGE.MainImageGenerationChanged:',
+        ('retry-unknown-native-error', '        except GENERATION.IMAGE.MainImageCaptureRetry:',
          '        except RuntimeError:', 'test_whole_inventory_retry_is_bounded_and_does_not_catch_unknown_errors'),
         ('extend-inventory-retry-bound',
-         '    for attempt in range(3):\n        try:\n            return running_executables_once(generation)\n        except GENERATION.IMAGE.MainImageGenerationChanged:\n            if attempt == 2:',
-         '    for attempt in range(4):\n        try:\n            return running_executables_once(generation)\n        except GENERATION.IMAGE.MainImageGenerationChanged:\n            if attempt == 3:',
+         '    for attempt in range(3):\n        try:\n            return running_executables_once(generation)\n        except GENERATION.IMAGE.MainImageCaptureRetry:\n            if attempt == 2:',
+         '    for attempt in range(4):\n        try:\n            return running_executables_once(generation)\n        except GENERATION.IMAGE.MainImageCaptureRetry:\n            if attempt == 3:',
          'test_whole_inventory_retry_is_bounded_and_does_not_catch_unknown_errors'),
         ('omit-original-scope-before-rescan', '    library = native_process_library()\n    if generation is not None:\n        generation.verify()',
          '    library = native_process_library()\n    # omit original installation verification before the complete scan',

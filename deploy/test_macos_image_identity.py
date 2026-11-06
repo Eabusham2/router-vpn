@@ -256,6 +256,20 @@ class MainImageCapture(unittest.TestCase):
         fake = NativeFixture(); fake.digest = bytes(20)
         with self.assertRaises(RuntimeError): self.image.main_image_identity(fake, 102, fake.state, system=fake)
 
+    def test_empty_esrch_retry_requires_unchanged_live_fences_and_has_no_identity(self):
+        fake = NativeFixture(); fake.error = errno.ESRCH
+        with self.assertRaises(self.image.MainImageObservationInterrupted) as failure:
+            self.image.main_image_identity(fake, 102, fake.state, system=fake)
+        self.assertFalse(hasattr(failure.exception, 'identity'))
+        self.assertEqual((fake.unique, fake.states), ([], []))
+        for error, result, digest in ((errno.EPERM, -1, bytes(20)), (errno.EACCES, -1, bytes(20)),
+                                      (errno.EINVAL, -1, bytes(20)), (errno.ESRCH, 1, bytes(20)),
+                                      (errno.ESRCH, -1, bytes.fromhex('a1' * 20))):
+            fake = NativeFixture(); fake.error = error; fake.error_result = result; fake.failed_digest = digest
+            with self.subTest(error=error, result=result), self.assertRaises(RuntimeError) as failure:
+                self.image.main_image_identity(fake, 102, fake.state, system=fake)
+            self.assertNotIsInstance(failure.exception, self.image.MainImageCaptureRetry)
+
     def test_only_ebadexec_retains_the_separate_fenced_uuid_failure(self):
         for uuid in ('0' * 32, '3' * 32):
             fake = NativeFixture(); fake.error = 85; fake.uuids = [uuid, uuid]
@@ -502,6 +516,10 @@ def main():
          MainImageCapture, 'test_only_valid_live_transition_can_request_a_complete_fresh_inventory'),
         ('retry-denied-image', 'error in (errno.ESRCH, 85)', 'error != 0',
          MainImageCapture, 'test_only_valid_live_transition_can_request_a_complete_fresh_inventory'),
+        ('retry-stable-denied-image', 'error == errno.ESRCH and not any(digest)', 'error != 0 and not any(digest)',
+         MainImageCapture, 'test_empty_esrch_retry_requires_unchanged_live_fences_and_has_no_identity'),
+        ('retry-dirty-esrch-image', 'error == errno.ESRCH and not any(digest)', 'error == errno.ESRCH',
+         MainImageCapture, 'test_empty_esrch_retry_requires_unchanged_live_fences_and_has_no_identity'),
         ('retry-empty-successful-code', 'result == 0 and any(digest)', 'result == 0',
          MainImageCapture, 'test_only_valid_live_transition_can_request_a_complete_fresh_inventory'),
     )
