@@ -524,7 +524,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-ios-execution-') as folder:
         path, binary = Path(folder)/'test.swift', Path(folder)/'test'
         path.write_text((APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSStartupLastChoice.swift').read_text()+'\n'+SWIFT)
-        subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(path), '-o', str(binary)], check=True, timeout=90)
+        subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(APP / 'IOSMultihopStartLayer.swift'), str(path), '-o', str(binary)], check=True, timeout=90)
         fixtures=[ROOT/'deploy/fixtures'/name for name in ['external-openvpn-multihost-client.json','external-openvpn-multihost-layered-aes-client.json','external-openvpn-multihost-layered-xor-client.json']]
         subprocess.run([str(binary), *map(str,fixtures)], check=True, timeout=20)
     provider = (ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()

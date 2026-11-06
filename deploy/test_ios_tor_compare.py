@@ -437,7 +437,7 @@ def main():
             args += ['-lCryptoKit']
         test=work/'Tests.swift'; test.write_text(BOUNDARIES.replace(' // SHIPPING_PROVIDER',provider_body(source))+TESTS)
         host=work/'RouterVPNTorCompare.swift'; host.write_text(host_source)
-        command=args+[str(APP/'IOSMultihopExecution.swift'),str(TUN/'RouterVPNSettingsQueue.swift'),str(host),str(test),'-o',str(work/'tests')]
+        command=args+[str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSMultihopExecution.swift'),str(TUN/'RouterVPNSettingsQueue.swift'),str(host),str(test),'-o',str(work/'tests')]
         subprocess.run(command,check=True,timeout=90)
         subprocess.run([str(work/'tests')],check=True,timeout=45)
         mutations = (

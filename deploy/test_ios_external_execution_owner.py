@@ -247,7 +247,7 @@ def main():
         dns_session = (ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNDNSMeasurementSession.swift').read_text().replace('import Libbox\n', '')
         code.write_text(BOUNDARIES + DNS.NATIVE + DNS.STORAGE + dns_session + (APP / 'IOSMultihopExecution.swift').read_text() + shipping())
         binary = work / 'test'
-        subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library', '-module-cache-path', str(work / 'module-cache'), str(code), '-o', str(binary)], check=True, timeout=90)
+        subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library', '-module-cache-path', str(work / 'module-cache'), str(APP / 'IOSMultihopStartLayer.swift'), str(code), '-o', str(binary)], check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=30)
 
 

@@ -345,7 +345,7 @@ def main():
         prefix=SHIM+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'
         def compile_and_run(body, negative=None):
             path.write_text(prefix+body+'\n'+cleanup)
-            subprocess.run([swift,'-swift-version','6','-parse-as-library',str(path),'-o',str(binary)],check=True,timeout=90)
+            subprocess.run([swift,'-swift-version','6','-parse-as-library',str(APP/'IOSMultihopStartLayer.swift'),str(path),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary)],capture_output=negative is not None,text=True,timeout=30)
             if negative is None:
                 result.check_returncode()
