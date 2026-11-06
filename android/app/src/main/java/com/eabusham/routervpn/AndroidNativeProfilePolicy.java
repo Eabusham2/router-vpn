@@ -73,8 +73,9 @@ final class AndroidNativeProfilePolicy {
         if (protocol.isEmpty()) protocol = "udp";
         String host;
         if ("home".equals(mode)) {
-            host = firstNonEmpty(p.optString("adguard_ipv4", ""), p.optString("adguard_ipv6", ""));
-            protocol = "udp";
+            HomeDNS home=homeDNS(p);
+            host=home.host;protocol=home.protocol;
+            if(home.port!=53)throw new IllegalStateException("Home DNS port requires the transport-aware Libbox backend.");
         } else if ("fastest".equals(mode)) {
             host = p.optString("fastest_dns_host", "").trim();
             protocol = "udp";
@@ -91,6 +92,79 @@ final class AndroidNativeProfilePolicy {
         }
         if (!isLiteralIp(host)) throw new IllegalStateException("Native Android DNS requires a literal IPv4/IPv6 address; selected value is not an IP.");
         return host;
+    }
+
+    /** One Home policy contract for settings, saved profiles and native graphs. */
+    static final class HomeDNS {
+        final String protocol, host, serverName, path;
+        final int port;
+        HomeDNS(String protocol,String host,int port,String serverName,String path){this.protocol=protocol;this.host=host;this.port=port;this.serverName=serverName;this.path=path;}
+        void apply(JSONObject profile)throws Exception{
+            profile.put("dns_mode","home").put("dns_protocol",protocol).put("dns_host",host)
+                    .put("dns_port",port).put("dns_server_name",serverName).put("dns_path",path);
+        }
+    }
+
+    static HomeDNS homeDNS(JSONObject profile)throws Exception{
+        return homeDNS(profile,text(profile,"dns_protocol","udp"),text(profile,"dns_host",""),
+                exactInteger(profile,"dns_port",0,0,65535),text(profile,"dns_server_name",""),text(profile,"dns_path",""));
+    }
+
+    static HomeDNS homeDNS(JSONObject profile,String protocol,String host,int port,String serverName,String path)throws Exception{
+        List<String> addresses=new ArrayList<>();
+        for(String key:new String[]{"adguard_ipv4","adguard_ipv6"}){
+            String value=text(profile,key,"");
+            if(!value.isEmpty()){
+                requireHomeAddress(value);
+                if(value.contains(":")!=key.equals("adguard_ipv6"))throw new IllegalArgumentException("Home AdGuard address family is invalid.");
+                addresses.add(value);
+            }
+        }
+        if(addresses.isEmpty())throw new IllegalArgumentException("Home AdGuard address is missing from this node.");
+        host=host.trim();if(host.startsWith("[")&&host.endsWith("]"))host=host.substring(1,host.length()-1);
+        if(host.isEmpty())host=addresses.get(0);
+        requireHomeAddress(host);
+        if(!addresses.contains(host))throw new IllegalArgumentException("Home DNS belongs to a different node; choose this node's AdGuard address.");
+        String ipv6=stringPolicy(profile,"ipv6_mode","on");
+        if(!java.util.Arrays.asList("","on","auto","off").contains(ipv6))throw new IllegalArgumentException("Unknown IPv6 policy.");
+        if(ipv6.equals("off")&&host.contains(":"))throw new IllegalArgumentException("IPv6 Home DNS cannot be used while IPv6 is Off.");
+        protocol=protocol.trim().toLowerCase(Locale.ROOT);
+        if(protocol.isEmpty())protocol="udp";
+        if(protocol.equals("dot"))protocol="tls";else if(protocol.equals("doh"))protocol="https";else if(protocol.equals("doh3"))protocol="h3";
+        if(!java.util.Arrays.asList("udp","tcp","tls","https","h3").contains(protocol))throw new IllegalArgumentException("Home DNS transport must be UDP, TCP, DoT, DoH or DoH3.");
+        if(port<0||port>65535)throw new IllegalArgumentException("Home DNS port must be 1–65535 or zero for the transport default.");
+        if(port==0)port=protocol.equals("tls")?853:protocol.equals("https")||protocol.equals("h3")?443:53;
+        serverName=serverName.trim();path=path.trim();
+        if(protocol.equals("udp")||protocol.equals("tcp")){serverName="";path="";}
+        else{
+            if(serverName.length()>253||!serverName.matches("(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")||!serverName.matches(".*[A-Za-z].*"))throw new IllegalArgumentException("Encrypted Home DNS requires its exact TLS certificate hostname.");
+            if(protocol.equals("tls"))path="";
+            else{
+                if(path.isEmpty())path="/dns-query";
+                if(path.length()>2048||!path.startsWith("/")||path.startsWith("//")||path.matches(".*[\\\\?#].*")||java.util.regex.Pattern.compile("%(?![0-9a-fA-F]{2})").matcher(path).find())throw new IllegalArgumentException("Home DoH requires a local resolver path without a host, query or fragment.");
+                for(int i=0;i<path.length();i++)if(path.charAt(i)<=32||path.charAt(i)>=127)throw new IllegalArgumentException("Home DoH path must be ASCII and percent encoded.");
+                java.net.URI uri=new java.net.URI(path);
+                if(uri.getScheme()!=null||uri.getHost()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null)throw new IllegalArgumentException("Home DoH path is invalid.");
+            }
+        }
+        return new HomeDNS(protocol,host,port,serverName,path);
+    }
+
+    static void validateHomeDNS(JSONObject profile)throws Exception{
+        String mode=stringPolicy(profile,"dns_mode","home");
+        if(mode.isEmpty()||mode.equals("home"))homeDNS(profile);
+    }
+
+    private static String text(JSONObject profile,String key,String fallback){
+        Object value=profile.opt(key);if(value==null)return fallback;
+        if(!(value instanceof String))throw new IllegalArgumentException(key+" must be text.");
+        return ((String)value).trim();
+    }
+    private static void requireHomeAddress(String value)throws Exception{
+        if(!value.equals(AndroidNumericAddress.canonical(value)))throw new IllegalArgumentException("Home DNS requires a canonical private AdGuard IP address.");
+        byte[] bytes=AndroidNumericAddress.parse(value).getAddress();int first=bytes[0]&255,second=bytes[1]&255;
+        boolean owned=bytes.length==4?(first==10||first==172&&second>=16&&second<=31||first==192&&second==168):(first&254)==252;
+        if(!owned)throw new IllegalArgumentException("Home DNS requires a private AdGuard IP address.");
     }
 
     static int selectedMtu(JSONObject bundle, int fallback) {

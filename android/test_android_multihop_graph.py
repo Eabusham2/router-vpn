@@ -325,6 +325,7 @@ public final class MultihopGraphHarness {
    JSONObject source=awgBundle('b'),policy=profile(source);
    policy.put("dns_mode",dnsMode).put("dns_host","resolver.example.test").put("dns_protocol","tcp").put("dns_server_name","resolver.example.test")
      .put("home_lan_access",false).put("ipv6_mode","off").put("kill_switch",true).put("mtu_policy","fixed").put("manual_mtu",1360);
+   if(dnsMode.equals("home"))policy.put("dns_host","192.168.50.133").put("dns_protocol","udp");
    File bundleFile=save(dir,source);byte[] original=Files.readAllBytes(bundleFile.toPath());
    check(controller.listDirectLibboxModes(bundleFile).stream().anyMatch(m->m.id.equals(mode)),"native AWG missing from mode selection");
    NativeSingBoxController.SessionInfo selected=controller.prepareSession(bundleFile,mode);

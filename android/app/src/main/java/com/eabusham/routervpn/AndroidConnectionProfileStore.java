@@ -356,6 +356,7 @@ final class AndroidConnectionProfileStore {
         if(findNode(id)==null)throw new IllegalStateException("The saved Router node is no longer linked.");
         JSONObject profile=selectedProfile(readBundle(nodes.file(id))),policy=new JSONObject();
         if(profile==null)throw new IllegalStateException("The Router node has no selected profile.");
+        AndroidNativeProfilePolicy.validateHomeDNS(profile);
         for(String key:POLICY_KEYS)if(profile.has(key))policy.put(key,profile.get(key));
         // Null in a saved Router policy captures the runtime default (absence).
         // An omitted saved field belongs to an older profile and is not ours to reset.
@@ -382,6 +383,7 @@ final class AndroidConnectionProfileStore {
             if("daita_rate_kbps".equals(key)&&policy.isNull(key))profile.remove(key);
             else profile.put(key,policy.get(key));
         }
+        AndroidNativeProfilePolicy.validateHomeDNS(profile);
         AndroidNodeStore.validateBundle(bundle);byte[] updatedBundle=bundle.toString().getBytes(StandardCharsets.UTF_8);
         if(!id.equals(AndroidNodeStore.deriveId(bundle,updatedBundle)))throw new IllegalStateException("This legacy Router node has no stable proof-bound identity. Re-import its current bundle before restoring policy.");
         NodeUpdate existing=updates.get(id);

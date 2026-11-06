@@ -466,7 +466,7 @@ final class NativeSingBoxController {
         s.port = AndroidNativeProfilePolicy.exactInteger(profile, "dns_port", 0, 0, 65535);
         s.serverName = profile.optString("dns_server_name", "").trim();
         s.path = profile.optString("dns_path", "/dns-query").trim();
-        if ("home".equals(s.mode)) { s.host=firstNonEmpty(profile.optString("adguard_ipv4", ""), profile.optString("adguard_ipv6", "")); s.protocol="udp";s.port=53;s.serverName="";s.path=""; }
+        if ("home".equals(s.mode)) { AndroidNativeProfilePolicy.HomeDNS home=AndroidNativeProfilePolicy.homeDNS(profile);s.host=home.host;s.protocol=home.protocol;s.port=home.port;s.serverName=home.serverName;s.path=home.path;return s; }
         else if ("fastest".equals(s.mode)) { s.host=fastest;s.protocol="udp";s.port=53;s.serverName="";s.path=""; }
         else if ("doh".equals(s.mode)) { s.protocol="https";if(s.port<=0)s.port=443; }
         else if ("dot".equals(s.mode)) { s.protocol="tls";if(s.port<=0)s.port=853; }

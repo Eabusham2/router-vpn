@@ -133,6 +133,7 @@ jobs:
           python3 client/test_native_onboarding_contract.py
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_home_dns.py
           python3 android/test_android_multihop_graph.py
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py
@@ -424,6 +425,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_home_dns.py
           python3 android/test_android_multihop_graph.py
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py

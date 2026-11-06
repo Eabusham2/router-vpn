@@ -173,6 +173,7 @@ final class ProductConnectSurface extends Context {
  Object callback(){return new Object();}void configureMultihop(){}void refreshModeChoices(){}void refreshConnectionLater(){}ModeChoice currentMode(){throw new AssertionError("external selection used Router mode");}
  static String safe(Exception error){return error.getMessage();}void pressConnect(){connectOrDisconnect();}
  boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}
+ void pressDNS(String mode){setQuickDns(mode);}void refreshDnsSelection(){}boolean openSelectedExternal(boolean edit){return isExternalSelected();}
  JSONObject activeBundle()throws Exception{return new JSONObject(ConnectionProfilesHarness.text(nodeStore.file(nodeStore.activeId())));}
  JSONObject selectedProfile(JSONObject bundle)throws Exception{return AndroidProfileSelection.selectedRouterProfile(bundle);}
  JSONObject activeRouterProfile(){try{return selectedProfile(activeBundle());}catch(Exception invalid){return null;}}
@@ -217,7 +218,7 @@ public final class ConnectionProfilesHarness {
  static JSONObject node(String name,int key)throws Exception{
   byte[] publicKey=new byte[32];Arrays.fill(publicKey,(byte)key);String peer=Base64.getEncoder().encodeToString(publicKey);
   String proof=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(("router-vpn-node-proof-v1\n"+peer).getBytes(StandardCharsets.UTF_8)));
-  JSONObject p=policy("home").put("id",name).put("name",name).put("node_proof_id",proof).put("api_token","fixture-api-"+name).put("socks_password","fixture-socks-"+name)
+  JSONObject p=policy("home").put("adguard_ipv4","10.12.0.53").put("adguard_ipv6","fd12::53").put("dns_host","10.12.0.53").put("id",name).put("name",name).put("node_proof_id",proof).put("api_token","fixture-api-"+name).put("socks_password","fixture-socks-"+name)
     .put("start_layer","aes-256-gcm+xor-whitening").put("auto_require_encrypted",true).put("auto_require_obfuscation",true).put("base_tunnel","awg").put("base_fallback",false).put("kill_switch",true).put("kill_switch_policy","always").put("daita_enabled",true).put("jumbo_tun",true).put("socks_enabled",false);
   JSONObject assets=new JSONObject().put("wg.conf",Base64.getEncoder().encodeToString(("[Interface]\nPrivateKey = fixture-private-"+name+"\n[Peer]\nPublicKey = "+peer+"\n").getBytes(StandardCharsets.UTF_8)));
   return new JSONObject().put("selectedRouterID",name).put("nodeProofId",proof).put("routerProfiles",new JSONArray().put(p)).put("profiles",new JSONObject().put("wg",assets).put("hysteria2",new JSONObject().put("fixture","entry"))).put("modes",new JSONArray().put(new JSONObject().put("id","wg")).put(new JSONObject().put("id","hysteria2")));
@@ -752,14 +753,50 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("router-rates")){routerRateProfiles(root);torPaddingProfiles(root);System.out.println("Android Router captured rates: "+checks+" checks across "+cases+" isolated cases passed");return;}if(args.length>1&&args[1].equals("imported-summary")){importedSummary(root);System.out.println("Android actual imported summary: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-preferences")){profilePreferences(root);System.out.println("Android profile preferences: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-apply")){profileApply(root);System.out.println("Android profile apply: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&List.of("imported-router","imported-wireguard-router","imported-amneziawg-router","imported-final-wg","imported-final-awg2-fast","imported-final-awg2-strong","imported-nested-wg","imported-nested-awg2-fast","imported-nested-awg2-strong").contains(args[1])){if(args[1].equals("imported-wireguard-router"))importedProtocols=List.of("wireguard");if(args[1].equals("imported-amneziawg-router"))importedProtocols=List.of("amneziawg");if(args[1].startsWith("imported-nested-")){importedProtocols=List.of("wireguard","amneziawg");importedFinalModes=List.of(args[1].substring("imported-nested-".length()));}if(args[1].startsWith("imported-final-"))importedFinalModes=List.of(args[1].substring("imported-final-".length()));importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);packetFinalBoundaries(root);System.out.println("Android "+args[1]+" actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+
+
+ static void independentHomeDNSProfiles(Path root)throws Exception{
+  Fixture f=new Fixture(root);
+  for(AndroidNodeStore.Node n:List.of(f.first,f.second)){
+   boolean exit=n==f.second;JSONObject b=bundle(n),p=AndroidProfileSelection.selectedRouterProfile(b);
+   p.put("adguard_ipv4",exit?"10.13.0.53":"10.12.0.53").put("adguard_ipv6",exit?"fd13::53":"fd12::53").put("ipv6_mode","on").put("dns_host",exit?"fd13::53":"10.12.0.53").put("dns_protocol",exit?"h3":"tls").put("dns_port",exit?5443:5853).put("dns_server_name",exit?"exit.home.example":"entry.home.example").put("dns_path",exit?"/exit-dns":"");
+   f.nodes.importBundle(b.toString().getBytes(StandardCharsets.UTF_8));
+  }
+  f.nodes.select(f.first.id);f.prefs.edit().putBoolean("multihop_on",true).putString("multihop_entry",f.first.id).putString("multihop_exit",f.second.id).putString("multihop_exit_mode","hysteria2").putString("multihop_execution","local").putString("multihop_entry_mode","wg").commit();
+  var saved=f.store.add("Independent Home owners");JSONObject original=f.row();String firstAssets=bundle(f.first).getJSONObject("profiles").toString(),secondAssets=bundle(f.second).getJSONObject("profiles").toString();f.changeNode(f.first);f.changeNode(f.second);for(AndroidNodeStore.Node n:List.of(f.first,f.second)){JSONObject current=bundle(n),p=AndroidProfileSelection.selectedRouterProfile(current);p.put("api_token","rotated-api-"+n.id).put("socks_password","rotated-socks-"+n.id);f.nodes.importBundle(current.toString().getBytes(StandardCharsets.UTF_8));}f.otherSelection();f.store.load(saved.id);
+  for(AndroidNodeStore.Node n:List.of(f.first,f.second))check(profile(n).getString("api_token").equals("rotated-api-"+n.id)&&profile(n).getString("socks_password").equals("rotated-socks-"+n.id),"Home profile replaced current independent node credentials");
+  check(profile(f.first).getString("dns_host").equals("10.12.0.53")&&profile(f.first).getString("dns_protocol").equals("tls")&&profile(f.first).getInt("dns_port")==5853,"entry Home policy was substituted");
+  check(profile(f.second).getString("dns_host").equals("fd13::53")&&profile(f.second).getString("dns_protocol").equals("h3")&&profile(f.second).getInt("dns_port")==5443&&profile(f.second).getString("dns_path").equals("/exit-dns"),"exit Home policy was substituted");
+  check(firstAssets.equals(bundle(f.first).getJSONObject("profiles").toString())&&secondAssets.equals(bundle(f.second).getJSONObject("profiles").toString()),"independent Home restore replaced private transport assets");
+  JSONObject swapped=new JSONObject(original.toString());swapped.getJSONObject("exit_policy").put("dns_host","10.12.0.53");f.row(swapped);State before=new State(f);int writes=AndroidPrivateFileStore.writes;rejected(()->f.store.load(saved.id),"swapped Home owner");before.same(f,"invalid exit must not adopt valid entry");check(writes==AndroidPrivateFileStore.writes,"invalid exit wrote before whole path validation");
+  f.row(original);f.changeNode(f.first);f.changeNode(f.second);f.otherSelection();before=new State(f);AndroidPrivateFileStore.failPath=f.second.file.getAbsolutePath();AndroidPrivateFileStore.failures=1;try{rejected(()->f.store.load(saved.id),"failed second Home store");before.same(f,"failed exit publication rolls back entry, exit and selected path");}finally{AndroidPrivateFileStore.failures=0;AndroidPrivateFileStore.failPath="";}
+ }
+ static void homeDNSProfiles(Path root)throws Exception{
+  independentHomeDNSProfiles(root);
+  for(String type:List.of("udp","tcp","tls","https","h3"))for(String host:List.of("10.12.0.53","fd12::53")){
+   Fixture f=new Fixture(root);JSONObject b=bundle(f.first),p=AndroidProfileSelection.selectedRouterProfile(b);p.put("dns_protocol",type).put("dns_host",host).put("dns_port",5443).put("dns_server_name","dns.home.example").put("dns_path","/private-dns").put("ipv6_mode","on");f.nodes.importBundle(b.toString().getBytes(StandardCharsets.UTF_8));
+   ProductConnectSurface quick=new ProductConnectSurface(f);quick.pressDNS("home");check(quick.message.startsWith("DNS set to home"),"actual quick Home handler failed");check(profile(f.first).getString("dns_protocol").equals(type)&&profile(f.first).getString("dns_host").equals(host)&&profile(f.first).getInt("dns_port")==5443,"actual quick Home handler reset explicit DNS");State busyBefore=new State(f);AndroidVpnMutationGuard.busy=true;try{quick.pressDNS("home");busyBefore.same(f,"busy Home quick selection");}finally{AndroidVpnMutationGuard.busy=false;}
+   b=bundle(f.first);p=AndroidProfileSelection.selectedRouterProfile(b);String assets=b.getJSONObject("profiles").toString();var saved=f.store.add("Exact Home DNS");f.changeNode(f.first);f.otherSelection();f.store.load(saved.id);JSONObject restored=profile(f.first);
+   for(String key:List.of("dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode"))check(restored.get(key).equals(p.get(key)),"profile restore replaced Home "+key);
+   check(assets.equals(bundle(f.first).getJSONObject("profiles").toString()),"Home restore changed node credentials");
+   for(String fault:List.of("foreign-owner","invalid-path","write")){
+    JSONObject row=f.row();if(fault.equals("foreign-owner")){JSONObject current=bundle(f.first);AndroidProfileSelection.selectedRouterProfile(current).put("adguard_ipv4","10.13.0.53").put("adguard_ipv6","fd13::53");f.nodes.importBundle(current.toString().getBytes(StandardCharsets.UTF_8));}
+    else if(fault.equals("invalid-path")){if(!type.equals("https")&&!type.equals("h3"))continue;row.getJSONObject("policy").put("dns_path","//other.example/dns");f.row(row);}
+    else {f.changeNode(f.first);AndroidPrivateFileStore.failPath=f.first.file.getAbsolutePath();AndroidPrivateFileStore.failures=1;}
+    State before=new State(f);try{rejected(()->f.store.load(saved.id),fault);before.same(f,"Home restore rollback "+fault);}finally{AndroidPrivateFileStore.failures=0;}
+    // Each fault needs its own source identity/row; retain exact original policy.
+    f.nodes.importBundle(b.toString().getBytes(StandardCharsets.UTF_8));f.row(row.put("policy",new JSONObject(f.row().getJSONObject("policy").toString()).put("dns_path","/private-dns")));
+   }
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("home-dns")){homeDNSProfiles(root);System.out.println("Android Home profile stores: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("router-rates")){routerRateProfiles(root);torPaddingProfiles(root);System.out.println("Android Router captured rates: "+checks+" checks across "+cases+" isolated cases passed");return;}if(args.length>1&&args[1].equals("imported-summary")){importedSummary(root);System.out.println("Android actual imported summary: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-preferences")){profilePreferences(root);System.out.println("Android profile preferences: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-apply")){profileApply(root);System.out.println("Android profile apply: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&args[1].equals("profile-rollback")){profileRollback(root);System.out.println("Android profile rollback: "+checks+" checks across "+cases+" cases passed");return;}if(args.length>1&&List.of("imported-router","imported-wireguard-router","imported-amneziawg-router","imported-final-wg","imported-final-awg2-fast","imported-final-awg2-strong","imported-nested-wg","imported-nested-awg2-fast","imported-nested-awg2-strong").contains(args[1])){if(args[1].equals("imported-wireguard-router"))importedProtocols=List.of("wireguard");if(args[1].equals("imported-amneziawg-router"))importedProtocols=List.of("amneziawg");if(args[1].startsWith("imported-nested-")){importedProtocols=List.of("wireguard","amneziawg");importedFinalModes=List.of(args[1].substring("imported-nested-".length()));}if(args[1].startsWith("imported-final-"))importedFinalModes=List.of(args[1].substring("imported-final-".length()));importedRouterRoundtrip(root);importedRouterInvalid(root);importedRouterRollback(root);importedRouterProduct(root);packetFinalBoundaries(root);System.out.println("Android "+args[1]+" actual persistence: "+checks+" checks across "+cases+" isolated cases passed (pure compiler boundary doubled)");return;}if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary"), default="all")
+    parser.add_argument("--case-family", choices=("all", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary"), default="all")
     args = parser.parse_args()
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
@@ -779,7 +816,7 @@ def main():
             target.write_text(content)
         app = src / "com/eabusham/routervpn"
         app.mkdir(parents=True)
-        for name in ("AndroidExternalProtection", "AndroidKillSwitchPolicy", "AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidExternalAmnezia", "AndroidOpenVPN"):
+        for name in ("AndroidExternalProtection", "AndroidKillSwitchPolicy", "AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidExternalAmnezia", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static String protocol(", "static void checkPolicy("))
         policy_source = (JAVA / "AndroidExternalPolicy.java").read_text(encoding="utf-8")
@@ -789,8 +826,10 @@ def main():
         captured += "\n" + "\n".join(method("AndroidMultihopController.java", signature) for signature in ("private static String sourceDigest(", "private static byte[] readBundleBytes("))
         imported_capture = "\n".join(method("AndroidImportedRouterPath.java", signature) for signature in ("static boolean supports(", "static void requireEntry(", "static AndroidMultihopController.Source captureSource(", "static AndroidStandardExitStore.Entry entry("))
         (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods).replace("EXTERNAL_POLICY_FIELDS", policy_fields).replace("CAPTURE_SOURCE", captured).replace("IMPORTED_CAPTURE_METHODS", imported_capture), encoding="utf-8")
-        protection = "\n".join(method("ProductActivity.java", signature) for signature in ("private boolean isExternalSelected(", "private void setQuickKillSwitch(", "private void refreshSettingsState("))
+        protection = "\n".join(method("ProductActivity.java", signature) for signature in ("private boolean isExternalSelected(", "private void setQuickKillSwitch(", "private void refreshSettingsState(", "private void setQuickDns("))
         (app / "ProductConnectSurface.java").write_text(PRODUCT.replace("PRODUCT_CONNECT", method("ProductActivity.java", "private void connectOrDisconnect(")).replace("PRODUCT_PROTECTION", protection).replace("PRODUCT_IMPORTED", "\n".join(method("ProductActivity.java", signature) for signature in ("private void chooseImportedRouterFinal(", "private void chooseImportedRouterTransport(", "private void refreshMultihopSummary("))), encoding="utf-8")
+        (app / "AndroidProductParity.java").write_text('package com.eabusham.routervpn; import org.json.*; final class AndroidProductParity {static void showDNS(android.content.Context c,AndroidNodeStore s){throw new AssertionError("Details sheet rendering boundary");}' + method("AndroidProductParity.java", "static void selectQuickDNS(") + '}')
+        (app / "AndroidStartLayer.java").write_text('package com.eabusham.routervpn; final class AndroidStartLayer {static final String OFF="off";static String selectedMode(org.json.JSONObject root){throw new AssertionError("Raw eligibility is covered in native graph tests");}}')
         (app / "ConnectionProfilesHarness.java").write_text(HARNESS)
         classes = work / "classes"
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(classes), *map(str, src.rglob("*.java"))], check=True, timeout=60)
@@ -798,6 +837,21 @@ def main():
         data.mkdir()
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
         # Each complete case family retains the original finite JVM budget.
+        if args.case_family in ("all", "home-dns"):
+            subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "home-dns"], env=env, check=True, timeout=80)
+            original = (app / "AndroidConnectionProfileStore.java").read_text()
+            mutation = work / "home-negative" / "AndroidConnectionProfileStore.java"; mutation.parent.mkdir()
+            guard = "        AndroidNativeProfilePolicy.validateHomeDNS(profile);"
+            if original.count(guard) != 2: raise AssertionError("Home capture/restore validation changed")
+            mutation.write_text(original.replace(guard, ""))
+            negative = work / "home-negative-classes"; shutil.copytree(classes, negative)
+            classpath = str(negative) + os.pathsep + str(jar)
+            subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative), str(mutation)], check=True, timeout=60)
+            result = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "home-dns"], env=env, capture_output=True, text=True, timeout=80)
+            if result.returncode == 0 or "accepted swapped Home owner" not in result.stderr: raise AssertionError("Home profile ownership causal control missed its defect\n" + result.stderr)
+            print("Android Home profile causal control rejected: missing current-node validation")
+            if args.case_family == "home-dns":
+                return
         if args.case_family in ("all", "router-rates"):
             subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "router-rates"], env=env, check=True, timeout=180)
             original_store = (app / "AndroidConnectionProfileStore.java").read_text()

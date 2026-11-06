@@ -109,36 +109,53 @@ final class AndroidProductParity {
             JSONObject bundle=activeBundle(nodeStore); JSONObject profile=selectedProfile(bundle);
             if(profile==null) throw new IllegalStateException("Choose/link a Router VPN node first.");
             final String openedProfileId=profile.optString("id","");
+            final String openedNodeId=nodeStore.activeId();
             final boolean policyBusy=AndroidVpnMutationGuard.isBusy(activity);
             String[] modeValues={"home","fastest","custom","dot","doh","doh3","rescue"};
             String[] modeLabels={"Home AdGuard","Fastest measured","Custom UDP/TCP","DNS-over-TLS","DNS-over-HTTPS","DNS-over-HTTP/3","DNS Rescue"};
             LinearLayout body=column(activity,12);
             Spinner mode=new Spinner(activity); mode.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,modeLabels));
             int selectedMode=indexOf(modeValues,profile.optString("dns_mode","home")); mode.setSelection(Math.max(0,selectedMode));
-            Spinner protocol=new Spinner(activity); protocol.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,new String[]{"udp","tcp"})); protocol.setSelection("tcp".equalsIgnoreCase(profile.optString("dns_protocol","udp"))?1:0);
+            String selectedProtocol=profile.optString("dns_protocol","udp").trim().toLowerCase(Locale.ROOT);if(selectedProtocol.isEmpty())selectedProtocol="udp";if(selectedProtocol.equals("dot"))selectedProtocol="tls";else if(selectedProtocol.equals("doh"))selectedProtocol="https";else if(selectedProtocol.equals("doh3"))selectedProtocol="h3";List<String> protocols=new ArrayList<>(java.util.Arrays.asList("udp","tcp","tls","https","h3"));if(!protocols.contains(selectedProtocol))protocols.add(selectedProtocol);
+            Spinner protocol=new Spinner(activity); protocol.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,protocols));protocol.setSelection(protocols.indexOf(selectedProtocol));
             Spinner preset=new Spinner(activity); List<String> presetLabels=new ArrayList<>();presetLabels.add("Manual/current");for(ResolverPreset p:PRESETS)presetLabels.add(p.toString());preset.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,presetLabels));
             EditText host=field(activity,"Resolver host / IPv4 / IPv6",profile.optString("dns_host",""),InputType.TYPE_CLASS_TEXT);
             EditText port=field(activity,"Port",String.valueOf(profile.optInt("dns_port",53)),InputType.TYPE_CLASS_NUMBER);
             EditText server=field(activity,"TLS server name",profile.optString("dns_server_name",""),InputType.TYPE_CLASS_TEXT);
             EditText path=field(activity,"HTTPS path",profile.optString("dns_path","/dns-query"),InputType.TYPE_CLASS_TEXT);
+            mode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){boolean initial=true;public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,View v,int position,long id){if(initial){initial=false;return;}if("home".equals(modeValues[position])){try{AndroidNativeProfilePolicy.HomeDNS home=AndroidNativeProfilePolicy.homeDNS(profile,"udp","",53,"","");protocol.setSelection(0);host.setText(home.host);port.setText("53");server.setText("");path.setText("");}catch(Exception error){toast(activity,safe(error));}}}});
             preset.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){} public void onItemSelected(android.widget.AdapterView<?> p,View v,int position,long id){if(position>0){ResolverPreset r=PRESETS[position-1];host.setText(r.host);server.setText(r.serverName);}}});
-            body.addView(label(activity,"DNS policy",18,true));body.addView(mode);body.addView(label(activity,"Custom protocol (used only by Custom)",12,false));body.addView(protocol);body.addView(label(activity,"Common IPv4/IPv6 resolver",12,false));body.addView(preset);body.addView(host);body.addView(port);body.addView(server);body.addView(path);
+            body.addView(label(activity,"DNS policy",18,true));body.addView(mode);body.addView(label(activity,"Home transport / Custom UDP or TCP",12,false));body.addView(protocol);body.addView(label(activity,"Common IPv4/IPv6 resolver",12,false));body.addView(preset);body.addView(host);body.addView(port);body.addView(server);body.addView(path);
             if(policyBusy){mode.setEnabled(false);protocol.setEnabled(false);preset.setEnabled(false);host.setEnabled(false);port.setEnabled(false);server.setEnabled(false);path.setEnabled(false);body.addView(label(activity,"Disconnect or let the current VPN transition finish before changing persistent DNS policy. DNS Retest remains a measurement action.",12,false));}
             TextView benchmark=label(activity,dnsResultsText(profile),12,false);body.addView(benchmark);
             Button retest=new Button(activity);retest.setText("Retest DNS RTT from home node");retest.setAllCaps(false);body.addView(retest);
             retest.setOnClickListener(v->{retest.setEnabled(false);benchmark.setText("Testing real A/AAAA DNS queries from the selected home node…");new Thread(()->{try{JSONObject result=benchmarkDNS(bundle,profile);persistBenchmark(nodeStore,openedProfileId,result);activity.runOnUiThread(()->{try{benchmark.setText(dnsResultsText(selectedProfile(activeBundle(nodeStore))));}catch(Exception e){benchmark.setText("DNS benchmark saved; reopen to refresh details.");}retest.setEnabled(true);});}catch(Exception error){activity.runOnUiThread(()->{benchmark.setText("DNS Retest failed: "+safe(error));retest.setEnabled(true);});}}).start();});
             ScrollView scroll=new ScrollView(activity);scroll.addView(body);
             AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("DNS").setView(scroll).setPositiveButton("Save",null).setNeutralButton("Close",null).create();
-            dialog.setOnShowListener(x->{Button save=dialog.getButton(AlertDialog.BUTTON_POSITIVE);save.setEnabled(!AndroidVpnMutationGuard.isBusy(activity));save.setOnClickListener(v->{if(AndroidVpnMutationGuard.isBusy(activity)){toast(activity,"VPN state changed; disconnect/finish before saving DNS policy.");return;}try{JSONObject fresh=activeBundle(nodeStore),freshProfile=selectedProfile(fresh);if(freshProfile==null||!openedProfileId.equals(freshProfile.optString("id","")))throw new IllegalStateException("Selected Router VPN profile changed while DNS settings were open; reopen DNS before saving.");String chosen=modeValues[mode.getSelectedItemPosition()];String proto=(String)protocol.getSelectedItem();applyDNS(nodeStore,fresh,chosen,proto,host.getText().toString(),parsePort(port.getText().toString()),server.getText().toString(),path.getText().toString());toast(activity,"DNS policy saved for the next connection: "+chosen.toUpperCase(Locale.US)+". Reconnect, then use runtime proof to confirm active DNS.");dialog.dismiss();}catch(Exception error){toast(activity,"DNS policy failed: "+safe(error));}});});
+            dialog.setOnShowListener(x->{Button save=dialog.getButton(AlertDialog.BUTTON_POSITIVE);save.setEnabled(!AndroidVpnMutationGuard.isBusy(activity));save.setOnClickListener(v->{if(AndroidVpnMutationGuard.isBusy(activity)){toast(activity,"VPN state changed; disconnect/finish before saving DNS policy.");return;}try{JSONObject fresh=activeBundle(nodeStore),freshProfile=selectedProfile(fresh);requireDNSOwner(nodeStore,openedNodeId,openedProfileId,freshProfile);String chosen=modeValues[mode.getSelectedItemPosition()];String proto=(String)protocol.getSelectedItem();applyDNS(nodeStore,fresh,chosen,proto,host.getText().toString(),parsePort(port.getText().toString()),server.getText().toString(),path.getText().toString());toast(activity,"DNS policy saved for the next connection: "+chosen.toUpperCase(Locale.US)+". Reconnect, then use runtime proof to confirm active DNS.");dialog.dismiss();}catch(Exception error){toast(activity,"DNS policy failed: "+safe(error));}});});
             dialog.show();
         }catch(Exception error){toast(activity,"DNS settings unavailable: "+safe(error));}
+    }
+
+    static void requireDNSOwner(AndroidNodeStore store,String nodeId,String profileId,JSONObject current)throws Exception{
+        if(nodeId==null||nodeId.isEmpty()||!nodeId.equals(store.activeId())||current==null||!profileId.equals(current.optString("id","")))
+            throw new IllegalStateException("Selected Router VPN node or profile changed while DNS settings were open; reopen DNS before saving.");
+    }
+
+    static void selectQuickDNS(JSONObject profile,String mode)throws Exception{
+        if("home".equals(mode)){
+            String current=AndroidNativeProfilePolicy.stringPolicy(profile,"dns_mode","home");
+            AndroidNativeProfilePolicy.HomeDNS home=(current.isEmpty()||"home".equals(current))
+                    ?AndroidNativeProfilePolicy.homeDNS(profile):AndroidNativeProfilePolicy.homeDNS(profile,"udp","",53,"","");
+            home.apply(profile);
+        }else profile.put("dns_mode",mode);
     }
 
     private static void applyDNS(AndroidNodeStore store,JSONObject bundle,String mode,String protocol,String host,int port,String serverName,String path)throws Exception{
         JSONObject profile=selectedProfile(bundle);if(profile==null)throw new IllegalStateException("No selected Router VPN profile.");
         if("external".equalsIgnoreCase(profile.optString("node_kind","router-vpn")))throw new IllegalStateException("External nodes own their DNS runtime.");
         mode=mode.trim().toLowerCase(Locale.US);protocol=protocol.trim().toLowerCase(Locale.US);host=host.trim();serverName=serverName.trim();path=path.trim();
-        if("home".equals(mode)){host=profile.optString("adguard_ipv4",profile.optString("adguard_ipv6",""));protocol="udp";port=53;serverName="";path="";}
+        if("home".equals(mode)){AndroidNativeProfilePolicy.HomeDNS home=AndroidNativeProfilePolicy.homeDNS(profile,protocol,host,port,serverName,path);host=home.host;protocol=home.protocol;port=home.port;serverName=home.serverName;path=home.path;}
         else if("fastest".equals(mode)){host=profile.optString("fastest_dns_host","").trim();if(host.isEmpty())throw new IllegalStateException("Run DNS Retest before selecting Fastest.");protocol="udp";port=53;serverName="";path="";}
         else if("custom".equals(mode)){if(!"udp".equals(protocol)&&!"tcp".equals(protocol))throw new IllegalArgumentException("Custom DNS must use UDP or TCP.");if(port==0)port=53;}
         else if("dot".equals(mode)){protocol="tls";if(port==0)port=853;}
@@ -183,7 +200,7 @@ final class AndroidProductParity {
     private static double max(List<JSONObject> values,String key){double v=0;for(JSONObject x:values)v=Math.max(v,x.optDouble(key,0));return v;}
     private static List<String> sorted(Set<String> values){List<String> out=new ArrayList<>(values);Collections.sort(out);return out;}
     private static String inferServerName(String host){for(ResolverPreset p:PRESETS)if(p.host.equalsIgnoreCase(host))return p.serverName;return host.matches(".*[A-Za-z].*")?host:"";}
-    private static int parsePort(String value){try{return Integer.parseInt(value.trim());}catch(Exception ignored){return 0;}}
+    private static int parsePort(String value){String text=value.trim();if(text.isEmpty())return 0;if(!text.matches("[0-9]{1,5}"))throw new IllegalArgumentException("DNS port must be a number between 1 and 65535, or blank for the transport default.");int port=Integer.parseInt(text);if(port>65535)throw new IllegalArgumentException("DNS port must be 1–65535.");return port;}
     private static int indexOf(String[] values,String value){for(int i=0;i<values.length;i++)if(values[i].equalsIgnoreCase(value))return i;return 0;}
     private static LinearLayout column(Activity a,int pad){LinearLayout l=new LinearLayout(a);l.setOrientation(LinearLayout.VERTICAL);int p=dp(a,pad);l.setPadding(p,p,p,p);return l;}
     private static TextView label(Activity a,String text,int sp,boolean bold){TextView v=new TextView(a);v.setText(text);v.setTextSize(sp);v.setTextColor(0xff14213d);if(bold)v.setTypeface(v.getTypeface(),Typeface.BOLD);return v;}
