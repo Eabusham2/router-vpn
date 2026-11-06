@@ -6,7 +6,7 @@ extension RouterVPNModel {
     static let ordinaryExternalHopProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     /// Picker availability uses the selected paired home's original raw assets.
     /// Save and Connect capture and validate those same sources again.
-    func iosImportedRouterFinalModes(entryMode: String, exitID: String) -> [String] {
+    func iosImportedRouterFinalModes(entryMode: String, exitID: String, entryProfile: RouterProfile? = nil) -> [String] {
         guard let data = IOSNodeBundleStore.shared.bundleData(containing: exitID, current: bundle),
               var selected = try? JSONDecoder().decode(ClientBundle.self, from: data),
               selected.routerProfiles.filter({ $0.id == exitID }).count == 1,
@@ -15,8 +15,14 @@ extension RouterVPNModel {
               let encoded = try? JSONEncoder().encode(profile),
               let original = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else { return [] }
         selected.selectedRouterID = exitID
-        return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].filter { mode in
+        return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision"].filter { mode in
             guard IOSImportedEntryMultihop.supports(entry: entryMode, final: mode) else { return false }
+            if mode == "reality-vision" {
+                guard let first = entryProfile, first.normalizedNodeKind == "external",
+                      first.external?.protocolName == "socks5", first.id != exitID,
+                      ["", "off"].contains(first.startLayer ?? ""),
+                      ["", "off"].contains(profile.startLayer ?? "") else { return false }
+            }
             do {
                 _ = try IOSMultihopStartLayer.capture(profile: original, profiles: selected.profiles)
                 _ = try IOSRuntimeSelector.selectRaw(bundle: selected, rawProfileID: mode)
@@ -251,7 +257,7 @@ struct IOSMultihopView: View {
         return node.external?.protocolName
     }
     private var importedFinalModes: [String] {
-        model.iosImportedRouterFinalModes(entryMode: externalEntryProtocol ?? "", exitID: exitID)
+        model.iosImportedRouterFinalModes(entryMode: externalEntryProtocol ?? "", exitID: exitID, entryProfile: nodes.first(where: { $0.id == entryID }))
     }
     private var externalExecutionEligible: Bool {
         guard let entry = nodes.first(where: { $0.id == entryID }),
@@ -349,6 +355,7 @@ struct IOSMultihopView: View {
                             }
                             if importedFinalModes.contains("shadowsocks") { Text("Shadowsocks 2022").tag("shadowsocks") }
                             if importedFinalModes.contains("hysteria2") { Text("Hysteria2").tag("hysteria2") }
+                            if importedFinalModes.contains("reality-vision") { Text("REALITY Vision").tag("reality-vision") }
                             if importedFinalModes.contains("wg") { Text("WireGuard").tag("wg") }
                             if importedFinalModes.contains("awg2-fast") { Text("AmneziaWG Fast").tag("awg2-fast") }
                             if importedFinalModes.contains("awg2-strong") { Text("AmneziaWG Strong").tag("awg2-strong") }

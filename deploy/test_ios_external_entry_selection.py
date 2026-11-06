@@ -163,6 +163,61 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   guard cases==6 else {throw IOSImportedEntryMultihop.issue()}
   print("PASS selected DNS "+kind+" "+carrier+" 6 cases")
  }
+ static func reality(_ finalBundle:ClientBundle,_ paired:RouterProfile)throws {
+  func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+  var first=try profile("reality-socks","external","socks5");first.apiToken="";first.dnsMode="home"
+  let original=bundle(first)
+  var final=finalBundle
+  final.profiles["reality-vision"]=["sing-box.json":Data("captured wrapper readiness is checked by the separate Swift/Go producer".utf8).base64EncodedString(),"xray.json":Data("complete original private Xray source".utf8).base64EncodedString()]
+  let model=RouterVPNModel();model.bundle=final
+  IOSNodeBundleStore.shared.nodes=[first.id:try encoded(original),paired.id:try encoded(final)]
+  try check("REALITY picker requires exact captured SOCKS source",model.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id,entryProfile:first).contains("reality-vision"))
+  try check("REALITY picker never infers missing entry",!model.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id).contains("reality-vision"))
+  try model.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:"reality-vision",execution:"local",entryMode:"socks5")
+  let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
+  try check("REALITY selection keeps complete original entry",captured.routerProfiles==original.routerProfiles && captured.profiles==original.profiles)
+  try check("REALITY selection keeps full final assets",model.bundle!.profiles==final.profiles)
+  try check("REALITY selection retains final DNS and pairing",model.bundle!.routerProfiles[0].dnsMode==paired.dnsMode && model.bundle!.routerProfiles[0].adGuardIPv4==paired.adGuardIPv4 && model.bundle!.routerProfiles[0].nodeProofID==paired.nodeProofID)
+  let configuration:[String:Any]=["engine":"multihop-libbox","mode":"reality-vision","bundle":try encoded(model.bundle!),"entryBundle":try encoded(original)]
+  let source=try IOSMultihopExecution.Source(configuration:configuration,digest:hash)
+  try check("REALITY capture binds actual roles",source.entryID==first.id && source.exitID==paired.id && source.entryMode=="socks5" && source.exitMode=="reality-vision")
+  for asset in ["xray.json","sing-box.json"] {
+   var changed=model.bundle!;changed.profiles["reality-vision"]![asset]=Data("replacement original asset".utf8).base64EncodedString()
+   var replaced=configuration;replaced["bundle"]=try encoded(changed)
+   let next=try IOSMultihopExecution.Source(configuration:replaced,digest:hash)
+   try check("REALITY source fingerprint retains asset "+asset,next != source)
+  }
+  let saved=try encoded(model.bundle!),writes=model.writes
+  for kind in ["http-connect","https-connect","openvpn","wireguard","amneziawg","shadowsocks","hysteria2"] {
+   try check("REALITY unsupported entry remains refused "+kind,!IOSImportedEntryMultihop.supports(entry:kind,final:"reality-vision"))
+  }
+  for mode in ["reality-pq-vision","reality-xhttp","split","max","max-tls-wg"] {
+   try check("SOCKS unrelated final remains refused "+mode,!IOSImportedEntryMultihop.supports(entry:"socks5",final:mode))
+  }
+  for fault in ["entry-aes","entry-xor","final-aes","final-xor","server","auto","missing-assets","changed-entry","entry-type","final-type"] {
+   var source=first,other=final,execution="local"
+   if fault=="entry-aes"{source.startLayer="aes-256-gcm"}
+   if fault=="entry-xor"{source.startLayer="aes-256-gcm+xor-whitening"}
+   if fault=="final-aes"{other.routerProfiles[0].startLayer="aes-256-gcm"}
+   if fault=="final-xor"{other.routerProfiles[0].startLayer="aes-256-gcm+xor-whitening"}
+   if fault=="server" || fault=="auto"{execution=fault}
+   if fault=="missing-assets"{other.profiles.removeValue(forKey:"reality-vision")}
+   if fault=="changed-entry"{source.external?.protocolName="openvpn"}
+   IOSNodeBundleStore.shared.nodes=[first.id:try encoded(bundle(source)),paired.id:try encoded(other)]
+   let target=RouterVPNModel();target.bundle=other
+   if fault=="entry-type" || fault=="final-type" {
+    var entry=try JSONSerialization.jsonObject(with:JSONEncoder().encode(first)) as! [String:Any]
+    var last=try JSONSerialization.jsonObject(with:JSONEncoder().encode(model.bundle!.routerProfiles[0])) as! [String:Any]
+    if fault=="entry-type"{entry["start_layer"]=true}else{last["start_layer"]=true}
+    try reject("REALITY rejects malformed layer "+fault){try IOSImportedEntryMultihop.validate(entry:entry,final:last,profiles:final.profiles)}
+   }else{
+    try reject("REALITY selection rejects "+fault){try target.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:"reality-vision",execution:execution,entryMode:"socks5")}
+    try check("REALITY refusal retains original selection "+fault,target.writes==0 && encoded(target.bundle!)==encoded(other))
+   }
+  }
+  try check("REALITY rejected alternatives do not replace saved owner",model.writes==writes && encoded(model.bundle!)==saved)
+  print("PASS SOCKS REALITY host \(checks) checks")
+ }
  static func run()throws {
   defer { RouterVPNTorTestClose() }
   var imported=try profile("imported-first","external","shadowsocks");imported.apiToken="";imported.dnsMode="home"
@@ -170,6 +225,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   var paired=try profile("paired-final","router-vpn");paired.external=nil;paired.dnsMode="home"
   var finalBundle=bundle(paired)
   finalBundle.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:8,count:32).base64EncodedString()]]]).base64EncodedString()]
+  if CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "socks-reality" {try reality(finalBundle,paired);return}
   if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
   if CommandLine.arguments.count == 4 { try configured(finalBundle,paired,CommandLine.arguments[2],CommandLine.arguments[3]);return }
   let importedBundle=bundle(imported),mixed=RouterVPNModel();mixed.bundle=finalBundle
@@ -698,7 +754,9 @@ def validate_imported_picker(view):
                      'Text("AmneziaWG Fast").tag("awg2-fast")',
                      'Text("AmneziaWG Strong").tag("awg2-strong")',
                      'Text("Shadowsocks 2022").tag("shadowsocks")',
-                     'Text("Hysteria2").tag("hysteria2")'):
+                     'Text("Hysteria2").tag("hysteria2")',
+                     'if importedFinalModes.contains("reality-vision")',
+                     'Text("REALITY Vision").tag("reality-vision")'):
         if required not in branch:
             raise ValueError('Imported final picker must preserve invalid saved values and require an explicit valid choice')
     if 'if ["http-connect", "https-connect"].contains(externalEntryProtocol ?? "") {' not in branch or 'TCP-only' not in branch:
@@ -739,6 +797,10 @@ def main():
         if baseline.stdout != expected_baseline:
             raise ValueError('Missing or foreign baseline Swift verdict: '+repr(baseline.stdout))
         print(baseline.stdout, end='', flush=True)
+        reality = subprocess.run([str(work / 'test'), str(compiler), 'socks-reality'], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+        if reality.stdout != 'PASS SOCKS REALITY host 39 checks\n':
+            raise ValueError('Missing or foreign SOCKS REALITY Swift verdict: '+repr(reality.stdout))
+        print(reality.stdout, end='', flush=True)
         # Each additional configured transport/layer runs with the original
         # process budget; all four DNS selections and refusal controls remain.
         for kind in ('http-connect', 'https-connect'):

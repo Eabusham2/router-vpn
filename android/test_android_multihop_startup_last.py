@@ -335,7 +335,7 @@ public final class ComposedTest {
  static final class Callback implements AndroidMultihopRuntime.Callback {final CountDownLatch done=new CountDownLatch(1);boolean ok;int completions;public void progress(String s){}public void finished(boolean value,String message){ok=value;completions++;done.countDown();}void await()throws Exception{check(done.await(4,TimeUnit.SECONDS)&&completions==1,"composed runtime did not finish one owned callback");}}
  static byte[] source()throws Exception{return new JSONObject().put("node_id","final").put("profiles",new JSONObject()).put("modes",new JSONArray()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);}
  public static void main(String[] args)throws Exception{
-  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:(protocol.equals("socks5")||protocol.equals("openvpn"))?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(String fault:List.of("none","source-before-stage","source-after-start","proof","cancel")){
+  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision"):protocol.equals("openvpn")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(String fault:List.of("none","source-before-stage","source-after-start","proof","cancel")){
    context=new Context();NativeSingBoxController engine=new NativeSingBoxController();AndroidMultihopController.preparations=0;AndroidMultihopController.onPrepare=null;AndroidPathProbe.proofs=0;AndroidPathProbe.valid=!fault.equals("proof");AndroidPathProbe.duringProof=null;
    LayeredVpnService.captures=0;LayeredVpnService.mtu=0;LayeredVpnService.unhealthy=false;LayeredVpnService.selected="";LayeredVpnService.pins="{}";LayeredVpnService.duringCapture=null;LayeredVpnService.duringMTU=null;
    Path directory=Files.createTempDirectory("composed-imported-home-"),file=directory.resolve("final.json");Files.write(file,source());AndroidNodeStore.Node last=new AndroidNodeStore.Node("final",file.toFile());
@@ -354,13 +354,13 @@ public final class ComposedTest {
     }else check(!callback.ok&&!home.connected&&LayeredVpnService.mtu==0,"composed runtime published cancelled/stale/unproved Home: "+fault);
    }finally{runtime.disconnect();runtime.close();long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(runtime.isActiveOrTransitioning()&&System.nanoTime()<end)Thread.yield();check(!AndroidHomeStateStore.snapshot(context).connected&&engine.state.equals("DOWN"),"composed cleanup retained live Home or native owner: "+fault+"/"+engine.state+"/"+AndroidHomeStateStore.snapshot(context).phase);Files.delete(file);Files.delete(directory);}
   }
-  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:(protocol.equals("socks5")||protocol.equals("openvpn"))?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(boolean alive:List.of(false,true)){
+  for(String protocol:List.of("socks5","http","https","openvpn"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong","reality-vision"):protocol.equals("openvpn")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(boolean alive:List.of(false,true)){
    context=new Context();AndroidHomeStateStore.beginMultihop(context,"saved-socks","saved-final",mode,AndroidExternalPolicy.protocol(protocol));AndroidHomeStateStore.connectedMultihop(context,"saved-socks","saved-final",mode,AndroidExternalPolicy.protocol(protocol));
    NativeSingBoxController engine=new NativeSingBoxController();engine.state=alive?"UP":"DOWN";AndroidMultihopRuntime runtime=new AndroidMultihopRuntime(context,engine);
    try{check(runtime.isConnected()==alive&&AndroidHomeStateStore.snapshot(context).connected==alive,"published SOCKS live-state reattachment changed exact native liveness");if(alive)check(runtime.activeEntryMode().equals(AndroidExternalPolicy.protocol(protocol)),"reattachment changed original entry label");}
    finally{runtime.disconnect();runtime.close();}
   }
-  System.out.println("Composed shipping imported runtime + Home: "+checks+" checks /84 cases PASS; native preparation/proof and Android OS boundaries doubled");
+  System.out.println("Composed shipping imported runtime + Home: "+checks+" checks /91 cases PASS; native preparation/proof and Android OS boundaries doubled");
  }
 }
 '''

@@ -59,10 +59,10 @@ class ImportedGate(unittest.TestCase):
         self.assertEqual(len(previous),247)
         self.assertEqual(len(openvpn),90)
         self.assertFalse(previous & openvpn)
-        self.assertEqual(G.NAMES,previous | openvpn)
+        self.assertEqual(G.NAMES,previous | openvpn | {"socks5--final-reality-vision.json"})
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 339)
+        self.assertEqual(len(self.events()), 340)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

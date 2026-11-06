@@ -3,6 +3,7 @@ package mobilemultihop
 import (
 	"encoding/json"
 	"errors"
+	"router-vpn/internal/applexray"
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobileperf"
 	"router-vpn/internal/routechoice"
@@ -18,15 +19,21 @@ type importedEntry struct {
 }
 
 // NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG or OpenVPN predecessor and a paired
-// Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
-// composition requires the complete configured data/control envelope. SOCKS5 currently
-// supports these paired finals with independently provisioned Start Layers.
+// Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. SOCKS5 also supports
+// the paired REALITY/Vision final with both independently captured layers Off.
+// Packet-to-packet
+// composition requires the complete configured data/control envelope. SOCKS5's
+// SS/Hysteria2/WG/AWG finals retain independently provisioned Start Layers.
 // HTTP/HTTPS CONNECT retains TCP-only SS2022 unless the captured final supplies
 // exact configured UoT-v2 authority. Compilation proves neither live identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
 	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG, OpenVPN or HTTP/HTTPS CONNECT source and a compatible paired final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil {
+		return nil, bad
+	}
+	socksXrayFinal := selection.Protocol == "socks5" && exitMode == "reality-vision"
+	if selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect" && selection.Protocol != "openvpn") || selection.Profile["node_kind"] != "external" || (!socksXrayFinal && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
@@ -78,6 +85,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 
 	if raw := exit.profile["multihop_execution"]; raw != nil && raw != "" && raw != "local" {
 		return nil, bad
+	}
+	if socksXrayFinal && ((entryMeta.StartLayer != "" && entryMeta.StartLayer != "off") || (predecessorText(exit.profile, "start_layer") != "" && predecessorText(exit.profile, "start_layer") != "off") || exitStart != "") {
+		return nil, errors.New("imported SOCKS REALITY/Vision requires both captured Start Layers Off")
 	}
 	var first, last map[string]any
 	if json.Unmarshal([]byte(entry.Config()), &first) != nil || json.Unmarshal([]byte(exit.Config()), &last) != nil {
@@ -151,6 +161,14 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	if final == nil {
 		return nil, bad
+	}
+	if socksXrayFinal {
+		// The original paired-node compiler owns the complete VLESS/REALITY
+		// source. Attach only this captured entry after validating the single
+		// exact native final; no imported physical override or helper is kept.
+		if err := applexray.ValidateSingleTransport(final, "reality-vision"); err != nil {
+			return nil, err
+		}
 	}
 	connectUoT := false
 	if connectEntry {

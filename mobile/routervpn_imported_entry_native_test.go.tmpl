@@ -24,7 +24,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		t.Skip("exact generated compiler sources supplied by native mobile gate")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 337 {
+	if err != nil || len(entries) != 338 {
 		t.Fatal("incomplete original layer matrix", err)
 	}
 	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
@@ -79,6 +79,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 	for name := range routerImportedOpenVPNNames() {
 		expected[name] = true
 	}
+	expected["socks5--final-reality-vision.json"] = true
 	for _, entry := range entries {
 		t.Run(entry.Name(), func(t *testing.T) {
 			name := entry.Name()
@@ -266,6 +267,7 @@ func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
 	for name := range routerImportedOpenVPNNames() {
 		expected[name] = true
 	}
+	expected["socks5--final-reality-vision.json"] = true
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != len(expected) {
 		t.Fatal("incomplete actual Apple matrix", err)

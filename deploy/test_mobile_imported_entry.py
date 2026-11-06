@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -24,6 +25,7 @@ def socks_label(mode,a,b):
  if not b:return mode+'--entry-'+a
  return mode+'--'+(a or 'off')+'--'+(b or 'off')
 SOCKS_FILES={'socks5--final-'+socks_label(mode,a,b)+'.json' for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong') for a in LAYERS for b in LAYERS}
+SOCKS_XRAY_FILES={'socks5--final-reality-vision.json'}
 CONNECT_ROWS=[p+"--"+m+"--"+d for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")]
 CONNECT_FILES={"connect--"+row+".json" for row in CONNECT_ROWS}
 CONNECT_SERVICE_FILES={p+"--"+l+"--"+d+"--"+t+".json" for p in ("http-connect","https-connect") for l in ("off",*LAYERS[1:]) for d in ("home","custom") for t in ("udp","tcp")}
@@ -34,10 +36,17 @@ for protocol in ("http-connect","https-connect"):
  if protocol=="https-connect":CONNECT_PEERS += [row+"/"+fault for fault in ("sni","trust")]
 CONTEXT_CORE={'TestImportedOwnerContextRetiresHeldControllerRead':['identity','selection'],'TestImportedStartupCloseJoinsAdmittedIdentityRead':[],'TestImportedProofContextUsesAdmittedReader':['entry-proof','private-proof','owner-check','measurement-proof'],'TestImportedMeasurementClosesLateOriginalConnection':['cancel','hop-owner','controller-owner']}
 CONTEXT_NATIVE={'TestRouterNativeProofContextRetiresHeldReads':['identity','dial','dns','hop-identity','hop-dial','capture','selected','manager-dial','manager-selected'],'TestRouterNativeProofDialClosesLateConnection':['cancel','instance-replaced','outbound-replaced','connection-and-error']}
-FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
+FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|SOCKS_XRAY_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CONNECT_DNS_ROWS=[p+"/"+l+"/"+t+"/"+a for p in ("http-connect","https-connect") for l in ("plain","off",*LAYERS[1:]) for t in ("tls","https","h3") for a in ("literal","hostname") if not(l=="plain" and t=="h3")]
 CONNECT_DNS_FILES={row.replace("/","--")+".json" for row in CONNECT_DNS_ROWS}
 CORE={
+ "TestImportedEntrySOCKSRealityVisionCapturedGraphs":["default-home","explicit-off","custom-udp","custom-tcp","ipv6-off","lan-off","fixed-mtu"],
+ "TestImportedEntrySOCKSRealityVisionEncryptedDNS":[p+"/"+a for p in ("tls","https","h3") for a in ("literal","hostname")],
+ "TestImportedEntrySOCKSRealityVisionRejectsChangedSources":["entry-credential","entry-route","entry-version","fake-entry-proof","fake-entry-api","same-id","final-not-paired","missing-final-proof","missing-final-token","missing-xray","foreign-wrapper","xray-bypass","xray-plaintext","mode-mismatch","server","compare","unused-start","foreign-bootstrap"],
+ "TestImportedEntrySOCKSRealityVisionKeepsScope":["final-"+p for p in ("reality-pq-vision","reality-xhttp","split","max")]+["entry-"+p for p in ("shadowsocks","hysteria2","wireguard","amneziawg","http-connect","https-connect","openvpn")]+[role+"-"+layer for layer in LAYERS[1:] for role in ("entry","final")],
+ "TestImportedEntrySOCKSRealityVisionRetainsOriginalBytes":["entry-graph","entry-capture","final-assets","final-profile"],
+ "TestImportedEntrySOCKSRealityVisionRequiresBothProofsAndDNS":["success","wrong-public-ip","wrong-paired-final","dns-failure","cancel-during-dns","missing-dns-capability","changed-owner"],
+ "TestImportedEntrySOCKSRealityVisionRetainedRuntime":["close","network-change","replacement"],
  "TestImportedEntryCONNECTSelectedEncryptedDNS":CONNECT_DNS_ROWS,
  "TestImportedEntryCONNECTSelectedDNSRefusals":["plain-h3","plain-udp-bootstrap","missing-bootstrap","foreign-bootstrap-route","foreign-query","hostname-bootstrap","unused-bootstrap","insecure-tls","changed-home","unknown-protocol"],
  "TestImportedEntryCONNECTSelectedDNSProviders":["plain-home-tls","plain-home-https","plain-rescue","uot-home-tls","uot-home-https","uot-home-h3","uot-rescue","uot-fastest"],
@@ -157,6 +166,59 @@ def execute(command,cwd,env,expected,timeout=600):
   raise ValueError('Required imported-entry execution failed:\n'+(detail or result.stdout)[-24000:])
  require_verdicts(result.stdout,expected)
  return result.stdout
+
+def socks_xray_controls():
+ return (
+  ('original-admission','internal/mobilemultihop/imported_entry.go',
+   'socksXrayFinal := selection.Protocol == "socks5" && exitMode == "reality-vision"',
+   'socksXrayFinal := false',
+   'TestImportedEntrySOCKSRealityVisionCapturedGraphs','default-home',
+   'captured SOCKS REALITY/Vision graph was rejected'),
+  ('unowned-entry-layer','internal/mobilemultihop/imported_entry.go',
+   'if socksXrayFinal && ((entryMeta.StartLayer',
+   'if false && ((entryMeta.StartLayer',
+   'TestImportedEntrySOCKSRealityVisionKeepsScope','entry-aes-256-gcm',
+   'SOCKS REALITY Off-only boundary did not reject the provisioned layer'),
+  ('missing-imported-proof','internal/mobilemultihop/runtime.go',
+   'if err := c.verifyImportedEntry(ctx); err != nil {',
+   'if err := error(nil); err != nil {',
+   'TestImportedEntrySOCKSRealityVisionRequiresBothProofsAndDNS','wrong-public-ip',
+   'SOCKS REALITY retained a failed or cancelled proof'),
+ )
+
+def require_socks_xray_control(raw,returncode,parent,leaf,witness):
+ expected={parent,parent+'/'+leaf};starts={};failures={};observed=False
+ if returncode!=1 or any(marker in raw for marker in ('panic:', 'fatal error:', 'WARNING: DATA RACE', 'original SOCKS REALITY proof worker did not join', 'original SOCKS REALITY controller did not close')):
+  raise ValueError('SOCKS REALITY causal control did not retain clean bounded ownership')
+ for line in raw.splitlines():
+  try:event=json.loads(line)
+  except json.JSONDecodeError:continue
+  name=event.get('Test');action=event.get('Action')
+  if not name:continue
+  if name not in expected or action in ('pass','skip'):raise ValueError('Foreign or successful SOCKS REALITY causal verdict')
+  if action=='run':starts[name]=starts.get(name,0)+1
+  if action=='fail':failures[name]=failures.get(name,0)+1
+  if name==parent+'/'+leaf and action=='output' and witness in event.get('Output',''):observed=True
+ if starts!={n:1 for n in expected} or failures!={n:1 for n in expected} or not observed:
+  raise ValueError('Missing exact SOCKS REALITY causal witness')
+
+def run_socks_xray_controls(env):
+ records=[]
+ with tempfile.TemporaryDirectory(prefix='routervpn-socks-xray-controls-') as temporary:
+  root=Path(temporary).resolve()
+  for name,relative,before,after,parent,leaf,witness in socks_xray_controls():
+   source=(ROOT/relative).resolve(strict=True)
+   raw=source.read_text()
+   if raw.count(before)!=1:raise ValueError('SOCKS REALITY causal source anchor changed: '+name)
+   owned=root/name;owned.mkdir()
+   changed=owned/source.name;changed.write_text(raw.replace(before,after,1))
+   overlay=owned/'overlay.json';overlay.write_text(json.dumps({'Replace':{str(source):str(changed)}}))
+   selector='^'+re.escape(parent)+'$/^'+re.escape(leaf)+'$'
+   result=subprocess.run(['go','test','-mod=readonly','-race','-json','-overlay',str(overlay),'./internal/mobilemultihop','-run',selector,'-count=1','-timeout=30s'],cwd=ROOT,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=240)
+   require_socks_xray_control(result.stdout,result.returncode,parent,leaf,witness)
+   records.append({'control':name,'source':relative,'source_sha256':hashlib.sha256(raw.encode()).hexdigest(),'overlay_sha256':hashlib.sha256(changed.read_bytes()).hexdigest(),'result_sha256':hashlib.sha256(result.stdout.encode()).hexdigest(),'witness':parent+'/'+leaf})
+ return records
+
 def run(vendor,peers=False,android=False):
  vendor=vendor.resolve(strict=True)
  if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=PIN:raise ValueError('Wrong native source pin')
@@ -169,6 +231,7 @@ def run(vendor,peers=False,android=False):
   service=Path(temporary)/'configured-service';service.mkdir();env['ROUTERVPN_CONNECT_SERVICE_FIXTURES']=str(service)
   selected_dns=Path(temporary)/'selected-dns';selected_dns.mkdir();env['ROUTERVPN_CONNECT_DNS_FIXTURES']=str(selected_dns)
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedEntry','-count=1','-timeout=60s'],ROOT,env,names(CORE))
+  run_socks_xray_controls(env)
   env['ROUTERVPN_IMPORTED_OPENVPN_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES']='1'
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedOpenVPN','-count=1','-timeout=60s'],ROOT,env,names(OPENVPN.CORE))
   execute(['go','test','-mod=readonly','-race','-json','./internal/nativeopenvpn','-run','^TestOpenVPNNativeLayerMapSingleHostKeepsOriginalIdentity$','-count=1','-timeout=20s'],ROOT,env,names(OPENVPN.POLICY_CORE))

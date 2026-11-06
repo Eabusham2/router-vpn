@@ -187,9 +187,15 @@ enum RouterVPNExternalExitBuilder {
     /// Keep final transport and optional outer AES assets in separate original
     /// maps. The native node compiler owns certificate inlining and layering.
     static func importedRouterFinalSource(profile: [String: Any], profiles: [String: [String: String]]) throws -> (mode: String, files: String, start: String) {
-        guard let mode = profile["multihop_exit_mode"] as? String, ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode),
+        guard let mode = profile["multihop_exit_mode"] as? String, ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong", "reality-vision"].contains(mode),
               let assets = profiles[mode], !assets.isEmpty else { throw error("The paired final transport lost its original assets.") }
         let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: profiles)
+        if mode == "reality-vision" {
+            guard profile["multihop_entry_mode"] as? String == "socks5",
+                  (profile["multihop_execution"] as? String ?? "local") == "local", layer.mode == "off" else {
+                throw error("REALITY Vision requires the captured Local SOCKS5 entry and both Start Layers Off.")
+            }
+        }
         let files = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])
         var start = ""
         if mode != "shadowsocks", layer.mode != "off" {

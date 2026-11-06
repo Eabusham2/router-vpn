@@ -1608,3 +1608,77 @@ Two new Windows leaves are mandatory in native CI: `TestRouterVPNExternalPhysica
 The isolated integration source contains exact `9e746ff0a5ad99621a2b4002c49e30b6b1e0d16b` plus the seven Compare files, four retirement diagnostic/preparer files and fourteen entry-layer files. All 25 paths are distinct, matched their review Git blobs before application, and retained their hashes afterward; the previously published CONNECT/DNS files remain exact. This set passed 93 shared parent groups / 2,328 unique verdicts (44.856 seconds), the four client entry-layer parents / 276 unique verdicts (23.598 seconds), and all 24 Windows identity/source-copy runner tests (0.756 seconds). No failed, skipped, duplicated or missing run-to-pass verdict occurred in these combined checks.
 
 Combined source manifest SHA256: `92dfe1a6a8266054d8c4c1b328611d1560718522016ba4fa16f23ec36ac88f83`; shared JSONL `4bd0b92fd96317e0f33b3df3149e43225d255eb96f336e03dc6856dad368dbc4`; client JSONL `d0b9368d4c5e17b553c562a280bd4e08d403b21af1376793d5c77c899d14661a`. These counts are test verdict inventories, not a product-completion denominator. Actual encrypted Windows paths, new native startup controls, physical-device behavior, exact-SHA release and deployment remain separate requirements.
+
+
+## Imported SOCKS5 to paired REALITY/Vision: shared source and mobile capture
+
+This unit is based on published `e7a9d65e06eeee6502c55e37c71c7260819a0e0d`. It combines the six-file shared
+review `804d5366c6ff4e46fecb7836e0c3860e449316f4` with the thirteen-file
+Android/Apple review `46e181a5c0207e28e293f7f4ea0548eb4b48190b`.
+The publisher fetched every actual source file from those immutable objects
+and independently recomputed all nineteen Git blob identities before composition.
+The reviewed paths do not overlap. Existing work on main is retained.
+
+The original imported/custom entry and independently selected paired final
+requirements remain the authority. This bounded addition admits exactly an
+imported SOCKS5 entry followed by a paired `reality-vision` final, Local
+execution, with both independently captured Start Layers Off. It does not
+waive unfinished entry kinds, Xray families, layer combinations, Server or
+Compare execution.
+
+The shared compiler parses the original seven input strings, compiles the
+original external entry and complete paired-node asset map, and validates
+the exact single native Xray transport before adding its owned entry detour.
+It keeps separate imported public-entry, selected-DNS and authenticated
+paired-final proofs. Original source/configuration identity, DNS selection,
+LAN/IPv6 policy, MTU and cancellation/replacement checks remain enforced.
+Valid provisioned layers and other valid graph families are explicit refusal
+controls for this bounded implementation; malformed input is not their only
+reason for rejection.
+
+Android now carries this exact path through its picker/compiler, imported
+source capture, service admission and restoration. Apple carries it through
+its picker, runtime selector, original Xray asset capture and restoration.
+The hosts retain the complete seven-input capture and never turn a saved
+selection into proof that a tunnel is connected.
+
+Executed evidence before publication:
+
+- Final shared Go 1.26.3 race suite: seven parents and sixty child verdicts,
+  sixty-seven unique passes. Its log SHA256 is
+  `5797aa3de1a02ec3a5f54cce8cc159ec3142435de0c0d2b53d8ca02138a7eb47`.
+  Source tests cover exact Xray bytes/detour, all captured inputs, selected
+  Home/custom/encrypted DNS, policy preservation and valid unsupported graphs.
+- The shared runtime cases use real TLS/HTTP over owned pipes to require the
+  entry, selected-DNS and paired-final stages and to reject cancellation,
+  replacement and stale retained operations. These are scoped engine-boundary
+  fixtures, not an encrypted SOCKS/Xray peer.
+- Three scoped causal variants produce the intended failures when original
+  admission, valid entry-layer refusal or imported-entry proof is removed.
+  The Python imported-entry runner passes twenty tests.
+- Actual Android Java-to-Go captured-graph validation passes 110 checks and
+  five existing causal controls. The shipping runtime/Home composition passes
+  260 checks across 91 cases plus four causal controls; OS/preparation/proof
+  boundaries in that fixture remain test boundaries.
+- Actual Swift selection runs pass the original 3,231 checks and thirty-nine
+  new REALITY capture/selection checks, with the existing 336 configured
+  CONNECT checks and forty-four accepted/four refused selected-DNS captures.
+- The actual Swift-to-Go producer passes 338 exports and 6,996 checks. It
+  retains the original 337 names and adds only
+  `socks5--final-reality-vision.json`. Four Apple inventory controls pass.
+
+The host manifest SHA256 is
+`d83d01573620095df8f9e350df064e4eeb066687103f6cd33284ff66966d60ba`.
+Initial fixture failures are retained in the local evidence: source-test
+assumptions about the existing health exception/combined route rules,
+standalone AWG transport-only DNS projection, helper-only VCS stamping, and
+an omitted local CryptoKit helper. Their corrections do not remove assertions
+or change production retry/proof behavior.
+
+Generated native parser execution for the newly extended aggregate inventory,
+an actual owned SOCKS-to-Xray reference peer, native app builds, physical-device
+networking and release acceptance remain separate required evidence.
+The execution workspace disconnected during follow-up validation; no parser,
+Windows compilation or device result is inferred from an unfinished process.
+This publication is a tested source/capture unit, not complete multihop,
+all-platform, release or deployment acceptance.
