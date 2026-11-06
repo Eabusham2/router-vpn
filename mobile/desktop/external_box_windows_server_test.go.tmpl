@@ -43,6 +43,8 @@ import (
 	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	socksclient "github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
 )
 
 const desktopWFPRouterServerAPI = "10.78.0.1:8787"
@@ -203,6 +205,16 @@ func desktopWFPRouterServerDiagnostic(reply desktopExternalWFPReply) desktopWFPR
 	}
 	return reply.RouterServer.Diagnostic
 }
+func desktopWFPRouterServerProgress(reply desktopExternalWFPReply) string {
+	r := reply.RouterServer
+	if r == nil {
+		return "router-server progress receipt=missing"
+	}
+	return fmt.Sprintf("router-server progress health=%d discovery=%d creates=%d deletes=%d relay_tcp=%d relay_udp_attempts=%d final_tcp=%d final_udp_received=%d responses=%d local_tcp=%d local_udp=%d packets=%d auth_failures=%d dns=%d udp_dns=%d tls=%d public=%d attempts=%d",
+		r.Health, r.Discovery, r.Creates, r.Deletes, r.RelayTCP, r.RelayUDP, r.FinalTCP, r.FinalUDP, r.Responses, r.LocalTCP, r.LocalUDP,
+		reply.Packets, reply.AuthFailures, reply.DNS, reply.UDPDNS, reply.TLS, reply.Public, reply.Attempts)
+}
+
 func (r *desktopWFPRouterServer) receipt() *desktopWFPRouterServerReceipt {
 	r.mu.Lock()
 	p := r.process
@@ -553,9 +565,11 @@ func (r *desktopWFPRouterServer) localPacket(ctx context.Context, c N.PacketConn
 	return nil
 }
 
-// Observe the real authenticated SOCKS reply while forwarding the original
-// bytes. A UDP tuple exists only until that exact control closes. No client
-// supplied port, wildcard, guessed range or earlier session can authorize it.
+// Observe the real authenticated SOCKS reply. Only its validated fixture-local
+// UDP bind address is mapped back to the captured lease host; authentication and
+// the bound port stay original. A UDP tuple exists only until that exact control
+// closes. No client supplied port, wildcard, guessed range or earlier session
+// can authorize it.
 func (r *desktopWFPRouterServer) observeAssociation(ctx context.Context, control *desktopWFPRouterControl, process *desktopWFPRouterRelayProcess) (*desktopWFPRouterAssociation, error) {
 	client, server := control.client, control.server
 	bad := errors.New("Router relay changed authenticated SOCKS association")
@@ -681,12 +695,24 @@ func (r *desktopWFPRouterServer) observeAssociation(ctx context.Context, control
 		control.mu.Unlock()
 		return nil, bad
 	}
+	process.mu.Lock()
+	leaseHost, hostErr := netip.ParseAddr(process.lease.Host)
+	process.mu.Unlock()
+	if hostErr != nil || leaseHost != netip.MustParseAddr("10.78.0.1") {
+		r.mu.Unlock()
+		control.mu.Unlock()
+		return nil, bad
+	}
 	lifetime, cancel := context.WithCancel(r.peer.ctx)
 	association := &desktopWFPRouterAssociation{owner: r, process: process, control: client, port: port, ctx: lifetime, cancel: cancel, done: make(chan struct{})}
 	r.associations[port] = association
 	control.association = association
 	r.mu.Unlock()
 	control.mu.Unlock()
+	// The client reaches this listener through the original WG peer, whose
+	// network stack correctly rejects loopback destinations received from WG.
+	addressBytes := leaseHost.As4()
+	copy(response[4:8], addressBytes[:])
 	if _, err := client.Write(response); err != nil {
 		return nil, err
 	}
@@ -937,6 +963,44 @@ func TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement(t *testing.T
 		if json.Unmarshal(exchange("PUT", q), &lease) != nil || lease.Request != q || lease.NodeID != r.request.NodeID || r.process == nil || !r.process.Alive() {
 			t.Fatal("original manager lease not created")
 		}
+		// Observe the real authenticated UDP ASSOCIATE reply through the same
+		// fixture bridge used by the WG peer, without sending a final SS payload.
+		control, client := net.Pipe()
+		defer client.Close()
+		defer control.Close()
+		_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+		joined := make(chan struct{})
+		var relayErr error
+		go func() {
+			relayErr = r.stream(ctx, control, M.Metadata{
+				Source:      M.SocksaddrFromNetIP(netip.MustParseAddrPort("10.78.0.2:12345")),
+				Destination: M.SocksaddrFromNetIP(netip.AddrPortFrom(netip.MustParseAddr(lease.Host), uint16(lease.Port))),
+			})
+			close(joined)
+		}()
+		t.Cleanup(func() {
+			_ = client.Close()
+			_ = control.Close()
+			select {
+			case <-joined:
+			case <-time.After(5 * time.Second):
+				t.Error("original authenticated SOCKS control did not join")
+			}
+		})
+		response, err := socksclient.ClientHandshake5(client, socks5.CommandUDPAssociate,
+			M.SocksaddrFromNetIP(netip.MustParseAddrPort(desktopExternalIntegrationDNS)), q.Username, q.Password)
+		if err != nil || response.Bind.Addr.String() != lease.Host || response.Bind.Port == 0 {
+			t.Fatal("authenticated UDP reply did not project its original lease host and port", err)
+		}
+		r.mu.Lock()
+		association, process := r.associations[response.Bind.Port], r.process
+		r.mu.Unlock()
+		if association == nil || association.process != process || association.control != control || association.port != response.Bind.Port || !association.current() {
+			t.Fatal("projected UDP reply lost its original process, control or port")
+		}
+		if target, err := r.target(response.Bind, true); err != nil || target != net.JoinHostPort("127.0.0.1", fmt.Sprint(response.Bind.Port)) {
+			t.Fatal("projected UDP reply changed the owned local relay target", err)
+		}
 		var stopped struct {
 			Node    string `json:"node_id"`
 			Session string `json:"session_id"`
@@ -944,6 +1008,27 @@ func TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement(t *testing.T
 		}
 		if json.Unmarshal(exchange("DELETE", q), &stopped) != nil || !stopped.Stopped || stopped.Node != lease.NodeID || stopped.Session != lease.SessionID || r.process.Alive() {
 			t.Fatal("original stop receipt changed identity or preceded retirement")
+		}
+		select {
+		case <-joined:
+			if relayErr != nil {
+				t.Fatal("original authenticated SOCKS control failed", relayErr)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("original authenticated control did not join after stop receipt")
+		}
+		if association.current() {
+			t.Fatal("stopped projected UDP association remained current")
+		}
+		if association.enter() {
+			association.workers.Done()
+			t.Fatal("stopped projected UDP association admitted a packet")
+		}
+		r.mu.Lock()
+		retained := r.associations[response.Bind.Port] != nil
+		r.mu.Unlock()
+		if retained {
+			t.Fatal("stopped projected UDP association retained its port")
 		}
 	})
 	t.Run("close-joins-original-packet-worker", func(t *testing.T) {
@@ -1358,7 +1443,8 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 					case answer := <-done:
 						done <- answer
 						if fault == "held" || reply.AuthFailures == 0 && fault == "final-key" {
-							t.Fatal("proof ended before actual held/authentication witness", answer.err, desktopWFPRouterServerDiagnostic(peer.call(t, "stats", "")))
+							failureReply := peer.call(t, "stats", "")
+							t.Fatal("proof ended before actual held/authentication witness", answer.err, desktopWFPRouterServerDiagnostic(failureReply), desktopWFPRouterServerProgress(failureReply))
 						}
 						observed = true
 					case <-deadline.C:
@@ -1399,7 +1485,8 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 			}
 			var proof mobilemultihop.ExternalProofResult
 			if proofErr != nil || json.Unmarshal([]byte(raw), &proof) != nil || proof.Execution != execution || !proof.EntryProven || proof.EntryNodeID != peer.initial.RouterServer.NodeID || !proof.DNSProven || proof.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
-				t.Fatal("actual Server proof failed", proofErr, desktopWFPRouterServerDiagnostic(peer.call(t, "stats", "")))
+				failureReply := peer.call(t, "stats", "")
+				t.Fatal("actual Server proof failed", proofErr, desktopWFPRouterServerDiagnostic(failureReply), desktopWFPRouterServerProgress(failureReply))
 			}
 			reply := peer.call(t, "stats", "")
 			r := reply.RouterServer

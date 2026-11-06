@@ -900,6 +900,59 @@ Only the shim import and its explanatory comment changed. No local Swift
 execution was available; the app fixture, its negative controls, and subsequent
 Xcode app/PacketTunnel build remain separate CI results to obtain.
 
+### Windows Server fixture projects the original UDP relay onto its WG host
+
+[The c602 AMD64 packet/Server job](https://github.com/Eabusham2/router-vpn/actions/runs/42220220946/job/127907229708)
+passed the WG/AWG packet families and the six existing association-retirement
+leaves, then failed Server selected-DNS proof. Its new original-exchange
+observation was `class=deadline errno=0`. That result alone does not locate the
+missing packet or identify an SS forwarding defect.
+
+A separate address-path review found an invalid fixture projection before the
+final SS handler. The fixture changes the captured relay listener from
+`10.78.0.1` to local `127.0.0.1`, but had forwarded the real SOCKS UDP
+reply's loopback bind address unchanged. The pinned
+[sing client](https://github.com/SagerNet/sing/blob/v0.9.4/protocol/socks/client.go)
+dials that returned address literally; its
+[server handshake](https://github.com/SagerNet/sing/blob/v0.9.4/protocol/socks/handshake.go)
+advertises the actual local UDP listener. The pinned
+[WireGuard stack](https://github.com/SagerNet/sing-box/blob/1ac1a339cb1223e9c70eae14c44411c75033c02d/transport/wireguard/device_stack.go)
+uses the default
+[sing-tun IPv4 stack](https://github.com/SagerNet/sing-tun/blob/v0.9.3/stack_gvisor.go).
+Its pinned
+[gVisor IPv4 receiver](https://github.com/SagerNet/gvisor/blob/v0.0.0-20260727.0-sing-box-mod.1/pkg/tcpip/network/ipv4/ipv4.go)
+rejects loopback source/destination packets on that non-loopback interface.
+The current source pin and all dependency versions were checked directly.
+
+The fixture now maps only the already validated UDP reply's IPv4 address back
+to the exact captured lease host. It captures that host under the existing
+process ownership locks and retains the authenticated response status, real
+UDP port, original control/process association and expiry. The CONNECT branch,
+destination admission predicates and network-stack loopback protection retain
+their existing behavior. This reverses the fixture's listener-address mapping;
+it is not a new production routing policy.
+
+The existing mandatory `api-original-challenge-and-stop-receipt` leaf now
+performs a real authenticated UDP association through the same fixture bridge,
+checks the captured host and original owned port/control, and verifies bounded
+control drain after Stop, withdrawn packet admission and removal of the UDP
+tuple. It sends no SS payload. Existing parent/leaf inventories remain unchanged.
+The old address forwarding would fail the new host assertion by source analysis;
+an executed old-source causal control is not claimed.
+
+Both affected proof failures now print a fixed numeric projection of their
+single existing stats reply alongside the original lease diagnostic. Labels
+distinguish attempted relay UDP writes, final-peer packet arrival and decoded
+DNS counters; local-lane counters are also included. No extra probe or new
+success criterion is introduced, and private node identities or credentials
+are not added to output.
+
+Root and two Astra reviews checked the pinned source path, reply validation,
+lock order, exact port ownership, channel-synchronized join result and cleanup.
+No local compile or native execution was available. The actual association
+test and full Server DNS/WFP path must still execute on the published source;
+the projection correction alone does not establish Server acceptance.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.
