@@ -191,7 +191,7 @@ SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT +
 def check_ss_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
 
-RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname')
+RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname', 'service-boot-resolved-dnssec-private-tld', 'service-boot-resolved-dnssec-private-tld-unrelated-nta')
 CASES += RESOLVED_CASES
 HOSTNAME_CASES += RESOLVED_CASES
 PUBLIC_CASES += RESOLVED_CASES
@@ -427,6 +427,11 @@ def check_verdict(output, case=None):
                 marker = alias_prefix + value
                 if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
                     raise ValueError('Installed DNSSEC alias omitted original target authority or typed proof')
+        if value.startswith('service-boot-resolved-dnssec-private-tld'):
+            for marker_prefix in ('verified installed private-TLD original and auxiliary wire queries: ', 'verified installed private-TLD original complete root plan and monitor: '):
+                marker=marker_prefix+value
+                if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+                    raise ValueError('Installed private-TLD omitted original root/monitor or independent proof queries: '+value)
         if value in RESOLVED_CASES:
             marker = 'verified installed resolved helper original broker and scoped upstream: ' + value
             if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
@@ -573,6 +578,53 @@ def missing_binding_control(workspace, peer, bundle, compiler, captured, peer_sh
             'changed_source_sha256': hashlib.sha256(changed.read_bytes()).hexdigest(), 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
 
 
+def private_tld_missing_denial_source(text):
+    original='const privateTLDCompleteDenial = true'
+    if text.count(original)!=1:raise ValueError('private-TLD causal source marker changed')
+    return text.replace(original,'const privateTLDCompleteDenial = false',1)
+
+def check_private_tld_control(status,output):
+    case='service-boot-resolved-dnssec-private-tld'
+    # A deliberate assertion failure must finish normally. A matching earlier
+    # leaf cannot turn a later crash or failed original retirement into proof.
+    abnormal = ('panic:', 'fatal error:', 'test timed out', 'TimeoutExpired',
+                'Traceback (most recent call last):', 'Linux guardian namespace failed:', 'signal: killed',
+                'signal: segmentation fault', 'context deadline exceeded',
+                'joined original installed host retirement:',
+                'failed-readiness original joined retirement:',
+                'joined original installed session retirement:',
+                'owned active network replacement cleanup:',
+                'installed host omitted its actual source/process join and durable retirement',
+                'installed controller did not join after its original native retirement',
+                'installed-host retirement did not persist its exact original settled journal',
+                'installed-host TUN retirement requires a successful native inventory')
+    retired = ('private account workspace removed; return test status 1',
+               'original namespace child joined')
+    if status != 1 or any('Linux guardian namespace phase: '+phase+' (pid=' not in output for phase in retired) or any(marker in output for marker in abnormal) or '--- SKIP:' in output or 'DATA RACE' in output or 'private-TLD omitted actual original/proof/root-key exchange' in output or \
+       'private-TLD proof is not exact authenticated secure NXDOMAIN' not in output or \
+       not any(line.rstrip().endswith('verified installed private-TLD original and auxiliary wire queries: '+case) for line in output.splitlines()) or \
+       '--- FAIL: TestDesktopLinuxGuardianKernelNodeHostTUN/'+case+' (' not in output:
+        raise ValueError('Installed private-TLD did not reject its actual signed NODATA proof for the exact denial reason')
+
+def private_tld_control(workspace,binary,source,bundle,compiler,captured,binary_sha256,bundle_sha256,sudo):
+    original=source/'protocol/routervpnamnezia/routervpn_desktop_resolved_private_tld_test.go'
+    changed=workspace/'private_tld_missing_denial.go'
+    changed.write_text(private_tld_missing_denial_source(original.read_text()))
+    overlay=workspace/'private_tld_overlay.json';overlay.write_text(json.dumps({'Replace':{str(original):str(changed)}}))
+    peer=workspace/'private-tld-missing-denial.test'
+    status,output=NODE.run([compiler,'test','-c','-race','-mod=readonly','-overlay='+str(overlay),'-tags='+','.join(NODE.TAGS),'-ldflags=-checklinkname=0','-o',peer,'./protocol/routervpnamnezia'],cwd=source,env=captured,timeout=300)
+    if status:raise ValueError('Installed private-TLD missing-denial control did not compile:\n'+output[-16384:])
+    identity=CHILD.image_identity(peer)
+    command=[sys.executable,str(Path(__file__).resolve()),'--namespace-test-binary',str(binary),'--peer-binary',str(peer),'--bundle',str(bundle),'--namespace-test-sha256',binary_sha256,'--peer-sha256',identity[-1],'--bundle-sha256',bundle_sha256,'--case','service-boot-resolved-dnssec-private-tld']
+    if sudo is not None:command=[sudo,'-n','--',*command]
+    try:output=GUARD.UID.run(command,cwd=ROOT,env=captured,timeout=150,sudo=sudo);status=0
+    except subprocess.CalledProcessError as failure:status= failure.returncode;output=failure.output.decode('utf-8',errors='replace')
+    check_private_tld_control(status,output)
+    if CHILD.image_identity(peer)!=identity:raise ValueError('private-TLD causal peer changed original image')
+    print(output,end='' if output.endswith('\n') else '\n')
+    return {'name':'private-tld-missing-denial','bytes':identity[2],'sha256':identity[-1],'changed_source_sha256':hashlib.sha256(changed.read_bytes()).hexdigest(),'output_sha256':hashlib.sha256(output.encode()).hexdigest()}
+
+
 def execute(source, bundle, go='go', *, env=None, receipt_path=None):
     if platform.system() != 'Linux':
         raise ValueError('Installed Linux host acceptance requires its matching native Linux host')
@@ -696,6 +748,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         check_reverse_verdict(output)
         defect = missing_binding_control(workspace, peer, bundle, compiler, captured, identities[peer][-1],
                                          payloads['NATIVE-RUNTIME.json']['sha256'], sudo)
+        private_defect=private_tld_control(workspace,binary,source,bundle,compiler,captured,identities[binary][-1],payloads['NATIVE-RUNTIME.json']['sha256'],sudo)
         if checked_sources(source)[1] != before or bundle_identity(bundle, 'linux/' + architecture, captured) != (receipt, payloads) or any(
                 CHILD.image_identity(path) != identity for path, identity in identities.items()):
             raise ValueError('Installed Linux host changed its original source, engine bundle or compiled test images')
@@ -717,7 +770,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
-                  'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
+                  'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
     print('Physical devices, off-LAN interoperability, restart recovery and other graph families remain separate acceptance boundaries.')

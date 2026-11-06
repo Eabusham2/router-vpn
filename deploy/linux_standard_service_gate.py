@@ -825,3 +825,6 @@ AUXILIARY['resolved-private-tld-shipping']=('./cmd/client',{
  'no-extra-slot','original-retirement','all-scope-plan-change','physical-current-loss',
  'cancel-before-proof','alias-required','authority-lost')})
 AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_private_tld_linux_test.go']='resolved-private-tld-shipping'
+
+# Installed private-TLD peers are part of the original resolver composition.
+SOURCE.add('mobile/desktop/node_resolved_private_tld_test.go.tmpl')

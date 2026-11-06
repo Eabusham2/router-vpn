@@ -49,7 +49,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_resolved_composition_requires_original_helper_receipt(self):
         self.assertEqual(G.CASES[524:524+len(G.RESOLVED_CASES)], G.RESOLVED_CASES)
         self.assertEqual(G.CASES[524+len(G.RESOLVED_CASES):], G.EXTERNAL_SS_LAYER_CASES + G.EXTERNAL_SS_HYSTERIA_LAYER_CASES)
-        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname'))
+        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname','service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-unrelated-nta'))
         for case in G.RESOLVED_CASES:
             self.assertIn(case, G.HOSTNAME_CASES)
             self.assertIn(case, G.PUBLIC_CASES)
@@ -70,6 +70,47 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             for line in lines:
                 for changed in (good.replace(line, '', 1), good + line, good.replace(line, line.replace(case, case+'-foreign'), 1)):
                     with self.subTest(case=case), self.assertRaises(ValueError): G.check_verdict(changed, case)
+
+    def test_private_tld_requires_root_and_independent_query_receipts(self):
+        for case in G.RESOLVED_CASES:
+            if not case.startswith('service-boot-resolved-dnssec-private-tld'):continue
+            good=self.completed((case,));G.check_verdict(good,case)
+            lines=[line for line in good.splitlines(True) if 'verified installed private-TLD' in line]
+            self.assertEqual(len(lines),2)
+            for line in lines:
+                for changed in (good.replace(line,'',1),good+line):
+                    with self.assertRaises(ValueError):G.check_verdict(changed,case)
+
+    def test_private_tld_causal_must_reach_exact_denial_boundary(self):
+        source=(G.ROOT/'mobile/desktop/node_resolved_private_tld_test.go.tmpl').read_text()
+        changed=G.private_tld_missing_denial_source(source)
+        self.assertEqual(changed.count('const privateTLDCompleteDenial = false'),1)
+        output='private-TLD proof is not exact authenticated secure NXDOMAIN\nverified installed private-TLD original and auxiliary wire queries: service-boot-resolved-dnssec-private-tld\n--- FAIL: TestDesktopLinuxGuardianKernelNodeHostTUN/service-boot-resolved-dnssec-private-tld (1.0s)\n'
+        cleanup=('Linux guardian namespace phase: private account workspace removed; return test status 1 (pid=1, monotonic=1.000)\n'
+                 'Linux guardian namespace phase: original namespace child joined (pid=2, monotonic=1.001)\n')
+        output+=cleanup
+        G.check_private_tld_control(1,output)
+        for bad in ('',output.replace('secure NXDOMAIN','unknown error'),output+'DATA RACE',output+'--- SKIP: case',output+'private-TLD omitted actual original/proof/root-key exchange',output.replace('wire queries: service-boot-resolved-dnssec-private-tld','wire queries: service-boot-resolved-dnssec-private-tld-unrelated-nta')):
+            with self.assertRaises(ValueError):G.check_private_tld_control(1,bad)
+        with self.assertRaises(ValueError):G.check_private_tld_control(1,output.replace(cleanup,''))
+        for diagnostic in ('Linux guardian namespace failed: cleanup error', 'panic: late crash', 'fatal error: unexpected fault',
+                           'panic: test timed out after 90s', 'TimeoutExpired',
+                           'Traceback (most recent call last):', 'signal: killed',
+                           'signal: segmentation fault', 'context deadline exceeded',
+                           'joined original installed host retirement: failed',
+                           'failed-readiness original joined retirement: failed',
+                           'joined original installed session retirement: failed',
+                           'owned active network replacement cleanup: failed',
+                           'installed host omitted its actual source/process join and durable retirement',
+                           'installed controller did not join after its original native retirement',
+                           'installed-host retirement did not persist its exact original settled journal',
+                           'installed-host TUN retirement requires a successful native inventory'):
+            with self.subTest(diagnostic=diagnostic), self.assertRaises(ValueError):
+                G.check_private_tld_control(1,output+diagnostic)
+        for status in (0, -9, 2, 124, 137):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                G.check_private_tld_control(status,output)
+        G.check_private_tld_control(1,output+'verified original joined retirement\n')
 
     def completed(self, cases=None):
         cases = G.CASES if cases is None else cases
@@ -100,6 +141,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:24: verified installed host original boot service transfer: ' + case for case in cases if case in G.BOOT_TRANSFER_CASES + G.BOOT_RESOLVER_CASES + G.RESOLVED_CASES),
                           *('    native_test.go:25: verified installed host captured resolver policy: ' + case for case in cases if case in G.HOSTNAME_CASES),
                           *('    native_test.go:26: verified installed resolved helper original broker and scoped upstream: ' + case for case in cases if case in G.RESOLVED_CASES),
+                          *('    native_test.go:29: '+prefix+case for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld') for prefix in ('verified installed private-TLD original and auxiliary wire queries: ', 'verified installed private-TLD original complete root plan and monitor: ')),
                           *('    native_test.go:27: verified installed DNSSEC original NTA and absent-anchor recheck' for case in cases if case == 'service-boot-resolved-dnssec-nta'),
                           *('    native_test.go:28: '+prefix+case for case in cases if case in ('service-boot-resolved-dnssec-cname','service-boot-resolved-dnssec-dname') for prefix in ('verified installed DNSSEC alias target independently captured and adopted: ', 'verified installed DNSSEC alias original proof and target wire queries: ')),
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),

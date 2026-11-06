@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,14 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 	count := 0
 	anchorCount := 0
 	anchorNames := map[string]int{}
+	rootDS, rootErr := base64.StdEncoding.DecodeString(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_PRIVATE_TLD"))
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	privateTLD := len(rootDS) > 0
+	if privateTLD {
+		resolvedCompositionPrivateMonitor(t, ctx, os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT"))
+	}
 	alias := os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_ALIAS")
 	if alias != "" && alias != "cname" && alias != "dname" {
 		t.Fatal("unknown original alias fixture")
@@ -124,6 +133,13 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 				values["DNSSECNegativeTrustAnchors"] = dbus.MakeVariant([]string{"transport-bootstrap.invalid"})
 				if alias != "" {
 					values["DNSSECNegativeTrustAnchors"] = dbus.MakeVariant([]string{"transport-bootstrap.invalid", "alias-bootstrap.invalid"})
+				}
+			}
+			if privateTLD {
+				values["DNSSEC"] = dbus.MakeVariant("allow-downgrade")
+				values["DNSSECNegativeTrustAnchors"] = dbus.MakeVariant([]string{})
+				if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_UNRELATED_NTA") == "1" {
+					values["DNSSECNegativeTrustAnchors"] = dbus.MakeVariant([]string{"unrelated"})
 				}
 			}
 			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC") == "1" {
@@ -212,11 +228,14 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 			}
 			return nil, "", nil
 		case "ResolveRecord":
-			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA") != "1" || destination != ":1.77" || len(request.Body) != 5 || request.Body[0] != int32(0) || request.Body[2] != uint16(1) || (request.Body[3] != uint16(43) && request.Body[3] != uint16(48)) || request.Body[4] != uint64(1|1<<5|1<<11|1<<12|1<<13|1<<15) {
+			if (!privateTLD && os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA") != "1") || destination != ":1.77" || len(request.Body) != 5 || request.Body[0] != int32(0) || request.Body[2] != uint16(1) || (request.Body[3] != uint16(43) && request.Body[3] != uint16(48)) || request.Body[4] != uint64(1|1<<5|1<<11|1<<12|1<<13|1<<15) {
 				return nil, "", errors.New("trust observation escaped original no-network anchor query")
 			}
 			name, ok := request.Body[1].(string)
-			if !ok || (name != "node.transport-bootstrap.invalid" && name != "transport-bootstrap.invalid" && name != "invalid" && name != "." && !(alias != "" && (name == "node.alias-bootstrap.invalid" || name == "alias-bootstrap.invalid"))) {
+			if privateTLD && name != "node.private" && name != "private" && name != "." {
+				return nil, "", errors.New("private root observation escaped original suffix")
+			}
+			if !ok || (!privateTLD && name != "node.transport-bootstrap.invalid" && name != "transport-bootstrap.invalid" && name != "invalid" && name != "." && !(alias != "" && (name == "node.alias-bootstrap.invalid" || name == "alias-bootstrap.invalid"))) {
 				return nil, "", errors.New("trust observation changed original suffix")
 			}
 			mu.Lock()
@@ -234,12 +253,23 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 			if writeErr != nil {
 				return nil, "", writeErr
 			}
+			if privateTLD && name == "." && request.Body[3] == uint16(43) {
+				type anchorRow struct {
+					Index       int32
+					Class, Type uint16
+					Data        []byte
+				}
+				return []any{[]anchorRow{{0, 1, 43, rootDS}}, uint64(1 | 1<<9 | 1<<18 | 1<<22)}, "", nil
+			}
 			if name == "." && request.Body[3] == uint16(43) {
 				return []any{"original strict root has no DS trust anchor"}, "org.freedesktop.resolve1.NoTrustAnchor", nil
 			}
 			return []any{"no original positive trust source"}, "org.freedesktop.resolve1.NoSource", nil
 		case "ResolveHostname":
-			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || (request.Body[1] != "node.transport-bootstrap.invalid" && !(alias != "" && request.Body[1] == "node.alias-bootstrap.invalid")) || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
+			if privateTLD && (len(request.Body) != 4 || request.Body[1] != "node.private") {
+				return nil, "", errors.New("private local observation changed original qualified name")
+			}
+			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || (request.Body[1] != "node.transport-bootstrap.invalid" && !(alias != "" && request.Body[1] == "node.alias-bootstrap.invalid") && !(privateTLD && request.Body[1] == "node.private")) || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
 				return nil, "", errors.New("local preflight escaped exact original question or NO_NETWORK/NO_CACHE/NO_SEARCH")
 			}
 			mu.Lock()

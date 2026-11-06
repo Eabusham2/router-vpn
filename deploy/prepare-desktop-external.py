@@ -136,6 +136,7 @@ PEER_TEMPLATES = {
     'node_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_test.go',
     'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
+    'node_resolved_private_tld_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_resolved_private_tld_test.go',
     'node_resolved_broker_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go',
     'node_layer_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go',
     'node_router_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_test.go',
@@ -703,7 +704,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
         elif name == 'node_naive_loader_purego_test.go.tmpl':
             prefix = b'//go:build with_purego\n\n' + prefix
-        elif name == 'node_resolved_broker_test.go.tmpl':
+        elif name in ('node_resolved_broker_test.go.tmpl', 'node_resolved_private_tld_test.go.tmpl'):
             prefix = b'//go:build linux\n\n' + prefix
         elif name in ('node_pq_peer_windows_test.go.tmpl', 'node_max_peer_windows_test.go.tmpl'):
             prefix = b'//go:build windows && cgo && routervpn_native_pq && routervpn_pq_traffic_test && routervpn_windows_node_composition\n\npackage routervpnpq\n'

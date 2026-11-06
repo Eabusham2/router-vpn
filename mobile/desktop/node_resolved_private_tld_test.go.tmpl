@@ -1,0 +1,192 @@
+//go:build linux
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto"
+	"encoding/json"
+	"fmt"
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+const privateTLDCompleteDenial = true
+
+// Independent signed physical DNS peer for the installed original resolver.
+// Its root key is generated inside this peer; the daemon fixture receives only
+// its public DS observation, never the signing key.
+func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
+	if os.Getenv("ROUTERVPN_PRIVATE_TLD_DNS") != "1" || os.Geteuid() != 0 {
+		t.Fatal("private-TLD peer requires isolated installed fixture")
+	}
+	answer := net.ParseIP(os.Getenv("ROUTERVPN_PRIVATE_TLD_ANSWER")).To4()
+	countFile := os.Getenv("ROUTERVPN_PRIVATE_TLD_COUNT")
+	if answer == nil || countFile == "" {
+		t.Fatal("missing original peer/count owner")
+	}
+	key := &dns.DNSKEY{Hdr: dns.RR_Header{Name: ".", Rrtype: dns.TypeDNSKEY, Class: 1, Ttl: 60}, Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}
+	private, err := key.Generate(256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds := key.ToDS(dns.SHA256)
+	wire := make([]byte, 8192)
+	n, err := dns.PackRR(ds, wire, 0, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(countFile+".root-ds", wire[:n], 0600); err != nil {
+		t.Fatal(err)
+	}
+	rr := func(text string) dns.RR {
+		r, err := dns.NewRR(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	sign := func(r dns.RR) []dns.RR {
+		sig := &dns.RRSIG{Hdr: dns.RR_Header{Name: r.Header().Name, Rrtype: 46, Class: 1, Ttl: 60}, Algorithm: key.Algorithm, KeyTag: key.KeyTag(), SignerName: ".", Inception: uint32(time.Now().Add(-time.Hour).Unix()), Expiration: uint32(time.Now().Add(time.Hour).Unix())}
+		if err := sig.Sign(private.(crypto.Signer), []dns.RR{r}); err != nil {
+			t.Error(err)
+			return nil
+		}
+		return []dns.RR{r, sig}
+	}
+	var mu sync.Mutex
+	counts := map[string]int{}
+	failure := make(chan error, 2)
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		if len(q.Question) != 1 {
+			return
+		}
+		x := q.Question[0]
+		name := strings.ToLower(x.Name)
+		if x.Qclass != 1 || (name != "node.private." && name != "private." && name != ".") || (x.Qtype != 1 && x.Qtype != 28 && x.Qtype != 43 && x.Qtype != 48) {
+			t.Error("private peer received foreign authority", x)
+			return
+		}
+		mu.Lock()
+		counts[""]++
+		suffix := ""
+		if name == "node.private." && (x.Qtype == 1 || x.Qtype == 28) {
+			suffix = ".original"
+		}
+		if name == "private." && x.Qtype == 1 {
+			suffix = ".proof"
+		}
+		if name == "." && x.Qtype == 48 {
+			suffix = ".root-key"
+		}
+		if suffix != "" {
+			counts[suffix]++
+		}
+		for suffix, n := range counts {
+			if err := os.WriteFile(countFile+suffix, []byte(strconv.Itoa(n)), 0600); err != nil {
+				t.Error(err)
+			}
+		}
+		mu.Unlock()
+		m := new(dns.Msg)
+		m.SetReply(q)
+		m.Authoritative = true
+		m.RecursionAvailable = true
+		if name == "." && x.Qtype == 48 {
+			m.Answer = sign(key)
+		} else if name == "." && x.Qtype == 43 {
+			m.Answer = sign(ds)
+		} else if name == "node.private." && (x.Qtype == 1 || x.Qtype == 28) {
+			if x.Qtype == 1 {
+				m.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: 1, Class: 1, Ttl: 30}, A: answer}}
+			}
+		} else {
+			m.Rcode = dns.RcodeNameError
+			m.Ns = append(sign(rr(". 60 IN SOA ns. hostmaster. 1 60 60 60 60")), sign(rr(". 60 IN NSEC zzz. NS SOA RRSIG NSEC DNSKEY"))...)
+		}
+		if name == "private." && x.Qtype == 1 && !privateTLDCompleteDenial {
+			m.Rcode = dns.RcodeSuccess
+			m.Ns = append(sign(rr(". 60 IN SOA ns. hostmaster. 1 60 60 60 60")), sign(rr("private. 60 IN NSEC zzz. AAAA RRSIG NSEC"))...)
+		}
+		if err := w.WriteMsg(m); err != nil {
+			t.Error(err)
+		}
+	})
+	udp, err := net.ListenPacket("udp4", "198.19.0.53:53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	tcp, err := net.Listen("tcp4", "198.19.0.53:53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcp.Close()
+	u := &dns.Server{PacketConn: udp, Handler: handler, UDPSize: 4096}
+	s := &dns.Server{Listener: tcp, Handler: handler}
+	go func() { failure <- u.ActivateAndServe() }()
+	go func() { failure <- s.ActivateAndServe() }()
+	fmt.Println("ready")
+	select {
+	case err := <-failure:
+		t.Fatal(err)
+	case <-time.After(80 * time.Second):
+		t.Fatal("private-TLD peer exceeded original fixture lifetime")
+	}
+}
+
+// This listener belongs to the SAME original broker process as its D-Bus
+// ProcessFD. No successor PID or weaker pathname-only monitor is substituted.
+func resolvedCompositionPrivateMonitor(t *testing.T, ctx context.Context, countFile string) {
+	t.Helper()
+	if err := os.MkdirAll("/run/systemd/resolve", 0755); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: "/run/systemd/resolve/io.systemd.Resolve.Monitor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	deadline, _ := ctx.Deadline()
+	listener.SetDeadline(deadline)
+	go func() {
+		count := 0
+		for {
+			connection, err := listener.AcceptUnix()
+			if err != nil {
+				return
+			}
+			connection.SetDeadline(deadline)
+			request, err := bufio.NewReader(connection).ReadBytes(0)
+			expected := []byte("{\"method\":\"io.systemd.Resolve.Monitor.DumpServerState\",\"parameters\":{\"allowInteractiveAuthentication\":false}}\x00")
+			if err != nil || !bytes.Equal(request, expected) {
+				connection.Close()
+				t.Error("private original monitor request changed", err)
+				continue
+			}
+			row := standardengine.ResolvedServerRow{Server: "198.19.0.53:53", Type: "system", VerifiedFeatureLevel: "n/a", PossibleFeatureLevel: "UDP+EDNS0+DO", DNSSECMode: "allow-downgrade", DNSSECSupported: true}
+			raw, err := json.Marshal(map[string]any{"parameters": map[string]any{"dump": []standardengine.ResolvedServerRow{row}}})
+			if err == nil {
+				_, err = connection.Write(append(raw, 0))
+			}
+			connection.Close()
+			if err != nil {
+				t.Error(err)
+				continue
+			}
+			count++
+			if err = os.WriteFile(countFile+".monitor", []byte(strconv.Itoa(count)), 0600); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+}

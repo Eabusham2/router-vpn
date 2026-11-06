@@ -258,6 +258,12 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 // private mount/net namespaces. Home AdGuard, its DNS transport, private Router
 // target and encrypted Node credentials remain the ordinary public fixture.
 func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scenario string) {
+	privateTLD := strings.HasPrefix(scenario, "service-boot-resolved-dnssec-private-tld")
+	hostname := bootHostnameFixtureName
+	if privateTLD {
+		hostname = "node.private"
+	}
+	var rootDS []byte
 	mode := "udp"
 	if scenario == "service-boot-hostname-tcp" || scenario == "service-boot-resolved-tcp" {
 		mode = "tcp"
@@ -375,6 +381,10 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 		countFile := filepath.Join(directory, "queries")
 		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
 		dns := exec.CommandContext(ctx, "/usr/sbin/ip", "netns", "exec", "rvpn-peer", executable, "routervpn-boot-hostname-resolver", peer.address.Addr().String(), countFile, mode)
+		if privateTLD {
+			dns = exec.CommandContext(ctx, "/usr/sbin/ip", "netns", "exec", "rvpn-peer", os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), "-test.run=^TestRouterVPNPrivateTLDInstalledDNS$", "-test.timeout=80s")
+			dns.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_PRIVATE_TLD_DNS=1", "ROUTERVPN_PRIVATE_TLD_ANSWER=" + peer.address.Addr().String(), "ROUTERVPN_PRIVATE_TLD_COUNT=" + countFile}
+		}
 		dns.Stderr = os.Stderr
 		output, e := dns.StdoutPipe()
 		if e != nil {
@@ -394,6 +404,16 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			}
 			if e != nil || parse != nil || count < minimum {
 				t.Error("public Node Connect omitted actual A/AAAA bootstrap", e, parse, count)
+			}
+			if privateTLD {
+				for _, suffix := range []string{".original", ".proof", ".root-key"} {
+					body, err := os.ReadFile(countFile + suffix)
+					n, parse := strconv.Atoi(string(body))
+					if err != nil || parse != nil || n < 1 {
+						t.Error("private-TLD omitted actual original/proof/root-key exchange", suffix, err, parse, n)
+					}
+				}
+				t.Logf("verified installed private-TLD original and auxiliary wire queries: %s", scenario)
 			}
 			if mode == "dnssec-cname" || mode == "dnssec-dname" {
 				for _, suffix := range []string{".alias-target", ".alias-proof"} {
@@ -425,9 +445,15 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 		if ready, e := bufio.NewReader(output).ReadString('\n'); e != nil || ready != "ready\n" {
 			t.Fatal("captured bootstrap peer not ready", ready, e)
 		}
+		if privateTLD {
+			rootDS, e = os.ReadFile(countFile + ".root-ds")
+			if e != nil || len(rootDS) == 0 {
+				t.Fatal("private peer omitted root DS", e)
+			}
+		}
 	}
 	if resolved {
-		linuxHostTUNResolvedBroker(t, peer, scenario)
+		linuxHostTUNResolvedBroker(t, peer, scenario, rootDS)
 	}
 	profilePath := filepath.Join(linuxOwnedControllerRoot, "routers.json")
 	body, e := os.ReadFile(profilePath)
@@ -439,7 +465,7 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	if p.Endpoint != peer.address.Addr().String() || p.DNSMode != "home" || p.AdGuardIPv4 != "192.168.50.133" {
 		t.Fatal("hostname fixture changed private targets")
 	}
-	p.Endpoint = bootHostnameFixtureName
+	p.Endpoint = hostname
 	body, e = json.Marshal(store)
 	if e != nil || os.WriteFile(profilePath, body, 0600) != nil {
 		t.Fatal("hostname profile write", e)
@@ -453,7 +479,7 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	if bytes.Count(body, old) != 1 {
 		t.Fatal("hostname fixture outer source is ambiguous")
 	}
-	body = bytes.Replace(body, old, []byte(`"server":"`+bootHostnameFixtureName+`"`), 1)
+	body = bytes.Replace(body, old, []byte(`"server":"`+hostname+`"`), 1)
 	if e = os.WriteFile(asset, body, 0600); e != nil {
 		t.Fatal(e)
 	}

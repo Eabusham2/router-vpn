@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -16,7 +17,7 @@ import (
 	"time"
 )
 
-var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta", "service-boot-resolved-dnssec-cname", "service-boot-resolved-dnssec-dname"}
+var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta", "service-boot-resolved-dnssec-cname", "service-boot-resolved-dnssec-dname", "service-boot-resolved-dnssec-private-tld", "service-boot-resolved-dnssec-private-tld-unrelated-nta"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNResolvedCases...) }
 func linuxHostTUNResolvedCase(scenario string) bool {
@@ -28,7 +29,8 @@ func linuxHostTUNResolvedCase(scenario string) bool {
 	return false
 }
 
-func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario string) {
+func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario string, rootDS []byte) {
+	privateTLD := strings.HasPrefix(scenario, "service-boot-resolved-dnssec-private-tld")
 	t.Helper()
 	// The host runner has already proved private original mount/net namespaces.
 	// Hide the outer bus using a bind mount; never rename or modify its socket.
@@ -86,7 +88,15 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	if scenario == "service-boot-resolved-opportunistic-tls" || scenario == "service-boot-resolved-opportunistic-fallback" {
 		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC=1")
 	}
-	if strings.HasPrefix(scenario, "service-boot-resolved-dnssec-") {
+	if privateTLD {
+		if len(rootDS) == 0 {
+			t.Fatal("original broker omitted private root authority")
+		}
+		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_PRIVATE_TLD="+base64.StdEncoding.EncodeToString(rootDS))
+		if strings.HasSuffix(scenario, "-unrelated-nta") {
+			command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_UNRELATED_NTA=1")
+		}
+	} else if strings.HasPrefix(scenario, "service-boot-resolved-dnssec-") {
 		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_DNSSEC_NTA=1")
 		if scenario != "service-boot-resolved-dnssec-nta" {
 			command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_ALIAS="+strings.TrimPrefix(scenario, "service-boot-resolved-dnssec-"))
@@ -118,6 +128,28 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		mutationCount, mutationParse := strconv.Atoi(string(mutations))
 		if mutationErr != nil || mutationParse != nil || mutationCount < 3 || mutationCount%3 != 0 {
 			t.Error("installed TUN omitted original post-helper DNS ownership", mutationErr, mutationParse, mutationCount)
+		}
+		if privateTLD {
+			raw, err := os.ReadFile(countFile + ".anchor-names")
+			var names map[string]int
+			if err != nil || json.Unmarshal(raw, &names) != nil {
+				t.Error("private root plan receipts missing", err)
+			}
+			total := names["node.private/43"]
+			if total < 6 {
+				t.Error("private-TLD omitted complete ordinary plus auxiliary plan checkpoints", total)
+			}
+			for _, name := range []string{"node.private", "private", "."} {
+				if names[name+"/43"] != total || names[name+"/48"] != total {
+					t.Error("private-TLD dropped original positive/absent observation", name, names)
+				}
+			}
+			monitor, err := os.ReadFile(countFile + ".monitor")
+			n, parse := strconv.Atoi(string(monitor))
+			if err != nil || parse != nil || n < 1 {
+				t.Error("private-TLD omitted same-original monitor refusal", err, parse, n)
+			}
+			t.Logf("verified installed private-TLD original complete root plan and monitor: %s", scenario)
 		}
 		if scenario == "service-boot-resolved-dnssec-nta" {
 			body, err := os.ReadFile(countFile + ".anchors")
