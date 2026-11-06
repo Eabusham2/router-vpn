@@ -73,7 +73,11 @@ func (p *ExternalPolicy) PhysicalEgress() ([]PhysicalEgress, error) {
 	if metadata.UDPAvailable {
 		networks = append(networks, "udp")
 	}
-	return compiledPhysicalEgress(p.config, networks)
+	proofTag := ""
+	if metadata.EntryProof == "required" {
+		proofTag = metadata.EntryTag
+	}
+	return compiledPhysicalEgressWithDesktopProof(p.config, networks, nil, proofTag)
 }
 
 // Source constructors validate the complete graph before this private helper.
@@ -83,6 +87,14 @@ func compiledPhysicalEgress(configJSON string, networks []string) ([]PhysicalEgr
 }
 
 func compiledPhysicalEgressWithDesktop(configJSON string, networks []string, desktop *externalDesktopRecorder) ([]PhysicalEgress, error) {
+	return compiledPhysicalEgressWithDesktopProof(configJSON, networks, desktop, "")
+}
+
+// The ordinary policy's independently required entry HTTPS proof starts at
+// its captured entry tag. A UDP final cannot erase this TCP payload path.
+// Trace it through the same original graph: only the actual first transport
+// gains intent, never the entry proof destination or the inner final peer.
+func compiledPhysicalEgressWithDesktopProof(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string) ([]PhysicalEgress, error) {
 	var graph map[string]any
 	if exactJSON([]byte(configJSON), &graph, 4<<20) != nil {
 		return nil, nodePhysicalEgressError
@@ -110,6 +122,11 @@ func compiledPhysicalEgressWithDesktop(configJSON string, networks []string, des
 	final := predecessorText(graph["route"].(map[string]any), "final")
 	for _, network := range networks {
 		if err := p.node(final, network); err != nil {
+			return nil, err
+		}
+	}
+	if proofTag != "" {
+		if err := p.node(proofTag, "tcp"); err != nil {
 			return nil, err
 		}
 	}

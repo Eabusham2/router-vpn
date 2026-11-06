@@ -121,7 +121,11 @@ func (p *ExternalPolicy) DesktopCapture() (ExternalDesktopCapture, error) {
 	if meta.UDPAvailable {
 		networks = append(networks, "udp")
 	}
-	tuples, err := compiledPhysicalEgressWithDesktop(p.config, networks, collector)
+	proofTag := ""
+	if meta.EntryProof == "required" {
+		proofTag = meta.EntryTag
+	}
+	tuples, err := compiledPhysicalEgressWithDesktopProof(p.config, networks, collector, proofTag)
 	if err != nil {
 		return result, err
 	}
