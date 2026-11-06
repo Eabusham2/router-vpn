@@ -10,6 +10,8 @@ The SOCKS client association also couples its UDP socket to the lifetime of
 its negotiated TCP control connection and synchronizes its own reply endpoint.
 Its write APIs report payload bytes and reject incomplete SOCKS UDP frames.
 Its ordinary read APIs reserve wire headroom outside the caller's payload.
+HTTP CONNECT cancellation also joins its original handshake socket close before
+returning, including cancellation racing a successful response.
 Preserve TCP capacities, upstream routing semantics, the whole-module h1
 checksum, and the license; never edit the Go module cache.
 """
@@ -268,6 +270,18 @@ UDPNAT_FILES = {
 PATCHES.update(UDPNAT_FILES)
 
 
+# A completed CONNECT response can race context cancellation. The callback
+# retains its original handshake socket until its Close has completed; a nil
+# result must not release the caller while that owned teardown is still active.
+CONNECT_FILES = {
+    'protocol/http/client.go': ('287e64743d4d7deafea38ac526c39623e0c2a1a2', (
+        ('\t\thandshakeConn := conn\n\t\tstopContext := context.AfterFunc(ctx, func() {\n\t\t\t_ = handshakeConn.Close()\n\t\t})', '\t\thandshakeConn := conn\n\t\tcontextClosed := make(chan struct{})\n\t\tstopContext := context.AfterFunc(ctx, func() {\n\t\t\tdefer close(contextClosed)\n\t\t\t_ = handshakeConn.Close()\n\t\t})'),
+        ('\t\t\tif !stopContext() {\n\t\t\t\tresult = nil', '\t\t\tif !stopContext() {\n\t\t\t\t// Cancellation keeps the original handshake socket until Close joins.\n\t\t\t\t<-contextClosed\n\t\t\t\tresult = nil'),
+    )),
+}
+PATCHES.update(CONNECT_FILES)
+
+
 def git_blob(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
 
@@ -328,7 +342,7 @@ def verify_tree(directory, allow_packet_only=False):
         if total > MAX_BYTES or len(rows) >= 5000:
             raise ValueError('Prepared sing exceeds source bounds')
         data = path.read_bytes()
-        if allow_packet_only and relative in (BUFFER_FILES | ASSOCIATION_FILES | AUTH_FILES | UDPNAT_FILES) and git_blob(data) == PATCHES[relative][0]:
+        if allow_packet_only and relative in (BUFFER_FILES | ASSOCIATION_FILES | AUTH_FILES | UDPNAT_FILES | CONNECT_FILES) and git_blob(data) == PATCHES[relative][0]:
             # A prior owned copy may predate either complete fix group. Only
             # exact pristine files may be upgraded, and only after every group
             # and the entire module reverse to the original pinned checksum.
@@ -356,7 +370,7 @@ def verify_tree(directory, allow_packet_only=False):
         rows.append((PREFIX + relative, hashlib.sha256(original).hexdigest()))
     if h1(rows) != SUM:
         raise ValueError('Prepared sing differs from its pinned module plus packet synchronization')
-    for group in (BUFFER_FILES, ASSOCIATION_FILES, AUTH_FILES, UDPNAT_FILES):
+    for group in (BUFFER_FILES, ASSOCIATION_FILES, AUTH_FILES, UDPNAT_FILES, CONNECT_FILES):
         changed = pristine_upgrades.intersection(group)
         if changed and changed != set(group):
             raise ValueError('Prepared sing has a partial UDP capacity, association or authentication policy')
@@ -427,7 +441,7 @@ def prepare(vendor):
             extract_verified(Path(info['Zip']), staged)
             staged.rename(target)
     subprocess.run(['go', 'mod', 'edit', '-replace=' + MODULE + '@' + VERSION + '=./' + COPY], cwd=vendor, check=True)
-    print('Prepared checksum-verified sing UDP endpoints, exact SOCKS authentication, payload read/write contracts, joined control ownership and complete ciphertext buffers:', VERSION)
+    print('Prepared checksum-verified sing UDP endpoints, exact SOCKS authentication, payload read/write contracts, joined SOCKS/CONNECT ownership and complete ciphertext buffers:', VERSION)
 
 
 def verify(vendor):

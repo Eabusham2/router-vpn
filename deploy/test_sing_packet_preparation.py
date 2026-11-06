@@ -103,6 +103,109 @@ func TestRouterVPNUDPNATRetiredHandlerCannotDeleteReplacement(t *testing.T){
 '''
 
 
+CONNECT_GO = r'''
+package http
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"io"
+	"net"
+	stdhttp "net/http"
+	"sync"
+	"testing"
+	"testing/synctest"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type routerVPNCONNECTJoinConn struct {
+	net.Conn
+	readReady, allowRead, closeStarted, releaseClose chan struct{}
+	readOnce, closeOnce                              sync.Once
+}
+
+func (c *routerVPNCONNECTJoinConn) Read(b []byte) (int, error) {
+	n, e := c.Conn.Read(b)
+	if n > 0 {
+		c.readOnce.Do(func() { close(c.readReady); <-c.allowRead })
+	}
+	return n, e
+}
+func (c *routerVPNCONNECTJoinConn) Close() error {
+	c.closeOnce.Do(func() { _ = c.Conn.Close(); close(c.closeStarted); <-c.releaseClose })
+	return nil
+}
+
+type routerVPNCONNECTJoinDialer struct{ conn net.Conn }
+
+func (d *routerVPNCONNECTJoinDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return d.conn, nil
+}
+func (*routerVPNCONNECTJoinDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("no UDP")
+}
+
+func TestRouterVPNCONNECTCancellationJoinsResponsePublication(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		original, peer := net.Pipe()
+		defer peer.Close()
+		raw := &routerVPNCONNECTJoinConn{Conn: original, readReady: make(chan struct{}), allowRead: make(chan struct{}), closeStarted: make(chan struct{}), releaseClose: make(chan struct{})}
+		var release sync.Once
+		defer release.Do(func() { close(raw.releaseClose) })
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		client := NewClient(Options{Dialer: &routerVPNCONNECTJoinDialer{conn: raw}, Server: M.ParseSocksaddr("192.0.2.1:443")})
+		response := make(chan error, 1)
+		go func() {
+			c, e := client.DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.2:8388"))
+			if c != nil {
+				e = errors.New("cancelled CONNECT published a stream")
+				_ = c.Close()
+			}
+			response <- e
+		}()
+		peerDone := make(chan error, 1)
+		go func() {
+			_, e := stdhttp.ReadRequest(bufio.NewReader(peer))
+			if e == nil {
+				_, e = io.WriteString(peer, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			}
+			peerDone <- e
+		}()
+		synctest.Wait()
+		select {
+		case <-raw.readReady:
+		default:
+			t.Fatal("actual CONNECT did not read successful response")
+		}
+		cancel()
+		synctest.Wait()
+		select {
+		case <-raw.closeStarted:
+		default:
+			t.Fatal("actual CONNECT did not cancel its original socket")
+		}
+		close(raw.allowRead)
+		synctest.Wait()
+		select {
+		case <-response:
+			t.Fatal("CONNECT returned cancellation before original Close joined")
+		default:
+		}
+		release.Do(func() { close(raw.releaseClose) })
+		synctest.Wait()
+		if e := <-response; !errors.Is(e, context.Canceled) {
+			t.Fatal("cancelled CONNECT lost original context", e)
+		}
+		if e := <-peerDone; e != nil {
+			t.Fatal(e)
+		}
+	})
+}
+'''
+
 class PacketPreparation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -685,6 +788,60 @@ class PacketPreparation(unittest.TestCase):
                 self.assertNotIn('panic: test timed out', result.stdout)
         finally:
             service.write_bytes(fixed)
+            fixture.unlink()
+        PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
+
+    def test_connect_upgrade_preserves_complete_owned_module_and_rejects_foreign_sources(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        name = 'protocol/http/client.go'
+        path = self.target/name
+        fixed = path.read_bytes()
+        preserved = {key: (self.target/key).read_bytes() for key in self.originals if key != name}
+        for fault in ('partial', 'foreign', 'alias', 'pristine'):
+            with self.subTest(fault=fault):
+                path.unlink()
+                data = self.originals[name]
+                if fault == 'partial':
+                    old, new = PATCH.CONNECT_FILES[name][1][0]
+                    data = data.replace(old.encode(), new.encode(), 1)
+                elif fault == 'foreign':
+                    data += b'\n// foreign CONNECT owner\n'
+                path.write_bytes(data)
+                if fault == 'alias':
+                    (self.root/'aliased-connect-owner').hardlink_to(path)
+                before = {key: (self.target/key).read_bytes() for key in self.originals}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'):
+                    if fault == 'pristine':
+                        PATCH.prepare(self.root)
+                        PATCH.prepare(self.root)
+                        self.assertEqual(path.read_bytes(), fixed)
+                        PATCH.verify_tree(self.target)
+                    else:
+                        with self.assertRaises(ValueError): PATCH.prepare(self.root)
+                        self.assertEqual({key: (self.target/key).read_bytes() for key in self.originals}, before)
+                self.assertEqual({key: (self.target/key).read_bytes() for key in preserved}, preserved)
+        self.assert_cache_unchanged()
+
+    def test_actual_connect_cancellation_joins_original_response_socket(self):
+        source = self.target/'protocol/http/client.go'
+        fixed = source.read_bytes()
+        fixture = self.target/'protocol/http/routervpn_connect_join_test.go'
+        fixture.write_text(CONNECT_GO)
+        command = ['go', 'test', '-mod=readonly', '-race', './protocol/http', '-run', '^TestRouterVPNCONNECTCancellationJoinsResponsePublication$', '-count=1', '-timeout=20s']
+        try:
+            result = subprocess.run(command, cwd=self.target, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            source.write_bytes(self.originals['protocol/http/client.go'])
+            result = subprocess.run(command, cwd=self.target, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+            self.assertNotEqual(result.returncode, 0, 'original CONNECT callback returned before joined teardown')
+            self.assertIn('CONNECT returned cancellation before original Close joined', result.stdout)
+            self.assertNotIn('panic: test timed out', result.stdout)
+        finally:
+            source.write_bytes(fixed)
             fixture.unlink()
         PATCH.verify_tree(self.target)
         self.assert_cache_unchanged()
