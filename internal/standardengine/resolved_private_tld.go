@@ -25,12 +25,17 @@ type ResolvedPrivateTLDProof struct {
 }
 
 func NewResolvedPrivateTLDProof(policy ResolvedPolicy, plan *ResolvedDNSSECPlan, kind uint16, candidateSHA256 string) (*ResolvedPrivateTLDProof, error) {
+	return newResolvedPrivateRootProof(policy, plan, kind, candidateSHA256, 2, "private-tld-denial")
+}
+
+// Internal root authority is shared only by separately typed proof purposes.
+func newResolvedPrivateRootProof(policy ResolvedPolicy, plan *ResolvedDNSSECPlan, kind uint16, candidateSHA256 string, depth int, purpose string) (*ResolvedPrivateTLDProof, error) {
 	bad := errors.New("private-TLD proof omitted exact original allow-downgrade root authority")
 	if plan == nil || !plan.MatchesPolicy(policy) || plan.Mode() != "allow-downgrade" || (kind != 1 && kind != 28) || !resolvedDigest(candidateSHA256, 32) {
 		return nil, bad
 	}
 	labels := strings.Split(plan.Name(), ".")
-	if len(labels) != 2 || !ResolvedName(plan.Name(), false) {
+	if len(labels) != depth || !ResolvedName(plan.Name(), false) {
 		return nil, bad
 	}
 	route, err := resolvedDNSSECRoute(policy, plan.Name(), plan.Index())
@@ -79,7 +84,7 @@ func NewResolvedPrivateTLDProof(policy ResolvedPolicy, plan *ResolvedDNSSECPlan,
 	if route.Index != 0 {
 		link = resolvedDNSSECSet(route.NegativeTrustAnchors)
 	}
-	if !rootPositive || len(inputs.TrustAnchors) == 0 || plan.explicitInsecure || resolvedDNSSECNegative(labels[1], global, link, positiveDS) {
+	if !rootPositive || len(inputs.TrustAnchors) == 0 || plan.explicitInsecure || resolvedDNSSECNegative(labels[len(labels)-1], global, link, positiveDS) {
 		return nil, bad
 	}
 
@@ -87,13 +92,13 @@ func NewResolvedPrivateTLDProof(policy ResolvedPolicy, plan *ResolvedDNSSECPlan,
 	if err != nil {
 		return nil, err
 	}
-	p := &ResolvedPrivateTLDProof{policySHA: ResolvedPolicySHA256(raw), planSHA: ResolvedPolicySHA256(plan.Canonical()), name: plan.Name(), tld: labels[1] + ".", candidate: candidateSHA256, index: plan.Index(), kind: kind, selected: *route.CurrentDNS, inputs: inputs}
+	p := &ResolvedPrivateTLDProof{policySHA: ResolvedPolicySHA256(raw), planSHA: ResolvedPolicySHA256(plan.Canonical()), name: plan.Name(), tld: labels[len(labels)-1] + ".", candidate: candidateSHA256, index: plan.Index(), kind: kind, selected: *route.CurrentDNS, inputs: inputs}
 	p.canonical, err = json.Marshal(struct {
 		Purpose, PolicySHA256, PlanSHA256, Name, TLD, CandidateSHA256 string
 		Index                                                         int32
 		Type                                                          uint16
 		Selected                                                      ResolvedDNS
-	}{"private-tld-denial", ResolvedPolicySHA256(raw), p.planSHA, p.name, p.tld, p.candidate, p.index, p.kind, p.selected})
+	}{purpose, ResolvedPolicySHA256(raw), p.planSHA, p.name, p.tld, p.candidate, p.index, p.kind, p.selected})
 	if err != nil {
 		return nil, err
 	}

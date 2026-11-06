@@ -24,22 +24,22 @@ type ResolvedPrivateTLDCandidate struct {
 }
 
 func NewResolvedPrivateTLDCandidate(question, packet []byte) (*ResolvedPrivateTLDCandidate, error) {
-	return newResolvedPrivateTLDCandidate(question, packet, false)
+	return newResolvedPrivateTLDCandidate(question, packet, false, 2)
 }
 
 // NewResolvedPrivateTLDNegativeCandidate preserves the original NXDOMAIN or
 // NODATA exactly. It authorizes no adoption: a separately authenticated TLD
 // denial and all original joined policy checkpoints are still required.
 func NewResolvedPrivateTLDNegativeCandidate(question, packet []byte) (*ResolvedPrivateTLDCandidate, error) {
-	return newResolvedPrivateTLDCandidate(question, packet, true)
+	return newResolvedPrivateTLDCandidate(question, packet, true, 2)
 }
-func newResolvedPrivateTLDCandidate(question, packet []byte, negative bool) (*ResolvedPrivateTLDCandidate, error) {
+func newResolvedPrivateTLDCandidate(question, packet []byte, negative bool, depth int) (*ResolvedPrivateTLDCandidate, error) {
 	bad := errors.New("private-TLD candidate is not an exact unsigned two-label address or negative answer")
 	if err := common.ValidateDNSProbeResponse(question, packet); err != nil {
 		return nil, err
 	}
 	name, end, err := dnsName(question, 12)
-	if err != nil || !validName(name) || len(strings.Split(name, ".")) != 2 {
+	if err != nil || !validName(name) || len(strings.Split(name, ".")) != depth {
 		return nil, bad
 	}
 	kind := binary.BigEndian.Uint16(question[end:])

@@ -849,3 +849,32 @@ AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_private_negative_lin
 
 # Installed negative result observation uses the original authenticated RPC.
 SOURCE.add('cmd/client/linux_standard_service_resolved_negative_namespace_native_test.go')
+
+# Three-label unsigned propagation requires a separate exact DS dependency purpose.
+SOURCE.update({'internal/common/dns_private_dependency.go',
+ 'internal/common/dns_private_dependency_test.go',
+ 'internal/standardengine/resolved_private_ds.go',
+ 'internal/standardengine/resolved_private_ds_test.go',
+ 'internal/systembootstrap/resolved_private_deep_linux.go',
+ 'internal/systembootstrap/resolved_private_deep_linux_test.go'})
+AUXILIARY['resolved-private-ds-wire']=('./internal/common',{
+ 'TestUnsignedDSDependencyWire':('empty','nxdomain','soa','opt','positive','signed',
+ 'alias','dname','referral','malformed-soa','multiple-soa','foreign-class','servfail',
+ 'truncated','wrong-id','edns-error','edns-option','oversize','query-trailing',
+ 'query-answer','query-option')})
+AUXILIARY['resolved-private-ds-authority']=('./internal/standardengine',{
+ 'TestResolvedPrivateDSDependencies':('complete','negative-dependencies','old-api',
+ 'two-label','four-label','foreign-policy','foreign-candidate','missing',
+ 'foreign-reply-authority','reordered','positive','signed','alias','foreign-name',
+ 'foreign-class','servfail','root-bogus','root-insecure','root-nodata','root-alias','changed-plan'),
+ 'TestResolvedPrivateDSOriginalAuthority':('original','unrelated-nta','strict',
+ 'tld-nta','parent-nta','original-nta','parent-ds','original-key','shadowed-island',
+ 'empty-root','changed-server','wrong-type'),
+ 'TestResolvedPrivateDSQuestionPurpose':('host.vpn.example.-43','vpn.example.-43',
+ 'example.-43','.-43','host.vpn.example.-48','host.vpn.example.-1','other.vpn.example.-43','vpn.example.-5')})
+AUXILIARY['resolved-private-deep-candidate']=('./internal/systembootstrap',{
+ 'TestResolvedPrivateDeepCandidate':('address','ipv6','nxdomain','nodata','two-label',
+ 'four-label','signed','alias','foreign-class')})
+AUXILIARY_TESTS.update({'internal/common/dns_private_dependency_test.go':'resolved-private-ds-wire',
+ 'internal/standardengine/resolved_private_ds_test.go':'resolved-private-ds-authority',
+ 'internal/systembootstrap/resolved_private_deep_linux_test.go':'resolved-private-deep-candidate'})
