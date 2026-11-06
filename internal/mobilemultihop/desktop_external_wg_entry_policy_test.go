@@ -190,13 +190,18 @@ func TestDesktopExternalDarwinWireGuardEntryPreservesOtherGraphBoundaries(t *tes
 	for _, entry := range []string{"router-wg", "shadowsocks", "socks5", "hysteria2", "http-connect", "https-connect"} {
 		final := "shadowsocks"
 		if entry == "shadowsocks" {
-			// Only the separate captured SS2022 -> SS2022 unit is admitted.
+			// This separately owned SS2022 composition now has its own native gate.
 			final = "hysteria2"
 		}
 		graph, capture := externalTestFixture(t, final, entry)
 		capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 		original := externalDesktopCompile(t, graph, capture)
-		if plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "darwin"); err == nil || plan != nil {
+		plan, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "darwin")
+		if entry == "shadowsocks" {
+			if err != nil || plan.Metadata().RootTag != "external-entry" || plan.Metadata().RootType != "shadowsocks" || plan.OriginalPolicy() != original {
+				t.Fatal("SS HY2 lost its separate original authority", err)
+			}
+		} else if err == nil || plan != nil {
 			t.Fatal("unimplemented first root admitted", entry)
 		}
 	}

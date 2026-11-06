@@ -70,7 +70,7 @@ var linuxHostTUNExternalCases = append(append(append(append(append(append([]stri
 	"external-socks-on-connect", "external-socks-always", "external-socks-public", "external-socks-cancelled",
 	"external-socks-wrong-auth", "external-socks-auth-downgrade", "external-socks-relay-domain", "external-socks-control-eof",
 	"external-socks-dns-failure", "external-socks-replacement", "external-socks-source",
-}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...), linuxHostTUNExternalSSEntryCases...), linuxHostTUNExternalSSCONNECTCases...)
+}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...), linuxHostTUNExternalSSEntryCases...), append(linuxHostTUNExternalSSCONNECTCases, linuxHostTUNExternalSSHysteriaCases...)...)
 
 func linuxHostTUNExternalCase(scenario string) bool {
 	for _, candidate := range linuxHostTUNExternalCases {
@@ -84,6 +84,9 @@ func linuxHostTUNExternalCase(scenario string) bool {
 func linuxHostTUNExternalProtocol(scenario string) string {
 	if !linuxHostTUNExternalCase(scenario) {
 		return ""
+	}
+	if linuxHostTUNExternalSSHysteria(scenario) {
+		return "hysteria2"
 	}
 	if linuxHostTUNExternalSSCONNECT(scenario) {
 		return linuxHostTUNSSCONNECTProtocol(scenario)
@@ -445,7 +448,7 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	if linuxHostTUNExternalAction(scenario) == "wrong-proxy-trust" {
 		request["https_fault"] = "untrusted-ca"
 	}
-	if linuxHostTUNExternalWGHysteria(scenario) && linuxHostTUNExternalAction(scenario) == "wrong-ca" {
+	if (linuxHostTUNExternalWGHysteria(scenario) || linuxHostTUNExternalSSHysteria(scenario)) && linuxHostTUNExternalAction(scenario) == "wrong-ca" {
 		request["hysteria_fault"] = "untrusted-ca"
 	}
 	if peer.entry != nil {
@@ -669,22 +672,23 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 }
 
 type linuxExternalTUNResult struct {
-	ProtectionOff     bool                              `json:"protection_off,omitempty"`
-	Stage             string                            `json:"stage"`
-	Scenario          string                            `json:"scenario"`
-	OriginalSession   string                            `json:"original_session"`
-	ExternalSession   string                            `json:"external_session,omitempty"`
-	FinalSession      string                            `json:"final_session,omitempty"`
-	Protocol          string                            `json:"protocol"`
-	MTU               int                               `json:"mtu"`
-	Proof             *desktopExternalProof             `json:"proof,omitempty"`
-	Restore           *linuxHostTUNRestoreResult        `json:"restore,omitempty"`
-	SourcePreserved   bool                              `json:"source_preserved,omitempty"`
-	ReplacementKept   bool                              `json:"replacement_kept,omitempty"`
-	PublicPersisted   bool                              `json:"public_persisted,omitempty"`
-	FailedProof       bool                              `json:"failed_proof,omitempty"`
-	Journal           *linuxprotection.JournalSelection `json:"journal,omitempty"`
-	ClosedTableSHA256 string                            `json:"closed_table_sha256,omitempty"`
+	ProtectionOff      bool                              `json:"protection_off,omitempty"`
+	Stage              string                            `json:"stage"`
+	Scenario           string                            `json:"scenario"`
+	OriginalSession    string                            `json:"original_session"`
+	ExternalSession    string                            `json:"external_session,omitempty"`
+	FinalSession       string                            `json:"final_session,omitempty"`
+	Protocol           string                            `json:"protocol"`
+	MTU                int                               `json:"mtu"`
+	Proof              *desktopExternalProof             `json:"proof,omitempty"`
+	Restore            *linuxHostTUNRestoreResult        `json:"restore,omitempty"`
+	SourcePreserved    bool                              `json:"source_preserved,omitempty"`
+	ReplacementKept    bool                              `json:"replacement_kept,omitempty"`
+	PublicPersisted    bool                              `json:"public_persisted,omitempty"`
+	CertificateFailure string                            `json:"certificate_failure,omitempty"`
+	FailedProof        bool                              `json:"failed_proof,omitempty"`
+	Journal            *linuxprotection.JournalSelection `json:"journal,omitempty"`
+	ClosedTableSHA256  string                            `json:"closed_table_sha256,omitempty"`
 }
 
 func linuxHostTUNReadExternal(t *testing.T, process *linuxHostTUNController, scenario, stage string) linuxExternalTUNResult {
@@ -755,6 +759,14 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	} else if action == "source" || action == "entry-source" {
 		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
 			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
+		}
+	} else if linuxHostTUNExternalSSHysteria(scenario) && (action == "wrong-trust" || action == "wrong-ca") {
+		expected := "hostname"
+		if action == "wrong-ca" {
+			expected = "authority"
+		}
+		if !middle.FailedProof || middle.Proof != nil || middle.CertificateFailure != expected || observed.PhysicalUDP == 0 || observed.Streams != 0 || observed.Packets != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 || observed.ShadowsocksEntry == nil || observed.ShadowsocksEntry.PublicReplies == 0 {
+			t.Fatal("SS HY2 final trust bypassed original verifier/entry", middle, observed)
 		}
 	} else if linuxHostTUNSSEntryFailure(t, peer, action, middle, observed) {
 		// The independent entry/final helper proved the exact failed authentication boundary.
@@ -906,7 +918,9 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		t.Fatal("retired external proof was adopted after cancellation", end)
 	}
 	if peer.ssEntry != nil {
-		if linuxHostTUNExternalSSCONNECT(scenario) {
+		if linuxHostTUNExternalSSHysteria(scenario) {
+			t.Log("verified installed host independent SS2022 entry and Hysteria2 final:", scenario)
+		} else if linuxHostTUNExternalSSCONNECT(scenario) {
 			t.Log("verified installed host independent SS2022 entry and CONNECT final:", scenario)
 		} else {
 			t.Log("verified installed host independent SS2022 entry and SS2022 final:", scenario)

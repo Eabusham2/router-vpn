@@ -168,7 +168,7 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 	}
 	root := capture.PhysicalRoots[0]
 	result.Layer, result.OuterTag, result.OuterType = capture.StartLayer, root.Tag, root.Type
-	if capture.EntryID != "" && root.Type == "shadowsocks" && capture.Protocol == "shadowsocks" {
+	if capture.EntryID != "" && root.Type == "shadowsocks" && (capture.Protocol == "shadowsocks" || capture.Protocol == "hysteria2") {
 		if len(root.Destinations) != 2 {
 			return result, errors.New("SS entry lost exact TCP/UDP physical tuples")
 		}
@@ -307,7 +307,7 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
 	for _, protocol := range append(append(append(append([]string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
 		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
-		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), append(append(macOSExternalHysteriaLayerEntryCases, macOSExternalWireGuardFinalCases...), append(append(macOSExternalAmneziaFinalCases, macOSExternalOpenVPNFinalCases...), append(macOSExternalSSEntryCases, macOSExternalSSCONNECTCases...)...)...)...) {
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), append(append(macOSExternalHysteriaLayerEntryCases, macOSExternalWireGuardFinalCases...), append(append(macOSExternalAmneziaFinalCases, macOSExternalOpenVPNFinalCases...), append(append(macOSExternalSSEntryCases, macOSExternalSSCONNECTCases...), macOSExternalSSHysteriaCases...)...)...)...) {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
@@ -386,6 +386,8 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		if peer.ssEntry {
 			if protocol == "shadowsocks" {
 				macOSExternalNativeSSEntryRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+			} else if protocol == "hysteria2" {
+				macOSExternalNativeSSHysteriaRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
 			} else {
 				macOSExternalNativeSSCONNECTRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
 			}
@@ -411,7 +413,7 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 			t.Fatal("rejected layer controller did not join original cleanup", receipt.ExitCode)
 		}
 		if peer.ssEntry {
-			if protocol == "shadowsocks" {
+			if protocol == "shadowsocks" || protocol == "hysteria2" {
 				t.Logf("actual sealed Darwin SS entry refused %s: original encrypted entry reached, expected entry or final boundary rejected, original TCP UDP PF and utun retired, controller joined", scenario)
 			} else {
 				t.Logf("actual sealed Darwin SS CONNECT entry refused %s: original encrypted entry reached, expected entry or final boundary rejected, original TCP PF and utun retired, controller joined", scenario)
@@ -464,6 +466,8 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	if peer.ssEntry {
 		if protocol == "shadowsocks" {
 			macOSExternalNativeSSEntryProved(t, peer, live, observed)
+		} else if protocol == "hysteria2" {
+			macOSExternalNativeSSHysteriaProved(t, peer, live, observed)
 		} else {
 			macOSExternalNativeSSCONNECTProved(t, peer, live, observed)
 		}

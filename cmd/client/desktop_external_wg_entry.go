@@ -111,7 +111,7 @@ func desktopExternalPathProfileID(launch *desktopNodeLaunch) string {
 // Linux retains this bounded ordinary pair through its original Node session.
 // The final peer never becomes a physical root or a replacement entry owner.
 func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
-	// A retained SS2022 entry carries only SS2022 or HTTP(S) CONNECT finals.
+	// A retained SS2022 entry carries SS2022, HTTP(S) CONNECT or plain HY2 finals.
 	// The original graph determines TCP-only CONNECT and its final-routed DNS.
 	if desktopExternalSSEntryOwner(owner) {
 		return true

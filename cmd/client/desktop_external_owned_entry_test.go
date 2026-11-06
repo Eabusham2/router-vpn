@@ -422,7 +422,7 @@ func mutateWindowsSSFinal(p *common.RouterProfile, field string) {
 }
 func TestDesktopWindowsExternalSSEntryHysteriaPlatformBoundary(t *testing.T) {
 	p, e, launch := desktopWindowsSSFinalFixture(t, "always", desktopSSEntryMethods[1], "hysteria2")
-	if !desktopWindowsExternalGraphEligible(p, e, false, "") || desktopExternalSSEntryOwner(launch.external) || desktopExternalRetainedEntryForOS(launch.external, "linux") || desktopExternalRetainedEntryForOS(launch.external, "darwin") {
+	if !desktopWindowsExternalGraphEligible(p, e, false, "") || !desktopExternalSSEntryOwner(launch.external) || !desktopExternalRetainedEntryForOS(launch.external, "linux") || !desktopExternalRetainedEntryForOS(launch.external, "darwin") {
 		t.Fatal("SS HY2 changed platform scope")
 	}
 	if err := prepareDesktopExternalPhysicalCaptured(launch, "windows"); err != nil {
@@ -437,8 +437,8 @@ func TestDesktopWindowsExternalSSEntryHysteriaPlatformBoundary(t *testing.T) {
 	}
 	for _, target := range []string{"linux", "darwin"} {
 		_, _, fresh := desktopWindowsSSFinalFixture(t, "always", desktopSSEntryMethods[1], "hysteria2")
-		if err := prepareDesktopExternalPhysicalCaptured(fresh, target); err != nil || fresh.external.physical != nil {
-			t.Fatal("unproved platform admitted", target)
+		if err := prepareDesktopExternalPhysicalCaptured(fresh, target); err != nil || fresh.external.physical == nil {
+			t.Fatal("SS HY2 lost captured platform owner", target)
 		}
 	}
 }

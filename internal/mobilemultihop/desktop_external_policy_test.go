@@ -412,12 +412,8 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 			if protocol == "hysteria2" && entry == "shadowsocks" {
 				for _, target := range []string{"linux", "darwin", "windows"} {
 					plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
-					if target == "windows" {
-						if err != nil || plan.Metadata().RootTag != "external-entry" || plan.OriginalPolicy() != original {
-							t.Fatal("lost Windows SS HY2 authority", err)
-						}
-					} else if err == nil {
-						t.Fatal("SS HY2 escaped Windows scope", target)
+					if err != nil || plan.Metadata().RootTag != "external-entry" || plan.OriginalPolicy() != original {
+						t.Fatal("lost SS HY2 original authority", target, err)
 					}
 				}
 			} else {
@@ -693,12 +689,7 @@ func TestDesktopExternalWindowsSSEntryHysteriaScope(t *testing.T) {
 		original := externalDesktopCompile(t, graph, selection)
 		for _, target := range []string{"windows", "linux", "darwin"} {
 			policy, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
-			if target != "windows" {
-				if err == nil {
-					t.Fatal("unproved platform acquired SS HY2", target)
-				}
-				continue
-			}
+
 			if err != nil || policy.Metadata().RootTag != "external-entry" || policy.Metadata().RootType != "shadowsocks" || policy.Metadata().Protocol != "hysteria2" || policy.OriginalPolicy() != original {
 				t.Fatal("lost independent SS carrier and HY2 final", err)
 			}

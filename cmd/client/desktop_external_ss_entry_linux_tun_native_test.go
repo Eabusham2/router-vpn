@@ -44,7 +44,7 @@ func linuxHostTUNExternalSSEntryCase(scenario string) bool {
 	return false
 }
 func linuxHostTUNExternalAnyEntry(scenario string) bool {
-	return linuxHostTUNExternalWGEntry(scenario) || linuxHostTUNExternalSSEntryCase(scenario) || linuxHostTUNExternalSSCONNECT(scenario)
+	return linuxHostTUNExternalWGEntry(scenario) || linuxHostTUNExternalSSEntryCase(scenario) || linuxHostTUNExternalSSCONNECT(scenario) || linuxHostTUNExternalSSHysteria(scenario)
 }
 
 type linuxExternalTUNSSEntryReceipt struct {
@@ -89,6 +89,10 @@ func linuxHostTUNSSKey(t *testing.T, method string) string {
 }
 func linuxHostTUNPrepareSSEntryPeer(t *testing.T, peer *linuxExternalTUNPeer, scenario string) {
 	t.Helper()
+	if linuxHostTUNExternalSSHysteria(scenario) {
+		linuxHostTUNPrepareSSHysteriaPeer(t, peer, scenario)
+		return
+	}
 	if linuxHostTUNExternalSSCONNECT(scenario) {
 		linuxHostTUNPrepareSSCONNECTPeer(t, peer, scenario)
 		return
@@ -140,6 +144,8 @@ func linuxHostTUNInstallSSEntry(t *testing.T, peer *linuxExternalTUNPeer, scenar
 		if action == "wrong-final-method" {
 			profile.External.Shadowsocks.Method = "2022-blake3-chacha20-poly1305"
 		}
+	} else if peer.protocol == "hysteria2" {
+		profile.DNSProtocol = "udp"
 	} else {
 		profile.DNSProtocol = "tcp"
 	}
@@ -222,6 +228,9 @@ func linuxHostTUNSSEntryObserved(t *testing.T, peer *linuxExternalTUNPeer, actio
 	}
 }
 func linuxHostTUNExternalSSAuthority(native *desktopNodeLaunch) error {
+	if native != nil && native.external != nil && native.external.profile.External != nil && native.external.profile.External.Protocol == "hysteria2" {
+		return linuxHostTUNExternalSSHysteriaAuthority(native)
+	}
 	if native != nil && native.external != nil && native.external.profile.External != nil && (native.external.profile.External.Protocol == "http-connect" || native.external.profile.External.Protocol == "https-connect") {
 		return linuxHostTUNExternalSSCONNECTAuthority(native)
 	}

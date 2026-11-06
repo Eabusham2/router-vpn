@@ -173,6 +173,15 @@ SS_CONNECT_AUTHORITY_CASES = (SS_CONNECT_AUTHORITY_ROOT, *(SS_CONNECT_AUTHORITY_
 def check_ss_connect_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_CONNECT_AUTHORITY_CASES, 'installed SS CONNECT entry authority')
 
+EXTERNAL_SS_HYSTERIA_CASES = ('external-ss128hy2-on-connect', 'external-ss256hy2-on-connect', 'external-sschachahy2-on-connect', 'external-ss256hy2-always', 'external-ss256hy2-always-off', 'external-ss256hy2-public', 'external-ss256hy2-cancelled', 'external-ss256hy2-source', 'external-ss256hy2-entry-source', 'external-ss256hy2-replacement', 'external-ss256hy2-wrong-entry-public', 'external-ss256hy2-wrong-entry-key', 'external-ss256hy2-wrong-entry-method', 'external-ss256hy2-wrong-key', 'external-ss256hy2-wrong-ca', 'external-ss256hy2-wrong-trust', 'external-ss256hy2-dns-failure')
+EXTERNAL_CASES += EXTERNAL_SS_HYSTERIA_CASES
+CASES += EXTERNAL_SS_HYSTERIA_CASES
+SS_HYSTERIA_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSSHysteriaFixtureKeepsCompiledAuthority'
+SS_HYSTERIA_AUTHORITY_CASES = (SS_HYSTERIA_AUTHORITY_ROOT, *(SS_HYSTERIA_AUTHORITY_ROOT + '/' + method + '/hysteria2'
+    for method in ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305')))
+def check_ss_hysteria_authority_verdict(output):
+    NODE.require_native_verdicts(output, SS_HYSTERIA_AUTHORITY_CASES, 'installed SS HY2 entry authority')
+
 SS_ENTRY_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSSEntryFixtureKeepsCompiledAuthority'
 SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT + '/' + entry + '-' + final
     for entry in ('128', '256', 'chacha') for final in ('128', '256', 'chacha')))
@@ -348,11 +357,14 @@ def check_verdict(output, case=None):
     layered_entry_receipts = []
     ss_entry_receipts = []
     ss_connect_receipts = []
+    ss_hysteria_receipts = []
     layered_entry_passes = re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"(external-wghy2(?:aes|xor)-[a-z-]+) \([0-9.]+s\)$", output)
     for line in output.replace('\r\n', '\n').split('\n')[:-1]:
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('independent SS2022 entry and Hysteria2 final: '):
+                ss_hysteria_receipts.append(suffix.removeprefix('independent SS2022 entry and Hysteria2 final: '))
             if suffix.startswith('independent SS2022 entry and CONNECT final: '):
                 ss_connect_receipts.append(suffix.removeprefix('independent SS2022 entry and CONNECT final: '))
             if suffix.startswith('independent SS2022 entry and SS2022 final: '):
@@ -372,6 +384,10 @@ def check_verdict(output, case=None):
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if ss_entry_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed SS2022 graph omitted or duplicated original native completion: ' + value)
+        if value in EXTERNAL_SS_HYSTERIA_CASES:
+            verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
+            if ss_hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
+                raise ValueError('Installed SS HY2 graph omitted or duplicated original native completion: ' + value)
         if value in EXTERNAL_SS_CONNECT_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if ss_connect_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
@@ -595,6 +611,20 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             raise ValueError('Installed SS CONNECT cipher reference failed:\n' + ss_connect_reference_output[-16384:])
         NODE.require_native_verdicts(ss_connect_reference_output, NODE.SS_CONNECT_REFERENCE_SUITE[3], 'installed SS CONNECT reference')
         print(ss_connect_reference_output, end='' if ss_connect_reference_output.endswith('\n') else '\n')
+        status, ss_hysteria_authority_output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
+                                             '-test.run=^' + SS_HYSTERIA_AUTHORITY_ROOT + '$'],
+                                            cwd=ROOT, env=captured, timeout=40)
+        if status:
+            raise ValueError('Installed SS HY2 authority witness failed:\n' + ss_hysteria_authority_output[-16384:])
+        check_ss_hysteria_authority_verdict(ss_hysteria_authority_output)
+        print(ss_hysteria_authority_output, end='' if ss_hysteria_authority_output.endswith('\n') else '\n')
+        status, ss_hysteria_reference_output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
+                                             '-test.run=' + NODE.SS_HYSTERIA_REFERENCE_SUITE[2]],
+                                            cwd=source, env=captured, timeout=100)
+        if status:
+            raise ValueError('Installed SS HY2 cipher reference failed:\n' + ss_hysteria_reference_output[-16384:])
+        NODE.require_native_verdicts(ss_hysteria_reference_output, NODE.SS_HYSTERIA_REFERENCE_SUITE[3], 'installed SS HY2 reference')
+        print(ss_hysteria_reference_output, end='' if ss_hysteria_reference_output.endswith('\n') else '\n')
         status, layer_output = NODE.run([str(peer), '-test.v', '-test.timeout=30s',
                                         '-test.run=^TestRouterVPNDesktopExternalInstalledLayerCarrier$'],
                                        cwd=source, env=captured, timeout=40)
@@ -643,6 +673,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'native_bundle': payloads,
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
                                 (('installed-controller-test', binary), ('independent-wg-awg2-ss2022-and-hysteria2-peers', peer), ('shipping-whitening-relay', whitening))},
+                  'ss_hysteria_authority_cases': list(SS_HYSTERIA_AUTHORITY_CASES), 'ss_hysteria_authority_output_sha256': hashlib.sha256(ss_hysteria_authority_output.encode()).hexdigest(),
+                  'ss_hysteria_reference_cases': list(NODE.SS_HYSTERIA_REFERENCE_SUITE[3]), 'ss_hysteria_reference_output_sha256': hashlib.sha256(ss_hysteria_reference_output.encode()).hexdigest(),
                   'ss_connect_authority_cases': list(SS_CONNECT_AUTHORITY_CASES), 'ss_connect_authority_output_sha256': hashlib.sha256(ss_connect_authority_output.encode()).hexdigest(),
                   'ss_connect_reference_cases': list(NODE.SS_CONNECT_REFERENCE_SUITE[3]), 'ss_connect_reference_output_sha256': hashlib.sha256(ss_connect_reference_output.encode()).hexdigest(),
                   'ss_entry_authority_cases': list(SS_ENTRY_AUTHORITY_CASES), 'ss_entry_authority_output_sha256': hashlib.sha256(ss_entry_authority_output.encode()).hexdigest(),

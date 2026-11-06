@@ -604,6 +604,24 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 			if startErr == nil || external.activation != nil || external.externalProof != nil {
 				return last, errors.New("failed external authentication, TLS or selected DNS reported a connected proof")
 			}
+			if linuxHostTUNExternalSSHysteria(result.Scenario) {
+				action := linuxHostTUNExternalAction(result.Scenario)
+				if action == "wrong-trust" || action == "wrong-ca" {
+					text := startErr.Error()
+					if !strings.Contains(text, "tls: failed to verify certificate") {
+						return last, errors.New("SS HY2 refusal lacked original certificate verifier")
+					}
+					if action == "wrong-trust" && strings.Contains(text, "not different-captured-external.example") {
+						result.CertificateFailure = "hostname"
+					}
+					if action == "wrong-ca" && strings.Contains(text, "x509: certificate signed by unknown authority") {
+						result.CertificateFailure = "authority"
+					}
+					if result.CertificateFailure == "" {
+						return last, errors.New("SS HY2 refusal changed its exact certificate cause")
+					}
+				}
+			}
 			result.Stage, result.FailedProof = "proof-refused", true
 		} else {
 			if startErr != nil {

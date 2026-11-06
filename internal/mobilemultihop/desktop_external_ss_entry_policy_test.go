@@ -118,7 +118,7 @@ func TestDesktopExternalDarwinSSEntryRejectsUncapturedGraphAndMethods(t *testing
 			case "final-layer":
 				capture["profile"].(map[string]any)["start_layer"] = "aes-256-gcm"
 			case "final-family":
-				graph, capture = externalTestFixture(t, "hysteria2", "shadowsocks")
+				graph, capture = externalTestFixture(t, "socks5", "shadowsocks")
 				capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
 			case "foreign-root":
 				externalTestFind(t, graph, "external-entry")["server"] = "192.0.2.88"

@@ -44,13 +44,10 @@ func (owner *desktopWindowsExternalRuntime) sourcesCurrentLocked(profile common.
 	return validateDesktopRetainedExternalSourcesLocked(profile, entry, owner.launch)
 }
 
-// Windows alone admits the independently captured SS2022 UDP carrier for an
-// ordinary HY2 final. Other platforms retain their existing narrower predicates.
+// Windows retains the same bounded ordinary SS2022 final family after the
+// platform's own physical policy and native host have been selected.
 func desktopWindowsExternalSSEntryFinalProfile(profile common.RouterProfile) bool {
-	if desktopExternalSSEntryFinalProfile(profile) {
-		return true
-	}
-	return profile.NodeKind == "external" && profile.External != nil && profile.External.Protocol == "hysteria2" && profile.External.Hysteria2 != nil && (profile.StartLayer == "" || profile.StartLayer == common.StartLayerOff) && profile.External.StartLayer == nil
+	return desktopExternalSSEntryFinalProfile(profile)
 }
 func desktopWindowsExternalSSEntryOwner(owner *desktopExternalRuntime) bool {
 	return desktopExternalSSEntryOwnerWithFinal(owner, desktopWindowsExternalSSEntryFinalProfile)

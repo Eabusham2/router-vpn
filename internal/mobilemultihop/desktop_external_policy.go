@@ -59,8 +59,8 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
 // Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer), SOCKS5, WireGuard or AmneziaWG graph.
 // Linux admits bounded Local WireGuard entry -> SS2022, HTTP(S) CONNECT or Hysteria2 finals, including the captured HY2 exit AES/XOR layer.
-// Linux and Windows also retain an ordinary SS2022 entry -> SS2022 or TCP-only HTTP(S) CONNECT final with both layers Off.
-// Darwin also admits an ordinary Local SS2022 entry -> SS2022 or HTTP(S) CONNECT final without layers.
+// Linux, Windows and Darwin retain an ordinary SS2022 entry -> SS2022,
+// TCP-only HTTP(S) CONNECT or HY2 final with both layers Off.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -83,7 +83,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			final, _ := original.capture.Profile["external"].(map[string]any)
 			supportedFinal := capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2"
 			supportedSSPair := entryKind == "shadowsocks" && capture.StartLayer == "" &&
-				(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect")
+				(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
 			if !supportedSSPair && (entryKind != "wireguard" || !supportedFinal) {
 				entryKind = ""
 			}
@@ -377,7 +377,7 @@ func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopC
 	case "shadowsocks":
 		final, ok := original.capture.Profile["external"].(map[string]any)
 		if capture.StartLayer == "" && ok && desktopExternalSS2022Import(external) &&
-			(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || targetOS == "windows" && capture.Protocol == "hysteria2") {
+			(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2") {
 			return "shadowsocks"
 		}
 	}

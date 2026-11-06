@@ -39,5 +39,9 @@ func desktopExternalSSEntryFinalProfile(profile common.RouterProfile) bool {
 	if profile.NodeKind != "external" || profile.External == nil || profile.StartLayer != "" && profile.StartLayer != common.StartLayerOff || profile.External.StartLayer != nil {
 		return false
 	}
+	if profile.External.Protocol == "hysteria2" {
+		h := profile.External.Hysteria2
+		return h != nil && h.Server != "" && h.Port > 0 && h.Password != ""
+	}
 	return profile.External.Protocol == "http-connect" && profile.External.HTTPConnect != nil || profile.External.Protocol == "https-connect" && profile.External.HTTPSConnect != nil
 }

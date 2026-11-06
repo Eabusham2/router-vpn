@@ -214,6 +214,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if method, _, _, found := macOSExternalSSCONNECTScenario(scenario); found {
 		p.ssEntryMethod, p.ssEntry = method, true
 	}
+	if method, _, _, found := macOSExternalSSHysteriaScenario(scenario); found {
+		p.ssEntryMethod, p.ssEntry = method, true
+	}
 	if p.ssEntry {
 		p.entryProtocol = "shadowsocks"
 	}
@@ -350,6 +353,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if p.ssEntry {
 		request["shadowsocks_method"] = p.ssFinalMethod
 		request["shadowsocks_entry"] = map[string]any{"method": p.ssEntryMethod, "password": p.ssEntryPassword}
+	}
+	if p.ssEntry && protocol == "hysteria2" && fault == "wrong-final-trust" {
+		request["hysteria_fault"] = "untrusted-ca"
 	}
 	if protocol == "openvpn" {
 		request["password"], request["openvpn_network"], request["openvpn_fallback"] = "", p.openvpnNetwork, p.openvpnFallback
@@ -545,6 +551,8 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 	if p.ssEntry {
 		if p.protocol == "shadowsocks" {
 			entry = macOSExternalNativeSSEntryProfile(t, p, &profile)
+		} else if p.protocol == "hysteria2" {
+			entry = macOSExternalNativeSSHysteriaProfile(t, p, &profile)
 		} else {
 			entry = macOSExternalNativeSSCONNECTProfile(t, p, &profile)
 		}
@@ -715,6 +723,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 }
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
+	if _, protocol, fault, found := macOSExternalSSHysteriaScenario(scenario); found {
+		return protocol, "", fault
+	}
 	if _, protocol, fault, found := macOSExternalSSCONNECTScenario(scenario); found {
 		return protocol, "", fault
 	}
