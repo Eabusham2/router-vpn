@@ -91,6 +91,8 @@ func main(){
  case "base-start":
   var inputs struct{Config string;Source string};err=json.Unmarshal([]byte(r.Config),&inputs)
   if err==nil{value,err=mobilemultihop.ComposeNativeBaseStartLayer(inputs.Config,inputs.Source,r.Policy)}
+ case "ss-resolved-source":err=mobilemultihop.ValidateResolvedSSSource(r.Config,r.Policy);if err==nil{value="true"}
+ case "ss-service":err=mobilemultihop.ValidateCapturedSSService(r.Config,r.Policy);if err==nil{value="true"}
  case "proxy-entry":value,err=mobilemultihop.CompileProxyEntry(r.Config,r.Policy)
  case "mtu-profile":value,err=mobilemultihop.MultihopMTUProfile(r.Config,r.Policy)
  case "mtu":value,err=mobilemultihop.ApplyMTUPolicy(r.Config,r.Policy)
@@ -198,6 +200,9 @@ public final class Libbox {
  public static String routerComposeNativeBaseStartLayer(String c,String source,String policy)throws Exception {
   return call("base-start",new JSONObject().put("Config",c).put("Source",source).toString(),policy);
  }
+ public static boolean routerValidateResolvedSSSource(String source,String resolved)throws Exception {return "true".equals(call("ss-resolved-source",source,resolved));}
+ public static boolean rejectSSService;
+ public static boolean routerValidateSSService(String source,String node)throws Exception {return !rejectSSService && "true".equals(call("ss-service",source,node));}
  public static Runnable afterProxyEntryCompilation;
  public static String routerCompileProxyEntry(String c,String p)throws Exception{
   String result=call("proxy-entry",c,p);if(afterProxyEntryCompilation!=null)afterProxyEntryCompilation.run();return result;
@@ -218,8 +223,9 @@ public final class Libbox {
   xrayResolutions++;String result=xray("xray-resolve",mode,wrapper,raw,"","");if(afterXrayResolution!=null)afterXrayResolution.run();return result;
  }
  public static String routerComposeXrayStartLayer(String mode,String wrapper,String raw,String aes,String policy)throws Exception{return xray("xray-start",mode,wrapper,raw,aes,policy);}
+ public static java.util.function.UnaryOperator<String> ssResolvedMutation;
  public static String routerResolveXrayStartLayerProfile(String mode,String wrapper,String raw,String aes,String policy)throws Exception{
-  xrayResolutions++;String result=xray("xray-start-resolve",mode,wrapper,raw,aes,policy);if(afterXrayResolution!=null)afterXrayResolution.run();return result;
+  xrayResolutions++;String result=xray("xray-start-resolve",mode,wrapper,raw,aes,policy);if(afterXrayResolution!=null)afterXrayResolution.run();return ssResolvedMutation==null?result:ssResolvedMutation.apply(result);
  }
  public static String routerApplyNativeXrayDevicePolicy(String config,String profile)throws Exception{return call("xray-policy",config,profile);}
  public static String routerCompileSIP003Profile(String a,String b)throws Exception{return call("sip-compile",a,b);}

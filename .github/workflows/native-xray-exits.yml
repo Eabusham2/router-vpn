@@ -75,7 +75,10 @@ jobs:
       - name: Execute actual Android exit consumers
         env:
           ROUTERVPN_ANDROID_XRAY_EXIT_FIXTURES: ${{ runner.temp }}/native-xray-exits
-        run: python3 android/test_android_xray_exits.py
+        run: |
+          python3 android/test_android_xray_exits.py
+          python3 android/test_android_ss_service_asset.py
+          go test -race -count=1 ./internal/mobilemultihop -run 'Test(CapturedSSServicePassiveAuthority|ResolvedSSSourceRetainsOriginalProjection)$'
       - uses: actions/download-artifact@v4
         with:
           name: apple-native-xray-exit-graphs

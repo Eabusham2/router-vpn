@@ -13,6 +13,7 @@ final class AndroidXrayLibboxPolicy {
     private static final int LIMIT = 4 * 1024 * 1024;
 
     static String check(JSONObject bundle, JSONObject profile, String mode) throws Exception {
+        AndroidStartLayer.validateSSService(bundle);
         verifyAssets(profile);
         String raw = AndroidStartLayer.exactNativeAsset(profile, "xray.json");
         String wrapper = profile.has("sing-box.json")
@@ -91,11 +92,17 @@ final class AndroidXrayLibboxPolicy {
         String compiled = AndroidStartLayer.exactNativeAsset(files, "sing-box.json");
         String resolved = AndroidStartLayer.exactNativeAsset(files, "xray.json");
         String aes = files.has("start-layer-source.json") ? AndroidStartLayer.exactNativeAsset(files, "start-layer-source.json") : null;
+        if (aes != null && !Libbox.routerValidateResolvedSSSource(
+                AndroidStartLayer.exactNativeAsset(bundle.getJSONObject("profiles").getJSONObject("shadowsocks"), "sing-box.json"), aes)) {
+            throw new IllegalStateException("Resolved AES projection changed the original source.");
+        }
         bounded(Libbox.routerCompileXrayProfile(mode, compiled, resolved));
         if (Thread.currentThread().isInterrupted()) throw new InterruptedException("Native Xray preparation was cancelled.");
         profile.put("sing-box.json", files.getString("sing-box.json"));
         profile.put("xray.json", files.getString("xray.json"));
-        if (aes != null) bundle.getJSONObject("profiles").getJSONObject("shadowsocks").put("sing-box.json", files.getString("start-layer-source.json"));
+        // The original AES source and service claim remain immutable. This
+        // resolved projection is owned only by this captured Xray candidate.
+        if (aes != null) profile.put("start-layer-source.json", files.getString("start-layer-source.json"));
         return compiled;
     }
 

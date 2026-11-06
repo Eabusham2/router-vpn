@@ -197,7 +197,10 @@ final class NativeSingBoxController {
                 for (int i = 0; i < names.length(); i++) {
                     String name = names.getString(i);
                     if (AndroidMAXProfilePreparation.SESSION_FILE.equals(name)) throw new IllegalStateException("Imported profile uses reserved MAX ownership metadata.");
-                    if (AndroidStartLayer.nativeXray(modeId) && "xray.json".equals(name)) continue;
+                    if (AndroidStartLayer.nativeXray(modeId) && ("xray.json".equals(name) || "start-layer-source.json".equals(name))) continue;
+                    // Already verified against the original bundle. It is not
+                    // authority for the separately rewritten runtime graph.
+                    if ("routervpn-ss-service.json".equals(name) && "shadowsocks".equals(modeId)) continue;
                     if (!safeFileName(name)) throw new IllegalStateException("Unsafe profile filename: " + name);
                     byte[] decoded;
                     if ("sing-box.json".equals(name)) decoded = config;
@@ -322,6 +325,7 @@ final class NativeSingBoxController {
     }
 
     static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
+        AndroidStartLayer.validateSSService(bundle);
         if (AndroidNativeMAXProfile.isMode(modeId)) return AndroidNativeMAXProfile.compile(bundle, profile, modeId);
         if (nativePQFamily(modeId)) {
             // The captured generated assets are data for the pinned compiler.

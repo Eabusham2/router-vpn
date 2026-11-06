@@ -551,6 +551,28 @@ Go SHA256-backed CryptoKit test module. It does not start NetworkExtension or
 prove asynchronous host ownership, native packaged execution, peer traffic,
 physical DNS/leak behavior, or Apple signing. Those gates remain separate.
 
+### Android companion and resolved-candidate follow-up
+
+The Android picker, ordinary native startup and Start Layer consumer now validate
+the original two-asset SS declaration through a passive shared API. A hostname
+can retain its captured service identity without being admitted as an unresolved
+physical transport. The existing owned Xray resolver still performs resolution.
+Its AES result stays with that candidate and is checked against the complete
+original graph before attachment and again before consumption. A different
+valid key, port, protocol or unrelated graph field cannot replace the original.
+Only the verified runtime projection is staged; the saved private source remains
+unchanged. Existing paired factory ownership checks are preserved.
+
+The final focused shared race run passed in **3.231 seconds**, including the
+published paired-owner controls. Actual shipping Android Java plus the shared
+Go helper passed **77 checks**, including valid alternate-key substitution and
+failure without staging. The existing no-sidecar Xray path passed **690 checks**.
+Earlier compiler/javac processes were killed and are not counted as passes; the
+final runs completed sequentially with bounded compiler/JVM heaps. The new Java
+and shared checks are mandatory in native Xray CI. Existing Android OS doubles
+remain explicit; a generated AAR, packaged application and device network run
+still require their separate native evidence.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

@@ -57,6 +57,22 @@ func RouterAmneziaExitConfig(config, nodeID string) (string, error) {
 	return mobilemultihop.AmneziaExitConfig(config, nodeID)
 }
 
+// RouterValidateSSService is passive: it never resolves or opens a transport.
+func RouterValidateSSService(profile, node string) (bool, error) {
+	if err := mobilemultihop.ValidateCapturedSSService(profile, node); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RouterValidateResolvedSSSource verifies an original-owner address projection.
+func RouterValidateResolvedSSSource(original, resolved string) (bool, error) {
+	if err := mobilemultihop.ValidateResolvedSSSource(original, resolved); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // RouterCompileProxyEntry inlines only the selected entry's owned trust asset.
 func RouterCompileProxyEntry(profile, mode string) (string, error) {
 	return mobilemultihop.CompileProxyEntry(profile, mode)

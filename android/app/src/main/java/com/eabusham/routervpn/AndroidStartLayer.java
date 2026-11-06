@@ -68,7 +68,27 @@ final class AndroidStartLayer {
         }
     }
 
+    /** Validate the original configured receiver before deriving a launch graph. */
+    static boolean validateSSService(JSONObject bundle) throws Exception {
+        JSONObject profiles = bundle.optJSONObject("profiles");
+        JSONObject source = profiles == null ? null : profiles.optJSONObject("shadowsocks");
+        if (source == null || !source.has("routervpn-ss-service.json")) return false;
+        JSONObject selected = selectedRouterProfile(bundle);
+        String node = AndroidNodeStore.stableNodeIdentity(bundle);
+        if (!node.matches("[0-9a-f]{64}") || !(selected.get("node_proof_id") instanceof String)
+                || !node.equals(selected.getString("node_proof_id"))) {
+            throw new IllegalStateException("Configured SS source lost its original paired node.");
+        }
+        // Passive authority validation permits an original hostname; actual
+        // physical resolution remains in the existing owned transport path.
+        if (!Libbox.routerValidateSSService(source.toString(), node)) {
+            throw new IllegalStateException("Configured SS source failed original node validation.");
+        }
+        return true;
+    }
+
     static RelayPlan apply(JSONObject bundle, JSONObject targetConfig, String modeId) throws Exception {
+        validateSSService(bundle);
         String start = selectedMode(bundle);
         if (AndroidNativeMAXProfile.isMode(modeId)) throw new IllegalStateException("Complete MAX must own its Start Layer in the shared compiler.");
         if (OFF.equals(start)) return null;
@@ -81,7 +101,10 @@ final class AndroidStartLayer {
         if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode) || "wg-pq".equals(mode) || "awg2-pq".equals(mode) || "ss-v2ray".equals(mode) || nativeXray(mode)) {
             JSONObject profile = selectedRouterProfile(bundle);
             JSONObject profiles = bundle.getJSONObject("profiles");
-            String encoded = profiles.getJSONObject("shadowsocks").getString("sing-box.json");
+            JSONObject originalAES = profiles.getJSONObject("shadowsocks");
+            JSONObject candidate = profiles.optJSONObject(mode);
+            String encoded = nativeXray(mode) && candidate != null && candidate.has("start-layer-source.json")
+                    ? candidate.getString("start-layer-source.json") : originalAES.getString("sing-box.json");
             if (encoded.isEmpty() || encoded.length() > 6 * 1024 * 1024) throw new IllegalStateException("Native Start Layer source exceeds the safety bound.");
             byte[] source = Base64.decode(encoded, Base64.DEFAULT);
             if (source.length == 0 || source.length > 4 * 1024 * 1024 || !Base64.encodeToString(source, Base64.NO_WRAP).equals(encoded)) {
@@ -91,6 +114,10 @@ final class AndroidStartLayer {
                     .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                     .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                     .decode(java.nio.ByteBuffer.wrap(source)).toString();
+            if (nativeXray(mode) && candidate != null && candidate.has("start-layer-source.json")
+                    && !Libbox.routerValidateResolvedSSSource(exactNativeAsset(originalAES,"sing-box.json"), sourceText)) {
+                throw new IllegalStateException("Resolved AES source lost its original candidate owner.");
+            }
             JSONObject policy = new JSONObject().put("mode", start).put("raw_mode", mode)
                     .put("node_kind", "router-vpn").put("router_api", profile.getString("router_api"));
             String composed;
