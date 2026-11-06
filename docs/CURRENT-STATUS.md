@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `35725083`
+## November 6 product continuation through `63644b70`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`35725083aae6c921fd5be7eba3c4a5c1d8ac1a64`](https://github.com/Eabusham2/router-vpn/commit/35725083aae6c921fd5be7eba3c4a5c1d8ac1a64).
+[`63644b703852357db8ef288acc9fceb49f25ecdd`](https://github.com/Eabusham2/router-vpn/commit/63644b703852357db8ef288acc9fceb49f25ecdd).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 27 units.
+with separately attributed contributor evidence; it is not one of these 29 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -191,6 +191,31 @@ It was preserved before `35725083`; its contributor evidence is separate.
   reproduced; all 438 lifecycle/store checks and twenty existing causal controls
   pass without changing production code or validation rules.
 
+- **Darwin SOCKS fixture cleanup (unit 28):** published `14724aaf` removes only
+  two redundant unbounded Close callbacks, leaving failure trace and retirement
+  with the original bounded broker/policy owners. Normal-path native Close,
+  joined retirement and PF absence assertions are unchanged. The extracted
+  registration harness passes its actual testing.T baseline and rejects all
+  three historical callback variants under race detection, releasing and joining
+  them afterward; twelve timeout diagnostics pass. Full runner evidence is
+  **40/41**, with the unchanged original-control fixture unable to listen on a
+  Unix socket (EPERM) in the local environment. Timeout evidence now retains a
+  bounded head and tail. The original native association setup error remains
+  unknown, and matching-host macOS acceptance remains required.
+
+- **Android Tor form fixture (unit 29):** published `63644b70` uses an Entry
+  copy with only intended location fields cleared before the shipping serializer,
+  preserving exact captured-byte and credential/policy byte comparisons. The
+  original JSONObject parse/remove helper reordered two colliding key pairs
+  without changing any of the 24 parsed values. The repaired form passes 162
+  compiler round-trips across nineteen modes and 7,267 checks; all twenty-two
+  causal controls reject their intended mutation, including actual Save password
+  corruption. Padding form passes 72 captures and 1,377 checks. The earlier full
+  runtime run at `35725083` failed at this location assertion while all 432 source
+  hashes stayed unchanged. The focused repair and later segmented continuation
+  do not establish an uninterrupted full-runtime pass or physical Android
+  acceptance; production behavior is unchanged.
+
 Concurrent `ad4da5e7` contributed four final-only SOCKS proxy cases, `dbb0a4ca`
 six final-only packet cases, and `ea460eae` ten entry-only cases. Their exact
 names, original sources and negative inventories are retained in `a08d7d6f`;
@@ -208,6 +233,29 @@ advance captured resolved DNSSEC validation through sealed children and original
 alias-proof ownership. These changes do not establish universal protocol/graph
 coverage, installed native acceptance or physical-device readiness.
 
+At **2026-11-06 06:41:00 UTC**, the Windows runs containing the published
+protocol/duplicate repair had not produced native acceptance. The original
+`80fefcc6` [native run 42174525567](https://github.com/Eabusham2/router-vpn/actions/runs/42174525567)
+and [physical run 42174525473](https://github.com/Eabusham2/router-vpn/actions/runs/42174525473)
+were cancelled while pending, as were later pending descendants
+`42175289916` (`e0d7b59d`) and `42175078761` (`fe914aaf`). These cancellations
+are superseded pending work, not executed test failures. At this read the newest
+pending runs were [Windows native 42175862508](https://github.com/Eabusham2/router-vpn/actions/runs/42175862508),
+[Windows physical 42175862464](https://github.com/Eabusham2/router-vpn/actions/runs/42175862464)
+and [macOS physical 42175862403](https://github.com/Eabusham2/router-vpn/actions/runs/42175862403),
+all at `14724aaf` and all attempt 1.
+
+Older active runs retain their original source boundaries:
+[Windows native 42168681000](https://github.com/Eabusham2/router-vpn/actions/runs/42168681000)
+at `f8cd9790` was running the Tor wrapper ownership step; both build-command
+ownership jobs had passed. [Windows physical 42173507764](https://github.com/Eabusham2/router-vpn/actions/runs/42173507764)
+at `c6a33ff1` had passed both native bootstrap jobs while its encrypted WFP and
+captured Node startup jobs were still running. Neither revision includes
+`80fefcc6`, so these outcomes cannot establish that the historical UDP4/TCP
+protocol mismatch is repaired. No post-fix failing job log for these two Windows workflows was available
+at this cutoff. The definitive macOS retry failure and its remaining unknown
+setup error are recorded immediately below.
+
 The later **attempt 2** of [macOS run 42167793365](https://github.com/Eabusham2/router-vpn/actions/runs/42167793365),
 Intel job 127740178604, completed with failure on original `a5000cc3`.
 The socket-retirement baseline passed in 257.25 seconds and the complete
@@ -220,9 +268,11 @@ At timeout the original test process was a zombie and exact-binary descendants
 were in another process group within its original session; killing the original
 group returned PermissionError. This observation does not prove those children
 remained after the root fixture's final cleanup. The initial setup error was
-lost from the bounded output tail, so its cause remains unproved. A narrow
-fixture cleanup/diagnostic repair is under review; no further retry, deadline
-increase or successful macOS release is claimed.
+lost from the bounded output tail, so its cause remains unproved. The narrow
+fixture cleanup/evidence repair is now published as `14724aaf` (unit 28), with
+the bounded portable results and Unix-listen EPERM limitation above. The initial
+setup rejection remains unknown; no further native retry, deadline increase or
+successful macOS release is claimed.
 
 At **2026-11-06 06:18:53 UTC**, an independent read found live `main` at
 `c6a33ff145168ed1aadf2008b66191611fcedd7d`. The exact published `9afd2a32`
