@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `9e0341f0`
+## November 6 product continuation through `cf4ea4b3`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`9e0341f0ddd5614330e95564cbd8fa09857c7c3c`](https://github.com/Eabusham2/router-vpn/commit/9e0341f0ddd5614330e95564cbd8fa09857c7c3c).
+[`cf4ea4b389ead8124b3db3f7002723b2ff6a466b`](https://github.com/Eabusham2/router-vpn/commit/cf4ea4b389ead8124b3db3f7002723b2ff6a466b).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 40 units.
+with separately attributed contributor evidence; it is not one of these 49 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -33,6 +33,52 @@ This ledger does not claim independent execution of that unit.
 Concurrent [`090c09ec`](https://github.com/Eabusham2/router-vpn/commit/090c09ec54f875ad0bf0031a3b6da5d3a254dc4f)
 subsequently adds joined resolver-owner handling before private-domain fallback.
 It was preserved before `35725083`; its contributor evidence is separate.
+
+### Newer published units 41–49
+
+`c70778ea` binds Android cold CONNECT startup to the captured canonical protocol;
+`a475f1ec` corrects the real Runtime/Home fixture projection. `29bf1fb5` adds
+atomic, node/source/key/image-bound paired SS service metadata, with its existing
+transport artifacts unchanged. Concurrent `66c81cde`/`0752df09` supply upgrade
+revalidation and ordinary/composite/Apple consumer compatibility. Additional
+paired node-binding and actual store/reload coverage remain under focused review;
+the producer alone is not new CONNECT graph admission.
+
+`3044f0b0` publishes the bounded imported OpenVPN Local direction in the existing
+Android/Apple VPN owner. It retains all 247 earlier captures and adds 90 TCP/UDP
+outer, five-final-family, independent-layer captures. The complete peer gate
+passes 111 exact race verdicts; composed native parsers pass 676 source/Android
+and 338 Apple verdicts with all 674 host artifact hashes retained. Actual daily
+Runtime/Home admission is included. Profile-subset, original public remote,
+negotiated-capacity, same-engine and ownership boundaries remain explicit;
+physical MTU, devices, other final families and Server/Compare remain separate.
+`3ee47f8d` repairs the old Android help-text contract exposed by the new support,
+preserving its complete MTU caveat.
+
+`803eabc1` makes the Stop fixture wait for installed signal behavior and exact
+owned child exit. Its frozen complete 22-gate map-first source/shipping run
+passes. The later OpenVPN source exposed the separate sentence contract above,
+so that earlier full pass is not current UI acceptance. Production process
+identity and retry bounds are unchanged. `cf4ea4b3` likewise repairs only the
+server Tor test's missing private-DNS mutex user, with eleven negative controls.
+
+`3dbb286d` adds actual SOCKS fixture diagnostics. The later `9cf424f3` WFP run
+passes that entire phase with relevant source unchanged from the earlier failure;
+the initial cause remains unexplained. Both full WFP jobs then stop at their
+30-minute aggregate cap before all seven phases finish. `341f2c66` keeps every
+native limit and requires seven independent phase jobs on both architectures
+plus fourteen exact source/run/image receipts. Nine new receipt contracts and
+all 42 existing runner contracts pass; actual Windows execution is separate.
+
+At **09:20:31 UTC**, its Windows phase run
+[42194122508](https://github.com/Eabusham2/router-vpn/actions/runs/42194122508)
+is pending, and its authoritative release run is cancelled after newer source.
+The latest listed release remains the October 24 `745b3e41` prerelease with
+twelve assets. No new completed native release, signing, private deployment or
+physical-device acceptance is claimed. See the product ledger's units 41–49
+for exact commits, tests, source identities and failure history.
+
+### Earlier published units retained below
 
 - **Apple imported-entry fixture:** `ae8ecead` corrects stale expectations after
   SOCKS5 support was implemented. Actual Swift/Go selection checks pass 2,080
@@ -266,7 +312,8 @@ It was preserved before `35725083`; its contributor evidence is separate.
   Whole-runtime checks pass 1,586/200 with fourteen controls; actual runtime/Home
   composition passes 100/35 with three old-guard controls. Related usage, startup,
   Home and permission checks pass with native/OS doubles explicitly identified.
-  OpenVPN and CONNECT remain unadmitted; current APK/device evidence is separate.
+  That unit did not admit OpenVPN or CONNECT; later `9cf424f3` and `3044f0b0`
+  add the bounded directions recorded above. Current APK/device evidence is separate.
 - **Darwin UoT provider fixture (unit 38):** `1cac6bf7` uses the existing owned
   UDP buffer policy, preserving payload and bounds. Normal/low-memory race checks
   pass and a setup-error causal control fails the intended unchanged assertion.
@@ -543,10 +590,12 @@ UDP NAT failure and the separate `775ac68e` repair remain in the evidence ledger
 The newer concurrent `9cf424f3` adds TCP-only HTTP/HTTPS CONNECT to paired
 SS2022 with both layers Off and exact Home/custom literal TCP DNS, retaining
 all 235 earlier graph cases plus twelve bounded captures. Its broader datagram,
-DNS and independent-layer requirements, OpenVPN imported entries, other paired
-final families, and Server/Compare remain concrete implementation requirements,
+DNS and independent-layer requirements, other paired final families, and
+Server/Compare remain concrete implementation requirements,
 not merely missing live-access evidence. See the
 [open graph boundaries](MOBILE-IMPORTED-ROUTER-PATH.md#open-graph-requirements).
+The bounded OpenVPN entry direction is now published in `3044f0b0` with its
+native, host and parser evidence above; it is no longer wholly unimplemented.
 All remaining original Methods/recovery/platform/graph obligations stay open
 until individually satisfied. One current SHA still needs its complete native
 packages, nine images, compose and publication; matching-host native integration,
