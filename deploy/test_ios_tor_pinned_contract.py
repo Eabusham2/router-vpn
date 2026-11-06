@@ -5,6 +5,7 @@ Only command execution is doubled here. The separate shipping gate executes
 the real Swift compilers, native Libbox constructor and C Tor ABI.
 """
 from pathlib import Path
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -91,6 +92,28 @@ def populate_padding(folder):
 
 
 class AppleTorNativeGate(unittest.TestCase):
+    def test_source_receipt_matches_actual_swift_compilation_inputs(self):
+        # Extract the real emitter's source declarations, independently of the
+        # consumer list used by populate(). This catches newly compiled policy
+        # dependencies that a synthetic receipt could otherwise omit twice.
+        tree = ast.parse(GATE.FIXTURE.read_text())
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        declarations = [node for node in ast.walk(main)
+                        if isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id in ('sources', 'inputs')
+                        or isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == 'sources']
+        self.assertEqual(len(declarations), 3, 'shipping emitter source declarations changed')
+        declarations.sort(key=lambda node: node.lineno)
+        program = compile(ast.Module(body=declarations, type_ignores=[]), str(GATE.FIXTURE), 'exec')
+        for execution in ('local', 'server'):
+            with self.subTest(execution=execution):
+                scope = dict(ROOT=ROOT, APP=GATE.APP, TUN=GATE.TUN, Path=Path,
+                             __file__=str(GATE.FIXTURE),
+                             EXTRA_EVIDENCE_SOURCES=[GATE.SERVER_FIXTURE] if execution == 'server' else [])
+                exec(program, scope)
+                self.assertEqual(set(GATE.host_sources(execution)), set(scope['inputs']),
+                                 'native receipt omitted an actual Swift compilation dependency')
+
     def test_enabled_matrix_preserves_all_layers_sources_and_rates(self):
         self.assertEqual(len(GATE.native_cases()), 738)
         self.assertEqual(len(GATE.padding_cases()), 528)
@@ -142,7 +165,7 @@ class AppleTorNativeGate(unittest.TestCase):
     def test_exact_matrix_asset_and_session_ownership(self):
         mutations = ('missing', 'extra', 'renamed', 'empty', 'oversized', 'linked-root',
                      'linked-graph', 'linked-asset', 'missing-trust', 'wrong-session', 'wrong-mode', 'missing-home-dns', 'stale-source',
-                     'missing-openvpn-binding', 'changed-openvpn-binding', 'extra-source')
+                     'missing-openvpn-binding', 'changed-openvpn-binding', 'missing-home-policy', 'changed-home-policy', 'extra-source')
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); folder = root/'graphs'; folder.mkdir(); populate(folder)
@@ -170,13 +193,13 @@ class AppleTorNativeGate(unittest.TestCase):
                 elif mutation == 'missing-home-dns':
                     data = json.loads((folder/'source-evidence.json').read_text()); del data['home_dns_combinations']
                     (folder/'source-evidence.json').write_text(json.dumps(data))
-                elif mutation in ('missing-openvpn-binding', 'changed-openvpn-binding', 'extra-source'):
+                elif mutation in ('missing-openvpn-binding', 'changed-openvpn-binding', 'missing-home-policy', 'changed-home-policy', 'extra-source'):
                     data = json.loads((folder/'source-evidence.json').read_text())
-                    key = 'mobile/routervpn_openvpn.go'
+                    key = 'ios/RouterVPN/App/IOSHomeDNSPolicy.swift' if mutation.endswith('home-policy') else 'mobile/routervpn_openvpn.go'
                     self.assertIn(key, data['sources'])
-                    if mutation == 'missing-openvpn-binding':
+                    if mutation.startswith('missing-'):
                         del data['sources'][key]
-                    elif mutation == 'changed-openvpn-binding':
+                    elif mutation.startswith('changed-'):
                         data['sources'][key] = '0'*64
                     else:
                         data['sources']['unowned-bridge.go'] = '0'*64

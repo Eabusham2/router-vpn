@@ -56,7 +56,7 @@ PIN = TOR.CORE
 def host_sources(execution: str = 'local') -> list[Path]:
     # This is the exact source list recorded by the executable Swift fixture.
     return [FIXTURE, *([SERVER_FIXTURE] if execution == 'server' else []), ROOT/'mobile/routervpn_openvpn.go', ROOT/'mobile/toroutbound/bridge.go.tmpl', APP/'IOSExternalNodeBuilderView.swift', TUN/'PacketTunnelProvider.swift',
-            *[APP/(name+'.swift') for name in ('Models', 'IOSExternalExecution', 'IOSMultihopExecution', 'IOSDNSRuntimePolicy',
+            *[APP/(name+'.swift') for name in ('Models', 'IOSExternalExecution', 'IOSMultihopExecution', 'IOSHomeDNSPolicy', 'IOSDNSRuntimePolicy',
                 'IOSNativeXrayProfile', 'IOSNativePQProfile', 'IOSMultihopStartLayer', 'IOSRuntimeSelection')],
             *[TUN/(name+'.swift') for name in ('WireGuardQuickConfig', 'RouterVPNMultihopGraph',
                 'RouterVPNMTUPolicy', 'IOSStartLayer', 'IOSXrayDevicePolicy', 'RouterVPNExternalExit')]]
