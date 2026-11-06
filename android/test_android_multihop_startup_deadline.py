@@ -108,6 +108,7 @@ def main():
     composite = P.member((JAVA / 'AndroidNativeCompositeProfile.java').read_text(), '    static boolean isMode(')
     stubs = P.STUBS.replace('// REAL_SOURCE_MEMBERS', source_members).replace('// NATIVE_PREDICATES', predicates)
     stubs = stubs.replace('// MAX_PREDICATE', max_predicate).replace('// COMPOSITE_PREDICATE', composite)
+    stubs = stubs.replace('// SHIPPING_IMPORTED_SUPPORTS', P.member((JAVA / 'AndroidImportedRouterPath.java').read_text(), '    static boolean supports('))
     before = 'volatile String state="DOWN";int starts,stops,leases;'
     assert stubs.count(before) == 1
     stubs = stubs.replace(before, 'volatile String state="DOWN";volatile int starts;int stops,leases;volatile long readyDelayMillis,readyAt;')
