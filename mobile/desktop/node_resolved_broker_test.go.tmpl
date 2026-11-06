@@ -64,6 +64,14 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 		t.Fatal(rootErr)
 	}
 	privateTLD := len(rootDS) > 0
+	privateName := "node.private"
+	deep := os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_PRIVATE_DEEP") == "1"
+	if deep {
+		if !privateTLD {
+			t.Fatal("deep fixture omitted original root")
+		}
+		privateName = "host.node.private"
+	}
 	if privateTLD {
 		resolvedCompositionPrivateMonitor(t, ctx, os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT"))
 	}
@@ -232,7 +240,7 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 				return nil, "", errors.New("trust observation escaped original no-network anchor query")
 			}
 			name, ok := request.Body[1].(string)
-			if privateTLD && name != "node.private" && name != "private" && name != "." {
+			if privateTLD && name != privateName && !(deep && name == "node.private") && name != "private" && name != "." {
 				return nil, "", errors.New("private root observation escaped original suffix")
 			}
 			if !ok || (!privateTLD && name != "node.transport-bootstrap.invalid" && name != "transport-bootstrap.invalid" && name != "invalid" && name != "." && !(alias != "" && (name == "node.alias-bootstrap.invalid" || name == "alias-bootstrap.invalid"))) {
@@ -266,10 +274,10 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 			}
 			return []any{"no original positive trust source"}, "org.freedesktop.resolve1.NoSource", nil
 		case "ResolveHostname":
-			if privateTLD && (len(request.Body) != 4 || request.Body[1] != "node.private") {
+			if privateTLD && (len(request.Body) != 4 || request.Body[1] != privateName) {
 				return nil, "", errors.New("private local observation changed original qualified name")
 			}
-			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || (request.Body[1] != "node.transport-bootstrap.invalid" && !(alias != "" && request.Body[1] == "node.alias-bootstrap.invalid") && !(privateTLD && request.Body[1] == "node.private")) || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
+			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || (request.Body[1] != "node.transport-bootstrap.invalid" && !(alias != "" && request.Body[1] == "node.alias-bootstrap.invalid") && !(privateTLD && request.Body[1] == privateName)) || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
 				return nil, "", errors.New("local preflight escaped exact original question or NO_NETWORK/NO_CACHE/NO_SEARCH")
 			}
 			mu.Lock()

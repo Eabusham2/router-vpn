@@ -3,6 +3,7 @@
 from pathlib import Path
 from contextlib import redirect_stderr
 import hashlib
+import ast
 import importlib.util
 import io
 import json
@@ -49,7 +50,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_resolved_composition_requires_original_helper_receipt(self):
         self.assertEqual(G.CASES[524:524+len(G.RESOLVED_CASES)], G.RESOLVED_CASES)
         self.assertEqual(G.CASES[524+len(G.RESOLVED_CASES):], G.EXTERNAL_SS_LAYER_CASES + G.EXTERNAL_SS_HYSTERIA_LAYER_CASES)
-        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname','service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-unrelated-nta','service-boot-resolved-dnssec-private-tld-negative-nxdomain-a','service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa','service-boot-resolved-dnssec-private-tld-negative-nodata-a','service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa'))
+        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname','service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-unrelated-nta','service-boot-resolved-dnssec-private-tld-negative-nxdomain-a','service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa','service-boot-resolved-dnssec-private-tld-negative-nodata-a','service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa') + G.PRIVATE_DS_CASES)
         for case in G.RESOLVED_CASES:
             self.assertIn(case, G.HOSTNAME_CASES)
             self.assertIn(case, G.PUBLIC_CASES)
@@ -80,6 +81,67 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             for line in lines:
                 for changed in (good.replace(line,'',1),good+line):
                     with self.assertRaises(ValueError):G.check_verdict(changed,case)
+
+    def test_deep_private_requires_exact_dependency_receipt(self):
+        self.assertEqual(len(G.PRIVATE_DS_CASES),5)
+        for case in G.PRIVATE_DS_CASES:
+            good=self.completed((case,));G.check_verdict(good,case)
+            marker='verified installed private DS exact original and parent queries: '+case
+            for changed in (good.replace(marker,'unrelated DS traffic'),good+'\n'+marker):
+                with self.assertRaises(ValueError):G.check_verdict(changed,case)
+
+    def test_deep_private_control_executes_once_after_original_cases(self):
+        tree=ast.parse((ROOT/'deploy/test_linux_node_host_tun.py').read_text())
+        execute=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        def calls(name):
+            return [n for n in ast.walk(execute) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id==name]
+        ds=calls('private_ds_control')
+        self.assertEqual(len(ds),1)
+        old=calls('private_tld_control')
+        self.assertEqual(len(old),1)
+        self.assertGreater(ds[0].lineno,old[0].lineno)
+        receipts=[n for n in ast.walk(execute) if isinstance(n,ast.Dict) for key,value in zip(n.keys,n.values)
+                  if isinstance(key,ast.Constant) and key.value=='compiled_negative_controls'
+                  for n in [value]]
+        self.assertEqual(len(receipts),1)
+        self.assertIsInstance(receipts[0],ast.List)
+        self.assertEqual([n.id for n in receipts[0].elts],['defect','private_defect','ds_defect'])
+
+    def test_deep_private_missing_parent_control_requires_joined_failure(self):
+        case='service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-a'
+        output='\n'.join(('DNS probe returned an unsuccessful response code',
+          'installed negative RPC did not return its exact accepted no-address result',
+          'verified installed private DS exact original and parent queries: '+case,
+          'verified installed private DS rejected missing parent before root proof: '+case,
+          'verified installed private-TLD original negative families: '+case+' A=3 AAAA=0',
+          'verified installed private DS failed-phase original8 plans and zero DNS mutations: '+case,
+          'verified installed private negative RPC original owner cleanup: '+case,
+          'verified installed resolved helper original broker and scoped upstream: '+case,
+          '--- FAIL: TestDesktopLinuxGuardianKernelNodeHostTUN/'+case+' (1.0s)',
+          'Linux guardian namespace phase: private account workspace removed; return test status 1 (pid=12)',
+          'Linux guardian namespace phase: original namespace child joined (pid=12)'))
+        G.check_private_ds_control(1,output)
+        for status in (0,2,-9,137,143):
+            with self.assertRaises(ValueError):G.check_private_ds_control(status,output)
+        for line in output.splitlines():
+            with self.assertRaises(ValueError):G.check_private_ds_control(1,output.replace(line,''))
+        for bad in ('panic: bad','fatal error: crash','test timed out','DATA RACE','--- SKIP: test',
+          'context deadline exceeded','joined original installed host retirement: failed',
+          'missing parent acquired a root-proof owner','signal: killed',
+          'private-TLD omitted complete ordinary plus auxiliary plan checkpoints',
+          'private-TLD dropped original positive/absent observation',
+          'installed shipping helper omitted original local-only preflights',
+          'installed TUN omitted original post-helper DNS ownership',
+          'private root plan receipts missing','private-TLD omitted same-original monitor refusal',
+          'missing-parent omitted exact original8 plan checkpoints','missing-parent mutated original TUN DNS',
+          'foreign missing-parent broker phase','installed negative original cleanup was not acknowledged',
+          'operation not permitted','permission denied','device or resource busy','directory not empty',
+          'verified installed private-TLD original negative RPC and joined cleanup: '+case):
+            with self.assertRaises(ValueError):G.check_private_ds_control(1,output+'\n'+bad)
+        source='const privateDSCompleteParent = true'
+        self.assertEqual(G.private_ds_missing_parent_source(source),'const privateDSCompleteParent = false')
+        for source in ('',source+source):
+            with self.assertRaises(ValueError):G.private_ds_missing_parent_source(source)
 
     def test_private_negative_requires_shipping_rpc_receipt(self):
         for case in G.RESOLVED_CASES:
@@ -157,9 +219,10 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:24: verified installed host original boot service transfer: ' + case for case in cases if case in G.BOOT_TRANSFER_CASES + G.BOOT_RESOLVER_CASES + G.RESOLVED_CASES),
                           *('    native_test.go:25: verified installed host captured resolver policy: ' + case for case in cases if case in G.HOSTNAME_CASES),
                           *('    native_test.go:26: verified installed resolved helper original broker and scoped upstream: ' + case for case in cases if case in G.RESOLVED_CASES),
+                          *('    native_test.go:32: verified installed private DS exact original and parent queries: '+case for case in cases if case in G.PRIVATE_DS_CASES),
                           *('    native_test.go:29: '+prefix+case for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld') for prefix in ('verified installed private-TLD original and auxiliary wire queries: ', 'verified installed private-TLD original complete root plan and monitor: ')),
-                          *('    native_test.go:31: verified installed private-TLD original negative families: '+case+' '+('A=0 AAAA=3' if case.endswith(('-nxdomain-aaaa','-nodata-a')) else 'A=3 AAAA=0') for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld-negative-')),
-                          *('    native_test.go:30: verified installed private-TLD original negative RPC and joined cleanup: '+case for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld-negative-')),
+                          *('    native_test.go:31: verified installed private-TLD original negative families: '+case+' '+('A=0 AAAA=3' if case.endswith(('-nxdomain-aaaa','-nodata-a')) else 'A=3 AAAA=0') for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld') and '-negative-' in case),
+                          *('    native_test.go:30: verified installed private-TLD original negative RPC and joined cleanup: '+case for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld') and '-negative-' in case),
                           *('    native_test.go:27: verified installed DNSSEC original NTA and absent-anchor recheck' for case in cases if case == 'service-boot-resolved-dnssec-nta'),
                           *('    native_test.go:28: '+prefix+case for case in cases if case in ('service-boot-resolved-dnssec-cname','service-boot-resolved-dnssec-dname') for prefix in ('verified installed DNSSEC alias target independently captured and adopted: ', 'verified installed DNSSEC alias original proof and target wire queries: ')),
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),

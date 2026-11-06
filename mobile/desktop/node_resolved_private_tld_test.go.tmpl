@@ -22,6 +22,7 @@ import (
 )
 
 const privateTLDCompleteDenial = true
+const privateDSCompleteParent = true
 
 // Independent signed physical DNS peer for the installed original resolver.
 // Its root key is generated inside this peer; the daemon fixture receives only
@@ -33,6 +34,11 @@ func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
 	answer := net.ParseIP(os.Getenv("ROUTERVPN_PRIVATE_TLD_ANSWER")).To4()
 	countFile := os.Getenv("ROUTERVPN_PRIVATE_TLD_COUNT")
 	negative := os.Getenv("ROUTERVPN_PRIVATE_TLD_NEGATIVE")
+	deep := os.Getenv("ROUTERVPN_PRIVATE_TLD_DEEP") == "1"
+	originalName := "node.private."
+	if deep {
+		originalName = "host.node.private."
+	}
 	switch negative {
 	case "", "nxdomain-a", "nxdomain-aaaa", "nodata-a", "nodata-aaaa":
 	default:
@@ -80,15 +86,21 @@ func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
 		}
 		x := q.Question[0]
 		name := strings.ToLower(x.Name)
-		if x.Qclass != 1 || (name != "node.private." && name != "private." && name != ".") || (x.Qtype != 1 && x.Qtype != 28 && x.Qtype != 43 && x.Qtype != 48) {
+		if x.Qclass != 1 || (name != originalName && !(deep && name == "node.private.") && name != "private." && name != ".") || (x.Qtype != 1 && x.Qtype != 28 && x.Qtype != 43 && x.Qtype != 48) {
 			t.Error("private peer received foreign authority", x)
 			return
 		}
 		mu.Lock()
 		counts[""]++
 		suffix := ""
-		if name == "node.private." && (x.Qtype == 1 || x.Qtype == 28) {
+		if name == originalName && (x.Qtype == 1 || x.Qtype == 28) {
 			suffix = ".original"
+		}
+		if deep && x.Qtype == 43 && name == originalName {
+			suffix = ".ds-original"
+		}
+		if deep && x.Qtype == 43 && name == "node.private." {
+			suffix = ".ds-parent"
 		}
 		if name == "private." && x.Qtype == 1 {
 			suffix = ".proof"
@@ -98,6 +110,16 @@ func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
 		}
 		if suffix != "" {
 			counts[suffix]++
+		}
+		if deep && (suffix == ".ds-original" || suffix == ".ds-parent") {
+			phase := "auxiliary"
+			if opt := q.IsEdns0(); opt != nil {
+				if !opt.Do() {
+					t.Error("validator DS omitted DO")
+				}
+				phase = "validator"
+			}
+			counts[suffix+"-"+phase]++
 		}
 		for suffix, n := range counts {
 			if err := os.WriteFile(countFile+suffix, []byte(strconv.Itoa(n)), 0600); err != nil {
@@ -113,7 +135,16 @@ func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
 			m.Answer = sign(key)
 		} else if name == "." && x.Qtype == 43 {
 			m.Answer = sign(ds)
-		} else if name == "node.private." && (x.Qtype == 1 || x.Qtype == 28) {
+		} else if deep && x.Qtype == 43 && (name == originalName || name == "node.private.") {
+			m.Ns = []dns.RR{rr("private. 60 IN SOA ns.private. hostmaster.private. 1 60 60 60 60")}
+			if name == "node.private." && q.IsEdns0() == nil && !privateDSCompleteParent {
+				if err := os.WriteFile(countFile+".missing-parent", []byte("original-parent-ds"), 0600); err != nil {
+					t.Error(err)
+					return
+				}
+				m.Rcode = dns.RcodeServerFailure
+			}
+		} else if name == originalName && (x.Qtype == 1 || x.Qtype == 28) {
 			release, releaseErr := os.ReadFile("/run/routervpn-private-negative-complete")
 			if negative != "" && errors.Is(releaseErr, os.ErrNotExist) {
 				if (negative == "nxdomain-a" || negative == "nodata-aaaa") && x.Qtype == 1 || (negative == "nxdomain-aaaa" || negative == "nodata-a") && x.Qtype == 28 {
@@ -146,6 +177,9 @@ func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
 		if name == "private." && x.Qtype == 1 && !privateTLDCompleteDenial {
 			m.Rcode = dns.RcodeSuccess
 			m.Ns = append(sign(rr(". 60 IN SOA ns. hostmaster. 1 60 60 60 60")), sign(rr("private. 60 IN NSEC zzz. AAAA RRSIG NSEC"))...)
+		}
+		if opt := q.IsEdns0(); opt != nil {
+			m.SetEdns0(opt.UDPSize(), opt.Do())
 		}
 		if err := w.WriteMsg(m); err != nil {
 			t.Error(err)

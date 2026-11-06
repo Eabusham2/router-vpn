@@ -192,6 +192,8 @@ def check_ss_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
 
 RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname', 'service-boot-resolved-dnssec-private-tld', 'service-boot-resolved-dnssec-private-tld-unrelated-nta', 'service-boot-resolved-dnssec-private-tld-negative-nxdomain-a', 'service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa', 'service-boot-resolved-dnssec-private-tld-negative-nodata-a', 'service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa')
+PRIVATE_DS_CASES = ('service-boot-resolved-dnssec-private-tld-deep', 'service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-a', 'service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-aaaa', 'service-boot-resolved-dnssec-private-tld-deep-negative-nodata-a', 'service-boot-resolved-dnssec-private-tld-deep-negative-nodata-aaaa')
+RESOLVED_CASES += PRIVATE_DS_CASES
 CASES += RESOLVED_CASES
 HOSTNAME_CASES += RESOLVED_CASES
 PUBLIC_CASES += RESOLVED_CASES
@@ -432,7 +434,7 @@ def check_verdict(output, case=None):
                 marker=marker_prefix+value
                 if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
                     raise ValueError('Installed private-TLD omitted original root/monitor or independent proof queries: '+value)
-        if value.startswith('service-boot-resolved-dnssec-private-tld-negative-'):
+        if value.startswith('service-boot-resolved-dnssec-private-tld') and '-negative-' in value:
             marker='verified installed private-TLD original negative RPC and joined cleanup: '+value
             if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
                 raise ValueError('Installed negative omitted exact accepted RPC and joined original cleanup: '+value)
@@ -440,6 +442,10 @@ def check_verdict(output, case=None):
             marker='verified installed private-TLD original negative families: '+value+' '+codes
             if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
                 raise ValueError('Installed negative omitted exact original A/AAAA rcodes: '+value)
+        if value in PRIVATE_DS_CASES:
+            marker='verified installed private DS exact original and parent queries: '+value
+            if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+                raise ValueError('Deep installed resolver omitted exact original DS dependencies: '+value)
         if value in RESOLVED_CASES:
             marker = 'verified installed resolved helper original broker and scoped upstream: ' + value
             if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
@@ -639,6 +645,68 @@ def private_tld_control(workspace,binary,source,bundle,compiler,captured,binary_
         records.append({'case':case,'output_sha256':hashlib.sha256(output.encode()).hexdigest()})
     return {'name':'private-tld-missing-denial','bytes':identity[2],'sha256':identity[-1],'changed_source_sha256':hashlib.sha256(changed.read_bytes()).hexdigest(),'cases':records}
 
+def private_ds_missing_parent_source(text):
+    marker='const privateDSCompleteParent = true'
+    if text.count(marker)!=1:raise ValueError('private DS causal source marker changed')
+    return text.replace(marker,'const privateDSCompleteParent = false',1)
+
+def check_private_ds_control(status,output):
+    case='service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-a'
+    abnormal=('panic:','fatal error:','test timed out','TimeoutExpired','Traceback (most recent call last):',
+      'Linux guardian namespace failed:','signal:','context deadline exceeded','DATA RACE','--- SKIP:',
+      'joined original installed host retirement:','failed-readiness original joined retirement:',
+      'joined original installed session retirement:','owned active network replacement cleanup:',
+      'installed host omitted its actual source/process join and durable retirement',
+      'installed controller did not join after its original native retirement',
+      'installed-host retirement did not persist its exact original settled journal',
+      'installed-host TUN retirement requires a successful native inventory',
+      'missing parent acquired a root-proof owner','foreign missing-parent receipt',
+      'installed negative omitted exact original family/rcode','negative release changed original case',
+      'deep private domain omitted exact original DS dependency',
+      'installed shipping helper omitted original local-only preflights',
+      'installed TUN omitted original post-helper DNS ownership','private root plan receipts missing',
+      'private-TLD omitted complete ordinary plus auxiliary plan checkpoints',
+      'private-TLD dropped original positive/absent observation','private-TLD omitted same-original monitor refusal',
+      'private-TLD omitted actual original/proof/root-key exchange',
+      'foreign missing-parent broker phase','missing-parent broker phase unreadable',
+      'missing-parent mutated original TUN DNS','missing-parent omitted exact original',
+      'negative lookup replaced original durable protection','negative lookup changed original physical network',
+      'negative lookup lost original retained boot protection','negative lookup adopted a Node or changed original usage',
+      'installed negative original cleanup was not acknowledged','installed negative retained original bootstrap registration',
+      'original outer bus directory changed','operation not permitted','permission denied',
+      'device or resource busy','directory not empty')
+    required=('DNS probe returned an unsuccessful response code',
+      'installed negative RPC did not return its exact accepted no-address result',
+      'verified installed private DS exact original and parent queries: '+case,
+      'verified installed private DS rejected missing parent before root proof: '+case,
+      'verified installed private-TLD original negative families: '+case+' A=3 AAAA=0',
+      'verified installed private DS failed-phase original8 plans and zero DNS mutations: '+case,
+      'verified installed private negative RPC original owner cleanup: '+case,
+      'verified installed resolved helper original broker and scoped upstream: '+case)
+    if status!=1 or any(s in output for s in abnormal) or any(output.count(s)!=1 for s in required[2:]) or any(s not in output for s in required[:2]) or \
+       'verified installed private-TLD original negative RPC and joined cleanup: '+case in output or \
+       '--- FAIL: TestDesktopLinuxGuardianKernelNodeHostTUN/'+case+' (' not in output or \
+       any('Linux guardian namespace phase: '+s+' (pid=' not in output for s in ('private account workspace removed; return test status 1','original namespace child joined')):
+        raise ValueError('Installed private DS did not reject exact missing parent with joined original cleanup')
+
+def private_ds_control(workspace,binary,source,bundle,compiler,captured,binary_sha256,bundle_sha256,sudo):
+    original=source/'protocol/routervpnamnezia/routervpn_desktop_resolved_private_tld_test.go'
+    changed=workspace/'private_ds_missing_parent.go';changed.write_text(private_ds_missing_parent_source(original.read_text()))
+    overlay=workspace/'private_ds_overlay.json';overlay.write_text(json.dumps({'Replace':{str(original):str(changed)}}))
+    peer=workspace/'private-ds-missing-parent.test'
+    status,output=NODE.run([compiler,'test','-c','-race','-mod=readonly','-overlay='+str(overlay),'-tags='+','.join(NODE.TAGS),'-ldflags=-checklinkname=0','-o',peer,'./protocol/routervpnamnezia'],cwd=source,env=captured,timeout=300)
+    if status:raise ValueError('Installed private DS missing-parent control did not compile:\n'+output[-16384:])
+    identity=CHILD.image_identity(peer);case='service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-a'
+    command=[sys.executable,str(Path(__file__).resolve()),'--namespace-test-binary',str(binary),'--peer-binary',str(peer),'--bundle',str(bundle),'--namespace-test-sha256',binary_sha256,'--peer-sha256',identity[-1],'--bundle-sha256',bundle_sha256,'--case',case]
+    if sudo is not None:command=[sudo,'-n','--',*command]
+    try:output=GUARD.UID.run(command,cwd=ROOT,env=captured,timeout=150,sudo=sudo);status=0
+    except subprocess.CalledProcessError as failure:status=failure.returncode;output=failure.output.decode('utf-8',errors='replace')
+    check_private_ds_control(status,output)
+    if CHILD.image_identity(peer)!=identity:raise ValueError('private DS causal peer changed original image')
+    print(output,end='' if output.endswith('\n') else '\n')
+    return {'name':'private-ds-missing-parent','case':case,'bytes':identity[2],'sha256':identity[-1],'changed_source_sha256':hashlib.sha256(changed.read_bytes()).hexdigest(),'output_sha256':hashlib.sha256(output.encode()).hexdigest()}
+
+
 
 
 def execute(source, bundle, go='go', *, env=None, receipt_path=None):
@@ -765,6 +833,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         defect = missing_binding_control(workspace, peer, bundle, compiler, captured, identities[peer][-1],
                                          payloads['NATIVE-RUNTIME.json']['sha256'], sudo)
         private_defect=private_tld_control(workspace,binary,source,bundle,compiler,captured,identities[binary][-1],payloads['NATIVE-RUNTIME.json']['sha256'],sudo)
+        ds_defect=private_ds_control(workspace,binary,source,bundle,compiler,captured,identities[binary][-1],payloads['NATIVE-RUNTIME.json']['sha256'],sudo)
         if checked_sources(source)[1] != before or bundle_identity(bundle, 'linux/' + architecture, captured) != (receipt, payloads) or any(
                 CHILD.image_identity(path) != identity for path, identity in identities.items()):
             raise ValueError('Installed Linux host changed its original source, engine bundle or compiled test images')
@@ -786,7 +855,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
-                  'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
+                  'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect, ds_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
     print('Physical devices, off-LAN interoperability, restart recovery and other graph families remain separate acceptance boundaries.')

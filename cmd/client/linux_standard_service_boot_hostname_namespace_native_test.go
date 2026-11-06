@@ -262,8 +262,12 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	hostname := bootHostnameFixtureName
 	if privateTLD {
 		hostname = "node.private"
+		if strings.Contains(scenario, "-private-tld-deep") {
+			hostname = "host.node.private"
+		}
 	}
 	var rootDS []byte
+	var privateCount string
 	mode := "udp"
 	if scenario == "service-boot-hostname-tcp" || scenario == "service-boot-resolved-tcp" {
 		mode = "tcp"
@@ -379,13 +383,19 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			t.Fatal(e)
 		}
 		countFile := filepath.Join(directory, "queries")
+		if privateTLD {
+			privateCount = countFile
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
 		dns := exec.CommandContext(ctx, "/usr/sbin/ip", "netns", "exec", "rvpn-peer", executable, "routervpn-boot-hostname-resolver", peer.address.Addr().String(), countFile, mode)
 		if privateTLD {
 			dns = exec.CommandContext(ctx, "/usr/sbin/ip", "netns", "exec", "rvpn-peer", os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), "-test.run=^TestRouterVPNPrivateTLDInstalledDNS$", "-test.timeout=80s")
 			dns.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_PRIVATE_TLD_DNS=1", "ROUTERVPN_PRIVATE_TLD_ANSWER=" + peer.address.Addr().String(), "ROUTERVPN_PRIVATE_TLD_COUNT=" + countFile}
+			if strings.Contains(scenario, "-private-tld-deep") {
+				dns.Env = append(dns.Env, "ROUTERVPN_PRIVATE_TLD_DEEP=1")
+			}
 			if linuxHostTUNPrivateNegativeCase(scenario) {
-				dns.Env = append(dns.Env, "ROUTERVPN_PRIVATE_TLD_NEGATIVE="+strings.TrimPrefix(scenario, "service-boot-resolved-dnssec-private-tld-negative-"))
+				dns.Env = append(dns.Env, "ROUTERVPN_PRIVATE_TLD_NEGATIVE="+linuxHostTUNPrivateNegativeSuffix(scenario))
 			}
 		}
 		dns.Stderr = os.Stderr
@@ -399,6 +409,8 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			t.Fatal(e)
 		}
 		t.Cleanup(func() {
+			receiptsOK := true
+			receiptError := func(args ...any) { receiptsOK = false; t.Error(args...) }
 			body, e := os.ReadFile(countFile)
 			count, parse := strconv.Atoi(string(body))
 			minimum := 2
@@ -406,7 +418,7 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 				minimum = 4
 			}
 			if e != nil || parse != nil || count < minimum {
-				t.Error("public Node Connect omitted actual A/AAAA bootstrap", e, parse, count)
+				receiptError("public Node Connect omitted actual A/AAAA bootstrap", e, parse, count)
 			}
 			if linuxHostTUNPrivateNegativeCase(scenario) {
 				aCode, aaaaCode := 3, 0
@@ -417,54 +429,89 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 					raw, err := os.ReadFile(countFile + ".negative-" + family + "-rcode-" + strconv.Itoa(code))
 					n, parse := strconv.Atoi(string(raw))
 					if err != nil || parse != nil || n < 1 {
-						t.Error("installed negative omitted exact original family/rcode", family, code, err, parse, n)
+						receiptError("installed negative omitted exact original family/rcode", family, code, err, parse, n)
 					}
 				}
-				t.Logf("verified installed private-TLD original negative families: %s A=%d AAAA=%d", scenario, aCode, aaaaCode)
+				if receiptsOK {
+					t.Logf("verified installed private-TLD original negative families: %s A=%d AAAA=%d", scenario, aCode, aaaaCode)
+				}
 				release, err := os.ReadFile(installedPrivateNegativeRelease)
 				if err == nil {
-					if string(release) != strings.TrimPrefix(scenario, "service-boot-resolved-dnssec-private-tld-negative-") {
-						t.Error("negative release changed original case")
+					if string(release) != linuxHostTUNPrivateNegativeSuffix(scenario) {
+						receiptError("negative release changed original case")
 					}
 					if err = os.Remove(installedPrivateNegativeRelease); err != nil {
-						t.Error(err)
+						receiptError(err)
 					}
 				} else if !errors.Is(err, os.ErrNotExist) {
-					t.Error(err)
+					receiptError(err)
+				}
+			}
+			if strings.Contains(scenario, "-private-tld-deep") {
+				for _, suffix := range []string{".ds-original-auxiliary", ".ds-parent-auxiliary"} {
+					raw, err := os.ReadFile(countFile + suffix)
+					n, parse := strconv.Atoi(string(raw))
+					if err != nil || parse != nil || n < 1 {
+						receiptError("deep private domain omitted exact original DS dependency", suffix, err, parse, n)
+					}
+				}
+				if receiptsOK {
+					t.Logf("verified installed private DS exact original and parent queries: %s", scenario)
 				}
 			}
 			if privateTLD {
-				for _, suffix := range []string{".original", ".proof", ".root-key"} {
+				suffixes := []string{".original", ".proof", ".root-key"}
+				if strings.Contains(scenario, "-private-tld-deep") {
+					if marker, err := os.ReadFile(countFile + ".missing-parent"); err == nil {
+						if string(marker) != "original-parent-ds" {
+							receiptError("foreign missing-parent receipt")
+						}
+						if _, err = os.Stat(countFile + ".proof"); !errors.Is(err, os.ErrNotExist) {
+							receiptError("missing parent acquired a root-proof owner", err)
+						}
+						suffixes = []string{".original", ".root-key"}
+						if receiptsOK {
+							t.Logf("verified installed private DS rejected missing parent before root proof: %s", scenario)
+						}
+					} else if !errors.Is(err, os.ErrNotExist) {
+						receiptError(err)
+					}
+				}
+				for _, suffix := range suffixes {
 					body, err := os.ReadFile(countFile + suffix)
 					n, parse := strconv.Atoi(string(body))
 					if err != nil || parse != nil || n < 1 {
-						t.Error("private-TLD omitted actual original/proof/root-key exchange", suffix, err, parse, n)
+						receiptError("private-TLD omitted actual original/proof/root-key exchange", suffix, err, parse, n)
 					}
 				}
-				t.Logf("verified installed private-TLD original and auxiliary wire queries: %s", scenario)
+				if receiptsOK {
+					t.Logf("verified installed private-TLD original and auxiliary wire queries: %s", scenario)
+				}
 			}
 			if mode == "dnssec-cname" || mode == "dnssec-dname" {
 				for _, suffix := range []string{".alias-target", ".alias-proof"} {
 					raw, err := os.ReadFile(countFile + suffix)
 					n, parse := strconv.Atoi(string(raw))
 					if err != nil || parse != nil || n < 2 {
-						t.Error("alias omitted real target or typed proof queries", suffix, err, parse, n)
+						receiptError("alias omitted real target or typed proof queries", suffix, err, parse, n)
 					}
 				}
-				t.Logf("verified installed DNSSEC alias original proof and target wire queries: %s", scenario)
+				if receiptsOK {
+					t.Logf("verified installed DNSSEC alias original proof and target wire queries: %s", scenario)
+				}
 			}
 			if mode == "opportunistic-fallback" {
 				b, err := os.ReadFile(countFile + ".tls")
 				n, parse := strconv.Atoi(string(b))
 				if err != nil || parse != nil || n < 2 {
-					t.Error("original opportunistic TLS attempts omitted", err, parse, n)
+					receiptError("original opportunistic TLS attempts omitted", err, parse, n)
 				}
 			}
 			if mode == "parallel" {
 				b, err := os.ReadFile(countFile + ".parallel")
 				n, parse := strconv.Atoi(string(b))
 				if err != nil || parse != nil || n < 2 {
-					t.Error("independent physical DNS scopes missed barrier", err, parse, n)
+					receiptError("independent physical DNS scopes missed barrier", err, parse, n)
 				}
 			}
 			cancel()
@@ -481,7 +528,7 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 		}
 	}
 	if resolved {
-		linuxHostTUNResolvedBroker(t, peer, scenario, rootDS)
+		linuxHostTUNResolvedBroker(t, peer, scenario, rootDS, privateCount)
 	}
 	profilePath := filepath.Join(linuxOwnedControllerRoot, "routers.json")
 	body, e := os.ReadFile(profilePath)

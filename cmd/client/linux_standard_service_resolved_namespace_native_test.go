@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 	"time"
 )
 
-var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta", "service-boot-resolved-dnssec-cname", "service-boot-resolved-dnssec-dname", "service-boot-resolved-dnssec-private-tld", "service-boot-resolved-dnssec-private-tld-unrelated-nta", "service-boot-resolved-dnssec-private-tld-negative-nxdomain-a", "service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa", "service-boot-resolved-dnssec-private-tld-negative-nodata-a", "service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa"}
+var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta", "service-boot-resolved-dnssec-cname", "service-boot-resolved-dnssec-dname", "service-boot-resolved-dnssec-private-tld", "service-boot-resolved-dnssec-private-tld-unrelated-nta", "service-boot-resolved-dnssec-private-tld-negative-nxdomain-a", "service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa", "service-boot-resolved-dnssec-private-tld-negative-nodata-a", "service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa", "service-boot-resolved-dnssec-private-tld-deep", "service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-a", "service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-aaaa", "service-boot-resolved-dnssec-private-tld-deep-negative-nodata-a", "service-boot-resolved-dnssec-private-tld-deep-negative-nodata-aaaa"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNResolvedCases...) }
 func linuxHostTUNResolvedCase(scenario string) bool {
@@ -29,7 +30,7 @@ func linuxHostTUNResolvedCase(scenario string) bool {
 	return false
 }
 
-func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario string, rootDS []byte) {
+func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario string, rootDS []byte, privateCount string) {
 	privateTLD := strings.HasPrefix(scenario, "service-boot-resolved-dnssec-private-tld")
 	t.Helper()
 	// The host runner has already proved private original mount/net namespaces.
@@ -93,6 +94,9 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 			t.Fatal("original broker omitted private root authority")
 		}
 		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_PRIVATE_TLD="+base64.StdEncoding.EncodeToString(rootDS))
+		if strings.Contains(scenario, "-private-tld-deep") {
+			command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_PRIVATE_DEEP=1")
+		}
 		if strings.HasSuffix(scenario, "-unrelated-nta") {
 			command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_UNRELATED_NTA=1")
 		}
@@ -113,6 +117,21 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		receiptsOK := true
+		receiptError := func(args ...any) { receiptsOK = false; t.Error(args...) }
+		failedDS := false
+		if privateCount != "" {
+			marker, err := os.ReadFile(privateCount + ".missing-parent")
+			if err == nil {
+				if scenario != "service-boot-resolved-dnssec-private-tld-deep-negative-nxdomain-a" || string(marker) != "original-parent-ds" {
+					receiptError("foreign missing-parent broker phase")
+				} else {
+					failedDS = true
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				receiptError("missing-parent broker phase unreadable", err)
+			}
+		}
 		cancel()
 		_ = command.Wait()
 		body, err := os.ReadFile(countFile)
@@ -122,67 +141,98 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 			minimum = 1
 		}
 		if err != nil || parse != nil || count < minimum {
-			t.Error("installed shipping helper omitted original local-only preflights", err, parse, count)
+			receiptError("installed shipping helper omitted original local-only preflights", err, parse, count)
 		}
 		mutations, mutationErr := os.ReadFile(countFile + ".mutations")
 		mutationCount, mutationParse := strconv.Atoi(string(mutations))
-		if mutationErr != nil || mutationParse != nil || mutationCount < 3 || mutationCount%3 != 0 {
-			t.Error("installed TUN omitted original post-helper DNS ownership", mutationErr, mutationParse, mutationCount)
+		if failedDS {
+			if !errors.Is(mutationErr, os.ErrNotExist) {
+				receiptError("missing-parent mutated original TUN DNS", mutationErr, mutationCount)
+			}
+		} else if mutationErr != nil || mutationParse != nil || mutationCount < 3 || mutationCount%3 != 0 {
+			receiptError("installed TUN omitted original post-helper DNS ownership", mutationErr, mutationParse, mutationCount)
 		}
 		if privateTLD {
 			raw, err := os.ReadFile(countFile + ".anchor-names")
 			var names map[string]int
 			if err != nil || json.Unmarshal(raw, &names) != nil {
-				t.Error("private root plan receipts missing", err)
+				receiptError("private root plan receipts missing", err)
 			}
-			total := names["node.private/43"]
-			if total < 6 {
-				t.Error("private-TLD omitted complete ordinary plus auxiliary plan checkpoints", total)
+			original := "node.private"
+			expected := []string{"node.private", "private", "."}
+			minimum := 6
+			if strings.Contains(scenario, "-private-tld-deep") {
+				original = "host.node.private"
+				expected = append([]string{original}, expected...)
+				minimum = 9
+				if failedDS {
+					minimum = 8
+				}
 			}
-			for _, name := range []string{"node.private", "private", "."} {
+			total := names[original+"/43"]
+			if total < minimum {
+				receiptError("private-TLD omitted complete ordinary plus auxiliary plan checkpoints", total)
+			}
+			for _, name := range expected {
 				if names[name+"/43"] != total || names[name+"/48"] != total {
-					t.Error("private-TLD dropped original positive/absent observation", name, names)
+					receiptError("private-TLD dropped original positive/absent observation", name, names)
+				}
+			}
+			if failedDS {
+				if err := linuxPrivateDSFailedPlan(names, mutationErr); err != nil {
+					receiptError(err)
 				}
 			}
 			monitor, err := os.ReadFile(countFile + ".monitor")
 			n, parse := strconv.Atoi(string(monitor))
 			if err != nil || parse != nil || n < 1 {
-				t.Error("private-TLD omitted same-original monitor refusal", err, parse, n)
+				receiptError("private-TLD omitted same-original monitor refusal", err, parse, n)
 			}
-			t.Logf("verified installed private-TLD original complete root plan and monitor: %s", scenario)
+			if failedDS && receiptsOK {
+				t.Logf("verified installed private DS failed-phase original8 plans and zero DNS mutations: %s", scenario)
+			}
+			if receiptsOK {
+				t.Logf("verified installed private-TLD original complete root plan and monitor: %s", scenario)
+			}
 		}
 		if scenario == "service-boot-resolved-dnssec-nta" {
 			body, err := os.ReadFile(countFile + ".anchors")
 			count, parse := strconv.Atoi(string(body))
 			if err != nil || parse != nil || count < 24 || count%24 != 0 {
-				t.Error("installed DNSSEC omitted full original absent-anchor capture/recheck", err, parse, count)
+				receiptError("installed DNSSEC omitted full original absent-anchor capture/recheck", err, parse, count)
 			}
-			t.Log("verified installed DNSSEC original NTA and absent-anchor recheck")
+			if receiptsOK {
+				t.Log("verified installed DNSSEC original NTA and absent-anchor recheck")
+			}
 		}
 		if scenario == "service-boot-resolved-dnssec-cname" || scenario == "service-boot-resolved-dnssec-dname" {
 			raw, err := os.ReadFile(countFile + ".anchor-names")
 			var names map[string]int
 			if err != nil || json.Unmarshal(raw, &names) != nil {
-				t.Error("alias trust observations missing", err)
+				receiptError("alias trust observations missing", err)
 			}
 			for _, name := range []string{"node.transport-bootstrap.invalid", "transport-bootstrap.invalid", "node.alias-bootstrap.invalid", "alias-bootstrap.invalid"} {
 				ds, key := names[name+"/43"], names[name+"/48"]
 				if ds < 3 || ds%3 != 0 || ds != key {
-					t.Error("alias target omitted original capture/postjoin/adoption", name, ds, key)
+					receiptError("alias target omitted original capture/postjoin/adoption", name, ds, key)
 				}
 			}
 			for _, suffix := range []string{"invalid", "."} {
 				total := names["node.transport-bootstrap.invalid/43"] + names["node.alias-bootstrap.invalid/43"]
 				if names[suffix+"/43"] != total || names[suffix+"/48"] != total {
-					t.Error("alias trust cohort omitted a common ancestor", suffix, names)
+					receiptError("alias trust cohort omitted a common ancestor", suffix, names)
 				}
 			}
 			if names["target-local"] < 3 || names["node.transport-bootstrap.invalid/43"] < names["node.alias-bootstrap.invalid/43"] {
-				t.Error("alias reused original name authority", names)
+				receiptError("alias reused original name authority", names)
 			}
-			t.Logf("verified installed DNSSEC alias target independently captured and adopted: %s", scenario)
+			if receiptsOK {
+				t.Logf("verified installed DNSSEC alias target independently captured and adopted: %s", scenario)
+			}
 		}
-		t.Logf("verified installed resolved helper original broker and scoped upstream: %s", scenario)
+		if receiptsOK {
+			t.Logf("verified installed resolved helper original broker and scoped upstream: %s", scenario)
+		}
 	})
 	if line, err := bufio.NewReader(output).ReadString('\n'); err != nil || line != "original resolved composition broker ready\n" {
 		t.Fatal("original isolated broker did not become ready", line, err)
@@ -203,5 +253,55 @@ func linuxHostTUNNamespaceIdentity(t *testing.T) {
 	var stat syscall.Stat_t
 	if syscall.Stat("/proc/self/ns/mnt", &stat) != nil || outer == "" || outer == strconv.FormatUint(uint64(stat.Dev), 10)+":"+strconv.FormatUint(stat.Ino, 10) {
 		t.Fatal("resolved composition lacks distinct original mount namespace")
+	}
+}
+
+// The failed auxiliary never reaches alias adoption or TUN installation:
+// two families each capture, join/recheck, preadmit DS and join/recheck DS.
+func linuxPrivateDSFailedPlan(names map[string]int, mutationErr error) error {
+	if !errors.Is(mutationErr, os.ErrNotExist) {
+		return errors.New("missing-parent mutated original TUN DNS")
+	}
+	if len(names) != 8 {
+		return errors.New("missing-parent omitted exact original failed-phase plan inventory")
+	}
+	for _, name := range []string{"host.node.private", "node.private", "private", "."} {
+		for _, kind := range []string{"43", "48"} {
+			if names[name+"/"+kind] != 8 {
+				return errors.New("missing-parent omitted exact original8 plan checkpoints")
+			}
+		}
+	}
+	return nil
+}
+func TestLinuxInstalledPrivateDSFailedPlan(t *testing.T) {
+	for _, scenario := range []string{"original", "seven", "nine", "missing", "foreign", "mutation", "read-error"} {
+		t.Run(scenario, func(t *testing.T) {
+			names := map[string]int{}
+			for _, name := range []string{"host.node.private", "node.private", "private", "."} {
+				for _, kind := range []string{"43", "48"} {
+					names[name+"/"+kind] = 8
+				}
+			}
+			var mutationErr error = os.ErrNotExist
+			switch scenario {
+			case "seven":
+				names["./43"] = 7
+			case "nine":
+				names["./43"] = 9
+			case "missing":
+				delete(names, "private/48")
+			case "foreign":
+				names["other/43"] = 8
+			case "mutation":
+				mutationErr = nil
+			case "read-error":
+				mutationErr = os.ErrPermission
+			}
+			err := linuxPrivateDSFailedPlan(names, mutationErr)
+			if (err == nil) != (scenario == "original") {
+				t.Fatal("wrong failed-phase authority result", scenario, err)
+			}
+		})
 	}
 }
