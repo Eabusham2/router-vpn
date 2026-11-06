@@ -5,8 +5,11 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -18,6 +21,104 @@ spec.loader.exec_module(GATE)
 spec = importlib.util.spec_from_file_location("windows_external_runner_test", ROOT / "deploy/test_windows_external_physical.py")
 EXTERNAL = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(EXTERNAL)
+
+
+class ExternalProcessOwnership(unittest.TestCase):
+    def test_original_failure_and_bytes_survive_joined_owner(self):
+        command = ["captured.test.exe", "-test.run=^Original$/^manager$"]
+        for status in (0, 1, 7):
+            with self.subTest(status=status):
+                result = subprocess.CompletedProcess(command, status, b"--- FAIL: Original/manager (0.01s)\n", b"original witness\xff\n")
+                options = {"return_value": result} if not status else {"side_effect": subprocess.CalledProcessError(status, command, result.stdout, result.stderr)}
+                with patch.object(EXTERNAL.OWNER, "run", **options) as run:
+                    actual, output = EXTERNAL.run_owned(command, cwd="captured-source", env={"ORIGINAL": "yes"}, timeout=75)
+                self.assertEqual(actual, status)
+                self.assertEqual(output, "--- FAIL: Original/manager (0.01s)\noriginal witness\ufffd\n")
+                run.assert_called_once_with(command, cwd="captured-source", env={"ORIGINAL": "yes"}, timeout=75)
+
+    def test_timeout_or_unjoined_owner_cannot_become_mutant_rejection(self):
+        command = ["captured.test.exe"]
+        for error in (subprocess.TimeoutExpired(command, 75, output=b"--- FAIL: Original/manager (0.01s)\noriginal witness"),
+                      RuntimeError("original descendant did not signal completion")):
+            with self.subTest(error=type(error).__name__), patch.object(EXTERNAL.OWNER, "run", side_effect=error):
+                with self.assertRaises(type(error)) as caught:
+                    EXTERNAL.run_owned(command, cwd="captured-source", env={}, timeout=75)
+                self.assertIs(caught.exception, error)
+
+    @unittest.skipUnless(os.name == "nt", "actual retained Windows process handles required")
+    def test_failed_fixture_joins_original_child_and_grandchild_before_return(self):
+        # Deliberately return the exact negative-control witness while original
+        # descendants still own non-shareable files. The same-image unrelated
+        # process has no membership in this fixture's job and must survive.
+        script = r'''
+import ctypes,json,os,subprocess,sys,time
+from pathlib import Path
+root=Path(sys.argv[1]); depth=int(sys.argv[2])
+kernel=ctypes.WinDLL("kernel32",use_last_error=True)
+kernel.CreateFileW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p]
+kernel.CreateFileW.restype=ctypes.c_void_p
+lock=kernel.CreateFileW(str(root/(str(depth)+".locked")),0xc0000000,0,None,2,0x80,None)
+if lock in (None,ctypes.c_void_p(-1).value): raise ctypes.WinError(ctypes.get_last_error())
+if depth<2:
+    child=subprocess.Popen([sys.executable,"-I","-S",__file__,str(root),str(depth+1)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ready=root/(str(depth)+".ready")
+temporary=ready.with_suffix(".tmp")
+temporary.write_text(str(os.getpid()))
+os.replace(temporary,ready)
+if depth==0:
+    until=time.monotonic()+15
+    while not (root/"2.ready").exists():
+        if time.monotonic()>until: raise RuntimeError("original grandchildren did not start")
+        time.sleep(0.01)
+    os.write(1,b"--- FAIL: Original/manager (0.01s)\n")
+    os.write(2,b"late network cancellation discarded the original manager candidate\n")
+    sys.exit(7)
+time.sleep(120)
+'''
+        with tempfile.TemporaryDirectory(prefix="external-owned-failure-") as directory:
+            root = Path(directory)
+            child_script = root / "fixture.py"
+            child_script.write_text(script)
+            testcase, observed = self, []
+            class ObservedJob(EXTERNAL.OWNER.WindowsJob):
+                def capture_members(job):
+                    super().capture_members()
+                    job.captured = dict(job.member_handles)
+                    for depth in (1, 2):
+                        pid = int((root / (str(depth) + ".ready")).read_text())
+                        testcase.assertIn(pid, job.captured)
+                        testcase.assertEqual(job.api.WaitForSingleObject(job.captured[pid], 0), 258)
+                def close_members(job):
+                    # join invokes this only after waiting on each original
+                    # process object. Independently observe completion before
+                    # those exact handles are released.
+                    for handle in job.member_handles.values():
+                        testcase.assertEqual(job.api.WaitForSingleObject(handle, 0), 0)
+                    return super().close_members()
+                def join(job, timeout=EXTERNAL.OWNER.JOIN_SECONDS):
+                    super().join(timeout)
+                    testcase.assertEqual(job.active(), 0)
+                    testcase.assertFalse(job.member_handles)
+                    observed.append(job.captured)
+            foreign = subprocess.Popen([sys.executable, "-I", "-S", "-c",
+                                        "import sys; print('ready',flush=True); sys.stdin.buffer.read()"],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                self.assertEqual(foreign.stdout.readline().strip(), b"ready")
+                with patch.object(EXTERNAL.OWNER, "WindowsJob", ObservedJob):
+                    status, output = EXTERNAL.run_owned([sys.executable, "-I", "-S", child_script, root, "0"],
+                                                        cwd=root, env=dict(os.environ), timeout=25)
+                self.assertEqual(status, 7)
+                self.assertIn("--- FAIL: Original/manager (0.01s)", output)
+                self.assertIn("late network cancellation discarded the original manager candidate", output)
+                self.assertEqual(len(observed), 1)
+                self.assertNotIn(foreign.pid, observed[0])
+                self.assertIsNone(foreign.poll())
+                for depth in (0, 1, 2):
+                    (root / (str(depth) + ".locked")).unlink()
+            finally:
+                foreign.communicate(input=b"release", timeout=10)
+                foreign._handle.Close()
 
 
 class ExternalMTURetentionControls(unittest.TestCase):
@@ -231,6 +332,7 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
                  patch.object(EXTERNAL, "checked_sources", return_value=(core, {"original": "captured"})) as sources, \
                  patch.object(EXTERNAL.IDENTITY, "selected_compiler", return_value=("owned-go", {}, "amd64")), \
                  patch.object(EXTERNAL.IDENTITY, "run", side_effect=run), \
+                 patch.object(EXTERNAL, "run_owned", side_effect=run), \
                  patch.object(EXTERNAL, "mutants", return_value=()), \
                  patch.object(EXTERNAL, "mtu_retention_mutants", return_value=()) as retention_controls, \
                  patch.object(EXTERNAL, "report_baseline", side_effect=report), \

@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -25,6 +26,22 @@ spec = importlib.util.spec_from_file_location(
 BOOT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(BOOT)
 IDENTITY = BOOT.IDENTITY
+spec = importlib.util.spec_from_file_location(
+    "windows_external_process_owner", ROOT / "deploy/windows_build_owner.py")
+OWNER = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(OWNER)
+
+
+def run_owned(command, *, cwd, env, timeout):
+    # A failed Go test can leave its isolated composition child behind. Keep
+    # the whole original job until every retained descendant has signaled and
+    # its handle is closed, before accepting a mutation witness or deleting the
+    # executable workspace. Ownership/join errors must propagate as gate errors.
+    try:
+        result = OWNER.run(command, cwd=cwd, env=env, timeout=timeout)
+    except subprocess.CalledProcessError as failed:
+        result = failed
+    return result.returncode, (result.stdout + result.stderr).decode("utf-8", errors="replace")
 
 HYSTERIA2_COMMAND = "TestRouterVPNDesktopExternalPhysicalCommandHysteria2SupportedTargets"
 HYSTERIA2_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + case for case in (
@@ -165,6 +182,7 @@ def checked_sources(source):
             raise ValueError("Ordinary Windows compiler differs from shipping bytes: " + path.name)
         records[target.relative_to(source).as_posix()] = hashlib.sha256(expected).hexdigest()
     records["ordinary-runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    records["ordinary-process-owner"] = hashlib.sha256(Path(OWNER.__file__).read_bytes()).hexdigest()
     return source, records
 
 
@@ -303,7 +321,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Ordinary Windows " + name + " compilation failed:\n" + output[-32768:])
             digest = hashlib.sha256(binary.read_bytes()).hexdigest()
             for run_name, run_selection, run_required in baseline_runs(name, selection, required):
-                status, output = IDENTITY.run(
+                status, output = run_owned(
                     [binary, "-test.run=" + run_selection, "-test.count=1", "-test.timeout=120s", "-test.v"],
                     cwd=source, env=captured, timeout=135)
                 report_baseline(run_name, run_required, status, output)
@@ -320,7 +338,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             status, output = IDENTITY.run(command, cwd=source, env=captured, timeout=600)
             if status:
                 raise ValueError("Ordinary Windows negative control did not compile: " + label + "\n" + output[-16384:])
-            status, output = IDENTITY.run([binary, "-test.run=" + control_selection(test), "-test.count=1", "-test.timeout=60s", "-test.v"],
+            status, output = run_owned([binary, "-test.run=" + control_selection(test), "-test.count=1", "-test.timeout=60s", "-test.v"],
                                           cwd=source, env=captured, timeout=75)
             if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or \
                     "--- SKIP:" in output or "DATA RACE" in output or "panic: test timed out" in output:
