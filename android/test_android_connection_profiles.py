@@ -929,10 +929,12 @@ def main():
             subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data), "profile-rollback"], env=env, check=True, timeout=180)
             original_node = (app / "AndroidNodeStore.java").read_text()
             guard = '\n        if (!java.util.Arrays.equals(current, published)) {\n            throw new IllegalStateException("A concurrent Router-node update prevents safe rollback; its source was preserved.");\n        }'
-            if original_node.count(guard) != 1 or original_node.count('synchronized (STORE_LOCK)') != 8:
+            # Mutate only the actual rollback admission, not unrelated store APIs.
+            rollback_admission = 'synchronized void restoreProfileBundle(String id, byte[] original, byte[] published) throws Exception { synchronized (STORE_LOCK) {'
+            if original_node.count(guard) != 1 or original_node.count(rollback_admission) != 1:
                 raise AssertionError("Owned node rollback publication boundary changed")
             controls = (("source", original_node.replace(guard, ""), "profile rollback overwrote the successor node credentials"),
-                        ("atomic", original_node.replace('synchronized (STORE_LOCK)', 'synchronized (new Object())'), "node rollback compare and publication did not exclude the competing store"))
+                        ("atomic", original_node.replace(rollback_admission, rollback_admission.replace('synchronized (STORE_LOCK)', 'synchronized (new Object())')), "node rollback compare and publication did not exclude the competing store"))
             for name, changed, witness in controls:
                 negative = work / ("rollback-negative-" + name); shutil.copytree(classes, negative)
                 mutation = work / ("rollback-source-" + name) / "AndroidNodeStore.java"; mutation.parent.mkdir(); mutation.write_text(changed)
