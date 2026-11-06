@@ -693,6 +693,13 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	finishMeasurement, err := a.beginStandaloneThroughput(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer finishMeasurement()
+
 	measured, stop, validate, err := connectionTelemetryPathContext(r.Context(), a, p, st, sessionAtStart)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "connection speed test") {

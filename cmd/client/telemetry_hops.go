@@ -266,6 +266,13 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	finishMeasurement, err := a.beginStandaloneThroughput(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer finishMeasurement()
+
 	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart, p)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "routed node speed test") {
@@ -368,6 +375,13 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
+	finishMeasurement, err := a.beginStandaloneThroughput(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer finishMeasurement()
+
 	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart, entry, exit)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "multihop speed test") {
