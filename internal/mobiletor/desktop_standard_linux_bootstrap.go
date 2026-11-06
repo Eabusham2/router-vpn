@@ -44,6 +44,7 @@ type desktopLinuxStandardBootstrap struct {
 	retired        bool
 	grantLive      bool
 	upstream       *DesktopLinuxBootstrapDNSUpstream
+	group          *DesktopLinuxBootstrapDNSGroup
 }
 type desktopLinuxBootstrapRoute struct {
 	Interface net.Interface
@@ -224,7 +225,7 @@ func (t *desktopLinuxStandardBootstrap) currentSocket(ctx context.Context) error
 
 // inventory accepts only the original acknowledged additional handle, never a
 // later lookalike. Its removal must leave the original complete baseline.
-func (t *desktopLinuxStandardBootstrap) inventory(b *DesktopLinuxNodeBaseline, rows []map[string]any) (bool, error) {
+func (t *desktopLinuxStandardBootstrap) filterInventory(b *DesktopLinuxNodeBaseline, rows []map[string]any) ([]map[string]any, bool, error) {
 	var filtered []map[string]any
 	present := false
 	setPresent := false
@@ -233,10 +234,10 @@ func (t *desktopLinuxStandardBootstrap) inventory(b *DesktopLinuxNodeBaseline, r
 		if t.grant != nil {
 			if set, ok := row["set"].(map[string]any); ok && desktopLinuxNumber(set["handle"]) == t.grant.setHandle {
 				if setPresent || t.retired {
-					return false, errors.New("bootstrap timer set duplicated or survived committed retirement")
+					return nil, false, errors.New("bootstrap timer set duplicated or survived committed retirement")
 				}
 				if err := t.inventoryGrantSet(b, set); err != nil {
-					return false, err
+					return nil, false, err
 				}
 				setPresent = true
 				continue
@@ -245,7 +246,7 @@ func (t *desktopLinuxStandardBootstrap) inventory(b *DesktopLinuxNodeBaseline, r
 		rule, _ := row["rule"].(map[string]any)
 		if desktopLinuxNumber(rule["handle"]) == t.handle && t.handle != 0 {
 			if present || !desktopLinuxProtectionKeys(rule, "family", "table", "chain", "handle", "expr") || rule["family"] != "inet" || rule["table"] != b.nft.table() || rule["chain"] != "output" || t.grant == nil && !reflect.DeepEqual(desktopLinuxSetNormalized(rule["expr"]), desktopLinuxSetNormalized(t.expression)) || t.retired {
-				return false, errors.New("bootstrap grant was replaced")
+				return nil, false, errors.New("bootstrap grant was replaced")
 			}
 			present = true
 			continue
@@ -253,7 +254,14 @@ func (t *desktopLinuxStandardBootstrap) inventory(b *DesktopLinuxNodeBaseline, r
 		filtered = append(filtered, desktopLinuxSetNormalized(row).(map[string]any))
 	}
 	if t.grant != nil && (present != setPresent || !t.retired && !present) {
-		return false, errors.New("bootstrap exact rule and timer set did not remain paired")
+		return nil, false, errors.New("bootstrap exact rule and timer set did not remain paired")
+	}
+	return filtered, present, nil
+}
+func (t *desktopLinuxStandardBootstrap) inventory(b *DesktopLinuxNodeBaseline, rows []map[string]any) (bool, error) {
+	filtered, present, err := t.filterInventory(b, rows)
+	if err != nil {
+		return false, err
 	}
 	n := *b.nft
 	n.Baseline = map[uint64]any{}
@@ -272,6 +280,10 @@ func (t *desktopLinuxStandardBootstrap) observe(ctx context.Context, b *DesktopL
 // generation to the kernel; a later policy change cannot turn readback into
 // authority to delete a same-handle replacement.
 func (t *desktopLinuxStandardBootstrap) observeGeneration(ctx context.Context, b *DesktopLinuxNodeBaseline) (bool, uint32, error) {
+	if t.group != nil {
+		generation, err := t.group.observe(ctx)
+		return t.handle != 0 && !t.retired, generation, err
+	}
 	if e := b.currentNamespace(ctx); e != nil {
 		return false, 0, e
 	}
@@ -308,6 +320,9 @@ func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(ctx context.Cont
 	t, b := p.bootstrap, p.baseline
 	if t == nil {
 		return nil
+	}
+	if t.group != nil {
+		return errors.New("bootstrap group cleanup requires its original joined owner")
 	}
 	if b.crossTransfer != "bootstrap" {
 		return errors.New("bootstrap cleanup lost its original reservation")
@@ -403,6 +418,15 @@ func (t *desktopLinuxStandardBootstrap) closeSocket() error {
 // CleanupBootstrap retires only a pending transaction already owned by this
 // original creator. It cannot start a lookup or create a replacement socket.
 func (p *DesktopLinuxStandardProtection) CleanupBootstrap(ctx context.Context, lease *os.File) error {
+	if p != nil {
+		if group := p.bootstrapGroup.Load(); group != nil {
+			if lease != group.lease {
+				return errors.New("bootstrap group cleanup replaced original lease")
+			}
+			return group.Close(ctx)
+		}
+	}
+
 	if p == nil || p.baseline == nil {
 		return errors.New("bootstrap lost its original creator")
 	}
@@ -632,7 +656,12 @@ func (t *desktopLinuxStandardBootstrap) prepareSocket(ctx context.Context, fd in
 	if e = desktopLinuxStandardLease(lease); e != nil {
 		return e
 	}
-	generation, e := b.observe(ctx, false)
+	var generation uint32
+	if t.group != nil {
+		generation, e = t.group.observe(ctx)
+	} else {
+		generation, e = b.observe(ctx, false)
+	}
 	if e != nil {
 		return e
 	}
@@ -665,6 +694,9 @@ func (t *desktopLinuxStandardBootstrap) prepareSocket(ctx context.Context, fd in
 	e = b.netlink.bootstrapExchange(ctx, t.grant)
 	if t.grant.complete() && !t.grant.rejected {
 		t.handle = t.grant.ruleHandle
+		if t.group != nil {
+			e = errors.Join(e, t.group.acknowledge(t.grant))
+		}
 	}
 	if e != nil || !t.grant.complete() || t.grant.rejected {
 		return errors.Join(e, errors.New("bootstrap creation lacks original object and commit receipts"))

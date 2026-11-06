@@ -570,3 +570,6 @@ AUXILIARY_TESTS.update({
  'internal/systembootstrap/resolved_linux_test.go':'resolved-stub',
  'internal/standardengine/resolved_route_test.go':'resolved-route',
  'internal/standardengine/resolved_anchor_command_test.go':'resolved-anchor-command'})
+
+# Original concurrent protected resolver cohort and exact joined retirement.
+SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_group'+suffix+'.go' for suffix in ('','_exchange','_test','_native_test'))

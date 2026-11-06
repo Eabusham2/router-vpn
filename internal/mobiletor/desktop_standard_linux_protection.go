@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -22,10 +23,11 @@ const desktopLinuxStandardTablePrefix = "router_vpn_standard_"
 // persisted owner under their retained mutation lease before Release.
 // Close joins descriptors only and deliberately leaves kernel protection.
 type DesktopLinuxStandardProtection struct {
-	baseline     *DesktopLinuxNodeBaseline
-	generation   uint32
-	acknowledged bool
-	bootstrap    *desktopLinuxStandardBootstrap
+	baseline       *DesktopLinuxNodeBaseline
+	generation     uint32
+	acknowledged   bool
+	bootstrap      *desktopLinuxStandardBootstrap
+	bootstrapGroup atomic.Pointer[DesktopLinuxBootstrapDNSGroup]
 }
 
 // DesktopLinuxStandardProtectionReceipt describes the original acknowledged
