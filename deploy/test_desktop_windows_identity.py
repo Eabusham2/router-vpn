@@ -52,6 +52,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityTCPRetainsBoundDescriptor",
     "TestDesktopSocketWindowsIdentitySequentialProtocolTransfer",
     "TestDesktopSocketWindowsIdentityRetainsFailedDuplicateReadback",
+    "TestDesktopSocketWindowsIdentityObservesRefusedConnectBeforePublication",
 )
 
 

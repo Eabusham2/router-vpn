@@ -166,6 +166,7 @@ func desktopWindowsNodeFailedInspection(ctx context.Context, identity *DesktopWi
 			return observe(raw, err)
 		}
 		phase, operation, imported := "none", "none", "absent"
+		connector := "absent"
 		if connection := record.connect; connection != nil {
 			phase = fmt.Sprint(connection.phase)
 			if connection.operation != nil {
@@ -173,9 +174,13 @@ func desktopWindowsNodeFailedInspection(ctx context.Context, identity *DesktopWi
 			}
 			if connection.io != nil {
 				imported = observe(desktopWindowsRaw{connection.io}, nil)
+				state, closing, closed := connection.io.observeConnect()
+				connector = fmt.Sprintf(
+					"entered=%t returned=%t class=%s errno=%d closing=%t closed=%t",
+					state.Entered, state.Returned, state.Class, uint32(state.Errno), closing, closed)
 			}
 		}
-		return fmt.Errorf("Node failed inspection observation network=%s phase=%s operation=%s original={%s} returned={%s} imported={%s}", creation.Network, phase, operation, observeSource(record.original), observeSource(record.returned), imported)
+		return fmt.Errorf("Node failed inspection observation network=%s phase=%s operation=%s connector={%s} original={%s} returned={%s} imported={%s}", creation.Network, phase, operation, connector, observeSource(record.original), observeSource(record.returned), imported)
 	})
 	return errors.Join(cause, diagnostic)
 }

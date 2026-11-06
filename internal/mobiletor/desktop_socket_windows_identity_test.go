@@ -1697,3 +1697,156 @@ func TestDesktopSocketWindowsIdentityRenewsAcrossActualEndpointTransition(t *tes
 	}
 	desktopWindowsIdentityTestIOProof(t, "after-concurrent-renewal", f.identity, f.creation, f.created.Native, f.before, desktopWindowsRaw{owned}, f.remote)
 }
+
+func TestDesktopSocketWindowsIdentityObservesRefusedConnectBeforePublication(t *testing.T) {
+	f := desktopWindowsIdentityTestTCPFixture(t)
+	ctx, cancel := context.WithTimeout(f.identity.ctx, 8*time.Second)
+	defer cancel()
+
+	// Keep the refusal destination exclusively bound but never listening.
+	// No closed-listener port is released for another process to acquire.
+	handle, err := desktopSocketCreateTCP(syscall.AF_INET)
+	if err != nil {
+		t.Fatal("create actual non-listening TCP destination", err)
+	}
+	destination := desktopWindowsNativeOwn(handle)
+	t.Cleanup(func() {
+		if err := destination.Close(); err != nil {
+			t.Error("non-listening TCP destination cleanup", err)
+		}
+	})
+	_, f.remote = desktopWindowsIdentityTestBind(t, destination, netip.MustParseAddr("127.0.0.1"))
+
+	entered := make(chan *desktopWindowsSocket, 1)
+	proceed := make(chan struct{})
+	var release sync.Once
+	done := make(chan struct{})
+	var connection net.Conn
+	var importErr error
+	go func() {
+		connection, importErr = desktopSocketImportNativeTCPWithConnect(
+			ctx, "tcp4", f.remote, f.created.Native, f.control,
+			func(ctx context.Context, owned *desktopWindowsSocket) error {
+				entered <- owned
+				<-proceed
+				return desktopSocketConnectOwnedTCP(ctx, owned)
+			})
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		release.Do(func() { close(proceed) })
+		select {
+		case <-done:
+			if connection != nil {
+				if err := connection.Close(); err != nil {
+					t.Error("refused imported I/O cleanup failed", err)
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("actual refused import did not join for cleanup")
+		}
+	})
+
+	var owned *desktopWindowsSocket
+	select {
+	case owned = <-entered:
+	case <-done:
+		t.Fatal("actual import failed before native refusal", importErr)
+	case <-ctx.Done():
+		t.Fatal("actual import never entered its connector", ctx.Err())
+	}
+	state, closing, closed := owned.observeConnect()
+	if !state.Entered || state.Returned || state.Class != "entered" || closing || closed {
+		t.Fatal("entered connector observation invented completion", state, closing, closed)
+	}
+
+	// Hold the identity gate while the actual connector returns. Its finish
+	// publication must wait, but the diagnostic observation must not.
+	if err := f.identity.call(ctx, false, func() error {
+		record := f.identity.sockets[f.creation.SocketID]
+		if record == nil || record.creation != f.creation || record.connect == nil ||
+			record.connect.io != owned || record.connect.phase != desktopWindowsTCPPending {
+			return errors.New("refused Connect lost its original pending import")
+		}
+		release.Do(func() { close(proceed) })
+		tick := time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+		for {
+			state, closing, closed := owned.observeConnect()
+			if state.Returned {
+				if !state.Entered || state.Class != "syscall" ||
+					state.Errno != syscall.Errno(10061) /* WSAECONNREFUSED */ ||
+					closing || closed {
+					return errors.New("actual refused connector did not preserve its numeric result and live owner")
+				}
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-tick.C:
+			}
+		}
+		if record.connect.phase != desktopWindowsTCPPending ||
+			record.connect.operation.Err() != nil || record.connect.io != owned {
+			return errors.New("connector observation changed identity publication or ownership")
+		}
+		if _, err := record.original.SyscallConn(); err != nil {
+			return errors.Join(err, errors.New("refused connector lost its retained original"))
+		}
+		if _, err := record.returned.SyscallConn(); err != nil {
+			return errors.Join(err, errors.New("refused connector lost its transferred descriptor"))
+		}
+		if err := f.created.Native.Close(); err == nil || !strings.Contains(err.Error(), "retained by imported I/O") {
+			return errors.Join(err, errors.New("source closed before refused imported I/O joined"))
+		}
+		if _, err := f.created.Native.SyscallConn(); err != nil {
+			return errors.Join(err, errors.New("refused source Close lost its retained descriptor"))
+		}
+		// Preserve the actual inspection outcome. No particular ALE error is
+		// invented or suppressed, and no connected receipt may be produced.
+		inspection, inspectionErr := f.identity.inspectSocketLocked(f.creation)
+		if inspection.PeerConnected {
+			return errors.New("refused Connect acquired a connected inspection")
+		}
+		if inspectionErr == nil && (inspection.EndpointID == 0 || inspection.EndpointID != f.before.EndpointID ||
+			inspection.TokenModifiedID != f.before.TokenModifiedID || inspection.Family != f.before.Family ||
+			inspection.Protocol != f.before.Protocol || inspection.Local != f.before.Local ||
+			inspection.Remote != f.before.Remote || !bytes.Equal(inspection.AppID, f.before.AppID) || inspection.Raw == nil) {
+			return errors.New("refused Connect reported an incomplete successful bound inspection")
+		}
+		t.Logf("Actual refused Connect inspection error=%v", inspectionErr)
+		return nil
+	}); err != nil {
+		t.Fatal("refused connector completion observation failed", err)
+	}
+
+	select {
+	case <-done:
+		if connection != owned || !errors.Is(importErr, syscall.Errno(10061)) {
+			t.Fatal("refused Connect lost its original partial owner or native error", importErr)
+		}
+	case <-ctx.Done():
+		t.Fatal("refused Connect did not publish after releasing the identity gate", ctx.Err())
+	}
+	if err := f.identity.call(ctx, false, func() error {
+		record := f.identity.sockets[f.creation.SocketID]
+		if record == nil || record.connect == nil || record.connect.io != owned ||
+			record.connect.phase != desktopWindowsTCPFailed {
+			return errors.New("actual refused Connect did not publish failure to its original record")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal("refused imported I/O did not close after join", err)
+	}
+	if err := f.keeper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopWindowsIdentityTestRelease(f.identity, f.creation); err != nil {
+		t.Fatal("refused Connect did not retire its original kernel endpoints", err)
+	}
+}

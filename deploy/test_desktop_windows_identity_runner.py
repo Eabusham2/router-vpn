@@ -17,6 +17,14 @@ SPEC.loader.exec_module(GATE)
 
 
 class WindowsIdentitySourceCopies(unittest.TestCase):
+    def test_actual_refused_connect_observation_is_mandatory(self):
+        name = "TestDesktopSocketWindowsIdentityObservesRefusedConnectBeforePublication"
+        self.assertEqual(GATE.REQUIRED[-1], name)
+        self.assertEqual(GATE.REQUIRED.count(name), 1)
+        source = (ROOT / "internal/mobiletor/desktop_socket_windows_identity_test.go").read_text(
+            encoding="utf-8")
+        self.assertIn("func " + name + "(t *testing.T)", source)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="windows-identity-copy-")
         self.addCleanup(self.temp.cleanup)

@@ -40,6 +40,32 @@ type desktopSocketPollFD struct {
 	revents int16
 }
 
+// Diagnostic only. This is not connection, permission, or retirement authority.
+// mu on the original desktopWindowsSocket protects this copied observation.
+type desktopWindowsConnectObservation struct {
+	Entered, Returned bool
+	Class             string
+	Errno             syscall.Errno
+}
+
+func desktopWindowsConnectResult(err error) desktopWindowsConnectObservation {
+	result := desktopWindowsConnectObservation{Entered: true, Returned: true, Class: "success"}
+	switch {
+	case errors.Is(err, context.Canceled):
+		result.Class = "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		result.Class = "deadline"
+	case err != nil:
+		result.Class = "error"
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			result.Class = "syscall"
+			result.Errno = errno
+		}
+	}
+	return result
+}
+
 // The Windows net.Dialer binds again immediately before ConnectEx. A socket
 // whose actual source port was already authorized therefore cannot be handed
 // back to it. This narrow connection owns nonblocking Winsock I/O directly;
@@ -60,6 +86,14 @@ type desktopWindowsSocket struct {
 	write       sync.Mutex
 	close       sync.Mutex
 	io          sync.WaitGroup
+
+	connectObservation desktopWindowsConnectObservation
+}
+
+func (c *desktopWindowsSocket) observeConnect() (desktopWindowsConnectObservation, bool, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connectObservation, c.closing, c.closed
 }
 
 type desktopWindowsRaw struct{ socket *desktopWindowsSocket }

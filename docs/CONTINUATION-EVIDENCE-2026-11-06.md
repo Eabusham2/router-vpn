@@ -800,6 +800,16 @@ ARM64 OpenVPN job `127872067654` reached `unavailable-port-reservation` with num
 
 The fixture startup diagnostic now appends only allowlisted network (`tcp`, `tcp4`, `udp`, `udp4`) and syscall-operation (`socket`, `bind`, `listen`, `setsockopt`) labels, defaulting to `unknown`. It preserves the numeric errno, original diagnostic prefix and exact returned error; no arbitrary error text, endpoint or credential is emitted. Port probing, retries, timeouts, protection and ownership are unchanged. No exact-line consumer was found in the current runners. Native execution must still identify the failing operation; this change is not a port-selection repair.
 
+### Native TCP connector completion observation and refusal regression
+
+The Windows importer calls its native connector outside the identity gate and publishes the result through `finishNativeTCP` afterward. The existing actual successful-transition test deliberately exercises the interval in which the connector has returned while the stored phase is still Pending. Therefore the earlier AMD64 failed-inspection `phase=0` alone does not establish that Connect was still running. No causal repair is inferred from that ambiguity.
+
+The original imported I/O object now retains a non-authoritative, mutex-protected copy of connector entry/return, fixed result class and numeric errno. Classification occurs outside the I/O mutex; only assignment/copying holds it, and the writer releases it before the existing finish hook. The fixture's failed-inspection diagnostic includes this observation and closing/closed flags. These diagnostic reads happen after the original inspection failure and are not an atomic record of that earlier instant. No observation field participates in admission, identity transition, cancellation or retirement, and no independent `SO_ERROR` read is added.
+
+`TestDesktopSocketWindowsIdentityObservesRefusedConnectBeforePublication` keeps a TCP/IPv4 destination exclusively bound without listening, requires the original connector's actual refusal `10061`, and holds the identity gate until the returned observation is visible. It requires the original pending owner, refuses premature source close, and rejects any connected inspection. A nil inspection error must still supply the complete original bound identity; an actual ALE error is observed without being rewritten into success. The test then requires the original partial owner/error, failed-phase publication, joined close, keeper close and exact retirement. An actual retirement failure remains a required test failure.
+
+The test is appended to the mandatory native inventory, preserving every existing positional mutation selector; the runner also checks its unique presence. The source inventory becomes 22 required native parent cases and 16 Python runner methods. This increment is six source/test/runner files plus this evidence entry, reviewed by two Astra agents and the parent. No local compilation or execution was possible. Actual Windows AMD64/ARM64 execution, including the new IPv4 refusal case and all existing ownership controls, remains required; it does not establish equivalent IPv6 refusal coverage or resolve the earlier OpenVPN WFP failure.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

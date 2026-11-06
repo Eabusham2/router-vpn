@@ -281,7 +281,14 @@ func desktopSocketImportNativeTCPWithConnect(ctx context.Context, network string
 			return c, fmt.Errorf("Windows TCP import registration: %w", err)
 		}
 	}
+	c.mu.Lock()
+	c.connectObservation = desktopWindowsConnectObservation{Entered: true, Class: "entered"}
+	c.mu.Unlock()
 	connectErr := connect(ctx, c)
+	observation := desktopWindowsConnectResult(connectErr)
+	c.mu.Lock()
+	c.connectObservation = observation
+	c.mu.Unlock()
 	if connectErr != nil {
 		connectErr = fmt.Errorf("Windows TCP native connect: %w", connectErr)
 	}
