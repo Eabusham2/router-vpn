@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `dc4ab1c1`
+## November 6 product continuation through `1cac6bf7`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`dc4ab1c1cd1fc36e8e03ec1427b7f74155820e13`](https://github.com/Eabusham2/router-vpn/commit/dc4ab1c1cd1fc36e8e03ec1427b7f74155820e13).
+[`1cac6bf7beaedc795c6e0acacb41123c25ddca58`](https://github.com/Eabusham2/router-vpn/commit/1cac6bf7beaedc795c6e0acacb41123c25ddca58).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 33 units.
+with separately attributed contributor evidence; it is not one of these 38 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -240,6 +240,51 @@ It was preserved before `35725083`; its contributor evidence is separate.
   now include the newer Router Server group. All nineteen workflow tests pass;
   the source inventory selects all 250 parent names exactly once, including
   platform variants. Actual Windows execution of the new groups remains pending.
+
+- **Ordinary SS DNS fixture (unit 34):** `8a71c473` restores its captured TCP
+  DNS selector while retaining explicitly UDP-capable Server cases. Pinned
+  preparation, 689 source records and native compilation pass. Local traffic
+  is blocked at netlink enumeration; matching Windows acceptance remains open.
+- **Owned UoT prerequisite (unit 35):** `6859097b` adds explicitly enabled
+  version-2 authenticated datagrams to the existing AES/XOR TCP owner. Actual
+  SS2022/UoT/whitening peers pass normal and low-memory race gates, including
+  17,000-byte datagrams, cancellation and replacement controls. No new imported
+  graph is admitted. Full-Box UoT later passes Ubuntu and macOS; the separate
+  macOS userspace provider fails and is addressed by unit 38.
+- **OpenVPN live capacity prerequisite (unit 36):** `f194e094` binds bounded
+  actual MTU readback to one authenticated remote and generation. Five mandatory
+  userspace peer cases prove encrypted TCP/UDP, reconnect, negotiated 1,280 from
+  requested 1,500, wrong credentials and closed-owner refusal. The new UDP witness
+  explicitly allows two provider sessions; old one-client helpers are unchanged.
+  This does not establish provider reclamation, physical routing or imported
+  OpenVPN host admission.
+- **Android daily imported-path admission (unit 37):** `95f36b95` removes stale
+  duplicate capability lists in Connect, Home, startup, reattachment and usage.
+  They previously blocked SOCKS despite the 235 producer/native graph results.
+  Whole-runtime checks pass 1,586/200 with fourteen controls; actual runtime/Home
+  composition passes 100/35 with three old-guard controls. Related usage, startup,
+  Home and permission checks pass with native/OS doubles explicitly identified.
+  OpenVPN and CONNECT remain unadmitted; current APK/device evidence is separate.
+- **Darwin UoT provider fixture (unit 38):** `1cac6bf7` uses the existing owned
+  UDP buffer policy, preserving payload and bounds. Normal/low-memory race checks
+  pass and a setup-error causal control fails the intended unchanged assertion.
+  The corresponding macOS job has not yet established repaired acceptance.
+
+Concurrent `bc6cffef` Windows Local execution, `2d59d74e`/`fb465836` deeper
+private-DNS dependencies, `12409a40` invalid Compare-score cleanup and evidence
+`71bfaba7` are preserved. Concurrent `d847152e` corrects the Apple Tor receipt's
+missing compiled Home DNS dependency. An independent actual Swift/Go export
+passes 68,661 checks; its 396 Local and 528 padding graphs pass that published
+consumer, with four missing/changed-hash controls and all twelve contracts.
+The redundant local fix was not republished.
+
+At **08:09:14 UTC**, exact `71bfaba7` has nineteen workflow attempts: seven
+successful, eight queued, three in progress and one pending. Authoritative
+release run 42185197816 is pending; the latest release remains historical
+`745b3e41` with twelve assets. Actual Windows MAX at `80fefcc6` passes all ten
+jobs and PQ at `fe914aaf` passes both architectures. Darwin ARM ownership at
+`14724aaf` passes, but its other three jobs are cancelled. These exact-source
+results do not establish complete current publication or physical acceptance.
 
 Concurrent `ad4da5e7` contributed four final-only SOCKS proxy cases, `dbb0a4ca`
 six final-only packet cases, and `ea460eae` ten entry-only cases. Their exact

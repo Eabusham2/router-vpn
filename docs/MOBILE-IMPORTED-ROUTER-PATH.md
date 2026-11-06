@@ -23,6 +23,16 @@ pairs with only a final layer, and ten pairs with only an entry layer remain
 in the matrix. Twenty pairs with both layers enabled extend the published
 215-case matrix to 235. These counts describe
 executable configurations, not completed user requirements.
+
+The later Android host correction `95f36b95` is required for the daily Connect,
+Home transition, startup and cold reattachment paths to use this capability
+consistently. Earlier duplicated protocol lists still rejected SOCKS5 after
+the producer and native-peer matrix passed. Those callers and usage now consult
+the same captured entry/final capability. The actual runtime composed with the
+Home store passes 35 cases and rejects three old-guard mutations; native proof
+and OS boundaries remain explicit doubles in that host test. Producer/native
+configuration evidence alone did not establish this daily-app admission.
+
 Packet composition validates the complete data, handshake, cookie and enabled
 junk envelope, including the final's separately captured Start Layer, before
 constructing a native owner.
