@@ -800,7 +800,7 @@ func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot s
 	if snapshot.Plan.native != nil && snapshot.Plan.native.ownedNode != nil {
 		policy = snapshot.Plan.native.ownedNode.policy.Metadata().KillSwitchPolicy
 	} else if saved := snapshot.Plan.external; saved != nil && saved.windowsHost != nil && saved.windowsHost.app == a &&
-		saved.windowsHost.current() == nil && desktopWindowsExternalProfileEligible(saved.profile, saved.direct, saved.execution) {
+		saved.windowsHost.current() == nil && desktopWindowsExternalGraphEligible(saved.profile, saved.entry, saved.direct, saved.execution) {
 		policy = desktopOwnedNodeProtectionPolicy(saved.profile)
 	}
 	if policy == "" {
@@ -825,10 +825,10 @@ func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot s
 		a.mu.Lock()
 		profiles := cloneRouterProfileStore(a.profiles).Profiles
 		a.mu.Unlock()
-		_, _, direct, err := speedLabExternalEntry(profiles, profile, request)
+		entry, _, direct, err := speedLabExternalEntry(profiles, profile, request)
 		execution, executionErr := externalExecutionChoice(profile, request.Execution, direct)
 		profile.MultihopExecution = execution
-		if err != nil || executionErr != nil || request.EntryMode != "" || !desktopWindowsExternalProfileEligible(profile, direct, "") {
+		if err != nil || executionErr != nil || request.EntryMode != "" || !desktopWindowsExternalGraphEligible(profile, entry, direct, "") {
 			return errors.Join(err, executionErr, errors.New("temporary external path has no captured Windows protection successor"))
 		}
 		return nil

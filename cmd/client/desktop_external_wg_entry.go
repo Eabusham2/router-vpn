@@ -50,6 +50,18 @@ func validateDesktopMacOSExternalSources(profile, entry common.RouterProfile, la
 	}
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	return validateDesktopRetainedExternalSourcesLocked(profile, entry, launch)
+}
+
+// Caller retains the source lock; saved-source callers also retain app.mu.
+func validateDesktopRetainedExternalSourcesLocked(profile, entry common.RouterProfile, launch *desktopNodeLaunch) error {
+	if launch == nil || launch.external == nil {
+		return errors.New("retained external entry lost its captured launch")
+	}
+	owner := launch.external
+	if !desktopExternalRetainedEntryOwner(owner) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID || profile.ID != owner.profile.ID || entry.ID != owner.entry.ID {
+		return errors.New("retained external entry changed its two original saved identities")
+	}
 	selected, err := externalRuntimePolicy(profile)
 	if err == nil {
 		selected, err = externalDNSPolicyForPath(selected, entry, false)
@@ -62,24 +74,24 @@ func validateDesktopMacOSExternalSources(profile, entry common.RouterProfile, la
 	selected, err = freezeDesktopExternalProfile(selected, owner.profile.Endpoint)
 	if err != nil || desktopOwnedNodeProfileToken(selected) != desktopOwnedNodeProfileToken(owner.profile) ||
 		[3]bool{selected.DAITAEnabled, selected.JumboTUN, selected.SocksEnabled} != [3]bool{owner.profile.DAITAEnabled, owner.profile.JumboTUN, owner.profile.SocksEnabled} {
-		return errors.Join(err, errors.New("macOS entry path replaced its captured final policy"))
+		return errors.Join(err, errors.New("retained external entry path replaced its captured final policy"))
 	}
 	frozen, err := freezeDesktopExternalProfile(entry, launch.endpoint)
 	if err != nil || desktopOwnedNodeProfileToken(frozen) != desktopOwnedNodeProfileToken(owner.entry) ||
 		[3]bool{frozen.DAITAEnabled, frozen.JumboTUN, frozen.SocksEnabled} != [3]bool{owner.entry.DAITAEnabled, owner.entry.JumboTUN, owner.entry.SocksEnabled} {
-		return errors.Join(err, errors.New("macOS entry path replaced its original entry source"))
+		return errors.Join(err, errors.New("retained external entry path replaced its original entry source"))
 	}
 	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
 	if err != nil || owner.physical == nil || owner.physical.Validate() != nil ||
 		original.SourceSHA256() != owner.physical.OriginalPolicy().SourceSHA256() || original.Config() != owner.physical.OriginalPolicy().Config() || original.Metadata() != owner.physical.OriginalPolicy().Metadata() {
-		return errors.Join(err, errors.New("macOS entry path lost its independently sealed full graph"))
+		return errors.Join(err, errors.New("retained external entry path lost its independently sealed full graph"))
 	}
 	var captured struct {
 		Profile common.RouterProfile `json:"profile"`
 		Entry   common.RouterProfile `json:"entry"`
 	}
 	if json.Unmarshal(owner.capture, &captured) != nil || desktopOwnedNodeProfileToken(captured.Profile) != desktopOwnedNodeProfileToken(owner.profile) || desktopOwnedNodeProfileToken(captured.Entry) != desktopOwnedNodeProfileToken(owner.entry) {
-		return errors.New("macOS entry path changed its captured private sources")
+		return errors.New("retained external entry path changed its captured private sources")
 	}
 	return nil
 }
@@ -117,5 +129,5 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 }
 
 func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
-	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner)
+	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && desktopExternalSSEntryOwner(owner)
 }

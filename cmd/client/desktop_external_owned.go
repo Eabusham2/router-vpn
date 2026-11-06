@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,7 +96,7 @@ type desktopWindowsExternalRuntime struct {
 	host                                           *desktopWindowsExternalHost
 	policy                                         *mobilemultihop.DesktopExternalPolicy
 	operation                                      context.Context
-	profileToken, persistedToken                   string
+	profileToken, persistedToken, entryToken       string
 	options, savedOptions                          [3]bool
 	beforeCommand                                  *exec.Cmd
 	beforeState                                    state
@@ -129,7 +130,7 @@ func desktopExternalStartLayerSupported(protocol, layer string) bool {
 }
 
 func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct bool, restored string) bool {
-	if !direct || profile.NodeKind != "external" || profile.External == nil ||
+	if (!direct && !desktopExternalSSEntryFinalProfile(profile)) || profile.NodeKind != "external" || profile.External == nil ||
 		!desktopExternalStartLayerSupported(profile.External.Protocol, profile.StartLayer) ||
 		profile.MultihopExecution != "" && profile.MultihopExecution != "local" || restored != "" && restored != "local" {
 		return false
@@ -148,7 +149,9 @@ func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct 
 func desktopWindowsExternalEligible(launch *desktopNodeLaunch) bool {
 	return launch != nil && launch.ownedNode == nil && launch.tor == nil && launch.external != nil &&
 		launch.external.predecessor == "" && launch.external.selection == "local" &&
-		desktopWindowsExternalProfileEligible(launch.external.profile, launch.external.direct, "")
+		launch.policyProfileID == launch.external.profile.ID &&
+		(launch.external.direct && launch.profileID == launch.policyProfileID || !launch.external.direct && launch.profileID == launch.external.entry.ID) &&
+		desktopWindowsExternalGraphEligible(launch.external.profile, launch.external.entry, launch.external.direct, "")
 }
 
 func captureDesktopWindowsExternalHost(a *app, supplied *desktopNodeConnectionHost) (*desktopWindowsExternalHost, error) {
@@ -167,8 +170,8 @@ func captureDesktopWindowsExternalHost(a *app, supplied *desktopNodeConnectionHo
 
 func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost, profile, entry common.RouterProfile,
 	exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {
-	if !desktopWindowsExternalProfileEligible(profile, direct, restored) || entry.ID != "" {
-		return nil, errors.New("native external preparation requires its captured direct Local Windows policy")
+	if !desktopWindowsExternalGraphEligible(profile, entry, direct, restored) {
+		return nil, errors.New("native external preparation requires its captured Local Windows graph")
 	}
 	operation := a.connectionOperationContextOrBackground()
 	if err := a.checkCapturedConnectionOperation(operation); err != nil {
@@ -214,7 +217,7 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 // already frozen endpoint. Credentials, trust, DNS, device policy and complete
 // imported source remain tied to the same saved external node.
 func validateDesktopWindowsExternalSource(profile common.RouterProfile, launch *desktopNodeLaunch) error {
-	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.profileID || profile.ID != launch.policyProfileID {
+	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.policyProfileID {
 		return errors.New("native external source lost its exact saved node")
 	}
 	owner := launch.external
@@ -229,7 +232,7 @@ func validateDesktopWindowsExternalSourceContext(ctx context.Context, profile co
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.profileID || profile.ID != launch.policyProfileID {
+	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.policyProfileID {
 		return errors.New("native external source lost its exact saved node")
 	}
 	if err := mobilemtu.LockContext(ctx, &launch.external.mu); err != nil {
@@ -239,10 +242,13 @@ func validateDesktopWindowsExternalSourceContext(ctx context.Context, profile co
 	return errors.Join(validateDesktopWindowsExternalSourceLocked(profile, launch), ctx.Err())
 }
 func validateDesktopWindowsExternalSourceLocked(profile common.RouterProfile, launch *desktopNodeLaunch) error {
-	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.profileID || profile.ID != launch.policyProfileID {
+	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.policyProfileID {
 		return errors.New("native external source lost its exact saved node")
 	}
 	owner := launch.external
+	if !owner.direct {
+		return validateDesktopRetainedExternalSourcesLocked(profile, owner.entry, launch)
+	}
 	selected, err := externalRuntimePolicy(profile)
 	if err == nil {
 		selected, err = externalDNSPolicyForPath(selected, common.RouterProfile{}, true)
@@ -326,17 +332,24 @@ func prepareDesktopWindowsRetainedExternal(a *app, launch *desktopNodeLaunch) (d
 	}
 	operation := a.connectionOperationContextOrBackground()
 	a.mu.Lock()
-	profile, exists := a.profileByIDLocked(launch.profileID)
+	profile, exists := a.profileByIDLocked(launch.policyProfileID)
 	owner := &desktopWindowsExternalRuntime{app: a, launch: launch, host: host, policy: policy, operation: operation,
 		profileToken: desktopOwnedNodeProfileToken(profile), options: [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks},
 		savedOptions: [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}, beforeCommand: a.cmd,
 		beforeState: a.state, beforeSelected: a.profiles.SelectedID, gate: make(chan struct{}, 1)}
+	entry, entryExists := a.profileByIDLocked(launch.external.entry.ID)
+	if !launch.external.direct && entryExists {
+		owner.entryToken = desktopOwnedNodeProfileToken(entry)
+	}
 	a.mu.Unlock()
-	if !exists || validateDesktopWindowsExternalSource(profile, launch) != nil {
+	if !exists || !launch.external.direct && !entryExists || validateDesktopWindowsExternalSource(profile, launch) != nil {
 		return nil, errors.New("native external launch changed its captured saved source")
 	}
 	persisted := cloneRouterProfile(profile)
-	persisted.MultihopEnabled, persisted.MultihopEntryID, persisted.MultihopExitID = false, "", ""
+	persisted.MultihopEnabled, persisted.MultihopEntryID, persisted.MultihopExitID = !launch.external.direct, launch.external.entry.ID, ""
+	if !launch.external.direct {
+		persisted.MultihopExitID = profile.ID
+	}
 	persisted.MultihopExecution, persisted.MultihopEntryMode = "local", ""
 	owner.persistedToken = desktopOwnedNodeProfileToken(persisted)
 	owner.gate <- struct{}{}
@@ -376,7 +389,7 @@ func (owner *desktopWindowsExternalRuntime) current(processRequired bool) error 
 		return err
 	}
 	l, a := owner.launch, owner.app
-	if l.root != owner.host.capture.dataRoot || l.profileID != l.external.profile.ID || l.mode != "external-"+owner.policy.Metadata().Protocol ||
+	if l.root != owner.host.capture.dataRoot || l.policyProfileID != l.external.profile.ID || l.mode != "external-"+owner.policy.Metadata().Protocol ||
 		l.external.network == "" || l.external.network != l.external.currentNetworkIdentity() || l.configSHA256 != owner.policy.Metadata().ConfigSHA256 {
 		return errors.New("native external owner changed its captured runtime or network")
 	}
@@ -391,16 +404,16 @@ func (owner *desktopWindowsExternalRuntime) current(processRequired bool) error 
 	// must not retain app.mu while waiting for another proof reader.
 	l.external.mu.Lock()
 	a.mu.Lock()
-	profile, exists := a.profileByIDLocked(l.profileID)
+	profile, exists := a.profileByIDLocked(l.policyProfileID)
 	revision := desktopOwnedNodeProfileToken(profile)
 	valid := exists && !a.closing && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owner.options &&
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == owner.savedOptions &&
-		(revision == owner.profileToken || activated && revision == owner.persistedToken) && validateDesktopWindowsExternalSourceLocked(profile, l) == nil
+		(revision == owner.profileToken || activated && revision == owner.persistedToken) && owner.sourcesCurrentLocked(profile) == nil
 	if !activated {
 		valid = valid && a.checkCapturedConnectionOperationLocked(owner.operation) == nil && a.connectionCancelIntent != owner.operation
 	}
 	if published {
-		valid = valid && slot != nil && a.nodeProtection == slot && a.cmd == l.command && a.state.RouterID == l.profileID && a.state.RuntimeMode == l.mode
+		valid = valid && slot != nil && a.nodeProtection == slot && a.cmd == l.command && a.state.RouterID == l.policyProfileID && a.state.RuntimeMode == l.mode
 	}
 	a.mu.Unlock()
 	l.external.mu.Unlock()
@@ -450,7 +463,7 @@ func (owner *desktopWindowsExternalRuntime) currentContext(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	if l.root != owner.host.capture.dataRoot || l.profileID != l.external.profile.ID || l.mode != "external-"+owner.policy.Metadata().Protocol ||
+	if l.root != owner.host.capture.dataRoot || l.policyProfileID != l.external.profile.ID || l.mode != "external-"+owner.policy.Metadata().Protocol ||
 		l.external.network == "" || l.external.network != network || l.configSHA256 != owner.policy.Metadata().ConfigSHA256 {
 		return errors.New("native external owner changed its captured runtime or network")
 	}
@@ -479,9 +492,9 @@ func (owner *desktopWindowsExternalRuntime) currentContext(ctx context.Context, 
 		}
 		a.mu.Unlock()
 	}
-	profile, exists := a.profileByIDLocked(l.profileID)
+	profile, exists := a.profileByIDLocked(l.policyProfileID)
 	revision := desktopOwnedNodeProfileToken(profile)
-	sourceErr := validateDesktopWindowsExternalSourceLocked(profile, l)
+	sourceErr := owner.sourcesCurrentLocked(profile)
 	valid := exists && !a.closing && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owner.options &&
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == owner.savedOptions &&
 		(revision == owner.profileToken || activated && revision == owner.persistedToken)
@@ -489,7 +502,7 @@ func (owner *desktopWindowsExternalRuntime) currentContext(ctx context.Context, 
 		valid = valid && a.checkCapturedConnectionOperationLocked(owner.operation) == nil && a.connectionCancelIntent != owner.operation
 	}
 	if published {
-		valid = valid && slot != nil && a.nodeProtection == slot && a.cmd == l.command && a.state.RouterID == l.profileID && a.state.RuntimeMode == l.mode
+		valid = valid && slot != nil && a.nodeProtection == slot && a.cmd == l.command && a.state.RouterID == l.policyProfileID && a.state.RuntimeMode == l.mode
 	}
 	a.mu.Unlock()
 	l.external.mu.Unlock()
@@ -566,8 +579,8 @@ func (owner *desktopWindowsExternalRuntime) CurrentProof(ctx context.Context, pr
 		return err
 	}
 	if !proof.Healthy || !proof.DNSProven ||
-		proof.EntryProven || proof.EntryID != "" || proof.Execution != "local" {
-		return errors.New("native external proof lost its actual process or distinct direct exit policy")
+		proof.EntryProven != !owner.launch.external.direct || proof.EntryID != owner.launch.external.entry.ID || proof.EntryNodeID != "" || proof.Execution != "local" {
+		return errors.New("native external proof lost its actual process or distinct final exit policy")
 	}
 	meta := owner.policy.Metadata()
 	if proof.SourceSHA256 != meta.OriginalSourceSHA256 || proof.ConfigSHA256 != meta.OriginalConfigSHA256 || proof.SessionID != meta.SessionID {
@@ -612,12 +625,15 @@ func (owner *desktopWindowsExternalRuntime) Activate(ctx context.Context) error 
 	a := owner.app
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	profile, exists := a.profileByIDLocked(owner.launch.profileID)
+	profile, exists := a.profileByIDLocked(owner.launch.policyProfileID)
 	if ctx.Err() != nil || a.checkCapturedConnectionOperationLocked(owner.operation) != nil || a.connectionCancelIntent == owner.operation ||
 		!exists || desktopOwnedNodeProfileToken(profile) != owner.profileToken || a.cmd != owner.launch.command || a.closing ||
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != owner.options ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != owner.savedOptions || owner.host.capture.lifetime.Err() != nil {
 		return errors.New("native external activation belongs to a replaced request, source or controller")
+	}
+	if !owner.entryCurrentLocked() {
+		return errors.New("native external activation replaced its original entry source")
 	}
 	owner.mu.Lock()
 	if owner.activated || owner.proof != nil || owner.retired || owner.closed {
@@ -766,6 +782,11 @@ func (owner *desktopWindowsExternalRuntime) Start(ctx context.Context) error {
 		return err
 	}
 	environment := desktopNativeEnvironmentForPackage(os.Environ(), launch.root, launch.profileID, "", owner.host.capture.packageRoot)
+	for i, value := range environment {
+		if strings.HasPrefix(value, "HOMEVPN_POLICY_PROFILE_ID=") {
+			environment[i] = "HOMEVPN_POLICY_PROFILE_ID=" + launch.policyProfileID
+		}
+	}
 	environment, err = desktopExternalPhysicalEnvironment(environment, launch.external)
 	if err != nil {
 		return err
@@ -789,7 +810,7 @@ func (owner *desktopWindowsExternalRuntime) Start(ctx context.Context) error {
 	a.cmd = command
 	a.state.Connected, a.state.Phase, a.state.LastError = false, "starting", ""
 	a.state.Mode, a.state.LogicalMode, a.state.RuntimeMode = "external-node", "external-node", launch.mode
-	a.state.RouterID, a.state.Base = launch.profileID, "external"
+	a.state.RouterID, a.state.Base = launch.policyProfileID, "external"
 	a.mu.Unlock()
 	owner.mu.Lock()
 	owner.published = true

@@ -300,7 +300,7 @@ func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, e
 
 func prepareDesktopExternalLaunch(a *app, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {
 	if host := a.desktopNodeConnectionHost(); host != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {
-		if !desktopWindowsExternalProfileEligible(profile, direct, restored) {
+		if !desktopWindowsExternalGraphEligible(profile, entry, direct, restored) {
 			return nil, errors.New("this protected Windows external graph has no captured native controller successor; the previous path is retained")
 		}
 		return prepareDesktopWindowsExternalLaunch(a, host, profile, entry, exit, direct, restored)

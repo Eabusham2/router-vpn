@@ -74,7 +74,7 @@ func (owner *desktopWindowsExternalRuntime) Monitor(parent context.Context) erro
 			}
 			a.mu.Lock()
 			// A late monitor cannot relabel a replacement's presentation.
-			if a.cmd == launch.command || a.cmd == nil && a.state.RouterID == launch.profileID {
+			if a.cmd == launch.command || a.cmd == nil && a.state.RouterID == launch.policyProfileID {
 				a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", message
 			}
 			a.mu.Unlock()

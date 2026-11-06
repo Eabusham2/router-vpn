@@ -433,6 +433,7 @@ jobs:
             @{ Run = '^TestDesktopDNS'; Skip = '' },
             @{ Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'; Skip = '' },
             @{ Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'; Skip = '' },
+            @{ Run = '^TestDesktopWindowsExternalSSEntry'; Skip = '' },
             # Native job 125676324275 exhausted the broad Tor package budget
             # while its active restore leaf had run only 1s. Keep 180s per group.
             @{ Run = '^TestDesktopTorMTU'; Skip = '' },

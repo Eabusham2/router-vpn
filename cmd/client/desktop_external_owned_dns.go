@@ -43,7 +43,7 @@ func proveDesktopWindowsExternalDNS(ctx context.Context, a *app, observed observ
 	active := owner.activated && owner.proof != nil
 	owner.mu.Unlock()
 	revision := desktopOwnedNodeProfileToken(observed.Profile)
-	if !active || !observed.Connected || observed.Phase != "connected" || observed.RouterID != l.profileID ||
+	if !active || !observed.Connected || observed.Phase != "connected" || observed.RouterID != l.policyProfileID ||
 		runtimeID != l.mode || observed.RuntimeMode != runtimeID ||
 		revision != owner.profileToken && revision != owner.persistedToken ||
 		[3]bool{observed.Profile.DAITAEnabled, observed.Profile.JumboTUN, observed.Profile.SocksEnabled} != owner.savedOptions ||
@@ -65,12 +65,12 @@ func proveDesktopWindowsExternalDNS(ctx context.Context, a *app, observed observ
 	l.external.mu.Lock()
 	a.mu.Lock()
 	current := a.state
-	profile, found := a.profileByIDLocked(l.profileID)
+	profile, found := a.profileByIDLocked(l.policyProfileID)
 	revision = desktopOwnedNodeProfileToken(profile)
 	currentPath := found && a.cmd == l.command && current.Connected && current.Phase == "connected" &&
 		current.RouterID == observed.RouterID && current.Mode == observed.Mode && current.LogicalMode == observed.LogicalMode &&
 		current.RuntimeMode == runtimeID && current.Base == observed.Base &&
-		(revision == owner.profileToken || revision == owner.persistedToken) && validateDesktopWindowsExternalSourceLocked(profile, l) == nil &&
+		(revision == owner.profileToken || revision == owner.persistedToken) && owner.sourcesCurrentLocked(profile) == nil &&
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == owner.savedOptions &&
 		[3]bool{current.DAITA, current.Jumbo, current.Socks} == owner.options
 	a.mu.Unlock()

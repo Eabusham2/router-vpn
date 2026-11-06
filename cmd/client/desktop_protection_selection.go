@@ -30,8 +30,11 @@ func desktopProtectionSelectionFor(node *mobilemultihop.DesktopNodePolicy, exter
 	}
 	meta := external.Metadata()
 	capture, err := external.Capture()
+	paired := err == nil && validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID &&
+		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && meta.RootType == "shadowsocks" && meta.RootTag == capture.EntryTag &&
+		capture.StartLayer == "" && (capture.Protocol == "shadowsocks" || capture.Protocol == "http-connect" || capture.Protocol == "https-connect")
 	if err != nil || meta.TargetOS != "windows" || !validProfileID(capture.ExitID) ||
-		capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
+		!paired && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
 		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) || capture.EntryStartLayer != "" || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
 		meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" ||
 		meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn" {
