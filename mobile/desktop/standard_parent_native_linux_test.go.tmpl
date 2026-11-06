@@ -274,6 +274,37 @@ func standardParentNativeObserve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The outer staged test image belongs to the CI runner. This namespace
+	// maps only its invoking root, so that image can appear owned by the
+	// overflow UID. The creator must satisfy the same ordinary executable
+	// proof as production: one protected directory entry, owned by root in
+	// this namespace. Keep the exact private copy until the creator joins.
+	source, err := os.Open(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	private, err := os.MkdirTemp("/run", "original-parent-creator-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(private)
+	image = private + "/creator.test"
+	copied, err := os.OpenFile(image, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(copied, source)
+	modeErr := copied.Chmod(0500)
+	info, statErr := copied.Stat()
+	closeErr := copied.Close()
+	if err := errors.Join(copyErr, modeErr, statErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || identity.Uid != 0 || identity.Gid != 0 || identity.Nlink != 1 || info.Mode() != 0500 {
+		t.Fatal("creator fixture lacks its protected namespace-owned executable")
+	}
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		t.Fatal(err)
