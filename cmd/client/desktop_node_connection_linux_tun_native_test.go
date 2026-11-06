@@ -39,6 +39,9 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 	if err := linuxHostTUNBootTransferPreflight(ctx, a, scenario); err != nil {
 		return err
 	}
+	if err := linuxHostTUNPrivateNegativeBootstrap(ctx, a, parent, scenario); err != nil {
+		return err
+	}
 	var standardSource *linuxStandardServiceLaunch
 	if linuxHostTUNTransferCase(scenario) {
 		standardSource, err = linuxHostTUNStartStandardTransferSource(ctx, a)

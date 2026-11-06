@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta", "service-boot-resolved-dnssec-cname", "service-boot-resolved-dnssec-dname", "service-boot-resolved-dnssec-private-tld", "service-boot-resolved-dnssec-private-tld-unrelated-nta"}
+var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback", "service-boot-resolved-dnssec-nta", "service-boot-resolved-dnssec-cname", "service-boot-resolved-dnssec-dname", "service-boot-resolved-dnssec-private-tld", "service-boot-resolved-dnssec-private-tld-unrelated-nta", "service-boot-resolved-dnssec-private-tld-negative-nxdomain-a", "service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa", "service-boot-resolved-dnssec-private-tld-negative-nodata-a", "service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNResolvedCases...) }
 func linuxHostTUNResolvedCase(scenario string) bool {

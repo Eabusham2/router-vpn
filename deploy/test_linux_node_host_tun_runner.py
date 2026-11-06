@@ -49,7 +49,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_resolved_composition_requires_original_helper_receipt(self):
         self.assertEqual(G.CASES[524:524+len(G.RESOLVED_CASES)], G.RESOLVED_CASES)
         self.assertEqual(G.CASES[524+len(G.RESOLVED_CASES):], G.EXTERNAL_SS_LAYER_CASES + G.EXTERNAL_SS_HYSTERIA_LAYER_CASES)
-        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname','service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-unrelated-nta'))
+        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname','service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-unrelated-nta','service-boot-resolved-dnssec-private-tld-negative-nxdomain-a','service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa','service-boot-resolved-dnssec-private-tld-negative-nodata-a','service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa'))
         for case in G.RESOLVED_CASES:
             self.assertIn(case, G.HOSTNAME_CASES)
             self.assertIn(case, G.PUBLIC_CASES)
@@ -76,10 +76,19 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             if not case.startswith('service-boot-resolved-dnssec-private-tld'):continue
             good=self.completed((case,));G.check_verdict(good,case)
             lines=[line for line in good.splitlines(True) if 'verified installed private-TLD' in line]
-            self.assertEqual(len(lines),2)
+            self.assertEqual(len(lines),4 if '-negative-' in case else 2)
             for line in lines:
                 for changed in (good.replace(line,'',1),good+line):
                     with self.assertRaises(ValueError):G.check_verdict(changed,case)
+
+    def test_private_negative_requires_shipping_rpc_receipt(self):
+        for case in G.RESOLVED_CASES:
+            if '-negative-' not in case:continue
+            output=self.completed((case,))
+            G.check_verdict(output,case)
+            marker='verified installed private-TLD original negative RPC and joined cleanup: '+case
+            for bad in (output.replace(marker,'generic DNS traffic'),output+'\n'+marker):
+                with self.subTest(case=case),self.assertRaises(ValueError):G.check_verdict(bad,case)
 
     def test_private_tld_causal_must_reach_exact_denial_boundary(self):
         source=(G.ROOT/'mobile/desktop/node_resolved_private_tld_test.go.tmpl').read_text()
@@ -111,6 +120,13 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             with self.subTest(status=status), self.assertRaises(ValueError):
                 G.check_private_tld_control(status,output)
         G.check_private_tld_control(1,output+'verified original joined retirement\n')
+        negative_case='service-boot-resolved-dnssec-private-tld-negative-nxdomain-a'
+        negative=output.replace('service-boot-resolved-dnssec-private-tld',negative_case)+'installed negative RPC did not return its exact accepted no-address result\n'
+        negative+='verified installed private-TLD original negative families: '+negative_case+' A=3 AAAA=0\n'
+        G.check_private_tld_control(1,negative,negative_case)
+        for bad in (negative.replace('installed negative RPC did not return its exact accepted no-address result','generic lookup failed'),negative+'verified installed private-TLD original negative RPC and joined cleanup: '+negative_case,negative+'panic: after rejection',negative.replace('A=3 AAAA=0','A=0 AAAA=3'),negative+'installed negative omitted exact original family/rcode'):
+            with self.assertRaises(ValueError):G.check_private_tld_control(1,bad,negative_case)
+
 
     def completed(self, cases=None):
         cases = G.CASES if cases is None else cases
@@ -142,6 +158,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:25: verified installed host captured resolver policy: ' + case for case in cases if case in G.HOSTNAME_CASES),
                           *('    native_test.go:26: verified installed resolved helper original broker and scoped upstream: ' + case for case in cases if case in G.RESOLVED_CASES),
                           *('    native_test.go:29: '+prefix+case for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld') for prefix in ('verified installed private-TLD original and auxiliary wire queries: ', 'verified installed private-TLD original complete root plan and monitor: ')),
+                          *('    native_test.go:31: verified installed private-TLD original negative families: '+case+' '+('A=0 AAAA=3' if case.endswith(('-nxdomain-aaaa','-nodata-a')) else 'A=3 AAAA=0') for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld-negative-')),
+                          *('    native_test.go:30: verified installed private-TLD original negative RPC and joined cleanup: '+case for case in cases if case.startswith('service-boot-resolved-dnssec-private-tld-negative-')),
                           *('    native_test.go:27: verified installed DNSSEC original NTA and absent-anchor recheck' for case in cases if case == 'service-boot-resolved-dnssec-nta'),
                           *('    native_test.go:28: '+prefix+case for case in cases if case in ('service-boot-resolved-dnssec-cname','service-boot-resolved-dnssec-dname') for prefix in ('verified installed DNSSEC alias target independently captured and adopted: ', 'verified installed DNSSEC alias original proof and target wire queries: ')),
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),

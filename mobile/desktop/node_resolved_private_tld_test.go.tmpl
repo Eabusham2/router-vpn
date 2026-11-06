@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/routervpn/standardengine"
@@ -31,6 +32,13 @@ func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
 	}
 	answer := net.ParseIP(os.Getenv("ROUTERVPN_PRIVATE_TLD_ANSWER")).To4()
 	countFile := os.Getenv("ROUTERVPN_PRIVATE_TLD_COUNT")
+	negative := os.Getenv("ROUTERVPN_PRIVATE_TLD_NEGATIVE")
+	switch negative {
+	case "", "nxdomain-a", "nxdomain-aaaa", "nodata-a", "nodata-aaaa":
+	default:
+		t.Fatal("foreign negative fixture")
+	}
+
 	if answer == nil || countFile == "" {
 		t.Fatal("missing original peer/count owner")
 	}
@@ -106,7 +114,29 @@ func TestRouterVPNPrivateTLDInstalledDNS(t *testing.T) {
 		} else if name == "." && x.Qtype == 43 {
 			m.Answer = sign(ds)
 		} else if name == "node.private." && (x.Qtype == 1 || x.Qtype == 28) {
-			if x.Qtype == 1 {
+			release, releaseErr := os.ReadFile("/run/routervpn-private-negative-complete")
+			if negative != "" && errors.Is(releaseErr, os.ErrNotExist) {
+				if (negative == "nxdomain-a" || negative == "nodata-aaaa") && x.Qtype == 1 || (negative == "nxdomain-aaaa" || negative == "nodata-a") && x.Qtype == 28 {
+					m.Rcode = dns.RcodeNameError
+				}
+				family := "a"
+				if x.Qtype == 28 {
+					family = "aaaa"
+				}
+				suffix := ".negative-" + family + "-rcode-" + strconv.Itoa(m.Rcode)
+				mu.Lock()
+				counts[suffix]++
+				writeErr := os.WriteFile(countFile+suffix, []byte(strconv.Itoa(counts[suffix])), 0600)
+				mu.Unlock()
+				if writeErr != nil {
+					t.Error(writeErr)
+					return
+				}
+				m.Ns = []dns.RR{rr("private. 60 IN SOA ns.private. hostmaster.private. 1 60 60 60 60")}
+			} else if negative != "" && (releaseErr != nil || string(release) != negative) {
+				t.Error("negative peer release changed original owner", releaseErr)
+				return
+			} else if x.Qtype == 1 {
 				m.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: 1, Class: 1, Ttl: 30}, A: answer}}
 			}
 		} else {

@@ -384,6 +384,9 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 		if privateTLD {
 			dns = exec.CommandContext(ctx, "/usr/sbin/ip", "netns", "exec", "rvpn-peer", os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), "-test.run=^TestRouterVPNPrivateTLDInstalledDNS$", "-test.timeout=80s")
 			dns.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_PRIVATE_TLD_DNS=1", "ROUTERVPN_PRIVATE_TLD_ANSWER=" + peer.address.Addr().String(), "ROUTERVPN_PRIVATE_TLD_COUNT=" + countFile}
+			if linuxHostTUNPrivateNegativeCase(scenario) {
+				dns.Env = append(dns.Env, "ROUTERVPN_PRIVATE_TLD_NEGATIVE="+strings.TrimPrefix(scenario, "service-boot-resolved-dnssec-private-tld-negative-"))
+			}
 		}
 		dns.Stderr = os.Stderr
 		output, e := dns.StdoutPipe()
@@ -404,6 +407,31 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			}
 			if e != nil || parse != nil || count < minimum {
 				t.Error("public Node Connect omitted actual A/AAAA bootstrap", e, parse, count)
+			}
+			if linuxHostTUNPrivateNegativeCase(scenario) {
+				aCode, aaaaCode := 3, 0
+				if strings.HasSuffix(scenario, "-nxdomain-aaaa") || strings.HasSuffix(scenario, "-nodata-a") {
+					aCode, aaaaCode = 0, 3
+				}
+				for family, code := range map[string]int{"a": aCode, "aaaa": aaaaCode} {
+					raw, err := os.ReadFile(countFile + ".negative-" + family + "-rcode-" + strconv.Itoa(code))
+					n, parse := strconv.Atoi(string(raw))
+					if err != nil || parse != nil || n < 1 {
+						t.Error("installed negative omitted exact original family/rcode", family, code, err, parse, n)
+					}
+				}
+				t.Logf("verified installed private-TLD original negative families: %s A=%d AAAA=%d", scenario, aCode, aaaaCode)
+				release, err := os.ReadFile(installedPrivateNegativeRelease)
+				if err == nil {
+					if string(release) != strings.TrimPrefix(scenario, "service-boot-resolved-dnssec-private-tld-negative-") {
+						t.Error("negative release changed original case")
+					}
+					if err = os.Remove(installedPrivateNegativeRelease); err != nil {
+						t.Error(err)
+					}
+				} else if !errors.Is(err, os.ErrNotExist) {
+					t.Error(err)
+				}
 			}
 			if privateTLD {
 				for _, suffix := range []string{".original", ".proof", ".root-key"} {

@@ -191,7 +191,7 @@ SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT +
 def check_ss_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
 
-RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname', 'service-boot-resolved-dnssec-private-tld', 'service-boot-resolved-dnssec-private-tld-unrelated-nta')
+RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname', 'service-boot-resolved-dnssec-private-tld', 'service-boot-resolved-dnssec-private-tld-unrelated-nta', 'service-boot-resolved-dnssec-private-tld-negative-nxdomain-a', 'service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa', 'service-boot-resolved-dnssec-private-tld-negative-nodata-a', 'service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa')
 CASES += RESOLVED_CASES
 HOSTNAME_CASES += RESOLVED_CASES
 PUBLIC_CASES += RESOLVED_CASES
@@ -432,6 +432,14 @@ def check_verdict(output, case=None):
                 marker=marker_prefix+value
                 if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
                     raise ValueError('Installed private-TLD omitted original root/monitor or independent proof queries: '+value)
+        if value.startswith('service-boot-resolved-dnssec-private-tld-negative-'):
+            marker='verified installed private-TLD original negative RPC and joined cleanup: '+value
+            if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+                raise ValueError('Installed negative omitted exact accepted RPC and joined original cleanup: '+value)
+            codes='A=0 AAAA=3' if value.endswith(('-nxdomain-aaaa','-nodata-a')) else 'A=3 AAAA=0'
+            marker='verified installed private-TLD original negative families: '+value+' '+codes
+            if sum(line.rstrip().endswith(marker) for line in output.splitlines())!=1:
+                raise ValueError('Installed negative omitted exact original A/AAAA rcodes: '+value)
         if value in RESOLVED_CASES:
             marker = 'verified installed resolved helper original broker and scoped upstream: ' + value
             if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
@@ -583,8 +591,9 @@ def private_tld_missing_denial_source(text):
     if text.count(original)!=1:raise ValueError('private-TLD causal source marker changed')
     return text.replace(original,'const privateTLDCompleteDenial = false',1)
 
-def check_private_tld_control(status,output):
-    case='service-boot-resolved-dnssec-private-tld'
+def check_private_tld_control(status,output,case='service-boot-resolved-dnssec-private-tld'):
+    if case not in ('service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-negative-nxdomain-a'):
+        raise ValueError('foreign private-TLD causal scope')
     # A deliberate assertion failure must finish normally. A matching earlier
     # leaf cannot turn a later crash or failed original retirement into proof.
     abnormal = ('panic:', 'fatal error:', 'test timed out', 'TimeoutExpired',
@@ -594,6 +603,7 @@ def check_private_tld_control(status,output):
                 'failed-readiness original joined retirement:',
                 'joined original installed session retirement:',
                 'owned active network replacement cleanup:',
+                'installed negative omitted exact original family/rcode', 'negative release changed original case',
                 'installed host omitted its actual source/process join and durable retirement',
                 'installed controller did not join after its original native retirement',
                 'installed-host retirement did not persist its exact original settled journal',
@@ -605,6 +615,8 @@ def check_private_tld_control(status,output):
        not any(line.rstrip().endswith('verified installed private-TLD original and auxiliary wire queries: '+case) for line in output.splitlines()) or \
        '--- FAIL: TestDesktopLinuxGuardianKernelNodeHostTUN/'+case+' (' not in output:
         raise ValueError('Installed private-TLD did not reject its actual signed NODATA proof for the exact denial reason')
+    if '-negative-' in case and ('installed negative RPC did not return its exact accepted no-address result' not in output or 'verified installed private-TLD original negative RPC and joined cleanup: '+case in output or not any(line.rstrip().endswith('verified installed private-TLD original negative families: '+case+' A=3 AAAA=0') for line in output.splitlines())):
+        raise ValueError('Installed negative accepted or bypassed the failed original denial proof')
 
 def private_tld_control(workspace,binary,source,bundle,compiler,captured,binary_sha256,bundle_sha256,sudo):
     original=source/'protocol/routervpnamnezia/routervpn_desktop_resolved_private_tld_test.go'
@@ -615,14 +627,18 @@ def private_tld_control(workspace,binary,source,bundle,compiler,captured,binary_
     status,output=NODE.run([compiler,'test','-c','-race','-mod=readonly','-overlay='+str(overlay),'-tags='+','.join(NODE.TAGS),'-ldflags=-checklinkname=0','-o',peer,'./protocol/routervpnamnezia'],cwd=source,env=captured,timeout=300)
     if status:raise ValueError('Installed private-TLD missing-denial control did not compile:\n'+output[-16384:])
     identity=CHILD.image_identity(peer)
-    command=[sys.executable,str(Path(__file__).resolve()),'--namespace-test-binary',str(binary),'--peer-binary',str(peer),'--bundle',str(bundle),'--namespace-test-sha256',binary_sha256,'--peer-sha256',identity[-1],'--bundle-sha256',bundle_sha256,'--case','service-boot-resolved-dnssec-private-tld']
-    if sudo is not None:command=[sudo,'-n','--',*command]
-    try:output=GUARD.UID.run(command,cwd=ROOT,env=captured,timeout=150,sudo=sudo);status=0
-    except subprocess.CalledProcessError as failure:status= failure.returncode;output=failure.output.decode('utf-8',errors='replace')
-    check_private_tld_control(status,output)
-    if CHILD.image_identity(peer)!=identity:raise ValueError('private-TLD causal peer changed original image')
-    print(output,end='' if output.endswith('\n') else '\n')
-    return {'name':'private-tld-missing-denial','bytes':identity[2],'sha256':identity[-1],'changed_source_sha256':hashlib.sha256(changed.read_bytes()).hexdigest(),'output_sha256':hashlib.sha256(output.encode()).hexdigest()}
+    records=[]
+    for case in ('service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-negative-nxdomain-a'):
+        command=[sys.executable,str(Path(__file__).resolve()),'--namespace-test-binary',str(binary),'--peer-binary',str(peer),'--bundle',str(bundle),'--namespace-test-sha256',binary_sha256,'--peer-sha256',identity[-1],'--bundle-sha256',bundle_sha256,'--case',case]
+        if sudo is not None:command=[sudo,'-n','--',*command]
+        try:output=GUARD.UID.run(command,cwd=ROOT,env=captured,timeout=150,sudo=sudo);status=0
+        except subprocess.CalledProcessError as failure:status=failure.returncode;output=failure.output.decode('utf-8',errors='replace')
+        check_private_tld_control(status,output,case)
+        if CHILD.image_identity(peer)!=identity:raise ValueError('private-TLD causal peer changed original image')
+        print(output,end='' if output.endswith('\n') else '\n')
+        records.append({'case':case,'output_sha256':hashlib.sha256(output.encode()).hexdigest()})
+    return {'name':'private-tld-missing-denial','bytes':identity[2],'sha256':identity[-1],'changed_source_sha256':hashlib.sha256(changed.read_bytes()).hexdigest(),'cases':records}
+
 
 
 def execute(source, bundle, go='go', *, env=None, receipt_path=None):

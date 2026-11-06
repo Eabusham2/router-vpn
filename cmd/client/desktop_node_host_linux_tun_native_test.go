@@ -908,6 +908,13 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if process.waitErr != nil || process.command.ProcessState == nil || !process.command.ProcessState.Success() {
 				t.Fatal("installed controller failed its actual native lifecycle", process.waitErr, process.diagnostic.String())
 			}
+			if linuxHostTUNPrivateNegativeCase(scenario) {
+				receipt := installedPrivateNegativeReceipt + scenario
+				if strings.Count(process.diagnostic.String(), receipt) != 1 {
+					t.Fatal("installed private negative omitted original authenticated RPC receipt", process.diagnostic.String())
+				}
+				t.Log(receipt)
+			}
 			if err := linuxHostTUNTUNAbsent(result.Ready); err != nil {
 				t.Fatal(err)
 			}

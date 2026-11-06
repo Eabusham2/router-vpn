@@ -846,3 +846,6 @@ AUXILIARY['resolved-private-tld-negative-shipping']=('./cmd/client',{
  'nodata-proof','retire-error','close-error','postjoin-change','cancelled',
  'original-retirement','normal-winner','capacity')})
 AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_private_negative_linux_test.go']='resolved-private-tld-negative-shipping'
+
+# Installed negative result observation uses the original authenticated RPC.
+SOURCE.add('cmd/client/linux_standard_service_resolved_negative_namespace_native_test.go')
