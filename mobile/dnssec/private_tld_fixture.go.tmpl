@@ -1,0 +1,92 @@
+// Offline authority for the pinned validator prerequisite. No external queries.
+package main
+
+import (
+	"bufio"
+	"crypto"
+	"encoding/json"
+	"fmt"
+	"github.com/miekg/dns"
+	"net"
+	"os"
+	"time"
+)
+
+func main() {
+	key := &dns.DNSKEY{Hdr: dns.RR_Header{Name: ".", Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 60}, Flags: 257, Protocol: 3, Algorithm: dns.ECDSAP256SHA256}
+	private, err := key.Generate(256)
+	if err != nil {
+		panic(err)
+	}
+	sign := func(rrs []dns.RR, expired bool) []dns.RR {
+		now := time.Now()
+		end := now.Add(time.Hour)
+		if expired {
+			end = now.Add(-48 * time.Hour)
+		}
+		sig := &dns.RRSIG{Hdr: dns.RR_Header{Name: rrs[0].Header().Name, Rrtype: dns.TypeRRSIG, Class: dns.ClassINET, Ttl: 60}, Algorithm: key.Algorithm, KeyTag: key.KeyTag(), SignerName: key.Hdr.Name, Inception: uint32(now.Add(-72 * time.Hour).Unix()), Expiration: uint32(end.Unix())}
+		if err := sig.Sign(private.(crypto.Signer), rrs); err != nil {
+			panic(err)
+		}
+		return append(rrs, sig)
+	}
+	rr := func(s string) dns.RR {
+		r, e := dns.NewRR(s)
+		if e != nil {
+			panic(e)
+		}
+		return r
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		panic(err)
+	}
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		if len(q.Question) != 1 {
+			return
+		}
+		question := q.Question[0]
+		fmt.Fprintf(os.Stderr, "query %s %d\n", question.Name, question.Qtype)
+		m := new(dns.Msg)
+		m.SetReply(q)
+		m.Authoritative = true
+		m.RecursionAvailable = true
+		name := question.Name
+		if name == "." && question.Qtype == dns.TypeDNSKEY {
+			m.Answer = sign([]dns.RR{key}, false)
+		} else if name == "host.private." && question.Qtype == dns.TypeA {
+			m.Answer = []dns.RR{rr("host.private. 60 IN A 192.0.2.9")}
+		} else if name == "host.private." && question.Qtype == dns.TypeAAAA {
+			m.Answer = []dns.RR{rr("host.private. 60 IN AAAA 2001:db8::9")}
+		} else if name == "aliasproof." && question.Qtype == dns.TypeA {
+			m.Rcode = dns.RcodeNameError
+			m.Answer = sign([]dns.RR{rr("aliasproof. 60 IN CNAME other.")}, false)
+			m.Ns = append(sign([]dns.RR{rr(". 60 IN SOA ns. hostmaster. 1 60 60 60 60")}, false), sign([]dns.RR{rr(". 60 IN NSEC aliasproof. NS SOA RRSIG NSEC DNSKEY")}, false)...)
+			m.Ns = append(m.Ns, sign([]dns.RR{rr("aliasproof. 60 IN NSEC zzz. CNAME RRSIG NSEC")}, false)...)
+		} else if question.Qtype == dns.TypeA {
+			m.Rcode = dns.RcodeNameError
+			m.Ns = append(sign([]dns.RR{rr(". 60 IN SOA ns. hostmaster. 1 60 60 60 60")}, name == "expired."), sign([]dns.RR{rr(". 60 IN NSEC zzz. NS SOA RRSIG NSEC DNSKEY")}, name == "expired.")...)
+			if name == "forged." {
+				m.Ns[3].(*dns.RRSIG).Signature = "AAAA"
+			}
+			if name == "exists." {
+				m.Rcode = 0
+				m.Ns = append(sign([]dns.RR{rr(". 60 IN SOA ns. hostmaster. 1 60 60 60 60")}, false), sign([]dns.RR{rr("exists. 60 IN NSEC zzz. AAAA RRSIG NSEC")}, false)...)
+			}
+		} else {
+			m.Rcode = dns.RcodeServerFailure
+		}
+		if err := w.WriteMsg(m); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	})
+	server := &dns.Server{Listener: listener, Net: "tcp", Handler: handler}
+	go func() {
+		if e := server.ActivateAndServe(); e != nil {
+			panic(e)
+		}
+	}()
+	json.NewEncoder(os.Stdout).Encode(map[string]any{"port": listener.Addr().(*net.TCPAddr).Port, "anchor": key.String()})
+	bufio.NewReader(os.Stdin).ReadString('\n')
+	server.Shutdown()
+}

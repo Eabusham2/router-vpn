@@ -36,8 +36,13 @@ func TestRouterVPNDNSSECCommandWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
+func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) { dnssecAuthenticatedCommand(t, false) }
+func TestRouterVPNDNSSECPrivateTLDCommand(t *testing.T)    { dnssecAuthenticatedCommand(t, true) }
+func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool) {
 	libraryPath, peerPath := os.Getenv("ROUTERVPN_DNSSEC_NATIVE_LIBRARY"), os.Getenv("ROUTERVPN_DNSSEC_NATIVE_PEER")
+	if privateTLD {
+		peerPath = os.Getenv("ROUTERVPN_DNSSEC_PRIVATE_TLD_PEER")
+	}
 	if libraryPath == "" || peerPath == "" {
 		t.Fatal("actual pinned library and signed peer required")
 	}
@@ -89,7 +94,11 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 	if json.Unmarshal(line, &info) != nil || info.Port < 1 || info.Anchor == "" {
 		t.Fatal("actual signed authority omitted endpoint/anchor")
 	}
-	for _, scenario := range []string{"secure", "bogus", "proven-unsigned", "captured-nta", "missing-signature", "cname-proof", "dname-proof", "cross-name-proof", "tampered-cname", "tampered-dname", "foreign-terminal-receipt", "closed-terminal-channel", "zero-anchor-unsigned", "zero-anchor-signed", "zero-anchor-tampered", "positive-island-secure", "positive-island-bogus", "positive-island-missing-signature"} {
+	scenarios := []string{"secure", "bogus", "proven-unsigned", "captured-nta", "missing-signature", "cname-proof", "dname-proof", "cross-name-proof", "tampered-cname", "tampered-dname", "foreign-terminal-receipt", "closed-terminal-channel", "zero-anchor-unsigned", "zero-anchor-signed", "zero-anchor-tampered", "positive-island-secure", "positive-island-bogus", "positive-island-missing-signature"}
+	if privateTLD {
+		scenarios = []string{"root-secure", "root-forged", "root-expired", "root-insecure", "root-nodata", "root-wrong-name", "root-unrelated-nta", "root-alias-nxdomain"}
+	}
+	for _, scenario := range scenarios {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -123,6 +132,27 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 				capture.Anchors, capture.Insecure = inputs.TrustAnchors, inputs.InsecureDomains
 				capture.PlanSHA256 = standardengine.SHA256(plan.Canonical())
 			}
+			var privateProof *standardengine.ResolvedPrivateTLDProof
+			if privateTLD {
+				target := map[string]string{"root-forged": "forged.", "root-expired": "expired.", "root-nodata": "exists.", "root-alias-nxdomain": "aliasproof."}[scenario]
+				if target == "" {
+					target = "private."
+				}
+				privateProof = dnssecCommandPrivateProof(t, target, info.Anchor, scenario == "root-unrelated-nta")
+				input := privateProof.Inputs()
+				capture.Name = privateProof.TLD()
+				capture.Type = 1
+				capture.Anchors = input.TrustAnchors
+				capture.Insecure = input.InsecureDomains
+				capture.PlanSHA256 = standardengine.SHA256(privateProof.Canonical())
+				if scenario == "root-insecure" {
+					capture.Anchors = nil
+				}
+				if scenario == "root-wrong-name" {
+					capture.Name = "other."
+				}
+			}
+
 			raw, err := capture.Canonical()
 			if err != nil {
 				t.Fatal(err)
@@ -187,6 +217,17 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 				for i := uint32(0); i < 8; i++ {
 					body, err := owner.Receive(ctx)
 					if err != nil {
+						if scenario == "root-alias-nxdomain" {
+							select {
+							case <-joined:
+							case <-ctx.Done():
+								t.Fatal("alias target refusal did not join", ctx.Err())
+							}
+							if queried == 0 || waitErr == nil || !strings.Contains(output.String(), "DNSSEC query escaped its captured name, type or bounded wire shape") {
+								t.Fatal("alias negative failed outside exact target authority", err, waitErr, output.String())
+							}
+							return
+						}
 						t.Fatal(err)
 					}
 					frame, err := standardengine.DecodeDNSSECFrame(body)
@@ -257,8 +298,31 @@ func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) {
 					if scenario == "proven-unsigned" || scenario == "captured-nta" || strings.HasPrefix(scenario, "zero-anchor-") {
 						want = 2
 					}
+					if privateTLD {
+						want = 1
+						if scenario == "root-forged" || scenario == "root-expired" {
+							want = 3
+						}
+						if scenario == "root-insecure" {
+							want = 2
+						}
+					}
 					if message.State != want {
 						t.Fatal("actual crypto verdict changed", message.State)
+					}
+					if privateTLD {
+						q := new(dns.Msg)
+						q.SetQuestion(capture.Name, dns.TypeA)
+						q.Id = binary.BigEndian.Uint16(message.Packet)
+						q.RecursionDesired = true
+						raw, err := q.Pack()
+						if err != nil {
+							t.Fatal(err)
+						}
+						accepted := privateProof.CheckVerdict(raw, message) == nil
+						if accepted != (scenario == "root-secure" || scenario == "root-unrelated-nta") {
+							t.Fatal("private-TLD proof meaning escaped original association", scenario, accepted)
+						}
 					}
 					return
 				}
@@ -353,4 +417,55 @@ func dnssecCommandRootPlan(t *testing.T, name, anchor string, island bool) *stan
 		t.Fatal(err)
 	}
 	return plan
+}
+
+func dnssecCommandPrivateProof(t *testing.T, tld, anchor string, unrelated bool) *standardengine.ResolvedPrivateTLDProof {
+	t.Helper()
+	name := "host." + strings.TrimSuffix(tld, ".")
+	server := standardengine.ResolvedDNS{Address: "192.0.2.53"}
+	policy := standardengine.ResolvedPolicy{Schema: 1, Authority: standardengine.ResolvedAuthority{BusID: strings.Repeat("a", 32), UniqueOwner: ":1.42", PID: 42, NamespaceInode: 9, PhysicalSHA256: strings.Repeat("b", 64)}, LLMNRHostname: "original-host", Manager: standardengine.ResolvedScope{DNS: []standardengine.ResolvedDNS{server}, CurrentDNS: &server, DNSSEC: "allow-downgrade", DNSOverTLS: "no"}}
+	if unrelated {
+		policy.Manager.NegativeTrustAnchors = []string{"unrelated"}
+	}
+	raw, err := policy.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := standardengine.SHA256(raw)
+	record, err := dns.NewRR(anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, ok := record.(*dns.DNSKEY)
+	if !ok || key.Hdr.Name != "." {
+		t.Fatal("root authority changed")
+	}
+	ds := key.ToDS(dns.SHA256)
+	wire := make([]byte, 8192)
+	n, err := dns.PackRR(ds, wire, 0, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := standardengine.ResolvedAnchorResult{PolicySHA256: digest, Name: ".", Type: 43, Present: true, Flags: standardengine.ResolvedAnchorFlags, Records: [][]byte{wire[:n]}}
+	root := standardengine.ResolvedRootDSDecision{PolicySHA256: digest, Name: name, DNSSEC: "allow-downgrade", Selected: server, Outcome: "positive", Root: &observed}
+	questions, err := standardengine.ResolvedDNSSECQuestions(policy, name, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []standardengine.ResolvedAnchorResult
+	for _, q := range questions {
+		if q.Name == "." && q.Type == 43 {
+			continue
+		}
+		rows = append(rows, standardengine.ResolvedAnchorResult{PolicySHA256: digest, Name: q.Name, Type: q.Type})
+	}
+	plan, err := standardengine.BuildResolvedDNSSECPlanWithRootDS(policy, name, 0, root, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := standardengine.NewResolvedPrivateTLDProof(policy, plan, 1, strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proof
 }

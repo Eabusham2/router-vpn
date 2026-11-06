@@ -783,3 +783,29 @@ AUXILIARY['resolved-downgrade-best']=('./cmd/client',{
  'TestResolvedBestLevelOriginalBinding':('original','foreign-policy','foreign-name',
  'foreign-scope','foreign-server','changed-tls','unknown-tls')})
 AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_downgrade_best_linux_test.go']='resolved-downgrade-best'
+
+# Private-TLD proof is a separate bounded purpose, not answer adoption.
+SOURCE.update({'internal/standardengine/resolved_private_tld.go',
+ 'internal/standardengine/resolved_private_tld_test.go',
+ 'internal/systembootstrap/resolved_private_tld_linux.go',
+ 'internal/systembootstrap/resolved_private_tld_linux_test.go',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap_private_tld.go',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap_private_tld_test.go',
+ 'mobile/dnssec/private_tld_fixture.go.tmpl'})
+AUXILIARY['resolved-private-tld']=('./internal/standardengine',{
+ 'TestResolvedPrivateTLDRootAuthority':('root-ds','root-key','unrelated-nta','root-nta',
+ 'tld-nta','name-nta','strict','deep','empty','island-ds','island-key','shadowed',
+ 'alias-type','bad-digest','foreign-policy'),
+ 'TestResolvedPrivateTLDQueryPurpose':('example.-1','example.-43','example.-48',
+ '.-43','.-48','example.-28','example.-5','vpn.example.-1','vpn.example.-43','other.-1','.-1'),
+ 'TestResolvedPrivateTLDVerdict':('secure','bogus','insecure','nodata','wrong-name',
+ 'address-data','foreign-id','truncated','alias-answer')})
+AUXILIARY['resolved-private-tld-candidate']=('./internal/systembootstrap',{
+ 'TestResolvedPrivateTLDCandidate':('address','ipv6','signed','alias','dname','foreign',
+ 'negative','empty','deep','bad-size','truncated','foreign-class')})
+AUXILIARY['resolved-private-tld-transport']=('./internal/mobiletor',{
+ 'TestLinuxStandardBootstrapPrivateTLDPurpose':('no','yes','opportunistic')})
+AUXILIARY_TESTS.update({
+ 'internal/standardengine/resolved_private_tld_test.go':'resolved-private-tld',
+ 'internal/systembootstrap/resolved_private_tld_linux_test.go':'resolved-private-tld-candidate',
+ 'internal/mobiletor/desktop_standard_linux_bootstrap_private_tld_test.go':'resolved-private-tld-transport'})

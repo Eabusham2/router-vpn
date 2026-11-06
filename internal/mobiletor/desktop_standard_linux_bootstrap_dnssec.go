@@ -20,6 +20,7 @@ const desktopLinuxBootstrapDNSSECQueries = int(standardengine.MaxDNSSECQueries)
 // group reservation. It does not turn ordinary address-query admission into a
 // general DNS proxy, and cannot be installed on an already active group.
 type desktopLinuxBootstrapDNSSECBinding struct {
+	privateTLD bool
 	policy     []byte
 	name       string
 	kind       uint16
@@ -102,6 +103,7 @@ func (p *DesktopLinuxStandardProtection) BeginBootstrapDNSSECAliasGroup(original
 // original loaded trust plan. Its private fields cannot be fabricated through
 // an ordinary Exchange call or changed by editing the caller's byte slice.
 type DesktopLinuxBootstrapDNSSECQuestion struct {
+	privateTLD    *standardengine.ResolvedPrivateTLDProof
 	policy, wire  []byte
 	name, planSHA string
 	index         int32
@@ -186,10 +188,17 @@ func (q *DesktopLinuxBootstrapDNSSECQuestion) upstream(network string, secure bo
 }
 
 func (q *DesktopLinuxBootstrapDNSSECQuestion) matches(g *DesktopLinuxBootstrapDNSGroup, upstream DesktopLinuxBootstrapDNSUpstream, wire []byte) error {
-	if q == nil || g == nil || g.dnssec == nil || q.name != g.dnssec.name || q.kind != g.dnssec.kind || q.planSHA == "" || g.dnssec.plans[q.index] != q.planSHA || !bytes.Equal(q.policy, g.dnssec.policy) || !bytes.Equal(wire, q.wire) {
+	if q == nil || g == nil || g.dnssec == nil || (q.privateTLD != nil) != g.dnssec.privateTLD || q.name != g.dnssec.name || q.kind != g.dnssec.kind || q.planSHA == "" || g.dnssec.plans[q.index] != q.planSHA || !bytes.Equal(q.policy, g.dnssec.policy) || !bytes.Equal(wire, q.wire) {
 		return errors.New("DNSSEC query lost its original admitted group/plan")
 	}
-	if err := desktopLinuxDNSSECQuestion(q.name, q.kind, wire); err != nil {
+	if q.privateTLD != nil {
+		if standardengine.ResolvedPolicySHA256(q.privateTLD.Canonical()) != q.planSHA {
+			return errors.New("private-TLD query changed original proof binding")
+		}
+		if _, err := q.privateTLD.Question(wire); err != nil {
+			return err
+		}
+	} else if err := desktopLinuxDNSSECQuestion(q.name, q.kind, wire); err != nil {
 		return err
 	}
 	network := upstream.Network
