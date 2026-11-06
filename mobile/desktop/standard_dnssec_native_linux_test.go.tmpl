@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/routervpn/standardengine"
 	"golang.org/x/sys/unix"
 )
 
@@ -133,6 +134,9 @@ func TestRouterVPNDNSSECIsolatedNative(t *testing.T) {
 			defer cancel()
 			var count atomic.Int32
 			exchange := func(ctx context.Context, q []byte) ([]byte, error) {
+				if _, err := standardengine.ResolvedDNSSECQuestionFromWire(name, 1, q); err != nil {
+					return nil, err
+				}
 				count.Add(1)
 				found := 0
 				for ns, n := range dnssecNativeNamespaces(t) {

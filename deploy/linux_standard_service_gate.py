@@ -627,3 +627,12 @@ AUXILIARY['resolved-dnssec-owner']=('./cmd/client',{
  'TestResolvedDNSSECAnchorCancelledAdmission':()})
 AUXILIARY_TESTS.update({'internal/standardengine/resolved_dnssec_test.go':'resolved-dnssec-policy',
  'cmd/client/linux_standard_service_resolved_dnssec_linux_test.go':'resolved-dnssec-owner'})
+
+# A validator may query only its captured address and exact DS/DNSKEY ancestors.
+SOURCE.update({'internal/standardengine/resolved_dnssec_query.go',
+ 'internal/standardengine/resolved_dnssec_query_test.go'})
+AUXILIARY['resolved-dnssec-query']=('./internal/standardengine',{
+ 'TestResolvedDNSSECQueryOriginalAncestors':(),
+ 'TestResolvedDNSSECQueryRejectsExpandedAuthority':(),
+ 'TestResolvedDNSSECQueryRejectsMalformedWire':('response','opcode','multiple-questions','answer','authority','multiple-edns','compressed-name','class','edns-version','edns-options','edns-flags','edns-size','trailing','truncated')})
+AUXILIARY_TESTS['internal/standardengine/resolved_dnssec_query_test.go']='resolved-dnssec-query'
