@@ -136,15 +136,21 @@ func desktopDarwinPFLoad(ctx context.Context, anchor string, rules string) error
 
 var desktopDarwinPFAnchorName = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
 
+func desktopDarwinPFReadAnchors(ctx context.Context, anchor string) ([]byte, error) {
+	if anchor == "" {
+		return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "Anchors")
+	}
+	return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-s", "Anchors")
+}
+
 func desktopDarwinPFRejectLegacyLayout(ctx context.Context) error {
+	return desktopDarwinPFRejectLegacyInventory(ctx, desktopDarwinPFReadAnchors)
+}
+
+func desktopDarwinPFRejectLegacyInventory(ctx context.Context, inventory func(context.Context, string) ([]byte, error)) error {
 	return desktopPFRejectLegacyRules(desktopDarwinPFNamespace+"/physical",
 		func(anchor string) (string, error) { return desktopDarwinPFRead(ctx, anchor) },
-		func(anchor string) ([]byte, error) {
-			if anchor == "" {
-				return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "Anchors")
-			}
-			return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-s", "Anchors")
-		})
+		func(anchor string) ([]byte, error) { return inventory(ctx, anchor) })
 }
 
 func desktopDarwinPFNoTranslation(ctx context.Context, anchor string) error {
@@ -180,11 +186,11 @@ func desktopDarwinPFValidateSystemFilters(raw []byte) error {
 }
 
 func desktopDarwinPFGlobal(ctx context.Context) error {
-	checks := desktopDarwinPFGlobalChecks()
+	checks := desktopDarwinPFGlobalChecks(ctx)
 	return desktopPFReadback(ctx, checks[:]...)
 }
 
-func desktopDarwinPFGlobalChecks() [6]func(context.Context) error {
+func desktopDarwinPFGlobalChecks(ctx context.Context) [6]func(context.Context) error {
 	// These independent inspections only read the kernel. Keep their original
 	// shared deadline and every foreign-owner/state/translation check, but do
 	// not spend that proof budget serially starting unrelated pfctl processes.
@@ -197,13 +203,18 @@ func desktopDarwinPFGlobalChecks() [6]func(context.Context) error {
 			return nil
 		}
 	}
+	// Root and com.apple inventories are consumed independently by legacy,
+	// foreign-root and system-child validators. Read each identical command once
+	// inside this invocation; constructing new checks always constructs a fresh
+	// reader, including on both sides of every PF mutation.
+	inventory := newDesktopPFInventoryReadback(ctx, desktopDarwinPFReadAnchors)
 	return [6]func(context.Context) error{
 		inspect("enablement", desktopDarwinPFEnabled),
 		inspect("system dispatch", desktopDarwinPFSystemFilters),
-		inspect("legacy inventory", desktopDarwinPFRejectLegacyLayout),
+		inspect("legacy inventory", func(c context.Context) error { return desktopDarwinPFRejectLegacyInventory(c, inventory.read) }),
 		inspect("owned translation", desktopDarwinPFOwnedTranslations),
-		inspect("foreign roots", desktopDarwinPFForeignRoots),
-		inspect("system children", desktopDarwinPFSystemChildren),
+		inspect("foreign roots", func(c context.Context) error { return desktopDarwinPFForeignRootInventory(c, inventory.read) }),
+		inspect("system children", func(c context.Context) error { return desktopDarwinPFSystemChildInventory(c, inventory.read) }),
 	}
 }
 
@@ -234,8 +245,8 @@ func desktopDarwinPFOwnedTranslations(ctx context.Context) error {
 	return desktopPFReadback(ctx, checks...)
 }
 
-func desktopDarwinPFForeignRoots(ctx context.Context) error {
-	roots, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "Anchors")
+func desktopDarwinPFForeignRootInventory(ctx context.Context, inventory func(context.Context, string) ([]byte, error)) error {
+	roots, err := inventory(ctx, "")
 	if err != nil {
 		return err
 	}
@@ -253,10 +264,10 @@ func desktopDarwinPFForeignRoots(ctx context.Context) error {
 	return nil
 }
 
-func desktopDarwinPFSystemChildren(ctx context.Context) (failure error) {
+func desktopDarwinPFSystemChildInventory(ctx context.Context, inventory func(context.Context, string) ([]byte, error)) (failure error) {
 	progress := desktopPFChildrenProgress{command: 1, attempted: 1}
 	defer func() { failure = progress.failure(failure) }()
-	anchors, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", "com.apple", "-s", "Anchors")
+	anchors, err := inventory(ctx, "com.apple")
 	if err != nil {
 		return err
 	}
@@ -390,7 +401,7 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 	if !p.valid() {
 		return errors.New("Darwin PF readback has another captured owner")
 	}
-	return desktopPFCompleteReadback(ctx, desktopDarwinPFGlobalChecks(),
+	return desktopPFCompleteReadback(ctx, desktopDarwinPFGlobalChecks(ctx),
 		func(captured context.Context) error {
 			return desktopDarwinCheckPhysicalStates(captured, p.Physical)
 		},

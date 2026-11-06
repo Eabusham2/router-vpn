@@ -39,7 +39,11 @@ CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorP
 READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAndCancellationJoin',
                   'PFReadbackDeadlineAndInvalidCapture', 'PFReadbackNestedNativeCommandBudget',
                   'PFReadbackQueuedCommandCancellation', 'PFReadbackCommandSlotJoinsCleanup',
-                  'PFReadbackForeignBranches')
+                  'PFReadbackForeignBranches',
+                  'PFReadbackInventorySharesOnlyJoinedIdenticalPaths',
+                  'PFReadbackInventoryNewInspectionReadsAfterMutation',
+                  'PFReadbackInventoryCancelledWaiterDoesNotDetachNativeOwner',
+                  'PFReadbackInventoryCancellationAndFailureNeverBecomeEmptyProof')
 SOCKS_CASES = ('SOCKSAssociations',)
 SEPARATE_CASES = ('SocketRetirementReusesCapacity',)+SOCKS_CASES
 SOCKS_LEAVES = ('original-kernel-identity', 'stale-control-permit', 'expired-control-permit',
