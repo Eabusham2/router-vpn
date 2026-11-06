@@ -889,7 +889,10 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	// The test owns the session lifetime. Individual proof and measurement
+	// operations retain their own deadlines; a shared 45-second session timer
+	// would retire a valid native path during the 90-second benchmark budget.
+	ctx, cancel := context.WithCancel(t.Context())
 	f := &desktopExternalWFPFixture{original: original, policy: policy, source: source, capture: capture, cancel: cancel}
 	t.Cleanup(func() {
 		if err := f.close(); err != nil {

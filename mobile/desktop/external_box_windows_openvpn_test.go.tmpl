@@ -474,7 +474,14 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNWFP(t *testing.T) {
 						done := make(chan result, 1)
 						go func() { raw, err := f.proof.Run(); done <- result{raw, err} }()
 						deadline := time.Now().Add(10 * time.Second)
-						for peer.observe(t, "stats").PublicAttempts == 0 {
+						for {
+							stats := peer.observe(t, "stats")
+							if stats.PublicRequests == 1 {
+								if stats.DNS == 0 || stats.PublicAttempts != 1 || stats.TLS != 1 {
+									t.Fatal("held OpenVPN proof lost authenticated request boundary", stats)
+								}
+								break
+							}
 							if !time.Now().Before(deadline) {
 								f.proof.Cancel()
 								peer.observe(t, "release")
