@@ -673,3 +673,5 @@ AUXILIARY['resolved-command'][1]['TestResolvedFixedCommandDNSSECSequenceBudget']
 # Exact-name alias proof remains distinct from address query authority.
 AUXILIARY['resolved-dnssec-query'][1]['TestResolvedDNSSECAliasQueryAuthority']=()
 AUXILIARY['dnssec-child-protocol'][1]['TestDNSSECCapturedAliasPurpose']=()
+
+SOURCE.add("internal/mobiletor/desktop_standard_linux_bootstrap_dnssec_alias_test.go")

@@ -28,7 +28,14 @@ type desktopLinuxBootstrapDNSSECBinding struct {
 }
 
 func desktopLinuxBindDNSSEC(policy standardengine.ResolvedPolicy, plans []*standardengine.ResolvedDNSSECPlan, kind uint16) (*desktopLinuxBootstrapDNSSECBinding, error) {
-	if len(plans) == 0 || len(plans) > desktopLinuxBootstrapGroupActive || kind != 1 && kind != 28 || plans[0] == nil {
+	if kind != 1 && kind != 28 {
+		return nil, errors.New("address validation requires its original A or AAAA purpose")
+	}
+	return desktopLinuxBindDNSSECQuestion(policy, plans, kind)
+}
+
+func desktopLinuxBindDNSSECQuestion(policy standardengine.ResolvedPolicy, plans []*standardengine.ResolvedDNSSECPlan, kind uint16) (*desktopLinuxBootstrapDNSSECBinding, error) {
+	if len(plans) == 0 || len(plans) > desktopLinuxBootstrapGroupActive || kind != 1 && kind != 28 && kind != 5 || plans[0] == nil {
 		return nil, errors.New("DNSSEC group omitted original complete plan cohort")
 	}
 	raw, err := policy.Canonical()
@@ -80,6 +87,17 @@ func (p *DesktopLinuxStandardProtection) BeginBootstrapDNSSECGroup(original cont
 	return p.beginBootstrapDNSGroup(original, lease, binding)
 }
 
+// BeginBootstrapDNSSECAliasGroup admits only an exact-name CNAME proof and
+// its DS/DNSKEY ancestors. Address queries and the alias target require a new
+// captured cohort; an existing address group cannot be promoted to this owner.
+func (p *DesktopLinuxStandardProtection) BeginBootstrapDNSSECAliasGroup(original context.Context, lease *os.File, policy standardengine.ResolvedPolicy, plans []*standardengine.ResolvedDNSSECPlan) (*DesktopLinuxBootstrapDNSGroup, error) {
+	binding, err := desktopLinuxBindDNSSECQuestion(policy, plans, 5)
+	if err != nil {
+		return nil, err
+	}
+	return p.beginBootstrapDNSGroup(original, lease, binding)
+}
+
 // DesktopLinuxBootstrapDNSSECQuestion retains one exact child query and its
 // original loaded trust plan. Its private fields cannot be fabricated through
 // an ordinary Exchange call or changed by editing the caller's byte slice.
@@ -93,10 +111,30 @@ type DesktopLinuxBootstrapDNSSECQuestion struct {
 }
 
 func NewDesktopLinuxBootstrapDNSSECQuestion(policy standardengine.ResolvedPolicy, plan *standardengine.ResolvedDNSSECPlan, kind uint16, wire []byte) (*DesktopLinuxBootstrapDNSSECQuestion, error) {
+	if kind != 1 && kind != 28 {
+		return nil, errors.New("address validation cannot acquire alias proof authority")
+	}
+	return newDesktopLinuxBootstrapDNSSECQuestion(policy, plan, kind, wire)
+}
+
+func NewDesktopLinuxBootstrapDNSSECAliasQuestion(policy standardengine.ResolvedPolicy, plan *standardengine.ResolvedDNSSECPlan, wire []byte) (*DesktopLinuxBootstrapDNSSECQuestion, error) {
+	return newDesktopLinuxBootstrapDNSSECQuestion(policy, plan, 5, wire)
+}
+
+func desktopLinuxDNSSECQuestion(name string, kind uint16, wire []byte) error {
+	if kind == 5 {
+		_, err := standardengine.ResolvedDNSSECAliasQuestionFromWire(name, wire)
+		return err
+	}
+	_, err := standardengine.ResolvedDNSSECQuestionFromWire(name, kind, wire)
+	return err
+}
+
+func newDesktopLinuxBootstrapDNSSECQuestion(policy standardengine.ResolvedPolicy, plan *standardengine.ResolvedDNSSECPlan, kind uint16, wire []byte) (*DesktopLinuxBootstrapDNSSECQuestion, error) {
 	if plan == nil || !plan.MatchesPolicy(policy) {
 		return nil, errors.New("DNSSEC question omitted original loaded trust plan")
 	}
-	if _, err := standardengine.ResolvedDNSSECQuestionFromWire(plan.Name(), kind, wire); err != nil {
+	if err := desktopLinuxDNSSECQuestion(plan.Name(), kind, wire); err != nil {
 		return nil, err
 	}
 	raw, err := policy.Canonical()
@@ -151,7 +189,7 @@ func (q *DesktopLinuxBootstrapDNSSECQuestion) matches(g *DesktopLinuxBootstrapDN
 	if q == nil || g == nil || g.dnssec == nil || q.name != g.dnssec.name || q.kind != g.dnssec.kind || q.planSHA == "" || g.dnssec.plans[q.index] != q.planSHA || !bytes.Equal(q.policy, g.dnssec.policy) || !bytes.Equal(wire, q.wire) {
 		return errors.New("DNSSEC query lost its original admitted group/plan")
 	}
-	if _, err := standardengine.ResolvedDNSSECQuestionFromWire(q.name, q.kind, wire); err != nil {
+	if err := desktopLinuxDNSSECQuestion(q.name, q.kind, wire); err != nil {
 		return err
 	}
 	network := upstream.Network

@@ -112,7 +112,7 @@ class StandardServiceGateTests(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('dnssec_bootstrap_guardian',ROOT/'deploy/test_desktop_linux_guardian.py')
         guardian=importlib.util.module_from_spec(spec);spec.loader.exec_module(guardian)
         self.assertIn('StandardBootstrapDNSSEC',guardian.STANDARD_KERNEL_CASES)
-        for suffix in ('','_test','_native_test'):
+        for suffix in ('','_test','_alias_test','_native_test'):
             name='desktop_standard_linux_bootstrap_dnssec'+suffix+'.go'
             self.assertIn(name,guardian.STANDARD_SOURCE_FILES)
             self.assertIn('internal/mobiletor/'+name,gate.SOURCE)

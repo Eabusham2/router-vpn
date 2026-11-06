@@ -28,7 +28,7 @@ import (
 	"router-vpn/internal/standardengine"
 )
 
-var bootstrapDNSSECNativeModes = []string{"udp-key", "tcp-large", "udp-truncated", "tls-ds", "tls-wrong-name", "opportunistic-udp", "opportunistic-tcp", "owner-loss", "ordinary-bypass", "foreign-scope", "wrong-response", "recycled-queries"}
+var bootstrapDNSSECNativeModes = []string{"udp-key", "tcp-large", "udp-truncated", "tls-ds", "tls-wrong-name", "opportunistic-udp", "opportunistic-tcp", "owner-loss", "ordinary-bypass", "foreign-scope", "wrong-response", "recycled-queries", "alias-udp", "tls-alias", "alias-ordinary", "alias-address-group"}
 
 func init() {
 	if len(os.Args) == 5 && os.Args[1] == "routervpn-dnssec-upstream-peer" {
@@ -55,6 +55,9 @@ func bootstrapDNSSECNativeWire(mode string, number int) []byte {
 	if mode == "recycled-queries" {
 		name = []string{"node.example", "example", "."}[number]
 		kind = []uint16{1, 43, 48}[number]
+	}
+	if strings.Contains(mode, "alias") {
+		name, kind = "node.example", 5
 	}
 	return bootstrapDNSSECWire(name, kind)
 }
@@ -274,19 +277,29 @@ func bootstrapDNSSECNativeClient(mode string) (failure error) {
 	if err != nil {
 		return err
 	}
-	group, err := protection.BeginBootstrapDNSSECGroup(ctx, lease, policy, []*standardengine.ResolvedDNSSECPlan{plan}, 1)
+	var group *DesktopLinuxBootstrapDNSGroup
+	if strings.Contains(mode, "alias") && mode != "alias-address-group" {
+		group, err = protection.BeginBootstrapDNSSECAliasGroup(ctx, lease, policy, []*standardengine.ResolvedDNSSECPlan{plan})
+	} else {
+		group, err = protection.BeginBootstrapDNSSECGroup(ctx, lease, policy, []*standardengine.ResolvedDNSSECPlan{plan}, 1)
+	}
 	if err != nil {
 		return err
 	}
 	defer func() { failure = errors.Join(failure, group.Close(ctx)) }()
-	negative := mode == "tls-wrong-name" || mode == "owner-loss" || mode == "ordinary-bypass" || mode == "foreign-scope" || mode == "wrong-response"
+	negative := mode == "tls-wrong-name" || mode == "owner-loss" || mode == "ordinary-bypass" || mode == "foreign-scope" || mode == "wrong-response" || mode == "alias-ordinary" || mode == "alias-address-group"
 	count := 1
 	if mode == "recycled-queries" {
 		count = 3
 	}
 	for number := 0; number < count; number++ {
 		wire := bootstrapDNSSECNativeWire(mode, number)
-		question, err := NewDesktopLinuxBootstrapDNSSECQuestion(policy, plan, 1, wire)
+		var question *DesktopLinuxBootstrapDNSSECQuestion
+		if strings.Contains(mode, "alias") {
+			question, err = NewDesktopLinuxBootstrapDNSSECAliasQuestion(policy, plan, wire)
+		} else {
+			question, err = NewDesktopLinuxBootstrapDNSSECQuestion(policy, plan, 1, wire)
+		}
 		if err != nil {
 			return err
 		}
@@ -313,7 +326,7 @@ func bootstrapDNSSECNativeClient(mode string) (failure error) {
 		var answer []byte
 		var exchangeErr error
 		switch {
-		case mode == "ordinary-bypass":
+		case mode == "ordinary-bypass" || mode == "alias-ordinary":
 			answer, exchangeErr = group.Exchange(query, upstream, wire)
 		case strings.HasPrefix(mode, "opportunistic-"):
 			selected, e := NewDesktopLinuxOpportunisticDNS(policy, "node.example", 0, "udp")
@@ -330,7 +343,7 @@ func bootstrapDNSSECNativeClient(mode string) (failure error) {
 			if exchangeErr == nil || answer != nil {
 				return errors.New("invalid DNSSEC scope, reply or owner acquired an answer")
 			}
-			if (mode == "ordinary-bypass" || mode == "foreign-scope") && (calls != 0 || group.admitted != 0) {
+			if (mode == "ordinary-bypass" || mode == "foreign-scope" || mode == "alias-ordinary" || mode == "alias-address-group") && (calls != 0 || group.admitted != 0) {
 				return errors.New("unadmitted DNSSEC authority acquired a physical attempt")
 			}
 			if mode == "tls-wrong-name" {
@@ -427,7 +440,7 @@ func TestDesktopLinuxGuardianKernelStandardBootstrapDNSSEC(t *testing.T) {
 			if json.Unmarshal(raw, &result) != nil || result.Mode != mode || !result.BaselineRestored {
 				t.Fatal("DNSSEC client omitted exact joined native retirement", string(raw))
 			}
-			if mode == "ordinary-bypass" || mode == "foreign-scope" {
+			if mode == "ordinary-bypass" || mode == "foreign-scope" || mode == "alias-ordinary" || mode == "alias-address-group" {
 				_ = peer.Process.Kill()
 				_ = peer.Wait()
 				joined = true
@@ -458,7 +471,7 @@ func TestDesktopLinuxGuardianKernelStandardBootstrapDNSSEC(t *testing.T) {
 			if note.Queries != queries || note.TLS != (strings.HasPrefix(mode, "tls-") || strings.HasPrefix(mode, "opportunistic-")) || note.RejectedTLS != (mode == "tls-wrong-name" || strings.HasPrefix(mode, "opportunistic-")) {
 				t.Fatal("DNSSEC physical traffic did not match captured policy/refusal", output.String())
 			}
-			if mode == "tls-ds" && note.SNI != "resolver.example" || mode == "tls-wrong-name" && note.SNI != "replacement.example" {
+			if (mode == "tls-ds" || mode == "tls-alias") && note.SNI != "resolver.example" || mode == "tls-wrong-name" && note.SNI != "replacement.example" {
 				t.Fatal("DNSSEC TLS changed actual captured SNI", output.String())
 			}
 		})
