@@ -55,14 +55,18 @@ func macOSExternalSSEntryMethod(name string) string {
 	return ""
 }
 func macOSExternalSSEntryScenario(scenario string) (entry, final, fault string, found bool) {
-	for _, candidate := range macOSExternalSSEntryCases {
+	for _, candidate := range append(macOSExternalSSEntryCases, macOSExternalSSLayerCases...) {
 		if candidate != scenario {
 			continue
 		}
 		parts := strings.Split(scenario, "-")
 		entry, final = macOSExternalSSEntryMethod(parts[2]), macOSExternalSSEntryMethod(parts[4])
-		if len(parts) > 5 && parts[5] != "always" {
-			fault = strings.Join(parts[5:], "-")
+		start := 5
+		if len(parts) > 5 && strings.HasPrefix(parts[5], "layers") {
+			start = 6
+		}
+		if len(parts) > start && parts[start] != "always" {
+			fault = strings.Join(parts[start:], "-")
 		}
 		return entry, final, fault, true
 	}
@@ -103,7 +107,11 @@ func macOSExternalNativeSSEntryRead(t *testing.T, p *macOSExternalNativePeer, re
 		}
 		return
 	}
-	if entry == nil || entry.Method != p.ssEntryMethod || reply.Address != "198.51.100.240:8388" || entry.PhysicalTCP < 0 || entry.PhysicalUDP < 0 || entry.Streams < 0 || entry.Packets < 0 {
+	finalAddress := "198.51.100.240:8388"
+	if p.ssFinalLayer.mode == common.StartLayerAES256GCMXOR {
+		finalAddress = "198.51.100.240:8389"
+	}
+	if entry == nil || entry.Method != p.ssEntryMethod || reply.Address != finalAddress || entry.PhysicalTCP < 0 || entry.PhysicalUDP < 0 || entry.Streams < 0 || entry.Packets < 0 {
 		t.Fatal("SS entry lost its exact response")
 	}
 	address, e := netip.ParseAddrPort(entry.Address)
@@ -145,6 +153,7 @@ func macOSExternalNativeSSEntryProfile(t *testing.T, p *macOSExternalNativePeer,
 	case "wrong-exit":
 		exit.External.ExpectedPublicIP = "203.0.113.89"
 	}
+	macOSSSLayerProfiles(t, p, &entry, exit)
 	if err := common.NormalizeRouterProfile(&entry); err != nil {
 		t.Fatal("SS entry source rejected before native execution", err)
 	}
@@ -152,6 +161,10 @@ func macOSExternalNativeSSEntryProfile(t *testing.T, p *macOSExternalNativePeer,
 }
 func macOSExternalNativeSSEntryAuthority(t *testing.T, p *macOSExternalNativePeer, live macOSExternalNativeResult) {
 	t.Helper()
+	if _, _, layered := macOSSSLayerToken(p.name); layered {
+		macOSSSLayerAuthority(t, p, live)
+		return
+	}
 	if live.OuterTag != "external-entry" || live.OuterType != "shadowsocks" || live.PhysicalNetwork != "tcp+udp" || live.PhysicalAddress != p.entryAddress.String() || live.InnerDetour != "external-entry" || len(live.PhysicalDestinations) != 2 {
 		t.Fatal("SS final acquired physical authority", live)
 	}
@@ -173,6 +186,7 @@ func macOSExternalNativeSSEntryAuthority(t *testing.T, p *macOSExternalNativePee
 func macOSExternalNativeSSEntryProved(t *testing.T, p *macOSExternalNativePeer, live macOSExternalNativeResult, observed macOSExternalPeerReply) {
 	t.Helper()
 	macOSExternalNativeSSEntryAuthority(t, p, live)
+	macOSSSLayerProved(t, p, observed)
 	entry := observed.ShadowsocksEntry
 	dns, ipv6 := "tcp", "off"
 	if p.policy == "always" {
@@ -192,10 +206,13 @@ func macOSExternalNativeSSEntryRefused(t *testing.T, ctx context.Context, client
 	}
 	observed := p.stats(t)
 	entry := observed.ShadowsocksEntry
-	if entry == nil || entry.PhysicalTCP < 1 {
+	if entry == nil || entry.PhysicalTCP < 1 && p.fault != "wrong-entry-layer" && p.fault != "wrong-entry-whitening" {
 		t.Fatal("SS negative never reached independent encrypted entry")
 	}
 	switch p.fault {
+	case "wrong-entry-layer", "wrong-final-layer", "wrong-entry-whitening", "wrong-final-whitening":
+		macOSSSLayerRefused(t, p, observed)
+
 	case "wrong-entry-key", "wrong-entry-method":
 		if entry.AuthTCP == 0 || observed.AuthFailures != 0 || entry.Streams != 0 || entry.PublicReplies != 0 || observed.Connections != 0 || observed.PhysicalUDP != 0 || observed.DNSQueries != 0 || observed.PublicReplies != 0 {
 			t.Fatal("SS entry authentication negative acquired final path")

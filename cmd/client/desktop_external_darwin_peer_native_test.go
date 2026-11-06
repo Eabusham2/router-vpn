@@ -38,6 +38,8 @@ type macOSExternalLayerReceipt struct {
 }
 
 type macOSExternalPeerReply struct {
+	SSEntryLayer            *macOSExternalSSEntryReceipt     `json:"ss_entry_layer,omitempty"`
+	SSFinalLayer            *macOSExternalSSEntryReceipt     `json:"ss_final_layer,omitempty"`
 	ShadowsocksEntry        *macOSExternalSSEntryReceipt     `json:"shadowsocks_entry,omitempty"`
 	PacketEntry             *macOSExternalPacketEntryReceipt `json:"packet_entry,omitempty"`
 	OpenVPNNetwork          string                           `json:"openvpn_network,omitempty"`
@@ -67,6 +69,7 @@ type macOSExternalPeerReply struct {
 }
 
 type macOSExternalNativePeer struct {
+	ssEntryLayer, ssFinalLayer                                       macOSSSLayerSelection
 	ssEntry                                                          bool
 	ssEntryMethod, ssFinalMethod, ssEntryPassword                    string
 	finalClientKey, finalPeerKey, finalPSK                           string
@@ -169,6 +172,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 		t.Fatal("ordinary peer acquired an unrequested AWG parameter identity")
 	}
 	macOSExternalNativePacketEntryRead(t, p, reply)
+	macOSSSLayerRead(t, p, reply)
 	macOSExternalNativeSSEntryRead(t, p, reply)
 	macOSExternalNativeOpenVPNRead(t, p, reply, address)
 	p.address, p.ca = address, reply.CA
@@ -211,6 +215,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
 	p.ssEntryMethod, p.ssFinalMethod, _, p.ssEntry = macOSExternalSSEntryScenario(scenario)
+	macOSSSLayerPrepare(t, p)
 	if method, _, _, found := macOSExternalSSCONNECTScenario(scenario); found {
 		p.ssEntryMethod, p.ssEntry = method, true
 	}
@@ -354,6 +359,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		request["shadowsocks_method"] = p.ssFinalMethod
 		request["shadowsocks_entry"] = map[string]any{"method": p.ssEntryMethod, "password": p.ssEntryPassword}
 	}
+	macOSSSLayerRequest(p, request)
 	if p.ssEntry && protocol == "hysteria2" && fault == "wrong-final-trust" {
 		request["hysteria_fault"] = "untrusted-ca"
 	}
@@ -439,6 +445,11 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal(err)
 	}
 	initial := p.read(t)
+	for _, layer := range []*macOSExternalSSEntryReceipt{initial.SSEntryLayer, initial.SSFinalLayer} {
+		if layer != nil && (layer.PhysicalTCP != 0 || layer.PhysicalUDP != 0 || layer.Streams != 0 || layer.Packets != 0 || layer.AuthTCP != 0 || layer.AuthUDP != 0) {
+			t.Fatal("SS layer fabricated pre-traffic receipt")
+		}
+	}
 	if initial.ShadowsocksEntry != nil && (initial.ShadowsocksEntry.PhysicalTCP != 0 || initial.ShadowsocksEntry.PhysicalUDP != 0 || initial.ShadowsocksEntry.Streams != 0 || initial.ShadowsocksEntry.Packets != 0 || initial.ShadowsocksEntry.PublicReplies != 0) || initial.PacketEntry != nil && (initial.PacketEntry.PhysicalUDP != 0 || initial.PacketEntry.Streams != 0 || initial.PacketEntry.Packets != 0 || initial.PacketEntry.PublicReplies != 0) || initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.Layer != nil && (initial.Layer.Raw != 0 || initial.Layer.Authenticated != 0 || initial.Layer.Forwarded != 0 || initial.Layer.Rejected != 0) {
 		t.Fatal("native peer claimed traffic before its captured runtime")
 	}

@@ -60,7 +60,8 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 // Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer), SOCKS5, WireGuard or AmneziaWG graph.
 // Linux admits bounded Local WireGuard entry -> SS2022, HTTP(S) CONNECT or Hysteria2 finals, including the captured HY2 exit AES/XOR layer.
 // Linux, Windows and Darwin retain an ordinary SS2022 entry -> SS2022,
-// TCP-only HTTP(S) CONNECT or HY2 final with both layers Off.
+// TCP-only HTTP(S) CONNECT or HY2 final with both layers Off. An SS2022 final
+// additionally retains independently provisioned entry and final AES/XOR layers.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
@@ -82,7 +83,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		if targetOS == "linux" {
 			final, _ := original.capture.Profile["external"].(map[string]any)
 			supportedFinal := capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2"
-			supportedSSPair := entryKind == "shadowsocks" && capture.StartLayer == "" &&
+			supportedSSPair := entryKind == "shadowsocks" &&
 				(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
 			if !supportedSSPair && (entryKind != "wireguard" || !supportedFinal) {
 				entryKind = ""
@@ -93,7 +94,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	streamEntry := entryKind == "shadowsocks"
 	packetFinal := entry && (capture.Protocol == "wireguard" || capture.Protocol == "amneziawg" || capture.Protocol == "openvpn")
 	if err != nil || !entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" ||
-		capture.Execution != "" || capture.EntryStartLayer != "" ||
+		capture.Execution != "" || capture.EntryStartLayer != "" && !streamEntry ||
 		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || len(capture.PhysicalRoots) != 1 {
 		return nil, desktopExternalPolicyError
@@ -103,7 +104,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	// its original detour and only that entry owns physical socket intent.
 	// Native host admission still requires the complete independent capture.
 	layered := capture.StartLayer != ""
-	if layered && (capture.Protocol != "hysteria2" || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
+	if layered && (capture.Protocol != "hysteria2" && !(streamEntry && capture.Protocol == "shadowsocks") || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
 		return nil, desktopExternalPolicyError
 	}
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
@@ -140,6 +141,15 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			rowCount = 2
 		}
 	}
+	if streamEntry {
+		if capture.EntryStartLayer != "" {
+			rootTag, rootKind = ExternalEntryStartLayerTag, desktopExternalLayerKind(capture.EntryStartLayer)
+			rowCount++
+		}
+		if layered {
+			rowCount++
+		}
+	}
 	if layered && !entry {
 		rootTag, rootKind, rowCount = multihoprelay.ExitStartLayerTag, "shadowsocks", 2
 		if capture.StartLayer == "aes-256-gcm+xor-whitening" {
@@ -166,30 +176,38 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		return nil, desktopExternalPolicyError
 	}
 	var physical map[string]any
-	innerFound := false
-	for _, row := range rows {
-		object, ok := row.(map[string]any)
-		if !ok {
-			return nil, desktopExternalPolicyError
+	if streamEntry {
+		physical, err = desktopExternalSSRows(rows, capture, kind, root)
+		if err != nil {
+			return nil, err
 		}
-		switch object["tag"] {
-		case root.Tag:
-			if physical != nil {
+	} else {
+		innerFound := false
+		for _, row := range rows {
+			object, ok := row.(map[string]any)
+			if !ok {
 				return nil, desktopExternalPolicyError
 			}
-			physical = object
-		case ExternalFinalTag:
-			if !(layered && !entry || packetFinal || streamEntry) || innerFound || object["type"] != kind || object["detour"] != root.Tag {
+			switch object["tag"] {
+			case root.Tag:
+				if physical != nil {
+					return nil, desktopExternalPolicyError
+				}
+				physical = object
+			case ExternalFinalTag:
+				if !(layered && !entry || packetFinal || streamEntry) || innerFound || object["type"] != kind || object["detour"] != root.Tag {
+					return nil, desktopExternalPolicyError
+				}
+				innerFound = true
+			default:
 				return nil, desktopExternalPolicyError
 			}
-			innerFound = true
-		default:
+		}
+		if physical == nil || innerFound != (layered && !entry || packetFinal || streamEntry) || physical["type"] != root.Type || physical["detour"] != nil ||
+			desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
 			return nil, desktopExternalPolicyError
 		}
-	}
-	if physical == nil || innerFound != (layered && !entry || packetFinal || streamEntry) || physical["type"] != root.Type || physical["detour"] != nil ||
-		desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
-		return nil, desktopExternalPolicyError
+
 	}
 	if root.DynamicSOCKSUDP {
 		username, _ := physical["username"].(string)
@@ -360,8 +378,7 @@ func desktopExternalPacketEntryExit(protocol string) bool {
 func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture, targetOS string) string {
 	if original == nil || capture.EntryID == "" || capture.EntryTag != "external-entry" ||
 		capture.EntryNodeID != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
-		!desktopExternalPacketEntryExit(capture.Protocol) || capture.EntryStartLayer != "" ||
-		capture.StartLayer != "" && (capture.Protocol != "hysteria2" || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
+		!desktopExternalPacketEntryExit(capture.Protocol) {
 		return ""
 	}
 	entry := original.capture.Entry
@@ -370,18 +387,76 @@ func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopC
 		return ""
 	}
 	switch external["protocol"] {
-	case "wireguard":
-		return "wireguard"
-	case "amneziawg":
+	case "wireguard", "amneziawg":
+		if capture.EntryStartLayer != "" || capture.StartLayer != "" && (capture.Protocol != "hysteria2" || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
+			return ""
+		}
+		if external["protocol"] == "wireguard" {
+			return "wireguard"
+		}
 		return AmneziaType
 	case "shadowsocks":
 		final, ok := original.capture.Profile["external"].(map[string]any)
-		if capture.StartLayer == "" && ok && desktopExternalSS2022Import(external) &&
+		if (capture.EntryStartLayer == "" || multihoprelay.ValidLayerMode(capture.EntryStartLayer)) &&
+			(capture.StartLayer == "" || multihoprelay.ValidLayerMode(capture.StartLayer)) &&
+			((capture.StartLayer == "" && capture.EntryStartLayer == "") || capture.Protocol == "shadowsocks") &&
+			ok && desktopExternalSS2022Import(external) &&
 			(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2") {
 			return "shadowsocks"
 		}
 	}
 	return ""
+}
+
+func desktopExternalLayerKind(mode string) string {
+	if mode == "aes-256-gcm+xor-whitening" {
+		return "routervpn-aes-xor"
+	}
+	return "shadowsocks"
+}
+
+// The already validated original graph contains precisely two independent raw
+// SS owners and zero, one or two provisioned wrappers. Only the first wrapper
+// (or the raw entry when Off) can acquire the physical lower owner.
+func desktopExternalSSRows(rows []any, capture ExternalDesktopCapture, kind string, root ExternalDesktopPhysicalRoot) (map[string]any, error) {
+	expected := map[string]struct{ kind, detour string }{
+		capture.EntryTag: {"shadowsocks", ""}, ExternalFinalTag: {kind, capture.EntryTag},
+	}
+	if capture.EntryStartLayer != "" {
+		expected[capture.EntryTag] = struct{ kind, detour string }{"shadowsocks", ExternalEntryStartLayerTag}
+		expected[ExternalEntryStartLayerTag] = struct{ kind, detour string }{desktopExternalLayerKind(capture.EntryStartLayer), ""}
+	}
+	if capture.StartLayer != "" {
+		expected[ExternalFinalTag] = struct{ kind, detour string }{kind, multihoprelay.ExitStartLayerTag}
+		expected[multihoprelay.ExitStartLayerTag] = struct{ kind, detour string }{desktopExternalLayerKind(capture.StartLayer), capture.EntryTag}
+	}
+	if len(rows) != len(expected) {
+		return nil, desktopExternalPolicyError
+	}
+	var physical map[string]any
+	seen := map[string]bool{}
+	for _, row := range rows {
+		object, ok := row.(map[string]any)
+		if !ok {
+			return nil, desktopExternalPolicyError
+		}
+		tag, _ := object["tag"].(string)
+		want, ok := expected[tag]
+		if !ok || seen[tag] || object["type"] != want.kind || want.detour == "" && object["detour"] != nil || want.detour != "" && object["detour"] != want.detour {
+			return nil, desktopExternalPolicyError
+		}
+		seen[tag] = true
+		if (tag == ExternalEntryStartLayerTag || tag == multihoprelay.ExitStartLayerTag) && object["method"] != NativeStartLayerMethod {
+			return nil, desktopExternalPolicyError
+		}
+		if tag == root.Tag {
+			physical = object
+		}
+	}
+	if physical == nil || physical["type"] != root.Type || physical["detour"] != nil || desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
+		return nil, desktopExternalPolicyError
+	}
+	return physical, nil
 }
 
 func desktopExternalObjectDigest(value any) string {

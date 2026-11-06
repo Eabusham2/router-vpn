@@ -17,12 +17,15 @@ func desktopExternalSSEntryOwnerWithFinal(owner *desktopExternalRuntime, final f
 		owner.profile.MultihopExecution != "" && owner.profile.MultihopExecution != "local" || owner.profile.MultihopEntryMode != "" {
 		return false
 	}
+	if owner.entry.StartLayer != "" && owner.entry.StartLayer != common.StartLayerOff && !desktopExternalSS2022Profile(owner.profile) {
+		return false
+	}
 	policy := desktopOwnedNodeProtectionPolicy(owner.profile)
 	return policy == "on-connect" || policy == "always"
 }
 func desktopExternalSS2022Profile(profile common.RouterProfile) bool {
 	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "shadowsocks" || profile.External.Shadowsocks == nil ||
-		profile.StartLayer != "" && profile.StartLayer != common.StartLayerOff || profile.External.StartLayer != nil {
+		!desktopExternalSSCapturedLayer(profile) {
 		return false
 	}
 	switch profile.External.Shadowsocks.Method {
@@ -44,4 +47,21 @@ func desktopExternalSSEntryFinalProfile(profile common.RouterProfile) bool {
 		return h != nil && h.Server != "" && h.Port > 0 && h.Password != ""
 	}
 	return profile.External.Protocol == "http-connect" && profile.External.HTTPConnect != nil || profile.External.Protocol == "https-connect" && profile.External.HTTPSConnect != nil
+}
+
+// This is only an admission shape check. Full compiler capture validates the
+// private API, exact transport credentials and source binding before retirement.
+func desktopExternalSSCapturedLayer(profile common.RouterProfile) bool {
+	if profile.External == nil {
+		return false
+	}
+	layer := profile.External.StartLayer
+	switch profile.StartLayer {
+	case "", common.StartLayerOff:
+		return layer == nil
+	case common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR:
+		return layer != nil && layer.Mode == profile.StartLayer && layer.API != "" && len(layer.Transport) == 6 && layer.Transport["type"] == "shadowsocks" && layer.Transport["method"] == common.StartLayerAES256GCMTransport
+	default:
+		return false
+	}
 }

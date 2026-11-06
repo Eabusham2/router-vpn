@@ -53,7 +53,7 @@ type desktopExternalInstalledSSPeer struct {
 	close   func()
 }
 
-var desktopExternalInstalledSSEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledSSRequest, tls.Certificate, string, string) desktopExternalInstalledSSPeer
+var desktopExternalInstalledSSEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledSSRequest, tls.Certificate, string, string, ...uint16) desktopExternalInstalledSSPeer
 
 func desktopSS2022Credentials(method, password string) bool {
 	size := 32
@@ -115,11 +115,31 @@ func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method
 // Decorators transform only ciphertext on the original owned transport; the
 // listener, accepted connection registry and cancellation joins stay unchanged.
 func desktopStartSSProviderTransport(t *testing.T, server *desktopNodeLayerServer, method, password string, address netip.Addr, wrapStream func(net.Conn) net.Conn, wrapPacket func(net.PacketConn) net.PacketConn) desktopExternalInstalledSSPeer {
+	return desktopStartSSProviderBoundTransport(t, server, method, password, address, 0, wrapStream, wrapPacket)
+}
+func desktopStartSSProviderBoundTransport(t *testing.T, server *desktopNodeLayerServer, method, password string, address netip.Addr, port uint16, wrapStream func(net.Conn) net.Conn, wrapPacket func(net.PacketConn) net.PacketConn) desktopExternalInstalledSSPeer {
 	t.Helper()
 	if !desktopSS2022Credentials(method, password) || server == nil || server.ctx == nil || len(server.routes) == 0 {
 		t.Fatal("SS provider lost captured credential or exact routes")
 	}
-	listener, packet, err := desktopNodeLayerPortPair(address, net.Listen)
+	var listener net.Listener
+	var packet net.PacketConn
+	var err error
+	if port == 0 {
+		listener, packet, err = desktopNodeLayerPortPair(address, net.Listen)
+	} else {
+		if port != 8389 {
+			t.Fatal("unowned fixed layer port")
+		}
+		endpoint := netip.AddrPortFrom(address, port).String()
+		packet, err = net.ListenPacket("udp4", endpoint)
+		if err == nil {
+			listener, err = net.Listen("tcp4", endpoint)
+			if err != nil {
+				_ = packet.Close()
+			}
+		}
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,13 +224,13 @@ func desktopStartSSProviderTransport(t *testing.T, server *desktopNodeLayerServe
 		return desktopExternalInstalledSSReceipt{Method: method, Address: listener.Addr().String(), PhysicalTCP: server.rawTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Streams: server.plainTCP.Load(), Packets: server.plainUDP.Load(), AuthTCP: authTCP.Load(), AuthUDP: authUDP.Load()}
 	}}
 }
-func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, physical netip.Addr) desktopExternalInstalledSSPeer {
+func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, physical netip.Addr, finalPorts ...uint16) desktopExternalInstalledSSPeer {
 	t.Helper()
 	target, err := netip.ParseAddrPort(final)
 	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || (!physical.Is4() || !physical.IsGlobalUnicast() || physical.IsLoopback()) {
 		t.Fatal("SS entry lost captured physical role and loopback final")
 	}
-	return desktopStartSSEntryAt(t, parent, request, cert, final, network, physical)
+	return desktopStartSSEntryAt(t, parent, request, cert, final, network, physical, finalPorts...)
 }
 
 // The explicit loopback component also uses this constructor, with no native
@@ -480,8 +500,8 @@ func desktopSSReferenceTwoHop(t *testing.T, entryMethod, finalMethod, fault stri
 func TestRouterVPNDesktopInstalledSSEntryLoopbackProviderProcess(t *testing.T) {
 	const child = "ROUTERVPN_SS_ENTRY_COMPONENT_CHILD"
 	if os.Getenv(child) == "1" {
-		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string) desktopExternalInstalledSSPeer {
-			return desktopStartSSEntryAt(t, parent, request, cert, final, network, netip.MustParseAddr("127.0.0.1"))
+		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, finalPorts ...uint16) desktopExternalInstalledSSPeer {
+			return desktopStartSSEntryAt(t, parent, request, cert, final, network, netip.MustParseAddr("127.0.0.1"), finalPorts...)
 		}
 		desktopExternalInstalledReferenceProcess(t, "127.0.0.1", map[string]bool{"shadowsocks": true}, true)
 		return

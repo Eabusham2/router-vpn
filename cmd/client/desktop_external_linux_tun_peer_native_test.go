@@ -139,7 +139,7 @@ func linuxHostTUNExternalAction(scenario string) string {
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
 	switch linuxHostTUNExternalAction(scenario) {
-	case "wrong-entry-key", "wrong-entry-method", "wrong-final-method", "wrong-ca", "wrong-proxy-password", "wrong-proxy-username", "wrong-proxy-sni", "wrong-proxy-trust", "wrong-entry-public", "wrong-layer-key", "wrong-whitening", "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control", "wrong-auth", "auth-downgrade", "relay-domain", "control-eof":
+	case "wrong-entry-layer", "wrong-final-layer", "entry-whitening", "final-whitening", "wrong-entry-key", "wrong-entry-method", "wrong-final-method", "wrong-ca", "wrong-proxy-password", "wrong-proxy-username", "wrong-proxy-sni", "wrong-proxy-trust", "wrong-entry-public", "wrong-layer-key", "wrong-whitening", "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control", "wrong-auth", "auth-downgrade", "relay-domain", "control-eof":
 		return true
 	}
 	return false
@@ -167,6 +167,8 @@ func linuxHostTUNExternalWGCONNECT(scenario string) bool {
 }
 
 type linuxExternalTUNPeerReply struct {
+	SSEntryLayer           *linuxExternalTUNSSEntryReceipt     `json:"ss_entry_layer,omitempty"`
+	SSFinalLayer           *linuxExternalTUNSSEntryReceipt     `json:"ss_final_layer,omitempty"`
 	ShadowsocksEntry       *linuxExternalTUNSSEntryReceipt     `json:"shadowsocks_entry,omitempty"`
 	TLSCertificateRefusals uint32                              `json:"tls_certificate_refusals,omitempty"`
 	PacketEntry            *linuxExternalTUNPacketEntryReceipt `json:"packet_entry,omitempty"`
@@ -249,6 +251,7 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 	} else if reply.PacketEntry != nil {
 		t.Fatal("direct peer acquired an unrequested entry")
 	}
+	linuxHostTUNSSLayerRead(t, peer, reply)
 	linuxHostTUNSSEntryRead(t, peer, reply)
 	linuxHostTUNExternalLayerRead(t, peer, reply)
 	if peer.protocol == "amneziawg" {
@@ -438,6 +441,7 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 		}
 		request["shadowsocks_entry"] = map[string]any{"method": peer.ssEntry.entryMethod, "password": peer.ssEntry.entryPassword}
 	}
+	linuxHostTUNSSLayerRequest(t, peer, request, scenario)
 	if peer.layerMode != "" {
 		layer := map[string]any{"mode": peer.layerMode, "password": peer.layerPassword}
 		if linuxHostTUNExternalAction(scenario) == "wrong-whitening" {
@@ -476,6 +480,11 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 		t.Fatal(err)
 	}
 	initial := peer.read(t)
+	for _, layer := range []*linuxExternalTUNSSEntryReceipt{initial.SSEntryLayer, initial.SSFinalLayer} {
+		if layer != nil && (layer.PhysicalTCP != 0 || layer.PhysicalUDP != 0 || layer.Streams != 0 || layer.Packets != 0 || layer.AuthTCP != 0 || layer.AuthUDP != 0) {
+			t.Fatal("layer fabricated pre-traffic receipts")
+		}
+	}
 	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 || initial.TLSCertificateRefusals != 0 ||
 		len(initial.SOCKSRelays) != 0 || initial.SOCKSRejectedReplies != 0 {
 		t.Fatal("external reference reported traffic before its selected native child")

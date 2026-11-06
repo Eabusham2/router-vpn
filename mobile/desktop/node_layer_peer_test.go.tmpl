@@ -382,12 +382,28 @@ func TestRouterVPNDesktopLayerInitialPacketRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		owned, transport := makeOwned()
+		retired := &desktopNodeLayerServer{ctx: context.Background(), closing: true}
+		if err := retired.NewPacketConnection(context.Background(), owned, M.Metadata{Destination: destination}); !errors.Is(err, net.ErrClosed) {
+			t.Fatal("retired provider accepted cache owner", err)
+		}
+		captured := owned.(*desktopNodeOwnedInitialPacket)
+		if captured.first != nil || !captured.closed {
+			t.Fatal("retired provider leaked transferred initial packet")
+		}
+		select {
+		case <-transport.done:
+		default:
+			t.Fatal("retired provider left original transport open")
+		}
+
 	})
 }
 
 func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connection N.PacketConn, metadata M.Metadata) error {
 	connection = desktopNodeOwnInitialPacket(connection)
 	if !s.enter(connection) {
+		_ = connection.Close()
 		return net.ErrClosed
 	}
 	defer s.leave(connection)
@@ -1936,6 +1952,8 @@ var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServe
 type desktopExternalInstalledPeerRequest struct {
 	HysteriaFault        string                                `json:"hysteria_fault,omitempty"`
 	HTTPSFault           string                                `json:"https_fault,omitempty"`
+	SSEntryLayer         *desktopExternalInstalledLayerRequest `json:"ss_entry_layer,omitempty"`
+	SSFinalLayer         *desktopExternalInstalledLayerRequest `json:"ss_final_layer,omitempty"`
 	ShadowsocksEntry     *desktopExternalInstalledSSRequest    `json:"shadowsocks_entry,omitempty"`
 	ShadowsocksMethod    string                                `json:"shadowsocks_method,omitempty"`
 	AmneziaEntry         *desktopExternalInstalledAWGRequest   `json:"amnezia_entry,omitempty"`
@@ -1972,6 +1990,8 @@ var desktopExternalInstalledOpenVPN func(*testing.T, *desktopNodeLayerServer, de
 
 type desktopExternalInstalledPeerReply struct {
 	TLSCertificateRefusals  uint32                                      `json:"tls_certificate_refusals,omitempty"`
+	SSEntryLayer            *desktopExternalInstalledSSReceipt          `json:"ss_entry_layer,omitempty"`
+	SSFinalLayer            *desktopExternalInstalledSSReceipt          `json:"ss_final_layer,omitempty"`
 	ShadowsocksEntry        *desktopExternalInstalledSSReceipt          `json:"shadowsocks_entry,omitempty"`
 	PacketEntry             *desktopExternalInstalledPacketEntryReceipt `json:"packet_entry,omitempty"`
 	OpenVPNUsername         string                                      `json:"openvpn_username,omitempty"`
@@ -2750,6 +2770,14 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			t.Fatal("installed HY2 layer lost its original mode and private key")
 		}
 	}
+	for _, layer := range []*desktopExternalInstalledLayerRequest{request.SSEntryLayer, request.SSFinalLayer} {
+		if layer == nil {
+			continue
+		}
+		if request.ShadowsocksEntry == nil || request.Protocol != "shadowsocks" || request.Layer != nil || !desktopSS2022Credentials("2022-blake3-aes-256-gcm", layer.Password) || (layer.Mode != "aes-256-gcm" && layer.Mode != "aes-256-gcm+xor-whitening") || (layer.Fault != "" && layer.Fault != "layer-key" && !(layer.Fault == "whitening" && layer.Mode == "aes-256-gcm+xor-whitening")) {
+			t.Fatal("SS layer lost independently captured original pair")
+		}
+	}
 	if request.Protocol != "openvpn" && (request.OpenVPNNetwork != "" || request.OpenVPNFallback || request.OpenVPNClientAddress != "") {
 		t.Fatal("ordinary external reference acquired uncaptured provider transport")
 	}
@@ -2920,6 +2948,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	var wgPeer desktopExternalInstalledWGPeer
 	var entryPeer desktopExternalInstalledPacketEntryPeer
 	var ssEntryPeer desktopExternalInstalledSSPeer
+	var ssEntryLayer, ssFinalLayer desktopExternalInstalledSSPeer
 	var ssFinalStats func() desktopExternalInstalledSSReceipt
 	var openvpnProfile string
 	var openvpnPeer desktopExternalInstalledOpenVPNPeer
@@ -3077,11 +3106,31 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		} else if request.Protocol == "hysteria2" {
 			finalNetwork = "udp"
 		}
-		ssEntryPeer = desktopExternalInstalledSSEntry(t, server, *request.ShadowsocksEntry, cert, address, finalNetwork)
+		finalPort := uint16(8388)
+		if layer := request.SSFinalLayer; layer != nil {
+			ssFinalLayer = desktopStartSSCapturedLayer(t, ctx, address, "10.93.0.1:8388", layer.Mode, layer.Password, layer.Fault, netip.MustParseAddr("127.0.0.1"), 0)
+			address = ssFinalLayer.address
+			if layer.Mode == "aes-256-gcm+xor-whitening" {
+				finalPort = 8389
+			}
+		}
+		ssEntryPeer = desktopExternalInstalledSSEntry(t, server, *request.ShadowsocksEntry, cert, address, finalNetwork, finalPort)
+		if layer := request.SSEntryLayer; layer != nil {
+			raw, err := netip.ParseAddrPort(ssEntryPeer.address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := uint16(0)
+			if layer.Mode == "aes-256-gcm+xor-whitening" {
+				port = 8389
+			}
+			private := netip.AddrPortFrom(netip.MustParseAddr("10.94.0.1"), raw.Port()).String()
+			ssEntryLayer = desktopStartSSCapturedLayer(t, ctx, ssEntryPeer.address, private, layer.Mode, layer.Password, layer.Fault, raw.Addr(), port)
+		}
 		if ssEntryPeer.address == "" || ssEntryPeer.close == nil || ssEntryPeer.stats == nil {
 			t.Fatal("SS entry omitted original native peer")
 		}
-		address = "198.51.100.240:8388"
+		address = netip.AddrPortFrom(netip.MustParseAddr("198.51.100.240"), finalPort).String()
 	}
 	if entryRequested {
 		exitNetwork := "tcp"
@@ -3127,6 +3176,12 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if entryPeer.close != nil {
 			entryPeer.close()
 		}
+		if ssEntryLayer.close != nil {
+			ssEntryLayer.close()
+		}
+		if ssFinalLayer.close != nil {
+			ssFinalLayer.close()
+		}
 		if ssEntryPeer.close != nil {
 			ssEntryPeer.close()
 		}
@@ -3158,6 +3213,14 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if ssEntryPeer.stats != nil {
 			value := ssEntryPeer.stats()
 			reply.ShadowsocksEntry = &value
+		}
+		if ssEntryLayer.stats != nil {
+			value := ssEntryLayer.stats()
+			reply.SSEntryLayer = &value
+		}
+		if ssFinalLayer.stats != nil {
+			value := ssFinalLayer.stats()
+			reply.SSFinalLayer = &value
 		}
 		if benchmark != nil {
 			reply.Latency = benchmark.receipt()

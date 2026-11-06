@@ -75,8 +75,9 @@ EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS +
 EXTERNAL_SS_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsSSEntryWFP"
 EXTERNAL_SS_ENTRY_NETWORKS = ("shadowsocks", "http-connect", "https-connect", "hysteria2")
 EXTERNAL_SS_ENTRY_LEAVES = ("on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
+EXTERNAL_SS_ENTRY_LAYER_LEAVES = tuple("layers/" + entry + "/" + final for entry in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening") for final in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")) + ("receipt-identity", "retired-initial-packet", "reject/entry-layer-key", "reject/final-layer-key", "reject/entry-whitening", "reject/final-whitening", "reject/entry-layer-inner", "reject/final-layer-inner")
 EXTERNAL_SS_ENTRY_CASES = {network: (EXTERNAL_SS_ENTRY_ROOT, EXTERNAL_SS_ENTRY_ROOT + "/" + network,
-    *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_SS_ENTRY_LEAVES + (("reject/final-trust",) if network == "hysteria2" else ()))) for network in EXTERNAL_SS_ENTRY_NETWORKS}
+    *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_SS_ENTRY_LEAVES + (EXTERNAL_SS_ENTRY_LAYER_LEAVES if network == "shadowsocks" else ()) + (("reject/final-trust",) if network == "hysteria2" else ()))) for network in EXTERNAL_SS_ENTRY_NETWORKS}
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {

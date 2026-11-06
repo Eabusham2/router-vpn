@@ -5,10 +5,13 @@ package box
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	mDNS "github.com/miekg/dns"
 	boxTLS "github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
@@ -25,16 +28,115 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
 
 const desktopWFPSSEntryFinal = "198.51.100.240:8388"
 
-type desktopExternalWFPSSEntryRequest struct{ Method, Final string }
+type desktopExternalWFPSSEntryRequest struct{ Method, Final, EntryLayer, FinalLayer string }
+
+type desktopWFPSSEntryLayerReceipt struct {
+	Mode, Address, Private             string
+	RawTCP, RawUDP, TCP, UDP, Rejected int32
+}
+
+func (h *desktopWFPSSEntryForward) receipt() *desktopWFPSSEntryLayerReceipt {
+	if h == nil {
+		return nil
+	}
+	return &desktopWFPSSEntryLayerReceipt{Mode: h.mode, Address: h.outer.LocalAddr().String(), Private: h.logical, RawTCP: h.rawTCP.Load(), RawUDP: h.rawUDP.Load(), TCP: h.streams.Load(), UDP: h.packets.Load(), Rejected: h.rejected.Load()}
+}
+func desktopWFPSSEntryReplyIdentity(a, b desktopExternalWFPReply) bool {
+	same := func(x, y *desktopWFPSSEntryLayerReceipt) bool {
+		if x == nil || y == nil {
+			return x == nil && y == nil
+		}
+		return x.Mode == y.Mode && x.Address == y.Address && x.Private == y.Private
+	}
+	return a.SSEntryInner == b.SSEntryInner && same(a.SSEntryLayer, b.SSEntryLayer) && same(a.SSFinalLayer, b.SSFinalLayer)
+}
+func desktopWFPSSEntryInitialReceipt(request *desktopExternalWFPSSEntryRequest, reply desktopExternalWFPReply, local netip.Addr, remote netip.AddrPort, fault string) bool {
+	if request == nil {
+		return reply.SSEntryInner == "" && reply.SSEntryLayer == nil && reply.SSFinalLayer == nil
+	}
+	inner, err := netip.ParseAddrPort(reply.SSEntryInner)
+	if err != nil || inner.Addr() != local || inner.Port() == 0 || request.EntryLayer == "" && inner != remote || request.EntryLayer != "" && inner == remote || reply.SSEntryTCP != 0 || reply.SSEntryUDP != 0 || reply.SSEntryPublic != 0 || reply.SSEntryTLS != 0 || reply.SSEntryRejected != 0 {
+		return false
+	}
+	for _, row := range []struct {
+		role, mode, private string
+		receipt             *desktopWFPSSEntryLayerReceipt
+	}{{"entry", request.EntryLayer, netip.AddrPortFrom(netip.MustParseAddr("10.94.0.1"), inner.Port()).String(), reply.SSEntryLayer}, {"final", request.FinalLayer, "10.93.0.1:8388", reply.SSFinalLayer}} {
+		if row.mode == "" {
+			if row.receipt != nil {
+				return false
+			}
+			continue
+		}
+		private := row.private
+		if fault == row.role+"-layer-inner" {
+			private = "10.95.0.1:1"
+		}
+		if row.receipt == nil || row.receipt.Mode != row.mode || row.receipt.Private != private || row.receipt.RawTCP != 0 || row.receipt.RawUDP != 0 || row.receipt.TCP != 0 || row.receipt.UDP != 0 || row.receipt.Rejected != 0 {
+			return false
+		}
+		address, err := netip.ParseAddrPort(row.receipt.Address)
+		if err != nil || address.Port() == 0 || row.role == "entry" && address != remote || row.role == "final" && !address.Addr().IsLoopback() || row.role == "entry" && row.mode == "aes-256-gcm+xor-whitening" && address.Port() != 8389 {
+			return false
+		}
+	}
+	return true
+}
+func desktopWFPSSEntryReceiptIdentityControl(t *testing.T) {
+	t.Helper()
+	original := desktopExternalWFPReply{SSEntryInner: "192.0.2.1:1234", SSEntryLayer: &desktopWFPSSEntryLayerReceipt{Mode: "aes-256-gcm", Address: "192.0.2.1:1235", Private: "10.94.0.1:1234"}, SSFinalLayer: &desktopWFPSSEntryLayerReceipt{Mode: "aes-256-gcm", Address: "127.0.0.1:1236", Private: "10.93.0.1:8388"}}
+	clone := func() desktopExternalWFPReply {
+		copy := original
+		entry, last := *original.SSEntryLayer, *original.SSFinalLayer
+		copy.SSEntryLayer, copy.SSFinalLayer = &entry, &last
+		return copy
+	}
+	counters := clone()
+	counters.SSEntryLayer.TCP = 3
+	counters.SSFinalLayer.UDP = 5
+	if !desktopWFPSSEntryReplyIdentity(counters, original) {
+		t.Fatal("real counters changed static original identity")
+	}
+	for _, fault := range []string{"raw-inner", "entry-mode", "entry-address", "entry-private", "final-mode", "final-address", "final-private", "missing-entry", "missing-final"} {
+		changed := clone()
+		switch fault {
+		case "raw-inner":
+			changed.SSEntryInner = "192.0.2.1:9999"
+		case "entry-mode":
+			changed.SSEntryLayer.Mode = "aes-256-gcm+xor-whitening"
+		case "entry-address":
+			changed.SSEntryLayer.Address = "192.0.2.1:9999"
+		case "entry-private":
+			changed.SSEntryLayer.Private = "10.94.0.1:9999"
+		case "final-mode":
+			changed.SSFinalLayer.Mode = "aes-256-gcm+xor-whitening"
+		case "final-address":
+			changed.SSFinalLayer.Address = "127.0.0.1:9999"
+		case "final-private":
+			changed.SSFinalLayer.Private = "10.93.0.1:9999"
+		case "missing-entry":
+			changed.SSEntryLayer = nil
+		case "missing-final":
+			changed.SSFinalLayer = nil
+		}
+		if desktopWFPSSEntryReplyIdentity(changed, original) {
+			t.Fatal("changed independent layer receipt admitted", fault)
+		}
+	}
+}
 
 func desktopWFPSSEntryPassword(method string, value byte) string {
 	size := 32
@@ -67,13 +169,54 @@ type desktopWFPSSEntryForward struct {
 	target                     string
 	final                      string
 	streams, packets, rejected atomic.Int32
+	rawTCP, rawUDP             atomic.Int32
+	logical, inner, mode       string
+	wireKey                    *[32]byte
+	outer                      *desktopExternalWFPDatagrams
+	entryLayer, finalLayer     *desktopWFPSSEntryForward
 }
 
+func (h *desktopWFPSSEntryForward) destination() string {
+	if h.logical != "" {
+		return h.logical
+	}
+	return desktopWFPSSEntryFinal
+}
+
+type desktopWFPSSEntryWhiteningStream struct {
+	net.Conn
+	key                     [32]byte
+	readMu, writeMu         sync.Mutex
+	readOffset, writeOffset uint64
+}
+
+func (c *desktopWFPSSEntryWhiteningStream) Read(body []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	n, err := c.Conn.Read(body)
+	for i := 0; i < n; i++ {
+		body[i] ^= c.key[(c.readOffset+uint64(i))%32]
+	}
+	c.readOffset += uint64(n)
+	return n, err
+}
+func (c *desktopWFPSSEntryWhiteningStream) Write(body []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	wire := append([]byte(nil), body...)
+	for i := range wire {
+		wire[i] ^= c.key[(c.writeOffset+uint64(i))%32]
+	}
+	n, err := c.Conn.Write(wire)
+	c.writeOffset += uint64(n)
+	clear(wire)
+	return n, err
+}
 func (h *desktopWFPSSEntryForward) NewConnection(ctx context.Context, c net.Conn, m M.Metadata) error {
-	if m.Destination.String() == "1.1.1.1:443" {
+	if h.entryProof != nil && m.Destination.String() == "1.1.1.1:443" {
 		return h.entryProof.serve(c, m.Destination.String())
 	}
-	if h.final == "hysteria2" || m.Destination.String() != desktopWFPSSEntryFinal {
+	if h.final == "hysteria2" || m.Destination.String() != h.destination() {
 		h.rejected.Add(1)
 		return errors.New("SS entry rejected uncaptured final")
 	}
@@ -93,14 +236,74 @@ func (h *desktopWFPSSEntryForward) NewConnection(ctx context.Context, c net.Conn
 	<-done
 	return nil
 }
+
+// The pinned CachedPacketConn owns an unsynchronized initial packet. Take it
+// before publishing the connection to concurrent cancellation/retirement. Only
+// this bounded memory copy is locked; blocking transport reads remain closable.
+type desktopWFPOwnedInitialPacket struct {
+	N.PacketConn
+	mu     sync.Mutex
+	first  *N.PacketBuffer
+	closed bool
+}
+
+func desktopWFPOwnInitialPacket(connection N.PacketConn) N.PacketConn {
+	cached, ok := connection.(*B.CachedPacketConn)
+	if !ok {
+		return connection
+	}
+	first := cached.ReadCachedPacket()
+	if first != nil && first.Buffer == nil {
+		N.PutPacketBuffer(first)
+		first = nil
+	}
+	return &desktopWFPOwnedInitialPacket{PacketConn: connection, first: first}
+}
+func (c *desktopWFPOwnedInitialPacket) ReadPacket(body *buf.Buffer) (M.Socksaddr, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return M.Socksaddr{}, net.ErrClosed
+	}
+	if first := c.first; first != nil {
+		c.first = nil
+		destination := first.Destination
+		var err error
+		if first.Buffer != nil {
+			_, err = body.ReadOnceFrom(first.Buffer)
+			first.Buffer.Release()
+		}
+		N.PutPacketBuffer(first)
+		c.mu.Unlock()
+		return destination, err
+	}
+	c.mu.Unlock()
+	return c.PacketConn.ReadPacket(body)
+}
+func (c *desktopWFPOwnedInitialPacket) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	if first := c.first; first != nil {
+		c.first = nil
+		if first.Buffer != nil {
+			first.Buffer.Release()
+		}
+		N.PutPacketBuffer(first)
+	}
+	c.mu.Unlock()
+	return c.PacketConn.Close()
+}
+
 func (h *desktopWFPSSEntryForward) NewPacketConnection(ctx context.Context, c N.PacketConn, m M.Metadata) error {
-	if (h.final != "shadowsocks" && h.final != "hysteria2") || m.Destination.String() != desktopWFPSSEntryFinal {
+	if (h.final != "shadowsocks" && h.final != "hysteria2") || m.Destination.String() != h.destination() {
 		h.rejected.Add(1)
 		return errors.New("SS entry rejected unowned UDP final")
 	}
+	c = desktopWFPOwnInitialPacket(c)
 	h.mu.Lock()
 	if h.closing {
 		h.mu.Unlock()
+		_ = c.Close()
 		return net.ErrClosed
 	}
 	h.packetConnections[c] = true
@@ -152,6 +355,25 @@ func (h *desktopWFPSSEntryForward) NewPacketConnection(ctx context.Context, c N.
 	return nil
 }
 
+type desktopWFPSSEntryRetiredPacket struct {
+	N.PacketConn
+	closed atomic.Int32
+}
+
+func (c *desktopWFPSSEntryRetiredPacket) Close() error { c.closed.Add(1); return nil }
+func desktopWFPSSEntryRetiredInitialPacket(t *testing.T) {
+	t.Helper()
+	transport := &desktopWFPSSEntryRetiredPacket{}
+	destination := M.ParseSocksaddr(desktopWFPSSEntryFinal)
+	cached := B.NewCachedPacketConn(transport, buf.As([]byte("original initial packet")), destination)
+	defer cached.Close()
+	owner := &desktopWFPSSEntryForward{desktopExternalIntegrationPeer: &desktopExternalIntegrationPeer{closing: true}, final: "shadowsocks"}
+	err := owner.NewPacketConnection(context.Background(), cached, M.Metadata{Destination: destination})
+	if !errors.Is(err, net.ErrClosed) || transport.closed.Load() != 1 {
+		t.Fatal("retired SS owner failed to close transferred initial packet", err, transport.closed.Load())
+	}
+}
+
 // The entry and final are independent pinned services in the retained provider
 // executable. Entry TLS proof terminates here; only the captured final tuple
 // is forwardable after entry AEAD.
@@ -161,14 +383,139 @@ type desktopWFPSSEntryFinalHandler struct {
 
 func (h *desktopWFPSSEntryFinalHandler) NewPacketConnection(ctx context.Context, c N.PacketConn, m M.Metadata) error {
 	var result error
-	h.NewPacketConnectionEx(ctx, c, m.Source, m.Destination, func(e error) { result = e })
+	h.NewPacketConnectionEx(ctx, desktopWFPOwnInitialPacket(c), m.Source, m.Destination, func(e error) { result = e })
 	return result
 }
+func desktopWFPSSEntryAddressInUse(err error) bool {
+	if runtime.GOOS == "windows" {
+		// Winsock returns WSAEADDRINUSE. Go's Windows EADDRINUSE is a
+		// different, synthetic POSIX value and does not match a native bind.
+		return errors.Is(err, syscall.Errno(10048))
+	}
+	return errors.Is(err, syscall.EADDRINUSE)
+}
+
+func desktopWFPSSEntryPortPair(ip netip.Addr, listenTCP func(string, string) (net.Listener, error)) (net.Listener, net.PacketConn, error) {
+	candidates, err := desktopWFPSSEntryPortCandidates(runtime.GOOS == "windows", rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return desktopWFPSSEntryPortPairCandidates(ip, candidates, net.ListenPacket, listenTCP)
+}
+
+func desktopWFPSSEntryPortCandidates(windows bool, entropy io.Reader) ([3]uint16, error) {
+	var result [3]uint16
+	if !windows {
+		return result, nil // Preserve the ordinary native port-zero allocator.
+	}
+	var seed [4]byte
+	if entropy == nil {
+		return result, errors.New("layer pair has no candidate entropy")
+	}
+	if _, err := io.ReadFull(entropy, seed[:]); err != nil {
+		return result, fmt.Errorf("layer pair candidate entropy: %w", err)
+	}
+	// Port zero selects from independent TCP and UDP dynamic ranges. A run
+	// of UDP-selected ports can all be forbidden to TCP. Diversify three
+	// candidates outside the default Windows dynamic range; only retained
+	// successful binds prove availability. No host reservation is changed.
+	start := uint32(seed[0])<<8 | uint32(seed[1])
+	stride := (uint32(seed[2])<<8 | uint32(seed[3])) | 1
+	for i := range result {
+		// An odd stride in this power-of-two ring makes the three distinct.
+		result[i] = uint16(16384 + ((start + uint32(i)*stride) & 32767))
+	}
+	return result, nil
+}
+
+func desktopWFPSSEntryAllocationError(err error) bool {
+	return desktopWFPSSEntryAddressInUse(err) || runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10013))
+}
+
+func desktopWFPSSEntryPortPairCandidates(ip netip.Addr, candidates [3]uint16, listenUDP func(string, string) (net.PacketConn, error), listenTCP func(string, string) (net.Listener, error)) (net.Listener, net.PacketConn, error) {
+	if !ip.Is4() || listenUDP == nil || listenTCP == nil {
+		return nil, nil, errors.New("layer pair requires its captured IPv4 listener constructors")
+	}
+	if candidates != [3]uint16{} {
+		seen := make(map[uint16]bool)
+		for _, port := range candidates {
+			if port < 16384 || port >= 49152 || seen[port] {
+				return nil, nil, errors.New("layer pair changed its three distinct candidate ports")
+			}
+			seen[port] = true
+		}
+	}
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		requested := netip.AddrPortFrom(ip, candidates[attempt])
+		packet, err := listenUDP("udp4", requested.String())
+		if err != nil {
+			if packet != nil {
+				if closeErr := packet.Close(); closeErr != nil {
+					return nil, nil, errors.Join(err, closeErr)
+				}
+			}
+			last = fmt.Errorf("UDP listener: %w", err)
+			if desktopWFPSSEntryAllocationError(err) {
+				continue
+			}
+			return nil, nil, last
+		}
+		var actual netip.AddrPort
+		if packet != nil && packet.LocalAddr() != nil {
+			actual, err = netip.ParseAddrPort(packet.LocalAddr().String())
+		}
+		if packet == nil || err != nil || actual.Addr() != ip || actual.Port() == 0 || requested.Port() != 0 && actual.Port() != requested.Port() {
+			var closeErr error
+			if packet != nil {
+				closeErr = packet.Close()
+			}
+			return nil, nil, errors.Join(errors.New("layer UDP listener replaced its captured candidate endpoint"), err, closeErr)
+		}
+		// Keep the original UDP owner throughout the matching TCP bind.
+		listener, err := listenTCP("tcp4", actual.String())
+		if err == nil && listener != nil && listener.Addr() != nil && listener.Addr().String() == actual.String() {
+			return listener, packet, nil
+		}
+		if err == nil {
+			err = errors.New("paired TCP listener replaced its retained UDP endpoint")
+		}
+		var closeErr error
+		if listener != nil {
+			closeErr = listener.Close()
+		}
+		closeErr = errors.Join(closeErr, packet.Close())
+		if closeErr != nil {
+			return nil, nil, errors.Join(err, closeErr)
+		}
+		last = fmt.Errorf("paired TCP listener: %w", err)
+		if !desktopWFPSSEntryAllocationError(err) {
+			return nil, nil, last
+		}
+	}
+	return nil, nil, fmt.Errorf("layer pair exhausted three retained candidates: %w", last)
+}
+
 func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrationPeer, observed *desktopExternalWFPDatagrams, r desktopExternalWFPRequest) *desktopWFPSSEntryForward {
 	t.Helper()
 	selected := r.SSEntry
+	if selected != nil {
+		for _, mode := range []string{selected.EntryLayer, selected.FinalLayer} {
+			if mode != "" && mode != "aes-256-gcm" && mode != "aes-256-gcm+xor-whitening" {
+				t.Fatal("uncaptured SS layer mode")
+			}
+		}
+		if selected.Final != "shadowsocks" && (selected.EntryLayer != "" || selected.FinalLayer != "") {
+			t.Fatal("layered Windows SS graph requires SS final")
+		}
+	}
 	if selected == nil || (selected.Final != "shadowsocks" && selected.Final != "http-connect" && selected.Final != "https-connect" && selected.Final != "hysteria2") {
 		t.Fatal("unowned SS final")
+	}
+	for _, item := range []struct{ role, mode string }{{"entry", selected.EntryLayer}, {"final", selected.FinalLayer}} {
+		if strings.HasPrefix(r.Fault, item.role+"-layer-") && item.mode == "" || r.Fault == item.role+"-whitening" && item.mode != "aes-256-gcm+xor-whitening" {
+			t.Fatal("SS layer negative lacks original wrapper")
+		}
 	}
 	switch selected.Method {
 	case "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
@@ -176,19 +523,20 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 		t.Fatal("unowned SS entry cipher")
 	}
 	p.protocol = selected.Final
-	listener, e := net.Listen("tcp4", observed.LocalAddr().String())
+	listener, entryUDP, e := desktopWFPSSEntryPortPair(netip.MustParseAddr(r.Address), net.Listen)
 	if e != nil {
-		t.Fatal(e)
+		t.Fatal("SS entry retained TCP/UDP pair", e)
 	}
-	p.listener = listener
-	finalUDP, e := net.ListenPacket("udp4", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
+	if e = observed.Close(); e != nil {
+		listener.Close()
+		entryUDP.Close()
+		t.Fatal("unused original UDP owner did not close", e)
 	}
-	finalTCP, e := net.Listen("tcp4", finalUDP.LocalAddr().String())
+	observed = &desktopExternalWFPDatagrams{PacketConn: entryUDP, observed: map[string]int{}}
+	p.packet, p.listener = observed, listener
+	finalTCP, finalUDP, e := desktopWFPSSEntryPortPair(netip.MustParseAddr("127.0.0.1"), net.Listen)
 	if e != nil {
-		_ = finalUDP.Close()
-		t.Fatal(e)
+		t.Fatal("SS final retained TCP/UDP pair", e)
 	}
 	p.closeProtocol = func() { _ = finalTCP.Close(); _ = finalUDP.Close() }
 	entryProof := &desktopExternalIntegrationPeer{ctx: p.ctx, certificate: p.certificate, badIP: r.Fault != "entry-exit"}
@@ -213,7 +561,7 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 			t.Fatal(e)
 		}
 	}
-	accept := func(l net.Listener, ss shadowsocks.Service, outer bool) {
+	accept := func(l net.Listener, ss shadowsocks.Service, outer bool, wrapper *desktopWFPSSEntryForward) {
 		p.workers.Add(1)
 		go func() {
 			defer p.workers.Done()
@@ -239,7 +587,17 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 						p.accepted.Add(1)
 					}
 					if ss != nil {
-						err := ss.NewConnection(p.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+						transport := c
+						if wrapper != nil {
+							wrapper.rawTCP.Add(1)
+							if wrapper.wireKey != nil {
+								transport = &desktopWFPSSEntryWhiteningStream{Conn: c, key: *wrapper.wireKey}
+							}
+						}
+						err := ss.NewConnection(p.ctx, transport, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+						if wrapper != nil && desktopWFPSSEntryAuthError(err) {
+							wrapper.rejected.Add(1)
+						}
 						if desktopWFPSSEntryAuthError(err) {
 							p.authFailures.Add(1)
 						}
@@ -251,7 +609,10 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 			}
 		}()
 	}
-	packets := func(pc net.PacketConn, ss shadowsocks.Service) {
+	packets := func(pc net.PacketConn, ss shadowsocks.Service, wrapper *desktopWFPSSEntryForward) {
+		if wrapper != nil && wrapper.wireKey != nil {
+			pc = &desktopExternalLayerWhiteningPacket{PacketConn: pc, key: *wrapper.wireKey}
+		}
 		p.workers.Add(1)
 		go func() {
 			defer p.workers.Done()
@@ -263,7 +624,13 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 					body.Release()
 					return
 				}
+				if wrapper != nil {
+					wrapper.rawUDP.Add(1)
+				}
 				if e = ss.NewPacket(p.ctx, reader, body, M.Metadata{Source: from}); e != nil {
+					if wrapper != nil && desktopWFPSSEntryAuthError(e) {
+						wrapper.rejected.Add(1)
+					}
 					body.Release()
 					if desktopWFPSSEntryAuthError(e) {
 						p.authFailures.Add(1)
@@ -273,7 +640,6 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 			}
 		}()
 	}
-	accept(listener, entry, true)
 	if selected.Final == "hysteria2" {
 		logger := log.NewNOPFactory().NewLogger("ss-entry-hysteria-final")
 		tlsConfig, err := boxTLS.NewServer(p.ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{string(r.ProxyCertificate)}, Key: []string{string(r.ProxyKey)}})
@@ -317,20 +683,108 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 			t.Fatal("independent SS entry HY2 startup", err)
 		}
 	} else {
-		accept(finalTCP, final, false)
+		accept(finalTCP, final, false, nil)
 	}
 	// CONNECT exposes TCP only; a provider-side echo is still independent evidence
 	// for the ordinary WFP UDP deny oracle.
-	packets(observed, entry)
 	if final != nil {
-		packets(finalUDP, final)
+		packets(finalUDP, final, nil)
 	}
+	forward.outer = observed
+	forward.inner = listener.Addr().String()
+	layer := func(mode, password, logical, target, host, port, role string) *desktopWFPSSEntryForward {
+		var udp net.PacketConn
+		var tcp net.Listener
+		var err error
+		if port == "0" {
+			tcp, udp, err = desktopWFPSSEntryPortPair(netip.MustParseAddr(host), net.Listen)
+		} else {
+			// Fixed XOR entry port is a captured contract. Never select another port.
+			udp, err = net.ListenPacket("udp4", net.JoinHostPort(host, port))
+			if err == nil {
+				tcp, err = net.Listen("tcp4", udp.LocalAddr().String())
+				if err != nil {
+					closeErr := udp.Close()
+					err = errors.Join(err, closeErr)
+				}
+			}
+		}
+		if err != nil {
+			t.Fatal("owned SS layer retained TCP/UDP pair", err)
+		}
+		w := &desktopWFPSSEntryForward{desktopExternalIntegrationPeer: p, logical: logical, target: target, final: "shadowsocks", mode: mode}
+		if r.Fault == role+"-layer-inner" {
+			w.logical = "10.95.0.1:1"
+		}
+		if mode == "aes-256-gcm+xor-whitening" {
+			key := sha256.Sum256([]byte("router-vpn-xor-whitening-v1\x00" + password))
+			if r.Fault == role+"-whitening" {
+				key[0] ^= 255
+			}
+			w.wireKey = &key
+		}
+		if r.Fault == role+"-layer-key" {
+			password = desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 99)
+		}
+		service, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 60, w, nil)
+		if err != nil {
+			tcp.Close()
+			udp.Close()
+			t.Fatal(err)
+		}
+		observedLayer := &desktopExternalWFPDatagrams{PacketConn: udp, observed: map[string]int{}}
+		w.outer = observedLayer
+		closeOriginal := p.closeProtocol
+		p.closeProtocol = func() { tcp.Close(); udp.Close(); closeOriginal() }
+		accept(tcp, service, role == "entry", w)
+		packets(observedLayer, service, w)
+		return w
+	}
+	if selected.FinalLayer != "" {
+		forward.finalLayer = layer(selected.FinalLayer, desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 61), "10.93.0.1:8388", finalTCP.Addr().String(), "127.0.0.1", "0", "final")
+		forward.target = forward.finalLayer.outer.LocalAddr().String()
+		if selected.FinalLayer == "aes-256-gcm+xor-whitening" {
+			forward.logical = "198.51.100.240:8389"
+		}
+	}
+	if selected.EntryLayer != "" {
+		_, innerPort, err := net.SplitHostPort(listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := "0"
+		if selected.EntryLayer == "aes-256-gcm+xor-whitening" {
+			port = "8389"
+		}
+		forward.entryLayer = layer(selected.EntryLayer, desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 51), net.JoinHostPort("10.94.0.1", innerPort), listener.Addr().String(), r.Address, port, "entry")
+		forward.outer = forward.entryLayer.outer
+		closeOriginal := p.closeProtocol
+		p.closeProtocol = func() { observed.Close(); closeOriginal() }
+		p.packet = forward.outer
+	}
+	accept(listener, entry, selected.EntryLayer == "", nil)
+	packets(observed, entry, nil)
 	return forward
 }
 
 func desktopExternalWFPSSEntryOriginal(t *testing.T, p *desktopExternalWFPReference, method, final, kill string) (*mobilemultihop.ExternalPolicy, string, string) {
 	t.Helper()
 	entry := map[string]any{"id": "captured-ss-entry", "node_kind": "external", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.89", "shadowsocks": map[string]any{"server": p.local.String(), "port": int(p.remote.Port()), "method": method, "password": desktopWFPSSEntryPassword(method, 31)}}}
+	entryPort := int(p.remote.Port())
+	entryLayer, finalLayer := "", ""
+	if p.ssEntry != nil {
+		entryLayer, finalLayer = p.ssEntry.EntryLayer, p.ssEntry.FinalLayer
+	}
+	if entryLayer != "" {
+		inner, err := netip.ParseAddrPort(p.initial.SSEntryInner)
+		if err != nil || inner.Addr() != p.local || inner == p.remote {
+			t.Fatal("SS entry lost original inner tuple", err)
+		}
+		entryPort = int(inner.Port())
+		entry["external"].(map[string]any)["shadowsocks"].(map[string]any)["port"] = entryPort
+		entry["start_layer"] = entryLayer
+		entry["external"].(map[string]any)["start_layer"] = map[string]any{"mode": entryLayer, "api": "http://10.94.0.1:8787", "transport": map[string]any{"type": "shadowsocks", "tag": "captured-entry-layer", "server": p.local.String(), "server_port": int(p.remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 51)}}
+	}
 	transport := map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "method": method, "password": desktopWFPSSEntryPassword(method, 41)}
 	external := map[string]any{"protocol": final, "expected_public_ip": desktopExternalIntegrationIP}
 	dnsProtocol := "udp"
@@ -350,8 +804,16 @@ func desktopExternalWFPSSEntryOriginal(t *testing.T, p *desktopExternalWFPRefere
 		external[strings.ReplaceAll(final, "-", "_")] = settings
 	}
 	profile := map[string]any{"id": "captured-ss-final", "node_kind": "external", "external": external, "dns_mode": "custom", "dns_protocol": dnsProtocol, "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "manual", "manual_mtu": 1280, "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": kill}
+	if finalLayer != "" {
+		outerPort := 8388
+		if finalLayer == "aes-256-gcm+xor-whitening" {
+			outerPort = 8389
+		}
+		profile["start_layer"] = finalLayer
+		external["start_layer"] = map[string]any{"mode": finalLayer, "api": "http://10.93.0.1:8787", "transport": map[string]any{"type": "shadowsocks", "tag": "captured-final-layer", "server": "198.51.100.240", "server_port": outerPort, "method": "2022-blake3-aes-256-gcm", "password": desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 61)}}
+	}
 	transport["detour"] = "external-entry"
-	entryTransport := map[string]any{"type": "shadowsocks", "tag": "external-entry", "server": p.local.String(), "server_port": int(p.remote.Port()), "method": method, "password": desktopWFPSSEntryPassword(method, 31)}
+	entryTransport := map[string]any{"type": "shadowsocks", "tag": "external-entry", "server": p.local.String(), "server_port": entryPort, "method": method, "password": desktopWFPSSEntryPassword(method, 31)}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "rvpn-ss-" + desktopExternalWFPNonce(t)[:16], "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{entryTransport, transport}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
 	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": final, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile, "entry": entry, "entry_tag": "external-entry"}
 	raw, _ := json.Marshal(graph)
@@ -415,8 +877,24 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 			if final == "hysteria2" {
 				names = append(names, "reject/final-trust")
 			}
+			if final == "shadowsocks" {
+				for _, entry := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+					for _, last := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+						names = append(names, "layers/"+entry+"/"+last)
+					}
+				}
+				names = append(names, "receipt-identity", "retired-initial-packet", "reject/entry-layer-key", "reject/final-layer-key", "reject/entry-whitening", "reject/final-whitening", "reject/entry-layer-inner", "reject/final-layer-inner")
+			}
 			for _, name := range names {
 				t.Run(name, func(t *testing.T) {
+					if name == "receipt-identity" {
+						desktopWFPSSEntryReceiptIdentityControl(t)
+						return
+					}
+					if name == "retired-initial-packet" {
+						desktopWFPSSEntryRetiredInitialPacket(t)
+						return
+					}
 					method := "2022-blake3-aes-256-gcm"
 					if name == "cipher-aes128" {
 						method = "2022-blake3-aes-128-gcm"
@@ -431,7 +909,26 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 					if name == "cancelled-proof" {
 						fault = "held"
 					}
-					p := desktopExternalWFPStartReferenceProtocol(t, ca, fault, "ss-entry/"+final+"/"+method)
+					entryLayer, finalLayer := "off", "off"
+					if strings.HasPrefix(name, "layers/") {
+						parts := strings.Split(name, "/")
+						entryLayer, finalLayer = parts[1], parts[2]
+					}
+					if strings.Contains(name, "-layer-") {
+						entryLayer, finalLayer = "aes-256-gcm", "aes-256-gcm"
+					}
+					if strings.Contains(name, "-whitening") {
+						entryLayer, finalLayer = "aes-256-gcm+xor-whitening", "aes-256-gcm+xor-whitening"
+					}
+					protocol := "ss-entry/" + final + "/" + method
+					if entryLayer != "off" || finalLayer != "off" {
+						protocol += "/" + entryLayer + "/" + finalLayer
+					}
+					p := desktopExternalWFPStartReferenceProtocol(t, ca, fault, protocol)
+					rootTag := "external-entry"
+					if entryLayer != "off" {
+						rootTag = "routervpn-external-entry-start-layer"
+					}
 					kill := "always"
 					if name == "on-connect" {
 						kill = name
@@ -443,12 +940,35 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 						raw, e := f.proof.Run()
 						var value mobilemultihop.ExternalProofResult
 						meta := f.policy.Metadata()
-						if e != nil || json.Unmarshal([]byte(raw), &value) != nil || value.SessionID != meta.SessionID || value.SourceSHA256 != meta.OriginalSourceSHA256 || value.ConfigSHA256 != meta.OriginalConfigSHA256 || meta.RootTag != "external-entry" || !value.DNSProven || !value.EntryProven || value.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
+						if e != nil || json.Unmarshal([]byte(raw), &value) != nil || value.SessionID != meta.SessionID || value.SourceSHA256 != meta.OriginalSourceSHA256 || value.ConfigSHA256 != meta.OriginalConfigSHA256 || meta.RootTag != rootTag || !value.DNSProven || !value.EntryProven || value.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
 							t.Fatal("SS entry final path proof failed", e)
 						}
 						stats := p.call(t, "stats", "")
 						if stats.SSEntryPublic == 0 || stats.SSEntryTLS == 0 || (final != "hysteria2" && stats.SSEntryTCP == 0 || final == "hysteria2" && stats.SSEntryTCP != 0) || stats.DNS == 0 || stats.TLS == 0 || stats.Public == 0 || (final == "shadowsocks" || final == "hysteria2") && (stats.SSEntryUDP == 0 || stats.UDPDNS == 0) || final != "shadowsocks" && final != "hysteria2" && (stats.SSEntryUDP != 0 || stats.UDPDNS != 0) {
 							t.Fatal("SS entry bypassed independent encrypted final or selected DNS", stats)
+						}
+						_, entryInnerPort, err := net.SplitHostPort(p.initial.SSEntryInner)
+						if err != nil {
+							t.Fatal("original raw entry port disappeared", err)
+						}
+						for _, row := range []struct {
+							mode, private string
+							physical      bool
+							receipt       *desktopWFPSSEntryLayerReceipt
+						}{{entryLayer, net.JoinHostPort("10.94.0.1", entryInnerPort), true, stats.SSEntryLayer}, {finalLayer, "10.93.0.1:8388", false, stats.SSFinalLayer}} {
+							if row.mode == "off" {
+								if row.receipt != nil {
+									t.Fatal("disabled wrapper acquired provider state")
+								}
+								continue
+							}
+							if row.receipt == nil || row.receipt.Private != row.private || row.receipt.Mode != row.mode || row.receipt.RawTCP == 0 || row.receipt.RawUDP == 0 || row.receipt.TCP == 0 || row.receipt.UDP == 0 || row.receipt.Rejected != 0 {
+								t.Fatal("independent SS layer did not decrypt both original transports", row.receipt)
+							}
+							address, err := netip.ParseAddrPort(row.receipt.Address)
+							if err != nil || address.Port() == 0 || row.physical && address != p.remote || !row.physical && !address.Addr().IsLoopback() {
+								t.Fatal("SS layer lost its independent original listener", row.receipt, err)
+							}
 						}
 						desktopExternalWFPSSEntrySnapshot(t, f, p, final)
 					}
@@ -500,6 +1020,39 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 							}
 							f.proof.Cancel()
 						}
+						if strings.Contains(name, "-layer-") || strings.Contains(name, "-whitening") {
+							limit := time.NewTimer(10 * time.Second)
+							defer limit.Stop()
+						layerRejection:
+							for {
+								observed := p.call(t, "stats", "")
+								receipt := observed.SSFinalLayer
+								if strings.HasPrefix(name, "reject/entry-") {
+									receipt = observed.SSEntryLayer
+								}
+								if receipt != nil && receipt.Rejected > 0 {
+									break
+								}
+								select {
+								case result := <-done:
+									done <- result
+									observed := p.call(t, "stats", "")
+									receipt := observed.SSFinalLayer
+									if strings.HasPrefix(name, "reject/entry-") {
+										receipt = observed.SSEntryLayer
+									}
+									if receipt == nil || receipt.Rejected == 0 {
+										t.Fatal("layer proof ended before independent rejection", result.err)
+									}
+									break layerRejection
+								case <-limit.C:
+									f.proof.Cancel()
+									t.Fatal("SS wrapper rejection was not observed")
+								case <-time.After(10 * time.Millisecond):
+								}
+							}
+							f.proof.Cancel()
+						}
 						if name == "cancelled-proof" {
 							limit := time.NewTimer(10 * time.Second)
 							defer limit.Stop()
@@ -536,7 +1089,11 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 						if name == "reject/entry-key" && (stats.SSEntryPublic != 0 || stats.SSEntryTCP != 0 || stats.DNS != 0) {
 							t.Fatal("wrong entry credential reached inner proof", stats)
 						}
-						if name != "reject/entry-key" && stats.SSEntryPublic != 1 {
+						entryBlocked := name == "reject/entry-key" || strings.HasPrefix(name, "reject/entry-layer-") || name == "reject/entry-whitening"
+						if entryBlocked && (stats.SSEntryPublic != 0 || stats.DNS != 0 || stats.TLS != 0 || stats.Public != 0) {
+							t.Fatal("rejected outer entry wrapper reached inner authority", stats)
+						}
+						if !entryBlocked && stats.SSEntryPublic != 1 {
 							t.Fatal("final rejection omitted independent entry proof", stats)
 						}
 						if name == "cancelled-proof" {
@@ -554,7 +1111,7 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 					desktopExternalWFPRequireBlocked(t, oracle)
 					retained = f.drain(t)
 					desktopExternalWFPRequireBlocked(t, oracle)
-					if name == "successor-and-original-restore" {
+					if name == "successor-and-original-restore" || strings.HasPrefix(name, "layers/") {
 						previous := retained
 						next := desktopExternalWFPBox(t, original, source, capture, &previous, false)
 						next.start(t)

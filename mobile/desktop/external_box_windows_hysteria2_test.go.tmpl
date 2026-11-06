@@ -78,6 +78,8 @@ type desktopExternalWFPRequest struct {
 }
 
 type desktopExternalWFPReply struct {
+	SSEntryInner                                                       string
+	SSEntryLayer, SSFinalLayer                                         *desktopWFPSSEntryLayerReceipt
 	SSEntryTCP, SSEntryUDP, SSEntryRejected, SSEntryPublic, SSEntryTLS int32
 	LayerLatencyDNS, LayerLatencyTLS, LayerLatencyRequests             int32  `json:",omitempty"`
 	LayerMode, InnerAddress                                            string `json:",omitempty"`
@@ -257,7 +259,7 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 		}
 		switch request.Fault {
 		case "", "password", "trust", "dns", "exit", "held":
-		case "entry-key", "entry-exit", "final-key":
+		case "entry-key", "entry-exit", "final-key", "entry-layer-key", "final-layer-key", "entry-whitening", "final-whitening", "entry-layer-inner", "final-layer-inner":
 			if protocol != "ss-entry" {
 				t.Fatal("unowned SS entry credential fault")
 			}
@@ -310,6 +312,8 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 		clear(request.ProxyKey)
 	} else if protocol == "ss-entry" {
 		ssEntry = desktopExternalWFPStartSSEntryPeer(t, peer, observed, request)
+		observed = ssEntry.outer
+		address = observed.LocalAddr().String()
 		clear(request.Key)
 		clear(request.ProxyKey)
 	} else {
@@ -384,6 +388,9 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 			LayerMode: layerMode, InnerAddress: innerAddress}
 		reply.AuthFailures = peer.authFailures.Load()
 		if ssEntry != nil {
+			reply.SSEntryInner = ssEntry.inner
+			reply.SSEntryLayer = ssEntry.entryLayer.receipt()
+			reply.SSFinalLayer = ssEntry.finalLayer.receipt()
 			reply.SSEntryPublic, reply.SSEntryTLS = ssEntry.entryProof.publicRequests.Load(), ssEntry.entryProof.tlsHandshakes.Load()
 			reply.SSEntryTCP, reply.SSEntryUDP, reply.SSEntryRejected = ssEntry.streams.Load(), ssEntry.packets.Load(), ssEntry.rejected.Load()
 		}
@@ -486,6 +493,7 @@ func desktopExternalWFPCloseJoined(err error, depth int) bool {
 }
 
 type desktopExternalWFPReference struct {
+	ssEntry     *desktopExternalWFPSSEntryRequest
 	layer       *desktopExternalWFPLayerRequest
 	command     *exec.Cmd
 	input       io.WriteCloser
@@ -545,7 +553,7 @@ func (p *desktopExternalWFPReference) call(t *testing.T, operation, nonce string
 		t.Fatal(err)
 	}
 	reply, err := p.read()
-	if err != nil || reply.Schema != 1 || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.Nonce != nonce || reply.Closed || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress {
+	if err != nil || reply.Schema != 1 || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.Nonce != nonce || reply.Closed || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress || !desktopWFPSSEntryReplyIdentity(reply, p.initial) {
 		t.Fatal("external peer acknowledgement changed owner", err)
 	}
 	return reply
@@ -648,7 +656,7 @@ func (p *desktopExternalWFPReference) close() error {
 	p.closed = true
 	failure := p.input.Close()
 	reply, err := p.read()
-	if err != nil || reply.Schema != 1 || !reply.Closed || reply.Nonce != "" || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress {
+	if err != nil || reply.Schema != 1 || !reply.Closed || reply.Nonce != "" || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress || !desktopWFPSSEntryReplyIdentity(reply, p.initial) {
 		failure = errors.Join(failure, err, errors.New("external provider did not acknowledge joined cleanup"))
 		p.cancel()
 	}
@@ -741,10 +749,20 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	request := desktopExternalWFPRequest{Schema: 1, Operation: "start", Address: p.local.String(), Fault: fault, Certificate: public, Key: key, ProxyCertificate: proxy, ProxyKey: proxyKey}
 	if strings.HasPrefix(protocol, "ss-entry/") {
 		parts := strings.Split(protocol, "/")
-		if len(parts) != 3 {
+		if len(parts) != 3 && len(parts) != 5 {
 			t.Fatal("SS entry reference selection malformed")
 		}
 		request.SSEntry = &desktopExternalWFPSSEntryRequest{Final: parts[1], Method: parts[2]}
+		if len(parts) == 5 {
+			request.SSEntry.EntryLayer, request.SSEntry.FinalLayer = parts[3], parts[4]
+			if request.SSEntry.EntryLayer == "off" {
+				request.SSEntry.EntryLayer = ""
+			}
+			if request.SSEntry.FinalLayer == "off" {
+				request.SSEntry.FinalLayer = ""
+			}
+		}
+		p.ssEntry = request.SSEntry
 	}
 	if protocol == "wireguard" || protocol == "awg2-fast" || protocol == "awg2-strong" {
 		request.Packet, p.packet = desktopExternalWFPPacketKeys(t, protocol)
@@ -772,6 +790,9 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
 	if err != nil || scopeErr != nil || p.initial.Schema != 1 || p.remote.Addr() != p.local || p.remote.Port() == 0 || len(p.initial.AppID) == 0 || bytes.Equal(scope, p.initial.AppID) || p.initial.Packets != 0 || p.initial.DNS != 0 || p.initial.Public != 0 || p.initial.Closed {
 		t.Fatal("external provider has no separate actual captured executable", err, scopeErr)
+	}
+	if !desktopWFPSSEntryInitialReceipt(p.ssEntry, p.initial, p.local, p.remote, fault) {
+		t.Fatal("SS entry layer initial receipt changed captured owners")
 	}
 	if layer == nil && (p.initial.LayerMode != "" || p.initial.InnerAddress != "" || p.initial.LayerPackets != 0 || p.initial.LayerAccepted != 0 || p.initial.LayerForwarded != 0 || p.initial.LayerRejected != 0) {
 		t.Fatal("ordinary reference acquired an unrequested HY2 layer")

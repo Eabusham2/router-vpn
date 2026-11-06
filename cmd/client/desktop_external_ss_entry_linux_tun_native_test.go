@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -32,7 +33,7 @@ var linuxHostTUNExternalSSEntryCases = func() []string {
 	for _, action := range []string{"always", "always-off", "public", "cancelled", "source", "entry-source", "replacement", "wrong-entry-public", "wrong-entry-key", "wrong-entry-method", "wrong-key", "wrong-final-method", "dns-failure", "tcp-dns"} {
 		cases = append(cases, "external-ss256ss256-"+action)
 	}
-	return cases
+	return append(cases, linuxHostTUNSSLayerCases...)
 }()
 
 func linuxHostTUNExternalSSEntryCase(scenario string) bool {
@@ -60,6 +61,7 @@ type linuxExternalTUNSSEntryReceipt struct {
 }
 type linuxExternalTUNSSPair struct {
 	entryMethod, entryPassword, finalMethod string
+	entryLayer, finalLayer                  linuxSSLayerSelection
 	address                                 netip.AddrPort
 }
 
@@ -101,6 +103,7 @@ func linuxHostTUNPrepareSSEntryPeer(t *testing.T, peer *linuxExternalTUNPeer, sc
 		return
 	}
 	token, _, _ := strings.Cut(strings.TrimPrefix(scenario, "external-ss"), "-")
+	token, entryLayer, finalLayer, layered := linuxHostTUNSSLayerToken(token)
 	entry, final, ok := strings.Cut(token, "ss")
 	e, f := linuxHostTUNSSMethod(entry), linuxHostTUNSSMethod(final)
 	if !ok || e == "" || f == "" {
@@ -108,6 +111,10 @@ func linuxHostTUNPrepareSSEntryPeer(t *testing.T, peer *linuxExternalTUNPeer, sc
 	}
 	peer.ssEntry = &linuxExternalTUNSSPair{entryMethod: e, entryPassword: linuxHostTUNSSKey(t, e), finalMethod: f}
 	peer.password = linuxHostTUNSSKey(t, f)
+	if layered {
+		peer.ssEntry.entryLayer = linuxSSLayerSelection{mode: linuxHostTUNSSLayerMode(entryLayer), key: linuxHostTUNSSKey(t, common.StartLayerAES256GCMTransport)}
+		peer.ssEntry.finalLayer = linuxSSLayerSelection{mode: linuxHostTUNSSLayerMode(finalLayer), key: linuxHostTUNSSKey(t, common.StartLayerAES256GCMTransport)}
+	}
 }
 func linuxHostTUNSSEntryRead(t *testing.T, peer *linuxExternalTUNPeer, reply linuxExternalTUNPeerReply) {
 	t.Helper()
@@ -121,8 +128,12 @@ func linuxHostTUNSSEntryRead(t *testing.T, peer *linuxExternalTUNPeer, reply lin
 	if e == nil || reply.PacketEntry != nil || peer.entry != nil || (peer.protocol != "shadowsocks" && peer.protocol != "http-connect" && peer.protocol != "https-connect") || e.Method != peer.ssEntry.entryMethod || e.PhysicalTCP < 0 || e.PhysicalUDP < 0 || e.Streams < 0 || e.Packets < 0 {
 		t.Fatal("lost independent SS entry receipt")
 	}
+	expectedFinal := netip.MustParseAddrPort("198.51.100.240:8388")
+	if peer.ssEntry.finalLayer.mode == common.StartLayerAES256GCMXOR {
+		expectedFinal = netip.MustParseAddrPort("198.51.100.240:8389")
+	}
 	address, err := netip.ParseAddrPort(e.Address)
-	if err != nil || address.Addr().String() != "11.77.0.2" || address.Port() == 0 || peer.ssEntry.address.IsValid() && peer.ssEntry.address != address || peer.address != netip.MustParseAddrPort("198.51.100.240:8388") {
+	if err != nil || address.Addr().String() != "11.77.0.2" || address.Port() == 0 || peer.ssEntry.address.IsValid() && peer.ssEntry.address != address || peer.address != expectedFinal {
 		t.Fatal("SS entry replaced captured physical/final tuple", err)
 	}
 	peer.ssEntry.address = address
@@ -159,6 +170,7 @@ func linuxHostTUNInstallSSEntry(t *testing.T, peer *linuxExternalTUNPeer, scenar
 	if action == "wrong-entry-method" {
 		entry.External.Shadowsocks.Method = "2022-blake3-chacha20-poly1305"
 	}
+	linuxHostTUNSSLayerProfiles(t, peer, scenario, profile, &entry)
 	if err := common.NormalizeRouterProfile(&entry); err != nil {
 		t.Fatal("SS entry failed original importer", err)
 	}
@@ -168,6 +180,9 @@ func linuxHostTUNSSEntryFailure(t *testing.T, peer *linuxExternalTUNPeer, action
 	t.Helper()
 	if peer.ssEntry == nil {
 		return false
+	}
+	if linuxHostTUNSSLayerFailure(t, peer, action, middle, observed) {
+		return true
 	}
 	entryFailure := action == "wrong-entry-key" || action == "wrong-entry-method"
 	finalFailure := action == "wrong-key" || action == "wrong-final-method"
@@ -189,6 +204,9 @@ func linuxHostTUNSSEntryFailure(t *testing.T, peer *linuxExternalTUNPeer, action
 func linuxHostTUNSSEntryObserved(t *testing.T, peer *linuxExternalTUNPeer, action string, reply linuxExternalTUNPeerReply) {
 	t.Helper()
 	if peer.ssEntry == nil {
+		return
+	}
+	if linuxHostTUNSSLayerStats(t, peer, action, reply) {
 		return
 	}
 	e := reply.ShadowsocksEntry
@@ -233,6 +251,9 @@ func linuxHostTUNExternalSSAuthority(native *desktopNodeLaunch) error {
 	}
 	if native != nil && native.external != nil && native.external.profile.External != nil && (native.external.profile.External.Protocol == "http-connect" || native.external.profile.External.Protocol == "https-connect") {
 		return linuxHostTUNExternalSSCONNECTAuthority(native)
+	}
+	if native != nil && native.external != nil && native.external.entry.External != nil && native.external.profile.External != nil && (native.external.entry.External.StartLayer != nil || native.external.profile.External.StartLayer != nil) {
+		return linuxHostTUNSSLayerAuthority(native)
 	}
 	bad := errors.New("Linux SS entry lost exact original TCP/UDP root or independent final policy")
 	if native == nil || native.external == nil || !desktopExternalSSEntryOwner(native.external) || !desktopExternalSS2022Profile(native.external.profile) || native.external.physical == nil {
@@ -280,6 +301,45 @@ func linuxHostTUNExternalSSAuthority(native *desktopNodeLaunch) error {
 }
 
 func TestDesktopLinuxInstalledSSEntryFixtureKeepsCompiledAuthority(t *testing.T) {
+	for i, entryMode := range []string{common.StartLayerOff, common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+		for j, finalMode := range []string{common.StartLayerOff, common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+			t.Run(fmt.Sprintf("layer%d-layer%d", i, j), func(t *testing.T) {
+				_, _, launch := desktopSSLayerFixture(t, desktopSSEntryMethods[1], desktopSSEntryMethods[2], entryMode, finalMode, "always")
+				if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil {
+					t.Fatal(err)
+				}
+				if err := linuxHostTUNExternalSSAuthority(launch); err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range []bool{true, false} {
+					original := launch.external.profile
+					if entry {
+						original = launch.external.entry
+					}
+					changed := cloneRouterProfile(original)
+					if changed.External.StartLayer != nil {
+						changed.External.StartLayer.Transport["password"] = desktopSSEntryKey(desktopSSEntryMethods[1], 'z')
+					} else {
+						changed.External.Shadowsocks.Password = desktopSSEntryKey(changed.External.Shadowsocks.Method, 'z')
+					}
+					if entry {
+						launch.external.entry = changed
+					} else {
+						launch.external.profile = changed
+					}
+					if linuxHostTUNExternalSSAuthority(launch) == nil {
+						t.Fatal("replaced layer/raw credential adopted")
+					}
+					if entry {
+						launch.external.entry = original
+					} else {
+						launch.external.profile = original
+					}
+				}
+			})
+		}
+	}
+
 	for _, entryToken := range []string{"128", "256", "chacha"} {
 		for _, finalToken := range []string{"128", "256", "chacha"} {
 			t.Run(entryToken+"-"+finalToken, func(t *testing.T) {

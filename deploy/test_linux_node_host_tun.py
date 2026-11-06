@@ -195,6 +195,11 @@ HOSTNAME_CASES += RESOLVED_CASES
 PUBLIC_CASES += RESOLVED_CASES
 ACTIVE_CASES += RESOLVED_CASES
 OFF_CASES += RESOLVED_CASES
+EXTERNAL_SS_LAYER_CASES = tuple('external-ss256ss256l%d%d-on-connect' % (entry, final) for entry in range(3) for final in range(3)) + tuple('external-ss256ss256l22-' + action for action in ('always', 'always-off', 'cancelled', 'source', 'entry-source', 'replacement', 'dns-failure', 'wrong-entry-public', 'wrong-entry-layer', 'wrong-final-layer', 'entry-whitening', 'final-whitening'))
+EXTERNAL_CASES += EXTERNAL_SS_LAYER_CASES
+CASES += EXTERNAL_SS_LAYER_CASES
+SS_ENTRY_AUTHORITY_CASES += tuple(SS_ENTRY_AUTHORITY_ROOT + '/layer%d-layer%d' % (entry, final) for entry in range(3) for final in range(3))
+
 
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
@@ -389,7 +394,7 @@ def check_verdict(output, case=None):
     if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
     for value in cases:
-        if value in EXTERNAL_SS_ENTRY_CASES:
+        if value in EXTERNAL_SS_ENTRY_CASES or value in EXTERNAL_SS_LAYER_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if ss_entry_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed SS2022 graph omitted or duplicated original native completion: ' + value)

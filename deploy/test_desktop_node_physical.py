@@ -119,10 +119,11 @@ SS_CONNECT_REFERENCE_SUITE = ("ss-connect-two-hop-reference", "./protocol/router
     (SS_CONNECT_REFERENCE_ROOT, *(SS_CONNECT_REFERENCE_ROOT + "/method%d-%s" % (method, protocol) for method in range(3) for protocol in ("http-connect", "https-connect")),
      *(SS_CONNECT_REFERENCE_ROOT + "/negative/" + fault for fault in ("entry-key", "entry-method", "username", "password", "server-name", "trust", "final-route", "dns-route"))))
 SS_INDEPENDENT_LAYERS_ROOT = "TestRouterVPNDesktopSSIndependentLayersReference"
-SS_INDEPENDENT_LAYERS_SUITE = ("ss-independent-layers-reference", "./protocol/routervpnamnezia", "^" + SS_INDEPENDENT_LAYERS_ROOT + "$",
+SS_INDEPENDENT_LAYERS_PROCESS_ROOT = "TestRouterVPNDesktopSSIndependentLayersProviderProcess"
+SS_INDEPENDENT_LAYERS_SUITE = ("ss-independent-layers-reference", "./protocol/routervpnamnezia", "^(" + SS_INDEPENDENT_LAYERS_ROOT + "|" + SS_INDEPENDENT_LAYERS_PROCESS_ROOT + ")$",
     (SS_INDEPENDENT_LAYERS_ROOT, *(SS_INDEPENDENT_LAYERS_ROOT + "/method%d-method%d/layer%d-layer%d" % (entry, final, first, last)
       for entry in range(3) for final in range(3) for first in range(3) for last in range(3)),
-     *(SS_INDEPENDENT_LAYERS_ROOT + "/negative/" + fault for fault in ("entry-key", "final-key", "entry-layer-key", "final-layer-key", "entry-whitening", "final-whitening", "entry-private", "final-private", "dns-route"))))
+     *(SS_INDEPENDENT_LAYERS_ROOT + "/negative/" + fault for fault in ("entry-key", "final-key", "entry-layer-key", "final-layer-key", "entry-whitening", "final-whitening", "entry-private", "final-private", "dns-route")), SS_INDEPENDENT_LAYERS_PROCESS_ROOT, *(SS_INDEPENDENT_LAYERS_PROCESS_ROOT + "/layer%d-layer%d" % (entry, final) for entry in range(3) for final in range(3))))
 
 SS_HYSTERIA_REFERENCE_ROOT = "TestRouterVPNDesktopInstalledSSHysteriaLoopbackReference"
 SS_HYSTERIA_REFERENCE_SUITE = ("ss-hysteria-two-hop-reference", "./protocol/routervpnamnezia", "^" + SS_HYSTERIA_REFERENCE_ROOT + "$",

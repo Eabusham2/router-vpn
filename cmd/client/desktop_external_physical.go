@@ -48,10 +48,11 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if targetOS == "darwin" && !desktopExternalDarwinProtocol(capture.Protocol) {
 		return nil
 	}
+	layeredSSPair := desktopExternalSSEntryOwner(owner) && desktopExternalSS2022Profile(owner.profile)
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
 		capture.Protocol != "wireguard" && capture.Protocol != "amneziawg" && capture.Protocol != "openvpn" ||
 		!entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
-		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) || capture.EntryStartLayer != "" || capture.KillSwitchPolicy == "off" {
+		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !layeredSSPair || capture.EntryStartLayer != "" && !layeredSSPair || capture.KillSwitchPolicy == "off" {
 		return nil
 	}
 	// Eligibility was established from the complete compiled capture. Any

@@ -737,6 +737,9 @@ class OrdinarySSEntryScope(unittest.TestCase):
     def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
         self.assertEqual(GATE.EXTERNAL_SS_ENTRY_NETWORKS, ("shadowsocks", "http-connect", "https-connect", "hysteria2"))
         self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_LEAVES), 13)
+        expected_layers = {"layers/" + entry + "/" + final for entry in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening") for final in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")} | {"reject/"+fault for fault in ("entry-layer-key","final-layer-key","entry-whitening","final-whitening","entry-layer-inner","final-layer-inner")}
+        self.assertEqual(set(GATE.EXTERNAL_SS_ENTRY_LAYER_LEAVES), expected_layers | {"receipt-identity", "retired-initial-packet"})
+        self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"]), 32)
         self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"]), 16)
         self.assertIn(GATE.EXTERNAL_SS_ENTRY_ROOT + "/hysteria2/reject/final-trust", GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"])
         for network in GATE.EXTERNAL_SS_ENTRY_NETWORKS:

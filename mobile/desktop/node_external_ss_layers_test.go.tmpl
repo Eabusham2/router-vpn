@@ -1,8 +1,12 @@
 package routervpnamnezia
 
 import (
+	STD "bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
@@ -14,6 +18,9 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -78,10 +85,13 @@ func (c *desktopSSLayerPacket) WriteTo(body []byte, to net.Addr) (int, error) {
 // provisioned SS2022 transport and forwards only the exact captured private
 // TCP/UDP tuple. The actual loopback destination grants no native acceptance.
 func desktopStartSSReferenceLayer(t *testing.T, parent context.Context, inner, private, mode, password, fault string) desktopExternalInstalledSSPeer {
+	return desktopStartSSCapturedLayer(t, parent, inner, private, mode, password, fault, netip.MustParseAddr("127.0.0.1"), 0)
+}
+func desktopStartSSCapturedLayer(t *testing.T, parent context.Context, inner, private, mode, password, fault string, address netip.Addr, port uint16) desktopExternalInstalledSSPeer {
 	t.Helper()
 	target, e := netip.ParseAddrPort(inner)
 	logical, e2 := netip.ParseAddrPort(private)
-	if e != nil || !target.Addr().IsLoopback() || target.Port() == 0 || e2 != nil || !logical.Addr().IsPrivate() || logical.Port() == 0 || (mode != "aes-256-gcm" && mode != "aes-256-gcm+xor-whitening") || (fault != "" && fault != "layer-key" && fault != "whitening") || (fault == "whitening" && mode != "aes-256-gcm+xor-whitening") {
+	if e != nil || !(target.Addr().IsLoopback() || target.Addr() == address) || target.Port() == 0 || e2 != nil || !logical.Addr().IsPrivate() || logical.Port() == 0 || (mode != "aes-256-gcm" && mode != "aes-256-gcm+xor-whitening") || (fault != "" && fault != "layer-key" && fault != "whitening") || (fault == "whitening" && mode != "aes-256-gcm+xor-whitening") {
 		t.Fatal("invalid original independent SS layer")
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -99,7 +109,7 @@ func desktopStartSSReferenceLayer(t *testing.T, parent context.Context, inner, p
 	if fault == "layer-key" {
 		password = desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'z')
 	}
-	return desktopStartSSProviderTransport(t, server, "2022-blake3-aes-256-gcm", password, netip.MustParseAddr("127.0.0.1"), stream, packet)
+	return desktopStartSSProviderBoundTransport(t, server, "2022-blake3-aes-256-gcm", password, address, port, stream, packet)
 }
 
 func desktopSSReferenceLayerClient(t *testing.T, ctx context.Context, tag, detour, host string, port uint16, mode, key string) adapter.Outbound {
@@ -362,5 +372,124 @@ func desktopSSIndependentLayersReference(t *testing.T, entryMethod, finalMethod,
 	}
 	if finalLayer.close != nil {
 		finalLayer.close()
+	}
+}
+
+func TestRouterVPNDesktopSSIndependentLayersProviderProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_SS_LAYERS_COMPONENT_CHILD") == "1" {
+		desktopSSIndependentLayersProviderProcess(t, "", "")
+		return
+	}
+	modes := []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"}
+	for i, entry := range modes {
+		for j, final := range modes {
+			t.Run(fmt.Sprintf("layer%d-layer%d", i, j), func(t *testing.T) { desktopSSIndependentLayersProviderProcess(t, entry, final) })
+		}
+	}
+}
+func desktopSSIndependentLayersProviderProcess(t *testing.T, entryMode, finalMode string) {
+	const child = "ROUTERVPN_SS_LAYERS_COMPONENT_CHILD"
+	if os.Getenv(child) == "1" {
+		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, finalPorts ...uint16) desktopExternalInstalledSSPeer {
+			return desktopStartSSEntryAt(t, parent, request, cert, final, network, netip.MustParseAddr("127.0.0.1"), finalPorts...)
+		}
+		desktopExternalInstalledReferenceProcess(t, "127.0.0.1", map[string]bool{"shadowsocks": true}, true)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNDesktopSSIndependentLayersProviderProcess$", "-test.count=1", "-test.timeout=9s")
+	command.Env = append(os.Environ(), child+"=1")
+	input, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic bytes.Buffer
+	command.Stderr = &diagnostic
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	joined := false
+	defer func() {
+		_ = input.Close()
+		if !joined {
+			err := command.Wait()
+			t.Errorf("original SS provider failed before joined completion: %v %s", err, diagnostic.String())
+		}
+	}()
+	request := desktopExternalInstalledPeerRequest{Schema: 1, Protocol: "shadowsocks", Address: "127.0.0.1", Password: desktopSSReferenceKey("2022-blake3-aes-128-gcm", 'f'), ShadowsocksMethod: "2022-blake3-aes-128-gcm", ShadowsocksEntry: &desktopExternalInstalledSSRequest{Method: "2022-blake3-chacha20-poly1305", Password: desktopSSReferenceKey("2022-blake3-chacha20-poly1305", 'e')}}
+	if entryMode != "" {
+		request.SSEntryLayer = &desktopExternalInstalledLayerRequest{Mode: entryMode, Password: desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'a')}
+	}
+	if finalMode != "" {
+		request.SSFinalLayer = &desktopExternalInstalledLayerRequest{Mode: finalMode, Password: desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'b')}
+	}
+	finalAddress := "198.51.100.240:8388"
+	if finalMode == "aes-256-gcm+xor-whitening" {
+		finalAddress = "198.51.100.240:8389"
+	}
+	if err = json.NewEncoder(input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	reader := STD.NewReaderSize(output, 16385)
+	read := func() desktopExternalInstalledPeerReply {
+		raw, e := reader.ReadSlice('\n')
+		if e != nil || len(raw) > 16384 {
+			t.Fatal("actual original SS provider omitted bounded readiness", e)
+		}
+		var reply desktopExternalInstalledPeerReply
+		if e = json.Unmarshal(raw, &reply); e != nil || reply.Schema != 1 || reply.Protocol != "shadowsocks" || reply.Address != finalAddress || reply.ShadowsocksEntry == nil || reply.ShadowsocksEntry.Method != request.ShadowsocksEntry.Method || reply.CA == "" {
+			t.Fatal("actual SS provider changed original readiness", e)
+		}
+		address, e := netip.ParseAddrPort(reply.ShadowsocksEntry.Address)
+		if e != nil || !address.Addr().IsLoopback() || address.Port() == 0 {
+			t.Fatal("SS component lost original listener pair", e)
+		}
+		for i, layer := range []*desktopExternalInstalledSSReceipt{reply.SSEntryLayer, reply.SSFinalLayer} {
+			mode := entryMode
+			if i == 1 {
+				mode = finalMode
+			}
+			if mode == "" {
+				if layer != nil {
+					t.Fatal("Off acquired a layer owner")
+				}
+				continue
+			}
+			if layer == nil || layer.Method != "2022-blake3-aes-256-gcm" || layer.PhysicalTCP != 0 || layer.PhysicalUDP != 0 || layer.Streams != 0 || layer.Packets != 0 || layer.AuthTCP != 0 || layer.AuthUDP != 0 {
+				t.Fatal("layer invented pre-traffic receipt")
+			}
+			outer, err := netip.ParseAddrPort(layer.Address)
+			if err != nil || !outer.Addr().IsLoopback() || outer.Port() == 0 || layer.Address == reply.ShadowsocksEntry.Address {
+				t.Fatal("layer merged its original raw listener")
+			}
+			if i == 0 && mode == "aes-256-gcm+xor-whitening" && outer.Port() != 8389 {
+				t.Fatal("entry XOR changed original wire port")
+			}
+		}
+		return reply
+	}
+	first := read()
+	if _, err = io.WriteString(input, "stats\n"); err != nil {
+		t.Fatal(err)
+	}
+	next := read()
+	if *first.ShadowsocksEntry != *next.ShadowsocksEntry || !reflect.DeepEqual(first.SSEntryLayer, next.SSEntryLayer) || !reflect.DeepEqual(first.SSFinalLayer, next.SSFinalLayer) {
+		t.Fatal("original idle SS provider changed before any traffic")
+	}
+	_ = input.Close()
+	_, _ = io.Copy(io.Discard, reader)
+	err = command.Wait()
+	joined = true
+	if err != nil || ctx.Err() != nil {
+		t.Fatal("actual SS provider did not join its original listeners and DNS workers", err, ctx.Err(), diagnostic.String())
 	}
 }

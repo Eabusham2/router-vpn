@@ -34,8 +34,8 @@ import (
 func TestRouterVPNDesktopInstalledSSHysteriaLoopbackReference(t *testing.T) {
 	const child = "ROUTERVPN_SS_HYSTERIA_COMPONENT_CHILD"
 	if os.Getenv(child) == "1" {
-		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string) desktopExternalInstalledSSPeer {
-			return desktopStartSSEntryAt(t, parent, request, cert, final, network, netip.MustParseAddr("127.0.0.1"))
+		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, finalPorts ...uint16) desktopExternalInstalledSSPeer {
+			return desktopStartSSEntryAt(t, parent, request, cert, final, network, netip.MustParseAddr("127.0.0.1"), finalPorts...)
 		}
 		desktopExternalInstalledReferenceProcess(t, "127.0.0.1", map[string]bool{"hysteria2": true}, true)
 		return

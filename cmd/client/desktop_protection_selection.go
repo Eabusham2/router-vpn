@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/multihoprelay"
 )
 
 // The protection journal shares succession machinery, not connection proof.
@@ -30,12 +31,20 @@ func desktopProtectionSelectionFor(node *mobilemultihop.DesktopNodePolicy, exter
 	}
 	meta := external.Metadata()
 	capture, err := external.Capture()
+	entryRoot, entryKind := capture.EntryTag, "shadowsocks"
+	if capture.EntryStartLayer != "" {
+		entryRoot = mobilemultihop.ExternalEntryStartLayerTag
+		if capture.EntryStartLayer == "aes-256-gcm+xor-whitening" {
+			entryKind = "routervpn-aes-xor"
+		}
+	}
+	layeredPair := capture.Protocol == "shadowsocks" && (capture.EntryStartLayer == "" || multihoprelay.ValidLayerMode(capture.EntryStartLayer)) && (capture.StartLayer == "" || multihoprelay.ValidLayerMode(capture.StartLayer))
 	paired := err == nil && validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID &&
-		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && meta.RootType == "shadowsocks" && meta.RootTag == capture.EntryTag &&
-		capture.StartLayer == "" && (capture.Protocol == "shadowsocks" || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
+		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && meta.RootType == entryKind && meta.RootTag == entryRoot &&
+		(layeredPair || capture.StartLayer == "" && capture.EntryStartLayer == "") && (capture.Protocol == "shadowsocks" || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
 	if err != nil || meta.TargetOS != "windows" || !validProfileID(capture.ExitID) ||
 		!paired && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
-		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) || capture.EntryStartLayer != "" || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
+		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !(paired && layeredPair) || capture.EntryStartLayer != "" && !(paired && layeredPair) || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
 		meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" ||
 		meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn" {
 		return empty, errors.Join(err, errors.New("native protection has no supported captured Windows external policy"))

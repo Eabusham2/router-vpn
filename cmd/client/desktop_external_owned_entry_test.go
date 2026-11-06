@@ -114,6 +114,14 @@ func TestDesktopWindowsExternalSSEntrySources(t *testing.T) {
 
 func windowsSSEntryHostFixture(t *testing.T, protocol, kill string) (*desktopWindowsExternalFixture, common.RouterProfile, common.RouterProfile) {
 	t.Helper()
+	name := protocol
+	layerModes := ""
+	if base, suffix, ok := strings.Cut(protocol, "-layers"); ok {
+		protocol, layerModes = base, suffix
+		if protocol != "shadowsocks" || len(layerModes) != 2 || layerModes[0] < '0' || layerModes[0] > '2' || layerModes[1] < '0' || layerModes[1] > '2' {
+			t.Fatal("invalid captured layer fixture")
+		}
+	}
 	f := newDesktopWindowsExternalFixture(t, kill)
 	var p, e common.RouterProfile
 	if protocol == "shadowsocks" {
@@ -121,7 +129,12 @@ func windowsSSEntryHostFixture(t *testing.T, protocol, kill string) (*desktopWin
 	} else {
 		p, e, _ = desktopWindowsSSFinalFixture(t, kill, desktopSSEntryMethods[1], protocol)
 	}
-	p.ID = "windows-ss-final-" + protocol
+	if layerModes != "" {
+		modes := []string{common.StartLayerOff, common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR}
+		desktopSSProvisionLayer(&e, modes[layerModes[0]-'0'], "10.94.0.1", 'a')
+		desktopSSProvisionLayer(&p, modes[layerModes[1]-'0'], "10.93.0.1", 'b')
+	}
+	p.ID = "windows-ss-final-" + name
 	for _, v := range []common.RouterProfile{p, e} {
 		f.base.a.profiles.Profiles = append(f.base.a.profiles.Profiles, v)
 	}
@@ -141,7 +154,7 @@ func windowsSSEntryConnect(f *desktopWindowsExternalFixture, p, e common.RouterP
 	return response
 }
 func TestDesktopWindowsExternalSSEntryPublicLifecycle(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range desktopSSLayerHostVariants() {
 		for _, kill := range []string{"on-connect", "always"} {
 			t.Run(protocol+"/"+kill, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
@@ -228,7 +241,7 @@ func TestDesktopWindowsExternalSSEntryActivationCapturesBothSources(t *testing.T
 }
 
 func TestDesktopWindowsExternalSSEntrySpeedLabRestoresBothSources(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range desktopSSLayerHostVariants() {
 		t.Run(protocol, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f, p, e := windowsSSEntryHostFixture(t, protocol, "always")
@@ -289,7 +302,7 @@ func TestDesktopWindowsExternalSSEntrySpeedLabRestoresBothSources(t *testing.T) 
 }
 
 func TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
+	for _, protocol := range desktopSSLayerHostVariants() {
 		t.Run(protocol, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f, p, e := windowsSSEntryHostFixture(t, protocol, "always")
