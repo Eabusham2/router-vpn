@@ -69,6 +69,7 @@ class ServerTorPreparation(unittest.TestCase):
                  'routervpn/mobiletor/desktop_standard_linux_bootstrap_group.go':{b'LockContext'},
                  'routervpn/mobiletor/desktop_standard_linux_bootstrap_group_exchange.go':{b'LockContext'},
                  'routervpn/mobiletor/desktop_standard_linux_bootstrap_opportunistic.go':{b'LockContext'},
+                 'routervpn/mobiletor/desktop_standard_linux_bootstrap_private_ds.go':{b'LockContext'},
                  'routervpn/mobiletor/desktop_standard_linux_bootstrap.go':{b'InterfaceContext',b'InterfacesContext'}}
         self.assertEqual(set(users),set(symbols))
         exports=set(re.findall(rb'func (\w+)\(',b'\n'.join(supplied.values())))
@@ -80,7 +81,8 @@ class ServerTorPreparation(unittest.TestCase):
     def test_server_mutex_dependency_rejects_missing_foreign_and_substituted_projection(self):
         original=PREP.copies
         for change in ('missing','source-bytes','extra-native-file','foreign-import','missing-symbol',
-                       'missing-decoder','changed-interface','bootstrap-foreign-import','bootstrap-symbol'):
+                       'missing-decoder','changed-interface','bootstrap-foreign-import','bootstrap-symbol',
+                       'private-ds-foreign-import','private-ds-symbol'):
             with self.subTest(change=change):
                 def substituted():
                     content=original()
@@ -99,9 +101,15 @@ class ServerTorPreparation(unittest.TestCase):
                     elif change=='bootstrap-foreign-import':
                         key='routervpn/mobiletor/desktop_standard_linux_bootstrap.go'
                         content[key]=content[key].replace(b'"github.com/sagernet/sing-box/routervpn/desktopnetwork"',b'"github.com/sagernet/sing-box/routervpn/foreignnetwork"')
-                    else:
+                    elif change=='bootstrap-symbol':
                         key='routervpn/mobiletor/desktop_standard_linux_bootstrap.go'
                         content[key]=content[key].replace(b'desktopnetwork.InterfaceContext',b'desktopnetwork.UnapprovedContext')
+                    elif change=='private-ds-foreign-import':
+                        key='routervpn/mobiletor/desktop_standard_linux_bootstrap_private_ds.go'
+                        content[key]=content[key].replace(b'"github.com/sagernet/sing-box/routervpn/desktopnetwork"',b'"github.com/sagernet/sing-box/routervpn/foreignnetwork"')
+                    else:
+                        key='routervpn/mobiletor/desktop_standard_linux_bootstrap_private_ds.go'
+                        content[key]=content[key].replace(b'desktopnetwork.LockContext',b'desktopnetwork.UnapprovedContext')
                     return content
                 with mock.patch.object(PREP,'copies',side_effect=substituted):
                     with self.assertRaises(AssertionError):self.test_server_mutex_dependency_is_exact_and_closed()
