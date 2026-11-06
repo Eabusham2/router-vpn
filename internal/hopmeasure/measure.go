@@ -44,11 +44,24 @@ type Engine interface {
 	Dial(context.Context, string, string) (net.Conn, error)
 }
 
+// ContextEngine observes the captured native owner within the original caller's
+// lifetime. The compatibility Engine contract remains available for older
+// owners; a context-capable owner must never fall back to its detached reader.
+type ContextEngine interface {
+	IdentityContext(context.Context) (string, error)
+}
+
 // MeasurementScope is implemented by native owners that share mutable packet
 // resources with another controller. Its release is held through real worker
 // and socket drain, including cancellation, rather than just status completion.
 type MeasurementScope interface {
 	BeginMeasurement() (release func(), err error)
+}
+
+// ContextMeasurementScope retains cancellation while acquiring the original
+// native activity. A returned release is owned even when acquisition fails.
+type ContextMeasurementScope interface {
+	BeginMeasurementContext(context.Context) (release func(), err error)
 }
 
 // MeasurementBoundary observes any independently changing native transport
@@ -113,12 +126,32 @@ type Service struct {
 	state    Status
 	cancel   context.CancelFunc
 	done     chan struct{}
+	pending  *measurementAdmission
 	// Unexported trusted-root seam for local TLS protocol/lifetime tests.
 	publicTLS *tls.Config
 }
 
+type measurementAdmission struct {
+	id     string
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// ObservationTimeout matches native identity observations. It applies only to
+// contextless construction/status calls, not to an admitted measurement's
+// existing complete 90-second request budget or five-second drain allowance.
+const ObservationTimeout = 1500 * time.Millisecond
+
 func New(engine Engine, hops []Hop) (*Service, error) {
-	if engine == nil || engine.Identity() == "" || len(hops) < 1 || len(hops) > 8 {
+	ctx, cancel := context.WithTimeout(context.Background(), ObservationTimeout)
+	defer cancel()
+	return NewContext(ctx, engine, hops)
+}
+
+// NewContext captures identity without making the returned service's lifetime
+// depend on the short-lived constructor caller.
+func NewContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if engine == nil || len(hops) < 1 || len(hops) > 8 {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}
@@ -166,7 +199,34 @@ func New(engine Engine, hops []Hop) (*Service, error) {
 		copyHops[index] = h
 		seen[h.ID] = true
 	}
-	return &Service{hops: copyHops, engine: engine, identity: engine.Identity(), state: Status{Stage: "idle", Results: []Result{}}}, nil
+	identity, err := observedIdentity(ctx, engine)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{hops: copyHops, engine: engine, identity: identity, state: Status{Stage: "idle", Results: []Result{}}}, nil
+}
+
+func observedIdentity(ctx context.Context, engine Engine) (string, error) {
+	if ctx == nil {
+		return "", errors.New("hop observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var identity string
+	var err error
+	if observer, ok := engine.(ContextEngine); ok {
+		identity, err = observer.IdentityContext(ctx)
+	} else {
+		identity = engine.Identity()
+	}
+	if err != nil || ctx.Err() != nil {
+		return "", errors.Join(err, ctx.Err())
+	}
+	if identity == "" {
+		return "", ErrStale
+	}
+	return identity, nil
 }
 func privateAPI(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
@@ -181,65 +241,132 @@ func privateAPI(raw string) (*url.URL, error) {
 	return u, nil
 }
 func (s *Service) valid(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("hop observation has no caller")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
-	if closed || s.engine.Identity() != s.identity {
+	if closed {
 		return ErrStale
 	}
-	return nil
+	identity, err := observedIdentity(ctx, s.engine)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	closed = s.closed
+	s.mu.Unlock()
+	if closed || identity != s.identity {
+		return ErrStale
+	}
+	return ctx.Err()
 }
 func (s *Service) Start(id string, size int) error {
+	return s.StartContext(context.Background(), id, size)
+}
+
+func (s *Service) StartContext(ctx context.Context, id string, size int) error {
 	if size < 64<<10 || size > MaxBytes {
 		return errors.New("invalid bounded hop measurement request")
 	}
-	return s.start(id, func(ctx context.Context) { s.run(ctx, id, size) })
+	return s.startContext(ctx, id, func(ctx context.Context) { s.run(ctx, id, size) })
 }
 
 func (s *Service) start(id string, work func(context.Context)) error {
-	if !tokenID.MatchString(id) || work == nil {
+	return s.startContext(context.Background(), id, work)
+}
+
+func (s *Service) startContext(parent context.Context, id string, work func(context.Context)) error {
+	if parent == nil || !tokenID.MatchString(id) || work == nil {
 		return errors.New("invalid bounded hop measurement request")
 	}
+	ctx, cancel := context.WithTimeout(parent, RequestTimeout)
+	op := &measurementAdmission{id: id, cancel: cancel, done: make(chan struct{})}
+	accepted := false
+	var release func()
+	defer func() {
+		if !accepted {
+			cancel()
+			if release != nil {
+				release()
+			}
+			close(op.done)
+			s.mu.Lock()
+			if s.pending == op {
+				s.pending = nil
+			}
+			s.mu.Unlock()
+		}
+	}()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.engine.Identity() != s.identity {
+	if s.closed {
+		s.mu.Unlock()
 		return ErrStale
+	}
+	if s.pending != nil {
+		s.mu.Unlock()
+		return errors.New("another hop measurement still owns this session")
 	}
 	if s.done != nil {
 		select {
 		case <-s.done:
 		default:
+			s.mu.Unlock()
 			return errors.New("another hop measurement still owns this session")
 		}
 	}
 	if id == s.state.Request {
+		s.mu.Unlock()
 		return errors.New("measurement request identifiers cannot be reused")
 	}
-	release := func() {}
-	if scoped, ok := s.engine.(MeasurementScope); ok {
-		var err error
-		release, err = scoped.BeginMeasurement()
-		if err != nil || release == nil {
-			if release != nil {
-				release()
-			}
-			return errors.New("native measurement resource is busy or retired")
-		}
+	// Publish only cancellation/drain ownership before an external observation.
+	// Rejected admission leaves the prior completed result unchanged.
+	s.pending = op
+	s.mu.Unlock()
+	if err := s.valid(ctx); err != nil {
+		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), RequestTimeout)
+	var err error
+	if scoped, ok := s.engine.(ContextMeasurementScope); ok {
+		release, err = scoped.BeginMeasurementContext(ctx)
+	} else if scoped, ok := s.engine.(MeasurementScope); ok {
+		release, err = scoped.BeginMeasurement()
+	} else {
+		release = func() {}
+	}
+	if err != nil || release == nil {
+		return errors.Join(errors.New("native measurement resource is busy or retired"), ctx.Err())
+	}
+	if err := s.valid(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.pending != op {
+		return ErrStale
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.pending = nil
 	s.cancel = cancel
-	s.done = make(chan struct{})
-	done := s.done
+	s.done = op.done
 	s.state = Status{Request: id, Stage: "starting", Results: []Result{}}
-	go func() { defer close(done); defer cancel(); defer release(); work(ctx) }()
+	accepted = true
+	go func() { defer close(op.done); defer cancel(); defer release(); work(ctx) }()
 	return nil
 }
 func (s *Service) Cancel(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pending != nil && id == s.pending.id {
+		s.pending.cancel()
+		return
+	}
 	if id == s.state.Request && s.cancel != nil {
 		s.cancel()
 		s.state = Status{Request: id, Stage: "cancelled", Complete: true, Failure: "Measurement cancelled", Results: []Result{}}
@@ -251,11 +378,13 @@ func (s *Service) Cancel(id string) {
 // keep the MTU measurement hold until this succeeds, including cancellation.
 func (s *Service) Drain(id string) error {
 	s.mu.Lock()
-	if id != s.state.Request {
+	done := s.done
+	if s.pending != nil && id == s.pending.id {
+		done = s.pending.done
+	} else if id != s.state.Request {
 		s.mu.Unlock()
 		return errors.New("measurement drain belongs to another request")
 	}
-	done := s.done
 	s.mu.Unlock()
 	if done == nil {
 		return nil
@@ -275,6 +404,9 @@ func (s *Service) Invalidate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
+	if s.pending != nil {
+		s.pending.cancel()
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -283,10 +415,16 @@ func (s *Service) Invalidate() {
 func (s *Service) Close() error {
 	s.mu.Lock()
 	s.closed = true
+	if s.pending != nil {
+		s.pending.cancel()
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
 	done := s.done
+	if s.pending != nil {
+		done = s.pending.done
+	}
 	s.state = Status{Request: s.state.Request, Stage: "invalidated", Complete: true, Failure: "Native path changed or closed", Results: []Result{}}
 	s.mu.Unlock()
 	if done != nil {
@@ -299,11 +437,32 @@ func (s *Service) Close() error {
 	return nil
 }
 func (s *Service) StatusJSON() string {
+	ctx, cancel := context.WithTimeout(context.Background(), ObservationTimeout)
+	defer cancel()
+	return s.statusJSON(ctx)
+}
+
+func (s *Service) statusJSON(ctx context.Context) string {
+	s.mu.Lock()
+	request, done, pending := s.state.Request, s.done, s.pending
+	observe := !s.closed && s.state.Stage != "cancelled" && s.state.Stage != "invalidated"
+	s.mu.Unlock()
+	var identity string
+	var err error
+	if observe {
+		identity, err = observedIdentity(ctx, s.engine)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.engine.Identity() != s.identity {
+	// A late status read cannot invalidate a replacement admission, worker, or
+	// cancellation. No native owner is ever queried while the status lock is held.
+	if observe && !s.closed && s.state.Stage != "cancelled" && s.state.Stage != "invalidated" &&
+		request == s.state.Request && done == s.done && pending == s.pending && (err != nil || identity != s.identity) {
 		if s.cancel != nil {
 			s.cancel()
+		}
+		if s.pending != nil {
+			s.pending.cancel()
 		}
 		s.state = Status{Request: s.state.Request, Stage: "invalidated", Complete: true, Failure: "Selected native path changed", Results: []Result{}}
 	}

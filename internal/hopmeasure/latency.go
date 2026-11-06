@@ -26,12 +26,16 @@ type LatencyBenchmark struct {
 // StartLatency can select only the exit already sealed into this native
 // measurement owner. It accepts no endpoint, DNS, outbound or credentials.
 func (s *Service) StartLatency(id, exitID string) error {
+	return s.StartLatencyContext(context.Background(), id, exitID)
+}
+
+func (s *Service) StartLatencyContext(ctx context.Context, id, exitID string) error {
 	if s == nil || exitID == "" {
 		return errors.New("a captured external exit is required")
 	}
 	for _, hop := range s.hops {
 		if hop.ID == exitID && hop.Role == "exit" && hop.Kind == "public-path" && hop.Tag == "custom-exit" {
-			return s.start(id, func(ctx context.Context) { s.runLatency(ctx, id, hop) })
+			return s.startContext(ctx, id, func(ctx context.Context) { s.runLatency(ctx, id, hop) })
 		}
 	}
 	return errors.New("latency benchmark belongs to the captured external exit")
@@ -92,6 +96,7 @@ func (s *Service) runLatency(ctx context.Context, id string, hop Hop) {
 			result.Failure += " (" + string(probeFailure) + ")"
 		}
 	}
+	finalError := s.valid(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state.Request != id || s.state.Complete {
@@ -99,7 +104,7 @@ func (s *Service) runLatency(ctx context.Context, id string, hop Hop) {
 	}
 	s.state.Complete = true
 	s.state.Stage = "complete"
-	if boundaryFailure != nil || ctx.Err() != nil || s.engine.Identity() != s.identity {
+	if boundaryFailure != nil || ctx.Err() != nil || finalError != nil {
 		s.state.Stage = "invalidated"
 		s.state.Failure = "Session changed or latency measurement timed out"
 		s.state.Results = []Result{}

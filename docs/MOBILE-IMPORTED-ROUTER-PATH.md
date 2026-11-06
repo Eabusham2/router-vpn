@@ -267,11 +267,23 @@ Contextless native identity queries use the existing 1,500 ms observation bound.
 A connection returned after cancellation or original owner replacement is closed
 before the operation returns; it cannot be handed to a replacement owner. Startup
 publishes its cancellation owner before observing native identity and joins that
-read on Close. This does not make every shared hop measurement observation use its
-operation context: `hopmeasure.Service` still has contextless `Identity()` calls,
-including calls under its admission/status lock. The ordinary MTU adapter retains
-its separate context-bound readback and rollback contract, while external/Tor
-constructors, proof callbacks and Tor lease observations remain follow-ups.
+read on Close. The shared `hopmeasure.Service` now uses an available
+`IdentityContext` capability throughout its original operation and never queries
+native identity while holding its admission/status lock. It registers cancellation
+before identity or activity acquisition; a rejected start preserves the previous
+completed result and drains any returned activity release before returning. Late
+status observations cannot invalidate a replacement request or cancellation, and
+an expired final observation cannot publish a 50-sample result. The existing
+90-second complete request budget includes admission; the five-second drain
+allowance is unchanged. Context-capable activity owners can retain that same
+caller through `BeginMeasurementContext`; legacy engines and activity callbacks
+keep their compatibility behavior and are not claimed to be interruptible.
+The ordinary MTU adapter retains its separate context-bound readback and rollback
+contract, while external/Tor constructors, proof callbacks and Tor lease
+observations remain follow-ups. Native factory adoption of the optional shared
+`NewContext` constructor must preserve the original caller separately from the
+returned service lifetime; the contextless constructor uses a 1,500 ms observation
+budget only for owners that support context-bound reads.
 
 The complete compiled graph supplies the MTU plan. For a nested packet final,
 `internal/awgpolicy` accounts for the actual IPv4/IPv6 carrier, 16-byte transport
