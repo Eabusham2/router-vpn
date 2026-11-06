@@ -135,9 +135,20 @@ func desktopSocketDuplicate(fd syscall.Handle) (*desktopSocketKeeper, error) {
 			info.AddressFamily, source.AddressFamily, info.SocketType, source.SocketType, info.Protocol, source.Protocol)
 	}
 	if err := desktopWindowsSocketProtocol(keeper.handle, int(source.AddressFamily), int(source.SocketType), int(source.Protocol)); err != nil {
-		return keeper, fmt.Errorf("Windows duplicated descriptor protocol readback: %w", err)
+		return keeper, desktopWindowsDuplicateProtocolFailure(fd, keeper.handle, source, err)
 	}
 	return keeper, nil
+}
+
+// This runs only after the original duplicate failed its mandatory readback.
+// The caller still holds the original RawConn.Control ownership lock. Observe
+// both descriptors once; never retry creation, consume another transfer, close
+// either owner, or admit a mismatched descriptor based on these diagnostics.
+func desktopWindowsDuplicateProtocolFailure(original, duplicate syscall.Handle, captured syscall.WSAProtocolInfo, cause error) error {
+	originalErr := desktopWindowsSocketProtocol(original, int(captured.AddressFamily), int(captured.SocketType), int(captured.Protocol))
+	duplicateErr := desktopWindowsSocketProtocol(duplicate, int(captured.AddressFamily), int(captured.SocketType), int(captured.Protocol))
+	return errors.Join(fmt.Errorf("Windows duplicated descriptor protocol readback: %w", cause),
+		fmt.Errorf("Windows duplicate failure observation (same handle %t; original protocol %v; returned protocol %v)", original == duplicate, originalErr, duplicateErr), originalErr, duplicateErr)
 }
 
 func desktopSocketBindTCP(raw syscall.RawConn, address netip.Addr) (*desktopSocketKeeper, netip.AddrPort, error) {

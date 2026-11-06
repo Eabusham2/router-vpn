@@ -454,3 +454,93 @@ func TestDesktopSocketWindowsNativeCancellationJoinsEnteredRead(t *testing.T) {
 		t.Fatal("imported UDP cancellation left entered I/O running")
 	}
 }
+
+// Actual Winsock observations preserve the original failure and both owners.
+// The injected cause selects the diagnostic path only; no socket creation or
+// validation result is replaced, and no diagnostic result can admit a socket.
+func TestDesktopSocketWindowsNativeDuplicateFailureObservation(t *testing.T) {
+	for _, name := range []string{"distinct-udp", "returned-tcp", "same-handle", "invalid-original"} {
+		t.Run(name, func(t *testing.T) {
+			original, err := desktopWindowsNativeTestSocket("udp", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer original.Close()
+			raw, err := original.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			network := "udp"
+			if name == "returned-tcp" {
+				network = "tcp"
+			}
+			returned, err := desktopWindowsNativeTestSocket(network, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer returned.Close()
+			returnedRaw, err := returned.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var returnedHandle syscall.Handle
+			if err = returnedRaw.Control(func(fd uintptr) { returnedHandle = syscall.Handle(fd) }); err != nil {
+				t.Fatal(err)
+			}
+			cause := errors.New("original duplicate failure")
+			var observed error
+			var originalHandle syscall.Handle
+			err = raw.Control(func(fd uintptr) {
+				originalHandle = syscall.Handle(fd)
+				captured, readErr := desktopWindowsSocketProtocolInfo(originalHandle)
+				if readErr != nil {
+					observed = readErr
+					return
+				}
+				selected := returnedHandle
+				if name == "same-handle" {
+					selected = originalHandle
+				}
+				observed = desktopWindowsDuplicateProtocolFailure(originalHandle, selected, captured, cause)
+			})
+			if err != nil || !errors.Is(observed, cause) {
+				t.Fatal("diagnostic replaced original error", err, observed)
+			}
+			if name == "invalid-original" {
+				captured := syscall.WSAProtocolInfo{AddressFamily: syscall.AF_INET, SocketType: syscall.SOCK_DGRAM, Protocol: syscall.IPPROTO_UDP}
+				observed = desktopWindowsDuplicateProtocolFailure(syscall.InvalidHandle, returnedHandle, captured, cause)
+				if !errors.Is(observed, cause) || !errors.Is(observed, syscall.Errno(10038)) {
+					t.Fatal("original readback failure was lost", observed)
+				}
+			} else if _, err = original.SyscallConn(); err != nil {
+				t.Fatal("diagnostic released original", err)
+			}
+			if strings.Contains(observed.Error(), "same handle true") != (name == "same-handle") {
+				t.Fatal("handle identity changed", observed)
+			}
+			if name == "returned-tcp" && !strings.Contains(observed.Error(), "type 1/2, protocol 6/17") {
+				t.Fatal("actual returned protocol mismatch was lost", observed)
+			}
+			for _, retained := range []struct {
+				name           string
+				socket         DesktopSocketNative
+				kind, protocol int
+			}{{"original", original, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP}, {"returned", returned, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP}} {
+				if retained.name == "returned" && name == "returned-tcp" {
+					retained.kind, retained.protocol = syscall.SOCK_STREAM, syscall.IPPROTO_TCP
+				}
+				raw, err := retained.socket.SyscallConn()
+				if err != nil {
+					t.Fatal("diagnostic lost retained owner", retained.name, err)
+				}
+				var readErr error
+				err = raw.Control(func(fd uintptr) {
+					readErr = desktopWindowsSocketProtocol(syscall.Handle(fd), syscall.AF_INET, retained.kind, retained.protocol)
+				})
+				if err != nil || readErr != nil {
+					t.Fatal("diagnostic closed or changed retained kernel socket", retained.name, err, readErr)
+				}
+			}
+		})
+	}
+}

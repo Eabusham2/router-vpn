@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import platform
 import tempfile
 
@@ -31,8 +32,21 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPActualProcessDeath",
     "TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources",
     "TestDesktopSocketWindowsNativeUDPRetainsBoundDescriptor",
+    "TestDesktopSocketWindowsNativeDuplicateFailureObservation",
 )
 NATIVE_UDP_FAILURE_CASES = ("source_validation", "captured_bind_control", "socket_bind")
+
+
+
+DUPLICATE_OBSERVATION_ROOT = "TestDesktopSocketWindowsNativeDuplicateFailureObservation"
+DUPLICATE_OBSERVATION_LEAVES = ("distinct-udp", "returned-tcp", "same-handle", "invalid-original")
+
+
+def require_duplicate_observations(output):
+    for name in (DUPLICATE_OBSERVATION_ROOT, *(DUPLICATE_OBSERVATION_ROOT + "/" + leaf for leaf in DUPLICATE_OBSERVATION_LEAVES)):
+        pattern = r"(?m)^\s*--- PASS: " + re.escape(name) + r" \([^\r\n]*\)\r?$"
+        if len(re.findall(pattern, output)) != 1:
+            raise ValueError("WFP traffic omitted or duplicated an original duplicate failure observation: " + name)
 
 
 def mutants(target):
@@ -91,6 +105,7 @@ def execute(source=ROOT, go="go", *, env=None):
         for stage in NATIVE_UDP_FAILURE_CASES:
             if "--- PASS: TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources/udp-" + stage + " (" not in output:
                 raise ValueError("WFP traffic omitted a native UDP error-context and ownership control: " + stage)
+        require_duplicate_observations(output)
         for network in ("tcp4", "tcp6", "udp4", "udp6"):
             if "--- PASS: " + REQUIRED[4] + "/" + network + " (" not in output:
                 raise ValueError("WFP traffic omitted a required actual address/transport family: " + network)
