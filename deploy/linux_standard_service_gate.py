@@ -809,3 +809,18 @@ AUXILIARY_TESTS.update({
  'internal/standardengine/resolved_private_tld_test.go':'resolved-private-tld',
  'internal/systembootstrap/resolved_private_tld_linux_test.go':'resolved-private-tld-candidate',
  'internal/mobiletor/desktop_standard_linux_bootstrap_private_tld_test.go':'resolved-private-tld-transport'})
+
+# Shipping private-TLD continuation runs only after the original cohort joins.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_private_tld_linux.go',
+ 'cmd/client/linux_standard_service_resolved_private_tld_linux_test.go'})
+AUXILIARY['resolved-private-tld-shipping']=('./cmd/client',{
+ 'TestResolvedPrivateTLDJoinedShipping':('secure','parallel-isolation','invalid-sibling',
+ 'bogus','insecure','nodata','wrong-name','alias-answer','child-error','retire-error',
+ 'close-error','postjoin-change','cancelled','candidate-swap'),
+ 'TestResolvedPrivateTLDCandidateRetention':('eligible','validator-error','secure','insecure',
+ 'negative','no-data','sealed','duplicate'),
+ 'TestResolvedPrivateTLDCohortReservation':(),
+ 'TestResolvedPrivateTLDShippingContinuation':('proved','normal-positive','normal-negative',
+ 'no-extra-slot','original-retirement','all-scope-plan-change','physical-current-loss',
+ 'cancel-before-proof','alias-required','authority-lost')})
+AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_private_tld_linux_test.go']='resolved-private-tld-shipping'

@@ -91,7 +91,7 @@ func resolvedValidatedPacket(question []byte, v standardengine.DNSSECVerdict, al
 	return answer, nil
 }
 
-func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Context, policy standardengine.ResolvedPolicy, network, name string, question []byte, aliasProof bool, remember func(func(context.Context) error)) ([]byte, error) {
+func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Context, policy standardengine.ResolvedPolicy, network, name string, question []byte, aliasProof bool, remember func(func(context.Context) error), allowPrivate bool) ([]byte, error) {
 	resolver := o.original.resolver
 	if network != "udp" && network != "tcp" {
 		return nil, errors.New("DNSSEC caller changed original transport")
@@ -155,6 +155,10 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 	}
 	if err != nil {
 		return nil, err
+	}
+	var private *resolvedPrivateCandidates
+	if allowPrivate && !aliasProof {
+		private = &resolvedPrivateCandidates{}
 	}
 	scopes := make([]resolvedQueryScope, 0, len(routes))
 	for _, route := range routes {
@@ -232,10 +236,15 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 					return resolvedDNSSECOriginalReply(answer, err)
 				})
 				index := plan.Index()
-				return resolveResolvedTerminal(work, policy, plan, network, question, verdict, err, aliasProof, group, current,
+				validationErr := err
+				answer, terminalErr := resolveResolvedTerminal(work, policy, plan, network, question, verdict, err, aliasProof, group, current,
 					func(check context.Context) (standardengine.ResolvedServerState, error) {
 						return resolver.helper.serverStateScoped(check, o.operation, index, name)
 					}, compatibility)
+				if terminalErr != nil {
+					private.retain(policy, plan, question, verdict, validationErr)
+				}
+				return answer, terminalErr
 			}
 		}
 		if err != nil {
@@ -266,7 +275,11 @@ func (o *linuxBootBootstrapExchange) exchangeResolvedDNSSECName(ctx context.Cont
 	if check := o.Current(ctx); check != nil {
 		return nil, &resolvedAliasAuthorityError{errors.Join(err, check)}
 	}
-	return answer, err
+	return resolvePrivateTLDAfterOriginal(ctx, answer, err, private, func(rows []resolvedPrivateCandidate) ([]byte, error) {
+		// Spend the auxiliary slot only now; normal winners never spend it.
+		remember(finalCheck)
+		return o.exchangeResolvedPrivateTLD(ctx, policy, network, question, rows, finalCheck)
+	})
 }
 
 // Alias RR validation requires its own original plan. An original-domain NTA
