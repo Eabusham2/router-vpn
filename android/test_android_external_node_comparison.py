@@ -286,6 +286,16 @@ def sources():
     activity='package com.eabusham.routervpn;import android.app.*;final class ComparisonActivity extends Activity {AndroidNodeStore nodeStore;AndroidStandardExitStore exitStore;AndroidUnifiedConnectionController connection;AndroidExternalComparisonDialog externalComparisonDialog;int routerChoices,refreshes;void configure(AndroidNodeStore n,AndroidStandardExitStore e,AndroidUnifiedConnectionController c){nodeStore=n;exitStore=e;connection=c;}void fastest(){showFastConnectMenu();}void showRouterFastConnectMenu(){routerChoices++;}void refreshAll(){refreshes++;}void toast(String message){}'
     for marker in ('    private void showFastConnectMenu(', '    private void showExternalComparison('):activity+=U.S.block(product,marker)
     ui['com/eabusham/routervpn/ComparisonActivity.java']=activity+'} final class AndroidViaEntryLatencyProbe {static boolean hasActiveOperation(){return false;}}'
+    # The actual profile store validates Home policy while capturing/restoring
+    # Router entries. Compile its real validator and the pure shipping layer
+    # selection dependency; this fixture does not compose a Start Layer graph.
+    layer=(JAVA/'AndroidStartLayer.java').read_text()
+    constants=layer[layer.index('    static final String OFF'):layer.index('    static final String AES_METHOD')]
+    selection='\n'.join(U.S.block(layer,marker) for marker in (
+        '    static String selectedMode(', '    private static JSONObject selectedRouterProfile(',
+        '    private static JSONObject requireHome(', '    private static String normalize('))
+    ui['com/eabusham/routervpn/AndroidStartLayer.java']='package com.eabusham.routervpn;import org.json.JSONObject;import java.util.Locale;final class AndroidStartLayer {'+constants+selection+'}'
+
     return ui,boundaries,native
 
 def main():
@@ -298,7 +308,7 @@ def main():
             path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(body)
         app=root/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
         (app/'Boundaries.java').write_text(boundaries);(app/'LayeredVpnService.java').write_text(native);(app/'ExternalComparisonTest.java').write_text(HARNESS)
-        names=('AndroidPrivateFileStore','AndroidNodeUsage','AndroidHomeStateStore','AndroidNodeStore','AndroidStandardExitStore','AndroidProfileSelection','AndroidConnectionSelection','AndroidUnifiedConnectionController','AndroidNumericAddress','AndroidMTUMeasurementGate','AndroidNativeHopMeasurement','AndroidExternalNodeStatistics','AndroidExternalNodeBenchmark','AndroidSpeedLabController','AndroidConnectionProfilePolicy','AndroidConnectionProfileStore','AndroidExternalComparisonNetwork','AndroidExternalNodeComparison','AndroidExternalComparisonDialog')
+        names=('AndroidPrivateFileStore','AndroidNodeUsage','AndroidHomeStateStore','AndroidNodeStore','AndroidStandardExitStore','AndroidProfileSelection','AndroidConnectionSelection','AndroidUnifiedConnectionController','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidMTUMeasurementGate','AndroidNativeHopMeasurement','AndroidExternalNodeStatistics','AndroidExternalNodeBenchmark','AndroidSpeedLabController','AndroidConnectionProfilePolicy','AndroidConnectionProfileStore','AndroidExternalComparisonNetwork','AndroidExternalNodeComparison','AndroidExternalComparisonDialog')
         for name in names:(app/(name+'.java')).write_bytes((JAVA/(name+'.java')).read_bytes())
         compile=['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(root/'classes'),*map(str,root.rglob('*.java'))]
         run=['java','--add-opens','java.base/java.io=ALL-UNNAMED','-Dfixture.privatejson='+str(validator),'-cp',os.pathsep.join((str(root/'classes'),str(jar))),'com.eabusham.routervpn.ExternalComparisonTest',str(root/'data')]
