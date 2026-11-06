@@ -168,3 +168,29 @@ func TestDesktopMTUContextRollbackOnlyRetainsOriginalPendingReader(t *testing.T)
 		})
 	}
 }
+
+func TestDesktopMTUContextCaptureAvailabilityPreservesOriginalOwner(t *testing.T) {
+	legacy, _, _ := desktopMTUNativeFixtureAt(t, 1380)
+	before, err := legacy.owner.Capture()
+	if err != nil || legacy.owner.ContextCaptureAvailable() {
+		t.Fatal("legacy owner unexpectedly advertises bounded capture", before, err)
+	}
+	strict, err := mobilemtu.NewExternalContext(context.Background(), legacy.owner, legacy.owner.lease.Config(), legacy.owner.lease.Authority(), nil)
+	if strict != nil {
+		_ = strict.Close()
+	}
+	if err == nil {
+		t.Fatal("strict constructor accepted a legacy desktop owner")
+	}
+	after, captureErr := legacy.owner.Capture()
+	if captureErr != nil || after != before || legacy.owner.invalid.Load() {
+		t.Fatal("strict refusal poisoned the original legacy owner", after, captureErr)
+	}
+	bounded, _, _ := desktopMTUContextFixture(t, 1380)
+	if !bounded.owner.ContextCaptureAvailable() {
+		t.Fatal("context constructor lost its bounded capture")
+	}
+	if _, err := bounded.owner.CaptureContext(context.Background()); err != nil {
+		t.Fatal("original bounded desktop owner failed capture", err)
+	}
+}

@@ -42,10 +42,17 @@ MTU_CONTEXT_VERDICTS = {
         "TestContextOriginalCleanupDeadlineCannotBeRenewed", "TestContextRollbackUsesReturnedTransactionAfterUnpublishedCandidate",
         "TestContextAdmissionCallbackAndWorkerPublishOneGeneration", "TestContextMailboxAdmissionDoesNotOwnAcceptedWorkerLifetime",
         "TestContextLateAdmissionAcknowledgementDrainsWithoutMutation",
+        "TestContextLegacyControllerUsesConstructedAvailability",
+        *["TestContextLegacyControllerUsesConstructedAvailability/" + name for name in ("legacy-owner", "context-owner")],
+        "TestContextUnavailableCaptureRejectsStrictConstructorAndAdmission",
+        *["TestContextUnavailableCaptureRejectsStrictConstructorAndAdmission/" + name for name in ("constructor", "run", "start", "admission", "separate-admission")],
+        "TestContextAvailableCaptureFailureNeverFallsBack",
+        *["TestContextAvailableCaptureFailureNeverFallsBack/" + name for name in ("native-error", "late-cancel")],
         *["TestContextOperationAdmissionAndStatusDoNotLeaveWaiters/" + name for name in ("start", "status", "cancel", "close")],
         *["TestContextRollbackUsesReturnedTransactionAfterUnpublishedCandidate/" + name for name in ("cancel-after-mutation", "failed-candidate", "replaced-owner")]],
     "mtu-owner-context": [
         "TestDesktopMTUContextCaptureOwnsDeadlineAndPreservesHealthyReader", "TestDesktopMTUContextRollbackOnlyRetainsOriginalPendingReader",
+        "TestDesktopMTUContextCaptureAvailabilityPreservesOriginalOwner",
         *["TestDesktopMTUContextCaptureOwnsDeadlineAndPreservesHealthyReader/" + name for name in ("owner", "lease")],
         *["TestDesktopMTUContextRollbackOnlyRetainsOriginalPendingReader/" + name for name in ("original", "new-caller", "new-reader")]],
     "mtu-manager-context": [

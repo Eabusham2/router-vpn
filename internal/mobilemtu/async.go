@@ -34,7 +34,7 @@ func (c *Controller) beginContextAdmissionProvider(admission, parent context.Con
 		return nil, errors.New("MTU operation has no caller")
 	}
 	if strict {
-		if _, ok := c.owner.(ContextOwner); !ok {
+		if _, ok := capturedContextOwner(c.owner); !ok {
 			return nil, errors.New("MTU owner has no bounded capture")
 		}
 	}

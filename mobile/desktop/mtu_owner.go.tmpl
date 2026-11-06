@@ -218,6 +218,12 @@ func newRouterVPNDesktopMTUOwnerContext(ctx context.Context, lease routerVPNDesk
 	}
 	return owner, nil
 }
+// The legacy constructor retains its original observation path. Only the
+// context constructor installs the callbacks needed by strict observations.
+func (o *routerVPNDesktopMTUOwner) ContextCaptureAvailable() bool {
+	return o != nil && o.physicalContext != nil
+}
+
 func (o *routerVPNDesktopMTUOwner) pathCurrentContext(ctx context.Context) error {
 	if ctx == nil {
 		return routerVPNExternalFailure

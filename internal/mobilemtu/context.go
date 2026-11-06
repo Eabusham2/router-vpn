@@ -14,6 +14,25 @@ import (
 type ContextOwner interface {
 	CaptureContext(context.Context) (State, error)
 }
+
+// ContextCaptureAvailability distinguishes construction-time capability on
+// types that support both legacy and context-aware owners. Availability must
+// stay fixed for the captured owner; it is not a transient health result.
+// ContextOwner implementations without this optional method are available.
+type ContextCaptureAvailability interface {
+	ContextCaptureAvailable() bool
+}
+
+func capturedContextOwner(owner Owner) (ContextOwner, bool) {
+	bounded, ok := owner.(ContextOwner)
+	if !ok {
+		return nil, false
+	}
+	if availability, ok := owner.(ContextCaptureAvailability); ok && !availability.ContextCaptureAvailable() {
+		return nil, false
+	}
+	return bounded, true
+}
 type boundedOperationKey struct{}
 type operationAuthorityKey struct{}
 type operationCleanupOnlyKey struct{}
@@ -146,7 +165,7 @@ func captureContext(ctx context.Context, owner Owner) (State, error) {
 	if err := ctx.Err(); err != nil {
 		return State{}, err
 	}
-	bounded, ok := owner.(ContextOwner)
+	bounded, ok := capturedContextOwner(owner)
 	if !ok {
 		return State{}, errors.New("MTU owner has no bounded capture")
 	}
@@ -158,7 +177,7 @@ func captureContext(ctx context.Context, owner Owner) (State, error) {
 }
 func (c *Controller) capture(ctx context.Context) (State, error) {
 	strict, _ := ctx.Value(boundedOperationKey{}).(bool)
-	_, contextOwner := c.owner.(ContextOwner)
+	_, contextOwner := capturedContextOwner(c.owner)
 	// Native callers can adopt bounded observation without changing their
 	// existing cache contract or public Start/Cancel API. An available context
 	// capability must retain this operation's caller even for legacy New.
