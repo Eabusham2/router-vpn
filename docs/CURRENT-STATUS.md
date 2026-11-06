@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 published continuation through `1691c303`
+## November 6 published continuation through `b53071d4`
 
 The recovered live baseline was `b04eccee`, already 1,294 commits ahead of the
-older `745b3e41` release. Fifteen coherent changes are now published on `main`
-through `1691c303e718a3cb556fb29c54ba11d6f2f5ea9a`. Each remote tree was compared
+older `745b3e41` release. Coherent tested changes are published on `main`
+through `b53071d401c637e1f050335e29a00cf65c7f0474`. Each remote tree was compared
 with its tested local tree before adopting the remote commit. The
 [November 6 evidence ledger](CONTINUATION-EVIDENCE-2026-11-06.md) records the
 original-source reconciliation, changes, executable evidence and open boundaries.
@@ -23,18 +23,27 @@ original-source reconciliation, changes, executable evidence and open boundaries
   Nested envelope accounting retains the requested configuration and distinguishes
   the effective configured cap from measured path MTU. Retired AWG reads cannot
   publish packets into a replacement session.
-* **Windows composed external paths:** the public retained host now admits Local
-  SS2022 entry to SS2022/HTTP/HTTPS final with both Start Layers Off. Separate
-  source identities, proofs, DNS, protection ownership and full restoration reach
-  the shipping path. Native CI requires 39 cases and two causal mutations. Both
-  AMD64/ARM64 WFP test binaries compile; all 39 runner tests, actual child-process
-  drain checks and the mandatory packaging-order test pass locally. Actual
-  Windows WFP runtime acceptance is still pending.
-* **Linux resolver policy:** published typed frames preserve the original daemon,
-  namespace, manager/per-link DNS routing, ports, TLS names, selected server and
-  policy digest. Race tests pass. This foundation alone does not admit an upstream
-  query; original-daemon capture, bootstrap grants and execution remain active
-  integration work at this cutoff.
+* **Windows composed external paths:** the public retained host admits Local
+  SS2022 entry to SS2022/HTTP/HTTPS/Hysteria2 final with both Start Layers Off.
+  Independent source identities, proofs, DNS, protection ownership and full
+  restoration reach the shipping path. Native CI requires 53 cases and two
+  causal mutations. AMD64/ARM64 test binaries compile and focused source,
+  encrypted-provider and runner checks pass. The cross-platform graph tests
+  found and fixed a missing entry TCP proof allowance before a Hysteria2 final;
+  final-node and application-DNS addresses receive no direct physical access.
+  Actual Windows WFP runtime and physical acceptance remain separate gates.
+* **Linux resolver policy:** original-daemon capture and local-only preflight,
+  finite original-socket kernel grants, exact upstream port/transport/TLS/link,
+  routing-scope selection and a supported single-scope caller are published.
+  Active DNSSEC trust anchors come from that same daemon without an upstream
+  query; this is not full DNSSEC validation. Isolated race, generated-command
+  and codec checks pass. Installed privileged composition, parallel equal-best
+  scopes, full DNSSEC validation, opportunistic TLS and other remaining source
+  branches are still being implemented and accepted.
+* **macOS/Linux external paths:** the independent encrypted SS2022/Hysteria2
+  provider and exact entry-proof transport projection are published prerequisites.
+  The native host admission and PF/TUN acceptance remain in progress at this
+  cutoff; provider success alone does not close those paths.
 * **Current delivery:** repaired native fixtures preserve their rejection cases;
   the authoritative Windows scope inventory now requires the new entry tests.
   Current exact-SHA native builds and publication have not yet converged. The old

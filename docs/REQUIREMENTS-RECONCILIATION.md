@@ -18,7 +18,7 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## November 6 reconciliation through `1691c303`
+## November 6 reconciliation through `b53071d4`
 
 Original user passages were recovered from `mm.md`, the audit/addendum, the later
 32-item request, and the August 13/14 and August 19 external-node/map-first
@@ -30,8 +30,8 @@ a completion denominator. See the [source and evidence ledger](CONTINUATION-EVID
 |---|---|
 | External/custom nodes in both hop roles; native owned graphs | Android and Apple now retain 190 imported-entry/paired-final combinations, including 54 nested WG/AWG packet combinations. Shared, actual Java and actual Swift exports reach the pinned native parser; encrypted peers exercise positive and negative paths. Other protocol families, Server/Compare for this direction and physical-device acceptance remain open. |
 | Original #229–240 MTU controls and later packet-envelope correction | Complete nested data/control/junk/Start Layer envelopes bound the configured final capacity. Auto derives a fitting cap and Fixed rejects conflicts. Requested and effective values remain distinct; neither compilation nor configured capacity is fresh physical PMTU evidence. |
-| Original #200–224 and #337 protection, multihop and lifecycle | Windows Local SS2022 entry to SS/HTTP/HTTPS final now has independent sources, proofs, physical-entry ownership, exit DNS and complete restoration. Actual native WFP cases are mandatory on AMD64/ARM64; compilation and portable tests do not close native or physical acceptance. Broader graphs/layers/execution choices remain required. |
-| Selected DNS and original connection ownership | Typed Linux resolver-policy frames preserve manager/per-link routing, selected servers, ports and TLS identity. Original-daemon/native bootstrap integration remains unfinished at this source cutoff. The model does not authorize public-resolver substitution or a query before policy proof. |
+| Original #200–224 and #337 protection, multihop and lifecycle | Windows Local SS2022 entry to SS/HTTP/HTTPS/Hysteria2 final now has independent sources, proofs, physical-entry ownership, exit DNS and complete restoration. Actual native WFP cases are mandatory on AMD64/ARM64; compilation and portable tests do not close native or physical acceptance. Broader graphs/layers/execution choices remain required. |
+| Selected DNS and original connection ownership | Original-daemon local-only preflight, finite owned bootstrap grants, exact selected-server ports/TLS/link, longest-suffix scope selection and the supported single-scope caller are published. Active trust anchors are captured locally from that daemon; this is not full DNSSEC validation. Installed privileged composition, equal-best parallel scopes, full DNSSEC, opportunistic TLS and other source branches remain open. Public-resolver substitution and queries before policy proof remain forbidden. |
 | Original #335 | Favorites are optional; latency and last-used ordering remain required. This identifier is not an MTU or Speed Lab identifier. Earlier measurement rows' erroneous #335 citations are corrected without removing their measurement requirements. |
 | Full original and later scope | Setup Center/native separation, map-first UI, complete profiles, 50-sample measurements, exact Compare scoring, Start Layers, retention, all requested platforms, Methods, signing, live/off-LAN/visual and private deployment remain binding. No safe refusal, source gate or historical release closes those obligations. |
 
