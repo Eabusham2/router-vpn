@@ -54,6 +54,13 @@ func main() {
 		name := question.Name
 		if name == "." && question.Qtype == dns.TypeDNSKEY {
 			m.Answer = sign([]dns.RR{key}, false)
+		} else if (name == "absent.private." || name == "empty.private.") && (question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+			// Original private zone negatives deliberately lack signatures.
+			// The separate private. denial remains signed by the root.
+			if name == "absent.private." {
+				m.Rcode = dns.RcodeNameError
+			}
+			m.Ns = []dns.RR{rr("private. 60 IN SOA ns.private. hostmaster.private. 1 60 60 60 60")}
 		} else if name == "host.private." && question.Qtype == dns.TypeA {
 			m.Answer = []dns.RR{rr("host.private. 60 IN A 192.0.2.9")}
 		} else if name == "host.private." && question.Qtype == dns.TypeAAAA {

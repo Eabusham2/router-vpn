@@ -38,7 +38,11 @@ func TestRouterVPNDNSSECCommandWorker(t *testing.T) {
 }
 func TestRouterVPNDNSSECAuthenticatedCommand(t *testing.T) { dnssecAuthenticatedCommand(t, false) }
 func TestRouterVPNDNSSECPrivateTLDCommand(t *testing.T)    { dnssecAuthenticatedCommand(t, true) }
-func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool) {
+func TestRouterVPNDNSSECPrivateTLDNegativeCommand(t *testing.T) {
+	dnssecAuthenticatedCommand(t, true, true)
+}
+func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool, originalNegative ...bool) {
+	negative := len(originalNegative) > 0 && originalNegative[0]
 	libraryPath, peerPath := os.Getenv("ROUTERVPN_DNSSEC_NATIVE_LIBRARY"), os.Getenv("ROUTERVPN_DNSSEC_NATIVE_PEER")
 	if privateTLD {
 		peerPath = os.Getenv("ROUTERVPN_DNSSEC_PRIVATE_TLD_PEER")
@@ -98,6 +102,9 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool) {
 	if privateTLD {
 		scenarios = []string{"root-secure", "root-forged", "root-expired", "root-insecure", "root-nodata", "root-wrong-name", "root-unrelated-nta", "root-alias-nxdomain"}
 	}
+	if negative {
+		scenarios = []string{"original-nxdomain-a", "original-nxdomain-aaaa", "original-nodata-a", "original-nodata-aaaa"}
+	}
 	for _, scenario := range scenarios {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -150,6 +157,16 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool) {
 				}
 				if scenario == "root-wrong-name" {
 					capture.Name = "other."
+				}
+			}
+
+			if negative {
+				capture.Name = "absent.private."
+				if strings.Contains(scenario, "nodata") {
+					capture.Name = "empty.private."
+				}
+				if strings.HasSuffix(scenario, "aaaa") {
+					capture.Type = 28
 				}
 			}
 
@@ -307,10 +324,33 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool) {
 							want = 2
 						}
 					}
+					if negative {
+						want = 3
+					}
 					if message.State != want {
 						t.Fatal("actual crypto verdict changed", message.State)
 					}
-					if privateTLD {
+					if negative {
+						var packet dns.Msg
+						if err := packet.Unpack(message.Packet); err != nil {
+							t.Fatal(err)
+						}
+						code := uint32(3)
+						nx := uint32(1)
+						if strings.Contains(scenario, "nodata") {
+							code = 0
+							nx = 0
+						}
+						if message.RCode != code || message.NXDomain != nx || message.HaveData != 0 || len(packet.Answer) != 0 || len(packet.Question) != 1 || packet.Question[0].Name != capture.Name || packet.Question[0].Qtype != capture.Type {
+							t.Fatal("original unsigned negative metadata/question changed", message, packet.String())
+						}
+						for _, rr := range append(packet.Answer, packet.Ns...) {
+							if rr.Header().Rrtype == dns.TypeRRSIG || rr.Header().Rrtype == dns.TypeCNAME || rr.Header().Rrtype == dns.TypeDNAME {
+								t.Fatal("original negative is not unsigned and alias-free")
+							}
+						}
+					}
+					if privateTLD && !negative {
 						q := new(dns.Msg)
 						q.SetQuestion(capture.Name, dns.TypeA)
 						q.Id = binary.BigEndian.Uint16(message.Packet)

@@ -20,6 +20,8 @@ CASES=(PARENT,*(PARENT+'/'+case for case in ('secure','bogus','proven-unsigned',
 
 PRIVATE_PARENT='TestRouterVPNDNSSECPrivateTLDCommand'
 PRIVATE_CASES=(PRIVATE_PARENT,*(PRIVATE_PARENT+'/'+case for case in ('root-secure','root-forged','root-expired','root-insecure','root-nodata','root-wrong-name','root-unrelated-nta','root-alias-nxdomain')))
+NEGATIVE_PARENT='TestRouterVPNDNSSECPrivateTLDNegativeCommand'
+NEGATIVE_CASES=(NEGATIVE_PARENT,*(NEGATIVE_PARENT+'/'+case for case in ('original-nxdomain-a','original-nxdomain-aaaa','original-nodata-a','original-nodata-aaaa')))
 PRIVATE_FIXTURE=ROOT/'mobile/dnssec/private_tld_fixture.go.tmpl'
 
 def execute(source,bundle,target,go='go'):
@@ -55,6 +57,9 @@ def execute(source,bundle,target,go='go'):
         output=G.UID.run([unshare,'--user','--map-root-user','--net',sys.executable,'-c',G.NAMESPACE,os.readlink('/proc/self/ns/net'),binary,'-test.run','^('+PARENT+'|'+PRIVATE_PARENT+')$','-test.v','-test.timeout=55s'],cwd=tmp,env=env,timeout=65)
         G.CASES=(*CASES,*PRIVATE_CASES);G.require_verdicts(output)
         print(output,end='' if output.endswith('\n') else '\n',flush=True)
+        negative=G.UID.run([unshare,'--user','--map-root-user','--net',sys.executable,'-c',G.NAMESPACE,os.readlink('/proc/self/ns/net'),binary,'-test.run','^'+NEGATIVE_PARENT+'$','-test.v','-test.timeout=55s'],cwd=tmp,env=env,timeout=65)
+        G.CASES=NEGATIVE_CASES;G.require_verdicts(negative)
+        print(negative,end='' if negative.endswith('\n') else '\n',flush=True)
         implementation=package/'standard_dnssec_command_linux.go'
         original=implementation.read_text()
         start=original.index('\treceipt, err := standardengine.DNSSECTerminalReceipt')

@@ -14,7 +14,7 @@ import (
 )
 
 // ResolvedPrivateTLDCandidate is an inert, exact unsigned two-label address
-// answer. It is not a DNSSEC verdict. Adoption still requires a separately
+// answer or a separately constructed unsigned negative reply. It is not a DNSSEC verdict. Adoption still requires a separately
 // authenticated denial proof and joined ownership/policy checkpoints.
 type ResolvedPrivateTLDCandidate struct {
 	name             string
@@ -24,7 +24,17 @@ type ResolvedPrivateTLDCandidate struct {
 }
 
 func NewResolvedPrivateTLDCandidate(question, packet []byte) (*ResolvedPrivateTLDCandidate, error) {
-	bad := errors.New("private-TLD candidate is not an exact unsigned two-label positive address answer")
+	return newResolvedPrivateTLDCandidate(question, packet, false)
+}
+
+// NewResolvedPrivateTLDNegativeCandidate preserves the original NXDOMAIN or
+// NODATA exactly. It authorizes no adoption: a separately authenticated TLD
+// denial and all original joined policy checkpoints are still required.
+func NewResolvedPrivateTLDNegativeCandidate(question, packet []byte) (*ResolvedPrivateTLDCandidate, error) {
+	return newResolvedPrivateTLDCandidate(question, packet, true)
+}
+func newResolvedPrivateTLDCandidate(question, packet []byte, negative bool) (*ResolvedPrivateTLDCandidate, error) {
+	bad := errors.New("private-TLD candidate is not an exact unsigned two-label address or negative answer")
 	if err := common.ValidateDNSProbeResponse(question, packet); err != nil {
 		return nil, err
 	}
@@ -33,11 +43,11 @@ func NewResolvedPrivateTLDCandidate(question, packet []byte) (*ResolvedPrivateTL
 		return nil, bad
 	}
 	kind := binary.BigEndian.Uint16(question[end:])
-	if binary.BigEndian.Uint16(question[end+2:]) != 1 || kind != 1 && kind != 28 || packet[3]&15 != 0 {
+	if binary.BigEndian.Uint16(question[end+2:]) != 1 || kind != 1 && kind != 28 {
 		return nil, bad
 	}
 	count := int(binary.BigEndian.Uint16(packet[6:]))
-	if count < 1 || count > 32 {
+	if negative && count != 0 || !negative && (count < 1 || count > 32 || packet[3]&15 != 0) {
 		return nil, bad
 	}
 	_, offset, err := dnsName(packet, 12)

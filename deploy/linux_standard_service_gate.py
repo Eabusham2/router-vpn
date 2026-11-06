@@ -828,3 +828,11 @@ AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_private_tld_linux_te
 
 # Installed private-TLD peers are part of the original resolver composition.
 SOURCE.add('mobile/desktop/node_resolved_private_tld_test.go.tmpl')
+
+# Original unsigned negatives remain inert until a separate TLD denial joins.
+SOURCE.add('internal/systembootstrap/resolved_private_tld_negative_linux_test.go')
+AUXILIARY['resolved-private-tld-negative-candidate']=('./internal/systembootstrap',{
+ 'TestResolvedPrivateTLDNegativeCandidate':('nxdomain-a','nxdomain-aaaa','nodata-a',
+ 'nodata-aaaa','positive','negative-with-answer','signed','alias','dname','deep',
+ 'foreign-class','servfail','truncated','foreign-question','trailing')})
+AUXILIARY_TESTS['internal/systembootstrap/resolved_private_tld_negative_linux_test.go']='resolved-private-tld-negative-candidate'
