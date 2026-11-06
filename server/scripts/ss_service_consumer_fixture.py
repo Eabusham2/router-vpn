@@ -15,12 +15,14 @@ seed=importlib.util.module_from_spec(spec);spec.loader.exec_module(seed)
 
 def produce(endpoint,output):
  with tempfile.TemporaryDirectory(prefix='routervpn-ss-consumer-') as td:
-  base=Path(td)/'state';seed.seed(base)
+  # Resolve only this freshly owned root before creating private fixture state.
+  owned=Path(td).resolve(strict=True)
+  base=owned/'state';seed.seed(base)
   public=base64.b64encode(b'b'*32).decode()
   seed.private_write(base/'client-bundle/generated/wg/wg.conf',f'[Interface]\nPrivateKey = {base64.b64encode(b"a"*32).decode()}\nAddress = 10.77.0.2/24, fd77:77::2/64\nDNS = 10.77.0.1\nMTU = 1420\n[Peer]\nPublicKey = {public}\nPresharedKey = {base64.b64encode(b"c"*32).decode()}\nEndpoint = {endpoint}:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n')
   (base/'client-bundle/generated/reality-vision/xray.json').unlink()
   (base/'client-bundle/generated/reality-vision').rmdir()
-  stage=Path(td)/'generated';stage.mkdir()
+  stage=owned/'generated';stage.mkdir()
   source=(HERE/'generate-transports.sh').read_text()
   body=source[source.index('python3 - "$GEN_TMP"'):].split("<<'PY'\n",1)[1].split('\nPY\n',1)[0]
   for old,new in [('"/src/server/scripts/ss_service_capability.py"',repr(str(HERE/'ss_service_capability.py'))),('"/src/server/portainer-current.yaml"',repr(str(HERE.parent/'portainer-current.yaml')))]:
