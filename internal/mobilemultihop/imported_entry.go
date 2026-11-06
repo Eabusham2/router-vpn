@@ -15,16 +15,20 @@ type importedEntry struct {
 	source, metadata, profile, publicIP string
 }
 
-// NewImportedEntry composes an imported SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
+// NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
-// composition requires the complete configured data/control envelope. Compilation proves neither identity.
+// composition requires the complete configured data/control envelope. SOCKS5 currently
+// supports SS/HY2 finals with both independent Start Layers Off. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
-	bad := errors.New("imported entry requires a captured standalone SS2022, Hysteria2, WireGuard or AmneziaWG source and paired SS/HY2/WG/AWG final in Local execution")
+	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG source and paired SS/HY2/WG/AWG final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
+	if selection.Protocol == "socks5" && exitMode != "shadowsocks" && exitMode != "hysteria2" {
+		return nil, bad
+	}
 	// An imported operator address is a public-path proof, never a paired API.
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
 		if v := selection.Profile[key]; v != nil && v != "" {
@@ -69,6 +73,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if selection.ExitID == exit.profile["id"] {
 		return nil, bad
 	}
+	if selection.Protocol == "socks5" && (entryMeta.StartLayer != "" && entryMeta.StartLayer != "off" || predecessorText(exit.profile, "start_layer") != "" && predecessorText(exit.profile, "start_layer") != "off") {
+		return nil, errors.New("imported SOCKS5 paired-final path currently requires both independent Start Layers Off")
+	}
 	if raw := exit.profile["multihop_execution"]; raw != nil && raw != "" && raw != "local" {
 		return nil, bad
 	}
@@ -108,6 +115,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		}
 	}
 	expectedType := selection.Protocol
+	if selection.Protocol == "socks5" {
+		expectedType = "socks"
+	}
 	if selection.Protocol == "amneziawg" {
 		expectedType = AmneziaType
 	}

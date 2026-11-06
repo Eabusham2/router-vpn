@@ -1,0 +1,438 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	SOCKS "github.com/sagernet/sing-box/protocol/socks"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// This test uses actual compiler outputs, an independent authenticated SOCKS
+// TCP/UDP peer and an encrypted paired final. Only the physical-address boundary maps the fixed
+// captured tuples to private loopback peers; it proves no mobile OS TUN grant.
+func TestRouterVPNImportedSOCKSPairedFinalNativeTraffic(t *testing.T) {
+	for _, finalMode := range []string{"shadowsocks", "hysteria2"} {
+		t.Run(finalMode, func(t *testing.T) { desktopImportedSOCKSFinalTraffic(t, finalMode) })
+	}
+}
+func desktopImportedSOCKSFinalTraffic(t *testing.T, finalMode string) {
+	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("required original sources missing")
+		}
+		t.Skip("native mobile gate supplies exact compiler source captures")
+	}
+	raw, err := os.ReadFile(filepath.Join(directory, "socks5--final-"+finalMode+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if json.Unmarshal(raw, &args) != nil || len(args) != 9 {
+		t.Fatal("original source capture invalid")
+	}
+	for _, fault := range []string{"success", "wrong-entry-ip", "entry-auth", "auth-downgrade", "relay-route", "control-eof", "final-key", "final-route", "dns-route", "final-identity"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			args := append([]string(nil), args...)
+			var finalCert tls.Certificate
+			if finalMode == "hysteria2" {
+				var ca string
+				finalCert, ca = desktopImportedFinalCertificate(t)
+				var assets map[string]string
+				if json.Unmarshal([]byte(args[3]), &assets) != nil {
+					t.Fatal("final assets missing")
+				}
+				native, e := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+				if e != nil {
+					t.Fatal(e)
+				}
+				var original map[string]any
+				if json.Unmarshal(native, &original) != nil {
+					t.Fatal("original final graph missing")
+				}
+				original["outbounds"].([]any)[0].(map[string]any)["tls"].(map[string]any)["server_name"] = "captured-final.example"
+				native, _ = json.Marshal(original)
+				assets["sing-box.json"] = base64.StdEncoding.EncodeToString(native)
+				assets["cert.pem"] = base64.StdEncoding.EncodeToString([]byte(ca))
+				native, _ = json.Marshal(assets)
+				args[3] = string(native)
+			}
+			plan, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var graph map[string]any
+			if json.Unmarshal([]byte(plan.Config()), &graph) != nil {
+				t.Fatal("compiled graph invalid")
+			}
+			var firstRaw, lastRaw map[string]any
+			for _, raw := range graph["outbounds"].([]any) {
+				n := raw.(map[string]any)
+				if n["tag"] == "entry-wg" {
+					firstRaw = n
+				}
+				if n["tag"] == mobilemultihop.LocalTag {
+					lastRaw = n
+				}
+			}
+			if firstRaw == nil || lastRaw == nil || lastRaw["detour"] != "entry-wg" {
+				t.Fatal("compiler lost detoured native owners")
+			}
+			var meta mobilemultihop.Metadata
+			_ = json.Unmarshal([]byte(plan.Metadata()), &meta)
+			paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer "+meta.ExitToken {
+					http.Error(w, "foreign", 403)
+					return
+				}
+				node := meta.ExitNodeID
+				if fault == "final-identity" {
+					node = "foreign-paired-node"
+				}
+				fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, node)
+			}))
+			defer paired.Close()
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+				r := new(dns.Msg)
+				r.SetReply(q)
+				r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+				_ = w.WriteMsg(r)
+			})}
+			dnsDone := make(chan error, 1)
+			go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+			defer func() { _ = dnsServer.Shutdown(); _ = packet.Close(); <-dnsDone }()
+			selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+			if selected["type"] != "udp" || selected["detour"] != "proxy" {
+				t.Fatal("selected resolver not final-owned")
+			}
+			dnsTarget := net.JoinHostPort(selected["server"].(string), "53")
+			finalCtx, finalCancel := context.WithCancel(ctx)
+			finalServer := &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: "udp", Destination: dnsTarget, Physical: packet.LocalAddr().String()}}}
+			var final desktopExternalInstalledSSPeer
+			if finalMode == "shadowsocks" {
+				final = desktopStartSSProvider(t, finalServer, lastRaw["method"].(string), lastRaw["password"].(string), netip.MustParseAddr("127.0.0.1"))
+			} else {
+				packet, e := net.ListenPacket("udp4", "127.0.0.1:0")
+				if e != nil {
+					t.Fatal(e)
+				}
+				observation := &desktopExternalHysteriaObservation{}
+				obfs := lastRaw["obfs"].(map[string]any)
+				stop := desktopStartImportedFinalHysteria(t, finalServer, packet, finalCert, lastRaw["password"].(string), obfs["password"].(string), observation)
+				final = desktopExternalInstalledSSPeer{address: packet.LocalAddr().String(), close: stop, stats: func() desktopExternalInstalledSSReceipt {
+					return desktopExternalInstalledSSReceipt{PhysicalTCP: finalServer.rawTCP.Load(), PhysicalUDP: finalServer.rawUDP.Load(), Streams: finalServer.plainTCP.Load(), Packets: finalServer.plainUDP.Load()}
+				}}
+			}
+			defer final.close()
+			finalTarget := net.JoinHostPort(lastRaw["server"].(string), fmt.Sprint(int(lastRaw["server_port"].(float64))))
+			entryCertificate, entryCA := desktopExternalInstalledPeerCertificate(t, false)
+			public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" {
+					http.Error(w, "foreign", 403)
+					return
+				}
+				ip := "203.0.113.88"
+				if fault == "wrong-entry-ip" {
+					ip = "203.0.113.89"
+				}
+				fmt.Fprintln(w, "ip="+ip)
+			}))
+			public.TLS = &tls.Config{Certificates: []tls.Certificate{entryCertificate}, MinVersion: tls.VersionTLS12}
+			public.StartTLS()
+			defer public.Close()
+			entryCtx, entryCancel := context.WithCancel(ctx)
+			entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: finalTarget, Physical: final.address}, {Network: "udp", Destination: finalTarget, Physical: final.address}}}
+			entryServer.routes = append(entryServer.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()})
+			entry, socksPeer := desktopStartImportedSOCKSProvider(t, entryServer, firstRaw["password"].(string), fault)
+			defer entry.close()
+			entryTarget := net.JoinHostPort(firstRaw["server"].(string), fmt.Sprint(int(firstRaw["server_port"].(float64))))
+			lower := &desktopImportedSOCKSLower{desktopSSReferenceLower: desktopSSReferenceLower{virtual: entryTarget, original: entry.address}, peer: socksPeer}
+			manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
+			owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+			firstRaw["detour"] = "captured-physical" // Exact physical boundary only.
+			if fault == "entry-auth" {
+				firstRaw["password"] = "foreign-original-password"
+			}
+			if fault == "final-key" {
+				lastRaw["password"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'y')
+			}
+			if fault == "final-route" {
+				lastRaw["server"] = "192.0.2.99"
+			}
+			makeOutbound := func(raw map[string]any) adapter.Outbound {
+				body, _ := json.Marshal(raw)
+				if raw["type"] == "hysteria2" {
+					var opts option.Hysteria2OutboundOptions
+					if json.Unmarshal(body, &opts) != nil {
+						t.Fatal("HY2 options invalid")
+					}
+					o, e := HY.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), raw["tag"].(string), opts)
+					if e != nil {
+						t.Fatal(e)
+					}
+					t.Cleanup(func() { _ = o.(io.Closer).Close() })
+					return o
+				}
+				var opts option.ShadowsocksOutboundOptions
+				if json.Unmarshal(body, &opts) != nil {
+					t.Fatal("native options invalid")
+				}
+				o, e := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), raw["tag"].(string), opts)
+				if e != nil {
+					t.Fatal(e)
+				}
+				t.Cleanup(func() { _ = o.(io.Closer).Close() })
+				return o
+			}
+			firstBody, _ := json.Marshal(firstRaw)
+			var firstOptions option.SOCKSOutboundOptions
+			if err = json.Unmarshal(firstBody, &firstOptions); err != nil {
+				t.Fatal(err)
+			}
+			first, err := SOCKS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "entry-wg", firstOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if closer, ok := first.(io.Closer); ok {
+				defer closer.Close()
+			}
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM([]byte(entryCA)) {
+				t.Fatal("entry trust missing")
+			}
+			publicTransport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+				return first.DialContext(c, n, M.ParseSocksaddr(a))
+			}}
+			publicCtx, publicStop := context.WithTimeout(ctx, time.Second)
+			publicRequest, _ := http.NewRequestWithContext(publicCtx, "GET", "https://1.1.1.1/cdn-cgi/trace", nil)
+			publicResponse, publicErr := (&http.Client{Transport: publicTransport}).Do(publicRequest)
+			entryProved := false
+			if publicErr == nil {
+				body, e := io.ReadAll(io.LimitReader(publicResponse.Body, 1024))
+				publicResponse.Body.Close()
+				entryProved = e == nil && strings.TrimSpace(string(body)) == "ip=203.0.113.88"
+			}
+			publicTransport.CloseIdleConnections()
+			publicStop()
+			if entryProved != (fault != "entry-auth" && fault != "auth-downgrade" && fault != "wrong-entry-ip") {
+				t.Fatal("independent actual SOCKS entry public proof changed", fault, publicErr)
+			}
+			manager.owners["entry-wg"] = first
+			last := makeOutbound(lastRaw)
+			limit := time.Second
+			if fault != "success" {
+				limit = 250 * time.Millisecond
+			}
+			probe, stop := context.WithTimeout(ctx, limit)
+			transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return last.DialContext(ctx, network, M.ParseSocksaddr(address))
+			}}
+			client := &http.Client{Transport: transport}
+			req, _ := http.NewRequestWithContext(probe, "GET", meta.ExitAPI+"/health", nil)
+			req.Header.Set("Authorization", "Bearer "+meta.ExitToken)
+			response, e := client.Do(req)
+			proofOK := false
+			if e == nil {
+				var value struct {
+					OK    bool   `json:"ok"`
+					Node  string `json:"node_id"`
+					Proof string `json:"proof"`
+				}
+				e = json.NewDecoder(response.Body).Decode(&value)
+				_ = response.Body.Close()
+				proofOK = e == nil && value.OK && value.Node == meta.ExitNodeID && value.Proof == "router-vpn-private-agent-v1"
+			}
+			transport.CloseIdleConnections()
+			stop()
+			if proofOK != (fault == "success" || fault == "wrong-entry-ip" || fault == "dns-route" || finalMode == "shadowsocks" && (fault == "relay-route" || fault == "control-eof")) {
+				t.Fatal("paired proof acceptance did not follow actual encrypted chain", fault, e)
+			}
+			if fault == "dns-route" {
+				dnsTarget = "192.168.50.134:53"
+			}
+			probe, stop = context.WithTimeout(ctx, limit)
+			connection, e := last.DialContext(probe, "udp", M.ParseSocksaddr(dnsTarget))
+			dnsOK := false
+			if e == nil {
+				deadline, _ := probe.Deadline()
+				_ = connection.SetDeadline(deadline)
+				query := new(dns.Msg)
+				query.SetQuestion("example.com.", dns.TypeA)
+				wire, _ := query.Pack()
+				_, e = connection.Write(wire)
+				buf := make([]byte, 4096)
+				n := 0
+				if e == nil {
+					n, e = connection.Read(buf)
+				}
+				var reply dns.Msg
+				if e == nil && reply.Unpack(buf[:n]) == nil {
+					dnsOK = reply.Response && reply.Id == query.Id && len(reply.Answer) == 1
+				}
+				_ = connection.Close()
+			}
+			stop()
+			if dnsOK != (fault == "success" || fault == "wrong-entry-ip" || fault == "final-identity") {
+				t.Fatal("selected DNS acceptance did not follow actual encrypted UDP chain", fault, e)
+			}
+			if fault == "success" {
+				cancelled, stopCancelled := context.WithCancel(ctx)
+				stopCancelled()
+				rejected, cancelError := first.DialContext(cancelled, "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+				if rejected != nil {
+					rejected.Close()
+					t.Fatal("cancelled SOCKS operation gained new connection")
+				}
+				if !errors.Is(cancelError, context.Canceled) {
+					t.Fatal("SOCKS lost original cancellation", cancelError)
+				}
+			}
+			if closer, ok := last.(io.Closer); ok {
+				if e := closer.Close(); e != nil {
+					t.Fatal(e)
+				}
+			}
+			entry.close()
+			if fault == "auth-downgrade" && socksPeer.rejected.Load() == 0 {
+				t.Fatal("native client did not reject and join downgraded SOCKS auth")
+			}
+			a, b := entry.stats(), final.stats()
+			if lower.calls.Load() == 0 || a.PhysicalTCP+a.PhysicalUDP == 0 {
+				t.Fatal("actual imported physical peer not reached")
+			}
+			if fault == "success" && (finalMode == "shadowsocks" && a.Streams == 0 || a.Packets == 0 || b.Streams == 0 || b.Packets == 0) {
+				t.Fatal("native two-hop data/proof did not traverse both peers", a, b)
+			}
+			if (fault == "entry-auth" || fault == "final-route") && (b.PhysicalTCP != 0 || b.PhysicalUDP != 0) {
+				t.Fatal("rejected first hop reached final")
+			}
+			if fault == "entry-auth" && a.AuthTCP == 0 {
+				t.Fatal("negative lacked actual SOCKS auth refusal")
+			}
+			if fault == "success" {
+				socksPeer.mu.Lock()
+				count := len(socksPeer.relays)
+				socksPeer.mu.Unlock()
+				if count == 0 {
+					t.Fatal("success omitted actual UDP association")
+				}
+			}
+			if fault == "final-key" && (b.Streams != 0 || b.Packets != 0) {
+				t.Fatal("foreign final key gained decrypted traffic")
+			}
+		})
+	}
+}
+
+// A physical fixture boundary accepts only the original control endpoint and
+// relay addresses actually allocated/advertised by that same independent peer.
+type desktopImportedSOCKSLower struct {
+	desktopSSReferenceLower
+	peer *desktopExternalInstalledSOCKSPeer
+}
+
+func (d *desktopImportedSOCKSLower) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network == "tcp" {
+		return d.desktopSSReferenceLower.DialContext(ctx, network, destination)
+	}
+	d.peer.mu.Lock()
+	owned := false
+	for _, relay := range d.peer.relays {
+		if relay == destination.String() {
+			owned = true
+		}
+	}
+	d.peer.mu.Unlock()
+	if network != "udp" || !owned {
+		return nil, errors.New("SOCKS peer rejected foreign physical relay")
+	}
+	d.calls.Add(1)
+	return (&net.Dialer{}).DialContext(ctx, "udp", destination.String())
+}
+func desktopStartImportedSOCKSProvider(t *testing.T, s *desktopNodeLayerServer, password, fault string) (desktopExternalInstalledSSPeer, *desktopExternalInstalledSOCKSPeer) {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.tcp = listener
+	var authFailures atomic.Uint32
+	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &authFailures, bindHost: "127.0.0.1"}
+	var once sync.Once
+	closePeer := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.closing = true
+			all := make([]io.Closer, 0, len(s.connections))
+			for c := range s.connections {
+				all = append(all, c)
+			}
+			s.mu.Unlock()
+			s.cancel()
+			listener.Close()
+			for _, c := range all {
+				c.Close()
+			}
+			s.workers.Wait()
+			if p.joinFailed.Load() {
+				t.Error("SOCKS association did not join original control read")
+			}
+		})
+	}
+	t.Cleanup(closePeer)
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for {
+			c, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			if !s.enter(c) {
+				c.Close()
+				return
+			}
+			go func() {
+				defer s.leave(c)
+				s.rawTCP.Add(1)
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = p.serve(c)
+			}()
+		}
+	}()
+	return desktopExternalInstalledSSPeer{address: listener.Addr().String(), close: closePeer, stats: func() desktopExternalInstalledSSReceipt {
+		return desktopExternalInstalledSSReceipt{PhysicalTCP: s.rawTCP.Load(), PhysicalUDP: s.rawUDP.Load(), Streams: s.plainTCP.Load(), Packets: s.plainUDP.Load(), AuthTCP: authFailures.Load()}
+	}}, p
+}

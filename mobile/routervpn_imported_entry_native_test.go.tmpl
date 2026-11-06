@@ -24,7 +24,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		t.Skip("exact generated compiler sources supplied by native mobile gate")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 190 {
+	if err != nil || len(entries) != 192 {
 		t.Fatal("incomplete original layer matrix", err)
 	}
 	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
@@ -52,6 +52,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 			}
 		}
 	}
+	expected["socks5--final-shadowsocks.json"], expected["socks5--final-hysteria2.json"] = true, true
 	for _, entry := range entries {
 		t.Run(entry.Name(), func(t *testing.T) {
 			name := entry.Name()
@@ -102,6 +103,11 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 				expectedMode = strings.TrimPrefix(parts[0], "packet-")
 				expectedFinal = strings.TrimPrefix(parts[1], "final-")
 				layerName = parts[2]
+			}
+			if strings.HasPrefix(layerName, "socks5--final-") {
+				expectedMode = "socks5"
+				expectedFinal = strings.TrimSuffix(strings.TrimPrefix(layerName, "socks5--final-"), ".json")
+				layerName = "off--off.json"
 			}
 			if metadata["exit_mode"] != expectedFinal {
 				t.Fatal("captured final transport mode changed")
@@ -180,6 +186,9 @@ func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
 				}
 			}
 		}
+	}
+	for _, final := range []string{"shadowsocks", "hysteria2"} {
+		expected["socks5--final-"+final+".json"] = true
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != len(expected) {

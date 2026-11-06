@@ -51,9 +51,19 @@ func (e *importedProofEngine) Dial(ctx context.Context, tag, address string) (ne
 }
 
 func TestImportedEntryRuntimeDistinctProofsAndSelectedDNS(t *testing.T) {
+	importedRuntimeProofs(t, false)
+}
+func TestImportedEntrySOCKSRuntimeDistinctProofsAndSelectedDNS(t *testing.T) {
+	importedRuntimeProofs(t, true)
+}
+func importedRuntimeProofs(t *testing.T, socks bool) {
 	for _, fault := range []string{"success", "wrong-public-ip", "wrong-paired-final", "dns-failure", "cancel-during-dns", "missing-dns-capability", "changed-owner"} {
 		t.Run(fault, func(t *testing.T) {
 			config, capture, files, profile := importedEntryFixture(t, "", "")
+			if socks {
+				source := importedSOCKSFixture(t, "shadowsocks")
+				config, capture, files, profile = source[0], source[1], source[3], source[4]
+			}
 			c, err := NewImportedEntry(config, capture, "shadowsocks", files, profile, "", "")
 			if err != nil {
 				t.Fatal(err)

@@ -18,6 +18,7 @@ final class AndroidImportedRouterPath {
             "exit_profile", "exit_start", "dns_bootstrap", "source_sha256"};
 
     static boolean supports(String entryProtocol, String finalMode) {
+        if ("socks5".equals(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
                 && (Arrays.asList("shadowsocks", "hysteria2").contains(finalMode)
@@ -25,9 +26,9 @@ final class AndroidImportedRouterPath {
     }
 
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {
-        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg").contains(entry.protocol)
+        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5").contains(entry.protocol)
                 || "shadowsocks".equals(entry.protocol) && !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
-            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard or AmneziaWG.");
+            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG or SOCKS5.");
         }
         AndroidStandardExitStore.validate(entry);
     }
@@ -88,7 +89,7 @@ final class AndroidImportedRouterPath {
                 }
                 JSONObject selected = new JSONObject(metadata);
                 String entryMode = new JSONObject(input.getString("entry_capture")).getString("protocol");
-                if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg").contains(entryMode)
+                if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5").contains(entryMode)
                         || !"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
                         || !entryMode.equals(selected.getString("entry_mode")) || !input.getString("exit_mode").equals(selected.getString("exit_mode"))
                         || !supports(entryMode, selected.getString("exit_mode"))) {

@@ -712,15 +712,18 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   for kind in ["wireguard","amneziawg"] {
    cases += layers.flatMap { first in layers.map { (first,$0,kind,"") } }
   }
+  cases.append(("off","off","socks5",""))
   let composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
   let certificate=((composite["profiles"] as! [String:[String:String]])["split"]!)["cert.pem"]!
   var hyBase=base
   hyBase["outbounds"]=[["type":"hysteria2","tag":"proxy","server":"192.0.2.44","server_port":8443,"password":" exact paired HY2 secret ","tls":["enabled":true,"server_name":"final.example.test","certificate_path":"final-trust.pem"]],["type":"direct","tag":"direct"]]
   let hyAssets=["sing-box.json":try json(hyBase).base64EncodedString(),"final-trust.pem":certificate]
   for finalMode in ["shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"] {for (entryLayer,finalLayer,kind,method) in cases {
+   if kind=="socks5" && !["shadowsocks","hysteria2"].contains(finalMode) { continue }
    let packetFinal=["wg","awg2-fast","awg2-strong"].contains(finalMode)
    let entryKey=Data(repeating:105,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
    var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
+   if kind == "socks5" {imported=["protocol":kind,"expected_public_ip":"203.0.113.88","socks5":["host":"203.0.113.20","port":1080,"username":"captured-native-user","password":" exact SOCKS secret "]]}
    if kind == "hysteria2" {imported=["protocol":kind,"expected_public_ip":"203.0.113.88","hysteria2":["server":"203.0.113.20","port":443,"password":" exact HY2 password ","tls_server_name":"entry.example.test"]]}
    if ["wireguard","amneziawg"].contains(kind) {
     var packet:[String:Any]=["private_key":Data(repeating:11,count:32).base64EncodedString(),"peer_public_key":Data(repeating:12,count:32).base64EncodedString(),"preshared_key":Data(repeating:13,count:32).base64EncodedString(),"addresses":["10.91.0.2/32","fd91::2/128"],"endpoint":"203.0.113.20:51820","allowed_ips":["0.0.0.0/0","::/0"],"mtu":packetFinal ? 1500:1380,"persistent_keepalive_interval":29]
@@ -742,7 +745,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry)
    let finalSource=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:finalMaps)
    try check("non-SS final layer uses original raw same-node SS map",finalSource.start == (finalMode != "shadowsocks" && finalLayer != "off" ? String(decoding:try json(finalMaps["shadowsocks"]!),as:UTF8.self):""))
-   if packetFinal || ["wireguard","amneziawg"].contains(kind) {
+   if packetFinal || ["wireguard","amneziawg","socks5"].contains(kind) {
     var profileJSON=final
     profileJSON["name"]="Captured final";profileJSON["adguard_ipv6"]="";profileJSON["socks_host"]="";profileJSON["socks_port"]=0;profileJSON["socks_username"]="";profileJSON["socks_password"]=""
     var selected=ClientBundle.empty
@@ -867,6 +870,16 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
      reject("actual compiler rejects foreign packet final outer layer"){_ = try bridge(["Op":"imported-router","Config":text(changed)])}
     }
    }
+   if kind == "socks5" {
+    let native=outs.first{$0["tag"] as? String=="entry-wg"}!
+    try check("SOCKS original exact authentication survives",native["type"] as? String=="socks" && native["version"] as? String=="5" && native["username"] as? String=="captured-native-user" && native["password"] as? String==" exact SOCKS secret ")
+    for field in ["username","password"] {
+     var changed=entry,external=imported,transport=imported["socks5"] as! [String:Any]
+     transport[field]="replacement";external["socks5"]=transport;changed["external"]=external
+     let replacement=try RouterVPNExternalExitBuilder.importedRouterSource(profile:changed)
+     try check("SOCKS changed authentication changes captured source",replacement.capture != raw.capture && replacement.config != raw.config)
+    }
+   }
    if kind == "hysteria2" {
     let native=outs.first{$0["tag"] as? String=="entry-wg"}!
     try check("HY2 original TLS and password survive graph composition",native["password"] as? String==" exact HY2 password " && (native["tls"] as? [String:Any])?["server_name"] as? String=="entry.example.test" && (native["tls"] as? [String:Any])?["insecure"] as? Bool != true)
@@ -906,7 +919,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    }
    if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
     let name: String
-    if ["wireguard","amneziawg"].contains(kind) {name="packet-"+kind+"--final-"+finalMode+"--"+entryLayer+"--"+finalLayer+".json"}
+    if kind=="socks5" {name="socks5--final-"+finalMode+".json"}
+    else if ["wireguard","amneziawg"].contains(kind) {name="packet-"+kind+"--final-"+finalMode+"--"+entryLayer+"--"+finalLayer+".json"}
     else {name=(packetFinal ? "final-"+finalMode+"--":finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")}
     try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(name))
    }
@@ -916,7 +930,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (190 graphs: preserved136 plus54 nested packet entries and paired finals with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (192 graphs: preserved190 plus2 SOCKS5 paired finals with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

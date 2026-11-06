@@ -161,7 +161,7 @@ enum RouterVPNExternalExitBuilder {
     static func importedRouterSource(profile: [String: Any]) throws -> (config: String, capture: String) {
         guard profile["node_kind"] as? String == "external", profile["multihop_enabled"] as? Bool != true,
               let imported = profile["external"] as? [String: Any],
-              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(kind),
+              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5"].contains(kind),
               let id = profile["id"] as? String, !id.isEmpty else { throw error("Imported Router entry lost its original standalone source.") }
         try IOSStartLayer.validateExternal(profile: profile)
         let expected = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")

@@ -386,6 +386,7 @@ enum IOSMultihopExecution {
 enum IOSImportedEntryMultihop {
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func supports(entry: String, final: String) -> Bool {
+        if entry == "socks5" { return ["shadowsocks", "hysteria2"].contains(final) }
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
         }
@@ -393,7 +394,7 @@ enum IOSImportedEntryMultihop {
     }
     static func validate(entry: [String: Any], final: [String: Any]) throws {
         guard let imported = entry["external"] as? [String: Any],
-              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(kind) else { throw issue() }
+              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5"].contains(kind) else { throw issue() }
         if kind == "shadowsocks" {
             guard let transport = imported[kind] as? [String: Any], methods.contains(transport["method"] as? String ?? "") else { throw issue() }
         } else if kind == "hysteria2" {
