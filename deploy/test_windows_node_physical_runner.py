@@ -733,8 +733,10 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
         self.assertIn(GATE.EXTERNAL_OPENVPN_ALIAS + "/unavailable-tcp-reservation", GATE.EXTERNAL_OPENVPN_ALIAS_CASES)
         self.assertEqual(len(GATE.EXTERNAL_OPENVPN_ALIAS_CASES), 11)
         self.assertEqual(GATE.EXTERNAL_OPENVPN_LEAVES, ("on-connect", "always", "successor-and-original-restore", "reject/trust", "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused"))
-        for network in ("alias", *GATE.EXTERNAL_OPENVPN_NETWORKS):
-            required = GATE.EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else GATE.EXTERNAL_OPENVPN_CASES[network]
+        self.assertEqual(len(GATE.EXTERNAL_OPENVPN_CODEC_CASES), 27)
+        self.assertEqual(len(GATE.EXTERNAL_OPENVPN_OWNERSHIP_CASES), 21)
+        for network in ("alias", "witness", *GATE.EXTERNAL_OPENVPN_NETWORKS):
+            required = GATE.EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else GATE.EXTERNAL_OPENVPN_WITNESS_CASES if network == "witness" else GATE.EXTERNAL_OPENVPN_CASES[network]
             complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
             with contextlib.redirect_stdout(io.StringIO()):
                 GATE.report_external_openvpn(0, complete, network)
@@ -758,35 +760,44 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
             binary = Path(command[0])
             if binary.parent.name == "external-openvpn":
                 expression = next(value.removeprefix("-test.run=") for value in command if value.startswith("-test.run="))
-                network = "alias" if expression == "^" + GATE.EXTERNAL_OPENVPN_ALIAS + "$" else next(network for network in GATE.EXTERNAL_OPENVPN_NETWORKS if expression.endswith("/^" + network + "$"))
-                required = GATE.EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else GATE.EXTERNAL_OPENVPN_CASES[network]
+                network = "alias" if expression == "^" + GATE.EXTERNAL_OPENVPN_ALIAS + "$" else "witness" if expression == "^(" + GATE.EXTERNAL_OPENVPN_CODEC + "|" + GATE.EXTERNAL_OPENVPN_OWNERSHIP + ")$" else next(network for network in GATE.EXTERNAL_OPENVPN_NETWORKS if expression.endswith("/^" + network + "$"))
+                required = GATE.EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else GATE.EXTERNAL_OPENVPN_WITNESS_CASES if network == "witness" else GATE.EXTERNAL_OPENVPN_CASES[network]
                 if fault == "image":
                     binary.write_bytes(b"foreign image")
                 if fault == "leaf":
                     required = required[:-1]
                 return 0, "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
             label = binary.parent.name.removeprefix("external-openvpn-")
-            witness = "ordinary token bypassed actual external WFP UDP deny: independent peer marker" if label == "ordinary-udp-deny" else "actual OpenVPN source skipped its durable WFP intent"
-            self.assertIn("-test.run=^" + GATE.EXTERNAL_OPENVPN_ROOT + "$/^udp$/^always$", command)
-            output = "--- FAIL: " + GATE.EXTERNAL_OPENVPN_ROOT + "/udp/always (0.01s)\n" + witness
+            controls = {
+                "ordinary-udp-deny": (GATE.EXTERNAL_OPENVPN_ROOT + "/udp/always", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
+                "missing-durable-intent": (GATE.EXTERNAL_OPENVPN_ROOT + "/udp/always", "actual OpenVPN source skipped its durable WFP intent"),
+                "missing-mac-callback": (GATE.EXTERNAL_OPENVPN_CODEC + "/tls-crypt/wrong-mac", "actual failed control MAC did not emit exactly one final-candidate witness"),
+                "missing-session-correlation": (GATE.EXTERNAL_OPENVPN_OWNERSHIP + "/wrong-session", "stale OpenVPN MAC event matched a replacement session"),
+            }
+            leaf, witness = controls[label]
+            self.assertIn("-test.run=" + "/".join("^" + part + "$" for part in leaf.split("/")), command)
+            output = "--- FAIL: " + leaf + " (0.01s)\n" + witness
             if fault == "prefix": output = "expected: " + output
             if fault == "duplicate": output += "\n" + output
             if fault == "panic": output += "\npanic: deadline"
             if fault == "witness": output = output.replace(witness, "unrelated failure")
             if fault == "mutant-image": binary.write_bytes(b"foreign negative image")
             return (0 if fault == label else 1), output
-        with patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+        # This is the orchestration test boundary; real module/fixture compiler
+        # overlay checks have their own source-scope tests and native execution.
+        with patch.object(GATE.OPENVPN_BOX, "compose", side_effect=lambda source, directory, existing, mutation=None: existing), patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
             GATE.execute_external_openvpn(self.source, self.workspace, ["go", "test", "-c", "-mod=readonly", "-race"], {})
         return calls
 
     def test_openvpn_builds_are_separate_and_all_native_cases_and_controls_execute(self):
         calls = self.dispatch()
-        self.assertEqual([timeout for _, timeout in calls], [600, 75, 195, 195, 195, 600, 75, 600, 75])
+        self.assertEqual([timeout for _, timeout in calls], [600, 75, 75, 195, 195, 195, 600, 75, 600, 75, 600, 75, 600, 75])
         self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
 
     def test_native_openvpn_rejects_spoofed_controls_changed_images_and_omitted_results(self):
         for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"),
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("missing-mac-callback", "exact defect"), ("missing-session-correlation", "exact defect"),
                                ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect"), ("mutant-image", "negative executable changed")):
             with self.subTest(fault=fault):
                 previous = self.workspace
@@ -797,6 +808,115 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
                         self.dispatch(fault)
                 finally:
                     self.workspace = previous
+
+
+class OpenVPNWitnessCompilerScope(unittest.TestCase):
+    """Exercise compiler-copy ownership; native codec results are tested in Go."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="windows-openvpn-witness-")
+        self.addCleanup(self.temporary.cleanup)
+        self.workspace = Path(self.temporary.name)
+        self.source = self.workspace / "core"
+        self.source.mkdir()
+        self.directory = self.workspace / "compiler"
+        self.directory.mkdir()
+        self.helper = GATE.OPENVPN_BOX
+        self.original = {}
+        for name, target in (
+                ("external_box_openvpn_reference_test.go.tmpl", "routervpn_desktop_external_box_openvpn_reference_test.go"),
+                ("external_box_windows_openvpn_test.go.tmpl", "routervpn_desktop_external_box_windows_openvpn_test.go")):
+            raw = (ROOT / "mobile/desktop" / name).read_bytes()
+            self.original[target] = raw
+            (self.source / target).write_bytes(raw)
+        self.existing = self.directory / "native.json"
+        self.native = {str(self.source / "original-native.go"): str(self.directory / "original-native.go")}
+        Path(next(iter(self.native.values()))).write_text("package box\n// original native boundary\n")
+        kernel = self.directory / "kernel-observer.go"
+        kernel.write_bytes((ROOT / "deploy/fixtures/windows-node-physical/kernel_observer.go").read_bytes())
+        self.native[str(self.source / "routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go")] = str(kernel)
+        self.existing.write_text(json.dumps({"Replace": self.native}))
+
+    def module_overlay(self, source, directory):
+        # The pinned-module verifier is a separate, actual native-build boundary.
+        # This fixture isolates composing its owned map without network downloads.
+        staged = Path(directory) / "module-owned"
+        staged.mkdir()
+        mapping = {}
+        for name in ("control_wrap.go", "udp_predecrypt.go", "server_listener.go", "client_session_tls.go",
+                     "routervpn_test_control_witness.go", "routervpn_test_control_codec.go"):
+            target = Path(source) / self.helper.MODULE.POLICY.COPY / name
+            copied = staged / name
+            text = "package openvpn\n"
+            if name == "control_wrap.go":
+                text += "if c.routerVPNTestMACRejected != nil {\n\tc.routerVPNTestMACRejected()\n}\n" * 2
+            copied.write_text(text)
+            mapping[str(target)] = str(copied)
+        copied = staged / "endpoint.go"
+        copied.write_text("package openvpn\n")
+        mapping[str(Path(source) / "protocol/openvpn/routervpn_test_control_witness.go")] = str(copied)
+        path = staged / "overlay.json"
+        path.write_text(json.dumps({"Replace": mapping}))
+        return path
+
+    def compose(self, mutation=None):
+        with patch.object(self.helper.MODULE, "overlay", side_effect=self.module_overlay), patch.object(self.helper.MODULE, "checked_sources", return_value={}) as verified:
+            result = self.helper.compose(self.source, self.directory, self.existing, mutation)
+        verified.assert_called_once_with(self.source)
+        return json.loads(result.read_text())["Replace"]
+
+    def test_original_native_map_and_source_fixtures_survive_composition(self):
+        mapping = self.compose()
+        for target, path in self.native.items():
+            self.assertEqual(mapping[target], path)
+        for target, raw in self.original.items():
+            self.assertEqual((self.source / target).read_bytes(), raw)
+        provider = Path(mapping[str(self.source / "routervpn_desktop_external_box_openvpn_reference_test.go")]).read_text()
+        self.assertIn("ControlMode: request.Control, ControlRejects: controlWitness.Snapshot()", provider)
+        self.assertIn("reply.ControlMode != p.initial.ControlMode", provider)
+        self.assertIn("p.initial.ControlMode != request.Control", provider)
+        self.assertIn("len(p.initial.ControlRejects.Events) != 0", provider)
+        self.assertIn("initialContext, initialCancel := context.WithTimeout(ctx, 10*time.Second)", provider)
+        rejection = Path(mapping[str(self.source / "routervpn_desktop_external_box_windows_openvpn_test.go")]).read_text()
+        self.assertIn('if fault == "reject/control-key" && provider.network == "udp"', rejection)
+        self.assertIn("alias.original.Address.Addr()", rejection)
+        self.assertIn("expected[tuple]", rejection)
+        self.assertEqual(self.existing.read_text(), json.dumps({"Replace": self.native}))
+
+    def test_changed_original_fixture_is_rejected(self):
+        target = self.source / "routervpn_desktop_external_box_openvpn_reference_test.go"
+        target.write_bytes(target.read_bytes() + b"\n// another source owner\n")
+        with self.assertRaisesRegex(ValueError, "exact original prepared fixture"):
+            self.compose()
+
+    def test_existing_box_witness_is_never_adopted(self):
+        target = self.source / "routervpn_desktop_external_windows_openvpn_control_witness_test.go"
+        target.write_text("package box\n// another owner\n")
+        with self.assertRaisesRegex(ValueError, "Unowned OpenVPN box witness"):
+            self.compose()
+        self.assertIn("another owner", target.read_text())
+
+    def test_mac_callback_control_changes_only_both_original_hook_guards(self):
+        mapping = self.compose("missing-mac-callback")
+        copied = Path(mapping[str(self.source / self.helper.MODULE.POLICY.COPY / "control_wrap.go")]).read_text()
+        self.assertEqual(copied.count("if false && c.routerVPNTestMACRejected != nil {"), 2)
+        self.assertEqual(copied.count("\tc.routerVPNTestMACRejected()"), 2)
+
+    def test_session_control_changes_only_the_matching_guard(self):
+        mapping = self.compose("missing-session-correlation")
+        target = self.source / "routervpn_desktop_external_windows_openvpn_control_witness_test.go"
+        changed = Path(mapping[str(target)]).read_text()
+        actual = self.helper.BOX.read_text()
+        self.assertEqual(changed, actual.replace(
+            "if event.SessionID == view.SessionID && event.Network == view.Network",
+            "if true && event.Network == view.Network", 1))
+        self.assertIn("event.SessionID != view.SessionID", changed)
+
+    def test_unknown_control_is_rejected_before_any_module_staging(self):
+        with patch.object(self.helper.MODULE, "overlay") as module:
+            with self.assertRaisesRegex(ValueError, "Unknown OpenVPN MAC witness mutation"):
+                self.helper.compose(self.source, self.directory, self.existing, "unowned")
+        module.assert_not_called()
 
 
 class OrdinarySSEntryScope(unittest.TestCase):

@@ -1,0 +1,300 @@
+//go:build windows && routervpn_windows_node_composition && with_openvpn
+
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SOVPN "github.com/sagernet/sing-openvpn"
+)
+
+// A clear session token is only a correlation key. The actual provider codec,
+// initialized original endpoint and native socket must agree independently.
+func desktopExternalOpenVPNMACHistory(previous []SOVPN.RouterVPNTestControlReject, current SOVPN.RouterVPNTestControlRejectSnapshot, mode, provider string, source netip.Addr) ([]SOVPN.RouterVPNTestControlReject, error) {
+	if current.Invalid || current.Overflow || len(current.Events) > 64 || len(current.Events) < len(previous) ||
+		(mode != "tls-auth" && mode != "tls-crypt") {
+		return nil, errors.New("OpenVPN MAC collector lost its bounded original owner")
+	}
+	for index, event := range current.Events {
+		peer, err := netip.ParseAddrPort(event.Peer)
+		if event.Sequence != uint64(index+1) || event.Mode != mode || event.Network != "udp" ||
+			event.Provider != provider || event.SessionID == ([8]byte{}) || err != nil ||
+			peer.Port() == 0 || peer.Addr() != source || peer.String() != event.Peer ||
+			index < len(previous) && previous[index] != event {
+			return nil, errors.New("OpenVPN MAC history changed its captured provider or prior event")
+		}
+	}
+	return append([]SOVPN.RouterVPNTestControlReject(nil), current.Events...), nil
+}
+
+func desktopExternalOpenVPNMACMatch(events []SOVPN.RouterVPNTestControlReject, view SOVPN.RouterVPNTestControlSessionView) (SOVPN.RouterVPNTestControlReject, bool) {
+	for index := len(events)-1; index >= 0; index-- {
+		event := events[index]
+		if event.SessionID == view.SessionID && event.Network == view.Network &&
+			event.Provider == view.Remote && event.Peer == view.Local {
+			return event, true
+		}
+	}
+	return SOVPN.RouterVPNTestControlReject{}, false
+}
+
+type desktopExternalOpenVPNMACRetry struct {
+	view SOVPN.RouterVPNTestControlSessionView
+	socket string
+	sequence uint64
+}
+
+func (r *desktopExternalOpenVPNMACRetry) accept(view SOVPN.RouterVPNTestControlSessionView, event SOVPN.RouterVPNTestControlReject, socket string) (bool, error) {
+	if view.Generation == 0 || view.SessionID == ([8]byte{}) || view.Network != "udp" || socket == "" ||
+		event.Sequence == 0 || event.SessionID != view.SessionID || event.Peer != view.Local ||
+		event.Provider != view.Remote || event.Network != view.Network {
+		return false, errors.New("OpenVPN MAC rejection lacks its initialized original socket")
+	}
+	if r.socket == "" {
+		r.view, r.socket, r.sequence = view, socket, event.Sequence
+		return false, nil
+	}
+	if view == r.view && socket == r.socket {
+		return false, nil
+	}
+	if view.Generation <= r.view.Generation || view.SessionID == r.view.SessionID ||
+		socket == r.socket || event.Sequence <= r.sequence {
+		return false, errors.New("OpenVPN MAC rejection reused a prior session, generation or socket")
+	}
+	return true, nil
+}
+
+func desktopExternalWFPOpenVPNRejectControl(t *testing.T, f *desktopExternalWFPFixture, peer *desktopOpenVPNCompositionProcess, provider desktopExternalIntegrationTuple, originalSource netip.Addr) (failure error) {
+	t.Helper()
+	value, ok := f.box.endpoint.Get(mobilemultihop.ExternalFinalTag)
+	endpoint, typed := value.(*OVPN.ClientEndpoint)
+	if !ok || !typed || provider.network != "udp" || !originalSource.Is4() || peer.initial.ControlMode != "tls-crypt" ||
+		peer.initial.ControlRejects.Invalid || peer.initial.ControlRejects.Overflow || len(peer.initial.ControlRejects.Events) != 0 {
+		return errors.New("OpenVPN MAC rejection lost its original empty provider capture")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	type outcome struct { raw string; err error }
+	done := make(chan outcome, 1)
+	go func() { raw, err := f.proof.Run(); done <- outcome{raw, err} }()
+	joined := false
+	var joinContext context.Context
+	var joinCancel context.CancelFunc
+	join := func() error {
+		if joinContext == nil { joinContext, joinCancel = context.WithTimeout(context.Background(), 5*time.Second) }
+		f.proof.Cancel()
+		if joined { return nil }
+		select {
+		case result := <-done:
+			joined = true
+			if result.err == nil || result.raw != "" { return errors.New("invalid OpenVPN control MAC acquired proof") }
+			return nil
+		case <-joinContext.Done():
+			return errors.New("OpenVPN rejected control proof did not join")
+		}
+	}
+	defer func() {
+		failure = errors.Join(failure, join())
+		if joinCancel != nil { joinCancel() }
+	}()
+	tick := time.NewTicker(10*time.Millisecond)
+	defer tick.Stop()
+	var history []SOVPN.RouterVPNTestControlReject
+	var retry desktopExternalOpenVPNMACRetry
+	for {
+		select {
+		case result := <-done:
+			joined = true
+			if result.err == nil || result.raw != "" {
+				return errors.New("invalid OpenVPN control MAC acquired proof")
+			}
+			return errors.New("OpenVPN proof stopped before its actual MAC rejection retry")
+		default:
+		}
+		receipt, receiptErr := endpoint.RouterVPNConnectedRemoteContext(ctx)
+		status, statusErr := endpoint.RouterVPNTestStatusContext(ctx)
+		if statusErr != nil { return statusErr }
+		if !errors.Is(receiptErr, nativeopenvpn.ErrRemotePending) || receipt != (nativeopenvpn.RemoteReceipt{}) || status.Error != "" {
+			return errors.New("retryable OpenVPN MAC failure changed its native pending category")
+		}
+		view, err := endpoint.RouterVPNTestControlSessionContext(ctx)
+		if err != nil && !errors.Is(err, SOVPN.RouterVPNTestErrControlPending) {
+			return errors.Join(errors.New("OpenVPN MAC witness could not observe its captured endpoint"), err)
+		}
+		// A not-yet-initialized initial TCP attempt is not a failed UDP MAC.
+		// No native snapshot is taken until the actual final UDP session exists.
+		if err == nil && view.Network == "udp" {
+			local, localErr := netip.ParseAddrPort(view.Local)
+			if view.Remote != provider.remote.String() || localErr != nil || local.Port() == 0 || local.Addr() != originalSource {
+				return errors.New("OpenVPN initialized MAC view changed the captured final tuple")
+			}
+			stats, err := peer.observeContext(ctx, "stats")
+			if err != nil {
+				return errors.Join(errors.New("OpenVPN MAC provider observation failed"), err)
+			}
+			history, err = desktopExternalOpenVPNMACHistory(history, stats.ControlRejects, peer.initial.ControlMode, peer.initial.Remote, originalSource)
+			if err != nil { return err }
+			again, viewErr := endpoint.RouterVPNTestControlSessionContext(ctx)
+			event, matched := desktopExternalOpenVPNMACMatch(history, view)
+			if viewErr != nil && !errors.Is(viewErr, SOVPN.RouterVPNTestErrControlPending) { return viewErr }
+			if viewErr == nil && again == view && matched {
+				if status.State != adapter.OpenVPNStateConnecting { return errors.New("retryable OpenVPN MAC failure lost its native connecting category") }
+				probe, finish := context.WithTimeout(ctx, 2*time.Second)
+				actual, inspectErr := mobiletor.DesktopWindowsNodeCompositionSnapshot(probe)
+				finish()
+				// Every real native inspection error remains fatal. Session
+				// correlation never converts an ALE failure into acceptance.
+				if inspectErr != nil { return errors.Join(errors.New("OpenVPN MAC rejection lost exact native WFP readback"), inspectErr) }
+				after, viewErr := endpoint.RouterVPNTestControlSessionContext(ctx)
+				if viewErr != nil && !errors.Is(viewErr, SOVPN.RouterVPNTestErrControlPending) { return viewErr }
+				if viewErr == nil && after == view {
+					if actual.Target != f.prepared || actual.Capture != f.prepared.Capture || actual.Closed ||
+						actual.Owner.Kind != "windows-isolated-token" || !actual.Options.RetainBaselineForHandoff ||
+						actual.TunnelName != f.tun.options.InterfaceName || actual.TunnelIndex != uint32(f.tun.index) ||
+						actual.TunnelLUID != f.tun.luid || len(actual.Grants) != 1 {
+						return errors.New("OpenVPN MAC witness lost its exact captured WFP and TUN owner")
+					}
+					grant := actual.Grants[0]
+					if grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner ||
+						grant.Network != "udp" || grant.Local != local || grant.Remote != provider.remote ||
+						grant.SocketID == "" || grant.Sequence == 0 {
+						return errors.New("OpenVPN MAC witness changed its native socket correlation")
+					}
+					observed, err := retry.accept(view, event, grant.SocketID)
+					if err != nil { return err }
+					if observed {
+						if err := join(); err != nil { return err }
+						final, err := peer.observeContext(ctx, "stats")
+						if err != nil { return err }
+						if _, err := desktopExternalOpenVPNMACHistory(history, final.ControlRejects, peer.initial.ControlMode, peer.initial.Remote, originalSource); err != nil { return err }
+						if retirement := f.network.CurrentContext(ctx); !errors.Is(retirement, net.ErrClosed) { return errors.Join(errors.New("OpenVPN cancelled network lacks exact retirement"), retirement) }
+						if f.proof.Healthy() || final.PublicAttempts != 0 || final.PublicRequests != 0 ||
+							final.TLS != 0 || final.DNS != 0 || final.LatencyDNS != 0 || final.LatencyRequests != 0 || final.LatencyTLS != 0 {
+							return errors.New("invalid OpenVPN control MAC carried unproved encrypted bytes")
+						}
+						return nil
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("actual OpenVPN provider MAC rejection was not observed on two original UDP sessions")
+		case <-tick.C:
+		}
+	}
+}
+
+func TestRouterVPNDesktopExternalWindowsOpenVPNControlCodec(t *testing.T) {
+	for _, mode := range []string{"tls-auth", "tls-crypt"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, scenario := range []string{"valid", "wrong-mac", "truncated", "replay", "malformed-authenticated", "rate-limited", "wrong-mac-server", "retained-codec", "collector-bound", "collector-owner", "collector-cancelled", "fallback-valid"} {
+				t.Run(scenario, func(t *testing.T) {
+					if err := SOVPN.RouterVPNTestCheckControlCodec(mode, scenario, []byte(desktopOpenVPNCompositionControlKey())); err != nil {
+						t.Fatal("actual OpenVPN MAC codec witness rejected", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalWindowsOpenVPNControlOwnership(t *testing.T) {
+	// These are correlation guard tests only. They never fabricate provider
+	// traffic, a native socket, Connected state or a successful VPN proof.
+	view := SOVPN.RouterVPNTestControlSessionView{
+		SessionID: [8]byte{1}, Generation: 4, Network: "udp",
+		Local: "192.0.2.10:40001", Remote: "192.0.2.10:1194",
+	}
+	event := SOVPN.RouterVPNTestControlReject{
+		Sequence: 1, Mode: "tls-crypt", Network: "udp",
+		Provider: view.Remote, Peer: view.Local, SessionID: view.SessionID,
+	}
+	source := netip.MustParseAddr("192.0.2.10")
+	snapshot := func(events ...SOVPN.RouterVPNTestControlReject) SOVPN.RouterVPNTestControlRejectSnapshot {
+		return SOVPN.RouterVPNTestControlRejectSnapshot{Events: append([]SOVPN.RouterVPNTestControlReject(nil), events...)}
+	}
+	check := func(previous []SOVPN.RouterVPNTestControlReject, value SOVPN.RouterVPNTestControlRejectSnapshot) ([]SOVPN.RouterVPNTestControlReject, error) {
+		return desktopExternalOpenVPNMACHistory(previous, value, "tls-crypt", view.Remote, source)
+	}
+	t.Run("captured-event", func(t *testing.T) {
+		original := snapshot(event)
+		history, err := check(nil, original)
+		if err != nil { t.Fatal(err) }
+		actual, found := desktopExternalOpenVPNMACMatch(history, view)
+		if !found || actual != event { t.Fatal("original OpenVPN MAC correlation was lost") }
+		history[0].Mode = "changed"
+		if original.Events[0] != event { t.Fatal("OpenVPN history borrowed mutable storage") }
+	})
+	t.Run("missing-event", func(t *testing.T) {
+		if _, found := desktopExternalOpenVPNMACMatch(nil, view); found { t.Fatal("absent OpenVPN MAC evidence became acceptance") }
+	})
+	t.Run("wrong-session", func(t *testing.T) {
+		stale := event; stale.SessionID[0]++
+		if _, found := desktopExternalOpenVPNMACMatch([]SOVPN.RouterVPNTestControlReject{stale}, view); found {
+			t.Fatal("stale OpenVPN MAC event matched a replacement session")
+		}
+	})
+	t.Run("wrong-local", func(t *testing.T) {
+		stale := event; stale.Peer = "192.0.2.10:40002"
+		if _, found := desktopExternalOpenVPNMACMatch([]SOVPN.RouterVPNTestControlReject{stale}, view); found { t.Fatal("another OpenVPN socket became MAC evidence") }
+	})
+	for _, name := range []string{"changed-mode", "changed-provider", "changed-network", "changed-source", "zero-sequence", "zero-session", "history-truncated", "history-rewritten", "collector-invalid", "collector-overflow"} {
+		t.Run(name, func(t *testing.T) {
+			value := snapshot(event); previous := []SOVPN.RouterVPNTestControlReject(nil)
+			switch name {
+			case "changed-mode": value.Events[0].Mode = "tls-auth"
+			case "changed-provider": value.Events[0].Provider = "192.0.2.10:1195"
+			case "changed-network": value.Events[0].Network = "tcp"
+			case "changed-source": value.Events[0].Peer = "192.0.2.11:40001"
+			case "zero-sequence": value.Events[0].Sequence = 0
+			case "zero-session": value.Events[0].SessionID = [8]byte{}
+			case "history-truncated": previous = []SOVPN.RouterVPNTestControlReject{event}; value.Events = nil
+			case "history-rewritten": previous = []SOVPN.RouterVPNTestControlReject{event}; value.Events[0].SessionID[0]++
+			case "collector-invalid": value.Invalid = true
+			case "collector-overflow": value.Overflow = true
+			}
+			if _, err := check(previous, value); err == nil { t.Fatal("invalid OpenVPN MAC history was accepted") }
+		})
+	}
+	t.Run("fresh-retry", func(t *testing.T) {
+		var retry desktopExternalOpenVPNMACRetry
+		if done, err := retry.accept(view, event, "original"); done || err != nil { t.Fatal("first OpenVPN MAC event was not retained", err) }
+		next, nextEvent := view, event
+		next.Generation++; next.SessionID[0]++; next.Local = "192.0.2.10:40002"
+		nextEvent.Sequence++; nextEvent.SessionID = next.SessionID; nextEvent.Peer = next.Local
+		if done, err := retry.accept(next, nextEvent, "replacement"); !done || err != nil { t.Fatal("fresh original OpenVPN retry was not recognized", err) }
+	})
+	t.Run("retransmission", func(t *testing.T) {
+		var retry desktopExternalOpenVPNMACRetry
+		if _, err := retry.accept(view, event, "original"); err != nil { t.Fatal(err) }
+		next := event; next.Sequence++
+		if done, err := retry.accept(view, next, "original"); done || err != nil { t.Fatal("same OpenVPN session counted as a retry", err) }
+	})
+	for _, name := range []string{"same-generation", "same-socket", "same-session", "stale-event"} {
+		t.Run(name, func(t *testing.T) {
+			var retry desktopExternalOpenVPNMACRetry
+			if _, err := retry.accept(view, event, "original"); err != nil { t.Fatal(err) }
+			next, nextEvent, socket := view, event, "replacement"
+			next.Generation++; next.SessionID[0]++; next.Local = "192.0.2.10:40002"
+			nextEvent.Sequence++; nextEvent.SessionID = next.SessionID; nextEvent.Peer = next.Local
+			switch name {
+			case "same-generation": next.Generation = view.Generation
+			case "same-socket": socket = "original"
+			case "same-session": next.SessionID = view.SessionID; nextEvent.SessionID = view.SessionID
+			case "stale-event": nextEvent.Sequence = event.Sequence
+			}
+			if done, err := retry.accept(next, nextEvent, socket); done || err == nil { t.Fatal("stale OpenVPN ownership counted as another actual retry") }
+		})
+	}
+}

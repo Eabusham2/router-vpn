@@ -24,6 +24,9 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 BOOT = NODE.BOOT
 RESOURCES = ROOT / "deploy/fixtures/windows-node-physical"
+OPENVPN_SPEC = importlib.util.spec_from_file_location("windows_openvpn_box_witness", RESOURCES / "openvpn_box_overlay.py")
+OPENVPN_BOX = importlib.util.module_from_spec(OPENVPN_SPEC)
+OPENVPN_SPEC.loader.exec_module(OPENVPN_BOX)
 TAG = b"//go:build windows && routervpn_windows_node_composition\n"
 TAGS = (*NODE.TAGS, "routervpn_windows_node_composition")
 REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
@@ -72,6 +75,17 @@ EXTERNAL_OPENVPN_CASES = {network: (EXTERNAL_OPENVPN_ROOT, EXTERNAL_OPENVPN_ROOT
 EXTERNAL_OPENVPN_ALIAS = "TestRouterVPNDesktopExternalWindowsOpenVPNAlias"
 EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/unavailable-tcp-reservation", EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
     *(EXTERNAL_OPENVPN_ALIAS + "/reject-" + field for field in ("address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin")))
+EXTERNAL_OPENVPN_CODEC = "TestRouterVPNDesktopExternalWindowsOpenVPNControlCodec"
+EXTERNAL_OPENVPN_OWNERSHIP = "TestRouterVPNDesktopExternalWindowsOpenVPNControlOwnership"
+EXTERNAL_OPENVPN_CODEC_CASES = (EXTERNAL_OPENVPN_CODEC, *(EXTERNAL_OPENVPN_CODEC + "/" + mode for mode in ("tls-auth", "tls-crypt")),
+    *(EXTERNAL_OPENVPN_CODEC + "/" + mode + "/" + case for mode in ("tls-auth", "tls-crypt") for case in OPENVPN_BOX.MODULE.CODEC_SCENARIOS))
+EXTERNAL_OPENVPN_OWNERSHIP_LEAVES = (
+    "captured-event", "missing-event", "wrong-session", "wrong-local",
+    "changed-mode", "changed-provider", "changed-network", "changed-source", "zero-sequence", "zero-session",
+    "history-truncated", "history-rewritten", "collector-invalid", "collector-overflow",
+    "fresh-retry", "retransmission", "same-generation", "same-socket", "same-session", "stale-event")
+EXTERNAL_OPENVPN_OWNERSHIP_CASES = (EXTERNAL_OPENVPN_OWNERSHIP, *(EXTERNAL_OPENVPN_OWNERSHIP + "/" + case for case in EXTERNAL_OPENVPN_OWNERSHIP_LEAVES))
+EXTERNAL_OPENVPN_WITNESS_CASES = EXTERNAL_OPENVPN_CODEC_CASES + EXTERNAL_OPENVPN_OWNERSHIP_CASES
 EXTERNAL_SERVER_ROOT = "TestRouterVPNDesktopExternalWindowsRouterServerWFP"
 EXTERNAL_SERVER_ASSOCIATION = "TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement"
 EXTERNAL_SERVER_LEAVES = ("on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof")
@@ -154,6 +168,7 @@ def checked_sources(source):
         if native.is_symlink() or not native.is_file() or not native.read_bytes().startswith(TAG):
             raise ValueError("Ordinary Windows OpenVPN escaped its explicit native test scope")
         records["external_" + name] = hashlib.sha256(native.read_bytes()).hexdigest()
+    records.update(OPENVPN_BOX.source_inputs())
     records["kernel_runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
 
@@ -478,7 +493,7 @@ def execute_external_packet(source, workspace, build, captured):
 
 def report_external_openvpn(status, output, network):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
-    required = EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else EXTERNAL_OPENVPN_CASES.get(network, ())
+    required = EXTERNAL_OPENVPN_ALIAS_CASES if network == "alias" else EXTERNAL_OPENVPN_WITNESS_CASES if network == "witness" else EXTERNAL_OPENVPN_CASES.get(network, ())
     if not required or status or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Ordinary Windows OpenVPN omitted its required native result: " + network)
 
@@ -486,15 +501,15 @@ def report_external_openvpn(status, output, network):
 def execute_external_openvpn(source, workspace, build, captured):
     directory = workspace / "external-openvpn"
     directory.mkdir()
-    selected = external_overlay(source, directory)
+    selected = OPENVPN_BOX.compose(source, directory, external_overlay(source, directory))
     binary = directory / "external-openvpn.test.exe"
     status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."], cwd=source, env=captured, timeout=600)
     if status:
         raise ValueError("Actual ordinary Windows OpenVPN compilation failed:\n" + output[-32768:])
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-    for network in ("alias", *EXTERNAL_OPENVPN_NETWORKS):
-        expression = "^" + EXTERNAL_OPENVPN_ALIAS + "$" if network == "alias" else "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + network + "$"
-        duration = 60 if network == "alias" else 180
+    for network in ("alias", "witness", *EXTERNAL_OPENVPN_NETWORKS):
+        expression = "^" + EXTERNAL_OPENVPN_ALIAS + "$" if network == "alias" else "^(" + EXTERNAL_OPENVPN_CODEC + "|" + EXTERNAL_OPENVPN_OWNERSHIP + ")$" if network == "witness" else "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + network + "$"
+        duration = 60 if network in ("alias", "witness") else 180
         status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)
         report_external_openvpn(status, output, network)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
@@ -504,7 +519,7 @@ def execute_external_openvpn(source, workspace, build, captured):
             ("missing-durable-intent", "actual OpenVPN source skipped its durable WFP intent")):
         changed = workspace / ("external-openvpn-" + label)
         changed.mkdir()
-        selected = external_overlay(source, changed, label)
+        selected = OPENVPN_BOX.compose(source, changed, external_overlay(source, changed, label))
         candidate = changed / "external-openvpn.test.exe"
         status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", candidate, "."], cwd=source, env=captured, timeout=600)
         if status:
@@ -518,6 +533,29 @@ def execute_external_openvpn(source, workspace, build, captured):
         if hashlib.sha256(candidate.read_bytes()).hexdigest() != candidate_digest:
             raise ValueError("Actual ordinary OpenVPN negative executable changed")
         print("Rejected actual ordinary OpenVPN native control: " + label, flush=True)
+
+    # These deterministic controls fail assertions in the real codec/correlation
+    # tests. An operation timeout or missing execution is never their witness.
+    for label, leaf, witness in (
+            ("missing-mac-callback", EXTERNAL_OPENVPN_CODEC + "/tls-crypt/wrong-mac",
+             "actual failed control MAC did not emit exactly one final-candidate witness"),
+            ("missing-session-correlation", EXTERNAL_OPENVPN_OWNERSHIP + "/wrong-session",
+             "stale OpenVPN MAC event matched a replacement session")):
+        changed = workspace / ("external-openvpn-" + label)
+        changed.mkdir()
+        selected = OPENVPN_BOX.compose(source, changed, external_overlay(source, changed), label)
+        candidate = changed / "external-openvpn.test.exe"
+        status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", candidate, "."], cwd=source, env=captured, timeout=600)
+        if status:
+            raise ValueError("Actual OpenVPN MAC control did not compile: " + label + "\n" + output[-16384:])
+        candidate_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        expression = "/".join("^" + part + "$" for part in leaf.split("/"))
+        status, output = BOOT.IDENTITY.run([candidate, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"], cwd=source, env=captured, timeout=75)
+        if status == 0 or not exact_native_verdict(output, "FAIL", leaf) or witness not in output or socks_native_aborted(output):
+            raise ValueError("Actual OpenVPN MAC control missed its exact defect: " + label + "\n" + output[-16384:])
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != candidate_digest:
+            raise ValueError("Actual OpenVPN MAC negative executable changed")
+        print("Rejected actual OpenVPN MAC native control: " + label, flush=True)
 
 
 def report_external_ss_entry(status, output, network):
@@ -602,7 +640,7 @@ PHASE_TIMEOUTS = {
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
     "external-packet": _PHASE_COMMON + 600 + 75 + 6 * 195 + 2 * (600 + 4 * 75),
-    "external-openvpn": _PHASE_COMMON + 600 + 75 + 3 * 195 + 2 * (600 + 75),
+    "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + 3 * 195 + 4 * (600 + 75),
 }
 _PHASE_IMAGES = {
     "external-ss-entry": tuple("external-ss-entry" + suffix + "/external-ss-entry.test.exe" for suffix in ("", "-ordinary-udp-deny", "-missing-durable-intent")),
@@ -617,7 +655,7 @@ _PHASE_IMAGES = {
     "external-packet": tuple("external-packet" + suffix + "/external-packet.test.exe" for suffix in
                             ("", "-ordinary-udp-deny", "-missing-durable-intent")),
     "external-openvpn": tuple("external-openvpn" + suffix + "/external-openvpn.test.exe" for suffix in
-                             ("", "-ordinary-udp-deny", "-missing-durable-intent")),
+                             ("", "-ordinary-udp-deny", "-missing-durable-intent", "-missing-mac-callback", "-missing-session-correlation")),
 }
 
 

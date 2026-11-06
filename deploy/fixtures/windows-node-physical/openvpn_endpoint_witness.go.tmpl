@@ -1,0 +1,112 @@
+//go:build windows && routervpn_windows_node_composition && with_openvpn
+
+package openvpn
+
+import (
+	"context"
+	"errors"
+	"slices"
+
+	"github.com/sagernet/sing-box/adapter"
+	SOVPN "github.com/sagernet/sing-openvpn"
+)
+
+// This test-only view observes an initialized original transport before the
+// handshake completes. It never substitutes for RouterVPNConnectedRemote.
+func (c *ClientEndpoint) RouterVPNTestControlSessionContext(ctx context.Context) (SOVPN.RouterVPNTestControlSessionView, error) {
+	empty := SOVPN.RouterVPNTestControlSessionView{}
+	if ctx == nil || c == nil {
+		return empty, errors.New("OpenVPN endpoint control view has no original caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	if c.loopContext.Err() != nil || c.client == nil {
+		return empty, SOVPN.RouterVPNTestErrControlPending
+	}
+	state := c.state.Load()
+	if state == nil || !state.started || state.routerVPNTransport == nil || state.routerVPNTransportGeneration == 0 {
+		return empty, SOVPN.RouterVPNTestErrControlPending
+	}
+	view, err := c.client.RouterVPNTestControlSessionContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	local, remote := state.routerVPNTransport.LocalAddr(), state.routerVPNTransport.RemoteAddr()
+	if local == nil || remote == nil || view.Generation != state.routerVPNTransportGeneration ||
+		view.Network != remote.Network() || view.Local != local.String() || view.Remote != remote.String() ||
+		c.loopContext.Err() != nil || c.state.Load() != state {
+		return empty, SOVPN.RouterVPNTestErrControlPending
+	}
+	again, err := c.client.RouterVPNTestControlSessionContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	if again != view || c.loopContext.Err() != nil || c.state.Load() != state {
+		return empty, SOVPN.RouterVPNTestErrControlPending
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	return again, nil
+}
+
+// Observe the same status fields and classification as the pinned status.go,
+// using the caller's original context for every acquired native/client lock.
+func (c *ClientEndpoint) RouterVPNTestStatusContext(ctx context.Context) (adapter.OpenVPNStatus, error) {
+	empty := adapter.OpenVPNStatus{}
+	if ctx == nil || c == nil || c.client == nil {
+		return empty, errors.New("OpenVPN status observation has no original caller or client")
+	}
+	challenge, err := c.client.PendingChallengeContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	state := c.state.Load()
+	if state == nil {
+		return empty, SOVPN.RouterVPNTestErrControlPending
+	}
+	var status adapter.OpenVPNStatus
+	if err := SOVPN.RouterVPNLockContext(ctx, &c.statusAccess); err != nil {
+		return empty, err
+	}
+	status.Error = c.terminalError
+	c.statusAccess.Unlock()
+	ready := false
+	if challenge == nil && status.Error == "" && state.started && state.tunnelConfigured {
+		ready, err = c.client.ReadyContext(ctx)
+		if err != nil {
+			return empty, err
+		}
+	}
+	switch {
+	case challenge != nil:
+		status.State = adapter.OpenVPNStateAuthPending
+		status.Challenge = &adapter.OpenVPNChallenge{
+			ID:            challenge.ID,
+			Kind:          string(challenge.Kind),
+			Username:      challenge.Username,
+			Message:       challenge.Message,
+			URL:           challenge.URL,
+			SecretMessage: challenge.SecretMessage,
+			Echo:          challenge.Echo,
+			PreviousError: challenge.PreviousError,
+			Deadline:      challenge.Deadline,
+		}
+	case status.Error != "":
+		status.State = adapter.OpenVPNStateError
+	case state.started && state.tunnelConfigured && ready:
+		status.State = adapter.OpenVPNStateConnected
+		tunnelInfo := state.tunnelInfo
+		tunnelInfo.IPv4 = slices.Clone(tunnelInfo.IPv4)
+		tunnelInfo.IPv6 = slices.Clone(tunnelInfo.IPv6)
+		tunnelInfo.DNS = slices.Clone(tunnelInfo.DNS)
+		status.TunnelInfo = &tunnelInfo
+	default:
+		status.State = adapter.OpenVPNStateConnecting
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	return status, nil
+}

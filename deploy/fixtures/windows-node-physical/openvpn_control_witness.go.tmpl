@@ -1,0 +1,202 @@
+//go:build windows && routervpn_windows_node_composition
+
+package openvpn
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+
+	"github.com/sagernet/sing-openvpn/proto"
+)
+
+var RouterVPNTestErrControlPending = errors.New("original OpenVPN control session is pending")
+
+// SessionID is a clear-text correlation token. Only the separately captured
+// original session, generation, tuple and native socket establish ownership.
+type RouterVPNTestControlSessionView struct {
+	SessionID [8]byte
+	Generation uint64
+	Network string
+	Local string
+	Remote string
+}
+
+type RouterVPNTestControlReject struct {
+	Sequence uint64
+	Mode string
+	Network string
+	Provider string
+	Peer string
+	SessionID [8]byte
+}
+
+type RouterVPNTestControlRejectSnapshot struct {
+	Events []RouterVPNTestControlReject
+	Overflow bool
+	Invalid bool
+}
+
+type routerVPNTestControlCollectorKey struct{}
+
+type RouterVPNTestControlCollector struct {
+	mu sync.Mutex
+	context context.Context
+	server *tlsServer
+	provider string
+	events []RouterVPNTestControlReject
+	overflow bool
+	invalid bool
+}
+
+func RouterVPNTestControlCollectorContext(ctx context.Context) (context.Context, *RouterVPNTestControlCollector, error) {
+	if ctx == nil {
+		return nil, nil, errors.New("OpenVPN test collector has no original context")
+	}
+	if ctx.Value(routerVPNTestControlCollectorKey{}) != nil {
+		return nil, nil, errors.New("OpenVPN test collector cannot replace another owner")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	collector := &RouterVPNTestControlCollector{context: ctx}
+	return context.WithValue(ctx, routerVPNTestControlCollectorKey{}, collector), collector, nil
+}
+
+func (c *RouterVPNTestControlCollector) Snapshot() RouterVPNTestControlRejectSnapshot {
+	if c == nil {
+		return RouterVPNTestControlRejectSnapshot{Invalid: true}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return RouterVPNTestControlRejectSnapshot{
+		Events: append([]RouterVPNTestControlReject(nil), c.events...),
+		Overflow: c.overflow,
+		Invalid: c.invalid,
+	}
+}
+
+// This method is reached only by the final failed MAC candidate in the actual
+// codec. Short packets, replay failures and later parser/rate refusals do not
+// enter it. No packet/key/ciphertext is retained beyond the eight-byte token.
+func (s *tlsServer) routerVPNTestControlMACRejected(mode string, raw []byte, peer net.Addr) {
+	if s == nil || s.parent == nil || s.parent.options.Context == nil {
+		return
+	}
+	collector, ok := s.parent.options.Context.Value(routerVPNTestControlCollectorKey{}).(*RouterVPNTestControlCollector)
+	if !ok || collector == nil {
+		return
+	}
+	// Inspect the original immutable listener/peer metadata before taking the
+	// collector lock. Its critical section never invokes a transport callback.
+	valid := s.packetListener != nil && peer != nil &&
+		(mode == "tls-auth" || mode == "tls-crypt") && isPossibleUDPPreDecryptPacket(raw)
+	var provider, remote netip.AddrPort
+	if valid {
+		local := s.packetListener.LocalAddr()
+		valid = local != nil && local.Network() == "udp" && peer.Network() == "udp"
+		if valid {
+			var localErr, remoteErr error
+			provider, localErr = netip.ParseAddrPort(local.String())
+			remote, remoteErr = netip.ParseAddrPort(peer.String())
+			valid = localErr == nil && remoteErr == nil && provider.Addr().Is4() && remote.Addr().Is4() &&
+				provider.Port() != 0 && remote.Port() != 0
+		}
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.invalid || collector.overflow {
+		return
+	}
+	if !valid || collector.context == nil || collector.context.Err() != nil ||
+		collector.server != nil && (collector.server != s || collector.provider != provider.String()) {
+		collector.invalid = true
+		return
+	}
+	if len(collector.events) == 64 {
+		collector.overflow = true
+		return
+	}
+	collector.server, collector.provider = s, provider.String()
+	event := RouterVPNTestControlReject{
+		Sequence: uint64(len(collector.events) + 1), Mode: mode, Network: "udp",
+		Provider: provider.String(), Peer: remote.String(),
+	}
+	copy(event.SessionID[:], raw[1:tlsControlHeaderLength])
+	collector.events = append(collector.events, event)
+}
+
+// The supervisor publishes currentSession only after Initialize completed.
+// Keep its bounded lifecycle lock while checking the same live peer and the
+// immutable initialization capture. No Ready/Connected result is fabricated.
+func (c *Client) RouterVPNTestControlSessionContext(ctx context.Context) (RouterVPNTestControlSessionView, error) {
+	empty := RouterVPNTestControlSessionView{}
+	if ctx == nil || c == nil {
+		return empty, errors.New("OpenVPN control view has no original caller or client")
+	}
+	if err := RouterVPNLockContext(ctx, &c.lifecycle.access); err != nil {
+		return empty, err
+	}
+	defer c.lifecycle.access.Unlock()
+	if !c.lifecycle.started || c.lifecycle.closed || c.lifecycle.terminalError != nil {
+		return empty, RouterVPNTestErrControlPending
+	}
+	session, ok := c.lifecycle.currentSession.(*tlsClient)
+	if !ok || session == nil {
+		return empty, RouterVPNTestErrControlPending
+	}
+	if err := RouterVPNLockContext(ctx, &session.access); err != nil {
+		return empty, err
+	}
+	defer session.access.Unlock()
+	if err := RouterVPNLockContext(ctx, &session.lifecycleAccess); err != nil {
+		return empty, err
+	}
+	defer session.lifecycleAccess.Unlock()
+	view := session.routerVPNTestControlSession
+	if session.closed || session.packetConnection == nil || session.routerVPNTestPacketConnection == nil ||
+		session.packetConnection != session.routerVPNTestPacketConnection || session.sessionContext == nil ||
+		session.sessionContext.Err() != nil || view.SessionID == ([8]byte{}) ||
+		view.Generation == 0 || view.Generation != session.routerVPNTransportGeneration ||
+		(view.Network != "tcp" && view.Network != "udp") || view.Local == "" || view.Remote == "" {
+		return empty, RouterVPNTestErrControlPending
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	return view, nil
+}
+
+// Initialize has installed this exact packet wrapper but has not published the
+// session to the supervisor. Record the original Dial tuple once; no getter
+// calls the mutable SessionManager or substitutes a configured remote.
+func (c *tlsClient) routerVPNTestCaptureInitializedConnection(connection net.Conn, packet proto.PacketConnection) {
+	if connection == nil || packet == nil {
+		return
+	}
+	local, remote := connection.LocalAddr(), connection.RemoteAddr()
+	if local == nil || remote == nil || local.Network() != remote.Network() ||
+		(remote.Network() != "tcp" && remote.Network() != "udp") {
+		return
+	}
+	localTuple, localErr := netip.ParseAddrPort(local.String())
+	remoteTuple, remoteErr := netip.ParseAddrPort(remote.String())
+	if localErr != nil || remoteErr != nil || localTuple.Port() == 0 || remoteTuple.Port() == 0 {
+		return
+	}
+	c.access.Lock()
+	defer c.access.Unlock()
+	c.lifecycleAccess.Lock()
+	defer c.lifecycleAccess.Unlock()
+	if c.closed || c.packetConnection != packet || c.sessionContext == nil ||
+		c.sessionContext.Err() != nil || c.routerVPNTransportGeneration == 0 {
+		return
+	}
+	view := c.routerVPNTestControlSession
+	view.Generation, view.Network = c.routerVPNTransportGeneration, remote.Network()
+	view.Local, view.Remote = localTuple.String(), remoteTuple.String()
+	c.routerVPNTestControlSession = view
+	c.routerVPNTestPacketConnection = packet
+}

@@ -1,0 +1,307 @@
+//go:build windows && routervpn_windows_node_composition
+
+package openvpn
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/sagernet/sing-openvpn/proto"
+)
+
+func routerVPNTestControlProtection(mode string, key []byte, direction int) (tlsControlProtection, error) {
+	material := Material{Content: key}
+	switch mode {
+	case "tls-auth":
+		codec, err := newControlAuthCodecWithAuth(material, direction, "SHA256")
+		return tlsControlProtection{auth: codec}, err
+	case "tls-crypt":
+		codec, err := newControlCryptCodec(material, direction)
+		return tlsControlProtection{crypt: codec}, err
+	default:
+		return tlsControlProtection{}, errors.New("unknown OpenVPN control codec fixture")
+	}
+}
+
+// Use two distinct parsed key slots so a valid second candidate cannot be
+// mistaken for primary-key success or final MAC failure.
+func routerVPNTestControlFallbackValid(mode string, key []byte) error {
+	parsed, err := loadStaticKeyMaterialFromSource(Material{Content: key})
+	if err != nil {
+		return err
+	}
+	if len(parsed) != 256 {
+		return errors.New("control fallback fixture lost its complete parsed key")
+	}
+	material := append([]byte(nil), parsed...)
+	for index := 0; index < 128; index++ {
+		material[128+index] = material[index] ^ 0xff
+	}
+	sender, err := routerVPNTestControlProtection(mode, material, tlsCryptKeyDirectionInverse)
+	if err != nil {
+		return err
+	}
+	// The actual undefined direction selects slot 0 first, then slot 1.
+	receiver, err := routerVPNTestControlProtection(mode, material, -1)
+	if err != nil {
+		return err
+	}
+	// A separate codec retains only its actual first candidate as a negative
+	// control; the complete receiver below keeps both original candidates.
+	first := receiver.newSessionProtection()
+	var firstRejected, fallbackRejected int
+	if mode == "tls-auth" {
+		if len(receiver.auth.receiveKeys) != 2 ||
+			bytes.Equal(receiver.auth.receiveKeys[0], receiver.auth.receiveKeys[1]) ||
+			!bytes.Equal(sender.auth.sendKey, receiver.auth.receiveKeys[1]) {
+			return errors.New("tls-auth fallback lost its two distinct original candidates")
+		}
+		first.auth.receiveKeys = first.auth.receiveKeys[:1]
+		first.auth.routerVPNTestMACRejected = func() { firstRejected++ }
+		receiver.auth.routerVPNTestMACRejected = func() { fallbackRejected++ }
+		defer func() {
+			first.auth.routerVPNTestMACRejected = nil
+			receiver.auth.routerVPNTestMACRejected = nil
+		}()
+	} else {
+		if len(receiver.crypt.receiveCandidates) != 2 ||
+			bytes.Equal(receiver.crypt.receiveCandidates[0].authKey, receiver.crypt.receiveCandidates[1].authKey) ||
+			!bytes.Equal(sender.crypt.sendAuthKey, receiver.crypt.receiveCandidates[1].authKey) {
+			return errors.New("tls-crypt fallback lost its two distinct original candidates")
+		}
+		first.crypt.receiveCandidates = first.crypt.receiveCandidates[:1]
+		first.crypt.routerVPNTestMACRejected = func() { firstRejected++ }
+		receiver.crypt.routerVPNTestMACRejected = func() { fallbackRejected++ }
+		defer func() {
+			first.crypt.routerVPNTestMACRejected = nil
+			receiver.crypt.routerVPNTestMACRejected = nil
+		}()
+	}
+	packet := &proto.Packet{Opcode: proto.OpcodeControlHardResetClientV2, LocalSessionID: proto.SessionID{8, 7, 6, 5, 4, 3, 2, 1}}
+	plain, err := packet.Bytes()
+	if err != nil {
+		return err
+	}
+	wire := sender.encodeOutgoingControlPacket(plain)
+	firstPlain, firstErr := first.decodeIncomingControlPacket(wire)
+	if firstErr == nil || firstErr.Error() != "invalid "+mode+" packet" || firstPlain != nil || firstRejected != 1 {
+		return errors.New("actual first control candidate did not fail before valid fallback")
+	}
+	decoded, err := receiver.decodeIncomingControlPacket(wire)
+	if err != nil || !bytes.Equal(decoded, plain) || fallbackRejected != 0 {
+		return errors.New("valid fallback control candidate became a final MAC-failure witness")
+	}
+	reset, err := proto.ParsePacket(decoded)
+	if err != nil || reset.LocalSessionID != packet.LocalSessionID || validateInitialClientReset(reset) != nil {
+		return errors.New("actual fallback control candidate did not reach the original reset parser")
+	}
+	return nil
+}
+
+// Exercise the pinned codecs and parser with real key material. The fixture
+// never supplies a connection, readiness result or native ownership receipt.
+func RouterVPNTestCheckControlCodec(mode, scenario string, key []byte) error {
+	switch scenario {
+	case "valid", "fallback-valid", "wrong-mac", "truncated", "replay", "malformed-authenticated",
+		"rate-limited", "wrong-mac-server", "retained-codec", "collector-bound",
+		"collector-owner", "collector-cancelled":
+	default:
+		return errors.New("unknown OpenVPN control codec scenario")
+	}
+	if scenario == "fallback-valid" {
+		return routerVPNTestControlFallbackValid(mode, key)
+	}
+	sender, err := routerVPNTestControlProtection(mode, key, tlsCryptKeyDirectionInverse)
+	if err != nil {
+		return err
+	}
+	receiver, err := routerVPNTestControlProtection(mode, key, tlsCryptKeyDirectionNormal)
+	if err != nil {
+		return err
+	}
+	packet := &proto.Packet{Opcode: proto.OpcodeControlHardResetClientV2, LocalSessionID: proto.SessionID{1, 2, 3, 4, 5, 6, 7, 8}}
+	plain, err := packet.Bytes()
+	if err != nil {
+		return err
+	}
+	wire := sender.encodeOutgoingControlPacket(plain)
+	wrong := append([]byte(nil), wire...)
+	tagOffset := tlsControlHeaderLength
+	minimum := tlsControlHeaderLength + tlsControlPacketIDLength
+	if mode == "tls-auth" {
+		minimum += receiver.auth.digestSize
+	} else {
+		tagOffset += tlsControlPacketIDLength
+		minimum += tlsCryptTagLength
+	}
+	if len(wire) < minimum || tagOffset >= len(wrong) {
+		return errors.New("actual control encoder did not produce its complete wrapper")
+	}
+	wrong[tagOffset] ^= 0x80
+	var rejected int
+	var decode func([]byte) ([]byte, bool)
+	if receiver.auth != nil {
+		receiver.auth.routerVPNTestMACRejected = func() { rejected++ }
+		defer func() { receiver.auth.routerVPNTestMACRejected = nil }()
+		decode = receiver.auth.decodeControlPacket
+	} else {
+		receiver.crypt.routerVPNTestMACRejected = func() { rejected++ }
+		defer func() { receiver.crypt.routerVPNTestMACRejected = nil }()
+		decode = receiver.crypt.decodeControlPacket
+	}
+	switch scenario {
+	case "valid":
+		decoded, ok := decode(wire)
+		if !ok || !bytes.Equal(decoded, plain) || rejected != 0 {
+			return errors.New("valid authenticated control changed its original decode result or emitted a MAC witness")
+		}
+		parsed, err := proto.ParsePacket(decoded)
+		if err != nil || parsed.LocalSessionID != packet.LocalSessionID || validateInitialClientReset(parsed) != nil {
+			return errors.New("valid authenticated control did not reach the original reset parser")
+		}
+		return nil
+	case "wrong-mac":
+		decoded, ok := decode(wrong)
+		if ok || decoded != nil || rejected != 1 {
+			return errors.New("actual failed control MAC did not emit exactly one final-candidate witness")
+		}
+		return nil
+	case "truncated":
+		decoded, ok := decode(wire[:minimum-1])
+		if ok || decoded != nil || rejected != 0 {
+			return errors.New("short control packet became a MAC-failure witness")
+		}
+		return nil
+	case "replay":
+		first, ok := decode(wire)
+		if !ok || !bytes.Equal(first, plain) || rejected != 0 {
+			return errors.New("control replay fixture failed before its first authenticated packet")
+		}
+		second, ok := decode(wire)
+		if ok || second != nil || rejected != 0 {
+			return errors.New("authenticated replay changed its result or became a MAC-failure witness")
+		}
+		return nil
+	case "malformed-authenticated":
+		malformed := sender.encodeOutgoingControlPacket(plain[:tlsControlHeaderLength])
+		decoded, ok := decode(malformed)
+		if !ok || !bytes.Equal(decoded, plain[:tlsControlHeaderLength]) || rejected != 0 {
+			return errors.New("authenticated malformed body did not preserve successful MAC decoding")
+		}
+		if _, err := proto.ParsePacket(decoded); err == nil {
+			return errors.New("actual parser accepted the authenticated truncated control body")
+		}
+		return nil
+	}
+	return routerVPNTestControlServerCodec(mode, scenario, receiver, wire, wrong, packet.LocalSessionID)
+}
+
+func routerVPNTestControlServerCodec(mode, scenario string, protection tlsControlProtection, wire, wrong []byte, sessionID proto.SessionID) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observed, collector, err := RouterVPNTestControlCollectorContext(ctx)
+	if err != nil {
+		return err
+	}
+	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	peer, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer peer.Close()
+	options := ServerOptions{Context: observed, Resources: ServerResourceOptions{InitialConnectFrequency: 0, InitialConnectFrequencyPeriod: time.Hour}}
+	server := &tlsServer{parent: &Server{options: options}, staticProtection: protection,
+		packetListener: listener, resourcePolicy: newServerResourcePolicy(options)}
+	check := func(snapshot RouterVPNTestControlRejectSnapshot, count int, overflow, invalid bool) error {
+		if len(snapshot.Events) != count || snapshot.Overflow != overflow || snapshot.Invalid != invalid {
+			return errors.New("OpenVPN collector lost its exact bounded result")
+		}
+		for index, event := range snapshot.Events {
+			if event.Sequence != uint64(index+1) || event.Mode != mode || event.Network != "udp" ||
+				event.Provider != listener.LocalAddr().String() || event.Peer != peer.LocalAddr().String() ||
+				event.SessionID != [8]byte(sessionID) {
+				return errors.New("OpenVPN MAC witness changed its original provider, peer or correlation token")
+			}
+		}
+		return nil
+	}
+	reject := func(owner *tlsServer) error {
+		packet, _, _, err := owner.routerVPNTestDecodeUDPPreDecryptPacket(wrong, peer.LocalAddr())
+		if packet != nil || err == nil || err.Error() != "invalid "+mode+" packet" {
+			return fmt.Errorf("actual server did not preserve its failed %s decode result: %v", mode, err)
+		}
+		return nil
+	}
+	switch scenario {
+	case "rate-limited":
+		result, err := server.preDecryptUDPPacket(wire, peer.LocalAddr(), time.Now())
+		if err == nil || err.Error() != "initial packet rate limit exceeded" || result.verdict != udpPreDecryptDrop {
+			return errors.New("actual initial-packet limiter did not reject after successful control authentication")
+		}
+		return check(collector.Snapshot(), 0, false, false)
+	case "wrong-mac-server":
+		if err := reject(server); err != nil {
+			return err
+		}
+		return check(collector.Snapshot(), 1, false, false)
+	case "retained-codec":
+		packet, retained, _, err := server.routerVPNTestDecodeUDPPreDecryptPacket(wire, peer.LocalAddr())
+		if err != nil || packet == nil || packet.LocalSessionID != sessionID || validateInitialClientReset(packet) != nil {
+			return errors.New("successful original pre-decrypt did not retain its actual protection")
+		}
+		if retained.auth != nil && retained.auth.routerVPNTestMACRejected != nil ||
+			retained.crypt != nil && retained.crypt.routerVPNTestMACRejected != nil {
+			return errors.New("accepted control retained the original per-packet witness closure")
+		}
+		if _, err := retained.decodeIncomingControlPacket(wrong); err == nil {
+			return errors.New("retained real codec accepted an incorrect control MAC")
+		}
+		return check(collector.Snapshot(), 0, false, false)
+	case "collector-bound":
+		for index := 0; index < 64; index++ {
+			if err := reject(server); err != nil {
+				return err
+			}
+		}
+		first := collector.Snapshot()
+		if err := check(first, 64, false, false); err != nil {
+			return err
+		}
+		first.Events[0].Mode = "changed-snapshot"
+		if err := reject(server); err != nil {
+			return err
+		}
+		return check(collector.Snapshot(), 64, true, false)
+	case "collector-owner":
+		if err := reject(server); err != nil {
+			return err
+		}
+		foreign := &tlsServer{parent: server.parent, staticProtection: protection, packetListener: listener}
+		if err := reject(foreign); err != nil {
+			return err
+		}
+		return check(collector.Snapshot(), 1, false, true)
+	case "collector-cancelled":
+		if err := reject(server); err != nil {
+			return err
+		}
+		cancel()
+		if err := reject(server); err != nil {
+			return err
+		}
+		if _, _, err := RouterVPNTestControlCollectorContext(ctx); !errors.Is(err, context.Canceled) {
+			return errors.New("cancelled context acquired another control collector")
+		}
+		return check(collector.Snapshot(), 1, false, true)
+	default:
+		return errors.New("unknown server control codec scenario")
+	}
+}
