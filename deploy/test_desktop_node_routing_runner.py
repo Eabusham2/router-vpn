@@ -448,6 +448,19 @@ class NativeMTUVerdicts(unittest.TestCase):
 
 
 class NativeResolverVerdicts(unittest.TestCase):
+    def test_root_ds_inventory_retains_exact_parent_and_broker_cases(self):
+        root = "TestRouterVPNNativeLinuxResolverResolvedRootDSErrors"
+        self.assertEqual(NODE.NATIVE_RESOLVER_TESTS.count(root), 1)
+        self.assertEqual(set(NODE.NATIVE_RESOLVER_LEAVES["ResolvedRootDSErrors"]),
+                         {"synthetic", "strict", "wrong-mode", "no-source", "foreign", "timeout", "downgrade-no-trust"})
+        self.assertEqual(len(NODE.NATIVE_RESOLVER_LEAVES["ResolvedRootDSErrors"]), 7)
+        broker = NODE.NATIVE_RESOLVER_LEAVES["ResolvedAuthorityOriginalBroker"]
+        expected = {"root-ds-positive", "root-ds-synthetic", "root-ds-strict", "root-ds-wrong-mode", "root-ds-no-source", "root-ds-foreign-error", "root-ds-downgrade-no-trust", "root-ds-policy-change"}
+        self.assertEqual({leaf for leaf in broker if leaf.startswith("root-ds-")}, expected)
+        for leaf in expected:
+            self.assertEqual(broker.count(leaf), 1)
+        self.assertEqual(len(broker), 31)
+
     def test_every_original_resolver_verdict_is_required_exactly_once(self):
         suite = ("native-resolver-lifetime", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver", NODE.NATIVE_RESOLVER_TESTS)
         names = list(NODE.NATIVE_RESOLVER_TESTS) + ["TestRouterVPNNativeLinuxResolver" + root + "/" + leaf

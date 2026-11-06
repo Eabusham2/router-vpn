@@ -226,6 +226,25 @@ func routerVPNRunResolved(parent context.Context, expected string) (failure erro
 		if request.Action == "close" {
 			return nil
 		}
+		if request.Action == "root-ds-decision" {
+			decision, err := authority.RootDSDecision(lifetime, request.Index, request.Name)
+			if err != nil {
+				return err
+			}
+			frames, err := standardengine.BuildResolvedRootDSFrames(expected, sequence, []byte(decision))
+			if err != nil {
+				return err
+			}
+			for _, frame := range frames {
+				if err = peer.Send(lifetime, frame); err != nil {
+					return err
+				}
+			}
+			if err = peer.Current(lifetime); err != nil {
+				return err
+			}
+			continue
+		}
 		if request.Action == "server-state" {
 			state, err := authority.ServerState(lifetime, request.Index, request.Name)
 			if err != nil {

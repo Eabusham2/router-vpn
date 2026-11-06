@@ -1,0 +1,88 @@
+//go:build linux
+
+package tun
+
+import (
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/godbus/dbus/v5"
+)
+
+var resolvedRootDSFaults = []string{"root-ds-positive", "root-ds-synthetic", "root-ds-strict", "root-ds-wrong-mode", "root-ds-no-source", "root-ds-foreign-error", "root-ds-downgrade-no-trust", "root-ds-policy-change"}
+
+func resolvedRootDSMode(fault string) string {
+	if fault == "root-ds-strict" || fault == "root-ds-wrong-mode" {
+		return "yes"
+	}
+	return "allow-downgrade"
+}
+func resolvedRootDSModel(request *dbus.Message, fault string, changed *atomic.Bool) ([]any, string, error) {
+	if len(request.Body) != 5 || request.Body[0] != int32(7) || request.Body[1] != "." || request.Body[2] != uint16(1) || request.Body[3] != uint16(43) || request.Body[4] != ResolvedRootDSQueryFlags {
+		return nil, "", errors.New("root decision changed fixed local-only root DS request")
+	}
+	switch fault {
+	case "root-ds-positive":
+		return resolvedAnchorModel(request, "anchor-ds", changed)
+	case "root-ds-strict", "root-ds-downgrade-no-trust":
+		return []any{"original no trust anchor"}, "org.freedesktop.resolve1.NoTrustAnchor", nil
+	case "root-ds-no-source":
+		return []any{"not synthetic root absence"}, "org.freedesktop.resolve1.NoSource", nil
+	case "root-ds-foreign-error":
+		return []any{"foreign error"}, "io.systemd.Resolve.NoSuchResourceRecord", nil
+	case "root-ds-policy-change":
+		changed.Store(true)
+	}
+	return []any{"original empty root DS"}, "org.freedesktop.resolve1.NoSuchRR", nil
+}
+func resolvedRootDSAssert(t *testing.T, a *RouterVPNResolvedAuthority, fault, raw string, err error) {
+	t.Helper()
+	positive := fault == "root-ds-positive" || fault == "root-ds-synthetic" || fault == "root-ds-strict"
+	if !positive {
+		if err == nil {
+			t.Fatal("unproved root decision admitted", fault, raw)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := DecodeResolvedPolicy(a.policy, ResolvedPolicySHA256(a.policy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeResolvedRootDS([]byte(raw), p, "original-host.example", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := strings.TrimPrefix(fault, "root-ds-")
+	if expected == "synthetic" {
+		expected = "synthetic-unsigned"
+	}
+	if expected == "strict" {
+		expected = "no-trust-anchor"
+	}
+	if got.Outcome != expected {
+		t.Fatal("original root outcome changed", got)
+	}
+}
+func TestRouterVPNNativeLinuxResolverResolvedRootDSErrors(t *testing.T) {
+	for _, test := range []struct{ name, remote, mode, want string }{
+		{"synthetic", "org.freedesktop.resolve1.NoSuchRR", "allow-downgrade", "synthetic-unsigned"},
+		{"strict", "org.freedesktop.resolve1.NoTrustAnchor", "yes", "no-trust-anchor"},
+		{"wrong-mode", "org.freedesktop.resolve1.NoSuchRR", "yes", ""},
+		{"no-source", "org.freedesktop.resolve1.NoSource", "allow-downgrade", ""},
+		{"foreign", "io.systemd.Resolve.NoSuchResourceRecord", "allow-downgrade", ""},
+		{"timeout", "org.freedesktop.DBus.Error.Timeout", "allow-downgrade", ""},
+		{"downgrade-no-trust", "org.freedesktop.resolve1.NoTrustAnchor", "allow-downgrade", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolvedRootDSErrorOutcome(test.remote, test.mode)
+			if got != test.want || (err == nil) != (test.want != "") {
+				t.Fatal(got, err)
+			}
+		})
+	}
+}

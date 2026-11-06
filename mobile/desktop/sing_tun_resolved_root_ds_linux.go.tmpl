@@ -1,0 +1,102 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"runtime"
+)
+
+// RootDSDecision asks the retained original daemon one fixed local-only root DS
+// question. v257's unsigned empty success becomes NoSuchRR in the public D-Bus
+// method; it does not carry response flags and must remain a distinct outcome.
+// https://github.com/systemd/systemd/blob/v257/src/resolve/resolved-dns-transaction.c
+// https://github.com/systemd/systemd/blob/v257/src/resolve/resolved-bus.c
+func (a *RouterVPNResolvedAuthority) RootDSDecision(ctx context.Context, index int32, name string) (string, error) {
+	if a == nil || index < 0 || !ResolvedName(name, false) {
+		return "", errors.New("root DS decision omitted original qualified question")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r := &a.native.routervpnResolver
+	if err := LockContext(ctx, &r.mu); err != nil {
+		return "", err
+	}
+	defer r.mu.Unlock()
+	if err := a.current(ctx); err != nil {
+		return "", err
+	}
+	raw, err := a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(raw, a.policy) {
+		return "", errors.Join(errors.New("root DS original policy changed"), err)
+	}
+	policy, err := DecodeResolvedPolicy(raw, ResolvedPolicySHA256(raw))
+	if err != nil {
+		return "", err
+	}
+	routes, err := policy.ResolvedRoutes(name)
+	if err != nil {
+		return "", err
+	}
+	decision := ResolvedRootDSDecision{PolicySHA256: ResolvedPolicySHA256(raw), Name: name, Index: index}
+	found := false
+	for _, route := range routes {
+		if route.Index == index && route.CurrentDNS != nil && (route.DNSSEC == "yes" || route.DNSSEC == "allow-downgrade") {
+			decision.DNSSEC = route.DNSSEC
+			decision.Selected = *route.CurrentDNS
+			found = true
+		}
+	}
+	if !found {
+		return "", errors.New("root DS decision omitted original selected validating route")
+	}
+	if err = r.issue(ctx, r.unique, "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager.ResolveRecord", false, index, ".", uint16(1), uint16(43), ResolvedRootDSQueryFlags); err != nil {
+		return "", err
+	}
+	call, callErr := r.join(ctx)
+	if callErr != nil {
+		outcome, err := resolvedRootDSErrorOutcome(resolvedRemoteErrorName(callErr), decision.DNSSEC)
+		if err != nil {
+			return "", errors.Join(callErr, err)
+		}
+		decision.Outcome = outcome
+	} else {
+		var rows []resolvedAnchorRow
+		anchor := ResolvedAnchorResult{PolicySHA256: decision.PolicySHA256, Index: index, Name: ".", Type: 43}
+		if err = call.call.Store(&rows, &anchor.Flags); err != nil {
+			return "", err
+		}
+		if err = resolvedAnchorRecords(&anchor, rows); err != nil {
+			return "", err
+		}
+		decision.Outcome = "positive"
+		decision.Root = &anchor
+	}
+	if err = r.clear(call); err != nil {
+		return "", err
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	raw, err = a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(raw, a.policy) {
+		return "", errors.Join(errors.New("root DS policy changed during local-only observation"), err)
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	encoded, err := decision.Canonical()
+	return string(encoded), err
+}
+func resolvedRootDSErrorOutcome(remote, mode string) (string, error) {
+	switch {
+	case remote == "org.freedesktop.resolve1.NoSuchRR" && mode == "allow-downgrade":
+		return "synthetic-unsigned", nil
+	case remote == "org.freedesktop.resolve1.NoTrustAnchor" && mode == "yes":
+		return "no-trust-anchor", nil
+	default:
+		return "", errors.New("root DS original error does not prove mode-specific trust decision")
+	}
+}

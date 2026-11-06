@@ -729,3 +729,20 @@ AUXILIARY['resolved-downgrade']=('./cmd/client',{
  'cancelled','transport-error','changed-answer','original-alias','fallback-alias',
  'reset-do','cancelled-before')})
 AUXILIARY_TESTS['cmd/client/linux_standard_service_resolved_downgrade_linux_test.go']='resolved-downgrade'
+
+# Exact root DS decisions keep original synthetic absence separate from NoSource.
+SOURCE.update({'internal/standardengine/resolved_root_ds.go',
+ 'internal/standardengine/resolved_root_ds_command.go',
+ 'internal/standardengine/resolved_root_ds_test.go',
+ 'cmd/client/linux_standard_service_resolved_root_ds_linux.go',
+ 'cmd/client/linux_standard_service_resolved_root_ds_linux_test.go',
+ 'mobile/desktop/sing_tun_resolved_root_ds_linux.go.tmpl',
+ 'mobile/desktop/sing_tun_resolved_root_ds_linux_test.go.tmpl'})
+AUXILIARY['resolved-root-ds']=('./internal/standardengine',{
+ 'TestResolvedRootDSOriginalDecision':('synthetic-unsigned','positive','strict-missing'),
+ 'TestResolvedRootDSRejectsChangedAuthority':('mode','name','scope','selected','policy',
+ 'no-source','foreign-error','synthetic-with-anchor','positive-without-anchor',
+ 'strict-empty-in-downgrade','positive-wrong-origin')})
+AUXILIARY['resolved-root-ds-owner']=('./cmd/client',{'TestResolvedRootDSCancelledAdmission':()})
+AUXILIARY_TESTS.update({'internal/standardengine/resolved_root_ds_test.go':'resolved-root-ds',
+ 'cmd/client/linux_standard_service_resolved_root_ds_linux_test.go':'resolved-root-ds-owner'})

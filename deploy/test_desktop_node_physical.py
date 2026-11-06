@@ -166,12 +166,13 @@ NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("Replaceme
 NATIVE_RESOLVER_TESTS = tuple("TestRouterVPNNativeLinuxResolver" + name for name in (
     "DaemonCapability", "CredentialRefusals", "MutationNeedsOriginalReply", "LateReplyRetry",
     "RejectsReplacedCapability", "OriginalWireSerial", "RetireRequiresBound", "StartupBound",
-    "OriginalUnixConnection", "ObservedBusAbsence", "DefinitelyUnsentRetires", "ClosesDecodedFDArrays", "NamedBusNamespace", "ResolvedAuthorityOriginalBroker", "ResolvedAuthorityPropertyCodec", "ResolvedAuthoritySignalIdentity", "ResolvedAnchorWireCodec", "ResolvedServerMonitor", "ResolvedServerPIDMapping"))
+    "OriginalUnixConnection", "ObservedBusAbsence", "DefinitelyUnsentRetires", "ClosesDecodedFDArrays", "NamedBusNamespace", "ResolvedAuthorityOriginalBroker", "ResolvedAuthorityPropertyCodec", "ResolvedAuthoritySignalIdentity", "ResolvedAnchorWireCodec", "ResolvedServerMonitor", "ResolvedServerPIDMapping", "ResolvedRootDSErrors"))
 NATIVE_RESOLVER_LEAVES = {
+    "ResolvedRootDSErrors": ("synthetic", "strict", "wrong-mode", "no-source", "foreign", "timeout", "downgrade-no-trust"),
     "ResolvedServerPIDMapping": ("native-original", "same", "nested", "wrong-proc", "missing", "duplicate", "zero", "overflow"),
     "ResolvedServerMonitor": ("original", "foreign-pid", "foreign-uid", "renamed-socket", "cancelled", "incomplete", "extra-frame", "oversized"),
     "ResolvedAnchorWireCodec": ("anchor-ds", "anchor-dnskey", "anchor-ad-only", "anchor-network", "anchor-cache", "anchor-name", "anchor-index", "anchor-type", "anchor-revoked"),
-    "ResolvedAuthorityOriginalBroker": ("local-hosts", "local-synthetic", "no-local-source", "remote-error", "network-origin", "cache-origin", "unauthenticated", "policy-port", "physical-owner", "daemon-signal", "foreign-signal", "anchor-ds", "anchor-dnskey", "anchor-absent", "anchor-ad-only", "anchor-network", "anchor-cache", "anchor-name", "anchor-index", "anchor-type", "anchor-revoked", "anchor-policy-change", "anchor-error"),
+    "ResolvedAuthorityOriginalBroker": ("local-hosts", "local-synthetic", "no-local-source", "remote-error", "network-origin", "cache-origin", "unauthenticated", "policy-port", "physical-owner", "daemon-signal", "foreign-signal", "anchor-ds", "anchor-dnskey", "anchor-absent", "anchor-ad-only", "anchor-network", "anchor-cache", "anchor-name", "anchor-index", "anchor-type", "anchor-revoked", "anchor-policy-change", "anchor-error", "root-ds-positive", "root-ds-synthetic", "root-ds-strict", "root-ds-wrong-mode", "root-ds-no-source", "root-ds-foreign-error", "root-ds-downgrade-no-trust", "root-ds-policy-change"),
     "NamedBusNamespace": ("original-authenticated", "replaced-endpoint", "untrusted-ancestor", "cancelled-original-child", "resolved-authority", "resolved-authority-namespace", "resolved-authority-daemon-namespace"),
     "CredentialRefusals": ("missing-processfd", "invalid-processfd", "foreign-namespace", "unreceived-file"),
     "MutationNeedsOriginalReply": ("bus-no-reply", "foreign-owner", "wrong-serial", "transport-only"),
