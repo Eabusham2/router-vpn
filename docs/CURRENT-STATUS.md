@@ -1,12 +1,54 @@
 # Current implementation status
 
-Updated November 5, 2026 UTC. This file distinguishes published source,
+Updated November 6, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 5 workspace interruption and unfinished source
+## November 6 published continuation through `1691c303`
+
+The recovered live baseline was `b04eccee`, already 1,294 commits ahead of the
+older `745b3e41` release. Fifteen coherent changes are now published on `main`
+through `1691c303e718a3cb556fb29c54ba11d6f2f5ea9a`. Each remote tree was compared
+with its tested local tree before adopting the remote commit. The
+[November 6 evidence ledger](CONTINUATION-EVIDENCE-2026-11-06.md) records the
+original-source reconciliation, changes, executable evidence and open boundaries.
+
+* **Mobile nested packet paths:** imported WireGuard/AmneziaWG entries now reach
+  paired WireGuard/AmneziaWG Fast/Strong finals inside the existing single native
+  VPN owner. The matrix preserves 136 cases and adds 54, for 190. Shared plus
+  actual Java exports pass 382 exact pinned-native verdicts; actual Swift exports
+  pass 191. The encrypted peer suite passes 75 leaf cases and six parent results.
+  Nested envelope accounting retains the requested configuration and distinguishes
+  the effective configured cap from measured path MTU. Retired AWG reads cannot
+  publish packets into a replacement session.
+* **Windows composed external paths:** the public retained host now admits Local
+  SS2022 entry to SS2022/HTTP/HTTPS final with both Start Layers Off. Separate
+  source identities, proofs, DNS, protection ownership and full restoration reach
+  the shipping path. Native CI requires 39 cases and two causal mutations. Both
+  AMD64/ARM64 WFP test binaries compile; all 39 runner tests, actual child-process
+  drain checks and the mandatory packaging-order test pass locally. Actual
+  Windows WFP runtime acceptance is still pending.
+* **Linux resolver policy:** published typed frames preserve the original daemon,
+  namespace, manager/per-link DNS routing, ports, TLS names, selected server and
+  policy digest. Race tests pass. This foundation alone does not admit an upstream
+  query; original-daemon capture, bootstrap grants and execution remain active
+  integration work at this cutoff.
+* **Current delivery:** repaired native fixtures preserve their rejection cases;
+  the authoritative Windows scope inventory now requires the new entry tests.
+  Current exact-SHA native builds and publication have not yet converged. The old
+  release is not evidence for these newer source changes. Physical networking,
+  off-LAN behavior, signing, visual acceptance and private deployment remain
+  separately unproved.
+
+The November 5 observations below are preserved as historical checkpoints.
+Their 136-case limit, unavailable local Swift tooling, nested-packet refusal and
+missing Windows SS entry statements are superseded by the November 6 evidence
+above. Unrecovered draft bytes were not restored over newer source: the remaining
+shared/Android/Windows work was implemented and tested against current `main`.
+
+## Historical November 5 workspace interruption and unfinished source
 
 The execution workspace became unavailable while three source units were still
 uncommitted. Their exact paths, available hashes, completed checks and unfinished
@@ -25,7 +67,7 @@ Six frozen Apple files have exact hash-verified recovery operations; the shared
 nested engine, Android and Windows drafts still lack complete recoverable bytes
 and final native acceptance. Preserve both workspaces' pending source.
 
-## Mobile imported entry → paired Router final
+## Historical November 5 mobile imported entry → paired Router final
 
 Android and Apple source supports ordinary imported Shadowsocks 2022, Hysteria2,
 WireGuard and AmneziaWG entries followed by an independently paired Router final.
