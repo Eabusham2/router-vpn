@@ -78,7 +78,21 @@ func (b *peerBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
 		if len(packets) != 1 || len(sizes) < 1 || len(endpoints) < 1 {
 			return 0, errors.New("invalid AWG receive batch")
 		}
+		current := func() bool {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			return b.generation == generation && b.conn == c && ctx.Err() == nil
+		}
+		if !current() {
+			return 0, net.ErrClosed
+		}
 		n, err := c.Read(packets[0])
+		// Native userspace UDP returns its own closed-endpoint error. Retired
+		// binds must report net.ErrClosed to stop the AWG receive worker, and
+		// must never publish a late successful packet into a successor.
+		if !current() {
+			return 0, net.ErrClosed
+		}
 		if err != nil {
 			return 0, err
 		}
