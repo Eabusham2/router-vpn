@@ -8,7 +8,7 @@ original requirements. The live starting branch was
 1,294 commits ahead of the older published `745b3e41` release. Old patches were
 not replayed over that history. The published units below retain normal
 `main` ancestry through
-[`505531025a7852606c506ccf0ab7956912994b77`](https://github.com/Eabusham2/router-vpn/commit/505531025a7852606c506ccf0ab7956912994b77).
+[`fdc0d78639e19a905c4b44e526ddbf5328ebeffd`](https://github.com/Eabusham2/router-vpn/commit/fdc0d78639e19a905c4b44e526ddbf5328ebeffd).
 Each remote tree was compared with the locally tested committed tree, and the
 remote branch was read back before adoption. A saved patch, local commit or API
 schema was not counted as a successful push.
@@ -40,10 +40,10 @@ overlapping lists are not added into a completion denominator.
 
 | Requirement / correction | Platforms and shipping paths | Executable evidence | Remaining boundary |
 |---|---|---|---|
-| Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 195 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers | Other imported/final families, Server/Compare for this direction, complete native device/network acceptance |
+| Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 205 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers | Other imported/final families, Server/Compare for this direction, complete native device/network acceptance |
 | Original #229–240, Auto/Fixed/Retest/Cancel and later packet-envelope limits | `internal/awgpolicy/packet_*`, `internal/mobilemtu`, mobile compiler/metadata | Race tests; complete data/control/cookie/junk/Start Layer bounds; Fixed overflow rejection; full-size decrypted IPv4/IPv6 peer observations | Effective configured cap is explicitly unmeasured; physical PMTU, transitions and Jumbo acceptance remain separate |
 | Original #200–224/#337, exact captured ownership and full temporary-test restoration | Windows retained desktop host, `desktop_external_owned_sources.go`, independent entry/final captures | Shared/client race tests, two architecture test-binary builds, 53 mandatory native leaves and two causal mutations | Hosted WFP runtime and physical acceptance remain separate; the exact Speed Lab/Always-to-Off fixture failures below now have published corrections |
-| Selected DNS/Home AdGuard, LAN/IPv6 and original resolver authority | `internal/standardengine/resolved_*`, retained native resolver helper, finite kernel grants and parallel equal-best scope caller | Canonical bounded frames, original-daemon local-only preflight, exact upstream port/TLS/link transport and active trust-anchor codec/race tests | Installed privileged composition and kernel execution remain unaccepted; the captured DNSSEC child/caller is published, but cross-domain alias caller completion and authenticated allow-downgrade fallback remain unfinished; installed native acceptance is still required |
+| Selected DNS/Home AdGuard, LAN/IPv6 and original resolver authority | `internal/standardengine/resolved_*`, retained native resolver helper, finite kernel grants and parallel equal-best scope caller | Canonical bounded frames, original-daemon local-only preflight, exact upstream port/TLS/link transport and active trust-anchor codec/race tests | Installed privileged composition and kernel execution remain unaccepted; captured DNSSEC child/cohort, cross-domain alias caller, bounded authenticated compatibility fallback and typed root collector are published; remaining semantic branches and installed native acceptance are still required |
 | Later independent Off/AES-256-GCM/AES-256-GCM+XOR Start Layers | Mobile original sources and retained desktop SS-entry graphs | Independent entry/final layer matrix and actual encrypted positive/negative cases; SS and HY2 desktop finals now have nine-mode native inventories | Broader graph/platform coverage and actual Windows WFP/macOS PF/Linux TUN acceptance remain required |
 | Complete connection profiles; credential references; stale/cancelled operations cannot mutate a replacement | Typed Android/Apple captures; native retirement; Windows retained source owners | Actual saved-selection/startup fixtures, native retired-read race controls, exact restore-source checks | Full physical permission/reconnect/leak/off-LAN acceptance remains open |
 | Original #335 | Optional Favorites, required latency and last-used ordering | Identifier reconciliation only in this increment | This number is not an MTU/Speed Lab identifier; prior mistaken citations are corrected without deleting measurement scope |
@@ -146,7 +146,7 @@ published commits from `ae8ecead` through `4d0e76de`; no history was overwritten
 | `76d850cc`, `039a372a` | Added authenticated sealed-child DNSSEC execution and bounded retirement, plus real unsigned-delegation and captured-negative-anchor controls. | A validator's authenticated result must still be bound to the selected captured resolver policy. |
 | [`95ffbb72`](https://github.com/Eabusham2/router-vpn/commit/95ffbb729460bea9826c076c93f8b1880b6eab4a) | Extended the imported SOCKS5 path to paired WG and AWG Fast/Strong, both layers Off. Preserved 190 plus five graphs: actual Java/Swift 195 exports, shared 309 race verdicts and native 149 required verdicts. Java/native combined parsing had 392 verdicts; Swift/native had 196. | Independent SOCKS authentication, UDP association, encrypted packet peers, DNS, MTU and retirement are exercised; device/network acceptance remains separate. |
 | `88c84a27`, `c626af1f` | Bound DNSSEC callback queries to the original protected resolver cohort and wired the sealed validator child into the startup caller with captured original policy/trust inputs. | Full alias traversal and DNSSEC allow-downgrade handling are not closed by this increment. |
-| `90a7d70f`, `693cc705` | Added original DNS alias proof in the sealed validator child and a separate protected CNAME proof owner. Actual C crypto alias cases passed; exact-source library pins were updated coherently. | The parent caller that follows targets with newly selected scope/NTA/anchor plans is still an unpublished working-tree draft at this cutoff. |
+| `90a7d70f`, `693cc705` | Added original DNS alias proof in the sealed validator child and a separate protected CNAME proof owner. Actual C crypto alias cases passed; exact-source library pins were updated coherently. | This prerequisite did not yet deliver the parent alias caller; that bounded caller is subsequently published in `5ea5f09b` below. |
 | `ae8ecead`, `0f194d9f` | Extended Apple selection coverage to supported SOCKS entries and kept Setup Center guidance usable when browser storage is unavailable. | These preserved upstream source changes do not establish full device/UI acceptance. |
 | `6d2d3ec6`, `8091ff7a` | Added owned cancellable Android hop measurements and atomic replacement of admin bans/server Stop guards. | Live Android and router/server acceptance remain separate. |
 | `cb455004`, `4b8c007a`, `4d0e76de` | Joined owned Windows fixture descendants, retained standalone throughput/MTU suspension ownership and observed replacement history explicitly in multihop cleanup regressions. | These upstream commits were preserved during publication; no blanket runtime pass is inferred from ancestry. |
@@ -161,15 +161,47 @@ passed in 1.387s, and all eight actual PID-mapping cases passed in 1.013s.
 The eight Unix monitor cases encounter local EPERM and remain mandatory in CI;
 no actual monitor-socket acceptance is claimed locally. Publication preserved
 the additional upstream macOS Performance change `a09d5482`.
-The observer source is published; the allow-downgrade fallback consumer remains
-unwired, and the root alias caller remains an unpublished working-tree draft.
+At that monitor-only checkpoint, the fallback consumer and alias caller were
+not yet wired. Their subsequent bounded shipping integration is recorded below.
 
-The mobile 195-graph gate supersedes the earlier 190/192 counts; these are
+The mobile 205-graph gate below supersedes the earlier 190/192/195/199 counts; these are
 successive matrices, not additive completion totals. Desktop independent SS/HY
 layers now have production admission plus independent provider and mandatory
 native inventories. They are no longer listed as unimplemented source paths.
 Neither expansion closes all imported protocols, every layer combination, or
 Server/Compare behavior across the original platform scope.
+
+## Published alias, compatibility, root-trust and mobile-layer increments
+
+| Published commit | Bounded delivery and observed evidence | Remaining boundary |
+|---|---|---|
+| [`4e905017`](https://github.com/Eabusham2/router-vpn/commit/4e905017b1e55c092a82d9899ac5a432c787a520) | Published this evidence ledger through the original-daemon server-state observer, preserving historical scope and native acceptance limits. | Documentation is not independent runtime proof. |
+| [`5ea5f09b`](https://github.com/Eabusham2/router-vpn/commit/5ea5f09bd0aa6bc18d571cdcae821992ed2a5e4d) | Follows DNS aliases through separately selected original scopes and independently captured trust/NTA plans. Every physical cohort joins before the next; final adoption rechecks retained digest checkpoints rather than retaining all prior full anchor plans. | Bounded source delivery does not prove every DNSSEC semantic branch or installed kernel composition. |
+| [`5397f23e`](https://github.com/Eabusham2/router-vpn/commit/5397f23e101762672bcee057b55d9c585206ca13) | Added the guarded compatibility prerequisite with 21 focused leaves. A validator/IPC/retirement failure is not an incompatibility observation; strict policy and merely transient failure counters cannot authorize fallback. | This commit alone was unwired; actual caller activation follows in `f8cd9790`. |
+| [`7e2a55fa`](https://github.com/Eabusham2/router-vpn/commit/7e2a55fa0b55620210d4e575ef6a89f187fd0f86) | Captures a typed original root DS decision without inventing a NoSource miss: exact positive, mode-specific synthetic unsigned, or strict no-trust outcome. Isolated model/client races passed in 1.017s/1.025s. Mandatory native inventory adds seven error leaves and eight original-broker cases; two focused runner tests passed. | Full original D-Bus broker and privileged installed acceptance remain required. |
+| [`ad4da5e7`](https://github.com/Eabusham2/router-vpn/commit/ad4da5e75ec73ce9bea2bf9fe3ead5f7cd771750) | Enables provisioned paired SS/HY final layers behind ordinary SOCKS entries: 199 shared/Java/Swift graphs. Android: 16 phases, 14,691 checks and five causal controls; combined shared/Java pinned parsing: 400 verdicts. Actual Swift/pinned parsing: 200 verdicts. Encrypted native gate: 198 exact verdicts, including 44 new SS/HY layer leaves. | SOCKS entry layer remains Off; Server/Compare and real-device acceptance remain open. |
+| [`f8cd9790`](https://github.com/Eabusham2/router-vpn/commit/f8cd97905eee39dbcb9a7e31e5209bb3513e7d12) | Activates authenticated compatibility in the shipping DNSSEC caller only after successful natural child retirement, State 3, captured allow-downgrade and exact sticky PacketDoOff. A bounded 257-scope ledger rechecks immutable original server-state digests after all children/group join and again at alias adoption. Type 5 uses a separate protected purpose and never grants AD. Exact seven-file audit: 99 focused race verdicts in 1.113s, including 15 strict shipping and 22 prerequisite records; budget tests passed in 1.015s and two inventory checks in 0.099s. | Installed original-monitor/kernel execution remains mandatory. BadOpt/RRSIGMissing/transient transport history alone still does not grant fallback; remaining semantic branches are unfinished scope. |
+| [`dbb0a4ca`](https://github.com/Eabusham2/router-vpn/commit/dbb0a4ca2bde5ad4a7951a01f5b849f558d32229) | Enables provisioned WG/AWG final layers behind ordinary mobile SOCKS entries: 205 shared/Java/Swift graphs. Android: 16 phases, 15,121 checks and five causal controls; shared/Java pinned parsing: 412 verdicts. Swift/pinned parsing: 206 verdicts. Encrypted native acceptance: 292 exact verdicts, preserving the original 198 plus 94 in a separate bounded process; new packet-layer suite includes 85 leaves and passed under race in 47.697s. Eleven portable controls passed. | All five paired final variants support Off, AES-256-GCM, and AES-256-GCM + XOR whitening; SOCKS entry layers remain unimplemented here. Full-MTU DNS/no-fragment peer observations are not a measured physical MTU or a device VPN permission grant. |
+| [`fdc0d786`](https://github.com/Eabusham2/router-vpn/commit/fdc0d78639e19a905c4b44e526ddbf5328ebeffd) | Wires typed root decisions directly into the trust collector and complete canonical rechecks. Explicit original synthetic unsigned root can export zero trust anchors only when every positive observation is absent; closer DS/DNSKEY trust islands remain retained. Strict missing-root authority is not silently downgraded. Isolated model/client integration races passed in 1.148s/2.129s; two inventory checks passed in 0.040s. Eighteen actual authenticated child cases cover the root/island paths, including secure, forged and missing-signature controls; premature clean exit is rejected before adoption. | This closes the bounded root-collector source gap, not every resolver semantic branch or native service/kernel acceptance. |
+
+Concurrent upstream history was preserved, including
+[`b1a6353f`](https://github.com/Eabusham2/router-vpn/commit/b1a6353fb0a450e4bc286768f2c62413e5305331)
+(product/evidence reconciliation),
+[`d19f25dc`](https://github.com/Eabusham2/router-vpn/commit/d19f25dc00779e7e5dc2d7e924cc32b3034d8a57)
+(Android captured padding rates),
+[`5b32bcf5`](https://github.com/Eabusham2/router-vpn/commit/5b32bcf581eaff30fb8bc5b530cce1c723ba6ab0)
+(Apple Home AdGuard transports),
+[`bd5d869f`](https://github.com/Eabusham2/router-vpn/commit/bd5d869ff7493e6d418add8fc988c34b307cb788)
+(explicit legacy integer-port regression),
+[`7e6b7a16`](https://github.com/Eabusham2/router-vpn/commit/7e6b7a1644f9319578e1b46efbabab60615488ac)
+(saved padding defaults),
+[`a5000cc3`](https://github.com/Eabusham2/router-vpn/commit/a5000cc3636eea8b2a6e77bafd3477ca2ec84e6e)
+(Apple schema-seven Start Layer contract),
+[`3341e6c2`](https://github.com/Eabusham2/router-vpn/commit/3341e6c28434aacef08ddcbb8dfb1ab8aacc7333)
+(exact Tor cleanup publication observation), and
+[`06615f64`](https://github.com/Eabusham2/router-vpn/commit/06615f64672cc8165357b42ea7f275c071edeee0)
+(node-owned Home DNS in the SIP003 fixture). Recording their exact ancestry and
+commit subjects does not claim an independent audit of all their behavior.
 
 ## CI and release state at this checkpoint
 
@@ -249,6 +281,16 @@ run at this observation. The new `b1a6353f` authoritative
 [run 42164895972](https://github.com/Eabusham2/router-vpn/actions/runs/42164895972)
 was pending, attempt 1. These states do not establish a completed new release.
 
+**Latest exact-head Actions observation:** at **2026-11-06 05:39:13 UTC**,
+remote main was `fdc0d78639e19a905c4b44e526ddbf5328ebeffd`. Its all-events Actions
+query returned **32 runs: three successful, 17 queued, ten pending and two
+running**, with no failed runs in that snapshot. Authoritative
+[Build all Router VPN release gates, run 42169516542](https://github.com/Eabusham2/router-vpn/actions/runs/42169516542)
+was **push, attempt 1, pending**. No failing job logs were available from this
+exact-source snapshot. Earlier cancelled gates remain cancelled, not green;
+neither the pending authoritative run nor these local tests establish a new
+complete release. No workflow was cancelled or rerun for this observation.
+
 Current native builds, package/image identity, production compose and final
 publication still need exact-SHA verification. The older `745b3e41` release
 cannot close newer source. The earlier isolated root-package
@@ -262,13 +304,14 @@ not a full runtime test pass.
    parallel equal-best scope caller and joined group retirement are published.
    Privileged original-kernel/expiry/ACK-recovery and installed service acceptance
    remain open. Opportunistic transport and its shipping startup adapter are
-   published. Captured DNSSEC child/cohort integration is published too. The
-   cross-domain alias caller and authenticated allow-downgrade fallback remain
-   unpublished/unfinished, with semantic tests in progress. The original-daemon
-   negotiated-server-state observer, fixed-helper protocol and projection are
-   published in `50553102`; its fallback consumer remains unwired. Actual Unix
-   monitor and installed native acceptance remain pending. A configured mode or
-   unauthenticated snapshot is not negotiated-state proof.
+   published. Captured DNSSEC child/cohort integration, cross-domain alias
+   traversal, authenticated sticky-DO compatibility continuation, and the typed
+   root-trust collector are now published bounded paths. Remaining DNSSEC
+   semantic branches still require implementation/evidence; transient monitor
+   fields or generic bogus/transport results are not fallback authority. Actual
+   Unix monitor, original D-Bus broker and installed native acceptance remain
+   pending. A configured mode or unauthenticated snapshot is not negotiated-state
+   proof.
 2. Execute macOS/Linux SS-entry to Hysteria2-final mandatory native encrypted,
    policy, cancellation and restoration acceptance. Host admission is now published
    in `a2e4f201`; source/provider success does not establish PF/TUN acceptance.
@@ -278,7 +321,9 @@ not a full runtime test pass.
 4. Continue the complete protocol/graph/platform ledger, including presently
    unsupported imported families, broader Start Layer compositions and applicable
    Server/Compare execution. Mobile SOCKS5 to paired SS/HY/WG/AWG Local paths and retained desktop SS-entry
-   independent layers to SS/HY2 are now published as bounded increments. Wider
+   independent layers to SS/HY2 are now published as bounded increments. All five
+   paired mobile finals support Off, AES-256-GCM, and AES-256-GCM + XOR whitening behind ordinary SOCKS; SOCKS entry
+   layers and Server/Compare remain open for this direction. Wider
    graph/mode coverage must still be implemented and verified. Safe refusal is
    unfinished scope, not delivery.
 5. Perform real-device permission, selected-path DNS/leak, reconnect, network
