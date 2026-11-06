@@ -20,6 +20,33 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+class OpenVPNConnectedCapacityVerdicts(unittest.TestCase):
+    def output(self, names):
+        return "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
+
+    def test_all_original_peers_and_original_runtime_bound(self):
+        baseline = Mock()
+        output = self.output(NODE.OPENVPN_CAPACITY_VERDICTS)
+        baseline.execute.return_value = (0, output)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(NODE.execute_baseline_suite(baseline, NODE.OPENVPN_CAPACITY_SUITE), output)
+        baseline.execute.assert_called_once_with(*NODE.OPENVPN_CAPACITY_SUITE[:3], 60)
+
+    def test_no_missing_duplicate_skipped_or_failed_peer_can_pass(self):
+        names = NODE.OPENVPN_CAPACITY_VERDICTS
+        outputs = ["testing: warning: no tests to run\nPASS\n", self.output(names + (names[0],))]
+        outputs.extend(self.output(tuple(name for name in names if name != missing)) for missing in names)
+        outputs.extend(self.output(names) + extra for extra in ("--- SKIP: peer (0s)\n", "DATA RACE\n", "panic: test timed out\n"))
+        for output in outputs:
+            with self.subTest(output=output), contextlib.redirect_stdout(io.StringIO()):
+                baseline = Mock(); baseline.execute.return_value = (0, output)
+                with self.assertRaises(ValueError):
+                    NODE.execute_baseline_suite(baseline, NODE.OPENVPN_CAPACITY_SUITE)
+        baseline = Mock(); baseline.execute.return_value = (124, self.output(names))
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+            NODE.execute_baseline_suite(baseline, NODE.OPENVPN_CAPACITY_SUITE)
+
+
 class ExactPerformanceMutationBoundary(unittest.TestCase):
     def test_actual_legacy_methods_do_not_mutate_contextual_siblings(self):
         cases = (

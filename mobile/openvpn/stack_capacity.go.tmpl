@@ -1,0 +1,30 @@
+//go:build with_gvisor
+
+package openvpn
+
+import (
+	"context"
+	"errors"
+	SOVPN "github.com/sagernet/sing-openvpn"
+)
+
+// RouterVPNPortMTUContext observes the same live value as PortMTU. Lock
+// acquisition belongs to the caller; no detached worker survives cancellation.
+func (d *stackDevice) RouterVPNPortMTUContext(ctx context.Context) (uint32, error) {
+	if ctx == nil {
+		return 0, errors.New("OpenVPN capacity observation has no caller")
+	}
+	if err := SOVPN.RouterVPNRLockContext(ctx, &d.stateAccess); err != nil {
+		return 0, err
+	}
+	defer d.stateAccess.RUnlock()
+	select {
+	case <-d.endpoint.done:
+		return 0, errors.New("OpenVPN packet device is closed")
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return d.options.MTU, nil
+}

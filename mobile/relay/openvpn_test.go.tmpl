@@ -531,6 +531,9 @@ func TestRouterVPNRelayNativeQueuedOldTLSCallbackCannotProveNewTransport(t *test
 	if _, err := endpoint.RouterVPNConnectedRemote(); err == nil {
 		t.Fatal("queued old TLS callback marked replacement transport configured")
 	}
+	if _, _, err := endpoint.RouterVPNConnectedCapacityContext(ctx); err == nil {
+		t.Fatal("unconfigured replacement acquired imported entry capacity")
+	}
 	if _, err := remoteNativeQuery(t, directory, capture, 80*time.Millisecond); err == nil {
 		t.Fatal("native relay published stale queued callback receipt")
 	}
@@ -551,7 +554,7 @@ func TestRouterVPNRelayNativeQueuedOldTLSCallbackCannotProveNewTransport(t *test
 	// API. Holding the original endpoint mutex must expire this read alone.
 	releaseStatus := endpoint.RouterVPNTestHoldStatus()
 	observeCtx, cancelObserve := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	_, observeErr := endpoint.RouterVPNConnectedRemoteContext(observeCtx)
+	_, _, observeErr := endpoint.RouterVPNConnectedCapacityContext(observeCtx)
 	cancelObserve()
 	releaseStatus()
 	if !errors.Is(observeErr, context.DeadlineExceeded) {
@@ -563,6 +566,11 @@ func TestRouterVPNRelayNativeQueuedOldTLSCallbackCannotProveNewTransport(t *test
 	if observeErr != nil || bounded != receipt.Remote {
 		t.Fatal("read expiry changed the actual retained TLS remote generation", bounded, receipt.Remote, observeErr)
 	}
+	capacityReceipt, capacity, err := endpoint.RouterVPNConnectedCapacityContext(ctx)
+	if err != nil || capacityReceipt != receipt.Remote || capacity != endpoint.PortMTU() || capacity < 1280 {
+		t.Fatal("actual authenticated endpoint lost its live packet capacity", capacityReceipt, capacity, err)
+	}
+
 }
 
 // The auxiliary test provider uses the upstream server endpoint, whose closed

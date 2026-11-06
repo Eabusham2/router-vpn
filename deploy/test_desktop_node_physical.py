@@ -29,6 +29,12 @@ BOOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOT)
 PREP = BOOT.PREP
 TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq", "routervpn_windows_physical_composition"))
+OPENVPN_CAPACITY_PARENT = "TestRouterVPNOpenVPNConnectedCapacityUserspace"
+OPENVPN_CAPACITY_VERDICTS = (OPENVPN_CAPACITY_PARENT,) + tuple(
+    OPENVPN_CAPACITY_PARENT + "/" + network + "/" + outcome
+    for network in ("tcp", "udp") for outcome in ("success", "wrong-password"))
+OPENVPN_CAPACITY_SUITE = ("openvpn-connected-capacity", "./protocol/routervpnamnezia",
+                          "^" + OPENVPN_CAPACITY_PARENT + "$", OPENVPN_CAPACITY_VERDICTS)
 MTU_CONTEXT_VERDICTS = {
     "mtu-operation-context": [
         "TestContextOperationAdmissionAndStatusDoNotLeaveWaiters",
@@ -1018,10 +1024,14 @@ def execute_baseline_suite(baselines, suite):
     # Windows before the required pre-ready cases began. Keep those aggregate
     # bounds and every per-operation bound; each disjoint HY2 phase keeps 90 s.
     duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained") else 90
+    if name == OPENVPN_CAPACITY_SUITE[0]:
+        duration = 60
     status, output = baselines.execute(name, package, selector, duration)
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
         raise ValueError("Node " + name + " omitted a required native boundary")
+    if name == OPENVPN_CAPACITY_SUITE[0]:
+        require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
     if name == "native-lifecycle-admission":
         require_native_verdicts(output, NATIVE_LIFECYCLE_ADMISSION_VERDICTS, "native lifecycle admission")
     if name == 'native-retirement-bound':
@@ -1243,6 +1253,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(("native-startup-codec", "./experimental/libbox/routervpn/mobilemultihop", "^TestDesktopStartupAdmissionKeepsOriginalDeadline$", ("TestDesktopStartupAdmissionKeepsOriginalDeadline",)))
         suites.append(("tor-registration-policy", "./routervpn/desktoppt", "^TestRouterVPNLinuxPhysicalPolicyRegistrationContext$", ("TestRouterVPNLinuxPhysicalPolicyRegistrationContext",)))
         suites.append(("tor-registration-box", ".", "^TestRouterVPNDesktopTorPhysicalRegistrationContext$", ("TestRouterVPNDesktopTorPhysicalRegistrationContext",)))
+        if not bootstrap_only:
+            suites.append(OPENVPN_CAPACITY_SUITE)
         suites.append(LINUX_LAYERED_ENTRY_SUITE)
         suites.append(LINUX_SS_ENTRY_SUITE)
         suites.append(SS_ENTRY_REFERENCE_SUITE)
@@ -1290,7 +1302,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             xray_binary, xray_digest, xray_source, xray_records = build_xray_reference(compiler, source, workspace, captured, race)
         with stage("prepare pinned Naive library"):
             naive_library = stage_naive_library(compiler, source, workspace, captured)
-        build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
+        tags = TAGS + (("routervpn_openvpn_remote_test",) if platform.system() == "Linux" and not bootstrap_only else ())
+        build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(tags), *race, "-ldflags=-checklinkname=0"]
         suffix = ".exe" if windows else ""
         baselines = BaselineBinaries(source, workspace, build, captured, before)
         for name, package, selector, required in suites:

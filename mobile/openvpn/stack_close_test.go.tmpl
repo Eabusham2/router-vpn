@@ -113,3 +113,44 @@ func TestRouterVPNOpenVPNStackCloseDrainsDeliveryBeforeStackLock(t *testing.T) {
 		t.Fatal("closed native link delivered another packet")
 	}
 }
+
+func TestRouterVPNOpenVPNStackLiveCapacityObservation(t *testing.T) {
+	device, err := newStackDevice(DeviceOptions{Context: context.Background(), MTU: 1500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer device.Close()
+	for _, mtu := range []uint32{1500, 1600, 1400} {
+		if err := device.UpdateConfiguration(Configuration{MTU: mtu}); err != nil {
+			t.Fatal(err)
+		}
+		actual, err := device.RouterVPNPortMTUContext(context.Background())
+		if err != nil || actual != mtu || actual != device.PortMTU() {
+			t.Fatal("bounded capacity differs from actual packet port", actual, err)
+		}
+	}
+	device.stateAccess.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	entered, done := make(chan struct{}), make(chan error, 1)
+	go func() { close(entered); _, err := device.RouterVPNPortMTUContext(ctx); done <- err }()
+	<-entered
+	cancel()
+	// The writer remains held until the actual reader has returned cancellation.
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			device.stateAccess.Unlock()
+			t.Fatal("wrong cancelled reader", err)
+		}
+	case <-time.After(time.Second):
+		device.stateAccess.Unlock()
+		t.Fatal("capacity read escaped caller-owned cancellation")
+	}
+	device.stateAccess.Unlock()
+	if err := device.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := device.RouterVPNPortMTUContext(context.Background()); err == nil {
+		t.Fatal("closed packet device retained capacity authority")
+	}
+}

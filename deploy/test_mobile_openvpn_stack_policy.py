@@ -26,17 +26,32 @@ class Tests(unittest.TestCase):
             POLICY.patch(original)
 
     def test_linked_fixture_rejected_before_mutation(self):
+        for name in ('routervpn_stack_close_test.go', 'routervpn_stack_capacity.go'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root/'transport/openvpn/device_stack.go'; source.parent.mkdir(parents=True)
+                source.write_text('untouched source')
+                unrelated = root/'unrelated'; unrelated.write_text('untouched unrelated')
+                source.with_name(name).symlink_to(unrelated)
+                with mock.patch.object(POLICY.subprocess, 'check_output', return_value=POLICY.PIN+'\n'):
+                    with self.assertRaises(ValueError):
+                        POLICY.prepare(root)
+                self.assertEqual(source.read_text(), 'untouched source')
+                self.assertEqual(unrelated.read_text(), 'untouched unrelated')
+
+    def test_exact_capacity_source_is_prepared_and_owned(self):
+        original = 'func Close() {\n'+POLICY.OLD+'\n}\n'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root/'transport/openvpn/device_stack.go'; source.parent.mkdir(parents=True)
-            source.write_text('untouched source')
-            unrelated = root/'unrelated'; unrelated.write_text('untouched unrelated')
-            source.with_name('routervpn_stack_close_test.go').symlink_to(unrelated)
-            with mock.patch.object(POLICY.subprocess, 'check_output', return_value=POLICY.PIN+'\n'):
-                with self.assertRaises(ValueError):
-                    POLICY.prepare(root)
-            self.assertEqual(source.read_text(), 'untouched source')
-            self.assertEqual(unrelated.read_text(), 'untouched unrelated')
+            source.write_bytes(original.encode())
+            with mock.patch.object(POLICY, 'SOURCE_SHA', POLICY.blobsha(original.encode())), \
+                    mock.patch.object(POLICY.subprocess, 'check_output', return_value=POLICY.PIN+'\n'):
+                POLICY.prepare(root)
+                POLICY.prepare(root)
+            capacity = ROOT/'mobile/openvpn/stack_capacity.go.tmpl'
+            self.assertIn(capacity, POLICY.inputs())
+            self.assertEqual(source.with_name('routervpn_stack_capacity.go').read_bytes(), capacity.read_bytes())
 
 
 if __name__ == '__main__':

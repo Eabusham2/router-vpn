@@ -60,14 +60,29 @@ func startDesktopDarwinInstalledOpenVPN(t *testing.T, parent *desktopNodeLayerSe
 // decrypted routes can reach its exact loopback TCP/UDP listener objects.
 func startDesktopDarwinInstalledOpenVPNFinal(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string) desktopExternalInstalledOpenVPNPeer {
 	t.Helper()
+	return startDesktopDarwinInstalledOpenVPNFinalCapacity(t, parent, request, dnsAddress, publicAddress, 1)
+}
+
+// UDP reconnects may briefly retain the previous authenticated server session.
+// Only the reconnect witness requests two bounded slots; every existing fixture
+// keeps its original single-client admission limit.
+func startDesktopDarwinInstalledOpenVPNFinalCapacity(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string, maxClients int) desktopExternalInstalledOpenVPNPeer {
+	t.Helper()
 	if request.OpenVPNClientAddress != "" || request.OpenVPNNetwork != "tcp" && request.OpenVPNNetwork != "udp" {
 		t.Fatal("OpenVPN final lost its captured tunneled role")
 	}
 	loopback := netip.MustParseAddr("127.0.0.1")
-	return startDesktopInstalledOpenVPNProvider(t, parent, request, dnsAddress, publicAddress, loopback, loopback, true)
+	return startDesktopInstalledOpenVPNProviderCapacity(t, parent, request, dnsAddress, publicAddress, loopback, loopback, true, maxClients)
 }
 func startDesktopInstalledOpenVPNProvider(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string, physical, clientAddress netip.Addr, final bool) desktopExternalInstalledOpenVPNPeer {
 	t.Helper()
+	return startDesktopInstalledOpenVPNProviderCapacity(t, parent, request, dnsAddress, publicAddress, physical, clientAddress, final, 1)
+}
+func startDesktopInstalledOpenVPNProviderCapacity(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string, physical, clientAddress netip.Addr, final bool, maxClients int) desktopExternalInstalledOpenVPNPeer {
+	t.Helper()
+	if maxClients != 1 && maxClients != 2 {
+		t.Fatal("OpenVPN provider fixture requires one session or one bounded reconnect slot")
+	}
 	mtu := 1400
 	if final {
 		mtu = 1280
@@ -209,7 +224,7 @@ func startDesktopInstalledOpenVPNProvider(t *testing.T, parent *desktopNodeLayer
 		transport.PacketConn = &desktopDarwinOpenVPNPacket{PacketConn: packet, physical: physical, client: clientAddress, count: &rawUDP, received: received}
 	}
 	transport.ListenAddress = address
-	options := ovpn.ServerOptions{Context: ctx, Mode: ovpn.ModeTLS, Transport: transport, Resources: ovpn.ServerResourceOptions{MaxClients: 1}, Logger: log.NewNOPFactory().Logger(),
+	options := ovpn.ServerOptions{Context: ctx, Mode: ovpn.ModeTLS, Transport: transport, Resources: ovpn.ServerResourceOptions{MaxClients: maxClients}, Logger: log.NewNOPFactory().Logger(),
 		DataChannel: ovpn.ServerDataChannelOptions{MTU: uint32(mtu), Ciphers: []string{"AES-256-GCM", "AES-128-GCM"}, PacketHeadroom: stackvpn.PacketHeadroom},
 		Tunnel:      ovpn.ServerTunnelOptions{AddressPools: []netip.Prefix{netip.MustParsePrefix("10.211.18.1/24"), netip.MustParsePrefix("fd78:211::1/64")}, Topology: "subnet"},
 		TLS:         ovpn.ServerTLSOptions{CertificateAuthority: ovpn.Material{Content: []byte(ca)}, Certificate: ovpn.Material{Content: []byte(certificate)}, Key: ovpn.Material{Content: []byte(key)}, VerifyClientCertificate: "require", RemoteCertificateTLS: "client"},

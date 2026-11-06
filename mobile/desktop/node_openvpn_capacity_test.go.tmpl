@@ -1,0 +1,210 @@
+//go:build linux && !android && routervpn_openvpn_remote_test
+
+package routervpnamnezia
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/openvpn"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+	"io"
+	"net"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Real TLS/data-channel provider and native userspace packet endpoint. Only the
+// captured original provider tuple maps to loopback; this grants no interface,
+// route, physical socket protection or paired-final acceptance evidence.
+func TestRouterVPNOpenVPNConnectedCapacityUserspace(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		for _, fault := range []string{"success", "wrong-password"} {
+			t.Run(network+"/"+fault, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 12*time.Second)
+				defer cancel()
+				listener, err := net.Listen("tcp4", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				tcpDone := make(chan struct{})
+				go func() {
+					defer close(tcpDone)
+					for {
+						c, err := listener.Accept()
+						if err != nil {
+							return
+						}
+						_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+						_, _ = io.Copy(c, c)
+						_ = c.Close()
+					}
+				}()
+				defer func() { _ = listener.Close(); <-tcpDone }()
+				packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				udpDone := make(chan struct{})
+				go func() {
+					defer close(udpDone)
+					b := make([]byte, 2048)
+					for {
+						n, a, err := packet.ReadFrom(b)
+						if err != nil {
+							return
+						}
+						if _, err = packet.WriteTo(b[:n], a); err != nil {
+							return
+						}
+					}
+				}()
+				defer func() { _ = packet.Close(); <-udpDone }()
+				parent := &desktopNodeLayerServer{ctx: ctx, cancel: cancel}
+				provider := startDesktopDarwinInstalledOpenVPNFinalCapacity(t, parent, desktopExternalInstalledPeerRequest{OpenVPNNetwork: network}, packet.LocalAddr().String(), listener.Addr().String(), 2)
+				defer provider.close()
+				if len(provider.entryRoutes) != 1 || provider.entryRoutes[0].Network != network {
+					t.Fatal("provider lost its exact original physical tuple")
+				}
+				lower := &desktopSSReferenceLower{virtual: provider.address, original: provider.entryRoutes[0].Target}
+				owned := service.ContextWith[adapter.NetworkManager](ctx, &desktopOpenVPNReferenceNetwork{})
+				owned = service.ContextWith[adapter.OutboundManager](owned, &desktopOpenVPNReferenceManager{outbound: lower})
+				// The authenticated provider negotiates1280 while the original import
+				// requests1500. Returning configured capacity must fail this witness.
+				profile := nativeopenvpn.Profile{Config: strings.Replace(provider.profile, "tun-mtu 1280", "tun-mtu 1500", 1), Username: provider.username, Password: provider.password}
+				if fault == "wrong-password" {
+					profile.Password += "wrong"
+				}
+				compiled, err := nativeopenvpn.CompileProfile(profile, "captured-openvpn", "captured-entry")
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, _ := json.Marshal(compiled)
+				var options option.OpenVPNClientEndpointOptions
+				if json.Unmarshal(raw, &options) != nil {
+					t.Fatal("original OpenVPN options invalid")
+				}
+				outbound, err := openvpn.NewClientEndpoint(owned, nil, log.NewNOPFactory().Logger(), "captured-openvpn", options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				endpoint := outbound.(*openvpn.ClientEndpoint)
+				if endpoint.PortMTU() != 1500 {
+					t.Fatal("original imported capacity was not1500 before negotiation")
+				}
+				defer func() {
+					if err := endpoint.Close(); err != nil {
+						t.Error("original OpenVPN endpoint failed joined cleanup", err)
+					}
+				}()
+				if _, _, err := endpoint.RouterVPNConnectedCapacityContext(ctx); err == nil {
+					t.Fatal("unstarted transport acquired capacity")
+				}
+				if err := endpoint.Start(adapter.StartStatePostStart); err != nil {
+					t.Fatal(err)
+				}
+				wait := func(check func() bool, why string) {
+					t.Helper()
+					deadline := time.NewTimer(5 * time.Second)
+					defer deadline.Stop()
+					tick := time.NewTicker(5 * time.Millisecond)
+					defer tick.Stop()
+					for {
+						if check() {
+							return
+						}
+						select {
+						case <-ctx.Done():
+							t.Fatal(why, ctx.Err())
+						case <-deadline.C:
+							t.Fatal(why)
+						case <-tick.C:
+						}
+					}
+				}
+				if fault == "wrong-password" {
+					// The authenticator must witness refusal. A missing reply or timeout alone
+					// is not accepted as a credential-rejection verdict.
+					wait(func() bool { return provider.stats().authFailures > 0 }, "actual original authenticator never refused wrong credentials")
+					if _, _, err := endpoint.RouterVPNConnectedCapacityContext(ctx); err == nil {
+						t.Fatal("rejected credentials acquired a connected receipt")
+					}
+					stats := provider.stats()
+					if stats.streams != 0 || stats.packets != 0 {
+						t.Fatal("rejected credentials delivered plaintext", stats)
+					}
+					return
+				}
+				var receipt nativeopenvpn.RemoteReceipt
+				var mtu uint32
+				wait(func() bool { receipt, mtu, err = endpoint.RouterVPNConnectedCapacityContext(ctx); return err == nil }, "actual TLS/data session never produced owned capacity")
+				if !receipt.Matches(compiled) || mtu != 1280 || endpoint.PortMTU() != mtu {
+					t.Fatal("capacity differs from authenticated original provider", receipt, mtu)
+				}
+				assertPayloads := func() {
+					t.Helper()
+					for _, inner := range []string{"tcp", "udp"} {
+						destination := "1.1.1.1:443"
+						if inner == "udp" {
+							destination = "203.0.113.53:5353"
+						}
+						connection, err := endpoint.DialContext(ctx, inner, M.ParseSocksaddr(destination))
+						if err != nil {
+							t.Fatal(err)
+						}
+						_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+						payload := []byte("actual-openvpn-owned-" + inner)
+						_, err = connection.Write(payload)
+						received := make([]byte, len(payload))
+						if err == nil {
+							_, err = io.ReadFull(connection, received)
+						}
+						_ = connection.Close()
+						if err != nil || string(received) != string(payload) {
+							t.Fatal("actual encrypted packet/stream delivery failed", inner, err)
+						}
+					}
+				}
+				assertPayloads()
+				stats := provider.stats()
+				if stats.streams < 1 || stats.packets < 1 || lower.calls.Load() < 1 || network == "tcp" && stats.connections < 1 || network == "udp" && stats.physicalUDP < 1 {
+					t.Fatal("native transport missed original encrypted/decrypted counters", stats)
+				}
+				release := endpoint.RouterVPNTestHoldStatus()
+				readCtx, stop := context.WithTimeout(ctx, 20*time.Millisecond)
+				_, _, readErr := endpoint.RouterVPNConnectedCapacityContext(readCtx)
+				stop()
+				release()
+				if !errors.Is(readErr, context.DeadlineExceeded) {
+					t.Fatal("bounded original status observation lost caller", readErr)
+				}
+				unchanged, sameMTU, err := endpoint.RouterVPNConnectedCapacityContext(ctx)
+				if err != nil || unchanged != receipt || sameMTU != mtu {
+					t.Fatal("cancelled observation changed established native tuple", err)
+				}
+				// The provider retains its old UDP session while the new transport
+				// authenticates in its second bounded slot. This proves new local
+				// receipt ownership, not prompt server-side session reclamation.
+				endpoint.RouterVPNTestRestart()
+				wait(func() bool {
+					next, capacity, err := endpoint.RouterVPNConnectedCapacityContext(ctx)
+					return err == nil && next.Remote == receipt.Remote && next.Generation > receipt.Generation && next.ConnectedAt >= receipt.ConnectedAt && capacity == mtu
+				}, "same-address reconnect reused stale capacity receipt")
+				assertPayloads()
+				if err := endpoint.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := endpoint.RouterVPNConnectedCapacityContext(ctx); err == nil {
+					t.Fatal("closed native owner retained imported capacity")
+				}
+			})
+		}
+	}
+}

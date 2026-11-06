@@ -108,3 +108,47 @@ func (c *ClientEndpoint) RouterVPNConnectedRemoteContext(ctx context.Context) (n
 	}
 	return receipt, nil
 }
+
+// RouterVPNConnectedCapacityContext binds the live negotiated inner capacity
+// to the exact authenticated connection state. Only the userspace packet
+// device implements this bounded observation; system-device admission is not
+// inferred from a receipt or from a configured tun-mtu.
+func (c *ClientEndpoint) RouterVPNConnectedCapacityContext(ctx context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+	empty := nativeopenvpn.RemoteReceipt{}
+	if ctx == nil {
+		return empty, 0, errors.New("OpenVPN capacity observation has no caller")
+	}
+	if c == nil {
+		return empty, 0, nativeopenvpn.ErrRemotePending
+	}
+	state := c.state.Load()
+	first, err := c.RouterVPNConnectedRemoteContext(ctx)
+	if err != nil {
+		return empty, 0, err
+	}
+	device, ok := c.device.(interface {
+		RouterVPNPortMTUContext(context.Context) (uint32, error)
+	})
+	if !ok {
+		return empty, 0, errors.New("OpenVPN entry requires its owned userspace packet device")
+	}
+	mtu, err := device.RouterVPNPortMTUContext(ctx)
+	if err != nil {
+		return empty, 0, err
+	}
+	second, err := c.RouterVPNConnectedRemoteContext(ctx)
+	if err != nil {
+		return empty, 0, err
+	}
+	again, err := device.RouterVPNPortMTUContext(ctx)
+	if err != nil {
+		return empty, 0, err
+	}
+	if first != second || mtu != again || mtu == 0 || c.state.Load() != state {
+		return empty, 0, nativeopenvpn.ErrRemotePending
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, 0, err
+	}
+	return second, mtu, nil
+}
