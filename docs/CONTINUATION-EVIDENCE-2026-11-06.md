@@ -8,9 +8,9 @@ original requirements. The live starting branch was
 1,294 commits ahead of the older published `745b3e41` release. Old patches were
 not replayed over that history. The published units below retain normal
 `main` ancestry through
-[`ad8a1f25b10e6fd4fa2d48de81f5ee9f2904ad25`](https://github.com/Eabusham2/router-vpn/commit/ad8a1f25b10e6fd4fa2d48de81f5ee9f2904ad25).
-Each remote tree was compared with the locally tested committed tree, and the
-remote branch was read back before adoption. A saved patch, local commit or API
+[`75897b4d7099b500762b6402ed967d4442f2705d`](https://github.com/Eabusham2/router-vpn/commit/75897b4d7099b500762b6402ed967d4442f2705d).
+Each published remote tree was compared with the local committed tree; exact
+validation cutoffs are recorded below. The remote branch was read back before adoption. A saved patch, local commit or API
 schema was not counted as a successful push.
 
 The November 5 recovery metadata remains intact. Six frozen Apple files could
@@ -42,7 +42,7 @@ overlapping lists are not added into a completion denominator.
 |---|---|---|---|
 | Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 247 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers; subsequent rows retain their exact source and verdict counts | Other imported/final families, CONNECT datagrams/layers, Server/Compare for this direction, complete native device/network acceptance |
 | Original #229–240, Auto/Fixed/Retest/Cancel and later packet-envelope limits | `internal/awgpolicy/packet_*`, `internal/mobilemtu`, mobile compiler/metadata | Race tests; complete data/control/cookie/junk/Start Layer bounds; Fixed overflow rejection; full-size decrypted IPv4/IPv6 peer observations | Effective configured cap is explicitly unmeasured; physical PMTU, transitions and Jumbo acceptance remain separate |
-| Original #200–224/#337, exact captured ownership and full temporary-test restoration | Windows retained desktop host, `desktop_external_owned_sources.go`, independent entry/final captures | Shared/client race tests, two architecture test-binary builds, 53 mandatory native leaves and two causal mutations | Hosted WFP runtime and physical acceptance remain separate; the exact Speed Lab/Always-to-Off fixture failures below now have published corrections |
+| Original #200–224/#337, exact captured ownership and full temporary-test restoration | Windows retained desktop host, `desktop_external_owned_sources.go`, independent entry/final captures | Shared/client race tests, two architecture test-binary builds, mandatory native verdict inventories and causal mutations; bounded Windows Compare is recorded below | Hosted WFP runtime and physical acceptance remain separate; the exact Speed Lab/Always-to-Off fixture failures below now have published corrections |
 | Selected DNS/Home AdGuard, LAN/IPv6 and original resolver authority | `internal/standardengine/resolved_*`, retained native resolver helper, finite kernel grants and parallel equal-best scope caller | Canonical bounded frames, original-daemon local-only preflight, exact upstream port/TLS/link transport and active trust-anchor codec/race tests | Installed privileged composition and kernel execution remain unaccepted; captured DNSSEC child/cohort, cross-domain alias caller, bounded authenticated compatibility fallback and typed root collector are published; remaining semantic branches and installed native acceptance are still required |
 | Later independent Off/AES-256-GCM/AES-256-GCM+XOR Start Layers | Mobile original sources and retained desktop SS-entry graphs | Independent entry/final layer matrix and actual encrypted positive/negative cases; SS and HY2 desktop finals now have nine-mode native inventories | Broader graph/platform coverage and actual Windows WFP/macOS PF/Linux TUN acceptance remain required |
 | Complete connection profiles; credential references; stale/cancelled operations cannot mutate a replacement | Typed Android/Apple captures; native retirement; Windows retained source owners | Actual saved-selection/startup fixtures, native retired-read race controls, exact restore-source checks | Full physical permission/reconnect/leak/off-LAN acceptance remains open |
@@ -309,6 +309,33 @@ capacity is measured physical PMTU.
 | [`c06e59be`](https://github.com/Eabusham2/router-vpn/commit/c06e59bebaf4a98effa8a1327c9834e0fe6a3114) | Wires the three-label candidate into the shipping Linux lookup after the original cohort joins. Two protected DS replies and a separate authenticated root verdict must retain the exact original plan, candidate and current physical owner. Workers/child processes/groups join successfully before final proof adoption. Full `TestResolved` race passes in 3.158s; strict new caller and transport groups pass in 1.568s/1.046s; two inventory checks pass in 0.105s. Positive equal-best siblings, provisional negatives, invalid/incomplete dependencies, cancellation and stale ownership are covered. | No original deadline, query budget or 32-cohort bound increases. Only available auxiliary capacity is used. Actual installed deep-private RPC/kernel execution remains required. |
 | [`ad8a1f25`](https://github.com/Eabusham2/router-vpn/commit/ad8a1f25b10e6fd4fa2d48de81f5ee9f2904ad25) | Repairs the exact Android Home fixture composition failure exposed by run 42186961587 at `9cf424f3`: the extracted imported capability now compiles with the actual external `supports` and `protocol` methods. The complete shipping Home store/controller fixture passes 7,891 checks, 372 identity pairs, 24 no-write rejections and nine serialized adoption races; the transaction-lock and both old-admission mutants still reject. CONNECT identity and unsupported finals are explicit cases. | Production admission is unchanged. Android OS/native handles remain explicit boundaries in this host fixture; actual APK/native CI and device behavior remain separate. |
 
+### Windows Compare and installed deep-private acceptance gate
+
+| Published commit | Delivered behavior and focused evidence | Remaining boundary |
+|---|---|---|
+| [`f0c3ea9d`](https://github.com/Eabusham2/router-vpn/commit/f0c3ea9d1440eb4ab8f88ec207464c9b49062caa) | Enables Compare for the captured Windows paired-WG to external SS2022 path, with both Start Layers Off and On-connect/Always protection. Requested `auto` remains separate from the actual Local/Server winner; sealed restoration pins that proved winner with its new owned lease instead of rerunning Compare. Frozen shared/client races pass in 1.752s/2.073s; the actual portable TLS/HTTP provider passes seven leaves plus parent under race in 1.133s. All 42 physical-runner and nineteen release-inventory checks pass. Correctly prepared AMD64/ARM64 compositions crosscompile in 55.163s/52.436s, with all 2,149 source records and 540 shared/template projections verified before/after. | Frozen validation is based on `9cf424f3` plus the 21 files. Earlier compiles with stale shared prerequisites are explicitly discarded. Concurrent `3dbb286d` adds five SOCKS-only native diagnostic lines in one overlapping fixture; those were preserved when publishing after the frozen build. Twenty-two Compare verdicts, the existing 23 Server and fifteen Local verdicts, and both WFP causal controls remain mandatory native execution. No actual Windows WFP/device pass is claimed here. |
+| [`75897b4d`](https://github.com/Eabusham2/router-vpn/commit/75897b4d7099b500762b6402ed967d4442f2705d) | Extends the installed resolver inventory from fifteen to twenty cases: exact three-label positive and NXDOMAIN/NODATA A/AAAA paths must observe both original auxiliary DS exchanges. The missing-parent control must return the intended RPC rejection after acknowledged original cleanup, retain all eight failed-phase trust observations, make no TUN DNS mutation, and acquire no root-proof owner. Successful-path thresholds remain unchanged; receipt banners require their prerequisites. The exact corrected controller compiles and executes seven predicate leaves plus parent. Peer/overlay compiles remain valid with unchanged source hashes. Earlier fifty runner checks and eight targeted inventory/receipt checks pass; the final three affected Python controls pass in 0.029s after review corrections. | Frozen source is based on `761b75c8` plus seven files. Two resource-killed controller attempts are not passes; the corrected compile exits zero in 139.324s with 1,270,496 KiB maximum RSS. The exact compiled image supplies the eight predicate verdicts. Actual installed kernel/namespace execution still requires the explicit root/sudo fixture, unavailable locally. A failed test cannot pass merely by printing the intended cause alongside an unrelated plan, mutation or cleanup assertion. |
+
+Concurrent [`c70778ea`](https://github.com/Eabusham2/router-vpn/commit/c70778ea5e30d4d29c9490d3c04214cb9e592268)
+retains the canonical captured CONNECT protocol during saved Android startup;
+[`a475f1ec`](https://github.com/Eabusham2/router-vpn/commit/a475f1ece892c1e812ef78dfdec33f7592c9e8cb)
+projects the actual external policy into the composed Home fixture. Both were
+preserved. [`3dbb286d`](https://github.com/Eabusham2/router-vpn/commit/3dbb286d46a28e30469c8c3d50ba147fcead9e47)
+adds native SOCKS error logging to the actual WFP fixture without changing grants.
+Its cancelled native attempts provide no acceptance result. At 08:49 UTC,
+`f0c3ea9d` had 38 exact-source runs: three successful, seventeen queued,
+thirteen pending and five running. Its Windows physical and WFP runs were
+pending, so the older Home-LAN-off DNS failure remains unresolved.
+
+Concurrent [`29bf1fb5`](https://github.com/Eabusham2/router-vpn/commit/29bf1fb50d86f690bc723dfe870139fa5e0036c3)
+captures a private SS service-capability sidecar from matching generated
+server/client configuration and the configured production image. The sidecar
+binds the node, original source/key hashes, endpoint, port, method and UoT version;
+it does not establish live receiver readiness or change ordinary SS transport
+bytes. Its generation and bundle changes were preserved. Ordinary consumer
+adoption and CONNECT UoT execution still require subsequent integration at this
+cutoff; no competing unpublished capability asset is treated as delivered.
+
 Concurrent `b25c93fb` includes the actual imported capability in the startup
 deadline fixture. Concurrent `9e0341f0` joins the original CONNECT handshake
 socket close before returning a cancelled response, with a deterministic actual
@@ -345,6 +372,15 @@ the normal On-connect/Always SOCKS cases pass. The provider observed a control
 association but no UDP DNS. The underlying per-socket cause requires diagnosis;
 neither the earlier four successes nor a proposed filter explanation establishes
 WFP acceptance.
+
+**Release observation at 2026-11-06 09:00:39 UTC:** the exact `75897b4d`
+query returned 32 runs: two successful, eighteen cancelled, six pending, three
+queued and three running. Authoritative release run
+[42191376254](https://github.com/Eabusham2/router-vpn/actions/runs/42191376254)
+was cancelled, attempt 1. Newer `main` was `803eabc1`; its one-file owned-stop
+fixture correction was read and preserved. The releases collection still ends
+with the October 24 `745b3e41` prerelease and twelve assets. Source publication
+is established for the new units; a new complete release is not.
 
 **Release observation at 2026-11-06 08:04:06 UTC:** remote `main` was
 `12409a40`; the releases collection still ended with the October 24
@@ -481,8 +517,9 @@ not a full runtime test pass.
    root-trust collector are now published bounded paths. Remaining DNSSEC
    semantic branches still require implementation/evidence. The exact three-label
    DS model, authenticated-child controls, original protected transport and
-   shipping lookup caller are published. Installed deep-private execution is
-   still pending. Transient monitor
+   shipping lookup caller are published. The twenty-case installed inventory
+   and missing-parent causal gate are also published; their actual privileged
+   execution is still pending. Transient monitor
    fields or generic bogus/transport results are not fallback authority. Actual
    Unix monitor, original D-Bus broker and installed native acceptance remain
    pending. A configured mode or unauthenticated snapshot is not negotiated-state
@@ -497,13 +534,14 @@ not a full runtime test pass.
    unsupported imported families, broader Start Layer compositions and applicable
    Server/Compare execution. Mobile SOCKS5 to paired SS/HY/WG/AWG Local paths and retained desktop SS-entry
    independent layers to SS/HY2 are now published as bounded increments. All five
-   paired mobile finals support Off, AES-256-GCM, and AES-256-GCM + XOR whitening behind ordinary SOCKS; the independent entry/final layer matrix and its bounded packet envelopes are now published. Server/Compare remain open for this imported-entry direction. Wider
+   paired mobile finals support Off, AES-256-GCM, and AES-256-GCM + XOR whitening behind ordinary SOCKS; the independent entry/final layer matrix and its bounded packet envelopes are now published. Server/Compare remain open for this imported-entry direction.
    Twelve mobile CONNECT-to-SS2022 Local graphs with selected literal TCP DNS
    are published; CONNECT UDP/Home DNS and independent layers remain open.
    Wider graph/mode coverage must still be implemented and verified. Safe refusal is
    unfinished scope, not delivery. Windows paired WG to external SS2022 now has
-   bounded Local and Server host integration; its Compare host and actual WFP
-   acceptance remain separate from the shared progress correction above.
+   bounded Local, Server and Compare host integration with both layers Off.
+   Independent Windows layers and actual WFP acceptance remain open; broader
+   imported graph directions retain their separate requirements.
 5. Perform real-device permission, selected-path DNS/leak, reconnect, network
    transition, performance, visual/DPI/orientation/accessibility and off-LAN
    interoperability acceptance for the requested platforms and scenarios.
