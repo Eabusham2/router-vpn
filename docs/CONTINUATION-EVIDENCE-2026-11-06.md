@@ -1881,3 +1881,33 @@ definitions, startup assertions, baseline assembly, 90-second compile bound
 and 45-second execution bound remain unchanged. No final-file Swift execution
 is claimed while the executor is unavailable; exact-SHA startup and native
 iOS/iPadOS jobs must still establish that evidence.
+
+
+## Android generated asset-capture fixture: restore the real Entry policy field
+
+Exact `e4207fb8`
+[Android runtime job 128099397119](https://github.com/Eabusham2/router-vpn/actions/runs/42277993735/job/128099397119)
+ran the corrected CONNECT persistence suite: 110 checks across two cases. It
+also passed the imported-router persistence suite (779 checks across 81 cases)
+and the composed imported runtime/Home suite (260 checks across 91 cases).
+Those retain their declared native compiler/preparation/proof and Android OS
+test boundaries. The authoritative APK job was cancelled earlier, so no APK
+publication follows from these standalone results.
+
+The same completed standalone job then failed Java compilation in
+`deploy/test_ss_service_host_capture.py`: its generated Entry double lacked
+the `policy` field now read by the extracted shipping capture method.
+Root read the actual failed compiler output and the preceding bounded passes.
+
+Reviewed one-line correction `d86beeaca6b327468c67326a397db0bae08c0c17`
+adds `JSONObject policy = new JSONObject()`, exactly matching the field type
+and default in shipping `AndroidStandardExitStore.Entry`. The existing
+`org.json.*` import supplies the real JSON type. This is the generated Java
+asset-capture fixture; no forwarding-buffer or encrypted-peer implementation
+changes.
+
+Independent source review is clear. The actual node-store and asset-capture
+code, all exact-byte assertions, service-drop causal control, Java 17 target
+and compile/execution deadlines remain unchanged. No execution of this repaired
+fixture is claimed while the executor is unavailable. Its original positive
+and causal cases and the complete native Android build remain required.
