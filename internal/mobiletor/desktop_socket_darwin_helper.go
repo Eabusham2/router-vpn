@@ -207,7 +207,11 @@ func RunDesktopDarwinSocketHelper(role string) error {
 		}
 		channel.SetWriteDeadline(time.Now().Add(2 * time.Second))
 		if sendErr := desktopDarwinSend(channel, reply, transferred); sendErr != nil {
-			return sendErr
+			// The parent may already have retired this exact channel when a
+			// bounded native inspection fails. Keep that original operation
+			// failure as well as the failed reply; a broken pipe alone hides
+			// the readback progress needed to diagnose the lost owner.
+			return errors.Join(err, sendErr)
 		}
 		if next.Operation == "finish" && err == nil {
 			channel.SetReadDeadline(time.Now().Add(3 * time.Second))

@@ -1263,3 +1263,32 @@ The execution environment became available again in a fresh workspace. The previ
 The completed AMD64 job [128010294640](https://github.com/Eabusham2/router-vpn/actions/runs/42248724369/job/128010294640) at `df24940e` contains successful compilation and execution before its later scope-fixture failure: all eight extracted-source OpenVPN IPC cases, all three independent provider-image cases, all four original-provider-join cases, and bounded diagnostics passed. This establishes those specific executable ownership checks. It does not establish the full OpenVPN wrong-key witness, actual packet graphs, or elimination of the earlier large-image native timeout.
 
 The separate Windows Server production candidate remains under validation: its 14 shared lease test parents and 21 child verdicts passed under Go `-race` (2.025 seconds), and 32 targeted Python runner/scope tests passed. Generated Box compilation and actual Windows native execution remain separate gates. No complete release, private deployment, or physical-device acceptance is declared.
+
+
+## 2026-11-06 17:15 UTC — preserve the original Darwin operation failure when its reply cannot be delivered
+
+The exact `17ccb6ac0e7d3a1409d2abb95e274619522d5477` macOS physical ownership run
+`42256007996` completed with the Apple Silicon guardian job `128023266275`
+successful and both single-filter anchor jobs `128023265375` /
+`128023265738` successful. Intel guardian job `128023266105` failed in the
+ordinary positive `SocketRetirementReusesCapacity` case at sequential socket
+24. Its first recorded loss was `control-receive-probe` after 2,020 ms, with
+no pending control frame. The guardian's only final transport diagnostic was
+`write unix: sendmsg: broken pipe`. This is not a passing Intel capacity test,
+and the successful other jobs do not close it.
+
+The guardian already placed an operation failure, including bounded native
+readback progress, into `reply.Error`. If the parent had retired that exact
+channel, the failed send returned only the transport error and discarded the
+original operation error. `desktop_socket_darwin_helper.go` now joins both
+errors on that existing failed-send branch. It still returns a nonnil error,
+performs the same original cleanup, and changes no admission, frame, proof,
+freshness, deadline, or retry behavior. If the operation error is nil, this
+change supplies no invented cause.
+
+Validation: independent review of the switch's assignment, callers and error
+handling; `git diff --check`; Go 1.26.3 Darwin/AMD64 non-CGO package test-binary
+cross-compilation, exit 0. That cross-compilation does not execute macOS or
+validate the native CGO PF implementation. The exact operation failure and
+any corrective production change still require subsequent native evidence.
+No new release or deployment is established by this diagnostic change.
