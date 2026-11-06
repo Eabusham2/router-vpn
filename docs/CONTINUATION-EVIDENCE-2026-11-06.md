@@ -794,6 +794,12 @@ The fixture now models the producer boundary with explicitly labeled dummy paylo
 
 Only `deploy/test_desktop_native_toolchain.py` changes for this correction. Actual DNSSEC production, architecture restrictions, native verifier, receipts, package gates and negative controls remain unchanged. The proposed file contains 59 test methods; this is source inventory, not an execution result. Local Python execution remains unavailable; the complete file must pass in CI before claiming the four errors resolved.
 
+### OpenVPN provider port-selection diagnostic
+
+ARM64 OpenVPN job `127872067654` reached `unavailable-port-reservation` with numeric error `10013`. The helper first opens a TCP listener on port zero, then probes UDP on that assigned numeric port; either operation can fail under the same existing phase label. Both probes are closed before the helper returns, so its integer `used` map is not a retained kernel reservation. The log does not establish which operation failed, an excluded-port range, a privilege problem, or a WFP defect.
+
+The fixture startup diagnostic now appends only allowlisted network (`tcp`, `tcp4`, `udp`, `udp4`) and syscall-operation (`socket`, `bind`, `listen`, `setsockopt`) labels, defaulting to `unknown`. It preserves the numeric errno, original diagnostic prefix and exact returned error; no arbitrary error text, endpoint or credential is emitted. Port probing, retries, timeouts, protection and ownership are unchanged. No exact-line consumer was found in the current runners. Native execution must still identify the failing operation; this change is not a port-selection repair.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

@@ -247,13 +247,28 @@ func desktopOpenVPNReferenceServe(address string) (failure error) {
 
 func desktopOpenVPNReferenceServeOwned(address string, appID []byte) (failure error) {
 	// stdout belongs to strict JSON replies; keep startup failures on stderr.
-	// Emit fixed phase names and optional numeric errno without error text.
+	// Emit only fixed labels and the original numeric errno, never error text.
 	fail := func(phase string, err error) error {
+		network, operation := "unknown", "unknown"
+		var networkError *net.OpError
+		if errors.As(err, &networkError) && networkError != nil {
+			switch value := networkError.Net; value {
+			case "tcp", "tcp4", "udp", "udp4":
+				network = value
+			}
+		}
+		var syscallError *os.SyscallError
+		if errors.As(err, &syscallError) && syscallError != nil {
+			switch value := syscallError.Syscall; value {
+			case "socket", "bind", "listen", "setsockopt":
+				operation = value
+			}
+		}
 		var errno syscall.Errno
 		if errors.As(err, &errno) {
-			fmt.Fprintf(os.Stderr, "routervpn-openvpn-provider phase=%s class=syscall errno=%d\n", phase, uint64(errno))
+			fmt.Fprintf(os.Stderr, "routervpn-openvpn-provider phase=%s class=syscall errno=%d network=%s operation=%s\n", phase, uint64(errno), network, operation)
 		} else {
-			fmt.Fprintf(os.Stderr, "routervpn-openvpn-provider phase=%s class=error\n", phase)
+			fmt.Fprintf(os.Stderr, "routervpn-openvpn-provider phase=%s class=error network=%s operation=%s\n", phase, network, operation)
 		}
 		return err
 	}
