@@ -95,7 +95,7 @@ func desktopExternalIntegrationUDP(protocol string) bool {
 }
 
 func desktopExternalIntegrationUDPDNS(protocol string) bool {
-	return protocol == "socks5" || desktopExternalIntegrationUDP(protocol)
+	return protocol == "socks5" || protocol == "shadowsocks" || desktopExternalIntegrationUDP(protocol)
 }
 
 // These complete Fast/Strong imports are test inputs, not product defaults.
@@ -450,6 +450,9 @@ func (ca *desktopExternalIntegrationCA) certificate(t *testing.T, valid bool) tl
 // The peer accepts only the two selected upper destinations. The native lower
 // path must reach this exact local listener under a preexisting broker grant.
 type desktopExternalIntegrationPeer struct {
+	ownedFlow                                                                                   func(uint8, netip.AddrPort, netip.AddrPort) tun.FlowVerdict
+	ownedStream                                                                                 func(context.Context, net.Conn, M.Metadata) error
+	ownedPacket                                                                                 func(context.Context, N.PacketConn, M.Metadata) error
 	layerInput                                                                                  net.PacketConn
 	layerMode, layerPassword, layerFault                                                        string
 	layer                                                                                       *desktopExternalHysteriaLayerPeer
@@ -957,7 +960,10 @@ func (p *desktopExternalIntegrationPeer) startAmnezia(t *testing.T) {
 	}
 }
 
-func (p *desktopExternalIntegrationPeer) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
+func (p *desktopExternalIntegrationPeer) JudgeFlow(protocol uint8, source, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
+	if p.ownedFlow != nil {
+		return p.ownedFlow(protocol, source, destination)
+	}
 	if desktopExternalIntegrationPacketEndpoint(p.protocol) && (protocol == 17 && destination.String() == desktopExternalIntegrationDNS ||
 		protocol == 6 && (destination.String() == "1.1.1.1:443" || p.latency != nil && destination.String() == desktopExternalLatencyAddress)) {
 		return tun.FlowVerdict{Action: tun.ActionAccept}
@@ -1119,10 +1125,16 @@ type desktopExternalBufferedConn struct {
 }
 
 func (c *desktopExternalBufferedConn) Read(b []byte) (int, error) { return c.reader.Read(b) }
-func (p *desktopExternalIntegrationPeer) NewConnection(_ context.Context, c net.Conn, m M.Metadata) error {
+func (p *desktopExternalIntegrationPeer) NewConnection(ctx context.Context, c net.Conn, m M.Metadata) error {
+	if p.ownedStream != nil {
+		return p.ownedStream(ctx, c, m)
+	}
 	return p.serve(c, m.Destination.String())
 }
 func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context, connection N.PacketConn, metadata M.Metadata) error {
+	if p.ownedPacket != nil {
+		return p.ownedPacket(ctx, connection, metadata)
+	}
 	if !desktopExternalIntegrationUDPDNS(p.protocol) || metadata.Destination.String() != desktopExternalIntegrationDNS {
 		return errors.New("composition peer denies unrequested UDP")
 	}

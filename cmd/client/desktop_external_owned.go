@@ -148,7 +148,7 @@ func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct 
 
 func desktopWindowsExternalEligible(launch *desktopNodeLaunch) bool {
 	return launch != nil && launch.ownedNode == nil && launch.tor == nil && launch.external != nil &&
-		launch.external.predecessor == "" && launch.external.selection == "local" &&
+		(launch.external.predecessor == "" && launch.external.selection == "local" || desktopWindowsExternalRouterServerOwner(launch.external)) &&
 		launch.policyProfileID == launch.external.profile.ID &&
 		(launch.external.direct && launch.profileID == launch.policyProfileID || !launch.external.direct && launch.profileID == launch.external.entry.ID) &&
 		desktopWindowsExternalGraphEligible(launch.external.profile, launch.external.entry, launch.external.direct, "")
@@ -192,7 +192,20 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 	if err != nil || !sameDesktopNodeProcessPath(binary, filepath.Join(captured.capture.packageRoot, "runtime", "native", nativeBinaryName())) {
 		return nil, errors.Join(err, errors.New("native external verification selected another captured package"))
 	}
-	launch, err := compileDesktopExternalCaptured(ctx, profile, entry, exit, direct, restored, nil, nil, captured.host.lookup)
+	var files map[string][]byte
+	if !direct && desktopWindowsExternalRouterServerGraph(profile, entry, restored) {
+		profile.MultihopEntryMode = "wg"
+		files, err = readDesktopNodeAssets(captured.capture.dataRoot, entry.ID, "wg")
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, data := range files {
+				clear(data)
+			}
+		}()
+	}
+	launch, err := compileDesktopExternalCaptured(ctx, profile, entry, exit, direct, restored, files, nil, captured.host.lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +364,9 @@ func prepareDesktopWindowsRetainedExternal(a *app, launch *desktopNodeLaunch) (d
 		persisted.MultihopExitID = profile.ID
 	}
 	persisted.MultihopExecution, persisted.MultihopEntryMode = "local", ""
+	if desktopWindowsExternalRouterServerOwner(launch.external) {
+		persisted.MultihopExecution, persisted.MultihopEntryMode = "server", "wg"
+	}
 	owner.persistedToken = desktopOwnedNodeProfileToken(persisted)
 	owner.gate <- struct{}{}
 	launch.configSHA256 = policy.Metadata().ConfigSHA256
@@ -579,7 +595,7 @@ func (owner *desktopWindowsExternalRuntime) CurrentProof(ctx context.Context, pr
 		return err
 	}
 	if !proof.Healthy || !proof.DNSProven ||
-		proof.EntryProven != !owner.launch.external.direct || proof.EntryID != owner.launch.external.entry.ID || proof.EntryNodeID != "" || proof.Execution != "local" {
+		proof.EntryProven != !owner.launch.external.direct || proof.EntryID != owner.launch.external.entry.ID || !desktopWindowsExternalExecutionProof(owner.launch.external, proof.ExternalProofResult) {
 		return errors.New("native external proof lost its actual process or distinct final exit policy")
 	}
 	meta := owner.policy.Metadata()

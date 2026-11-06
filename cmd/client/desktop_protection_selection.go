@@ -42,8 +42,12 @@ func desktopProtectionSelectionFor(node *mobilemultihop.DesktopNodePolicy, exter
 	paired := err == nil && validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID &&
 		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && meta.RootType == entryKind && meta.RootTag == entryRoot &&
 		(layeredPair || capture.StartLayer == "" && capture.EntryStartLayer == "") && (capture.Protocol == "shadowsocks" || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
+	server := err == nil && capture.Execution == "server" && capture.PredecessorSHA256 != "" && capture.EntryNodeID != "" &&
+		validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID && capture.EntryTag == "external-entry" &&
+		meta.RootTag == capture.EntryTag && meta.RootType == "wireguard" && capture.Protocol == "shadowsocks" &&
+		capture.StartLayer == "" && capture.EntryStartLayer == ""
 	if err != nil || meta.TargetOS != "windows" || !validProfileID(capture.ExitID) ||
-		!paired && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
+		!paired && !server && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
 		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !(paired && layeredPair) || capture.EntryStartLayer != "" && !(paired && layeredPair) || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
 		meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" ||
 		meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn" {

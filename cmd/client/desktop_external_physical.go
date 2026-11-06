@@ -34,7 +34,8 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 		return errors.New("ordinary physical preparation cannot replace a captured owner")
 	}
 	entry := desktopExternalRetainedEntryForOS(owner, targetOS)
-	if targetOS != "windows" && targetOS != "linux" && targetOS != "darwin" || !owner.direct && !entry || owner.predecessor != "" {
+	server := targetOS == "windows" && desktopWindowsExternalRouterServerOwner(owner)
+	if targetOS != "windows" && targetOS != "linux" && targetOS != "darwin" || !owner.direct && !entry || owner.predecessor != "" && !server {
 		return nil
 	}
 	original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
@@ -51,7 +52,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	layeredSSPair := desktopExternalSSEntryOwner(owner) && desktopExternalSSLayeredFinalProfile(owner.profile)
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
 		capture.Protocol != "wireguard" && capture.Protocol != "amneziawg" && capture.Protocol != "openvpn" ||
-		!entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
+		!entry && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
 		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !layeredSSPair || capture.EntryStartLayer != "" && !layeredSSPair || capture.KillSwitchPolicy == "off" {
 		return nil
 	}
@@ -85,7 +86,7 @@ func capturedDesktopExternalPhysical(owner *desktopExternalRuntime) (*mobilemult
 		return nil, nil
 	}
 	physical := owner.physical
-	if physical.Validate() != nil || !owner.direct && !(desktopExternalRetainedEntryForOS(owner, physical.Metadata().TargetOS)) || owner.predecessor != "" {
+	if physical.Validate() != nil || !owner.direct && !(desktopExternalRetainedEntryForOS(owner, physical.Metadata().TargetOS)) || owner.predecessor != "" && !(physical.Metadata().TargetOS == "windows" && desktopWindowsExternalRouterServerOwner(owner)) {
 		return nil, errors.New("ordinary physical capture lost its exact native policy")
 	}
 	meta := physical.Metadata()
@@ -113,7 +114,7 @@ func capturedDesktopExternalPhysicalContext(ctx context.Context, owner *desktopE
 		return nil, nil
 	}
 	physical := owner.physical
-	if physical.Validate() != nil || !owner.direct && !(desktopExternalRetainedEntryForOS(owner, physical.Metadata().TargetOS)) || owner.predecessor != "" {
+	if physical.Validate() != nil || !owner.direct && !(desktopExternalRetainedEntryForOS(owner, physical.Metadata().TargetOS)) || owner.predecessor != "" && !(physical.Metadata().TargetOS == "windows" && desktopWindowsExternalRouterServerOwner(owner)) {
 		return nil, errors.New("ordinary physical capture lost its exact native policy")
 	}
 	meta := physical.Metadata()

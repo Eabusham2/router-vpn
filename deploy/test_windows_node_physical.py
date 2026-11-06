@@ -72,6 +72,11 @@ EXTERNAL_OPENVPN_CASES = {network: (EXTERNAL_OPENVPN_ROOT, EXTERNAL_OPENVPN_ROOT
 EXTERNAL_OPENVPN_ALIAS = "TestRouterVPNDesktopExternalWindowsOpenVPNAlias"
 EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
     *(EXTERNAL_OPENVPN_ALIAS + "/reject-" + field for field in ("address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin")))
+EXTERNAL_SERVER_ROOT = "TestRouterVPNDesktopExternalWindowsRouterServerWFP"
+EXTERNAL_SERVER_ASSOCIATION = "TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement"
+EXTERNAL_SERVER_LEAVES = ("on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof")
+EXTERNAL_SERVER_CASES = (EXTERNAL_SERVER_ROOT, *(EXTERNAL_SERVER_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES), EXTERNAL_SERVER_ASSOCIATION,
+    *(EXTERNAL_SERVER_ASSOCIATION + "/" + leaf for leaf in ("close-joins-original-packet-worker", "control-close-joins-before-udp-tuple-release", "successor-retains-own-association", "handshake-cancel-joins-both-streams")))
 EXTERNAL_SS_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsSSEntryWFP"
 EXTERNAL_SS_ENTRY_NETWORKS = ("shadowsocks", "http-connect", "https-connect", "hysteria2")
 EXTERNAL_SS_ENTRY_LEAVES = ("on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
@@ -112,6 +117,11 @@ def checked_sources(source):
     if external.is_symlink() or not external.is_file() or not external.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows Hysteria2 escaped its explicit native test scope")
     records["external_hysteria2"] = hashlib.sha256(external.read_bytes()).hexdigest()
+    server = ROOT / "mobile/desktop/external_box_windows_server_test.go.tmpl"
+    if server.is_symlink() or not server.is_file() or not server.read_bytes().startswith(TAG):
+        raise ValueError("Paired Router Server escaped its explicit native test scope")
+    records["external_router_server"] = hashlib.sha256(server.read_bytes()).hexdigest()
+
     layer = ROOT / "mobile/desktop/external_box_windows_hysteria2_layer_test.go.tmpl"
     if layer.is_symlink() or not layer.is_file() or not layer.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows Hysteria2 layer escaped its explicit native test scope")
@@ -366,6 +376,12 @@ def report_external_packet(status, output, protocol):
         raise ValueError("Actual ordinary Windows packet endpoint omitted its required native result")
 
 
+def report_external_server(status, output):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_SERVER_CASES) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Paired Windows Router Server omitted its required native result")
+
+
 def execute_external_packet(source, workspace, build, captured):
     directory = workspace / "external-packet"
     directory.mkdir()
@@ -397,6 +413,11 @@ def execute_external_packet(source, workspace, build, captured):
         report_external_packet(status, output, protocol)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual ordinary packet native executable changed")
+    expression = "^(" + EXTERNAL_SERVER_ROOT + "|" + EXTERNAL_SERVER_ASSOCIATION + ")$"
+    status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=180s", "-test.v"], cwd=source, env=captured, timeout=195)
+    report_external_server(status, output)
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+        raise ValueError("Paired Router Server native executable changed")
     for label, witness in (
             ("ordinary-udp-deny", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
             ("missing-durable-intent", "actual packet source skipped its durable WFP intent")):
@@ -409,15 +430,16 @@ def execute_external_packet(source, workspace, build, captured):
         if status:
             raise ValueError("Actual ordinary packet control did not compile: " + label + "\n" + output[-16384:])
         control_digest = executable_digest(binary)
-        leaf = EXTERNAL_PACKET_ROOT + "/wireguard/always"
-        expression = "/".join("^" + part + "$" for part in leaf.split("/"))
-        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"],
-            cwd=source, env=captured, timeout=75)
-        if status == 0 or not exact_native_verdict(output, "FAIL", leaf) or witness not in output or socks_native_aborted(output):
-            raise ValueError("Actual ordinary packet control missed its exact defect: " + label + "\n" + output[-16384:])
-        if executable_digest(binary) != control_digest:
-            raise ValueError("Ordinary native control executable changed")
-        print("Rejected actual ordinary packet native control: " + label, flush=True)
+        for leaf, wanted in ((EXTERNAL_PACKET_ROOT + "/wireguard/always", witness),
+                             (EXTERNAL_SERVER_ROOT + "/always", "actual Router Server source skipped its durable WFP intent" if label == "missing-durable-intent" else witness)):
+            expression = "/".join("^" + part + "$" for part in leaf.split("/"))
+            status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"],
+                cwd=source, env=captured, timeout=75)
+            if status == 0 or not exact_native_verdict(output, "FAIL", leaf) or wanted not in output or socks_native_aborted(output):
+                raise ValueError("Actual ordinary packet control missed its exact defect: " + label + "\n" + output[-16384:])
+            if executable_digest(binary) != control_digest:
+                raise ValueError("Ordinary native control executable changed")
+        print("Rejected actual ordinary packet and paired Server native control: " + label, flush=True)
 
 
 def report_external_openvpn(status, output, network):
@@ -545,7 +567,7 @@ PHASE_TIMEOUTS = {
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
-    "external-packet": _PHASE_COMMON + 600 + 75 + 3 * 195 + 2 * (600 + 75),
+    "external-packet": _PHASE_COMMON + 600 + 75 + 4 * 195 + 2 * (600 + 2 * 75),
     "external-openvpn": _PHASE_COMMON + 600 + 75 + 3 * 195 + 2 * (600 + 75),
 }
 _PHASE_IMAGES = {

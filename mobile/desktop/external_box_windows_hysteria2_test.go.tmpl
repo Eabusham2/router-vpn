@@ -40,12 +40,14 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	GROUP "github.com/sagernet/sing-box/protocol/group"
 	HTTP "github.com/sagernet/sing-box/protocol/http"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
 	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	SOCKS "github.com/sagernet/sing-box/protocol/socks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -66,6 +68,7 @@ const desktopExternalWFPLimit = 64 << 10
 const desktopExternalWFPProbePrefix = "routervpn-ordinary-wfp:"
 
 type desktopExternalWFPRequest struct {
+	RouterServer                                 *desktopWFPRouterServerRequest    `json:"router_server,omitempty"`
 	SSEntry                                      *desktopExternalWFPSSEntryRequest `json:"ss_entry,omitempty"`
 	Layer                                        *desktopExternalWFPLayerRequest   `json:"layer,omitempty"`
 	Packet                                       *desktopExternalWFPPacketRequest  `json:"packet,omitempty"`
@@ -78,6 +81,7 @@ type desktopExternalWFPRequest struct {
 }
 
 type desktopExternalWFPReply struct {
+	RouterServer                                                       *desktopWFPRouterServerReceipt `json:"router_server,omitempty"`
 	SSEntryInner                                                       string
 	SSEntryLayer, SSFinalLayer                                         *desktopWFPSSEntryLayerReceipt
 	SSEntryTCP, SSEntryUDP, SSEntryRejected, SSEntryPublic, SSEntryTLS int32
@@ -244,6 +248,9 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	if err != nil || request.Operation != "start" || request.Address != desktopExternalWFPAddress(t).String() || request.Nonce != "" {
 		t.Fatal("external peer did not receive its exact initial capture", err)
 	}
+	if (protocol == "router-server") != (request.RouterServer != nil) {
+		t.Fatal("Router Server provider changed its original family")
+	}
 	if (protocol == "ss-entry") != (request.SSEntry != nil) {
 		t.Fatal("SS entry reference changed captured family")
 	}
@@ -253,7 +260,7 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	if request.Layer != nil && (request.Layer.Mode != "aes-256-gcm" && request.Layer.Mode != "aes-256-gcm+xor-whitening" || request.Layer.Password == "") {
 		t.Fatal("HY2 layer reference lost its original private layer")
 	}
-	if protocol != "packet" {
+	if protocol != "packet" && protocol != "router-server" {
 		if request.Packet != nil {
 			t.Fatal("non-packet provider acquired packet keys")
 		}
@@ -297,6 +304,7 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	var protocolErr error
 	var layer *desktopExternalHysteriaLayerPeer
 	var ssEntry *desktopWFPSSEntryForward
+	var routerServer *desktopWFPRouterServer
 	address, innerAddress, layerMode := packet.LocalAddr().String(), "", ""
 	closed := false
 	closePeer := func() {
@@ -306,7 +314,11 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 		}
 	}
 	defer closePeer()
-	if protocol == "packet" {
+	if protocol == "router-server" {
+		routerServer = desktopWFPStartRouterServerPeer(t, peer, request)
+		clear(request.Key)
+		clear(request.ProxyKey)
+	} else if protocol == "packet" {
 		desktopExternalWFPStartPacketPeer(t, peer, request.Packet, request.Fault)
 		clear(request.Key)
 		clear(request.ProxyKey)
@@ -387,6 +399,14 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 			Packets: observed.packets.Load(), DNS: peer.dnsQueries.Load(), UDPDNS: peer.udpQueries.Load(), TLS: peer.tlsHandshakes.Load(), Public: peer.publicRequests.Load(), Attempts: peer.publicAttempts.Load(), Closed: isClosed,
 			LayerMode: layerMode, InnerAddress: innerAddress}
 		reply.AuthFailures = peer.authFailures.Load()
+		if routerServer != nil {
+			reply.RouterServer = routerServer.receipt()
+			reply.DNS = routerServer.finalPeer.dnsQueries.Load()
+			reply.UDPDNS = routerServer.finalPeer.udpQueries.Load()
+			reply.TLS = routerServer.finalPeer.tlsHandshakes.Load()
+			reply.Public = routerServer.finalPeer.publicRequests.Load()
+			reply.Attempts = routerServer.finalPeer.publicAttempts.Load()
+		}
 		if ssEntry != nil {
 			reply.SSEntryInner = ssEntry.inner
 			reply.SSEntryLayer = ssEntry.entryLayer.receipt()
@@ -553,7 +573,7 @@ func (p *desktopExternalWFPReference) call(t *testing.T, operation, nonce string
 		t.Fatal(err)
 	}
 	reply, err := p.read()
-	if err != nil || reply.Schema != 1 || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.Nonce != nonce || reply.Closed || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress || !desktopWFPSSEntryReplyIdentity(reply, p.initial) {
+	if err != nil || reply.Schema != 1 || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.Nonce != nonce || reply.Closed || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress || (!desktopWFPSSEntryReplyIdentity(reply, p.initial) || !desktopWFPRouterServerReplyIdentity(reply, p.initial)) {
 		t.Fatal("external peer acknowledgement changed owner", err)
 	}
 	return reply
@@ -656,7 +676,7 @@ func (p *desktopExternalWFPReference) close() error {
 	p.closed = true
 	failure := p.input.Close()
 	reply, err := p.read()
-	if err != nil || reply.Schema != 1 || !reply.Closed || reply.Nonce != "" || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress || !desktopWFPSSEntryReplyIdentity(reply, p.initial) {
+	if err != nil || reply.Schema != 1 || !reply.Closed || reply.Nonce != "" || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.ProbeUDP != p.initial.ProbeUDP || reply.LayerMode != p.initial.LayerMode || reply.InnerAddress != p.initial.InnerAddress || (!desktopWFPSSEntryReplyIdentity(reply, p.initial) || !desktopWFPRouterServerReplyIdentity(reply, p.initial)) {
 		failure = errors.Join(failure, err, errors.New("external provider did not acknowledge joined cleanup"))
 		p.cancel()
 	}
@@ -681,7 +701,9 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 		t.Fatal("reference lost its exact HY2 layer selection")
 	}
 	peerTest := "TestRouterVPNDesktopExternalWindowsHysteria2Peer"
-	if protocol == "socks5" {
+	if protocol == "router-server" {
+		peerTest = "TestRouterVPNDesktopExternalWindowsRouterServerPeer"
+	} else if protocol == "socks5" {
 		peerTest = "TestRouterVPNDesktopExternalWindowsSOCKSPeer"
 	} else if protocol == "wireguard" || protocol == "awg2-fast" || protocol == "awg2-strong" {
 		peerTest = "TestRouterVPNDesktopExternalWindowsPacketPeer"
@@ -767,6 +789,10 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	if protocol == "wireguard" || protocol == "awg2-fast" || protocol == "awg2-strong" {
 		request.Packet, p.packet = desktopExternalWFPPacketKeys(t, protocol)
 	}
+	if protocol == "router-server" {
+		request.Packet, p.packet = desktopExternalWFPPacketKeys(t, "wireguard")
+		request.RouterServer = desktopWFPRouterServerCapture(p.packet)
+	}
 	if layer != nil {
 		captured := *layer
 		request.Layer, p.layer = &captured, layer
@@ -790,6 +816,9 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
 	if err != nil || scopeErr != nil || p.initial.Schema != 1 || p.remote.Addr() != p.local || p.remote.Port() == 0 || len(p.initial.AppID) == 0 || bytes.Equal(scope, p.initial.AppID) || p.initial.Packets != 0 || p.initial.DNS != 0 || p.initial.Public != 0 || p.initial.Closed {
 		t.Fatal("external provider has no separate actual captured executable", err, scopeErr)
+	}
+	if !desktopWFPRouterServerInitialReceipt(request.RouterServer, p.initial.RouterServer) {
+		t.Fatal("Router Server initial authority or counters changed")
 	}
 	if !desktopWFPSSEntryInitialReceipt(p.ssEntry, p.initial, p.local, p.remote, fault) {
 		t.Fatal("SS entry layer initial receipt changed captured owners")
@@ -1050,6 +1079,8 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 	HY.RegisterOutbound(outs)
 	SS.RegisterOutbound(outs)
 	HTTP.RegisterOutbound(outs)
+	SOCKS.RegisterOutbound(outs)
+	GROUP.RegisterSelector(outs)
 	WH.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterExternalSOCKSOutbound(outs)
 	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
@@ -1121,6 +1152,9 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 	t.Helper()
 	if err := f.box.RouterVPNStrategyStart(); err != nil {
 		if f.committed != 1 {
+			if captured, e := f.policy.Capture(); e == nil && captured.Execution == "server" {
+				t.Fatal("actual Router Server source skipped its durable WFP intent", err)
+			}
 			if f.policy.Metadata().RootTag == "external-entry" {
 				t.Fatal("actual SS entry source skipped its durable WFP intent", err)
 			}
@@ -1137,7 +1171,7 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 		}
 		t.Fatal("external actual WFP startup", err)
 	}
-	eager := f.policy.Metadata().Protocol == "wireguard" || f.policy.Metadata().Protocol == "amneziawg" || f.policy.Metadata().Protocol == "openvpn"
+	eager := f.policy.Metadata().RootType == "wireguard" || f.policy.Metadata().RootType == mobilemultihop.AmneziaType || f.policy.Metadata().RootType == "openvpn-client"
 	if f.admitted != 1 || f.committed != 1 || f.network.Current() || f.network.SocketCurrent() != eager {
 		t.Fatal("external endpoint changed guarded socket/proof startup phase")
 	}

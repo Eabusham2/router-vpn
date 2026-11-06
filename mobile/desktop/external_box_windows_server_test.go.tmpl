@@ -1,0 +1,1142 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	SOCKS "github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/buf"
+	B "github.com/sagernet/sing/common/bufio"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+const desktopWFPRouterServerAPI = "10.78.0.1:8787"
+const desktopWFPRouterServerFinal = "198.51.100.240:8388"
+const desktopWFPRouterServerToken = "original-router-server-private-token"
+
+type desktopWFPRouterServerRequest struct{ NodeID, Token string }
+type desktopWFPRouterServerReceipt struct {
+	NodeID                                                                                 string
+	Health, Discovery, Creates, Deletes, RelayTCP, RelayUDP, FinalTCP, FinalUDP, Responses int32
+	Live                                                                                   bool
+}
+type desktopWFPRouterServer struct {
+	peer                                                                                   *desktopExternalIntegrationPeer
+	finalPeer                                                                              *desktopExternalIntegrationPeer
+	request                                                                                desktopWFPRouterServerRequest
+	manager                                                                                *multihoprelay.Manager
+	mu                                                                                     sync.Mutex
+	process                                                                                *desktopWFPRouterRelayProcess
+	associations                                                                           map[uint16]*desktopWFPRouterAssociation
+	final                                                                                  string
+	fault                                                                                  string
+	health, discovery, creates, deletes, relayTCP, relayUDP, finalTCP, finalUDP, responses atomic.Int32
+}
+type desktopWFPRouterRelayProcess struct {
+	closeBox func() error
+	box      *Box
+	lease    multihoprelay.Lease
+	mu       sync.Mutex
+	alive    bool
+	retiring bool
+	owner    *desktopWFPRouterServer
+}
+
+type desktopWFPRouterAssociation struct {
+	owner   *desktopWFPRouterServer
+	process *desktopWFPRouterRelayProcess
+	control net.Conn
+	port    uint16
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	closing bool
+	workers sync.WaitGroup
+	once    sync.Once
+	done    chan struct{}
+}
+
+func (a *desktopWFPRouterAssociation) current() bool {
+	if a.ctx.Err() != nil {
+		return false
+	}
+	a.owner.mu.Lock()
+	same := a.owner.associations[a.port] == a && a.owner.process == a.process
+	a.owner.mu.Unlock()
+	a.process.mu.Lock()
+	live := a.process.alive && !a.process.retiring && a.process.lease.ExpiresAt.After(time.Now())
+	a.process.mu.Unlock()
+	return same && live && a.ctx.Err() == nil
+}
+func (a *desktopWFPRouterAssociation) enter() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closing || !a.current() {
+		return false
+	}
+	a.workers.Add(1)
+	return true
+}
+func (a *desktopWFPRouterAssociation) retire() {
+	a.once.Do(func() {
+		a.mu.Lock()
+		a.closing = true
+		a.cancel()
+		if a.control != nil {
+			_ = a.control.Close()
+		}
+		a.mu.Unlock()
+		a.workers.Wait()
+		a.owner.mu.Lock()
+		if a.owner.associations[a.port] == a {
+			delete(a.owner.associations, a.port)
+		}
+		a.owner.mu.Unlock()
+		close(a.done)
+	})
+	<-a.done
+}
+
+func (p *desktopWFPRouterRelayProcess) Alive() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.alive && !p.retiring
+}
+func (p *desktopWFPRouterRelayProcess) Stop(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	p.mu.Lock()
+	if !p.alive {
+		p.mu.Unlock()
+		return nil
+	}
+	p.retiring = true
+	p.mu.Unlock()
+	p.owner.mu.Lock()
+	var associations []*desktopWFPRouterAssociation
+	for _, a := range p.owner.associations {
+		if a.process == p {
+			associations = append(associations, a)
+		}
+	}
+	p.owner.mu.Unlock()
+	for _, a := range associations {
+		a.retire()
+	}
+	if p.closeBox == nil {
+		return errors.New("original relay listener owner missing")
+	}
+	if err := p.closeBox(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.alive = false
+	p.mu.Unlock()
+	return nil
+}
+func desktopWFPRouterServerCapture(p *desktopExternalWFPPacketCapture) *desktopWFPRouterServerRequest {
+	sum := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + p.peerPublicKey))
+	return &desktopWFPRouterServerRequest{hex.EncodeToString(sum[:]), desktopWFPRouterServerToken}
+}
+func desktopWFPRouterServerReplyIdentity(a, b desktopExternalWFPReply) bool {
+	if a.RouterServer == nil || b.RouterServer == nil {
+		return a.RouterServer == nil && b.RouterServer == nil
+	}
+	return a.RouterServer.NodeID == b.RouterServer.NodeID
+}
+func desktopWFPRouterServerInitialReceipt(q *desktopWFPRouterServerRequest, r *desktopWFPRouterServerReceipt) bool {
+	if q == nil || r == nil {
+		return q == nil && r == nil
+	}
+	return *r == (desktopWFPRouterServerReceipt{NodeID: q.NodeID})
+}
+func (r *desktopWFPRouterServer) receipt() *desktopWFPRouterServerReceipt {
+	r.mu.Lock()
+	p := r.process
+	r.mu.Unlock()
+	return &desktopWFPRouterServerReceipt{r.request.NodeID, r.health.Load(), r.discovery.Load(), r.creates.Load(), r.deletes.Load(), r.relayTCP.Load(), r.relayUDP.Load(), r.finalTCP.Load(), r.finalUDP.Load(), r.responses.Load(), p != nil && p.Alive()}
+}
+
+// The independent Router owns a real relay Box compiled by the production
+// lease manager. Only its fixture-local socket addresses are mapped: the WG
+// handler checks the original tunnel peer before forwarding to this listener.
+// Credentials, lease, SS transport and domain refusal stay compiler-owned.
+func (r *desktopWFPRouterServer) Start(ctx context.Context, raw []byte, lease multihoprelay.Lease) (multihoprelay.Process, error) {
+	if ctx.Err() != nil || r.peer.ctx.Err() != nil || lease.NodeID != r.request.NodeID || lease.Host != "10.78.0.1" {
+		return nil, errors.New("Router relay lost original lease")
+	}
+	var graph map[string]any
+	if json.Unmarshal(raw, &graph) != nil {
+		return nil, errors.New("invalid compiled relay")
+	}
+	ins, ok := graph["inbounds"].([]any)
+	if !ok || len(ins) != 1 {
+		return nil, errors.New("relay listener count")
+	}
+	in, ok := ins[0].(map[string]any)
+	if !ok || in["type"] != "socks" || in["listen"] != lease.Host || in["listen_port"] != float64(lease.Port) {
+		return nil, errors.New("relay listener identity")
+	}
+	in["listen"] = "127.0.0.1"
+	outs, ok := graph["outbounds"].([]any)
+	if !ok || len(outs) != 1 {
+		return nil, errors.New("relay final count")
+	}
+	out, ok := outs[0].(map[string]any)
+	if !ok || out["type"] != "shadowsocks" || out["server"] != "198.51.100.240" || out["server_port"] != float64(8388) {
+		return nil, errors.New("relay final identity")
+	}
+	target := netip.MustParseAddrPort(r.final)
+	out["server"], out["server_port"] = target.Addr().String(), target.Port()
+	route, ok := graph["route"].(map[string]any)
+	if !ok {
+		return nil, errors.New("relay route missing")
+	}
+	rules, ok := route["rules"].([]any)
+	if !ok || len(rules) != 2 {
+		return nil, errors.New("relay peer/domain refusal missing")
+	}
+	rule, ok := rules[0].(map[string]any)
+	if !ok || rule["invert"] != true || rule["action"] != "reject" {
+		return nil, errors.New("relay peer refusal changed")
+	}
+	peers, ok := rule["source_ip_cidr"].([]any)
+	if !ok || len(peers) != 1 || peers[0] != "10.78.0.2/32" {
+		return nil, errors.New("relay original peer changed")
+	}
+	rule["source_ip_cidr"] = []string{"127.0.0.1/32"}
+	body, err := json.Marshal(graph)
+	if err != nil {
+		return nil, err
+	}
+	ir, or := inbound.NewRegistry(), outbound.NewRegistry()
+	SOCKS.RegisterInbound(ir)
+	SS.RegisterOutbound(or)
+	runtime := Context(r.peer.ctx, ir, or, endpoint.NewRegistry(), dns.NewTransportRegistry(), boxService.NewRegistry(), certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](runtime, body)
+	if err != nil {
+		return nil, err
+	}
+	instance, err := New(Options{Context: runtime, Options: options})
+	if err != nil {
+		return nil, err
+	}
+	if err = instance.Start(); err != nil {
+		_ = instance.Close()
+		return nil, err
+	}
+	process := &desktopWFPRouterRelayProcess{box: instance, lease: lease, alive: true, owner: r, closeBox: instance.Close}
+	r.mu.Lock()
+	r.process = process
+	r.mu.Unlock()
+	return process, nil
+}
+
+func (r *desktopWFPRouterServer) target(destination M.Socksaddr, packet bool) (string, error) {
+	r.mu.Lock()
+	p := r.process
+	association := r.associations[destination.Port]
+	r.mu.Unlock()
+	if p == nil {
+		return "", errors.New("Router has no lease")
+	}
+	p.mu.Lock()
+	lease, alive := p.lease, p.alive && !p.retiring
+	p.mu.Unlock()
+	if !alive || !lease.ExpiresAt.After(time.Now()) || (!packet && int(destination.Port) != lease.Port) || (packet && (association == nil || association.process != p || association.ctx.Err() != nil)) || destination.Addr.String() != "10.78.0.1" && destination.Addr.String() != "127.0.0.1" {
+		return "", errors.New("Router denies unowned relay destination")
+	}
+	return net.JoinHostPort("127.0.0.1", fmt.Sprint(destination.Port)), nil
+}
+
+type desktopWFPRouterControl struct {
+	client, server net.Conn
+	mu             sync.Mutex
+	association    *desktopWFPRouterAssociation
+	closing        bool
+	once           sync.Once
+}
+
+func (c *desktopWFPRouterControl) close() {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.closing = true
+		association := c.association
+		c.mu.Unlock()
+		if association != nil {
+			association.retire()
+		}
+		_ = c.client.Close()
+		_ = c.server.Close()
+	})
+}
+func (r *desktopWFPRouterServer) stream(ctx context.Context, c net.Conn, m M.Metadata) error {
+	if r.peer.ctx.Err() != nil || ctx.Err() != nil || m.Source.Addr.String() != "10.78.0.2" {
+		return errors.New("Router rejects foreign tunnel peer")
+	}
+	if m.Destination.String() == desktopWFPRouterServerAPI {
+		stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+		defer stop()
+		return r.api(ctx, c)
+	}
+	r.mu.Lock()
+	process := r.process
+	r.mu.Unlock()
+	target, err := r.target(m.Destination, false)
+	if err != nil {
+		return err
+	}
+	remote, err := (&net.Dialer{}).DialContext(ctx, "tcp", target)
+	if err != nil {
+		return err
+	}
+	control := &desktopWFPRouterControl{client: c, server: remote}
+	defer control.close()
+	stopPeer := context.AfterFunc(r.peer.ctx, control.close)
+	defer stopPeer()
+	stopFlow := context.AfterFunc(ctx, control.close)
+	defer stopFlow()
+	r.relayTCP.Add(1)
+	if _, err = r.observeAssociation(ctx, control, process); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(remote, c); control.close(); close(done) }()
+	_, _ = io.Copy(c, remote)
+	control.close()
+	<-done
+	return nil
+}
+func (r *desktopWFPRouterServer) packet(ctx context.Context, c N.PacketConn, m M.Metadata) error {
+	if r.peer.ctx.Err() != nil || m.Source.Addr.String() != "10.78.0.2" {
+		return errors.New("Router rejects foreign tunnel packet")
+	}
+	// Capture the original control before any validation that can race its
+	// retirement. Never reload a successor after validating an earlier tuple.
+	r.mu.Lock()
+	association := r.associations[m.Destination.Port]
+	r.mu.Unlock()
+	target, err := r.target(m.Destination, true)
+	if err != nil {
+		return err
+	}
+	if association == nil || !association.enter() {
+		return errors.New("original UDP association retired")
+	}
+	defer association.workers.Done()
+	remote, err := (&net.Dialer{}).DialContext(association.ctx, "udp", target)
+	if err != nil {
+		return err
+	}
+	defer remote.Close()
+	stop := context.AfterFunc(association.ctx, func() { _ = c.Close(); _ = remote.Close() })
+	defer stop()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer c.Close()
+		defer remote.Close()
+		for {
+			b := buf.NewPacket()
+			destination, e := c.ReadPacket(b)
+			if e == nil && (destination != m.Destination || !association.current()) {
+				e = errors.New("Router UDP changed destination")
+			}
+			if e == nil {
+				_, e = remote.Write(b.Bytes())
+				r.relayUDP.Add(1)
+			}
+			b.Release()
+			if e != nil {
+				return
+			}
+		}
+	}()
+	for {
+		b := buf.NewPacket()
+		n, e := remote.Read(b.FreeBytes())
+		if e != nil {
+			b.Release()
+			break
+		}
+		b.Truncate(n)
+		if !association.current() {
+			b.Release()
+			break
+		}
+		if e = c.WritePacket(b, m.Destination); e != nil {
+			break
+		}
+	}
+	_ = c.Close()
+	_ = remote.Close()
+	<-done
+	return nil
+}
+
+// Observe the real authenticated SOCKS reply while forwarding the original
+// bytes. A UDP tuple exists only until that exact control closes. No client
+// supplied port, wildcard, guessed range or earlier session can authorize it.
+func (r *desktopWFPRouterServer) observeAssociation(ctx context.Context, control *desktopWFPRouterControl, process *desktopWFPRouterRelayProcess) (*desktopWFPRouterAssociation, error) {
+	client, server := control.client, control.server
+	bad := errors.New("Router relay changed authenticated SOCKS association")
+	relay := func(from, to net.Conn, n int) ([]byte, error) {
+		b := make([]byte, n)
+		if _, e := io.ReadFull(from, b); e != nil {
+			return nil, e
+		}
+		if to != nil {
+			if _, e := to.Write(b); e != nil {
+				return nil, e
+			}
+		}
+		return b, nil
+	}
+	greeting, e := relay(client, server, 2)
+	if e != nil {
+		return nil, e
+	}
+	if greeting[0] != 5 || greeting[1] == 0 || greeting[1] > 16 {
+		return nil, bad
+	}
+	if _, e = relay(client, server, int(greeting[1])); e != nil {
+		return nil, e
+	}
+	method, e := relay(server, client, 2)
+	if e != nil {
+		return nil, e
+	}
+	if method[0] != 5 || method[1] != 2 {
+		return nil, bad
+	}
+	auth, e := relay(client, server, 2)
+	if e != nil {
+		return nil, e
+	}
+	if auth[0] != 1 || auth[1] == 0 {
+		return nil, bad
+	}
+	if _, e = relay(client, server, int(auth[1])); e != nil {
+		return nil, e
+	}
+	length, e := relay(client, server, 1)
+	if e != nil {
+		return nil, e
+	}
+	if length[0] == 0 {
+		return nil, bad
+	}
+	if _, e = relay(client, server, int(length[0])); e != nil {
+		return nil, e
+	}
+	verdict, e := relay(server, client, 2)
+	if e != nil {
+		return nil, e
+	}
+	if verdict[0] != 1 || verdict[1] != 0 {
+		return nil, bad
+	}
+	address := func(from, to net.Conn) ([]byte, error) {
+		h, e := relay(from, to, 4)
+		if e != nil {
+			return nil, e
+		}
+		if h[0] != 5 || h[2] != 0 {
+			return nil, bad
+		}
+		n := 0
+		switch h[3] {
+		case 1:
+			n = 6
+		case 4:
+			n = 18
+		default:
+			return nil, bad
+		}
+		body, e := relay(from, to, n)
+		return append(h, body...), e
+	}
+	request, e := address(client, server)
+	if e != nil {
+		return nil, e
+	}
+	if request[1] != 1 && request[1] != 3 {
+		return nil, bad
+	}
+	response, e := address(server, nil)
+	if e != nil {
+		return nil, e
+	}
+	if response[1] != 0 {
+		return nil, bad
+	}
+	if request[1] != 3 {
+		r.mu.Lock()
+		current := r.process == process && process != nil && process.Alive()
+		r.mu.Unlock()
+		if !current || ctx.Err() != nil || r.peer.ctx.Err() != nil {
+			return nil, bad
+		}
+		_, e := client.Write(response)
+		return nil, e
+	}
+	if response[3] != 1 {
+		return nil, bad
+	}
+	ip := netip.AddrFrom4([4]byte(response[4:8]))
+	if !ip.IsUnspecified() && ip != netip.MustParseAddr("127.0.0.1") {
+		return nil, bad
+	}
+	port := uint16(response[8])<<8 | uint16(response[9])
+	if port == 0 {
+		return nil, bad
+	}
+	control.mu.Lock()
+	if control.closing || ctx.Err() != nil || r.peer.ctx.Err() != nil {
+		control.mu.Unlock()
+		return nil, bad
+	}
+	r.mu.Lock()
+	if r.associations[port] != nil || r.process != process || process == nil || !process.Alive() {
+		r.mu.Unlock()
+		control.mu.Unlock()
+		return nil, bad
+	}
+	lifetime, cancel := context.WithCancel(r.peer.ctx)
+	association := &desktopWFPRouterAssociation{owner: r, process: process, control: client, port: port, ctx: lifetime, cancel: cancel, done: make(chan struct{})}
+	r.associations[port] = association
+	control.association = association
+	r.mu.Unlock()
+	control.mu.Unlock()
+	if _, err := client.Write(response); err != nil {
+		return nil, err
+	}
+	return association, nil
+}
+func (r *desktopWFPRouterServer) api(ctx context.Context, c net.Conn) error {
+	request, err := http.ReadRequest(bufio.NewReader(c))
+	if err != nil {
+		return err
+	}
+	defer request.Body.Close()
+	status := 200
+	var response any
+	if request.Host != desktopWFPRouterServerAPI || request.Header.Get("Authorization") != "Bearer "+r.request.Token || r.fault == "entry-token" {
+		status = 403
+	} else if request.Method == "GET" && request.URL.Path == "/health" {
+		r.health.Add(1)
+		node := r.request.NodeID
+		if r.fault == "entry-proof" {
+			node = string(bytes.Repeat([]byte{'f'}, 64))
+		}
+		response = map[string]any{"ok": true, "node_id": node, "proof": "router-vpn-private-agent-v1"}
+	} else if request.URL.Path != "/api/multihop/lease" {
+		status = 404
+	} else if request.Method == "GET" {
+		r.discovery.Add(1)
+		response = map[string]any{"node_id": r.request.NodeID, "execution": "server", "exits": r.manager.Available()}
+	} else {
+		var q multihoprelay.Request
+		decoder := json.NewDecoder(io.LimitReader(request.Body, 32<<10))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&q) != nil {
+			status = 400
+		} else if request.Method == "PUT" {
+			lease, e := r.manager.Create(ctx, netip.MustParseAddr("10.78.0.2"), q)
+			if e != nil {
+				status = 409
+			} else {
+				r.creates.Add(1)
+				r.mu.Lock()
+				process := r.process
+				r.mu.Unlock()
+				if process != nil {
+					process.mu.Lock()
+					process.lease = lease
+					process.mu.Unlock()
+				}
+				if r.fault == "lease-expired" {
+					lease.ExpiresAt = time.Now().Add(-time.Second)
+				}
+				if r.fault == "lease-credentials" {
+					lease.Password += "-changed"
+				}
+				response = lease
+			}
+		} else if request.Method == "DELETE" {
+			if e := r.manager.Delete(ctx, netip.MustParseAddr("10.78.0.2"), q); e != nil {
+				status = 409
+			} else {
+				r.deletes.Add(1)
+				response = map[string]bool{"ok": true}
+			}
+		} else {
+			status = 405
+		}
+	}
+	raw, _ := json.Marshal(response)
+	return (&http.Response{StatusCode: status, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{"Content-Type": []string{"application/json"}}, ContentLength: int64(len(raw)), Body: io.NopCloser(bytes.NewReader(raw)), Close: true}).Write(c)
+}
+
+func TestRouterVPNDesktopExternalWindowsRouterServerPeer(t *testing.T) {
+	desktopExternalWFPRunPeer(t, "router-server")
+}
+
+func TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement(t *testing.T) {
+	fixture := func(t *testing.T) (*desktopWFPRouterServer, *desktopWFPRouterAssociation) {
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		r := &desktopWFPRouterServer{peer: &desktopExternalIntegrationPeer{ctx: ctx}, associations: make(map[uint16]*desktopWFPRouterAssociation)}
+		r.process = &desktopWFPRouterRelayProcess{alive: true, owner: r, lease: multihoprelay.Lease{ExpiresAt: time.Now().Add(time.Minute)}}
+		original, retire := context.WithCancel(ctx)
+		a := &desktopWFPRouterAssociation{owner: r, process: r.process, port: 26240, ctx: original, cancel: retire, done: make(chan struct{})}
+		r.associations[a.port] = a
+		t.Cleanup(a.retire)
+		return r, a
+	}
+	t.Run("close-joins-original-packet-worker", func(t *testing.T) {
+		r, a := fixture(t)
+		if !a.enter() {
+			t.Fatal("original association refused")
+		}
+		released := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(released) }) }
+		t.Cleanup(release)
+		joined := make(chan struct{})
+		go func() { <-a.ctx.Done(); <-released; a.workers.Done() }()
+		closed := make(chan struct{})
+		r.process.closeBox = func() error { close(closed); return nil }
+		go func() {
+			if err := r.process.Stop(context.Background()); err != nil {
+				t.Error(err)
+			}
+			close(joined)
+		}()
+		<-a.ctx.Done()
+		if a.enter() || a.current() {
+			t.Fatal("retiring association admitted new packet")
+		}
+		r.mu.Lock()
+		held := r.associations[a.port] == a
+		r.mu.Unlock()
+		if !held {
+			t.Fatal("original association released before worker join")
+		}
+		select {
+		case <-joined:
+			t.Fatal("retirement skipped packet join")
+		default:
+		}
+		select {
+		case <-closed:
+			t.Fatal("listener released before original worker join")
+		default:
+		}
+		release()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Fatal("original worker not joined")
+		}
+		r.mu.Lock()
+		absent := r.associations[a.port] == nil
+		r.mu.Unlock()
+		if !absent {
+			t.Fatal("joined association not removed")
+		}
+		select {
+		case <-closed:
+		default:
+			t.Fatal("joined original listener not released")
+		}
+	})
+	t.Run("control-close-joins-before-udp-tuple-release", func(t *testing.T) {
+		_, a := fixture(t)
+		client, clientPeer := net.Pipe()
+		defer clientPeer.Close()
+		server, serverPeer := net.Pipe()
+		defer serverPeer.Close()
+		observed := &desktopWFPRouterCloseWitness{Conn: server, closed: make(chan struct{})}
+		control := &desktopWFPRouterControl{client: client, server: observed, association: a}
+		a.control = client
+		if !a.enter() {
+			t.Fatal("original packet worker absent")
+		}
+		released := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(released) }) }
+		t.Cleanup(release)
+		go func() { <-a.ctx.Done(); <-released; a.workers.Done() }()
+		joined := make(chan struct{})
+		go func() { control.close(); close(joined) }()
+		<-a.ctx.Done()
+		select {
+		case <-observed.closed:
+			t.Fatal("downstream SOCKS control freed UDP tuple before original packet joined")
+		default:
+		}
+		release()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Fatal("control cleanup did not join")
+		}
+		select {
+		case <-observed.closed:
+		default:
+			t.Fatal("joined downstream control not closed")
+		}
+	})
+	t.Run("successor-retains-own-association", func(t *testing.T) {
+		r, old := fixture(t)
+		ctx, cancel := context.WithCancel(r.peer.ctx)
+		defer cancel()
+		nextProcess := &desktopWFPRouterRelayProcess{alive: true, owner: r, lease: multihoprelay.Lease{ExpiresAt: time.Now().Add(time.Minute)}}
+		next := &desktopWFPRouterAssociation{owner: r, process: nextProcess, port: old.port, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+		defer next.retire()
+		r.mu.Lock()
+		r.process = nextProcess
+		r.associations[old.port] = next
+		r.mu.Unlock()
+		if old.current() || old.enter() {
+			t.Fatal("old flow adopted successor")
+		}
+		old.retire()
+		if !next.enter() {
+			t.Fatal("old cleanup removed successor")
+		}
+		next.workers.Done()
+	})
+	t.Run("handshake-cancel-joins-both-streams", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		flow, cancelFlow := context.WithCancel(ctx)
+		defer cancelFlow()
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		port := listener.Addr().(*net.TCPAddr).Port
+		r := &desktopWFPRouterServer{peer: &desktopExternalIntegrationPeer{ctx: ctx}, associations: make(map[uint16]*desktopWFPRouterAssociation)}
+		r.process = &desktopWFPRouterRelayProcess{alive: true, owner: r, lease: multihoprelay.Lease{Port: port, ExpiresAt: time.Now().Add(time.Minute)}}
+		control, client := net.Pipe()
+		defer client.Close()
+		defer control.Close()
+		done := make(chan error, 1)
+		go func() {
+			done <- r.stream(flow, control, M.Metadata{Source: M.SocksaddrFromNetIP(netip.MustParseAddrPort("10.78.0.2:12345")), Destination: M.SocksaddrFromNetIP(netip.AddrPortFrom(netip.MustParseAddr("10.78.0.1"), uint16(port)))})
+		}()
+		server, err := listener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer server.Close()
+		cancelFlow()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("cancelled handshake succeeded")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("original handshake did not join")
+		}
+		_ = server.SetReadDeadline(time.Now().Add(time.Second))
+		var b [1]byte
+		if _, err := server.Read(b[:]); err == nil {
+			t.Fatal("cancelled remote stream remained open")
+		}
+	})
+}
+
+type desktopWFPRouterCloseWitness struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *desktopWFPRouterCloseWitness) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func desktopWFPRouterServerExternal() map[string]any {
+	return map[string]any{"protocol": "shadowsocks", "expected_public_ip": desktopExternalIntegrationIP,
+		"shadowsocks":    map[string]any{"server": "198.51.100.240", "port": 8388, "method": "2022-blake3-aes-256-gcm", "password": desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 41)},
+		"response_probe": map[string]any{"url": "https://198.51.100.240/node-response", "server_name": "captured-proxy.example"}}
+}
+
+func desktopWFPStartRouterServerPeer(t *testing.T, p *desktopExternalIntegrationPeer, q desktopExternalWFPRequest) *desktopWFPRouterServer {
+	t.Helper()
+	if q.RouterServer == nil || q.Packet == nil || q.Packet.Protocol != "wireguard" || q.RouterServer.Token != desktopWFPRouterServerToken || len(q.RouterServer.NodeID) != 64 {
+		t.Fatal("Router Server original capture missing")
+	}
+	switch q.Fault {
+	case "", "entry-token", "entry-proof", "private-key", "psk", "final-key", "dns", "exit", "trust", "held", "lease-expired", "lease-credentials":
+	default:
+		t.Fatal("unknown Router Server negative")
+	}
+	r := &desktopWFPRouterServer{peer: p, request: *q.RouterServer, fault: q.Fault, associations: make(map[uint16]*desktopWFPRouterAssociation)}
+	tcp, udp, err := desktopWFPSSEntryPortPair(netip.MustParseAddr("127.0.0.1"), net.Listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.final = tcp.Addr().String()
+	finalCtx, cancel := context.WithCancel(p.ctx)
+	last := &desktopExternalIntegrationPeer{protocol: "shadowsocks", ctx: finalCtx, cancel: cancel, listener: tcp, packet: udp, certificate: p.certificate, connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), badDNS: q.Fault == "dns", badIP: q.Fault == "exit", publicEntered: p.publicEntered, publicRelease: p.publicRelease}
+	r.finalPeer = last
+	last.ownedStream = func(ctx context.Context, c net.Conn, m M.Metadata) error {
+		r.finalTCP.Add(1)
+		if m.Destination.String() != "198.51.100.240:443" {
+			return last.serve(c, m.Destination.String())
+		}
+		secure := tls.Server(c, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{last.certificate}, NextProtos: []string{"http/1.1"}})
+		if err := secure.HandshakeContext(ctx); err != nil {
+			return err
+		}
+		request, err := http.ReadRequest(bufio.NewReader(secure))
+		if err != nil {
+			return err
+		}
+		defer request.Body.Close()
+		if request.Method != "GET" || request.Host != "captured-proxy.example" || request.URL.Path != "/node-response" || request.Header.Get("Authorization") != "" || secure.ConnectionState().ServerName != "captured-proxy.example" {
+			return errors.New("final response changed original TLS destination or leaked Router token")
+		}
+		select {
+		case <-time.After(2 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		r.responses.Add(1)
+		body := "owned independent SS node response"
+		return (&http.Response{StatusCode: 200, ProtoMajor: 1, ProtoMinor: 1, ContentLength: int64(len(body)), Body: io.NopCloser(bytes.NewBufferString(body)), Close: true}).Write(secure)
+	}
+	password := desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 41)
+	if q.Fault == "final-key" {
+		password = desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 42)
+	}
+	service, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 60, &desktopWFPSSEntryFinalHandler{last}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last.workers.Add(2)
+	go func() {
+		defer last.workers.Done()
+		for {
+			c, e := tcp.Accept()
+			if e != nil {
+				return
+			}
+			last.mu.Lock()
+			if last.closing {
+				last.mu.Unlock()
+				_ = c.Close()
+				return
+			}
+			last.connections[c] = true
+			last.workers.Add(1)
+			last.mu.Unlock()
+			go func() {
+				defer last.workers.Done()
+				defer func() { _ = c.Close(); last.mu.Lock(); delete(last.connections, c); last.mu.Unlock() }()
+				_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+				err := service.NewConnection(last.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+				if desktopWFPSSEntryAuthError(err) {
+					p.authFailures.Add(1)
+				}
+				last.recordFailure(err)
+			}()
+		}
+	}()
+	go func() {
+		defer last.workers.Done()
+		reader := B.NewPacketConn(udp)
+		for {
+			body := buf.NewPacket()
+			from, e := reader.ReadPacket(body)
+			if e != nil {
+				body.Release()
+				return
+			}
+			r.finalUDP.Add(1)
+			if e = service.NewPacket(last.ctx, reader, body, M.Metadata{Source: from}); e != nil {
+				body.Release()
+				if desktopWFPSSEntryAuthError(e) {
+					p.authFailures.Add(1)
+				}
+				last.recordFailure(e)
+			}
+		}
+	}()
+	exit, err := multihoprelay.ExternalSelection("selected-external-native", "shadowsocks", desktopWFPRouterServerExternal(), nil)
+	if err != nil {
+		last.close()
+		t.Fatal(err)
+	}
+	r.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: "10.78.0.1", FirstPort: 26240, LastPort: 26271, TTLSeconds: 15, Exits: []multihoprelay.Exit{exit}}, r.request.NodeID, r)
+	if err != nil {
+		last.close()
+		t.Fatal(err)
+	}
+	p.ownedStream, p.ownedPacket = r.stream, r.packet
+	p.ownedFlow = func(protocol uint8, source, destination netip.AddrPort) tun.FlowVerdict {
+		if p.ctx.Err() != nil || source.Addr() != netip.MustParseAddr("10.78.0.2") {
+			return tun.FlowVerdict{Action: tun.ActionReject}
+		}
+		if protocol == 6 && destination.String() == desktopWFPRouterServerAPI {
+			return tun.FlowVerdict{Action: tun.ActionAccept}
+		}
+		if protocol != 6 && protocol != 17 {
+			return tun.FlowVerdict{Action: tun.ActionReject}
+		}
+		if _, err := r.target(M.SocksaddrFromNetIP(destination), protocol == 17); err != nil {
+			return tun.FlowVerdict{Action: tun.ActionReject}
+		}
+		return tun.FlowVerdict{Action: tun.ActionAccept}
+	}
+	fault := ""
+	if q.Fault == "private-key" || q.Fault == "psk" {
+		fault = q.Fault
+	}
+	desktopExternalWFPStartPacketPeer(t, p, q.Packet, fault)
+	closeWG := p.closeProtocol
+	p.closeProtocol = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := r.manager.Close(ctx); err != nil {
+			p.recordFailure(errors.New("original Router lease did not join"))
+		}
+		closeWG()
+		last.close()
+	}
+	return r
+}
+
+func desktopWFPRouterServerOriginal(t *testing.T, p *desktopExternalWFPReference, kill string) (*mobilemultihop.ExternalPolicy, string, string) {
+	t.Helper()
+	if p.packet == nil || p.packet.protocol != "wireguard" || p.initial.RouterServer == nil {
+		t.Fatal("Router capture lost independent WG provider")
+	}
+	_, source, capture := desktopExternalWFPOriginal(t, p, kill)
+	var graph, selected map[string]any
+	if json.Unmarshal([]byte(source), &graph) != nil || json.Unmarshal([]byte(capture), &selected) != nil {
+		t.Fatal("original graph decode")
+	}
+	ext := desktopWFPRouterServerExternal()
+	graph["outbounds"] = []any{map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 41)}}
+	profile := selected["profile"].(map[string]any)
+	profile["external"], profile["multihop_enabled"], profile["multihop_entry_id"], profile["multihop_exit_id"], profile["multihop_exit_mode"], profile["multihop_execution"], profile["multihop_entry_mode"] = ext, true, "original-paired-router", profile["id"], "shadowsocks", "server", "wg"
+	selected["protocol"] = "shadowsocks"
+	node := desktopWFPRouterServerCapture(p.packet)
+	if node.NodeID != p.initial.RouterServer.NodeID {
+		t.Fatal("provider changed Router public key identity")
+	}
+	wg := fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = 10.78.0.2/32\nDNS = 192.168.50.53\n\n[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = %s\nPersistentKeepalive = 25\n", p.packet.privateKey, p.packet.peerPublicKey, p.packet.presharedKey, p.remote)
+	predecessor, err := mobilemultihop.WireGuardExitConfig(wg, node.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected["entry"] = map[string]any{"id": "original-paired-router", "node_kind": "router-vpn", "node_proof_id": node.NodeID, "router_api": "http://" + desktopWFPRouterServerAPI, "api_token": node.Token, "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false}
+	selected["entry_tag"], selected["predecessor_config"] = "external-entry", predecessor
+	raw, _ := json.Marshal(graph)
+	saved, _ := json.Marshal(selected)
+	prepared, err := mobilemultihop.PrepareExternalExecutionCapture(string(raw), string(saved), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := mobilemultihop.NewExternalPolicy(string(raw), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original, string(raw), prepared
+}
+
+func TestRouterVPNDesktopExternalWindowsRouterServerWFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	cert, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(cert)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	for _, name := range []string{"on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof"} {
+		t.Run(name, func(t *testing.T) {
+			fault, kill := "", "always"
+			if name == "on-connect" {
+				kill = name
+			}
+			if len(name) > 7 && name[:7] == "reject/" {
+				fault = name[7:]
+			}
+			if name == "cancelled-proof" {
+				fault = "held"
+			}
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			peer := desktopExternalWFPStartReferenceProtocol(t, ca, fault, "router-server")
+			original, source, capture := desktopWFPRouterServerOriginal(t, peer, kill)
+			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			f.start(t)
+			type result struct {
+				raw string
+				err error
+			}
+			done := make(chan result, 1)
+			go func() { raw, err := f.proof.Run(); done <- result{raw, err} }()
+			if fault == "held" || fault == "private-key" || fault == "psk" || fault == "final-key" {
+				deadline := time.NewTimer(10 * time.Second)
+				observed := false
+				for !observed {
+					reply := peer.call(t, "stats", "")
+					observed = fault == "held" && reply.Attempts > 0 || (fault == "private-key" || fault == "psk") && reply.Packets > 0 || fault == "final-key" && reply.AuthFailures > 0
+					if observed {
+						break
+					}
+					select {
+					case answer := <-done:
+						done <- answer
+						if fault == "held" || reply.AuthFailures == 0 && fault == "final-key" {
+							t.Fatal("proof ended before actual held/authentication witness", answer.err)
+						}
+						observed = true
+					case <-deadline.C:
+						f.proof.Cancel()
+						t.Fatal("native negative did not reach original peer")
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+				deadline.Stop()
+				f.proof.Cancel()
+			}
+			var outcome result
+			select {
+			case outcome = <-done:
+			case <-time.After(20 * time.Second):
+				f.proof.Cancel()
+				select {
+				case outcome = <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("native Server proof did not join")
+				}
+				t.Fatal("native Server proof exceeded its bound", outcome.err)
+			}
+			raw, proofErr := outcome.raw, outcome.err
+			if fault != "" {
+				if proofErr == nil || f.proof.Healthy() || f.network.Current() {
+					t.Fatal("invalid Server graph became healthy")
+				}
+				retained = f.drain(t)
+				desktopExternalWFPRequireBlocked(t, peer)
+				return
+			}
+			var proof mobilemultihop.ExternalProofResult
+			if proofErr != nil || json.Unmarshal([]byte(raw), &proof) != nil || proof.Execution != "server" || !proof.EntryProven || proof.EntryNodeID != peer.initial.RouterServer.NodeID || !proof.DNSProven || proof.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
+				t.Fatal("actual Server proof failed", proofErr)
+			}
+			reply := peer.call(t, "stats", "")
+			r := reply.RouterServer
+			if r == nil || r.Health == 0 || r.Discovery == 0 || r.Creates == 0 || !r.Live || r.RelayTCP == 0 || r.RelayUDP == 0 || r.FinalTCP == 0 || r.FinalUDP == 0 || r.Responses == 0 || reply.DNS == 0 || reply.UDPDNS == 0 || reply.Public == 0 || reply.TLS == 0 {
+				t.Fatal("Server proof bypassed original WG, lease, SS or selected DNS", reply)
+			}
+			f.snapshot(t, peer)
+			desktopExternalWFPRequireBlocked(t, peer)
+			retained = f.drain(t)
+			reply = peer.call(t, "stats", "")
+			if reply.RouterServer.Live || reply.RouterServer.Deletes == 0 {
+				t.Fatal("Server lease was not retired through original Router")
+			}
+			desktopExternalWFPRequireBlocked(t, peer)
+			if name == "foreign-predecessor" || name == "commit-refused" {
+				expected := retained
+				if name == "foreign-predecessor" {
+					expected.Capture.SourceSHA256 = hex.EncodeToString(bytes.Repeat([]byte{0xff}, 32))
+				}
+				before := peer.call(t, "stats", "")
+				next := desktopExternalWFPBox(t, original, source, capture, &expected, name == "commit-refused")
+				if err := next.box.RouterVPNStrategyStart(); err == nil || next.admitted != 0 || next.network.Current() || next.network.SocketCurrent() {
+					t.Fatal("uncommitted Server successor acquired original WG socket")
+				}
+				if err := next.close(); err != nil {
+					t.Fatal("failed Server successor did not join", err)
+				}
+				if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+					t.Fatal("failed Server successor changed original deny", err)
+				}
+				after := peer.call(t, "stats", "")
+				if after.Packets != before.Packets || *after.RouterServer != *before.RouterServer {
+					t.Fatal("refused Server successor sent handshake, lease or proof traffic")
+				}
+			}
+			if name == "successor-and-original-restore" {
+				previousCapture := capture
+				for i := 0; i < 2; i++ {
+					var fresh map[string]any
+					if json.Unmarshal([]byte(capture), &fresh) != nil {
+						t.Fatal("original restoration capture")
+					}
+					delete(fresh, "execution")
+					private, _ := json.Marshal(fresh)
+					nextCapture, err := mobilemultihop.PrepareExternalExecutionCapture(source, string(private), "server")
+					if err != nil || nextCapture == previousCapture {
+						t.Fatal("restoration reused lease proposal", err)
+					}
+					nextOriginal, err := mobilemultihop.NewExternalPolicy(source, nextCapture)
+					if err != nil {
+						t.Fatal(err)
+					}
+					next := desktopExternalWFPBox(t, nextOriginal, source, nextCapture, &retained, false)
+					next.start(t)
+					raw, err := next.proof.Run()
+					var result mobilemultihop.ExternalProofResult
+					if err != nil || json.Unmarshal([]byte(raw), &result) != nil || result.Execution != "server" || result.EntryNodeID != proof.EntryNodeID || !result.EntryProven || !result.DNSProven || !next.proof.Healthy() || next.prepared == retained || next.commit.Previous == nil || *next.commit.Previous != retained {
+						t.Fatal("actual Server successor/restoration changed original authority", err)
+					}
+					next.snapshot(t, peer)
+					retained = next.drain(t)
+					previousCapture = nextCapture
+					if peer.call(t, "stats", "").RouterServer.Live {
+						t.Fatal("restored lease did not join")
+					}
+				}
+			}
+		})
+	}
+}

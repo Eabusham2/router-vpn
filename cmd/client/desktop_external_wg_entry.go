@@ -71,12 +71,28 @@ func validateDesktopRetainedExternalSourcesLocked(profile, entry common.RouterPr
 	}
 	selected.MultihopEnabled, selected.MultihopEntryID, selected.MultihopExitID = true, entry.ID, profile.ID
 	selected.MultihopExecution, selected.MultihopEntryMode = "local", ""
+	server := desktopWindowsExternalRouterServerOwner(owner)
+	if server && !desktopWindowsExternalRouterServerGraph(profile, entry, owner.selection) {
+		return errors.New("retained Router Server source changed its captured execution or entry")
+	}
+	if server {
+		selected.MultihopExecution, selected.MultihopEntryMode = "server", "wg"
+	}
 	selected, err = freezeDesktopExternalProfile(selected, owner.profile.Endpoint)
 	if err != nil || desktopOwnedNodeProfileToken(selected) != desktopOwnedNodeProfileToken(owner.profile) ||
 		[3]bool{selected.DAITAEnabled, selected.JumboTUN, selected.SocksEnabled} != [3]bool{owner.profile.DAITAEnabled, owner.profile.JumboTUN, owner.profile.SocksEnabled} {
 		return errors.Join(err, errors.New("retained external entry path replaced its captured final policy"))
 	}
-	frozen, err := freezeDesktopExternalProfile(entry, launch.endpoint)
+	var frozen common.RouterProfile
+	if server {
+		frozen = cloneRouterProfile(entry)
+		if frozen.NodeKind == "" {
+			frozen.NodeKind = "router-vpn"
+		}
+		frozen.Endpoint = launch.endpoint
+	} else {
+		frozen, err = freezeDesktopExternalProfile(entry, launch.endpoint)
+	}
 	if err != nil || desktopOwnedNodeProfileToken(frozen) != desktopOwnedNodeProfileToken(owner.entry) ||
 		[3]bool{frozen.DAITAEnabled, frozen.JumboTUN, frozen.SocksEnabled} != [3]bool{owner.entry.DAITAEnabled, owner.entry.JumboTUN, owner.entry.SocksEnabled} {
 		return errors.Join(err, errors.New("retained external entry path replaced its original entry source"))
@@ -129,5 +145,5 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 }
 
 func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
-	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && desktopWindowsExternalSSEntryOwner(owner)
+	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterServerOwner(owner))
 }

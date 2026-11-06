@@ -828,7 +828,12 @@ func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot s
 		entry, _, direct, err := speedLabExternalEntry(profiles, profile, request)
 		execution, executionErr := externalExecutionChoice(profile, request.Execution, direct)
 		profile.MultihopExecution = execution
-		if err != nil || executionErr != nil || request.EntryMode != "" || !desktopWindowsExternalGraphEligible(profile, entry, direct, "") {
+		entryModeSupported := request.EntryMode == ""
+		if !direct && request.EntryMode == "wg" {
+			profile.MultihopEntryMode = request.EntryMode
+			entryModeSupported = desktopWindowsExternalRouterServerGraph(profile, entry, "")
+		}
+		if err != nil || executionErr != nil || !entryModeSupported || !desktopWindowsExternalGraphEligible(profile, entry, direct, "") {
 			return errors.Join(err, executionErr, errors.New("temporary external path has no captured Windows protection successor"))
 		}
 		return nil
