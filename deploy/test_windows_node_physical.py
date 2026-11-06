@@ -73,10 +73,10 @@ EXTERNAL_OPENVPN_ALIAS = "TestRouterVPNDesktopExternalWindowsOpenVPNAlias"
 EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
     *(EXTERNAL_OPENVPN_ALIAS + "/reject-" + field for field in ("address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin")))
 EXTERNAL_SS_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsSSEntryWFP"
-EXTERNAL_SS_ENTRY_NETWORKS = ("shadowsocks", "http-connect", "https-connect")
+EXTERNAL_SS_ENTRY_NETWORKS = ("shadowsocks", "http-connect", "https-connect", "hysteria2")
 EXTERNAL_SS_ENTRY_LEAVES = ("on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
 EXTERNAL_SS_ENTRY_CASES = {network: (EXTERNAL_SS_ENTRY_ROOT, EXTERNAL_SS_ENTRY_ROOT + "/" + network,
-    *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_SS_ENTRY_LEAVES)) for network in EXTERNAL_SS_ENTRY_NETWORKS}
+    *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_SS_ENTRY_LEAVES + (("reject/final-trust",) if network == "hysteria2" else ()))) for network in EXTERNAL_SS_ENTRY_NETWORKS}
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
@@ -538,7 +538,7 @@ PHASES = ("node-baseline", "node-controls", "external-hysteria2", "external-sock
 _PHASE_COMMON = 2 * 180 + 90 + 60
 _PHASE_REFERENCES = 300 + 30 + 600 + 300 + 2 * 1800
 PHASE_TIMEOUTS = {
-    "external-ss-entry": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
+    "external-ss-entry": _PHASE_COMMON + 600 + 4 * 195 + 2 * (600 + 75),
     "node-baseline": _PHASE_COMMON + _PHASE_REFERENCES + 600 + 1215,
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),

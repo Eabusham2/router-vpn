@@ -8,8 +8,11 @@ func desktopExternalRetainedEntryOwner(owner *desktopExternalRuntime) bool {
 	return desktopExternalPacketEntryOwner(owner) || desktopExternalSSEntryOwner(owner)
 }
 func desktopExternalSSEntryOwner(owner *desktopExternalRuntime) bool {
+	return desktopExternalSSEntryOwnerWithFinal(owner, desktopExternalSSEntryFinalProfile)
+}
+func desktopExternalSSEntryOwnerWithFinal(owner *desktopExternalRuntime, final func(common.RouterProfile) bool) bool {
 	if owner == nil || owner.direct || owner.predecessor != "" || owner.selection != "local" ||
-		!desktopExternalSS2022Profile(owner.entry) || !desktopExternalSSEntryFinalProfile(owner.profile) ||
+		!desktopExternalSS2022Profile(owner.entry) || !final(owner.profile) ||
 		owner.entry.ID == "" || owner.entry.ID == owner.profile.ID ||
 		owner.profile.MultihopExecution != "" && owner.profile.MultihopExecution != "local" || owner.profile.MultihopEntryMode != "" {
 		return false

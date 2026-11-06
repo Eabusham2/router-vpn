@@ -59,7 +59,7 @@ func validateDesktopRetainedExternalSourcesLocked(profile, entry common.RouterPr
 		return errors.New("retained external entry lost its captured launch")
 	}
 	owner := launch.external
-	if !desktopExternalRetainedEntryOwner(owner) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID || profile.ID != owner.profile.ID || entry.ID != owner.entry.ID {
+	if owner.physical == nil || !desktopExternalRetainedEntryForOS(owner, owner.physical.Metadata().TargetOS) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID || profile.ID != owner.profile.ID || entry.ID != owner.entry.ID {
 		return errors.New("retained external entry changed its two original saved identities")
 	}
 	selected, err := externalRuntimePolicy(profile)
@@ -129,5 +129,5 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 }
 
 func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
-	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && desktopExternalSSEntryOwner(owner)
+	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && desktopWindowsExternalSSEntryOwner(owner)
 }

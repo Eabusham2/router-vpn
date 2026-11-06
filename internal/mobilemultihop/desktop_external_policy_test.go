@@ -408,7 +408,21 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 		t.Run("predecessor/"+entry, func(t *testing.T) {
 			graph, selected := desktopExternalInputFixture(t, protocol, entry, "")
 			selected["profile"].(map[string]any)["kill_switch_policy"] = "always"
-			reject(t, externalDesktopCompile(t, graph, selected))
+			original := externalDesktopCompile(t, graph, selected)
+			if protocol == "hysteria2" && entry == "shadowsocks" {
+				for _, target := range []string{"linux", "darwin", "windows"} {
+					plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
+					if target == "windows" {
+						if err != nil || plan.Metadata().RootTag != "external-entry" || plan.OriginalPolicy() != original {
+							t.Fatal("lost Windows SS HY2 authority", err)
+						}
+					} else if err == nil {
+						t.Fatal("SS HY2 escaped Windows scope", target)
+					}
+				}
+			} else {
+				reject(t, original)
+			}
 		})
 	}
 	for _, execution := range []string{"server", "auto"} {
@@ -669,5 +683,28 @@ func TestDesktopExternalPolicyDarwinWireGuardPreservesCapturedEndpoint(t *testin
 func TestDesktopExternalPolicyDarwinAmneziaPreservesCapturedEndpoint(t *testing.T) {
 	for _, variant := range []string{"fast", "strong"} {
 		t.Run(variant, func(t *testing.T) { desktopExternalPacketPolicyPreservesEndpoint(t, "amneziawg", variant, "darwin") })
+	}
+}
+
+func TestDesktopExternalWindowsSSEntryHysteriaScope(t *testing.T) {
+	for _, kill := range []string{"on-connect", "always"} {
+		graph, selection := externalTestFixture(t, "hysteria2", "shadowsocks")
+		selection["profile"].(map[string]any)["kill_switch_policy"] = kill
+		original := externalDesktopCompile(t, graph, selection)
+		for _, target := range []string{"windows", "linux", "darwin"} {
+			policy, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
+			if target != "windows" {
+				if err == nil {
+					t.Fatal("unproved platform acquired SS HY2", target)
+				}
+				continue
+			}
+			if err != nil || policy.Metadata().RootTag != "external-entry" || policy.Metadata().RootType != "shadowsocks" || policy.Metadata().Protocol != "hysteria2" || policy.OriginalPolicy() != original {
+				t.Fatal("lost independent SS carrier and HY2 final", err)
+			}
+			if err = policy.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }

@@ -728,6 +728,9 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	})
 	public, key := desktopExternalWFPCertificate(t, ca.certificate(t, true))
 	proxy, proxyKey := desktopExternalWFPCertificate(t, ca.certificate(t, true))
+	if fault == "final-trust" && strings.HasPrefix(protocol, "ss-entry/hysteria2/") {
+		proxy, proxyKey = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
+	}
 	if fault == "trust" {
 		if protocol != "hysteria2" && protocol != "hysteria2-layer" {
 			public, key = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))

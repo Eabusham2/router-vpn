@@ -14,7 +14,7 @@ func desktopWindowsExternalGraphEligible(profile, entry common.RouterProfile, di
 	if direct {
 		return entry.ID == ""
 	}
-	return desktopExternalSSEntryOwner(&desktopExternalRuntime{profile: profile, entry: entry, selection: "local"})
+	return desktopWindowsExternalSSEntryOwner(&desktopExternalRuntime{profile: profile, entry: entry, selection: "local"})
 }
 
 // app.mu is held. Compare the independently saved original entry, including
@@ -42,4 +42,16 @@ func (owner *desktopWindowsExternalRuntime) sourcesCurrentLocked(profile common.
 	}
 	entry, _ := owner.app.profileByIDLocked(owner.launch.external.entry.ID)
 	return validateDesktopRetainedExternalSourcesLocked(profile, entry, owner.launch)
+}
+
+// Windows alone admits the independently captured SS2022 UDP carrier for an
+// ordinary HY2 final. Other platforms retain their existing narrower predicates.
+func desktopWindowsExternalSSEntryFinalProfile(profile common.RouterProfile) bool {
+	if desktopExternalSSEntryFinalProfile(profile) {
+		return true
+	}
+	return profile.NodeKind == "external" && profile.External != nil && profile.External.Protocol == "hysteria2" && profile.External.Hysteria2 != nil && (profile.StartLayer == "" || profile.StartLayer == common.StartLayerOff) && profile.External.StartLayer == nil
+}
+func desktopWindowsExternalSSEntryOwner(owner *desktopExternalRuntime) bool {
+	return desktopExternalSSEntryOwnerWithFinal(owner, desktopWindowsExternalSSEntryFinalProfile)
 }

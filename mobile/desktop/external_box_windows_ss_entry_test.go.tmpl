@@ -10,8 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	mDNS "github.com/miekg/dns"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
 	shadowsocks "github.com/sagernet/sing-shadowsocks"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	"github.com/sagernet/sing/common/buf"
@@ -20,6 +24,7 @@ import (
 	N "github.com/sagernet/sing/common/network"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -68,7 +73,7 @@ func (h *desktopWFPSSEntryForward) NewConnection(ctx context.Context, c net.Conn
 	if m.Destination.String() == "1.1.1.1:443" {
 		return h.entryProof.serve(c, m.Destination.String())
 	}
-	if m.Destination.String() != desktopWFPSSEntryFinal {
+	if h.final == "hysteria2" || m.Destination.String() != desktopWFPSSEntryFinal {
 		h.rejected.Add(1)
 		return errors.New("SS entry rejected uncaptured final")
 	}
@@ -89,7 +94,7 @@ func (h *desktopWFPSSEntryForward) NewConnection(ctx context.Context, c net.Conn
 	return nil
 }
 func (h *desktopWFPSSEntryForward) NewPacketConnection(ctx context.Context, c N.PacketConn, m M.Metadata) error {
-	if h.final != "shadowsocks" || m.Destination.String() != desktopWFPSSEntryFinal {
+	if (h.final != "shadowsocks" && h.final != "hysteria2") || m.Destination.String() != desktopWFPSSEntryFinal {
 		h.rejected.Add(1)
 		return errors.New("SS entry rejected unowned UDP final")
 	}
@@ -162,7 +167,7 @@ func (h *desktopWFPSSEntryFinalHandler) NewPacketConnection(ctx context.Context,
 func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrationPeer, observed *desktopExternalWFPDatagrams, r desktopExternalWFPRequest) *desktopWFPSSEntryForward {
 	t.Helper()
 	selected := r.SSEntry
-	if selected == nil || (selected.Final != "shadowsocks" && selected.Final != "http-connect" && selected.Final != "https-connect") {
+	if selected == nil || (selected.Final != "shadowsocks" && selected.Final != "http-connect" && selected.Final != "https-connect" && selected.Final != "hysteria2") {
 		t.Fatal("unowned SS final")
 	}
 	switch selected.Method {
@@ -269,7 +274,51 @@ func desktopExternalWFPStartSSEntryPeer(t *testing.T, p *desktopExternalIntegrat
 		}()
 	}
 	accept(listener, entry, true)
-	accept(finalTCP, final, false)
+	if selected.Final == "hysteria2" {
+		logger := log.NewNOPFactory().NewLogger("ss-entry-hysteria-final")
+		tlsConfig, err := boxTLS.NewServer(p.ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{string(r.ProxyCertificate)}, Key: []string{string(r.ProxyKey)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: p.ctx, Logger: logger, TLSConfig: tlsConfig, UDPTimeout: 10 * time.Second, Handler: p,
+			MasqueradeHandler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				// The pinned service calls this only after rejecting the QUIC auth
+				// request. Count the actual authenticated transport rejection.
+				if req.Method == http.MethodPost && req.Host == "hysteria" && req.URL.Path == "/auth" {
+					p.authFailures.Add(1)
+				}
+				http.NotFound(w, req)
+			}),
+		})
+		p.closeProtocol = func() {
+			var closeErr error
+			if server != nil {
+				closeErr = server.Close()
+			}
+			closeErr = errors.Join(closeErr, tlsConfig.Close())
+			_ = finalTCP.Close()
+			_ = finalUDP.Close()
+			if !desktopExternalWFPCloseJoined(closeErr, 0) {
+				t.Error("SS entry HY2 provider close failed", closeErr)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		password := desktopExternalIntegrationPassword
+		if r.Fault == "final-key" {
+			password += "-wrong"
+		}
+		server.UpdateUsers([]int{1}, []string{password})
+		if err = tlsConfig.Start(); err == nil {
+			err = server.Start(finalUDP)
+		}
+		if err != nil {
+			t.Fatal("independent SS entry HY2 startup", err)
+		}
+	} else {
+		accept(finalTCP, final, false)
+	}
 	// CONNECT exposes TCP only; a provider-side echo is still independent evidence
 	// for the ordinary WFP UDP deny oracle.
 	packets(observed, entry)
@@ -287,6 +336,9 @@ func desktopExternalWFPSSEntryOriginal(t *testing.T, p *desktopExternalWFPRefere
 	dnsProtocol := "udp"
 	if final == "shadowsocks" {
 		external["shadowsocks"] = map[string]any{"server": "198.51.100.240", "port": 8388, "method": transport["method"], "password": transport["password"]}
+	} else if final == "hysteria2" {
+		transport = map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "password": desktopExternalIntegrationPassword, "tls": map[string]any{"enabled": true, "server_name": "captured-proxy.example"}}
+		external["hysteria2"] = map[string]any{"server": "198.51.100.240", "port": 8388, "password": desktopExternalIntegrationPassword, "tls_server_name": "captured-proxy.example"}
 	} else {
 		dnsProtocol = "tcp"
 		transport = map[string]any{"type": "http", "tag": mobilemultihop.ExternalFinalTag, "server": "198.51.100.240", "server_port": 8388, "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
@@ -336,10 +388,15 @@ func desktopExternalWFPSSEntrySnapshot(t *testing.T, f *desktopExternalWFPFixtur
 	if e != nil || actual.Closed || actual.Target != f.prepared || actual.TunnelLUID != f.tun.luid || actual.Owner.Kind != "windows-isolated-token" || !actual.Options.RetainBaselineForHandoff || actual.TunnelName != f.tun.options.InterfaceName || actual.TunnelIndex != uint32(f.tun.index) || len(actual.Grants) == 0 {
 		t.Fatal("SS entry lost actual WFP/TUN capture", e)
 	}
+	hasUDP := false
 	for _, grant := range actual.Grants {
-		if grant.Remote != p.remote || grant.Local.Addr() != p.local || grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || grant.Sequence == 0 || grant.Network != "tcp" && grant.Network != "udp" || final != "shadowsocks" && grant.Network != "tcp" {
+		hasUDP = hasUDP || grant.Network == "udp"
+		if grant.Remote != p.remote || grant.Local.Addr() != p.local || grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || grant.Sequence == 0 || grant.Network != "tcp" && grant.Network != "udp" || final != "shadowsocks" && final != "hysteria2" && grant.Network != "tcp" {
 			t.Fatal("SS final escaped captured entry WFP authority")
 		}
+	}
+	if final == "hysteria2" && !hasUDP {
+		t.Fatal("HY2 lost original SS UDP carrier grant")
 	}
 }
 func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
@@ -352,9 +409,13 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 	roots.AddCert(certificate)
 	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
 	x509.SetFallbackRoots(roots)
-	for _, final := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, final := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		t.Run(final, func(t *testing.T) {
-			for _, name := range []string{"on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused"} {
+			names := []string{"on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused"}
+			if final == "hysteria2" {
+				names = append(names, "reject/final-trust")
+			}
+			for _, name := range names {
 				t.Run(name, func(t *testing.T) {
 					method := "2022-blake3-aes-256-gcm"
 					if name == "cipher-aes128" {
@@ -386,7 +447,7 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 							t.Fatal("SS entry final path proof failed", e)
 						}
 						stats := p.call(t, "stats", "")
-						if stats.SSEntryPublic == 0 || stats.SSEntryTLS == 0 || stats.SSEntryTCP == 0 || stats.DNS == 0 || stats.TLS == 0 || stats.Public == 0 || final == "shadowsocks" && (stats.SSEntryUDP == 0 || stats.UDPDNS == 0) || final != "shadowsocks" && (stats.SSEntryUDP != 0 || stats.UDPDNS != 0) {
+						if stats.SSEntryPublic == 0 || stats.SSEntryTLS == 0 || (final != "hysteria2" && stats.SSEntryTCP == 0 || final == "hysteria2" && stats.SSEntryTCP != 0) || stats.DNS == 0 || stats.TLS == 0 || stats.Public == 0 || (final == "shadowsocks" || final == "hysteria2") && (stats.SSEntryUDP == 0 || stats.UDPDNS == 0) || final != "shadowsocks" && final != "hysteria2" && (stats.SSEntryUDP != 0 || stats.UDPDNS != 0) {
 							t.Fatal("SS entry bypassed independent encrypted final or selected DNS", stats)
 						}
 						desktopExternalWFPSSEntrySnapshot(t, f, p, final)
@@ -422,10 +483,15 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 						if name == "reject/entry-key" || name == "reject/final-key" {
 							limit := time.NewTimer(10 * time.Second)
 							defer limit.Stop()
+						credentialRejection:
 							for p.call(t, "stats", "").AuthFailures == 0 {
 								select {
 								case outcome := <-done:
-									t.Fatal("SS credential proof ended without native authentication rejection", outcome.err)
+									if final != "hysteria2" || name != "reject/final-key" || p.call(t, "stats", "").AuthFailures == 0 {
+										t.Fatal("SS credential proof ended without native authentication rejection", outcome.err)
+									}
+									done <- outcome
+									break credentialRejection
 								case <-limit.C:
 									f.proof.Cancel()
 									t.Fatal("SS credential rejection not observed")
@@ -458,6 +524,12 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 							t.Fatal("SS rejection failed to join")
 						}
 						stats := p.call(t, "stats", "")
+						if final == "hysteria2" && name == "reject/final-key" && (stats.AuthFailures == 0 || stats.SSEntryTLS != 1 || stats.SSEntryUDP == 0 || stats.SSEntryTCP != 0 || stats.DNS != 0 || stats.UDPDNS != 0 || stats.TLS != 0) {
+							t.Fatal("wrong HY2 credential reached final data or bypassed SS carrier", stats)
+						}
+						if name == "reject/final-trust" && (stats.SSEntryPublic != 1 || stats.SSEntryTLS != 1 || stats.SSEntryUDP == 0 || stats.DNS != 0 || stats.Public != 0 || stats.TLS != 0) {
+							t.Fatal("untrusted final bypassed independent entry or reached final proof", stats)
+						}
 						if name == "reject/entry-exit" && (stats.SSEntryPublic != 1 || stats.SSEntryTLS != 1 || stats.SSEntryTCP != 0 || stats.DNS != 0) {
 							t.Fatal("wrong entry IP reached final path", stats)
 						}

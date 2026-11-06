@@ -735,8 +735,10 @@ class OrdinarySSEntryScope(unittest.TestCase):
     setUp = OrdinaryHysteria2Scope.setUp
 
     def test_each_alias_and_transport_verdict_is_unique_and_mandatory(self):
-        self.assertEqual(GATE.EXTERNAL_SS_ENTRY_NETWORKS, ("shadowsocks", "http-connect", "https-connect"))
+        self.assertEqual(GATE.EXTERNAL_SS_ENTRY_NETWORKS, ("shadowsocks", "http-connect", "https-connect", "hysteria2"))
         self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_LEAVES), 13)
+        self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"]), 16)
+        self.assertIn(GATE.EXTERNAL_SS_ENTRY_ROOT + "/hysteria2/reject/final-trust", GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"])
         for network in GATE.EXTERNAL_SS_ENTRY_NETWORKS:
             required = GATE.EXTERNAL_SS_ENTRY_CASES[network]
             complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
@@ -785,7 +787,7 @@ class OrdinarySSEntryScope(unittest.TestCase):
 
     def test_ss_entry_builds_are_separate_and_all_native_cases_and_controls_execute(self):
         calls = self.dispatch()
-        self.assertEqual([timeout for _, timeout in calls], [600, 195, 195, 195, 600, 75, 600, 75])
+        self.assertEqual([timeout for _, timeout in calls], [600, 195, 195, 195, 195, 600, 75, 600, 75])
         self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
 
     def test_native_ss_entry_rejects_spoofed_controls_changed_images_and_omitted_results(self):

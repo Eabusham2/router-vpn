@@ -21,7 +21,7 @@ import (
 // Execute the real compiler and retained source guards. Native Windows
 // process/Job, BFE and encrypted peer acceptance are separately required.
 func TestDesktopWindowsExternalSSEntrySources(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		for _, method := range desktopSSEntryMethods {
 			for _, kill := range []string{"on-connect", "always"} {
 				t.Run(protocol+"/"+method+"/"+kill, func(t *testing.T) {
@@ -30,7 +30,7 @@ func TestDesktopWindowsExternalSSEntrySources(t *testing.T) {
 					if protocol == "shadowsocks" {
 						profile, entry, launch = desktopSSEntryFixture(t, kill, method, desktopSSEntryMethods[1], "tcp")
 					} else {
-						profile, entry, launch = desktopSSCONNECTFixture(t, kill, method, protocol)
+						profile, entry, launch = desktopWindowsSSFinalFixture(t, kill, method, protocol)
 					}
 					if !desktopWindowsExternalGraphEligible(profile, entry, false, "") {
 						t.Fatal("captured SS entry refused")
@@ -84,7 +84,7 @@ func TestDesktopWindowsExternalSSEntrySources(t *testing.T) {
 						if protocol == "shadowsocks" {
 							mutateDesktopSSSource(&changed, fault)
 						} else {
-							mutateSSCONNECTFinal(&changed, fault)
+							mutateWindowsSSFinal(&changed, fault)
 						}
 						if err := owner.sourcesCurrentLocked(changed); err == nil {
 							t.Fatal("changed final accepted", fault)
@@ -119,7 +119,7 @@ func windowsSSEntryHostFixture(t *testing.T, protocol, kill string) (*desktopWin
 	if protocol == "shadowsocks" {
 		p, e, _ = desktopSSEntryFixture(t, kill, desktopSSEntryMethods[1], desktopSSEntryMethods[2], "tcp")
 	} else {
-		p, e, _ = desktopSSCONNECTFixture(t, kill, desktopSSEntryMethods[1], protocol)
+		p, e, _ = desktopWindowsSSFinalFixture(t, kill, desktopSSEntryMethods[1], protocol)
 	}
 	p.ID = "windows-ss-final-" + protocol
 	for _, v := range []common.RouterProfile{p, e} {
@@ -141,7 +141,7 @@ func windowsSSEntryConnect(f *desktopWindowsExternalFixture, p, e common.RouterP
 	return response
 }
 func TestDesktopWindowsExternalSSEntryPublicLifecycle(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			t.Run(protocol+"/"+kill, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestDesktopWindowsExternalSSEntryActivationCapturesBothSources(t *testing.T
 }
 
 func TestDesktopWindowsExternalSSEntrySpeedLabRestoresBothSources(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		t.Run(protocol, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f, p, e := windowsSSEntryHostFixture(t, protocol, "always")
@@ -289,7 +289,7 @@ func TestDesktopWindowsExternalSSEntrySpeedLabRestoresBothSources(t *testing.T) 
 }
 
 func TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		t.Run(protocol, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f, p, e := windowsSSEntryHostFixture(t, protocol, "always")
@@ -378,5 +378,67 @@ func TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner(t *testing.T
 				}
 			})
 		})
+	}
+}
+
+func desktopWindowsSSFinalFixture(t *testing.T, kill, method, protocol string) (common.RouterProfile, common.RouterProfile, *desktopNodeLaunch) {
+	t.Helper()
+	if protocol != "hysteria2" {
+		return desktopSSCONNECTFixture(t, kill, method, protocol)
+	}
+	profile, _ := desktopExternalNativeFixture(t, protocol)
+	_, entry, _ := desktopSSEntryFixture(t, kill, method, desktopSSEntryMethods[1], "tcp")
+	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
+	profile.MTUPolicy, profile.ManualMTU, profile.DNSProtocol = "manual", 1360, "udp"
+	exit, err := standardExitFromExternalProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile, entry, launch
+}
+func mutateWindowsSSFinal(p *common.RouterProfile, field string) {
+	if p.External.Protocol != "hysteria2" {
+		mutateSSCONNECTFinal(p, field)
+		return
+	}
+	switch field {
+	case "password":
+		p.External.Hysteria2.Password += "changed"
+	case "tls":
+		p.External.Hysteria2.TLSServerName = "changed.example"
+	case "host":
+		p.External.Hysteria2.Server = "198.51.100.99"
+	case "port":
+		p.External.Hysteria2.Port++
+	case "public":
+		p.External.ExpectedPublicIP = "203.0.113.99"
+	case "option":
+		p.DAITAEnabled = !p.DAITAEnabled
+	}
+}
+func TestDesktopWindowsExternalSSEntryHysteriaPlatformBoundary(t *testing.T) {
+	p, e, launch := desktopWindowsSSFinalFixture(t, "always", desktopSSEntryMethods[1], "hysteria2")
+	if !desktopWindowsExternalGraphEligible(p, e, false, "") || desktopExternalSSEntryOwner(launch.external) || desktopExternalRetainedEntryForOS(launch.external, "linux") || desktopExternalRetainedEntryForOS(launch.external, "darwin") {
+		t.Fatal("SS HY2 changed platform scope")
+	}
+	if err := prepareDesktopExternalPhysicalCaptured(launch, "windows"); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"password", "tls", "host", "port", "public", "option"} {
+		changed := cloneRouterProfile(p)
+		mutateWindowsSSFinal(&changed, field)
+		if validateDesktopRetainedExternalSourcesLocked(changed, e, launch) == nil {
+			t.Fatal("changed final source admitted", field)
+		}
+	}
+	for _, target := range []string{"linux", "darwin"} {
+		_, _, fresh := desktopWindowsSSFinalFixture(t, "always", desktopSSEntryMethods[1], "hysteria2")
+		if err := prepareDesktopExternalPhysicalCaptured(fresh, target); err != nil || fresh.external.physical != nil {
+			t.Fatal("unproved platform admitted", target)
+		}
 	}
 }

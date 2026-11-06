@@ -73,7 +73,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	capture, err := original.DesktopCapture()
 	entryKind := ""
 	if err == nil && (targetOS == "darwin" || targetOS == "linux" || targetOS == "windows") {
-		entryKind = desktopExternalEntryKind(original, capture)
+		entryKind = desktopExternalEntryKind(original, capture, targetOS)
 		if targetOS == "windows" && entryKind != "shadowsocks" {
 			entryKind = ""
 		}
@@ -357,7 +357,7 @@ func desktopExternalPacketEntryExit(protocol string) bool {
 	return protocol == "openvpn" || protocol == "wireguard" || protocol == "amneziawg" || protocol == "shadowsocks" || protocol == "http-connect" || protocol == "https-connect" || protocol == "hysteria2" || protocol == "socks5"
 }
 
-func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture) string {
+func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopCapture, targetOS string) string {
 	if original == nil || capture.EntryID == "" || capture.EntryTag != "external-entry" ||
 		capture.EntryNodeID != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
 		!desktopExternalPacketEntryExit(capture.Protocol) || capture.EntryStartLayer != "" ||
@@ -377,7 +377,7 @@ func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopC
 	case "shadowsocks":
 		final, ok := original.capture.Profile["external"].(map[string]any)
 		if capture.StartLayer == "" && ok && desktopExternalSS2022Import(external) &&
-			(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect") {
+			(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || targetOS == "windows" && capture.Protocol == "hysteria2") {
 			return "shadowsocks"
 		}
 	}

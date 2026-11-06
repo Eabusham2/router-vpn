@@ -130,7 +130,7 @@ func desktopExternalStartLayerSupported(protocol, layer string) bool {
 }
 
 func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct bool, restored string) bool {
-	if (!direct && !desktopExternalSSEntryFinalProfile(profile)) || profile.NodeKind != "external" || profile.External == nil ||
+	if (!direct && !desktopWindowsExternalSSEntryFinalProfile(profile)) || profile.NodeKind != "external" || profile.External == nil ||
 		!desktopExternalStartLayerSupported(profile.External.Protocol, profile.StartLayer) ||
 		profile.MultihopExecution != "" && profile.MultihopExecution != "local" || restored != "" && restored != "local" {
 		return false
