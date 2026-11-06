@@ -6,7 +6,105 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 published continuation through `7f801312`
+## November 6 product continuation through `8fdc2ef7`
+
+The full original scope remains the historical 356-item requirement index,
+C1–C7, the later 32-item product/breakage request, the later map-first prompt,
+external node/hop/exit requirements and accepted later corrections. Original
+user passages were recovered again; repository contracts and shortened handoffs
+do not replace that authority. The
+[product continuation evidence ledger](CONTINUATION-EVIDENCE-2026-11-06-PRODUCT.md)
+records the source locators, published units, checks and remaining boundaries.
+
+This continuation initially found live `main` at `8f05dbe6`, already 1,352
+commits ahead of the historical `745b3e41` release with no divergence. The
+published product units recorded here extend through
+[`8fdc2ef7118c00567a45b63619091c7ebff6b876`](https://github.com/Eabusham2/router-vpn/commit/8fdc2ef7118c00567a45b63619091c7ebff6b876).
+An active separate workspace was preserved; work used isolated checkouts and
+live-main reconciliation. This is an evidence cutoff, not a frozen-head or
+completed-release claim.
+
+- **Apple imported-entry fixture:** `ae8ecead` corrects stale expectations after
+  SOCKS5 support was implemented. Actual Swift/Go selection checks pass 2,080
+  cases while retaining unsupported-entry, source, layer and transactional
+  rejection. This is fixture evidence, not physical iOS acceptance.
+- **Setup Center guidance:** `0f194d9f` keeps the guide usable when browser storage
+  is unavailable. Six storage tests, three related checks and the entrypoint
+  check pass. Private browser acceptance remains separate.
+- **Android daily hop measurement:** `6d2d3ec6` routes the daily app through its
+  owned cancellable request/dialog. Ownership checks pass 109 cases and five
+  controls; related external/dialog/permission checks pass 360/346/4,623.
+- **Atomic server administration:** `8091ff7a` replaces admin bans and Stop guards
+  in one nftables transaction. Focused transaction/race tests pass; live private
+  server policy is not inferred from those checks.
+- **Windows fixture process ownership:** `cb455004` joins the original Windows
+  Job's descendants before accepting negative-control output or deleting its
+  executable workspace. Portable runner/owner checks pass 25/15 cases. Five
+  actual-Windows tests are skipped locally and remain required on native CI.
+- **Desktop throughput ownership:** `4b8c007a` adds standalone admission and the
+  captured MTU suspension for the real HTTP request/cancellation lifetime.
+  Focused real-HTTP and race checks pass. Platform Performance UI and physical
+  measurement acceptance remain distinct.
+
+- **Multihop replacement fixture:** `4d0e76de` schedules real tracker observation
+  explicitly and preserves exact requested/observed replacement snapshots across
+  old cleanup. The real observation race test passes in 1.032 seconds. The full
+  handler is locally blocked before proof by physical-network capture HTTP 409;
+  native CI must execute the actual Stop/replacement path.
+- **macOS Performance cancellation:** `a09d5482` owns live RTT, selected-node,
+  path-throughput and active-graph hop requests through cancellation/close, rejects
+  stale callbacks and distinguishes client retirement from backend cleanup. The
+  real Swift HTTP/cancellation harness and three causal controls pass; native
+  AppKit/SDK and physical measurement acceptance remain separate.
+
+- **Persisted SS Start Layer fixture:** `e0b769ff` preserves strict persisted-source
+  equality using JSON numeric port types. Nine round-trip cases and actual SS
+  independent-layer source race checks pass in 7.363 seconds; the old helper fails
+  eight non-Off pairs. The full public lifecycle requires native CI because the
+  local physical inventory is unavailable. Concurrent resolver compatibility
+  `50553102` was preserved; that contributor unit has separate evidence.
+
+- **Apple captured profiles:** `8fdc2ef7` restores captured safe entry/final
+  settings through one durable store transaction and one model adoption,
+  retaining current private credential references and old state on failure.
+  Actual Swift checks pass 20,852/1,285/105 with independently repeated runs;
+  storage/app boundary doubles and the Linux SHA256 helper do not establish
+  actual Keychain, PacketTunnel or physical device acceptance.
+
+Several specific source gaps in the historical `7f801312` checkpoint below are
+superseded. `98d6af64` and `95ffbb72` implement Local mobile SOCKS5 entries to
+paired SS/HY2/WG/AWG finals. `8f05dbe6` adds independent desktop SS entry/final
+Start Layers for the implemented graph. Concurrent `8c00e8e4` continues independent
+SS/Hysteria graph layers and was preserved by the macOS unit; its graph evidence
+is separate from macOS measurement checks. `c626af1f`, `90a7d70f` and `693cc705`
+advance captured resolved DNSSEC validation through sealed children and original
+alias-proof ownership. These changes do not establish universal protocol/graph
+coverage, installed native acceptance or physical-device readiness.
+
+At **2026-11-06 04:49:13 UTC**, live `main` was exact `8fdc2ef7`. Its Actions
+query returned 23 runs, all attempt 1: twenty queued and three pending, none
+completed. The [authoritative build run 42164668925](https://github.com/Eabusham2/router-vpn/actions/runs/42164668925)
+was pending. This is a timestamped snapshot while workflows are being scheduled,
+not final inventory or green CI. The release list still showed the October 24
+`745b3e41` prerelease with twelve assets; those older packages/images do not
+certify the current source. Earlier exact-revision observations remain in the
+product continuation ledger.
+
+A concrete Apple Home DNS propagation gap remains under repair: shipping Home
+requested HTTPS at `[fd12::53]:5443` resolves to UDP at `192.168.50.133:53`,
+although shared native configuration supports all five exact transports. That
+separate repair is not included in this cutoff. Fastest's intentional UDP/53
+measurement path is not this defect. The persisted SS Start Layer assertion
+failure was reproduced as fixture `int` versus JSON `float64` ports and repaired
+in `e0b769ff`; no production persistence defect is claimed.
+All remaining original Methods/recovery/platform/graph obligations stay open
+until individually satisfied. One current SHA still needs its complete native
+packages, nine images, compose and publication; matching-host native integration,
+physical/off-LAN/leak/visual/accessibility tests, private server/AI providers,
+Apple signing/distribution, deliberate exact-SHA deployment and ASUS revalidation
+retain separate evidence requirements. No live acceptance gate is closed here.
+
+## Historical November 6 published continuation through `7f801312`
 
 The recovered live baseline was `b04eccee`, already 1,294 commits ahead of the
 older `745b3e41` release. Coherent tested changes are published on `main`
