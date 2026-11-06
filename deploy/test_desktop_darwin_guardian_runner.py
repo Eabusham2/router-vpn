@@ -318,6 +318,29 @@ class DarwinMutationOverlays(unittest.TestCase):
         self.assertIn(revoke[0][1], self.gate.CASES)
         self.assertEqual(revoke[0][3], 'desktop_socket_darwin_policy.go')
 
+    def test_descriptor_retirement_requires_the_first_original_tuple_and_joined_cleanup(self):
+        controls = [entry for entry in self.mutations if entry[0] == 'per-socket descriptor retirement']
+        self.assertEqual(len(controls), 1)
+        _, case, witness, name, _ = controls[0]
+        self.assertEqual(case, 'SocketRetirementReusesCapacity')
+        self.assertEqual(name, 'desktop_socket_broker.go')
+        self.assertEqual(witness, 'joined original socket retained its source port at iteration 0:')
+        verdict = '--- FAIL: '+self.gate.native_case_name(case)+' (0.01s)'
+        output = '    fixture.go:1: '+witness+' address already in use\n'+verdict+'\nFAIL\n'
+        self.gate.require_mutation_failure(output, case, witness)
+        for unrelated in ('sequential owned socket 128:', 'sequential owned socket 35 did not retire within the fixture drain bound',
+                          witness.replace('iteration 0:', 'iteration 1:'),
+                          'retained descriptor fixture could not recover its original creation',
+                          'retained descriptor fixture did not prove original tuple recovery'):
+            with self.subTest(unrelated=unrelated), self.assertRaises(ValueError):
+                self.gate.require_mutation_failure(output.replace(witness, unrelated), case, witness)
+        for cleanup in ('Darwin native broker did not drain context deadline exceeded',
+                        'actual Darwin guardian close context deadline exceeded',
+                        'Native fixture cleanup retained its recovery record',
+                        'Darwin kernel test exceeded its bounded lifetime', 'WARNING: DATA RACE'):
+            with self.subTest(cleanup=cleanup), self.assertRaises(ValueError):
+                self.gate.require_mutation_failure(output+cleanup, case, witness)
+
     def test_quick_deny_control_reaches_both_baselines_without_changing_another_field(self):
         label, case, witness, names, replacements = self.quick
         self.assertEqual(case, 'ForeignBlockAndLaterPass')

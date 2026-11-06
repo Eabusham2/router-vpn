@@ -1240,3 +1240,26 @@ Validation before publication: root and an independent Astra reviewer compared t
 - Darwin guardian run [42243235694](https://github.com/Eabusham2/router-vpn/actions/runs/42243235694) on `44999fe7`: the Intel positive socket-retirement case passed, but the per-socket descriptor-retirement mutation lost a control reply at socket 35 and failed cleanup before its expected capacity assertion. A more direct retained-tuple regression is under review; neither the full guardian gate nor a complete release is established.
 
 The Windows Server lease-cleanup production unit is still unpublished and undergoing exact-source/native-inventory review. Broader source, native, release, signing, deployment and physical-device requirements remain open as recorded above.
+
+## Darwin original-descriptor retirement witness — November 6, 2026
+
+This increment strengthens the actual `SocketRetirementReusesCapacity` fixture and its causal verdict. It preserves all 130 positive capacity cycles and the existing 15-second per-close diagnostic. After every joined connection Close, the fixture must bind and close the same original UDP source tuple. Application-side closure alone no longer supplies the positive evidence.
+
+The deliberate missing-`ReleaseSocket` variant must now expose the retained tuple on iteration zero. Its accepted failure requires `EADDRINUSE`, a still-current original policy, successful bounded release of the exact captured `DesktopSocketCreation`, actual rebinding of that tuple, and closure of the rebound socket. Only after that recovery does it emit the required failure witness. A different owner, late capacity exhaustion, earlier timeout, or failed recovery cannot satisfy this control. The original guardian still checks the complete captured creation and absence of its grants before releasing its descriptor.
+
+Mutation verdicts also reject the existing native broker-drain and guardian-close error diagnostics. The original positive inventory and all 45 causal controls remain present. Production Darwin control deadlines and behavior are unchanged. This is a more direct causal test; it does not establish why the earlier control reply exceeded its budget or claim that every transient native delay is resolved.
+
+### Executed validation and limits
+
+The execution environment became available again in a fresh workspace. The previous scratch checkout was absent there, so a new clean checkout was made from verified main and the review commits were tested separately. Go `1.26.3` was installed from its official release archive, checked against the official SHA-256 `2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556`. No earlier private or unpublished scratch recovery is inferred.
+
+- Root and an independent Astra reviewer examined exact review commit `1562a8212cdc86af20976f9bece4ec213da269bc`.
+- The four actual `DarwinMutationOverlays` Python regressions passed in 0.046 seconds, including the new first-tuple/cleanup rejection cases and exact source-mutation checks.
+- The full Darwin Python runner executed 42 tests: 41 passed; the existing actual control-channel regression failed because this executor denied creation of its AF_UNIX listening socket with `operation not permitted`. That required test was neither skipped nor weakened. The full suite is not recorded as passing.
+- The updated native Go test source parsed successfully with the pinned Go formatter. Native PF behavior and the new real tuple witness still require macOS CI.
+
+### New bounded Windows evidence
+
+The completed AMD64 job [128010294640](https://github.com/Eabusham2/router-vpn/actions/runs/42248724369/job/128010294640) at `df24940e` contains successful compilation and execution before its later scope-fixture failure: all eight extracted-source OpenVPN IPC cases, all three independent provider-image cases, all four original-provider-join cases, and bounded diagnostics passed. This establishes those specific executable ownership checks. It does not establish the full OpenVPN wrong-key witness, actual packet graphs, or elimination of the earlier large-image native timeout.
+
+The separate Windows Server production candidate remains under validation: its 14 shared lease test parents and 21 child verdicts passed under Go `-race` (2.025 seconds), and 32 targeted Python runner/scope tests passed. Generated Box compilation and actual Windows native execution remain separate gates. No complete release, private deployment, or physical-device acceptance is declared.

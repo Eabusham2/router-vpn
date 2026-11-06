@@ -1892,6 +1892,15 @@ func TestDesktopDarwinGuardianKernelSocketRetirementReusesCapacity(t *testing.T)
 		if err != nil {
 			t.Fatalf("sequential owned socket %d: %v", index, err)
 		}
+		packet, ok := connection.(*desktopConnectedPacket)
+		if !ok {
+			t.Fatal("socket retirement fixture lost its original connected UDP owner")
+		}
+		socket := packet.packet.socket
+		socket.mu.Lock()
+		creation := DesktopSocketCreation{Capture: broker.capture, Binding: socket.binding, SocketID: socket.id, Network: socket.network}
+		local := socket.local.String()
+		socket.mu.Unlock()
 		desktopDarwinExchange(t, connection)
 		// Report the retained original owner through the existing bounded
 		// failure trace before the package alarm can hide its first failure.
@@ -1907,6 +1916,36 @@ func TestDesktopDarwinGuardianKernelSocketRetirementReusesCapacity(t *testing.T)
 		case <-timer.C:
 			t.Fatalf("sequential owned socket %d did not retire within the fixture drain bound", index)
 		}
+		// A joined application close must release the guardian's original
+		// kernel descriptor too. Prove exact tuple reuse on every iteration;
+		// keep the complete capacity loop as a separate positive requirement.
+		reused, bindErr := net.ListenPacket("udp4", local)
+		if bindErr == nil {
+			if err := reused.Close(); err != nil {
+				t.Fatal("socket retirement tuple readback did not close", err)
+			}
+			continue
+		}
+		if !errors.Is(bindErr, syscall.EADDRINUSE) || !policy.Current(policy.capture, policy.owner) {
+			t.Fatal("socket retirement tuple readback failed without a current retained owner", bindErr)
+		}
+		// The deliberately broken ReleaseSocket control still owns this exact
+		// creation. Restore only that captured descriptor after observing the
+		// failure, so its causal verdict also requires real joined cleanup.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		releaseErr := policy.ReleaseSocket(ctx, creation)
+		cancel()
+		if releaseErr != nil {
+			t.Fatal("retained descriptor fixture could not recover its original creation", releaseErr)
+		}
+		recovered, recoverErr := net.ListenPacket("udp4", local)
+		if recoverErr != nil {
+			t.Fatal("retained descriptor fixture did not prove original tuple recovery", recoverErr)
+		}
+		if err := recovered.Close(); err != nil {
+			t.Fatal("retained descriptor fixture did not close its original tuple readback", err)
+		}
+		t.Fatalf("joined original socket retained its source port at iteration %d: %v", index, bindErr)
 	}
 }
 

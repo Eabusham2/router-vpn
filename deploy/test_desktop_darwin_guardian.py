@@ -640,7 +640,7 @@ def require_mutation_failure(output, case, witness):
     name = native_case_name(case)
     if (len(re.findall(r'^--- FAIL: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)) != 1 or
             witness not in output or
-            re.search(r'--- SKIP:|WARNING: DATA RACE|panic:|fatal error:|\[build failed\]|test timed out|bounded lifetime|Native fixture cleanup retained its recovery record', output)):
+            re.search(r'--- SKIP:|WARNING: DATA RACE|panic:|fatal error:|\[build failed\]|test timed out|bounded lifetime|Native fixture cleanup retained its recovery record|Darwin native broker did not drain|actual Darwin guardian close', output)):
         raise ValueError('Darwin mutation failed before its intended assertion or lost cleanup')
 
 
@@ -815,7 +815,7 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
                'lines = append(lines, fmt.Sprintf("block drop out %s ! tagged \\\"%s\\\" label \\\"%s\\\"", scope, allowed, label))'),
               ('lines = append(lines, fmt.Sprintf("block drop out quick all ! tagged \\\"%s\\\" label \\\"%s\\\"", allowed, label))',
                'lines = append(lines, fmt.Sprintf("block drop out all ! tagged \\\"%s\\\" label \\\"%s\\\"", allowed, label))')))),
-        ('per-socket descriptor retirement', 'SocketRetirementReusesCapacity', 'sequential owned socket 128:',
+        ('per-socket descriptor retirement', 'SocketRetirementReusesCapacity', 'joined original socket retained its source port at iteration 0:',
          'desktop_socket_broker.go', (
              ('ok && (s.sourceFile != nil || s.sourceNative != nil) {',
               'ok && (s.sourceFile != nil || s.sourceNative != nil) && false {'),)),
