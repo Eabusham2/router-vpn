@@ -774,6 +774,18 @@ The `7f94ebdb` AMD64 packet/Server job `127872067799` passed the WireGuard, AWG2
 
 `547a5d27daa5fbe11521d8b108214924ca7686af` adds `mobile/externalpolicy/**` and `mobile/strategy/**` to the push/PR filters of the existing Windows physical, PQ and MAX workflows. The desktop preparer compiles both directories, while a policy-only change previously did not trigger those standalone runs. Jobs, permissions, matrices, commands, receipt requirements, concurrency and deadlines remain byte-identical. All three standalone workflows were scheduled on that commit; their execution is separate from confirming source filters.
 
+### Captured mixed OpenVPN remotes and provider retry witness
+
+The mixed Windows OpenVPN fixture constructs an ordered original profile with an unavailable TCP remote followed by the real UDP provider. Its control-key rejection observer incorrectly required every active grant to equal the final provider, despite the first tuple being present in that same captured profile. The rejection helper now receives the existing parsed remote list, checks each grant against that exact tuple set, and verifies the final captured tuple against the independent provider declaration. Only two distinct, nonempty final-provider socket identities can satisfy its retry witness; any number of initial TCP observations cannot do so. The snapshot error, prepared target, capture, kernel owner, single-grant bound, native status, deadlines, proof rejection and unproved-traffic checks remain required. This is a fixture correction, not a repair or suppression of the separate AMD64 ALE endpoint inspection failure.
+
+The completed ARM64 OpenVPN job `127872067654` at `7f94ebdb` passed the TCP and UDP families and the first three mixed cases. Its remaining six mixed cases failed provider startup. The earlier bounded diagnostic identified `unavailable-port-reservation`, numeric Winsock error `10013`; that distinct reservation failure remains open. The AMD64 mixed/control-key failure remains the invalid-argument ALE inspection described above. Neither failure is accepted as a valid rejection witness.
+
+This increment was reviewed against the exact current source and its existing parsed-profile caller. Local compilation and execution remain unavailable. The existing full native Windows OpenVPN case and downstream causal controls must execute successfully before this path can be accepted.
+
+### Subsequent bounded native results
+
+At `547a5d27`, AMD64 SOCKS job `127888715514` passed its complete existing phase, including home-LAN denial, selected DNS, restoration and negative controls. AMD64 node-controls job `127888715589` rejected all four required causal mutations, including ordinary UDP denial. Their earlier failures did not recur in these runs; the intervening exchange observer is diagnostic-only and is not evidence of a functional repair. At `98f08601`, Linux generated-command/TUN jobs `127888868351` (AMD64) and `127888868512` (ARM64) passed selected DNS, encrypted traffic, captured MTU/rollback and pre-ACK close. These exact-run results do not establish a complete native release or physical-device acceptance.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

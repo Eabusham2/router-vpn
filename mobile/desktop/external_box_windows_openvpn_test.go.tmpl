@@ -310,8 +310,26 @@ func desktopExternalWFPOpenVPNMeasurements(t *testing.T, f *desktopExternalWFPFi
 	desktopExternalWFPOpenVPNSnapshot(t, f, a, remotes)
 }
 
-func desktopExternalWFPOpenVPNReject(t *testing.T, f *desktopExternalWFPFixture, peer *desktopOpenVPNCompositionProcess, fault string) {
+func desktopExternalWFPOpenVPNReject(t *testing.T, f *desktopExternalWFPFixture, peer *desktopOpenVPNCompositionProcess, remotes []nativeopenvpn.Remote, fault string) {
 	t.Helper()
+	if len(remotes) == 0 {
+		t.Fatal("OpenVPN rejection lost its captured remotes")
+	}
+	expected := make(map[desktopExternalIntegrationTuple]bool, len(remotes))
+	var provider desktopExternalIntegrationTuple
+	for index, remote := range remotes {
+		tuple := desktopExternalIntegrationTuple{
+			network: remote.Network,
+			remote:  netip.AddrPortFrom(netip.MustParseAddr(remote.Host), uint16(remote.Port)),
+		}
+		expected[tuple] = true
+		if index == len(remotes)-1 {
+			provider = tuple
+		}
+	}
+	if provider.network != peer.initial.Network || provider.remote.String() != peer.initial.Remote {
+		t.Fatal("OpenVPN rejection changed its captured final provider")
+	}
 	type outcome struct {
 		raw string
 		err error
@@ -359,16 +377,22 @@ func desktopExternalWFPOpenVPNReject(t *testing.T, f *desktopExternalWFPFixture,
 				}
 				if len(actual.Grants) == 1 {
 					grant := actual.Grants[0]
-					if grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || grant.Remote.String() != peer.initial.Remote || grant.Network != peer.initial.Network {
+					tuple := desktopExternalIntegrationTuple{network: grant.Network, remote: grant.Remote}
+					if grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || !expected[tuple] {
 						t.Fatal("OpenVPN retry broadened captured remote")
 					}
-					if firstSocket == "" {
-						firstSocket = grant.SocketID
-					} else if grant.SocketID != firstSocket {
-						if status.State != adapter.OpenVPNStateConnecting || status.Error != "" {
-							t.Fatal("retryable OpenVPN control failure changed native category")
+					if tuple == provider {
+						if grant.SocketID == "" {
+							t.Fatal("OpenVPN control-key retry lost its provider socket owner")
 						}
-						observed = true
+						if firstSocket == "" {
+							firstSocket = grant.SocketID
+						} else if grant.SocketID != firstSocket {
+							if status.State != adapter.OpenVPNStateConnecting || status.Error != "" {
+								t.Fatal("retryable OpenVPN control failure changed native category")
+							}
+							observed = true
+						}
 					}
 				}
 			}
@@ -523,7 +547,7 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNWFP(t *testing.T) {
 					}
 
 					if strings.HasPrefix(name, "reject/") {
-						desktopExternalWFPOpenVPNReject(t, f, peer, name)
+						desktopExternalWFPOpenVPNReject(t, f, peer, remotes, name)
 						retained = f.drain(t)
 						return
 					}
