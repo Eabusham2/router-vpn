@@ -67,11 +67,11 @@ func TestImportedEntrySOCKSLayerBoundaries(t *testing.T) {
 				source = importedSOCKSLayerFixture(t, "shadowsocks", "aes-256-gcm")
 				source[5] = source[3]
 			case "packet-final-layer":
-				source = importedSOCKSLayerFixture(t, "wg", "aes-256-gcm")
-				source[5] = ""
+				source = importedSOCKSFixture(t, "wg", "", "aes-256-gcm")
+				source[5] = "" // Captured packet layer without its original provisioning must fail.
 			case "entry-layer":
 				capture := externalTestRead(t, source[1])
-				externalTestAddLayer(capture["profile"].(map[string]any), "aes-256-gcm", "203.0.113.20", "10.93.0.1", "i")
+				capture["profile"].(map[string]any)["start_layer"] = "aes-256-gcm" // No independent private layer provision.
 				source[1] = externalTestJSON(t, capture)
 			}
 			if p, err := NewImportedEntry(source[0], source[1], source[2], source[3], source[4], source[5], source[6]); err == nil || p != nil {

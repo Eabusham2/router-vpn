@@ -38,13 +38,23 @@ class ImportedGate(unittest.TestCase):
         self.assertEqual(len(nested),54)
         self.assertFalse(nested & (original | packet | packet_final))
         socks={"socks5--final-"+mode+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")}
-        socks |= {"socks5--final-"+mode+"--"+layer+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in G.LAYERS if layer!="off"}
-        socks |= {"socks5--final-"+mode+"--entry-"+layer+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in G.LAYERS if layer!="off"}
+        published_layers={"socks5--final-"+mode+"--"+b+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for b in G.LAYERS[1:]}
+        published_entry_layers={"socks5--final-"+mode+"--entry-"+a+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for a in G.LAYERS[1:]}
+        independent_layers={"socks5--final-"+mode+"--"+a+"--"+b+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for a in G.LAYERS for b in G.LAYERS if (a,b)!=("off","off") and a!="off" and b!="off"}
+        self.assertEqual(len(published_layers),10)
+        self.assertEqual(len(published_entry_layers),10)
+        self.assertEqual(len(independent_layers),20)
+        self.assertFalse(published_entry_layers & (published_layers | independent_layers))
+        self.assertFalse(published_layers & independent_layers)
+        socks_layers=published_layers | published_entry_layers | independent_layers
+        self.assertEqual(len(socks_layers),40)
+        self.assertFalse(socks & socks_layers)
+        self.assertFalse(socks_layers & (original | packet | packet_final | nested))
         self.assertFalse(socks & (original | packet | packet_final | nested))
-        self.assertEqual(G.NAMES, original | packet | packet_final | nested | socks)
+        self.assertEqual(G.NAMES, original | packet | packet_final | nested | socks | socks_layers)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 217)
+        self.assertEqual(len(self.events()), 237)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

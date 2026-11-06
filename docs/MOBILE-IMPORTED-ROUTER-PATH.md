@@ -5,19 +5,27 @@
 The original August 19 map-first request allows Router and imported/custom nodes
 in either hop role. The original requirements and later corrections also require
 independent Start Layers, complete saved connection profiles, selected-path DNS,
-owned temporary tests, and native tunnel integration. This change adds one
-previously missing direction to Android and iOS/iPadOS:
+owned temporary tests, and native tunnel integration. Android and iOS/iPadOS
+implement this Local direction for the following captured sources:
 
 | Imported entry | Independently paired final transports | Captured graph cases |
 |---|---|---:|
 | Shadowsocks 2022 or Hysteria2 | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 100 |
 | WireGuard or AmneziaWG | Shadowsocks or Hysteria2 | 36 |
 | WireGuard or AmneziaWG | WireGuard, AmneziaWG Fast or AmneziaWG Strong | 54 |
+| SOCKS5 | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 45 |
 
-The 190 cases preserve all 136 previously supported combinations and add
-fifty-four packet-entry/packet-final combinations. The added direction validates
-the complete data, handshake, cookie and enabled-junk envelope, including the
-final's independently captured Start Layer, before constructing a native owner.
+The 235 captured cases include the existing 190 proxy/packet-entry cases and
+45 SOCKS5 cases. Each SOCKS5 final supports all nine independent entry/final
+Start Layer pairs. The earlier five pairs with both layers Off, four
+SOCKS5-to-SS/Hysteria pairs with only a final layer, six SOCKS5-to-WG/AWG
+pairs with only a final layer, and ten pairs with only an entry layer remain
+in the matrix. Twenty pairs with both layers enabled extend the published
+215-case matrix to 235. These counts describe
+executable configurations, not completed user requirements.
+Packet composition validates the complete data, handshake, cookie and enabled
+junk envelope, including the final's separately captured Start Layer, before
+constructing a native owner.
 
 Execution is Local, inside the application's existing Android VpnService or Apple
 PacketTunnel. A Shadowsocks entry supports `2022-blake3-aes-128-gcm`,
@@ -26,8 +34,8 @@ its original server, port, password and verified TLS server name. Entry and fina
 retain their separate Off, AES-256-GCM, or AES-256-GCM + XOR whitening choices.
 All nine layer combinations for each entry transport are constructed from the
 original sources. Two alternate SS2022 ciphers are retained for each final family.
-Each of the five proxy-entry final families has twenty cases: nine independent
-layer pairs for SS2022 AES-256 and Hysteria2, plus the two alternate SS2022 entry
+For SS2022/Hysteria2 entries, each of the five final families has twenty cases:
+nine independent layer pairs for SS2022 AES-256 and Hysteria2, plus the two alternate SS2022 entry
 ciphers with both layers Off. Thirty-six additional packet-entry cases cover both
 packet protocols, both proxy finals and all nine independent layer pairs.
 WireGuard and AmneziaWG retain the original endpoint, private key, peer key, PSK,
@@ -45,6 +53,14 @@ cap before startup, as described below. The paired WG public identity and
 the selected AWG transport's independent peer key are not substituted for one
 another.
 
+A SOCKS5 entry retains its original server, port, version, username and password.
+It uses the paired final's authenticated encrypted transport; SOCKS5 alone is
+not presented as an encrypted VPN. An entry Start Layer requires that imported
+node's separately provisioned AES transport and exact whitening choice. A final
+Start Layer requires the paired final's own original assets. A missing layer
+provision, a provision belonging to the other node, or a changed credential
+prevents construction. No second system VPN is started.
+
 Other imported entry protocols, other paired final transport families, and
 Server/Compare for this new direction remain requirements to implement and
 verify. Existing supported directions retain their own admission and proof
@@ -54,7 +70,7 @@ the complete product delivered.
 ## Selection and saved state
 
 Android's multihop editor lists eligible imported entries alongside Router
-entries. Choosing an imported SS2022, Hysteria2, WireGuard or AmneziaWG entry allows
+entries. Choosing an imported SS2022, Hysteria2, WireGuard, AmneziaWG or SOCKS5 entry allows
 selection of its paired Router final and an eligible complete transport from
 the table above. The picker
 compiles each offered choice from captured sources and retains the final-file
@@ -120,6 +136,19 @@ keys and TLS trust, outer-layer keys, routes, selected DNS and private/public
 identities. A transport that must authenticate during Start may reject there;
 the fixture requires a live original context and no acquired final authority.
 Timeouts and cancellation cannot satisfy certificate-refusal assertions.
+
+SOCKS5 peer tests send actual encrypted TCP and UDP traffic through all 45
+independent layer combinations. The entry wrapper carries the original SOCKS
+control connection and its UDP association. The tests reject wrong entry/final
+layer keys, changed whitening, SOCKS authentication downgrade, a foreign relay,
+retired control connections, and bypassed final or DNS routing. The previously
+published SS/Hysteria and WG/AWG final-layer fault matrices are retained
+separately, including their authentication refusals and MTU-sized DNS checks.
+Dynamic UDP test peers retain the original
+control owner until their workers join; deterministic controls exercise a
+retiring worker, concurrent root cleanup, a replacement owner and foreign or
+closed associations. This peer evidence is separate from physical VpnService
+or PacketTunnel routing.
 
 Nested packet tests add seven successful encrypted paths, including WG-to-WG,
 AWG Fast-to-WG, AWG Strong-to-AWG, independent entry/final layers, both layers,
@@ -213,19 +242,20 @@ strict paired-final admission,
 public-entry/private-final/DNS proof, full Run-to-Healthy measurement ownership,
 retirement, and malformed or forged source rejection.
 
-`deploy/test_mobile_imported_entry.py` consumes the exact 190 shared source
-fixtures and the 190 emitted by the actual Android helper. The pinned
+`deploy/test_mobile_imported_entry.py` consumes the exact 235 shared source
+fixtures and the 235 emitted by the actual Android helper. The pinned
 libbox constructor must reproduce their original config and source digest.
 Its actual native parser, MTU profile reader, and MTU planner must accept them.
 The required fixture gate rejects missing, skipped, duplicated, foreign, or
-malformed cases. The Linux native peer gate executes actual encrypted pairs across both entry
-and final families, including a Hysteria2 final with an AES outer transport. It
-requires 81 verdicts: six group parents and 75 encrypted peer scenarios, with
-negative routing, key, certificate, DNS and identity controls. All 190
-layer/cipher graphs separately require the native parser and typed MTU planner;
-the two source matrices require 382 exact verdicts
-in total. This does not claim encrypted mobile TUN traffic for every
-layer combination. Removing the final outer-edge ownership or bypassing actual
+malformed cases. The Linux native peer gate executes actual encrypted pairs
+across the implemented entry and final families, including the complete SOCKS5
+layer matrix and Hysteria2 finals behind their actual AES transport. Every
+group and negative case in the runner's explicit inventory must execute and
+pass once. The expanded groups run separately under the unchanged finite
+native-test deadlines. All 235 layer/cipher graphs separately require the
+native parser and typed MTU planner; the shared and Android source matrices
+require 472 exact native verdicts in total. This does not claim physical mobile
+TUN traffic for every layer combination. Removing the final outer-edge ownership or bypassing actual
 native TLS verification is rejected by the corresponding causal controls.
 Dropping the captured packet endpoint or bypassing the final detour also fails
 at its intended native witness. Additional compiler controls reject lost endpoint
@@ -244,7 +274,7 @@ covers every shipping Java source; the actual SDK/AAR APK build remains separate
 required.
 
 `deploy/test_ios_imported_router_pinned.py` is mandatory in Apple smoke and
-release preparation. It consumes the actual Swift-produced 190-graph matrix
+release preparation. It consumes the actual Swift-produced 235-graph matrix
 and requires native parser verdicts for all of it. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
 The local Swift 6.4.2 harness executes actual selection, save and graph-building

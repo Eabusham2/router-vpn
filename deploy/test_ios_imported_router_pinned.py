@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse 215 actual Swift-built imported-entry graphs in pinned Libbox.
+"""Parse 235 actual Swift-built imported-entry graphs in pinned Libbox.
 
 This is an executable host/compiler composition gate, not a device traffic test.
 """
@@ -30,10 +30,16 @@ NAMES |= {'packet-'+kind+'--final-'+final+'--'+entry_layer+'--'+final_layer+'.js
           for entry_layer in LAYERS for final_layer in LAYERS}
 
 NAMES |= {"socks5--final-"+mode+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")}
-NAMES |= {"socks5--final-"+mode+"--"+layer+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in LAYERS if layer!="off"}
-
-NAMES |= {"socks5--final-"+mode+"--entry-"+layer+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in LAYERS if layer!="off"}
-
+# Keep all established final-only and entry-only layer labels distinct
+# from the remaining both-enabled combinations; never duplicate cases.
+NAMES |= {"socks5--final-"+mode+"--"+final+".json"
+          for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for final in LAYERS[1:]}
+NAMES |= {"socks5--final-"+mode+"--entry-"+entry+".json"
+          for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for entry in LAYERS[1:]}
+NAMES |= {"socks5--final-"+mode+"--"+entry+"--"+final+".json"
+          for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")
+          for entry in LAYERS for final in LAYERS if (entry,final) != ("off","off")
+          and entry != "off" and final != "off"}
 
 def digest():
     paths = {Path(__file__).resolve(), ROOT/'ios/RouterVPN/prepare-libbox.sh', ROOT/'go.mod'}
@@ -51,7 +57,7 @@ def digest():
 
 def require_matrix(root):
     if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != NAMES:
-        raise ValueError('Apple imported matrix must contain exactly 215 original host graphs')
+        raise ValueError('Apple imported matrix must contain exactly 235 original host graphs')
     for name in NAMES:
         info = (root/name).lstat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4*1024*1024:
@@ -74,8 +80,8 @@ def require_verdicts(raw):
                 completed.append(test)
             else:
                 package_passes += 1
-    if len(completed) != 216 or set(completed) != expected or package_passes != 1:
-        raise ValueError('Native Apple imported proof requires all 216 exact passing verdicts')
+    if len(completed) != 236 or set(completed) != expected or package_passes != 1:
+        raise ValueError('Native Apple imported proof requires all 236 exact passing verdicts')
 
 
 def run(vendor):
@@ -107,7 +113,7 @@ def run(vendor):
         require_verdicts(result.stdout)
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: 215 actual Swift graph exports parsed by pinned Libbox; 216 exact native verdicts passed')
+    print('Apple imported Router: 235 actual Swift graph exports parsed by pinned Libbox; 236 exact native verdicts passed')
 
 
 def main():

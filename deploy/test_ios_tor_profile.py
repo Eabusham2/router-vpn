@@ -712,8 +712,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   for kind in ["wireguard","amneziawg"] {
    cases += layers.flatMap { first in layers.map { (first,$0,kind,"") } }
   }
-  cases += layers.map { ("off",$0,"socks5","") }
-  cases += layers.filter{$0 != "off"}.map { ($0,"off","socks5","") }
+  cases += layers.flatMap { first in layers.map { (first,$0,"socks5","") } }
   let composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
   let certificate=((composite["profiles"] as! [String:[String:String]])["split"]!)["cert.pem"]!
   var hyBase=base
@@ -730,7 +729,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
     if kind=="amneziawg" {packet["parameters"]=["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]}
     imported=["protocol":kind,"expected_public_ip":"203.0.113.88",kind:packet]
    }
-   if entryLayer != "off" {imported["start_layer"]=["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"203.0.113.20","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key]]}
+   let entryLayerKey=kind=="socks5" && finalLayer != "off" ? Data(repeating:106,count:32).base64EncodedString():key
+   if entryLayer != "off" {imported["start_layer"]=["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"203.0.113.20","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":entryLayerKey]]}
    let entry:[String:Any]=["id":"imported-entry","node_kind":"external","start_layer":entryLayer,"dns_mode":"home","mtu_policy":"auto","external":imported]
    var final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact-paired-token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":kind,"multihop_exit_id":"paired-final","multihop_exit_mode":finalMode,"multihop_execution":"local"]
    let nestedPacket=packetFinal && ["wireguard","amneziawg"].contains(kind)
@@ -873,6 +873,21 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    if kind == "socks5" {
     let native=outs.first{$0["tag"] as? String=="entry-wg"}!
     try check("SOCKS original exact authentication survives",native["type"] as? String=="socks" && native["version"] as? String=="5" && native["username"] as? String=="captured-native-user" && native["password"] as? String==" exact SOCKS secret ")
+    try check("SOCKS independent selected layers survive original capture",captured["start_layer"] as? String==entryLayer && final["start_layer"] as? String==finalLayer && ((captured["external"] as? [String:Any])?["start_layer"] == nil) == (entryLayer=="off"))
+    if entryLayer=="off" {
+     try check("unwrapped SOCKS keeps exact physical peer",native["server"] as? String=="203.0.113.20" && native["server_port"] as? Int==1080 && native["detour"]==nil)
+    } else {
+     let original=imported["start_layer"] as! [String:Any]
+     try check("SOCKS wrapper keeps exact captured key and distinct enabled final-layer key",((captured["external"] as! [String:Any])["start_layer"] as! [String:Any])["mode"] as? String==entryLayer && (original["transport"] as! [String:Any])["password"] as? String==entryLayerKey && (finalLayer=="off" || entryLayerKey != key))
+     try check("layered SOCKS uses captured private inside address",native["server"] as? String=="10.93.0.1" && native["server_port"] as? Int==1080 && native["detour"] as? String != nil)
+     try check("SOCKS native wrapper keeps its independent key and selected codec",outs.contains{$0["password"] as? String==entryLayerKey && $0["server"] as? String=="203.0.113.20" && $0["server_port"] as? Int==(entryLayer=="aes-256-gcm+xor-whitening" ? 8389:8388) && $0["type"] as? String==(entryLayer=="aes-256-gcm+xor-whitening" ? "routervpn-aes-xor":"shadowsocks")})
+     var invalid=entry,unprovisioned=imported;unprovisioned.removeValue(forKey:"start_layer");invalid["external"]=unprovisioned
+     reject("SOCKS enabled entry layer needs private provision"){_ = try RouterVPNExternalExitBuilder.importedRouterSource(profile:invalid)}
+     var changed=entry,external=imported,layer=original,transport=original["transport"] as! [String:Any]
+     transport["password"]=Data(repeating:107,count:32).base64EncodedString();layer["transport"]=transport;external["start_layer"]=layer;changed["external"]=external
+     let replacement=try RouterVPNExternalExitBuilder.importedRouterSource(profile:changed)
+     try check("SOCKS wrapper credential change updates capture without replacing primary authentication",replacement.capture != raw.capture && replacement.config == raw.config)
+    }
     for field in ["username","password"] {
      var changed=entry,external=imported,transport=imported["socks5"] as! [String:Any]
      transport[field]="replacement";external["socks5"]=transport;changed["external"]=external
@@ -919,7 +934,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    }
    if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
     let name: String
-    if kind=="socks5" {name="socks5--final-"+finalMode+(entryLayer != "off" ? "--entry-"+entryLayer:finalLayer=="off" ? "":"--"+finalLayer)+".json"}
+    if kind=="socks5" {
+     let suffix=entryLayer=="off" && finalLayer=="off" ? "" : entryLayer=="off" ? "--"+finalLayer : finalLayer=="off" ? "--entry-"+entryLayer : "--"+entryLayer+"--"+finalLayer
+     name="socks5--final-"+finalMode+suffix+".json"
+    }
     else if ["wireguard","amneziawg"].contains(kind) {name="packet-"+kind+"--final-"+finalMode+"--"+entryLayer+"--"+finalLayer+".json"}
     else {name=(packetFinal ? "final-"+finalMode+"--":finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")}
     try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(name))
@@ -930,7 +948,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (215 graphs: preserved205 plus10 provisioned SOCKS5 entry layers with paired finals Off with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (235 graphs: complete independent SOCKS5 layers with original and compatible case names; \(checks) shipping Swift/actual Go compiler checks; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

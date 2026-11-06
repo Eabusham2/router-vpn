@@ -54,6 +54,10 @@ func TestImportedEntrySOCKSEntryLayerAuthority(t *testing.T) {
 	for _, fault := range []string{"missing-provision", "foreign-outer", "public-private-target", "mode-mismatch", "unused-provision", "both-layers", "invented-proof", "retained-source"} {
 		t.Run(fault, func(t *testing.T) {
 			s := importedSOCKSEntryLayerFixture(t, "shadowsocks", "aes-256-gcm+xor-whitening")
+			if fault == "both-layers" {
+				s = importedSOCKSFixture(t, "hysteria2", "aes-256-gcm+xor-whitening", "aes-256-gcm")
+				_ = importedPacketCompile(t, s) // Independently provisioned both-layer source is valid.
+			}
 			c := externalTestRead(t, s[1])
 			p := c["profile"].(map[string]any)
 			ext := p["external"].(map[string]any)
@@ -70,9 +74,7 @@ func TestImportedEntrySOCKSEntryLayerAuthority(t *testing.T) {
 			case "unused-provision":
 				p["start_layer"] = "off"
 			case "both-layers":
-				last := externalTestRead(t, s[4])
-				last["start_layer"] = "aes-256-gcm"
-				s[4] = externalTestJSON(t, last)
+				s[5] = "" // The captured paired outer provision is mandatory.
 			case "invented-proof":
 				p["api_token"] = "invented"
 			}

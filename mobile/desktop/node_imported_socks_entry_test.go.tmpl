@@ -39,10 +39,916 @@ import (
 // captured tuples to private loopback peers; it proves no mobile OS TUN grant.
 func TestRouterVPNImportedSOCKSPairedFinalNativeTraffic(t *testing.T) {
 	for _, finalMode := range []string{"shadowsocks", "hysteria2"} {
-		t.Run(finalMode, func(t *testing.T) { desktopImportedSOCKSFinalTraffic(t, finalMode) })
+		for _, row := range desktopImportedSOCKSCases(finalMode, []string{"success", "wrong-entry-ip", "entry-auth", "auth-downgrade", "relay-route", "control-eof", "final-key", "final-route", "dns-route", "final-identity"}) {
+			t.Run(row.label, func(t *testing.T) { desktopImportedSOCKSFinalTraffic(t, finalMode, row) })
+		}
 	}
 }
-func desktopImportedSOCKSFinalTraffic(t *testing.T, finalMode string, selectedLayer ...string) {
+func desktopImportedSOCKSFinalTraffic(t *testing.T, finalMode string, row desktopImportedSOCKSCase) {
+	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+	if directory == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("required original sources missing")
+		}
+		t.Skip("native mobile gate supplies exact compiler source captures")
+	}
+	raw, err := os.ReadFile(filepath.Join(directory, "socks5--final-"+row.label+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if json.Unmarshal(raw, &args) != nil || len(args) != 9 {
+		t.Fatal("original source capture invalid")
+	}
+	for _, fault := range row.faults {
+		t.Run(fault, func(t *testing.T) {
+			// Keep the established final-only verdict identities.
+			if fault == "layer-key" {
+				fault = "final-layer-key"
+			}
+			if fault == "whitening" {
+				fault = "final-layer-whitening"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			args := append([]string(nil), args...)
+			var finalCert tls.Certificate
+			if finalMode == "hysteria2" {
+				var ca string
+				finalCert, ca = desktopImportedFinalCertificate(t)
+				var assets map[string]string
+				if json.Unmarshal([]byte(args[3]), &assets) != nil {
+					t.Fatal("final assets missing")
+				}
+				native, e := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+				if e != nil {
+					t.Fatal(e)
+				}
+				var original map[string]any
+				if json.Unmarshal(native, &original) != nil {
+					t.Fatal("original final graph missing")
+				}
+				original["outbounds"].([]any)[0].(map[string]any)["tls"].(map[string]any)["server_name"] = "captured-final.example"
+				native, _ = json.Marshal(original)
+				assets["sing-box.json"] = base64.StdEncoding.EncodeToString(native)
+				assets["cert.pem"] = base64.StdEncoding.EncodeToString([]byte(ca))
+				native, _ = json.Marshal(assets)
+				args[3] = string(native)
+			}
+			plan, err := mobilemultihop.NewImportedEntry(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var graph map[string]any
+			if json.Unmarshal([]byte(plan.Config()), &graph) != nil {
+				t.Fatal("compiled graph invalid")
+			}
+			var firstRaw, lastRaw map[string]any
+			for _, raw := range graph["outbounds"].([]any) {
+				n := raw.(map[string]any)
+				if n["tag"] == "entry-wg" {
+					firstRaw = n
+				}
+				if n["tag"] == mobilemultihop.LocalTag {
+					lastRaw = n
+				}
+			}
+			if firstRaw == nil || lastRaw == nil {
+				t.Fatal("compiler lost detoured native owners")
+			}
+			byTag := desktopImportedSOCKSGraph(graph)
+			_ = desktopImportedSOCKSOuter(t, byTag, lastRaw, "entry-wg")
+			var meta mobilemultihop.Metadata
+			_ = json.Unmarshal([]byte(plan.Metadata()), &meta)
+			paired := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer "+meta.ExitToken {
+					http.Error(w, "foreign", 403)
+					return
+				}
+				node := meta.ExitNodeID
+				if fault == "final-identity" {
+					node = "foreign-paired-node"
+				}
+				fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, node)
+			}))
+			defer paired.Close()
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+				r := new(dns.Msg)
+				r.SetReply(q)
+				r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1}, A: net.ParseIP("93.184.216.34")}}
+				_ = w.WriteMsg(r)
+			})}
+			dnsDone := make(chan error, 1)
+			go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+			defer func() { _ = dnsServer.Shutdown(); _ = packet.Close(); <-dnsDone }()
+			selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+			if selected["type"] != "udp" || selected["detour"] != "proxy" {
+				t.Fatal("selected resolver not final-owned")
+			}
+			dnsTarget := net.JoinHostPort(selected["server"].(string), "53")
+			finalCtx, finalCancel := context.WithCancel(ctx)
+			finalServer := &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: "udp", Destination: dnsTarget, Physical: packet.LocalAddr().String()}}}
+			var final desktopExternalInstalledSSPeer
+			if finalMode == "shadowsocks" {
+				finalFault := ""
+				if strings.HasPrefix(fault, "final-layer-") {
+					finalFault = fault
+				}
+				final = desktopImportedSOCKSLayerProvider(t, finalServer, lastRaw, finalFault)
+			} else {
+				packet, e := net.ListenPacket("udp4", "127.0.0.1:0")
+				if e != nil {
+					t.Fatal(e)
+				}
+				observation := &desktopExternalHysteriaObservation{}
+				obfs := lastRaw["obfs"].(map[string]any)
+				stop := desktopStartImportedFinalHysteria(t, finalServer, packet, finalCert, lastRaw["password"].(string), obfs["password"].(string), observation)
+				final = desktopExternalInstalledSSPeer{address: packet.LocalAddr().String(), close: stop, stats: func() desktopExternalInstalledSSReceipt {
+					return desktopExternalInstalledSSReceipt{PhysicalTCP: finalServer.rawTCP.Load(), PhysicalUDP: finalServer.rawUDP.Load(), Streams: finalServer.plainTCP.Load(), Packets: finalServer.plainUDP.Load()}
+				}}
+			}
+			defer final.close()
+			finalTarget, finalPhysical, verifyFinalLayer := desktopImportedSOCKSInstallFinal(t, ctx, byTag, lastRaw, desktopImportedSOCKSAddress(lastRaw), final.address, fault)
+			defer verifyFinalLayer()
+			entryCertificate, entryCA := desktopExternalInstalledPeerCertificate(t, false)
+			public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" {
+					http.Error(w, "foreign", 403)
+					return
+				}
+				ip := "203.0.113.88"
+				if fault == "wrong-entry-ip" {
+					ip = "203.0.113.89"
+				}
+				fmt.Fprintln(w, "ip="+ip)
+			}))
+			public.TLS = &tls.Config{Certificates: []tls.Certificate{entryCertificate}, MinVersion: tls.VersionTLS12}
+			public.StartTLS()
+			defer public.Close()
+			entryCtx, entryCancel := context.WithCancel(ctx)
+			entryServer := &desktopNodeLayerServer{ctx: entryCtx, cancel: entryCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: finalTarget, Physical: finalPhysical}, {Network: "udp", Destination: finalTarget, Physical: finalPhysical}}}
+			entryServer.routes = append(entryServer.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "1.1.1.1:443", Physical: public.Listener.Addr().String()})
+			entry, socksPeer := desktopStartImportedSOCKSProvider(t, entryServer, firstRaw["password"].(string), fault)
+			defer entry.close()
+			physicalOwner, lower, verifyEntryLayer := desktopImportedSOCKSInstallEntry(t, ctx, byTag, firstRaw, entry, socksPeer, fault)
+			manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": physicalOwner}}
+			owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+			desktopImportedSOCKSNativeLayers(t, owned, manager, byTag, firstRaw, firstRaw)
+			if fault == "entry-auth" {
+				firstRaw["password"] = "foreign-original-password"
+			}
+			if fault == "final-key" {
+				lastRaw["password"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'y')
+			}
+			if fault == "final-route" {
+				lastRaw["server"] = "192.0.2.99"
+			}
+			makeOutbound := func(raw map[string]any) adapter.Outbound {
+				if raw["type"] == "routervpn-aes-xor" {
+					return desktopImportedSOCKSNativeLayer(t, owned, raw)
+				}
+				body, _ := json.Marshal(raw)
+				if raw["type"] == "hysteria2" {
+					var opts option.Hysteria2OutboundOptions
+					if json.Unmarshal(body, &opts) != nil {
+						t.Fatal("HY2 options invalid")
+					}
+					o, e := HY.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), raw["tag"].(string), opts)
+					if e != nil {
+						t.Fatal(e)
+					}
+					t.Cleanup(func() { _ = o.(io.Closer).Close() })
+					return o
+				}
+				var opts option.ShadowsocksOutboundOptions
+				if json.Unmarshal(body, &opts) != nil {
+					t.Fatal("native options invalid")
+				}
+				o, e := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), raw["tag"].(string), opts)
+				if e != nil {
+					t.Fatal(e)
+				}
+				t.Cleanup(func() { _ = o.(io.Closer).Close() })
+				return o
+			}
+			firstBody, _ := json.Marshal(firstRaw)
+			var firstOptions option.SOCKSOutboundOptions
+			if err = json.Unmarshal(firstBody, &firstOptions); err != nil {
+				t.Fatal(err)
+			}
+			first, err := SOCKS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "entry-wg", firstOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if closer, ok := first.(io.Closer); ok {
+				defer closer.Close()
+			}
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM([]byte(entryCA)) {
+				t.Fatal("entry trust missing")
+			}
+			publicTransport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+				return first.DialContext(c, n, M.ParseSocksaddr(a))
+			}}
+			publicCtx, publicStop := context.WithTimeout(ctx, time.Second)
+			publicRequest, _ := http.NewRequestWithContext(publicCtx, "GET", "https://1.1.1.1/cdn-cgi/trace", nil)
+			publicResponse, publicErr := (&http.Client{Transport: publicTransport}).Do(publicRequest)
+			entryProved := false
+			if publicErr == nil {
+				body, e := io.ReadAll(io.LimitReader(publicResponse.Body, 1024))
+				publicResponse.Body.Close()
+				entryProved = e == nil && strings.TrimSpace(string(body)) == "ip=203.0.113.88"
+			}
+			publicTransport.CloseIdleConnections()
+			publicStop()
+			if entryProved != (fault != "entry-auth" && fault != "auth-downgrade" && fault != "wrong-entry-ip" && !strings.HasPrefix(fault, "entry-layer-")) {
+				t.Fatal("independent actual SOCKS entry public proof changed", fault, publicErr)
+			}
+			manager.owners["entry-wg"] = first
+			desktopImportedSOCKSNativeLayers(t, owned, manager, byTag, firstRaw, lastRaw)
+			last := makeOutbound(lastRaw)
+			limit := time.Second
+			if fault != "success" {
+				limit = 250 * time.Millisecond
+			}
+			probe, stop := context.WithTimeout(ctx, limit)
+			transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return last.DialContext(ctx, network, M.ParseSocksaddr(address))
+			}}
+			client := &http.Client{Transport: transport}
+			req, _ := http.NewRequestWithContext(probe, "GET", meta.ExitAPI+"/health", nil)
+			req.Header.Set("Authorization", "Bearer "+meta.ExitToken)
+			response, e := client.Do(req)
+			proofOK := false
+			if e == nil {
+				var value struct {
+					OK    bool   `json:"ok"`
+					Node  string `json:"node_id"`
+					Proof string `json:"proof"`
+				}
+				e = json.NewDecoder(response.Body).Decode(&value)
+				_ = response.Body.Close()
+				proofOK = e == nil && value.OK && value.Node == meta.ExitNodeID && value.Proof == "router-vpn-private-agent-v1"
+			}
+			transport.CloseIdleConnections()
+			stop()
+			if proofOK != (fault == "success" || fault == "wrong-entry-ip" || fault == "dns-route" || finalMode == "shadowsocks" && (fault == "relay-route" || fault == "control-eof")) {
+				t.Fatal("paired proof acceptance did not follow actual encrypted chain", fault, e)
+			}
+			if fault == "dns-route" {
+				dnsTarget = "192.168.50.134:53"
+			}
+			probe, stop = context.WithTimeout(ctx, limit)
+			connection, e := last.DialContext(probe, "udp", M.ParseSocksaddr(dnsTarget))
+			dnsOK := false
+			if e == nil {
+				deadline, _ := probe.Deadline()
+				_ = connection.SetDeadline(deadline)
+				query := new(dns.Msg)
+				query.SetQuestion("example.com.", dns.TypeA)
+				wire, _ := query.Pack()
+				_, e = connection.Write(wire)
+				buf := make([]byte, 4096)
+				n := 0
+				if e == nil {
+					n, e = connection.Read(buf)
+				}
+				var reply dns.Msg
+				if e == nil && reply.Unpack(buf[:n]) == nil {
+					dnsOK = reply.Response && reply.Id == query.Id && len(reply.Answer) == 1
+				}
+				_ = connection.Close()
+			}
+			stop()
+			if dnsOK != (fault == "success" || fault == "wrong-entry-ip" || fault == "final-identity") {
+				t.Fatal("selected DNS acceptance did not follow actual encrypted UDP chain", fault, e)
+			}
+			if fault == "success" {
+				cancelled, stopCancelled := context.WithCancel(ctx)
+				stopCancelled()
+				rejected, cancelError := first.DialContext(cancelled, "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+				if rejected != nil {
+					rejected.Close()
+					t.Fatal("cancelled SOCKS operation gained new connection")
+				}
+				if !errors.Is(cancelError, context.Canceled) {
+					t.Fatal("SOCKS lost original cancellation", cancelError)
+				}
+			}
+			if closer, ok := last.(io.Closer); ok {
+				if e := closer.Close(); e != nil {
+					t.Fatal(e)
+				}
+			}
+			entry.close()
+			verifyEntryLayer()
+			if fault == "auth-downgrade" && socksPeer.rejected.Load() == 0 {
+				t.Fatal("native client did not reject and join downgraded SOCKS auth")
+			}
+			a, b := entry.stats(), final.stats()
+			if strings.HasPrefix(fault, "final-layer-") {
+				if finalMode == "hysteria2" && b.PhysicalUDP != 0 {
+					t.Fatal("failed final layer reached QUIC", b)
+				}
+				if finalMode == "shadowsocks" && (b.AuthTCP+b.AuthUDP == 0 || b.Streams+b.Packets != 0) {
+					t.Fatal("wrong SS layer lacked actual AEAD refusal", b)
+				}
+			}
+			if lower.calls.Load() == 0 || (!strings.HasPrefix(fault, "entry-layer-") && a.PhysicalTCP+a.PhysicalUDP == 0) {
+				t.Fatal("actual imported physical peer not reached")
+			}
+			if fault == "success" && (finalMode == "shadowsocks" && a.Streams == 0 || a.Packets == 0 || b.Streams == 0 || b.Packets == 0) {
+				t.Fatal("native two-hop data/proof did not traverse both peers", a, b)
+			}
+			if (fault == "entry-auth" || fault == "final-route") && (b.PhysicalTCP != 0 || b.PhysicalUDP != 0) {
+				t.Fatal("rejected first hop reached final")
+			}
+			if fault == "entry-auth" && a.AuthTCP == 0 {
+				t.Fatal("negative lacked actual SOCKS auth refusal")
+			}
+			if fault == "success" {
+				socksPeer.mu.Lock()
+				count := len(socksPeer.relays)
+				socksPeer.mu.Unlock()
+				if count == 0 {
+					t.Fatal("success omitted actual UDP association")
+				}
+			}
+			if fault == "final-key" && (b.Streams != 0 || b.Packets != 0) {
+				t.Fatal("foreign final key gained decrypted traffic")
+			}
+		})
+	}
+}
+
+// A physical fixture boundary accepts only the original control endpoint and
+// relay addresses actually allocated/advertised by that same independent peer.
+type desktopImportedSOCKSLower struct {
+	desktopSSReferenceLower
+	peer *desktopExternalInstalledSOCKSPeer
+}
+
+func (d *desktopImportedSOCKSLower) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network == "tcp" {
+		return d.desktopSSReferenceLower.DialContext(ctx, network, destination)
+	}
+	d.peer.mu.Lock()
+	owned := false
+	for _, relay := range d.peer.relays {
+		if relay == destination.String() {
+			owned = true
+		}
+	}
+	d.peer.mu.Unlock()
+	if network != "udp" || !owned {
+		return nil, errors.New("SOCKS peer rejected foreign physical relay")
+	}
+	d.calls.Add(1)
+	return (&net.Dialer{}).DialContext(ctx, "udp", destination.String())
+}
+func desktopStartImportedSOCKSProvider(t *testing.T, s *desktopNodeLayerServer, password, fault string) (desktopExternalInstalledSSPeer, *desktopExternalInstalledSOCKSPeer) {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.tcp = listener
+	var authFailures atomic.Uint32
+	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &authFailures, bindHost: "127.0.0.1"}
+	var once sync.Once
+	closePeer := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.closing = true
+			all := make([]io.Closer, 0, len(s.connections))
+			for c := range s.connections {
+				all = append(all, c)
+			}
+			s.mu.Unlock()
+			s.cancel()
+			listener.Close()
+			for _, c := range all {
+				c.Close()
+			}
+			s.workers.Wait()
+			if p.joinFailed.Load() {
+				t.Error("SOCKS association did not join original control read")
+			}
+		})
+	}
+	t.Cleanup(closePeer)
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for {
+			c, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			if !s.enter(c) {
+				c.Close()
+				return
+			}
+			go func() {
+				defer s.leave(c)
+				s.rawTCP.Add(1)
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = p.serve(c)
+			}()
+		}
+	}()
+	return desktopExternalInstalledSSPeer{address: listener.Addr().String(), close: closePeer, stats: func() desktopExternalInstalledSSReceipt {
+		return desktopExternalInstalledSSReceipt{PhysicalTCP: s.rawTCP.Load(), PhysicalUDP: s.rawUDP.Load(), Streams: s.plainTCP.Load(), Packets: s.plainUDP.Load(), AuthTCP: authFailures.Load()}
+	}}, p
+}
+
+// Each dynamic relay belongs to its original authenticated TCP control. Its
+// revoker cancels and joins all acquired decrypted forwarders before returning.
+type desktopImportedSOCKSRelayLease struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	workers sync.WaitGroup
+}
+type desktopImportedSOCKSLayerRoutes struct {
+	mu               sync.Mutex
+	closed           bool
+	parent           context.Context
+	control, private string
+	leases           map[string]*desktopImportedSOCKSRelayLease
+	all              map[*desktopImportedSOCKSRelayLease]bool
+	physical         map[string]string
+}
+
+func (r *desktopImportedSOCKSLayerRoutes) acquire(destination string) (string, context.Context, func(), bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lease := r.leases[destination]
+	if r.closed || lease == nil {
+		return "", nil, nil, false
+	}
+	lease.workers.Add(1)
+	return r.physical[destination], lease.ctx, lease.workers.Done, true
+}
+func (r *desktopImportedSOCKSLayerRoutes) relay(control net.Conn, packet net.PacketConn) (net.Addr, func(), error) {
+	if control == nil || packet == nil {
+		return nil, nil, errors.New("missing original SOCKS association")
+	}
+	original, err := netip.ParseAddrPort(r.control)
+	actual, err2 := netip.ParseAddrPort(packet.LocalAddr().String())
+	if err != nil || err2 != nil || control.LocalAddr().String() != r.control || actual.Addr() != original.Addr() || actual.Port() == 0 || actual.Port() == original.Port() {
+		return nil, nil, errors.New("foreign SOCKS layer association")
+	}
+	address := netip.AddrPortFrom(netip.MustParseAddr(r.private), actual.Port())
+	key := address.String()
+	r.mu.Lock()
+	if r.closed || r.leases[key] != nil {
+		r.mu.Unlock()
+		return nil, nil, errors.New("closed or occupied SOCKS layer relay")
+	}
+	ctx, cancel := context.WithCancel(r.parent)
+	lease := &desktopImportedSOCKSRelayLease{ctx: ctx, cancel: cancel}
+	if r.all == nil {
+		r.all = map[*desktopImportedSOCKSRelayLease]bool{}
+	}
+	r.all[lease] = true
+	r.leases[key], r.physical[key] = lease, actual.String()
+	r.mu.Unlock()
+	var once sync.Once
+	return net.UDPAddrFromAddrPort(address), func() {
+		once.Do(func() {
+			r.mu.Lock()
+			if r.leases[key] == lease {
+				delete(r.leases, key)
+				delete(r.physical, key)
+			}
+			r.mu.Unlock()
+			cancel()
+			lease.workers.Wait()
+			r.mu.Lock()
+			delete(r.all, lease)
+			r.mu.Unlock()
+		})
+	}, nil
+}
+func (r *desktopImportedSOCKSLayerRoutes) close() {
+	r.mu.Lock()
+	r.closed = true
+	leases := make([]*desktopImportedSOCKSRelayLease, 0, len(r.all))
+	for lease := range r.all {
+		leases = append(leases, lease)
+	}
+	r.leases = map[string]*desktopImportedSOCKSRelayLease{}
+	r.physical = map[string]string{}
+	r.mu.Unlock()
+	for _, lease := range leases {
+		lease.cancel()
+	}
+	for _, lease := range leases {
+		lease.workers.Wait()
+		r.mu.Lock()
+		delete(r.all, lease)
+		r.mu.Unlock()
+	}
+}
+func desktopImportedSOCKSAddress(raw map[string]any) string {
+	return net.JoinHostPort(raw["server"].(string), fmt.Sprint(int(raw["server_port"].(float64))))
+}
+func desktopImportedSOCKSGraph(graph map[string]any) map[string]map[string]any {
+	result := map[string]map[string]any{}
+	for _, family := range []string{"outbounds", "endpoints"} {
+		rows, _ := graph[family].([]any)
+		for _, value := range rows {
+			raw := value.(map[string]any)
+			result[raw["tag"].(string)] = raw
+		}
+	}
+	return result
+}
+func desktopImportedSOCKSOuter(t *testing.T, graph map[string]map[string]any, start map[string]any, stop string) map[string]any {
+	t.Helper()
+	current := start
+	for i := 0; i < 3; i++ {
+		tag, _ := current["detour"].(string)
+		if tag == stop {
+			return current
+		}
+		if tag == "" || graph[tag] == nil {
+			t.Fatal("original layer closure escaped selected owner")
+		}
+		current = graph[tag]
+	}
+	t.Fatal("original layer closure cycle")
+	return nil
+}
+func desktopImportedSOCKSLayerProvider(t *testing.T, server *desktopNodeLayerServer, raw map[string]any, fault string) desktopExternalInstalledSSPeer {
+	password := raw["password"].(string)
+	var stream func(net.Conn) net.Conn
+	var packet func(net.PacketConn) net.PacketConn
+	if raw["type"] == "routervpn-aes-xor" {
+		key := sha256.Sum256([]byte("router-vpn-xor-whitening-v1\x00" + password))
+		if strings.HasSuffix(fault, "whitening") {
+			key[0] ^= 255
+		}
+		stream = func(c net.Conn) net.Conn { return &desktopSSLayerStream{Conn: c, key: key} }
+		packet = func(c net.PacketConn) net.PacketConn { return &desktopSSLayerPacket{PacketConn: c, key: key} }
+	}
+	if strings.HasSuffix(fault, "layer-key") {
+		password = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'z')
+	}
+	return desktopStartSSProviderBoundTransport(t, server, mobilemultihop.NativeStartLayerMethod, password, netip.MustParseAddr("127.0.0.1"), 0, stream, packet)
+}
+
+// Rebind only the terminal physical edge, retaining all selected inner detours.
+func desktopImportedSOCKSInstallEntry(t *testing.T, ctx context.Context, graph map[string]map[string]any, first map[string]any, peer desktopExternalInstalledSSPeer, socks *desktopExternalInstalledSOCKSPeer, fault string) (adapter.Outbound, *desktopSSReferenceLower, func()) {
+	if first["detour"] == nil {
+		lower := &desktopImportedSOCKSLower{desktopSSReferenceLower: desktopSSReferenceLower{virtual: desktopImportedSOCKSAddress(first), original: peer.address}, peer: socks}
+		first["detour"] = "captured-physical"
+		return lower, &lower.desktopSSReferenceLower, func() {}
+	}
+	outer := desktopImportedSOCKSOuter(t, graph, first, "")
+	c, cancel := context.WithCancel(ctx)
+	routes := &desktopImportedSOCKSLayerRoutes{parent: c, control: peer.address, private: first["server"].(string), leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+	server := &desktopNodeLayerServer{ctx: c, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: desktopImportedSOCKSAddress(first), Physical: peer.address}}, ownedUDP: routes.acquire}
+	socks.mu.Lock()
+	socks.entryRelay = routes.relay
+	socks.mu.Unlock()
+	layerFault := ""
+	if strings.HasPrefix(fault, "entry-layer-") {
+		layerFault = fault
+	}
+	layer := desktopImportedSOCKSLayerProvider(t, server, outer, layerFault)
+	lower := &desktopSSReferenceLower{virtual: desktopImportedSOCKSAddress(outer), original: layer.address}
+	outer["detour"] = "captured-physical"
+	var once sync.Once
+	closeLayer := func() { once.Do(func() { routes.close(); layer.close() }) }
+	t.Cleanup(closeLayer)
+	return lower, lower, func() {
+		if fault == "success" && (server.plainTCP.Load() == 0 || server.plainUDP.Load() == 0) {
+			t.Error("encrypted entry layer omitted original SOCKS control or UDP relay traffic")
+		}
+		routes.mu.Lock()
+		remaining := len(routes.leases)
+		routes.mu.Unlock()
+		if remaining != 0 {
+			t.Error("closed SOCKS control retained encrypted relay authority")
+		}
+		closeLayer()
+	}
+}
+func desktopImportedSOCKSNativeLayer(t *testing.T, ctx context.Context, raw map[string]any) adapter.Outbound {
+	mode := "aes-256-gcm"
+	if raw["type"] == "routervpn-aes-xor" {
+		mode = "aes-256-gcm+xor-whitening"
+	}
+	return desktopSSReferenceLayerClient(t, ctx, raw["tag"].(string), raw["detour"].(string), raw["server"].(string), uint16(raw["server_port"].(float64)), mode, raw["password"].(string))
+}
+func desktopImportedSOCKSNativeLayers(t *testing.T, ctx context.Context, manager *desktopSSReferenceManager, graph map[string]map[string]any, first, last map[string]any) {
+	var install func(map[string]any)
+	install = func(raw map[string]any) {
+		if raw == nil {
+			return
+		}
+		tag := raw["tag"].(string)
+		if manager.owners[tag] != nil || tag == "entry-wg" || tag == mobilemultihop.LocalTag {
+			return
+		}
+		detour, _ := raw["detour"].(string)
+		install(graph[detour])
+		manager.owners[tag] = desktopImportedSOCKSNativeLayer(t, ctx, raw)
+	}
+	for _, raw := range []map[string]any{first, last} {
+		tag, _ := raw["detour"].(string)
+		install(graph[tag])
+	}
+}
+
+type desktopImportedSOCKSCase struct {
+	label  string
+	faults []string
+}
+
+func desktopImportedSOCKSCases(mode string, original []string) []desktopImportedSOCKSCase {
+	rows := []desktopImportedSOCKSCase{{mode, original}}
+	for _, entry := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, final := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			if entry == "off" && final == "off" {
+				continue
+			}
+			faults := []string{"success"}
+			if entry != "off" {
+				faults = append(faults, "entry-layer-key")
+			}
+			if entry == "aes-256-gcm+xor-whitening" {
+				faults = append(faults, "entry-layer-whitening")
+			}
+			if final != "off" {
+				faults = append(faults, "final-layer-key")
+			}
+			if final == "aes-256-gcm+xor-whitening" {
+				faults = append(faults, "final-layer-whitening")
+			}
+			if entry != "off" && final == "off" {
+				faults = append(faults, "auth-downgrade", "relay-route", "control-eof")
+			}
+			label := mode + "--" + entry + "--" + final
+			if entry == "off" {
+				label = mode + "--" + final
+			}
+			if entry != "off" && final == "off" {
+				label = mode + "--entry-" + entry
+			}
+			rows = append(rows, desktopImportedSOCKSCase{label, faults})
+		}
+	}
+	return rows
+}
+func desktopImportedSOCKSInstallFinal(t *testing.T, ctx context.Context, graph map[string]map[string]any, last map[string]any, innerTarget, physical, fault string) (string, string, func()) {
+	outer := desktopImportedSOCKSOuter(t, graph, last, "entry-wg")
+	if outer["tag"] == last["tag"] {
+		return innerTarget, physical, func() {}
+	}
+	c, cancel := context.WithCancel(ctx)
+	// Separate final wrappers carry HY2/WG/AWG packets only. Shadowsocks is
+	// already its own layer and returned above, so no unused TCP route is granted.
+	server := &desktopNodeLayerServer{ctx: c, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "udp", Destination: innerTarget, Physical: physical}}}
+	layerFault := ""
+	if strings.HasPrefix(fault, "final-layer-") {
+		layerFault = fault
+	}
+	layer := desktopImportedSOCKSLayerProvider(t, server, outer, layerFault)
+	t.Cleanup(layer.close)
+	return desktopImportedSOCKSAddress(outer), layer.address, func() {
+		stats := layer.stats()
+		if stats.Streams != 0 {
+			t.Error("packet final layer forwarded forbidden TCP", stats)
+		}
+		if fault == "success" && (stats.PhysicalUDP == 0 || stats.Packets == 0 || stats.AuthUDP != 0) {
+			t.Error("packet final skipped authenticated layer", stats)
+		}
+		if layerFault != "" && (stats.AuthUDP == 0 || stats.Packets != 0) {
+			t.Error("wrong final layer lacked actual AEAD refusal", stats)
+		}
+		if fault == "success" && server.plainTCP.Load()+server.plainUDP.Load() == 0 {
+			t.Error("final encrypted layer received no authenticated inner traffic")
+		}
+		if layerFault != "" && server.plainTCP.Load()+server.plainUDP.Load() != 0 {
+			t.Error("foreign final layer credential gained decrypted traffic")
+		}
+		layer.close()
+	}
+}
+func TestRouterVPNImportedSOCKSLayerRelayRetirement(t *testing.T) {
+	for _, scenario := range []string{"retiring-worker-root-close", "replacement-owner", "foreign-and-closed"} {
+		t.Run(scenario, func(t *testing.T) {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			client, err := net.Dial("tcp4", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			control, err := listener.Accept()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer control.Close()
+			packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer packet.Close()
+			routes := &desktopImportedSOCKSLayerRoutes{parent: context.Background(), control: control.LocalAddr().String(), private: "10.93.0.1", leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+			defer routes.close()
+			if scenario == "foreign-and-closed" {
+				for _, c := range []net.Conn{nil, client} {
+					if _, _, err := routes.relay(c, packet); err == nil {
+						t.Fatal("foreign control gained relay")
+					}
+				}
+				if _, _, err := routes.relay(control, nil); err == nil {
+					t.Fatal("missing relay admitted")
+				}
+				if _, _, unexpectedRelease, ok := routes.acquire("10.93.0.99:1234"); ok {
+					unexpectedRelease()
+					t.Fatal("foreign relay admitted")
+				}
+				routes.close()
+				if _, _, err := routes.relay(control, packet); err == nil {
+					t.Fatal("closed owner gained relay")
+				}
+				return
+			}
+			address, revoke, err := routes.relay(control, packet)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, lease, release, ok := routes.acquire(address.String())
+			if ok {
+				originalRelease := release
+				var once sync.Once
+				release = func() { once.Do(originalRelease) }
+				defer release()
+			}
+			if !ok || target != packet.LocalAddr().String() {
+				t.Fatal("original allocated socket not retained")
+			}
+			if _, _, err := routes.relay(control, packet); err == nil {
+				t.Fatal("live association replaced")
+			}
+			retired := make(chan struct{})
+			go func() { revoke(); close(retired) }()
+			select {
+			case <-lease.Done():
+			case <-time.After(time.Second):
+				t.Fatal("revoke did not cancel original forwarder")
+			}
+			select {
+			case <-retired:
+				t.Fatal("revoke did not join blocked original forwarder")
+			default:
+			}
+			if _, _, unexpectedRelease, ok := routes.acquire(address.String()); ok {
+				unexpectedRelease()
+				t.Fatal("retiring route admitted new forwarder")
+			}
+			if scenario == "replacement-owner" {
+				nextAddress, nextRevoke, err := routes.relay(control, packet)
+				if err != nil || nextAddress.String() != address.String() {
+					t.Fatal("replacement association unavailable", err)
+				}
+				_, nextContext, nextRelease, ok := routes.acquire(nextAddress.String())
+				if ok {
+					originalRelease := nextRelease
+					var once sync.Once
+					nextRelease = func() { once.Do(originalRelease) }
+					defer nextRelease()
+				}
+				if !ok {
+					t.Fatal("replacement could not acquire its own relay")
+				}
+				release()
+				<-retired
+				revoke()
+				select {
+				case <-nextContext.Done():
+					t.Fatal("retired revoker canceled replacement")
+				default:
+				}
+				_, _, anotherRelease, ok := routes.acquire(nextAddress.String())
+				if !ok {
+					t.Fatal("retired revoker removed replacement")
+				}
+				anotherRelease()
+				nextRelease()
+				nextRevoke()
+				return
+			}
+			closed, second := make(chan struct{}), make(chan struct{})
+			go func() { routes.close(); close(closed) }()
+			go func() { routes.close(); close(second) }()
+			// Include the owner already removed from admission until its worker joins.
+			select {
+			case <-closed:
+				t.Fatal("root close omitted retiring worker")
+			case <-second:
+				t.Fatal("concurrent close omitted retiring worker")
+			case <-time.After(25 * time.Millisecond):
+			}
+			release()
+			for _, done := range []chan struct{}{retired, closed, second} {
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("retirement did not join")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic(t *testing.T) {
+	for _, final := range []string{"shadowsocks", "hysteria2"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			faults := []string{"success", "wrong-entry-ip", "entry-auth", "auth-downgrade", "relay-route", "control-eof", "final-key", "final-route", "dns-route", "final-identity"}
+			if final == "hysteria2" {
+				faults = append(faults, "layer-key")
+			}
+			if layer == "aes-256-gcm+xor-whitening" {
+				faults = append(faults, "whitening")
+			}
+			t.Run(final+"/"+layer, func(t *testing.T) {
+				desktopImportedSOCKSFinalTraffic(t, final, desktopImportedSOCKSCase{final + "--" + layer, faults})
+			})
+		}
+	}
+}
+
+// Each UDP mapping belongs to the original authenticated SOCKS control; retiring
+// that control cancels and joins its encrypted forwarding before its revoker returns.
+type desktopImportedSOCKSEntryLayer struct {
+	peer    desktopExternalInstalledSSPeer
+	routes  *desktopImportedSOCKSLayerRoutes
+	retired atomic.Int64
+}
+
+func desktopStartImportedSOCKSEntryLayer(t *testing.T, ctx context.Context, socks *desktopExternalInstalledSOCKSPeer, raw map[string]any, privateTarget, physical, mode, fault string) *desktopImportedSOCKSEntryLayer {
+	t.Helper()
+	host, _, err := net.SplitHostPort(privateTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layerCtx, cancel := context.WithCancel(ctx)
+	routes := &desktopImportedSOCKSLayerRoutes{parent: layerCtx, control: physical, private: host, leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+	owner := &desktopImportedSOCKSEntryLayer{routes: routes}
+	server := &desktopNodeLayerServer{ctx: layerCtx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: privateTarget, Physical: physical}}, ownedUDP: routes.acquire}
+	socks.mu.Lock()
+	socks.entryRelay = func(control net.Conn, packet net.PacketConn) (net.Addr, func(), error) {
+		address, revoke, err := routes.relay(control, packet)
+		if err != nil {
+			return nil, nil, err
+		}
+		var once sync.Once
+		return address, func() { once.Do(func() { revoke(); owner.retired.Add(1) }) }, nil
+	}
+	socks.mu.Unlock()
+	providerFault := ""
+	if fault == "entry-layer-key" {
+		providerFault = "layer-key"
+	}
+	if fault == "entry-whitening" {
+		providerFault = "whitening"
+	}
+	owner.peer = desktopImportedSOCKSLayerProvider(t, server, raw, providerFault)
+	return owner
+}
+func (o *desktopImportedSOCKSEntryLayer) close(t *testing.T) {
+	t.Helper()
+	o.routes.mu.Lock()
+	remaining := len(o.routes.leases)
+	o.routes.mu.Unlock()
+	o.routes.close()
+	o.peer.close()
+	if remaining != 0 {
+		t.Error("encrypted entry retained an authenticated SOCKS association", remaining)
+	}
+}
+
+func TestRouterVPNImportedSOCKSEntryLayersProxyNativeTraffic(t *testing.T) {
+	for _, mode := range []string{"shadowsocks", "hysteria2"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) { desktopImportedSOCKSEntryOnlyTraffic(t, mode, "", layer) })
+		}
+	}
+}
+
+func desktopImportedSOCKSEntryOnlyTraffic(t *testing.T, finalMode string, selectedLayer ...string) {
 	layer, entryLayer := "", ""
 	if len(selectedLayer) == 2 {
 		layer, entryLayer = selectedLayer[0], selectedLayer[1]
@@ -184,9 +1090,14 @@ func desktopImportedSOCKSFinalTraffic(t *testing.T, finalMode string, selectedLa
 			dnsTarget := net.JoinHostPort(selected["server"].(string), "53")
 			finalCtx, finalCancel := context.WithCancel(ctx)
 			finalServer := &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8787", Physical: paired.Listener.Addr().String()}, {Network: "udp", Destination: dnsTarget, Physical: packet.LocalAddr().String()}}}
+			// Keep entry-layer mutations independent of the paired final credentials.
+			finalLayerFault := ""
+			if fault == "layer-key" || fault == "whitening" {
+				finalLayerFault = fault
+			}
 			var final desktopExternalInstalledSSPeer
 			if finalMode == "shadowsocks" {
-				final = desktopImportedSOCKSLayerProvider(t, finalServer, lastRaw, layer, fault)
+				final = desktopImportedSOCKSLayerProvider(t, finalServer, lastRaw, finalLayerFault)
 			} else {
 				packet, e := net.ListenPacket("udp4", "127.0.0.1:0")
 				if e != nil {
@@ -206,7 +1117,7 @@ func desktopImportedSOCKSFinalTraffic(t *testing.T, finalMode string, selectedLa
 			if outerRaw != nil {
 				layerCtx, layerCancel := context.WithCancel(ctx)
 				layerServer = &desktopNodeLayerServer{ctx: layerCtx, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "udp", Destination: finalTarget, Physical: final.address}}}
-				carrier = desktopImportedSOCKSLayerProvider(t, layerServer, outerRaw, layer, fault)
+				carrier = desktopImportedSOCKSLayerProvider(t, layerServer, outerRaw, finalLayerFault)
 				defer carrier.close()
 				finalTarget = net.JoinHostPort(outerRaw["server"].(string), fmt.Sprint(int(outerRaw["server_port"].(float64))))
 			}
@@ -465,203 +1376,5 @@ func desktopImportedSOCKSFinalTraffic(t *testing.T, finalMode string, selectedLa
 				t.Fatal("foreign final key gained decrypted traffic")
 			}
 		})
-	}
-}
-
-// A physical fixture boundary accepts only the original control endpoint and
-// relay addresses actually allocated/advertised by that same independent peer.
-type desktopImportedSOCKSLower struct {
-	desktopSSReferenceLower
-	peer *desktopExternalInstalledSOCKSPeer
-}
-
-func (d *desktopImportedSOCKSLower) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
-	if network == "tcp" {
-		return d.desktopSSReferenceLower.DialContext(ctx, network, destination)
-	}
-	d.peer.mu.Lock()
-	owned := false
-	for _, relay := range d.peer.relays {
-		if relay == destination.String() {
-			owned = true
-		}
-	}
-	d.peer.mu.Unlock()
-	if network != "udp" || !owned {
-		return nil, errors.New("SOCKS peer rejected foreign physical relay")
-	}
-	d.calls.Add(1)
-	return (&net.Dialer{}).DialContext(ctx, "udp", destination.String())
-}
-func desktopStartImportedSOCKSProvider(t *testing.T, s *desktopNodeLayerServer, password, fault string) (desktopExternalInstalledSSPeer, *desktopExternalInstalledSOCKSPeer) {
-	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.tcp = listener
-	var authFailures atomic.Uint32
-	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &authFailures, bindHost: "127.0.0.1"}
-	var once sync.Once
-	closePeer := func() {
-		once.Do(func() {
-			s.mu.Lock()
-			s.closing = true
-			all := make([]io.Closer, 0, len(s.connections))
-			for c := range s.connections {
-				all = append(all, c)
-			}
-			s.mu.Unlock()
-			s.cancel()
-			listener.Close()
-			for _, c := range all {
-				c.Close()
-			}
-			s.workers.Wait()
-			if p.joinFailed.Load() {
-				t.Error("SOCKS association did not join original control read")
-			}
-		})
-	}
-	t.Cleanup(closePeer)
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-		for {
-			c, e := listener.Accept()
-			if e != nil {
-				return
-			}
-			if !s.enter(c) {
-				c.Close()
-				return
-			}
-			go func() {
-				defer s.leave(c)
-				s.rawTCP.Add(1)
-				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
-				_ = p.serve(c)
-			}()
-		}
-	}()
-	return desktopExternalInstalledSSPeer{address: listener.Addr().String(), close: closePeer, stats: func() desktopExternalInstalledSSReceipt {
-		return desktopExternalInstalledSSReceipt{PhysicalTCP: s.rawTCP.Load(), PhysicalUDP: s.rawUDP.Load(), Streams: s.plainTCP.Load(), Packets: s.plainUDP.Load(), AuthTCP: authFailures.Load()}
-	}}, p
-}
-
-func TestRouterVPNImportedSOCKSPairedFinalLayersNativeTraffic(t *testing.T) {
-	for _, final := range []string{"shadowsocks", "hysteria2"} {
-		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-			t.Run(final+"/"+layer, func(t *testing.T) { desktopImportedSOCKSFinalTraffic(t, final, layer) })
-		}
-	}
-}
-func desktopImportedSOCKSLayerProvider(t *testing.T, server *desktopNodeLayerServer, raw map[string]any, layer, fault string) desktopExternalInstalledSSPeer {
-	password := raw["password"].(string)
-	var stream func(net.Conn) net.Conn
-	var packet func(net.PacketConn) net.PacketConn
-	if layer == "aes-256-gcm+xor-whitening" {
-		key := sha256.Sum256([]byte("router-vpn-xor-whitening-v1\x00" + password))
-		if fault == "whitening" {
-			key[0] ^= 255
-		}
-		stream = func(c net.Conn) net.Conn { return &desktopSSLayerStream{Conn: c, key: key} }
-		packet = func(c net.PacketConn) net.PacketConn { return &desktopSSLayerPacket{PacketConn: c, key: key} }
-	}
-	if fault == "layer-key" {
-		password = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'z')
-	}
-	return desktopStartSSProviderTransport(t, server, raw["method"].(string), password, netip.MustParseAddr("127.0.0.1"), stream, packet)
-}
-
-// Each UDP mapping belongs to the original authenticated SOCKS control; retiring
-// that control cancels active encrypted forwarding before a replacement can bind.
-type desktopImportedSOCKSEntryLayer struct {
-	peer    desktopExternalInstalledSSPeer
-	mu      sync.Mutex
-	routes  map[string]*desktopImportedSOCKSEntryRelay
-	retired atomic.Int64
-}
-type desktopImportedSOCKSEntryRelay struct {
-	physical string
-	ctx      context.Context
-	cancel   context.CancelFunc
-	workers  sync.WaitGroup
-}
-
-func desktopStartImportedSOCKSEntryLayer(t *testing.T, ctx context.Context, socks *desktopExternalInstalledSOCKSPeer, raw map[string]any, privateTarget, physical, mode, fault string) *desktopImportedSOCKSEntryLayer {
-	t.Helper()
-	owner := &desktopImportedSOCKSEntryLayer{routes: map[string]*desktopImportedSOCKSEntryRelay{}}
-	layerCtx, cancel := context.WithCancel(ctx)
-	server := &desktopNodeLayerServer{ctx: layerCtx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: privateTarget, Physical: physical}}}
-	server.ownedUDP = func(target string) (string, context.Context, func(), bool) {
-		owner.mu.Lock()
-		defer owner.mu.Unlock()
-		r, ok := owner.routes[target]
-		if !ok || r.ctx.Err() != nil {
-			return "", nil, nil, false
-		}
-		r.workers.Add(1)
-		return r.physical, r.ctx, r.workers.Done, true
-	}
-	host, _, err := net.SplitHostPort(privateTarget)
-	if err != nil {
-		t.Fatal(err)
-	}
-	socks.mu.Lock()
-	socks.entryRelay = func(_ net.Conn, packet net.PacketConn) (net.Addr, func(), error) {
-		if layerCtx.Err() != nil {
-			return nil, nil, layerCtx.Err()
-		}
-		address := net.JoinHostPort(host, fmt.Sprint(packet.LocalAddr().(*net.UDPAddr).Port))
-		relayCtx, retire := context.WithCancel(layerCtx)
-		owner.mu.Lock()
-		if _, exists := owner.routes[address]; exists {
-			owner.mu.Unlock()
-			retire()
-			return nil, nil, errors.New("original SOCKS relay tuple reused")
-		}
-		lease := &desktopImportedSOCKSEntryRelay{physical: packet.LocalAddr().String(), ctx: relayCtx, cancel: retire}
-		owner.routes[address] = lease
-		owner.mu.Unlock()
-		var once sync.Once
-		revoke := func() {
-			once.Do(func() {
-				retire()
-				owner.mu.Lock()
-				delete(owner.routes, address)
-				owner.mu.Unlock()
-				lease.workers.Wait()
-				owner.retired.Add(1)
-			})
-		}
-		return net.UDPAddrFromAddrPort(netip.MustParseAddrPort(address)), revoke, nil
-	}
-	socks.mu.Unlock()
-	providerFault := ""
-	if fault == "entry-layer-key" {
-		providerFault = "layer-key"
-	}
-	if fault == "entry-whitening" {
-		providerFault = "whitening"
-	}
-	owner.peer = desktopImportedSOCKSLayerProvider(t, server, raw, mode, providerFault)
-	return owner
-}
-func (o *desktopImportedSOCKSEntryLayer) close(t *testing.T) {
-	t.Helper()
-	o.peer.close()
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if len(o.routes) != 0 {
-		t.Error("encrypted entry retained an authenticated SOCKS association", len(o.routes))
-	}
-}
-
-func TestRouterVPNImportedSOCKSEntryLayersProxyNativeTraffic(t *testing.T) {
-	for _, mode := range []string{"shadowsocks", "hysteria2"} {
-		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-			t.Run(mode+"/"+layer, func(t *testing.T) { desktopImportedSOCKSFinalTraffic(t, mode, "", layer) })
-		}
 	}
 }

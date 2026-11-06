@@ -119,6 +119,17 @@ public final class ImportedRouterTest {
    JSONObject captured=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("socks5");JSONObject first=null;JSONArray out=graph.getJSONArray("outbounds");for(int i=0;i<out.length();i++)if(out.getJSONObject(i).optString("tag").equals("entry-wg"))first=out.getJSONObject(i);
    check(first!=null&&first.getString("type").equals("socks")&&first.getString("version").equals("5")&&first.getString("username").equals(e.username)&&first.getString("password").equals(e.password),"SOCKS native credentials changed");
    check(captured.getString("username").equals(e.username)&&captured.getString("password").equals(e.password),"captured SOCKS credentials changed");
+   String entryLayer=e.policy.optString("start_layer","off"),finalLayer=profile(b).optString("start_layer","off");
+   check(object(raw.getString("entry_capture")).getJSONObject("profile").optString("start_layer","off").equals(entryLayer)&&object(raw.getString("exit_profile")).optString("start_layer","off").equals(finalLayer),"SOCKS independent layer selections changed");
+   if(!entryLayer.equals("off")){
+    JSONObject provision=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("start_layer");
+    check(provision.toString().equals(e.startLayer.toString())&&provision.getString("mode").equals(entryLayer),"SOCKS wrapper private provision changed");
+    check(first.has("detour")&&first.getString("server").equals(java.net.URI.create(provision.getString("api")).getHost())&&first.getInt("server_port")==e.serverPort,"SOCKS wrapper did not retain inside peer and native detour");
+    AndroidStandardExitStore.Entry missing=AndroidStandardExitStore.copy(e);missing.startLayer=null;
+    reject("SOCKS enabled wrapper requires private provision",()->AndroidImportedRouterPath.compile(missing,b,finalMode,"local"));
+    reject("SOCKS changed wrapper credential",()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject("start_layer").getJSONObject("transport").put("password",java.util.Base64.getEncoder().encodeToString("Z".repeat(32).getBytes(StandardCharsets.UTF_8)));changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
+   }else check(!first.has("detour")&&first.getString("server").equals(e.server)&&first.getInt("server_port")==e.serverPort,"unwrapped SOCKS physical peer changed");
+   for(String unavailable:List.of("server","auto"))reject("SOCKS layers do not authorize "+unavailable,()->AndroidImportedRouterPath.compile(e,b,finalMode,unavailable));
    for(String field:List.of("username","password"))reject("changed SOCKS source "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject("socks5").put(field,"foreign");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
   }
   if(e.protocol.equals("hysteria2")){
@@ -205,10 +216,10 @@ public final class ImportedRouterTest {
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
-  check(all.size()==215,"the complete proxy/packet independent entry/final layer matrix is incomplete");
-  String phase=args[3];boolean packet=phase.startsWith("packet-");boolean socks=phase.equals("socks5");
-  check(List.of("socks5","shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
-  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return socks?name.startsWith("socks5--"):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(socks?25:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
+  check(all.size()==235,"the complete proxy/packet independent entry/final layer matrix is incomplete");
+  String phase=args[3];boolean packet=phase.startsWith("packet-");boolean socks=phase.startsWith("socks5--final-");
+  check(List.of("socks5--final-shadowsocks","socks5--final-hysteria2","socks5--final-wg","socks5--final-awg2-fast","socks5--final-awg2-strong","shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
+  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return socks?(name.equals(phase+".json")||name.startsWith(phase+"--")):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(socks?9:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
   System.out.println("Android imported-entry original sources: "+checks+" checks; "+phase+", "+selected.size()+" original independent layer graphs");
  }
 }'''
@@ -226,7 +237,7 @@ def main():
         fixtures = temp / "fixtures"
         fixtures.mkdir()
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
-        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(SOCKS(EntryLayers|PairedFinalGraphs|PairedFinalLayers|PacketFinalLayers|PacketFinalGraphs)|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
+        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(SOCKS(PairedFinalGraphs|PairedFinalLayers|PacketFinalLayers|EntryLayers|PacketFinalGraphs)|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -262,7 +273,7 @@ def main():
         private.mkdir()
         command=["java", "-cp", os.pathsep.join((str(classes), str(jar))), "com.eabusham.routervpn.ImportedRouterTest", str(temp / "compiler"), str(private), str(fixtures)]
         # Preserve the original finite bound for each complete final-mode family.
-        for final_mode in ("socks5", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
+        for final_mode in ("socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
             subprocess.run(command+[final_mode], check=True, timeout=180)
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()

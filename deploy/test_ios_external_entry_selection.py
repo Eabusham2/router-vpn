@@ -130,6 +130,32 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   try socksModel.saveIOSMultihop(enabled:true,entryID:socks.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:"socks5")
   let socksCaptured=try socksModel.iosMultihopEntryBundle(for:socksModel.bundle!)
   try check("SOCKS selection retains complete original source and exact authentication",socksCaptured.routerProfiles==socksBundle.routerProfiles && socksCaptured.profiles==socksBundle.profiles && socksCaptured.routerProfiles[0].external?.socks5==socks.external?.socks5 && socksModel.bundle?.routerProfiles[0].multihopEntryMode=="socks5")
+  for finalMode in ["shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"] {for entryLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   var source=socks;source.startLayer=entryLayer
+   if entryLayer != "off" {
+    source.external?.startLayer=try JSONDecoder().decode(ExternalStartLayer.self,from:encoded(["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"198.51.100.8","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:106,count:32).base64EncodedString()]]))
+   }
+   let original=bundle(source);var final=finalBundle;final.routerProfiles[0].startLayer=finalLayer
+   final.profiles["hysteria2"]=["sing-box.json":Data("native readiness is separately exercised by shipping compiler fixture".utf8).base64EncodedString()]
+   for mode in ["awg2-fast","awg2-strong"]{final.profiles[mode]=["awg.conf":Data("captured native peer fixture boundary".utf8).base64EncodedString()]}
+   let model=RouterVPNModel();model.bundle=final
+   IOSNodeBundleStore.shared.nodes=[source.id:try encoded(original),paired.id:try encoded(final)]
+   try check("SOCKS picker keeps provisioned final "+finalMode,model.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id).contains(finalMode))
+   try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:finalMode,execution:"local",entryMode:"socks5")
+   let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("SOCKS layer selection preserves both independent sources",captured.routerProfiles==original.routerProfiles && captured.profiles==original.profiles && model.bundle?.profiles==final.profiles && captured.routerProfiles[0].startLayer==entryLayer && model.bundle?.routerProfiles[0].startLayer==finalLayer)
+   try check("SOCKS layers never borrow paired credentials",captured.apiToken.isEmpty && captured.routerAPI.isEmpty && captured.nodeProofID.isEmpty && model.bundle?.routerProfiles[0].apiToken==paired.apiToken && captured.routerProfiles[0].external?.socks5==socks.external?.socks5)
+   let before=try encoded(model.bundle!),writes=model.writes
+   for execution in ["server","auto"] {
+    try reject("SOCKS layers cannot add execution authority "+execution){try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:finalMode,execution:execution,entryMode:"socks5")}
+    try check("unavailable SOCKS execution leaves exact saved selection",model.writes==writes && encoded(model.bundle!)==before)
+   }
+   if entryLayer != "off" {
+    var missing=source;missing.external?.startLayer=nil;IOSNodeBundleStore.shared.nodes[source.id]=try encoded(bundle(missing))
+    try reject("SOCKS selection requires matching provisioned entry layer"){_ = try model.iosMultihopEntryBundle(for:model.bundle!)}
+    try check("missing SOCKS provision cannot alter selection",model.writes==writes && encoded(model.bundle!)==before)
+   }
+  }}}
   var packetEntries:[RouterProfile]=[]
   for kind in ["wireguard","amneziawg"] {
    var node=try profile("imported-"+kind,"external",kind);node.apiToken="";node.dnsMode="home";node.external?.socks5=nil

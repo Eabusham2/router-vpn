@@ -38,6 +38,25 @@ class ImportedEntryVerdicts(unittest.TestCase):
   gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
+ def test_layered_fixture_inventory(self):
+  self.assertEqual(len(gate.FILES),235)
+  self.assertEqual(len(gate.SOCKS_FILES),45)
+  for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong'):
+   for layer in gate.LAYERS[1:]:
+    self.assertIn('socks5--final-'+mode+'--'+layer+'.json',gate.FILES)
+    self.assertNotIn('socks5--final-'+mode+'--off--'+layer+'.json',gate.FILES)
+    self.assertIn('socks5--final-'+mode+'--entry-'+layer+'.json',gate.FILES)
+    self.assertNotIn('socks5--final-'+mode+'--'+layer+'--off.json',gate.FILES)
+ def test_missing_independent_layer_verdict(self):
+  expected=gate.names({'TestRouterVPNImportedSOCKSPairedFinalNativeTraffic':gate.SOCKS_PEERS,'TestRouterVPNImportedSOCKSPacketFinalNativeTraffic':gate.SOCKS_PACKET_PEERS})
+  for suffix in ('/entry-layer-key','/entry-layer-whitening','/final-layer-key','/final-layer-whitening'):
+   omitted=next(n for n in sorted(expected) if n.endswith(suffix))
+   events=[{'Action':a,'Test':n} for n in sorted(expected-{omitted}) for a in ('run','pass')]
+   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+ def test_retirement_cases_are_required(self):
+  source=(ROOT/'deploy/test_mobile_imported_entry.py').read_text()
+  for case in ('TestRouterVPNImportedSOCKSLayerRelayRetirement','retiring-worker-root-close','replacement-owner','foreign-and-closed'):
+   self.assertIn(case,source)
  def test_shipping_invocations(self):
   self.assertIn("test_mobile_imported_entry.py'),str(vendor),'--android'",(ROOT/'deploy/test_android_multihop_pinned.py').read_text())
   self.assertIn('"deploy/test_mobile_imported_entry.py", source, "--native-peers"',(ROOT/'deploy/test_desktop_node_physical.py').read_text())
