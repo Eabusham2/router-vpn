@@ -204,7 +204,7 @@ func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request d
 func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, address netip.Addr) desktopExternalInstalledSSPeer {
 	t.Helper()
 	target, err := netip.ParseAddrPort(final)
-	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || network != "tcp" && network != "tcp+udp" {
+	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || network != "tcp" && network != "tcp+udp" && network != "udp" {
 		t.Fatal("SS entry lost its original final listener")
 	}
 	ctx, cancel := context.WithCancel(parent.ctx)
@@ -239,9 +239,11 @@ func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request
 	t.Cleanup(closeProof)
 	server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{
 		{Network: "tcp", Destination: "1.1.1.1:443", Physical: listener.Addr().String()},
-		{Network: "tcp", Destination: "198.51.100.240:8388", Physical: final},
 	}}
-	if network == "tcp+udp" {
+	if network != "udp" {
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "198.51.100.240:8388", Physical: final})
+	}
+	if network == "tcp+udp" || network == "udp" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "198.51.100.240:8388", Physical: final})
 	}
 	peer := desktopStartSSProvider(t, server, request.Method, request.Password, address)

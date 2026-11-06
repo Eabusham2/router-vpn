@@ -1,0 +1,304 @@
+package routervpnamnezia
+
+import (
+	STD "bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	QUIC "github.com/sagernet/quic-go"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// This component executes the original installed-provider harness with an
+// explicit loopback address. It grants no native physical/interface/PF proof.
+func TestRouterVPNDesktopInstalledSSHysteriaLoopbackReference(t *testing.T) {
+	const child = "ROUTERVPN_SS_HYSTERIA_COMPONENT_CHILD"
+	if os.Getenv(child) == "1" {
+		desktopExternalInstalledSSEntry = func(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string) desktopExternalInstalledSSPeer {
+			return desktopStartSSEntryAt(t, parent, request, cert, final, network, netip.MustParseAddr("127.0.0.1"))
+		}
+		desktopExternalInstalledReferenceProcess(t, "127.0.0.1", map[string]bool{"hysteria2": true}, true)
+		return
+	}
+	methods := []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"}
+	for i, method := range methods {
+		for _, protocol := range []string{"hysteria2"} {
+			t.Run(fmt.Sprintf("method%d-%s", i, protocol), func(t *testing.T) { desktopSSHysteriaReference(t, child, method, protocol, "") })
+		}
+	}
+	for _, fault := range []string{"entry-key", "entry-method", "password", "server-name", "trust", "final-route", "dns-route"} {
+		t.Run("negative/"+fault, func(t *testing.T) { desktopSSHysteriaReference(t, child, methods[1], "hysteria2", fault) })
+	}
+}
+func desktopSSHysteriaReference(t *testing.T, child, method, protocol, fault string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNDesktopInstalledSSHysteriaLoopbackReference$", "-test.count=1", "-test.timeout=14s")
+	command.Env = append(os.Environ(), child+"=1")
+	input, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic bytes.Buffer
+	command.Stderr = &diagnostic
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reader := STD.NewReaderSize(output, 16385)
+	joined := false
+	defer func() {
+		_ = input.Close()
+		if !joined {
+			_, _ = io.Copy(io.Discard, reader)
+			e := command.Wait()
+			if e != nil {
+				t.Error("original HY2 provider join", e, diagnostic.String())
+			}
+		}
+	}()
+	entryPassword, finalPassword := desktopSSReferenceKey(method, 'i'), desktopSSReferenceKey("2022-blake3-aes-256-gcm", 'f')
+	request := desktopExternalInstalledPeerRequest{Schema: 1, Protocol: protocol, Address: "127.0.0.1", Password: finalPassword, ShadowsocksEntry: &desktopExternalInstalledSSRequest{Method: method, Password: entryPassword}}
+	if err = json.NewEncoder(input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	read := func() desktopExternalInstalledPeerReply {
+		raw, e := reader.ReadSlice('\n')
+		if e != nil || len(raw) > 16384 {
+			t.Fatal("HY2 original provider readiness", e)
+		}
+		var reply desktopExternalInstalledPeerReply
+		if e = json.Unmarshal(raw, &reply); e != nil || reply.Schema != 1 || reply.Protocol != protocol || reply.Address != "198.51.100.240:8388" || reply.ShadowsocksEntry == nil || reply.ShadowsocksEntry.Method != method || reply.CA == "" {
+			t.Fatal("HY2 provider changed captured readiness", e)
+		}
+		a, e := netip.ParseAddrPort(reply.ShadowsocksEntry.Address)
+		if e != nil || !a.Addr().IsLoopback() || a.Port() == 0 {
+			t.Fatal("HY2 component lost original SS listener", e)
+		}
+		return reply
+	}
+	first := read()
+	lower := &desktopSSReferenceLower{virtual: "198.51.100.239:8388", original: first.ShadowsocksEntry.Address}
+	manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}}
+	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
+	selectedMethod := method
+	if fault == "entry-key" {
+		entryPassword = desktopSSReferenceKey(method, 'x')
+	}
+	if fault == "entry-method" {
+		selectedMethod = "2022-blake3-chacha20-poly1305"
+	}
+	entry, err := SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "captured-entry", option.ShadowsocksOutboundOptions{DialerOptions: option.DialerOptions{Detour: "captured-physical"}, ServerOptions: option.ServerOptions{Server: "198.51.100.239", ServerPort: 8388}, Method: selectedMethod, Password: entryPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if e := entry.(io.Closer).Close(); e != nil {
+			t.Error("original SS HY2 entry cleanup", e)
+		}
+	}()
+	manager.owners["captured-entry"] = entry
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(first.CA)) {
+		t.Fatal("missing original reference CA")
+	}
+	prove := func(owner adapter.Outbound, want string) error {
+		operation, stop := context.WithTimeout(ctx, time.Second)
+		defer stop()
+		c, e := owner.DialContext(operation, "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+		if e != nil {
+			return e
+		}
+		defer c.Close()
+		limit, _ := operation.Deadline()
+		_ = c.SetDeadline(limit)
+		secured := tls.Client(c, &tls.Config{RootCAs: roots, ServerName: "1.1.1.1", MinVersion: tls.VersionTLS12})
+		defer secured.Close()
+		if e = secured.HandshakeContext(operation); e != nil {
+			return e
+		}
+		q, _ := http.NewRequestWithContext(operation, http.MethodGet, "https://1.1.1.1/cdn-cgi/trace?routervpn_proof="+strings.Repeat("ab", 16), nil)
+		if e = q.Write(secured); e != nil {
+			return e
+		}
+		answer, e := http.ReadResponse(STD.NewReader(secured), q)
+		if e != nil {
+			return e
+		}
+		defer answer.Body.Close()
+		body, e := io.ReadAll(io.LimitReader(answer.Body, 1024))
+		if e != nil {
+			return e
+		}
+		if answer.StatusCode != 200 || string(body) != "ip="+want+"\n" {
+			return fmt.Errorf("original public proof mismatch: %d %q", answer.StatusCode, body)
+		}
+		return nil
+	}
+	entryErr := prove(entry, "203.0.113.77")
+	badEntry := fault == "entry-key" || fault == "entry-method"
+	if (entryErr != nil) != badEntry {
+		t.Fatal("original encrypted entry proof mismatch", fault, entryErr)
+	}
+	options := option.Hysteria2OutboundOptions{DialerOptions: option.DialerOptions{Detour: "captured-entry"}, ServerOptions: option.ServerOptions{Server: "198.51.100.240", ServerPort: 8388}, Password: finalPassword}
+	if protocol == "hysteria2" {
+		options.TLS = &option.OutboundTLSOptions{Enabled: true, ServerName: "captured-external.example", Certificate: []string{first.CA}}
+	}
+	switch fault {
+	case "password":
+		options.Password += "wrong"
+	case "server-name":
+		options.TLS.ServerName = "wrong-final.example"
+	case "trust":
+		_, ca := desktopExternalInstalledPeerCertificate(t, false)
+		options.TLS.Certificate = []string{ca}
+	case "final-route":
+		options.Server = "198.51.100.241"
+	}
+	final, err := HY.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), "captured-final", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if e := final.(io.Closer).Close(); e != nil {
+			t.Error("original HY2 client close", e)
+		}
+	}()
+	if !badEntry {
+		operation, stop := context.WithTimeout(ctx, time.Second)
+		destination := "203.0.113.53:5353"
+		if fault == "dns-route" {
+			destination = "203.0.113.52:5353"
+		}
+		c, e := final.DialContext(operation, "udp", M.ParseSocksaddr(destination))
+		if e == nil {
+			deadline, _ := operation.Deadline()
+			_ = c.SetDeadline(deadline)
+			dnsConn := &dns.Conn{Conn: c}
+			query := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+			e = dnsConn.WriteMsg(query)
+			if e == nil {
+				var answer *dns.Msg
+				answer, e = dnsConn.ReadMsg()
+				if e == nil && (answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 || answer.Answer[0].(*dns.A).A.String() != "93.184.216.34") {
+					e = fmt.Errorf("selected DNS response mismatch")
+				}
+			}
+			_ = c.Close()
+		}
+		stop()
+		if fault == "trust" || fault == "server-name" {
+			// The pinned quic-go converts its local certificate verifier error
+			// to TransportError(INTERNAL_ERROR), retaining the verifier message
+			// but not the x509 error chain or a remote TLS alert.
+			var transport *QUIC.TransportError
+			wanted := "tls: failed to verify certificate: x509: certificate is valid for captured-external.example, speed.cloudflare.com, not wrong-final.example"
+			matched := errors.As(e, &transport) && !transport.Remote && transport.ErrorCode == QUIC.InternalError
+			if matched && fault == "server-name" {
+				matched = transport.ErrorMessage == wanted
+			}
+			if matched && fault == "trust" {
+				matched = strings.HasPrefix(transport.ErrorMessage, "tls: failed to verify certificate: x509: certificate signed by unknown authority")
+			}
+			if !matched {
+				t.Fatalf("HY2 did not report original local certificate verification failure: %T %v", e, e)
+			}
+		}
+		if (e != nil) != (fault != "") {
+			t.Fatal("HY2 DNS/credential boundary mismatch", fault, e)
+		}
+		if fault == "" {
+			if e = prove(final, "203.0.113.88"); e != nil {
+				t.Fatal("HY2 final public proof", e)
+			}
+		}
+	}
+	if _, err = io.WriteString(input, "stats\n"); err != nil {
+		t.Fatal(err)
+	}
+	observed := read()
+	// Observe the original SS AEAD rejection without starting another request.
+	// TLS failures above retain the actual local QUIC certificate verifier error.
+	if badEntry {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for observed.ShadowsocksEntry.AuthTCP == 0 {
+			select {
+			case <-ctx.Done():
+				t.Fatal("original HY2 rejection had no actual authentication witness", fault, ctx.Err())
+			case <-tick.C:
+				if _, err = io.WriteString(input, "stats\n"); err != nil {
+					t.Fatal(err)
+				}
+				observed = read()
+			}
+		}
+	}
+	if observed.ShadowsocksEntry.PhysicalTCP < 1 {
+		t.Fatal("missing encrypted entry proof transport")
+	}
+	if badEntry {
+		if observed.ShadowsocksEntry.AuthTCP == 0 || observed.ShadowsocksEntry.PublicReplies != 0 || observed.PhysicalUDP != 0 || observed.DNSQueries != 0 {
+			t.Fatal("bad entry reached HY2", observed)
+		}
+	} else {
+		if observed.ShadowsocksEntry.PublicReplies != 1 || observed.ShadowsocksEntry.PhysicalUDP == 0 {
+			t.Fatal("HY2 omitted independent SS entry proof or UDP", observed)
+		}
+		if fault == "" {
+			if observed.PhysicalUDP == 0 || observed.Packets == 0 || observed.DNSQueries != 1 || observed.PublicReplies != 1 || observed.AuthFailures != 0 || observed.TLSCertificateRefusals != 0 {
+				t.Fatal("HY2 bypassed independent final DNS/proof", observed)
+			}
+		} else if observed.DNSQueries != 0 || observed.PublicReplies != 0 {
+			t.Fatal("rejected HY2 reached final proof", observed)
+		}
+		if fault == "password" && observed.AuthFailures == 0 {
+			t.Fatal("wrong HY2 password lacked authenticated server rejection", observed)
+		}
+		if (fault == "trust" || fault == "server-name") && observed.PhysicalUDP == 0 {
+			t.Fatal("wrong HY2 trust never reached independent QUIC provider", observed)
+		}
+		if fault == "final-route" && observed.PhysicalUDP != 0 {
+			t.Fatal("foreign final tuple reached HY2", observed)
+		}
+	}
+	if err = final.(io.Closer).Close(); err != nil {
+		t.Fatal("original HY2 client join", err)
+	}
+
+	_ = input.Close()
+	_, _ = io.Copy(io.Discard, reader)
+	err = command.Wait()
+	joined = true
+	if err != nil || ctx.Err() != nil {
+		t.Fatal("HY2 provider did not join original workers", err, ctx.Err(), diagnostic.String())
+	}
+}

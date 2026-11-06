@@ -164,7 +164,7 @@ class LinuxLayeredEntryVerdicts(unittest.TestCase):
 class LinuxSSEntryVerdicts(unittest.TestCase):
     def test_original_physical_and_actual_cipher_verdicts_are_mandatory(self):
         for suite, count in ((NODE.LINUX_SS_ENTRY_SUITE, 4), (NODE.SS_ENTRY_REFERENCE_SUITE, 17),
-                             (NODE.LINUX_SS_CONNECT_SUITE, 3), (NODE.SS_CONNECT_REFERENCE_SUITE, 15)):
+                             (NODE.LINUX_SS_CONNECT_SUITE, 3), (NODE.SS_CONNECT_REFERENCE_SUITE, 15), (NODE.SS_HYSTERIA_REFERENCE_SUITE, 11)):
             self.assertEqual(len(suite[3]), count)
             output = ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in suite[3])
             baseline = Mock()

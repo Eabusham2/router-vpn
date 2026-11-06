@@ -2631,8 +2631,8 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	}
 	if request.ShadowsocksEntry != nil {
 		finalValid := request.Protocol == "shadowsocks" && desktopSS2022Credentials(request.ShadowsocksMethod, request.Password) ||
-			(request.Protocol == "http-connect" || request.Protocol == "https-connect") && request.ShadowsocksMethod == ""
-		if !finalValid || request.Layer != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || !latency && (capturedAddress != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect") || desktopExternalInstalledSSEntry == nil || !desktopSS2022Credentials(request.ShadowsocksEntry.Method, request.ShadowsocksEntry.Password) {
+			(request.Protocol == "http-connect" || request.Protocol == "https-connect" || request.Protocol == "hysteria2") && request.ShadowsocksMethod == ""
+		if !finalValid || request.Layer != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || !latency && (capturedAddress != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2") || desktopExternalInstalledSSEntry == nil || !desktopSS2022Credentials(request.ShadowsocksEntry.Method, request.ShadowsocksEntry.Password) {
 			t.Fatal("unrequested or incomplete ordinary SS entry graph")
 		}
 	} else if request.ShadowsocksMethod != "" {
@@ -2688,7 +2688,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	if request.HTTPSFault != "" && (!(linuxWGEntry || linuxSSCONNECTEntry) || request.Protocol != "https-connect" || request.HTTPSFault != "untrusted-ca") {
 		t.Fatal("uncaptured CONNECT TLS failure")
 	}
-	if request.HysteriaFault != "" && (!linuxWGEntry || request.Protocol != "hysteria2" || request.HysteriaFault != "untrusted-ca") {
+	if request.HysteriaFault != "" && (!linuxWGEntry && request.ShadowsocksEntry == nil || request.Protocol != "hysteria2" || request.HysteriaFault != "untrusted-ca") {
 		t.Fatal("uncaptured Hysteria TLS failure")
 	}
 	cert, ca := desktopExternalInstalledPeerCertificate(t, latency)
@@ -2697,7 +2697,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		proxyCertificate, _ = desktopExternalInstalledPeerCertificate(t, false)
 	}
 	var hysteriaObservation *desktopExternalHysteriaObservation
-	if linuxWGEntry && request.Protocol == "hysteria2" {
+	if (linuxWGEntry || request.ShadowsocksEntry != nil) && request.Protocol == "hysteria2" {
 		hysteriaObservation = &desktopExternalHysteriaObservation{}
 	}
 	hysteriaCertificate := cert
@@ -2944,6 +2944,8 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		finalNetwork := "tcp"
 		if request.Protocol == "shadowsocks" {
 			finalNetwork = "tcp+udp"
+		} else if request.Protocol == "hysteria2" {
+			finalNetwork = "udp"
 		}
 		ssEntryPeer = desktopExternalInstalledSSEntry(t, server, *request.ShadowsocksEntry, cert, address, finalNetwork)
 		if ssEntryPeer.address == "" || ssEntryPeer.close == nil || ssEntryPeer.stats == nil {
