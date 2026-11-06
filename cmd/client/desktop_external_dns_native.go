@@ -260,14 +260,19 @@ func (a *app) runDesktopDNSNative(ctx context.Context, operation *desktopDNSOper
 		defer tick.Stop()
 		for {
 			record, err := readDesktopDNSDrainRecord(launch)
-			if err == nil && record.desktopDNSNativeRequest == request && record.Status.Complete && record.Status.Drained {
+			acknowledged := err == nil && record.desktopDNSNativeRequest == request && record.Status.Complete && record.Status.Drained
+			if acknowledged && desktopMeasurementCancelRetired(launch, "dns-cancel.json") {
 				return
 			}
 			if desktopDNSNativeClosed(launch) {
 				*owner.failed = true
 				return // The exact native close follows DNS worker/socket drain.
 			}
-			_ = writeDesktopDNSCleanupCancel(launch, request)
+			// Once acknowledged, let the native owner retire a late retry. Do
+			// not recreate it while waiting, or delete another owner's input.
+			if !acknowledged {
+				_ = writeDesktopDNSCleanupCancel(launch, request)
+			}
 			<-tick.C
 		}
 	}()

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -222,4 +223,25 @@ func desktopMeasurementMTUSessionContext(ctx context.Context, launch *desktopNod
 func desktopMeasurementSessionMatchesContext(ctx context.Context, launch *desktopNodeLaunch, session string) bool {
 	identity, err := capturedDesktopMeasurementRuntimeContext(ctx, launch)
 	return err == nil && identity.session == session
+}
+
+// A worker's drained receipt can precede the controller's last cancellation
+// retry. Only the native reader retires that input. Waiting for its absence
+// prevents a previous generation's retry from occupying the next mailbox.
+// This is cleanup through the original directory handle, not path adoption.
+func desktopMeasurementCancelRetired(launch *desktopNodeLaunch, name string) bool {
+	if launch == nil || name != "latency-cancel.json" && name != "dns-cancel.json" {
+		return false
+	}
+	launch.workspaceMu.Lock()
+	defer launch.workspaceMu.Unlock()
+	if launch.directoryRoot == nil || launch.directoryInfo == nil {
+		return false
+	}
+	opened, err := launch.directoryRoot.Stat(".")
+	if err != nil || !os.SameFile(opened, launch.directoryInfo) {
+		return false
+	}
+	_, err = launch.directoryRoot.Lstat(name)
+	return errors.Is(err, os.ErrNotExist)
 }

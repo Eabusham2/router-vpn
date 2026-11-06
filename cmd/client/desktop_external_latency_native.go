@@ -265,14 +265,19 @@ func (a *app) runDesktopLatencyNative(ctx context.Context, operation *desktopLat
 		defer tick.Stop()
 		for {
 			record, err := readDesktopLatencyDrainRecord(launch)
-			if err == nil && record.desktopLatencyNativeRequest == request && record.Status.Complete && record.Status.Drained {
+			acknowledged := err == nil && record.desktopLatencyNativeRequest == request && record.Status.Complete && record.Status.Drained
+			if acknowledged && desktopMeasurementCancelRetired(launch, "latency-cancel.json") {
 				return
 			}
 			if desktopMeasurementNativeClosed(launch) {
 				*owner.failed = true
 				return // The exact native close follows Latency worker/socket drain.
 			}
-			_ = writeDesktopLatencyCleanupCancel(launch, request)
+			// Once acknowledged, let the native owner retire a late retry. Do
+			// not recreate it while waiting, or delete another owner's input.
+			if !acknowledged {
+				_ = writeDesktopLatencyCleanupCancel(launch, request)
+			}
 			<-tick.C
 		}
 	}()

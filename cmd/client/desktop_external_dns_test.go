@@ -35,7 +35,9 @@ func desktopDNSChildFixture(kind, directory string, expected mobilemultihop.Exte
 	}
 	remove := func() {
 		_ = os.Remove(filepath.Join(directory, "dns-request.json"))
-		_ = os.Remove(filepath.Join(directory, "dns-cancel.json"))
+		if _, err := os.Stat(filepath.Join(directory, "dns-retain-cancel.fixture")); err != nil {
+			_ = os.Remove(filepath.Join(directory, "dns-cancel.json"))
+		}
 	}
 	return func() {
 		var request desktopDNSNativeRequest

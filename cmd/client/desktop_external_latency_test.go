@@ -33,6 +33,13 @@ func desktopLatencyChildFixture(kind, directory string, expected mobilemultihop.
 	}
 	remove := func() {
 		for _, name := range []string{"latency-request.json", "latency-cancel.json"} {
+			// Model a late controller retry after the worker's drained receipt:
+			// the native peer alone owns retirement of this input.
+			if name == "latency-cancel.json" {
+				if _, err := os.Stat(filepath.Join(directory, "latency-retain-cancel.fixture")); err == nil {
+					continue
+				}
+			}
 			var captured desktopLatencyNativeRequest
 			if read(name, &captured) && captured == record.desktopLatencyNativeRequest {
 				_ = os.Remove(filepath.Join(directory, name))
@@ -522,5 +529,94 @@ func TestDesktopExternalLatencyTombstonesAreBoundToProvedNativeSession(t *testin
 	}
 	if w := desktopLatencyHTTP(t, a, http.MethodPost, "/api/speed-lab/external-latency", request); w.Code != http.StatusConflict {
 		t.Fatal("queued current-session tombstone was discarded")
+	}
+}
+
+// A drained worker receipt can race the controller's last cancellation retry.
+// Hold that exact input after the receipt, as if the retry was published just
+// after native removal. A replacement must wait for native mailbox retirement.
+func TestDesktopMeasurementDrainedReceiptWaitsForCancelRetirement(t *testing.T) {
+	for _, kind := range []string{"latency", "dns"} {
+		t.Run(kind, func(t *testing.T) {
+			var a *app
+			var launch *desktopNodeLaunch
+			var done <-chan struct{}
+			var cancel func()
+			var nativeDrained func() bool
+			if kind == "latency" {
+				a, launch = desktopLatencyControllerFixture(t, "latency-cancel-delay")
+				o, request := desktopLatencyStartTest(t, a)
+				desktopLatencyWaitTest(t, a, o, func(v desktopLatencyView) bool { return desktopLatencyNativePhase(v.Status.Stage) })
+				done = o.done
+				cancel = func() {
+					if w := desktopLatencyHTTP(t, a, http.MethodPost, "/api/speed-lab/external-latency/cancel", request); w.Code != http.StatusAccepted {
+						t.Fatal("cancel captured Latency", w.Code)
+					}
+				}
+				nativeDrained = func() bool {
+					r, err := readDesktopLatencyDrainRecord(launch)
+					return err == nil && r.Request == request.Request && r.Status.Complete && r.Status.Drained
+				}
+			} else {
+				a, launch = desktopDNSControllerFixture(t, "dns-cancel-delay")
+				o, request := desktopDNSStartForTest(t, a, "tcp")
+				desktopDNSWaitForTest(t, a, o, func(v desktopDNSView) bool { return v.Status.Stage == "measuring" })
+				done = o.done
+				cancel = o.invalidate
+				nativeDrained = func() bool {
+					r, err := readDesktopDNSDrainRecord(launch)
+					return err == nil && r.Request == request.Request && r.Status.Complete && r.Status.Drained
+				}
+			}
+			hold := filepath.Join(launch.directory, kind+"-retain-cancel.fixture")
+			release := filepath.Join(launch.directory, kind+"-drain-release.fixture")
+			if err := os.WriteFile(hold, []byte("hold exact late retry"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = os.Remove(hold)
+				_ = os.WriteFile(release, []byte("release"), 0600)
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("held cancel fixture failed to join")
+				}
+			})
+			cancel()
+			if err := os.WriteFile(release, []byte("release"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for !nativeDrained() {
+				if time.Now().After(deadline) {
+					t.Fatal("actual native peer did not publish its drained receipt")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			// The receipt is already observable. Keep the input across several
+			// real controller polls; no scheduling race creates the late retry.
+			select {
+			case <-done:
+				t.Fatal("drained worker receipt released a still-pending cancellation mailbox")
+			case <-time.After(350 * time.Millisecond):
+			}
+			if !mtuSuspended(a) || a.cmd != launch.command {
+				t.Fatal("pending native cancellation released measurement ownership")
+			}
+			if err := os.Remove(hold); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("native input retirement did not release the original operation")
+			}
+			if _, err := os.Lstat(filepath.Join(launch.directory, kind+"-cancel.json")); !os.IsNotExist(err) {
+				t.Fatal("completed operation retained its cancellation input", err)
+			}
+			if a.cmd != launch.command || mtuSuspended(a) {
+				t.Fatal("retirement changed the tunnel or retained its measurement lease")
+			}
+		})
 	}
 }
