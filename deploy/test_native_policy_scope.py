@@ -19,6 +19,10 @@ class NativePolicyScope(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as mocks:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
             (vendor/'cmd/sing-box').mkdir(parents=True)
+            # Preserve the upstream directory even while transport/native
+            # preparation is doubled. The real mobile projection writes its
+            # caller-bound instance observer here.
+            (vendor/'daemon').mkdir()
             output=vendor/'experimental/libbox/routervpn/applexray';output.mkdir(parents=True)
             parent=output/'preparation_test.go'
             if stale=='old':parent.write_bytes((ROOT/'internal/applexray/preparation_test.go').read_bytes())
@@ -46,6 +50,11 @@ class NativePolicyScope(unittest.TestCase):
                 self.assertEqual(parent.read_text(),'do not erase unknown test')
                 return
             module.prepare(vendor)
+            if name=='prepare-mobile-multihop.py':
+                for observer in ('instance_context','instance_context_test'):
+                    source=ROOT/'mobile/daemon'/(observer+'.go.tmpl')
+                    self.assertIn(source,module.inputs())
+                    self.assertEqual((vendor/'daemon'/('routervpn_'+observer+'.go')).read_bytes(),source.read_bytes())
             helper = module.OBSERVATION
             original = ROOT/'internal/common/observation_context.go'
             target = vendor/helper.RELATIVE

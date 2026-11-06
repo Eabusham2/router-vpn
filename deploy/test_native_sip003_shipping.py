@@ -23,6 +23,10 @@ class Shipping(unittest.TestCase):
     def assert_compiler_and_bridge_are_copied_byte_exactly(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/'go.mod').write_text('module github.com/sagernet/sing-box\n')
+            # Native patchers are boundary doubles below; the sparse source
+            # fixture still retains the upstream daemon directory used by the
+            # real compiler's captured-instance projection.
+            (root/'daemon').mkdir()
             with mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
                 PREPARE.prepare(root)
                 hy2_prepare.assert_called_once_with(root.resolve())
@@ -38,6 +42,10 @@ class Shipping(unittest.TestCase):
                 self.assertEqual(source.read_bytes(),(native/source.name).read_bytes())
             self.assertEqual((ROOT/'mobile/routervpn_sip003_bridge.go.tmpl').read_bytes(),(root/'experimental/libbox/routervpn_sip003_bridge.go').read_bytes())
             self.assertEqual((ROOT/'mobile/sip003/traffic_test.go.tmpl').read_bytes(),(root/'protocol/routervpnsip003test/traffic_test.go').read_bytes())
+            for name in ('instance_context', 'instance_context_test'):
+                source=ROOT/'mobile/daemon'/(name+'.go.tmpl')
+                self.assertIn(source,PREPARE.inputs())
+                self.assertEqual(source.read_bytes(),(root/'daemon'/('routervpn_'+name+'.go')).read_bytes())
     def test_both_native_builds_require_compiler_api_and_real_traffic(self):
         android=(ROOT/'android/build-sing-box-libbox.sh').read_text();ios=(ROOT/'ios/RouterVPN/prepare-libbox.sh').read_text()
         self.assertIn('routerCompileSIP003Profile',android);self.assertIn('LibboxRouterCompileSIP003Profile',ios)
