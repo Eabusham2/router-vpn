@@ -437,6 +437,34 @@ def pt_notice_boundaries(root):
         rejected(lambda: DELIVERY.verify_package(target, package), 'package PT notice '+fault)
 
 
+def encrypted_peer_projection_boundaries():
+    preparation = BUILD.EXTERNAL
+    with tempfile.TemporaryDirectory(prefix='native-peer-projection-') as temporary:
+        root = Path(temporary).resolve()
+        destination = root/'prepared'
+        destination.mkdir()
+        # Exercise the actual whole shipping peer inventory, including its
+        # platform declarations, before accepting any native package.
+        preparation.copy_encrypted_peer_templates(destination)
+        for name, relative in preparation.PEER_TEMPLATES.items():
+            check((destination/relative).read_bytes() == (ROOT/'mobile/desktop'/name).read_bytes(),
+                  'encrypted peer projection changed '+name)
+        name = 'node_resolved_broker_test.go.tmpl'
+        relative = preparation.PEER_TEMPLATES[name]
+        original = (ROOT/'mobile/desktop'/name).read_bytes()
+        fixtures = root/'fixtures'
+        source = fixtures/'mobile/desktop'/name
+        source.parent.mkdir(parents=True)
+        for label, raw in (
+            ('missing Linux guard', original.replace(b'//go:build linux\n\n', b'', 1)),
+            ('foreign platform guard', original.replace(b'//go:build linux\n', b'//go:build windows\n', 1)),
+            ('foreign native package', original.replace(b'package routervpnamnezia\n', b'package main\n', 1)),
+        ):
+            source.write_bytes(raw)
+            with patch.object(preparation, 'ROOT', fixtures), patch.object(preparation, 'PEER_TEMPLATES', {name: relative}):
+                rejected(lambda: preparation.copy_encrypted_peer_templates(destination), label)
+
+
 def boundary_tests():
     # This archive/promotion model doubles Go build metadata, codesign and the
     # newly mandatory DNSSEC package verifier boundary. It cannot issue a real
@@ -540,6 +568,7 @@ def boundary_tests():
               'archive delivery failed to invoke the mandatory Linux DNSSEC verifier')
     checkout_bytes_test()
     dependency_checkout_bytes_test()
+    encrypted_peer_projection_boundaries()
     print(f'{checks} native delivery/signing boundary checks passed', flush=True)
 
 
