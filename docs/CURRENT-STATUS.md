@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `cf4ea4b3`
+## November 6 product continuation through `df96e9cc`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`cf4ea4b389ead8124b3db3f7002723b2ff6a466b`](https://github.com/Eabusham2/router-vpn/commit/cf4ea4b389ead8124b3db3f7002723b2ff6a466b).
+[`df96e9ccc24086d9bcae589f2cac475a0dbab73d`](https://github.com/Eabusham2/router-vpn/commit/df96e9ccc24086d9bcae589f2cac475a0dbab73d).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 49 units.
+with separately attributed contributor evidence; it is not one of these 52 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -34,15 +34,18 @@ Concurrent [`090c09ec`](https://github.com/Eabusham2/router-vpn/commit/090c09ec5
 subsequently adds joined resolver-owner handling before private-domain fallback.
 It was preserved before `35725083`; its contributor evidence is separate.
 
-### Newer published units 41–49
+### Newer published units 41–52
 
 `c70778ea` binds Android cold CONNECT startup to the captured canonical protocol;
 `a475f1ec` corrects the real Runtime/Home fixture projection. `29bf1fb5` adds
 atomic, node/source/key/image-bound paired SS service metadata, with its existing
 transport artifacts unchanged. Concurrent `66c81cde`/`0752df09` supply upgrade
-revalidation and ordinary/composite/Apple consumer compatibility. Additional
-paired node-binding and actual store/reload coverage remain under focused review;
-the producer alone is not new CONNECT graph admission.
+revalidation and ordinary/composite/Apple consumer compatibility. `3f9701e3`
+adds the missing paired node binding, passing 285 focused race verdicts including
+48 real generator/private-bundle cases. `fd48f71c` adds mandatory actual host
+store/reload/rollback/capture checks: fifteen Android and eighteen Apple checks
+with missing-source and old asset-capture controls. These metadata changes alone
+do not admit new CONNECT graphs or prove a deployed server image.
 
 `3044f0b0` publishes the bounded imported OpenVPN Local direction in the existing
 Android/Apple VPN owner. It retains all 247 earlier captures and adds 90 TCP/UDP
@@ -57,8 +60,9 @@ preserving its complete MTU caveat.
 
 `803eabc1` makes the Stop fixture wait for installed signal behavior and exact
 owned child exit. Its frozen complete 22-gate map-first source/shipping run
-passes. The later OpenVPN source exposed the separate sentence contract above,
-so that earlier full pass is not current UI acceptance. Production process
+passes. A fresh complete 22-gate check also passes on frozen `fd48f71c`, and both
+its exact-source GitHub map-first and native UI workflows succeed. These are
+source/shipping checks; physical visual acceptance remains separate. Production process
 identity and retry bounds are unchanged. `cf4ea4b3` likewise repairs only the
 server Tor test's missing private-DNS mutex user, with eleven negative controls.
 
@@ -69,13 +73,23 @@ the initial cause remains unexplained. Both full WFP jobs then stop at their
 native limit and requires seven independent phase jobs on both architectures
 plus fourteen exact source/run/image receipts. Nine new receipt contracts and
 all 42 existing runner contracts pass; actual Windows execution is separate.
+The later `f0c3ea9d` run passes ordinary bootstrap and captured startup on both
+architectures. Its AMD64 WFP wrong-exit negative case fails before an authenticated
+TLS/proof receipt; that cause is still under investigation. ARM64 WFP reaches
+the aggregate cap. Neither outcome closes the complete WFP requirement.
+
+`df96e9cc` repairs two sparse source-copy fixtures exposed by four failed
+`fd48f71c` workflow groups. They now retain the upstream daemon directory and
+verify its exact captured-instance source projection. Both seven-test suites
+pass after local reproduction; production behavior and negative coverage remain
+unchanged. These passes do not establish the subsequent full release status.
 
 At **09:20:31 UTC**, its Windows phase run
 [42194122508](https://github.com/Eabusham2/router-vpn/actions/runs/42194122508)
 is pending, and its authoritative release run is cancelled after newer source.
 The latest listed release remains the October 24 `745b3e41` prerelease with
 twelve assets. No new completed native release, signing, private deployment or
-physical-device acceptance is claimed. See the product ledger's units 41–49
+physical-device acceptance is claimed. See the product ledger's units 41–52
 for exact commits, tests, source identities and failure history.
 
 ### Earlier published units retained below

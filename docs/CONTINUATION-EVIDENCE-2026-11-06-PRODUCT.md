@@ -6,12 +6,12 @@ This ledger supplements [the earlier November 6 ledger](CONTINUATION-EVIDENCE-20
 and [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md). It does not replace
 the original requirements or cancel an unfinished requirement. The recorded
 published product work below ends at
-[`cf4ea4b389ead8124b3db3f7002723b2ff6a466b`](https://github.com/Eabusham2/router-vpn/commit/cf4ea4b389ead8124b3db3f7002723b2ff6a466b).
+[`df96e9ccc24086d9bcae589f2cac475a0dbab73d`](https://github.com/Eabusham2/router-vpn/commit/df96e9ccc24086d9bcae589f2cac475a0dbab73d).
 This is a source/evidence cutoff, not a claim that the branch stops moving or
 that this revision has completed its release gates.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 49 units.
+with separately attributed contributor evidence; it is not one of these 52 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -163,7 +163,7 @@ were also checked at `8a71c473`: two named parents / 27 cases pass under race
 in 1.622 seconds. This narrow core result does not certify all later Android
 sources or the newer native peer templates.
 
-### Units 41–49: published imported paths, service metadata and CI completion
+### Units 41–52: published imported paths, service metadata and CI coverage
 
 | Published commit | Change and requirement connection | Observed verification | Remaining boundary |
 |---|---|---|---|
@@ -176,14 +176,21 @@ sources or the newer native peer templates.
 | [`3ee47f8d`](https://github.com/Eabusham2/router-vpn/commit/3ee47f8de5876c9c685fc52ab901cc6888ad0d2f) | The Android connection-profile source contract includes the published OpenVPN help wording. | Exact line-129 failure reproduces and the corrected actual contract passes. The complete packet-capacity, Auto/Fixed and not-measured-MTU caveat remains required. | Production text is unchanged by this one-line fixture repair. Current native builds and the complete UI gate require their own evidence. |
 | [`341f2c66`](https://github.com/Eabusham2/router-vpn/commit/341f2c6630e9654f537cc34dadb50288614277ab) | Windows native CI runs each of seven existing phases independently on AMD64/ARM64, keeping the 30-minute job cap and every inner compiler/test/cleanup limit. A required aggregate admits only fourteen successful exact-run/commit/architecture/image receipts and one comparable prepared-source closure per architecture. Default and packaging executions still require all seven phases. | All 42 existing runner contracts pass in 3.980 seconds, including observer races in 1.022 seconds. Nine new receipt tests pass in 0.156 seconds. Real Go parsing proves separate temporary roots compare identically while raw module bytes remain unchanged; changed module/dependency, foreign replacement, wrong source/run, missing phase/image and failed/cancelled/skipped job controls reject. Parsed workflow expands to fourteen native jobs. Independent source review and a real Linux prepared-tree scan confirm only `go.mod` among 2,138 records contains its preparation paths. | Each phase retains its original raw source digest. Only the validated owned sibling Xray path is normalized for cross-job comparison; full pinned Xray source hashes and all remaining module bytes are retained and checked before/after execution. Linux checks do not execute the actual Windows matrix. Run 42194122508 remains pending at the snapshot below. |
 | [`cf4ea4b3`](https://github.com/Eabusham2/router-vpn/commit/cf4ea4b389ead8124b3db3f7002723b2ff6a466b) | The exact server Tor dependency inventory includes the private-DNS helper's existing `desktopnetwork.LockContext` dependency. | The original missing-member failure reproduces. The corrected source closure and eleven missing/foreign/substituted dependency controls pass in 0.861 seconds, including new private-DNS import and symbol mutations. | This repairs the fixture exposed by Xray run 42189911345. No production lock, dependency source or runtime behavior changes; a new native CI result is separate. |
+| [`3f9701e3`](https://github.com/Eabusham2/router-vpn/commit/3f9701e361cd7aeea21295e0439d71d254b206c1) | Paired entry and final Start Layers validate configured SS service metadata against their exact captured node using the published shared validator before proxy compilation. Absent legacy metadata keeps its previous behavior. | The old source fails all four foreign-node AES/XOR cases. The final focused race run passes 285 verdicts in 23 parents (12.532 seconds), including 48 real generator/private-bundle cases: thirteen non-SS families with two layers, three standalone cases, four paired cases and eleven faults. Fresh lease credentials remain bound to their actual node. | The helper's SHA256 is `daf5bcf5eb6323f7f0521e0170d9607829e019484fcaf39b5e9ce65c1ca90600`. This closes paired metadata substitution; it does not itself enable CONNECT datagrams or prove a deployed image. |
+| [`fd48f71c`](https://github.com/Eabusham2/router-vpn/commit/fd48f71ce1935060937d9ab061af20c7307bf9c6) | Actual Android and Apple stores retain the generated SS declaration through link, persistence, reload, rollback and final/outer graph capture. The checks are mandatory in both runtime gates. | Fifteen Android and eighteen Apple checks pass using the exact real-generator helper above. Missing-declaration and old one-asset capture controls fail at their intended assertions. | OS, durable storage and native-constructor boundaries are explicit doubles. These tests establish shipping host source integration, not physical devices or new CONNECT capability. |
+| [`df96e9cc`](https://github.com/Eabusham2/router-vpn/commit/df96e9ccc24086d9bcae589f2cac475a0dbab73d) | Sparse source-copy fixtures retain the upstream `daemon` directory required by the real multihop preparer and verify both captured-instance templates and source-input membership. | The exact failures from four `fd48f71c` workflow groups reproduce locally. All seven SIP003 shipping tests pass in 0.472 seconds and all seven native-policy scope tests pass in 2.973 seconds, preserving byte/Windows-newline, foreign-source and parent-audit rejection. | Only two fixture files change. Production preparation, original-context checks and runtime deadlines remain unchanged; the new exact-SHA workflow results are separate. |
 
 These publications also preserve concurrent Windows Local/Server/Compare
 unit `f0c3ea9d`, installed private-DNS evidence `75897b4d`, and their `2d697a3e`
 record. Concurrent `66c81cde` revalidates configured SS generation during
 preserved upgrades; `0752df09` adds ordinary, composite and Apple sidecar
-compatibility. Their contributor evidence is separately attributed. Additional
-paired node-binding and actual host store/reload regressions are being checked
+compatibility. Their contributor evidence is separately attributed. Units 50–51
+complete the additional paired node-binding and actual host store/reload checks
 against those published changes, without replaying superseded implementations.
+The later concurrent `4a02b231` preserves original configured Apple SS bytes
+through DNS and Xray preparation, applying resolver changes only to the verified
+runtime projection. It and its separate contributor evidence are preserved;
+the pending CONNECT host work must compose with those newer source boundaries.
 
 ## Published independent SOCKS layers — reconciled final evidence
 
@@ -271,6 +278,21 @@ validation of that contributor unit.
 
 ## Current CI and publication evidence
 
+The complete 22-gate map-first source/shipping check passes on a frozen, clean
+`fd48f71c` checkout. At that same SHA, both the
+[map-first workflow 42194864239](https://github.com/Eabusham2/router-vpn/actions/runs/42194864239)
+and [native UI workflow 42194864260](https://github.com/Eabusham2/router-vpn/actions/runs/42194864260)
+complete successfully. These close the recovered UI source gate, including the
+unit-47 help-contract repair; physical visual acceptance is still separate.
+
+Four other exact-`fd48f71c` workflows fail at the same missing sparse-fixture
+`daemon` directory: release-gap audit 42194864132, custom-standard-exit
+42194864677, recovered requirements 42194864151 and multihop 42194864642.
+Their `cmd/client` runs pass; `internal/common` and, in the broad run,
+`internal/applexray` expose the affected Python projections. Unit 52 repairs
+those reproduced fixture failures without changing production. No all-green
+release is inferred from the local correction.
+
 At **2026-11-06 09:20:31 UTC**, the release-list read still returned the October
 24 `745b3e41` prerelease with twelve assets. No newer exact-source release or
 private deployment is established. The `341f2c66` Windows phase workflow
@@ -287,8 +309,13 @@ remains unexplained. Both complete WFP jobs then ended cancelled at roughly
 30 minutes (AMD64 30.233, ARM64 30.283), after multiple phases had passed. The
 logs do not establish the unfinished phases. Unit 48 addresses that aggregate
 CI boundary without weakening native operation limits or omitting a phase.
-The later `f0c3ea9d` ordinary bootstrap jobs passed both architectures at the
-subsequent read; its full WFP/startup jobs were still running.
+The later `f0c3ea9d` [Windows run 42190099335](https://github.com/Eabusham2/router-vpn/actions/runs/42190099335)
+passes ordinary bootstrap and captured startup on both architectures. AMD64
+WFP job 127802645044 instead fails its SOCKS wrong-exit negative case: the
+provider had an accepted TCP connection but no authenticated TLS/proof receipt.
+The same run passes Home/LAN-off and its retained denial checks. ARM64 WFP is
+cancelled at the aggregate cap. The wrong-exit failure's cause remains under
+investigation; the negative case is retained and no causal repair is claimed.
 
 The newly published OpenVPN head `3044f0b0` failed both recovered UI workflows
 at the same old Android help-sentence assertion:
@@ -686,7 +713,7 @@ The complete original scope remains open. Apple captured per-hop profile
 restoration, the persisted Start Layer fixture correction and macOS Performance
 cancellation are now published with the bounded evidence in their rows. Other
 original native UI, settings, Methods, recovery and graph requirements retain
-their individual closure obligations; these forty-nine units are not a replacement scope.
+their individual closure obligations; these fifty-two units are not a replacement scope.
 
 The concrete Apple Home DNS substitution gap reported at `8fdc2ef7` is repaired
 in `5b32bcf5` with the bounded evidence above. Intentional UDP/53 for Fastest node
