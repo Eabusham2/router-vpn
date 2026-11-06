@@ -69,7 +69,7 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java", "AndroidNodeStatistics.load(node)", "measured.eligible()")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
 		"⚡ Fastest", "liveLatency", "Performance", "Forward", "Profiles", "showProfileManager",
-		"Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds", "telemetry.speedTest(entry", "telemetry.speedTest(exit",
+		"Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds", "new AndroidHopMeasurementDialog(this,connection)", "closeRoutedHopMeasurement",
 		"currentPathMs", "refreshMultihopSummary", "RouterVpnNodeMapView.Marker")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
 		"latencyMs", "System.currentTimeMillis", "postInvalidateDelayed", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine")

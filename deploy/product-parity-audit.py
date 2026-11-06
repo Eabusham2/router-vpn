@@ -593,7 +593,7 @@ require(
     "AndroidProductParity.showModes", "AndroidProductParity.showDNS", "showSettings",
     "Multihop", "Add Router node", "Add custom", "Profiles", "showProfileManager",
     "Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds",
-    "telemetry.speedTest(entry", "telemetry.speedTest(exit", "connection.restorePending(state,callback())",
+    "new AndroidHopMeasurementDialog(this,connection)", "closeRoutedHopMeasurement", "connection.restorePending(state,callback())",
     "connection.savePending(out)", "connection.activeMultihopEntryId()", "connection.activeMultihopExitId()",
     "AndroidForwardingMaster forwardingMaster", "Forward ON", "Forward OFF", "setForwardingMaster",
 )

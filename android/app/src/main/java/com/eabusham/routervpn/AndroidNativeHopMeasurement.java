@@ -8,6 +8,8 @@ import java.util.UUID;
 final class AndroidNativeHopMeasurement {
     interface Callback {
         void progress(String status); void finished(String status,Throwable error);
+        /** The UI must recheck this exact native owner after its delivery queue. */
+        default void progress(LayeredVpnService.HopMeasurementOwner owner,String status){progress(status);}
         /** Called after the exact native workers drain, while cancellation and
          * the MTU hold still belong to this request. */
         default void commit(LayeredVpnService.HopMeasurementOwner owner,String status)throws Exception{}
@@ -68,7 +70,7 @@ final class AndroidNativeHopMeasurement {
                 if(job.cancelled)throw new IllegalStateException("Path measurement cancelled.");
                 if(System.nanoTime()>deadline)throw new IllegalStateException("Path measurement timed out.");
                 String response=job.owner.status();JSONObject status=validate(response,job.id);
-                job.callback.progress(response);
+                job.callback.progress(job.owner,response);
                 if(status.getBoolean("complete")){result=response;break;}
                 Thread.sleep(300L);
             }

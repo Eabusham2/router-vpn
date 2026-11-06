@@ -17,17 +17,34 @@ final class AndroidHopMeasurementDialog {
     private TextView output;
     AndroidHopMeasurementDialog(Activity activity,AndroidUnifiedConnectionController connection){this.activity=activity;this.connection=connection;}
     void show(){
-        if(!connection.isConnected())return;
+        if(activity.isFinishing()||activity.isDestroyed()||!connection.isConnected())return;
         output=new TextView(activity);output.setPadding(32,24,32,24);output.setTextIsSelectable(true);
         output.setText("Measuring the captured VPN paths. Private Router VPN nodes use their authenticated API; imported and Tor exits use HTTPS through the captured route. Rates describe cumulative paths, not inferred inter-server link speeds. Up to 32 MiB will be transferred. MTU stays paused until native cleanup finishes.");
         ScrollView scroll=new ScrollView(activity);scroll.addView(output);
         dialog=new AlertDialog.Builder(activity).setTitle("Routed path measurements").setView(scroll).setNegativeButton("Close / cancel",(d,w)->close()).create();
         dialog.setOnDismissListener(d->close());dialog.show();
         measurement.run(null,new AndroidNativeHopMeasurement.Callback(){
-            public void progress(String status){activity.runOnUiThread(()->{if(dialog==null||!dialog.isShowing())return;try{output.setText(renderStatus(status));}catch(Exception invalid){measurement.cancel();output.setText("Invalid measurement discarded; waiting for native cleanup.");}});}
-            public void finished(String status,Throwable error){activity.runOnUiThread(()->{if(dialog==null||!dialog.isShowing())return;if(error!=null){output.setText("Measurement discarded or cancelled. Its captured native work has drained.");return;}try{output.setText(renderStatus(status));}catch(Exception invalid){output.setText("Invalid native measurement discarded.");}});}
+            private LayeredVpnService.HopMeasurementOwner completedOwner;
+            public void progress(String status){activity.runOnUiThread(()->{if(visible())output.setText("Cancelling measurement; waiting for the captured native workers to drain…");});}
+            public void progress(LayeredVpnService.HopMeasurementOwner owner,String status){deliver(owner,status,false);}
+            public void commit(LayeredVpnService.HopMeasurementOwner owner,String status){completedOwner=owner;}
+            public void finished(String status,Throwable error){
+                if(error==null){deliver(completedOwner,status,true);return;}
+                activity.runOnUiThread(()->{if(visible())output.setText("Measurement discarded or cancelled. Its captured native work has drained.");});
+            }
         });
     }
+    private boolean visible(){return !activity.isFinishing()&&!activity.isDestroyed()&&dialog!=null&&dialog.isShowing();}
+    private void deliver(LayeredVpnService.HopMeasurementOwner owner,String status,boolean complete){
+        activity.runOnUiThread(()->{
+            if(!visible())return;
+            try{
+                if(owner==null)throw new IllegalStateException("Missing native path receipt.");
+                owner.commit(()->{if(visible())output.setText(renderStatus(status));});
+            }catch(Exception stale){measurement.cancel();output.setText(complete?"Measurement discarded: its captured VPN path changed.":"Measurement cancelled: its captured VPN path changed; waiting for native cleanup.");}
+        });
+    }
+
     static String renderStatus(String raw)throws Exception{
         if(raw==null||raw.length()>16384)throw new IllegalArgumentException("Oversized measurement status.");
         JSONObject status=new JSONObject(raw);JSONArray rows=status.getJSONArray("results");if(rows.length()>2)throw new IllegalArgumentException("Too many measured paths.");
@@ -52,5 +69,5 @@ final class AndroidHopMeasurementDialog {
     }
     private static boolean latency(JSONObject value){int count=value.optInt("samples");if(count<1||count>24)return false;for(String key:new String[]{"min_ms","median_ms","average_ms","p90_ms","max_ms","jitter_ms"}){double n=value.optDouble(key,Double.NaN);if(!Double.isFinite(n)||n<0)return false;}return true;}
     private static boolean transfer(JSONObject value){long bytes=value.optLong("bytes");double seconds=value.optDouble("seconds",Double.NaN),rate=value.optDouble("mbps",Double.NaN);return bytes>=65536&&bytes<=8388608&&Double.isFinite(seconds)&&seconds>0&&Double.isFinite(rate)&&rate>0&&Math.abs(bytes*8.0/seconds/1000000.0-rate)<=Math.max(0.000001,rate*0.000001);}
-    void close(){measurement.cancel();}
+    void close(){measurement.cancel();AlertDialog owned=dialog;dialog=null;if(owned!=null&&owned.isShowing())owned.dismiss();}
 }
