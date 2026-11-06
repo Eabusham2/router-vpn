@@ -2,6 +2,8 @@
 """Actual Android capture/session consumers with the shared Go source validator."""
 from pathlib import Path
 import importlib.util
+import os
+import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 TEST=r'''
  static String sha(byte[] raw)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(raw));}
@@ -85,5 +87,14 @@ def main():
  marker=' public static void main(String[] args)throws Exception {'
  if fixture.HARNESS.count(marker)!=1:raise ValueError('Actual Java fixture entry changed')
  fixture.HARNESS=fixture.HARNESS.split(marker,1)[0]+TEST
- fixture.main()
+ dep_spec=importlib.util.spec_from_file_location('ss_service_android_dependency',ROOT/'deploy/test_android_multihop_pinned.py')
+ dependency=importlib.util.module_from_spec(dep_spec);dep_spec.loader.exec_module(dependency)
+ with tempfile.TemporaryDirectory(prefix='router-ss-service-json-') as directory:
+  original=os.environ.get('ANDROID_JSON_JAR')
+  try:
+   os.environ['ANDROID_JSON_JAR']=str(dependency.android_json_dependency(Path(directory),dict(os.environ)))
+   fixture.main()
+  finally:
+   if original is None:os.environ.pop('ANDROID_JSON_JAR',None)
+   else:os.environ['ANDROID_JSON_JAR']=original
 if __name__=='__main__':main()

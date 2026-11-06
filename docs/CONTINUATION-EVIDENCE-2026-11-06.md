@@ -953,6 +953,29 @@ No local compile or native execution was available. The actual association
 test and full Server DNS/WFP path must still execute on the published source;
 the projection correction alone does not establish Server acceptance.
 
+### Android SS fixture owns its actual JSON dependency
+
+[The bab34 Android/native-parser job](https://github.com/Eabusham2/router-vpn/actions/runs/42226553733/job/127922137133)
+passed the Xray consumer fixture with 87 graphs and 1,777 executable checks,
+then stopped before the SS service fixture could compile its Java harness:
+the real Android JSON jar was unavailable in that second Python process.
+
+The preceding Xray fixture correctly owns its checksum-pinned temporary JSON
+artifact and restores its process environment when it exits. That ownership
+does not transfer to the next command. The SS service fixture now uses the
+same existing `android_json_dependency` helper in its own temporary lifetime,
+covering the complete Java/Go execution and restoring any original
+`ANDROID_JSON_JAR` value in `finally`. Explicit overrides retain their
+authoritative failure behavior; the helper still checks bounded file contents,
+pinned download identity/checksum and required unique JSON classes.
+The complete Java harness and negative cases are byte-identical.
+
+Validation before publication was root and Astra source review against the
+already executed Xray wrapper and shared dependency helper. No local execution
+was available. The earlier Xray result is actual evidence; the repaired SS
+consumer fixture still needs its own execution result. This does not add a
+dependency or substitute a JSON implementation in the shipped Android app.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.
