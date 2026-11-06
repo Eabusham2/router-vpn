@@ -123,6 +123,11 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_tunnel.py',
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_desktop_node_physical.py',
+                             ROOT/'deploy/test_mobile_imported_socks_xray.py',
+                             ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
+                             ROOT/'deploy/test_mobile_imported_entry.py',
+                             ROOT/'deploy/test_mobile_imported_entry_runner.py',
+                             ROOT/'deploy/mobile_imported_openvpn_cases.py',
                              ROOT/'deploy/test_desktop_node_routing_runner.py',
                              ROOT/'deploy/test_desktop_node_pq.py',
                              ROOT/'deploy/test_desktop_node_max.py',
@@ -756,6 +761,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # budget; compiler, suite and control deadlines stay intact.
                 run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
                     env=env, timeout=1800)
+                if target.startswith('linux/'):
+                    # The desktop reference owns its two native builds and
+                    # exact traffic matrix. Keep it outside the existing
+                    # 1200s imported-peer and 1800s node gate envelopes.
+                    # The separate mobile gate owns the libbox parser.
+                    run([sys.executable, ROOT/'deploy/test_mobile_imported_socks_xray.py',
+                         source, '--reference-only'], env=env, timeout=3000)
                 # The PQ matrix uses the same verified native archive and
                 # compiler cache, fresh KEM keys, and real packet/Start Layer
                 # peers. Native firewall/public admission remains separate.

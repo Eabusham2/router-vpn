@@ -26,6 +26,7 @@ def socks_label(mode,a,b):
  return mode+'--'+(a or 'off')+'--'+(b or 'off')
 SOCKS_FILES={'socks5--final-'+socks_label(mode,a,b)+'.json' for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong') for a in LAYERS for b in LAYERS}
 SOCKS_XRAY_FILES={'socks5--final-reality-vision.json'}
+SOCKS_XRAY_PARSER='TestRouterImportedSOCKSRealityVisionNativeGraph'
 CONNECT_ROWS=[p+"--"+m+"--"+d for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")]
 CONNECT_FILES={"connect--"+row+".json" for row in CONNECT_ROWS}
 CONNECT_SERVICE_FILES={p+"--"+l+"--"+d+"--"+t+".json" for p in ("http-connect","https-connect") for l in ("off",*LAYERS[1:]) for d in ("home","custom") for t in ("udp","tcp")}
@@ -154,6 +155,11 @@ def checked_sources(vendor,peers):
   for package in m.PACKAGES:raw=raw.replace(('"router-vpn/internal/'+package+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"').encode())
   path=vendor/'experimental/libbox/routervpn/mobilemultihop'/source.name
   if path.is_symlink() or not path.is_file() or path.read_bytes()!=raw:raise ValueError('Changed native imported-entry compiler: '+source.name)
+def native_parser_groups(peers):
+ groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES),'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(CONNECT_DNS_FILES)}
+ if not peers:groups[SOCKS_XRAY_PARSER]=[]
+ return groups
+
 def execute(command,cwd,env,expected,timeout=600):
  result=subprocess.run(command,cwd=cwd,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=timeout)
  if result.returncode:
@@ -239,7 +245,7 @@ def run(vendor,peers=False,android=False):
   if {p.name for p in fixtures.iterdir()}!=FILES:raise ValueError('Incomplete captured imported source matrix')
   if {p.name for p in service.iterdir()}!=CONNECT_SERVICE_FILES:raise ValueError('Incomplete configured CONNECT service matrix')
   if {p.name for p in selected_dns.iterdir()}!=CONNECT_DNS_FILES:raise ValueError('Incomplete selected CONNECT DNS matrix')
-  groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES),'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(CONNECT_DNS_FILES)}
+  groups=native_parser_groups(peers)
   if android:
    folder=Path(temporary)/'android';folder.mkdir();env['ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES']=str(folder)
    subprocess.run([sys.executable,str(ROOT/'android/test_android_imported_router.py')],cwd=ROOT,env=env,check=True,timeout=240)

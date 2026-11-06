@@ -261,6 +261,20 @@ func desktopNodeXrayForward(server *desktopNodeLayerServer, incoming net.Conn, t
 
 func startDesktopNodeXrayServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
 	t.Helper()
+	return startDesktopNodeXrayServerWithProof(t, mode, ip, dnsAddress, "")
+}
+
+// The optional fixture-only proof route admits exactly 10.77.0.1:8787 to its
+// separately retained loopback listener. Existing reference callers keep the
+// same blocked default and gain no additional destination.
+func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Addr, dnsAddress, proofAddress string) (*desktopNodeLayerServer, string) {
+	t.Helper()
+	if proofAddress != "" {
+		proof, err := netip.ParseAddrPort(proofAddress)
+		if err != nil || !proof.Addr().Is4() || !proof.Addr().IsLoopback() || proof.Port() == 0 {
+			t.Fatal("Xray reference lost its separately retained private proof endpoint", err)
+		}
+	}
 	if mode != "reality-vision" && mode != "reality-pq-vision" && mode != "reality-xhttp" {
 		t.Fatal("Xray reference requires an exact native REALITY graph family")
 	}
@@ -417,14 +431,19 @@ func startDesktopNodeXrayServer(t *testing.T, mode string, ip netip.Addr, dnsAdd
 			"address": ip.String(), "port": front.Addr().(*net.TCPAddr).Port, "users": []any{user}}}}, "streamSettings": clientStream}}}
 	outputs := []any{map[string]any{"tag": "blocked", "protocol": "blackhole"}}
 	rules := []any{}
-	for _, route := range []struct {
+	type capturedRoute struct {
 		tag, network, redirect, port string
 		ips                          []string
-	}{
+	}
+	routes := []capturedRoute{
 		{"owned-tcp", "tcp", echoTCP.Addr().String(), "9999", []string{"192.0.2.99/32", "2001:db8::99/128"}},
 		{"owned-udp", "udp", echoUDP.LocalAddr().String(), "9999", []string{"192.0.2.99/32", "2001:db8::99/128"}},
 		{"owned-home-dns", "udp", dnsAddress, "53", []string{"192.168.50.133/32"}},
-	} {
+	}
+	if proofAddress != "" {
+		routes = append(routes, capturedRoute{"owned-private-proof", "tcp", proofAddress, "8787", []string{"10.77.0.1/32"}})
+	}
+	for _, route := range routes {
 		target := netip.MustParseAddrPort(route.redirect)
 		outputs = append(outputs, map[string]any{"tag": route.tag, "protocol": "freedom", "settings": map[string]any{
 			"redirect": route.redirect, "finalRules": []any{map[string]any{"action": "allow", "network": route.network,

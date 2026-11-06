@@ -493,3 +493,62 @@ func TestRouterImportedCONNECTSelectedDNSGraphs(t *testing.T) {
 		})
 	}
 }
+
+// The focused reference gate supplies only this newly captured graph. The
+// existing complete 338-source constructor/parser inventory remains mandatory
+// in its original gate and is not reduced by this scoped entry point.
+func TestRouterImportedSOCKSRealityVisionNativeGraph(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("required original SOCKS REALITY source absent")
+		}
+		t.Skip("exact compiler source supplied by scoped native gate")
+	}
+	path := filepath.Join(root, "socks5--final-reality-vision.json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatal("original SOCKS REALITY source is not a retained file", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source []string
+	if json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+		t.Fatal("original SOCKS REALITY source capture missing")
+	}
+	plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+	if err != nil {
+		t.Fatal("actual native constructor rejected original SOCKS REALITY sources", err)
+	}
+	var metadata map[string]string
+	if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil ||
+		metadata["entry_kind"] != "external" || metadata["entry_mode"] != "socks5" || metadata["exit_mode"] != "reality-vision" ||
+		metadata["entry_api"] != "" || metadata["entry_node_id"] != "" || metadata["entry_token"] != "" ||
+		(metadata["entry_start_layer"] != "" && metadata["entry_start_layer"] != "off") ||
+		(metadata["exit_start_layer"] != "" && metadata["exit_start_layer"] != "off") {
+		t.Fatal("native SOCKS REALITY constructor changed captured identity or layer scope")
+	}
+	if plan.SourceSHA256() != source[7] || plan.Config() != source[8] {
+		t.Fatal("native SOCKS REALITY constructor changed exact original source bytes")
+	}
+	if err := CheckConfig(plan.Config()); err != nil {
+		t.Fatal("actual pinned parser rejected complete SOCKS REALITY graph", err)
+	}
+	if _, err := mobilemtu.ReadProfile(plan.MTUProfile()); err != nil {
+		t.Fatal("native SOCKS REALITY lost final private MTU proof authority", err)
+	}
+	if _, err := mobilemtu.NewPlan(plan.Config(), 1280); err != nil {
+		t.Fatal("native SOCKS REALITY lost retained MTU plan", err)
+	}
+	if plan.Healthy() {
+		t.Fatal("native SOCKS REALITY compilation manufactured readiness")
+	}
+	if _, err := plan.NewHopMeasurement(nil); err == nil {
+		t.Fatal("unstarted SOCKS REALITY graph gained measurement authority")
+	}
+	if _, err := plan.NewMTU(nil, nil); err == nil {
+		t.Fatal("unstarted SOCKS REALITY graph gained MTU authority")
+	}
+}

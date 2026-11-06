@@ -118,7 +118,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || 150 }}
+    # Linux adds only the separate 50-minute SOCKS/REALITY reference allowance.
+    # Existing native process deadlines and other platform budgets stay intact.
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 200 || 150 }}
     steps:
       - uses: actions/checkout@v4
         with:

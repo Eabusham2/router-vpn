@@ -146,6 +146,20 @@ class ImportedEntryVerdicts(unittest.TestCase):
     for marker in ('panic:','WARNING: DATA RACE','original SOCKS REALITY proof worker did not join','original SOCKS REALITY controller did not close'):
      with self.assertRaises(ValueError):gate.require_socks_xray_control(raw+'\n'+marker,1,parent,leaf,witness)
     with self.assertRaises(ValueError):gate.require_socks_xray_control(raw,0,parent,leaf,witness)
+ def test_socks_reality_mobile_parser_is_mandatory(self):
+  groups=gate.native_parser_groups(False)
+  self.assertEqual(groups[gate.SOCKS_XRAY_PARSER],[])
+  self.assertEqual(groups['TestRouterImportedEntryPairedFinalNativeGraphs'],sorted(gate.FILES))
+  self.assertEqual(len(gate.FILES),338)
+  expected=gate.names(groups)
+  self.assertEqual(len(expected),410)
+  events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
+  gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+  missing=[e for e in events if e['Test']!=gate.SOCKS_XRAY_PARSER]
+  with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,missing)),expected)
+  duplicate=events+[{'Action':'pass','Test':gate.SOCKS_XRAY_PARSER}]
+  with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,duplicate)),expected)
+  self.assertNotIn(gate.SOCKS_XRAY_PARSER,gate.native_parser_groups(True))
  def test_shipping_invocations(self):
   self.assertIn("test_mobile_imported_entry.py'),str(vendor),'--android'",(ROOT/'deploy/test_android_multihop_pinned.py').read_text())
   self.assertIn('"deploy/test_mobile_imported_entry.py", source, "--native-peers"',(ROOT/'deploy/test_desktop_node_physical.py').read_text())

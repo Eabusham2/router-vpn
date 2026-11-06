@@ -1911,3 +1911,29 @@ code, all exact-byte assertions, service-drop causal control, Java 17 target
 and compile/execution deadlines remain unchanged. No execution of this repaired
 fixture is claimed while the executor is unavailable. Its original positive
 and causal cases and the complete native Android build remain required.
+
+## 2026-11-06 — Mandatory imported SOCKS5/REALITY parser and actual desktop reference
+
+This source-reviewed unit follows the existing c8a0ba7c imported SOCKS5 to paired REALITY/Vision implementation. It applies exactly the eleven reviewed paths from unreferenced review commit 0ff4860d8531da1ad7e3dc8da3978445cc08d109 to the current main tree, preserving all seven intervening main commits. The complete source bytes were independently read and checked against every Git blob identity before publication. The independent reviewer cleared the final generated-observation closure correction; no execution result is claimed for these new bytes.
+
+### Required execution paths and scope
+
+- The focused `TestRouterImportedSOCKSRealityVisionNativeGraph` parser is mandatory in the existing non-peer mobile libbox invocation. All 338 original captured source files and configured CONNECT/selected-DNS inventories remain required. The default non-peer verdict inventory becomes 410 names; the existing Android export group remains additional.
+- The separate Linux desktop reference executes actual authenticated SOCKS5 and actual Xray REALITY/Vision outbounds for the bounded Local, entry-Off/final-Off graph. It manually drives selected UDP Home DNS, an independent public entry proof and an authenticated private final proof through the captured graph.
+- The required reference leaves are success, entry-auth, auth-downgrade, wrong-entry-ip, final-reality-key, final-user, final-route, dns-route, final-identity, final-token, cancel and close-owner. Actual arrival counters distinguish reaching the intended rejected boundary from an earlier unrelated failure. Teardown requires lower-stream drainage before fixture cleanup can conceal a leak.
+- Physical SOCKS endpoint substitution is restricted to the retained loopback peer. The final Xray detour remains the captured entry. The optional private proof route is limited to TCP 10.77.0.1:8787 and its one owned loopback listener; all other Xray reference callers retain their original default blocking behavior.
+- Desktop execution is explicitly reference-only and records `native_parser: false`. Mobile parser execution is required by its separate existing gate. This reference is not evidence of Box DNS-router integration, shipping host proof-adapter integration, OS TUN behavior, a native Connected result, or physical-device acceptance.
+
+### Source identity and bounds
+
+The reference checks the original desktop peer closure without assuming mobile bridge/parser files exist in that tree. It verifies copied templates, the projected shared policy and DNS sources, pinned SOCKS sources, actual prepared Xray sources, executable identities, and the generated common observation classifier using the official `RELAY.OBSERVATION.verify`. Source checks run again after build and execution. The Xray verification reconstructs the official producer's modified and added files using its actual text/byte line-ending behavior.
+
+The existing 1,200-second imported-peer and 1,800-second desktop-node stages remain unchanged. The new desktop reference is a separate matching-host Linux sibling after the node stage, bounded at 3,000 seconds. Linux job allowance changes from 150 to 200 minutes; Windows remains 150 and macOS 60. The existing MAX contract assertion reflects that exact expression while keeping its own 5,400-second bound. The native reference retains a 90-second Go timeout and 105-second outer process timeout. These limits do not promise that every stage can consume its individual worst case simultaneously.
+
+Pinned core: `1ac1a339cb1223e9c70eae14c44411c75033c02d`; Go: `1.26.3`; Xray: `50231eaff98ccc31b5cbd247a721c16e97fe5ec1`.
+
+### Validation state
+
+Source review and complete Git blob/readback verification passed. Added regression source covers strict verdict completeness/uniqueness, changed/missing desktop templates, real observation-source changes/missing/undeclared files, and the actual native-builder AST's platform, environment, order and budget constraints.
+
+The local executor remains unavailable. The revised 21 imported-runner tests, 13 scoped-runner tests, existing MAX runner, mandatory pinned mobile parser, and all twelve actual reference leaves have not executed for these bytes. Their outcomes must come from subsequent exact-SHA CI. Earlier shared-runtime or native-host-double passes do not substitute for this pending reference execution. No release, private deployment, signing or device acceptance is established by this commit.
