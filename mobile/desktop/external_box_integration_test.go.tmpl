@@ -95,7 +95,7 @@ func desktopExternalIntegrationUDP(protocol string) bool {
 }
 
 func desktopExternalIntegrationUDPDNS(protocol string) bool {
-	return protocol == "socks5" || protocol == "shadowsocks" || desktopExternalIntegrationUDP(protocol)
+	return protocol == "socks5" || desktopExternalIntegrationUDP(protocol)
 }
 
 // These complete Fast/Strong imports are test inputs, not product defaults.
@@ -1135,7 +1135,9 @@ func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context
 	if p.ownedPacket != nil {
 		return p.ownedPacket(ctx, connection, metadata)
 	}
-	if !desktopExternalIntegrationUDPDNS(p.protocol) || metadata.Destination.String() != desktopExternalIntegrationDNS {
+	// The Server SS peer owns both TCP and UDP listeners. Ordinary SS fixtures
+	// retain their captured TCP-only lower path and selected TCP DNS above.
+	if (p.protocol != "shadowsocks" && !desktopExternalIntegrationUDPDNS(p.protocol)) || metadata.Destination.String() != desktopExternalIntegrationDNS {
 		return errors.New("composition peer denies unrequested UDP")
 	}
 	stop := context.AfterFunc(p.ctx, func() { _ = connection.Close() })
