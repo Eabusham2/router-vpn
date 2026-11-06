@@ -1969,3 +1969,21 @@ The bounded full constructor trace includes externalRelaySelection, ExternalSele
 Original WG keys and peer identity, independently captured AES/XOR entry assets, final SS key, private API, selected HTTPS DNS at 192.168.50.53:5443, assertions and timeouts remain unchanged. No production guard is relaxed. This startup fixture uses the real compilers without instantiating an encrypted provider or OS constructor; actual complete-engine and native ownership gates remain separate.
 
 The local executor remains unavailable. Both architecture reruns and all existing causal controls remain required; source review is not a native pass or release acceptance.
+
+## Current mobile graph documentation reconciled with published source
+
+`docs/MOBILE-IMPORTED-ROUTER-PATH.md` contained stale current-boundary statements: it still excluded configured CONNECT UDP/final layers and compatible encrypted DNS, omitted the bounded SOCKS5/REALITY admission, and called 337 files the current source inventory. The document now describes the actual published compiler and mobile-host scope while preserving the original broader requirements and historical test cutoffs.
+
+The source inventory is 338, including the additional Local SOCKS5 to paired REALITY/Vision case with both Start Layers Off. Configured CONNECT's 24 captures and selected encrypted DNS's 44 accepted captures/four plain H3 refusals remain separate inventories. Plain CONNECT supports only compatible stream DNS with the final layer Off; validated final service authority is required to derive UoT-v2, selected datagrams and final AES/XOR. Entry layers, other CONNECT finals, other imported Xray pairings/layers and this direction's Server/Compare remain source requirements. A configuration declaration is not live receiver proof.
+
+The required default mobile parser inventory is exactly 339 primary verdicts (338 plus parent), 25 configured-service verdicts, 45 selected-DNS verdicts and one additional focused SOCKS/REALITY root: 410 total. Android source verdicts remain additional. The Apple producer/parser requires 338 sources and 339 verdicts. These are required executable inventories, not a completed-requirements denominator or a current native pass.
+
+Independent review cleared candidate e8d3c7d910f79975c1ba4405393266963c4fed91 with the final agreed clarification that all 338 graphs remain in the primary parser and the new graph additionally requires the focused root. Existing historical results and cutoffs were retained. Documentation-only changes require no new runtime test.
+
+Root separately read exact fc261fd0 authoritative source-audit [job 128116881055](https://github.com/Eabusham2/router-vpn/actions/runs/42283043671/job/128116881055). Under the shell's fail-on-error setting, its all-Python py_compile and shell syntax step completed before the Go-contract step began at 19:51:27 UTC. The later Go step was cancelled at 19:54:40. This is syntax evidence for the new reference scripts, not execution of the revised 21/13 Python test inventories, mobile parser, or twelve native reference leaves.
+
+### Unresolved execution and access boundaries at this checkpoint
+
+The local execution environment is unavailable; new source-reviewed fixes still require actual exact-SHA CI. A separate explicit account-security tool gate stopped the Linux DNS ancestry validation and second SS forward-buffer validation workstreams pending Advanced Account Security with a compatible FIDO2 key. Those blocked actions and their unpublished drafts were not retried through other agents, tools or runtimes. The excluded external-ss-entry job logs were not inspected. This is a session access boundary, not a finding that those requirements are complete or impossible.
+
+Broader graph/platform implementation, full native/release verification, signing/distribution, physical-device and off-LAN acceptance, and authorized private deployment remain open at their respective evidence stages. The latest release metadata read still points to 745b3e41. No live router or private deployment was changed.

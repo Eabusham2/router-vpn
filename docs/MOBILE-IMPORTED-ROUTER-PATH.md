@@ -1,12 +1,18 @@
 # Mobile imported entry to paired Router final
 
+Source scope reconciled November 6, 2026, through `30a5fff9`. Current admission,
+required executable inventories, earlier observed results, and pending native/device
+acceptance are distinguished below. The complete continuation evidence is in
+[CONTINUATION-EVIDENCE-2026-11-06.md](CONTINUATION-EVIDENCE-2026-11-06.md).
+
 ## Requirement and implemented direction
 
 The original August 19 map-first request allows Router and imported/custom nodes
 in either hop role. The original requirements and later corrections also require
 independent Start Layers, complete saved connection profiles, selected-path DNS,
 owned temporary tests, and native tunnel integration. Android and iOS/iPadOS
-implement this Local direction for the following captured sources:
+implement the Local compiler and host admission for the following captured
+sources. These rows do not by themselves establish native-package or device acceptance:
 
 | Imported entry | Independently paired final transports | Captured graph cases |
 |---|---|---:|
@@ -14,27 +20,37 @@ implement this Local direction for the following captured sources:
 | WireGuard or AmneziaWG | Shadowsocks or Hysteria2 | 36 |
 | WireGuard or AmneziaWG | WireGuard, AmneziaWG Fast or AmneziaWG Strong | 54 |
 | SOCKS5 | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 45 |
+| SOCKS5 | REALITY/Vision, both independently captured Start Layers Off | 1 |
 | OpenVPN, TCP or UDP outer transport | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 90 |
 | HTTP CONNECT or HTTPS CONNECT | Shadowsocks 2022, both Start Layers Off, captured Home/custom literal TCP DNS | 12 |
 
-The 337 captured cases retain all 247 published proxy/packet/SOCKS5/CONNECT
-cases and add 90 OpenVPN cases: two original outer networks, five paired finals
-and nine independent entry/final layer pairs. The twelve retained CONNECT cases
-use two entry protocols, three SS2022 final ciphers and two selected literal TCP DNS policies. Each SOCKS5 final supports all nine independent entry/final
-Start Layer pairs. The earlier five pairs with both layers Off, four
+The original-source inventory now contains 338 captured cases: the earlier
+247 proxy/packet/SOCKS5/CONNECT cases, 90 OpenVPN cases, and one separately
+bounded SOCKS5 to REALITY/Vision case. The OpenVPN cases retain two original
+outer networks, five paired finals and nine independent entry/final layer pairs.
+The twelve retained baseline CONNECT cases use two entry protocols, three SS2022
+final ciphers and two selected literal TCP DNS policies. Each of the five
+non-Xray SOCKS5 finals supports all nine independent entry/final Start Layer
+pairs; REALITY/Vision currently requires both layers Off. The earlier five pairs with both layers Off, four
 SOCKS5-to-SS/Hysteria pairs with only a final layer, six SOCKS5-to-WG/AWG
 pairs with only a final layer, and ten pairs with only an entry layer remain
 in the matrix. Twenty pairs with both layers enabled extended the published
 215-case matrix to 235 before the CONNECT addition. These counts describe
-executable configurations, not completed user requirements.
+executable configurations, not completed user requirements. The separately
+captured configured-CONNECT inventory adds 24 required cases, and the selected
+encrypted-DNS inventory adds 44 accepted captures plus four plain-carrier H3
+refusals. Those inventories remain separate from the 338 original-source files;
+they are not added into a product-completion denominator.
 
 The later Android host correction `95f36b95` is required for the daily Connect,
 Home transition, startup and cold reattachment paths to use this capability
 consistently. Earlier duplicated protocol lists still rejected SOCKS5 after
 the producer and native-peer matrix passed. Those callers and usage now consult
-the same captured entry/final capability. The actual runtime composed with the
-Home store passes 35 cases and rejects three old-guard mutations; native proof
-and OS boundaries remain explicit doubles in that host test. Producer/native
+the same captured entry/final capability. The recorded runtime composed with the
+Home store passed 35 cases and rejected three old-guard mutations at that
+historical checkpoint; later host inventories and results are recorded in the
+continuation evidence. Native proof and OS boundaries remain explicit doubles
+in that host test. Producer/native
 configuration evidence alone did not establish this daily-app admission.
 
 Packet composition validates the complete data, handshake, cookie and enabled
@@ -44,11 +60,11 @@ constructing a native owner.
 Execution is Local, inside the application's existing Android VpnService or Apple
 PacketTunnel. A Shadowsocks entry supports `2022-blake3-aes-128-gcm`,
 `2022-blake3-aes-256-gcm`, and `2022-blake3-chacha20-poly1305`. Hysteria2 preserves
-its original server, port, password and verified TLS server name. For the
-non-CONNECT entries, entry and final
-retain their separate Off, AES-256-GCM, or AES-256-GCM + XOR whitening choices.
-All nine layer combinations for each entry transport are constructed from the
-original sources. Two alternate SS2022 ciphers are retained for each final family.
+its original server, port, password and verified TLS server name. For the five
+non-Xray paired final families reached through non-CONNECT entries, entry and
+final retain their separate Off, AES-256-GCM, or AES-256-GCM + XOR whitening
+choices. All nine layer combinations for each admitted pair are constructed
+from the original sources. Two alternate SS2022 ciphers are retained for each final family.
 For SS2022/Hysteria2 entries, each of the five final families has twenty cases:
 nine independent layer pairs for SS2022 AES-256 and Hysteria2, plus the two alternate SS2022 entry
 ciphers with both layers Off. Thirty-six additional packet-entry cases cover both
@@ -76,6 +92,17 @@ Start Layer requires the paired final's own original assets. A missing layer
 provision, a provision belonging to the other node, or a changed credential
 prevents construction. No second system VPN is started.
 
+The additional SOCKS5 to paired REALITY/Vision path is Local with both Start
+Layers Off. The original paired-node compiler retains the final's complete
+VLESS/REALITY source and validates its exact native transport before attaching
+the captured SOCKS5 entry. Entry public-address proof, final authenticated
+private-node proof and selected final DNS remain independent. Android and Apple
+selection, preparation and restoration retain these same captured sources.
+PQ REALITY, XHTTP, Split, MAX, other imported entry protocols to this final,
+independent layers on this pair, and Server/Compare for this direction remain
+outside its implemented admission. Their safe rejection does not close those
+requirements.
+
 An OpenVPN entry retains its exact inline profile, ordered public remotes,
 original TCP/UDP network, TLS trust, username/password and bounded supported
 profile directives. It uses the existing userspace native packet endpoint in the
@@ -89,14 +116,28 @@ invented for the imported entry.
 
 A CONNECT entry retains its original proxy address, port and credentials;
 HTTPS also retains the original TLS name and trust. The paired SS2022 final
-keeps its separate credentials and all three supported ciphers. This initial
-composition is explicitly TCP-only, with both Start Layers Off and no UoT
-service authority. It accepts the final's selected Home/private AdGuard or
-custom literal TCP resolver with its exact address family, address and port.
-The default Home UDP policy is refused without changing the saved policy.
-Application DNS is hijacked into that selected final-owned TCP path before
-other UDP traffic is rejected. Host capability labels describe this bound;
-unrelated imported directions keep their own capabilities.
+keeps its separate credentials and all three supported ciphers. The imported
+entry Start Layer currently remains Off.
+
+Without the final's separately captured service declaration, the composition
+remains TCP-only with the final Start Layer Off. It supports compatible selected
+TCP, DNS-over-TLS and DNS-over-HTTPS policies, including a hostname only when
+its complete captured bootstrap policy can use the same carrier. Default Home
+UDP, DoH3 and a UDP-only bootstrap cannot use this plain carrier. Rejection
+preserves the saved resolver instead of substituting another transport or service.
+
+With the final's original service declaration validated against its node and
+source assets, the compiler derives explicit SS UoT-v2 transport. That bounded
+path supports the selected UDP/Home DNS policy and final Off, AES-256-GCM or
+AES-256-GCM + XOR whitening, as well as compatible encrypted DNS and captured
+bootstrap. A raw inline udp_over_tcp option never grants this authority.
+The declaration is configured source evidence, not proof that a live receiver
+works. Actual selected-path proof remains required.
+
+Both forms retain the final-owned resolver's transport, address, port, TLS name,
+HTTP path and query/bootstrap options. No DNS fallback or public resolver is
+invented. Android and Apple host admission, captured preparation and saved state
+follow the same capability; unrelated imported directions keep their own bounds.
 
 Other imported entry protocols, other paired final transport families, and
 Server/Compare for this new direction remain requirements to implement and
@@ -112,28 +153,28 @@ limitations, not merely missing credentials, live access or physical tests.
 
 | Direction or capability | Current source boundary | Work still required |
 |---|---|---|
-| Imported HTTP/HTTPS CONNECT → paired Shadowsocks with datagrams or Start Layers | The implemented Local SS2022 path requires both layers Off, exact selected literal TCP DNS and no `udp_over_tcp` field in the original final. Default Home UDP, other DNS transports and layered CONNECT remain unimplemented. | Capture authenticated service authority for any compatible datagram transport, preserve the exact selected DNS policy and independently provisioned layers, and prove the real encrypted graph before extending admission. |
-| Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | The same admission excludes these paths. HTTP CONNECT is TCP-only; these final transports require datagrams. Existing external composition correctly rejects a TCP-only predecessor for a UDP-required exit. | An implemented compatible transport design is required. No UDP association, UDP-over-TCP capability or supported final may be invented from successful TCP CONNECT. |
-| Other imported entry protocols and paired final families | The imported constructor and both mobile host adapters admit the eight entry labels and five paired final modes in this document, subject to each entry's specific bounds. OpenVPN now has the bounded Local composition described here; Trojan/VLESS are not in the ordinary external catalogue. | Implement and validate the particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path before offering it. New protocols need their own import/admission work; existing standalone support is not proof of this direction. |
+| Imported HTTP/HTTPS CONNECT → paired Shadowsocks with an entry Start Layer | The entry remains Off. Final AES/XOR and compatible datagrams require the final's validated configured SS UoT-v2 service declaration. With both layers Off, plain TCP/DoT/DoH remains available without it. | Implement and validate independently provisioned entry-layer capture and routing without borrowing the final's credentials. Complete native and device evidence for the already-admitted configurations. |
+| Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | Admission still excludes these final modes. The existing configured SS UoT-v2 composition is specific to the paired SS final and does not automatically authorize other finals. | Implement the particular compatible carrier, source ownership and native graph for each final. A successful CONNECT stream or a service declaration for another final is insufficient. |
+| Other imported entry protocols and paired final families | The constructor and mobile hosts retain eight entry labels and five general paired final modes, with the additional SOCKS5-only REALITY/Vision Off/Off case. Other Xray families and pairings remain excluded. Bounded OpenVPN Local is implemented; Trojan/VLESS are not ordinary imported catalogue entries. | Implement and validate each particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path. Standalone support or the bounded SOCKS5/REALITY path does not prove another pairing. |
 | Imported entry → paired final with Server or Compare | The constructor requires captured Local execution; both host adapters enforce Local and restoration deliberately does not invent a Compare winner. | Design actual execution and proof authority, measurement/comparison and restore semantics for this direction. An ordinary imported entry has no paired Router API/token; a public-address proof cannot grant server-side authority. |
 
 Any extension of CONNECT→SS must retain the final-selected Home/custom DNS
 transport, address, port, TLS name and HTTP path. UDP or DoH3 selection
 cannot silently become TCP/DoH or a public resolver just to make the graph work.
 The existing `externalUDP`, `externalExitRequiresUDP` and selected-DNS validator
-already express those transport limits for ordinary external composition; the
-imported-entry compiler carries those limits through paired-final ownership and
-host capability presentation for the bounded TCP path.
+express the carrier's actual transport limits. `importedCONNECTCapture` and
+`importedCONNECTDNS` preserve those limits and the complete final-owned DNS
+closure through mobile preparation; they do not choose another resolver.
 
-The new `node_imported_connect_entry_test.go.tmpl` executes CONNECT→encrypted-SS
-traffic, final-owned TCP DNS, exact auth/target/HTTPS trust rejection,
-public-entry/private-final proof, UDP refusal, unsupported-final rejection,
-cancellation and retained restoration. Independent layer provisioning and
-datagram support require further implementation and evidence. The existing
-`node_external_ss_connect_test.go.tmpl` exercises **SS→CONNECT**, the reverse
-direction, and cannot certify that work. Actual Android/Swift capture and stale
-source controls, pinned native parsing, and physical acceptance remain separate
-stages.
+The baseline `node_imported_connect_entry_test.go.tmpl` covers CONNECT to
+encrypted SS traffic, final-owned TCP DNS, auth/target/HTTPS trust rejection,
+public-entry/private-final proof, UDP refusal without service authority,
+unsupported finals, cancellation and restoration. Later configured-service and
+encrypted-DNS captures have their own mandatory source and parser inventories.
+The existing `node_external_ss_connect_test.go.tmpl` exercises **SS→CONNECT**,
+the reverse direction, and cannot certify CONNECT→SS. Actual Android/Swift
+capture, pinned native parsing, protocol-peer execution and physical acceptance
+remain separate evidence stages.
 
 ## Selection and saved state
 
@@ -361,8 +402,9 @@ strict paired-final admission,
 public-entry/private-final/DNS proof, full Run-to-Healthy measurement ownership,
 retirement, and malformed or forged source rejection.
 
-`deploy/test_mobile_imported_entry.py` consumes the exact 337 shared source
-fixtures and the 337 emitted by the actual Android helper. The pinned
+`deploy/test_mobile_imported_entry.py` now requires exactly 338 shared original
+source fixtures and 338 from the actual Android helper. Configured CONNECT and
+selected encrypted DNS are retained in their separate required directories. The pinned
 libbox constructor must reproduce their original config and source digest.
 Its actual native parser, MTU profile reader, and MTU planner must accept them.
 The required fixture gate rejects missing, skipped, duplicated, foreign, or
@@ -371,9 +413,12 @@ across the implemented entry and final families, including the complete SOCKS5
 layer matrix and Hysteria2 finals behind their actual AES transport. Every
 group and negative case in the runner's explicit inventory must execute and
 pass once. The expanded groups run separately under the unchanged finite
-native-test deadlines. All 337 layer/cipher graphs separately require the
-native parser and typed MTU planner; the shared and Android source matrices
-require 676 exact native verdicts in total. This does not claim physical mobile
+native-test deadlines. All 338 original-source graphs retain the primary native-parser and typed-MTU
+requirements. The new SOCKS5/REALITY file additionally requires its focused
+native-parser root in the existing non-peer invocation. With the configured
+CONNECT and selected-DNS groups, the default non-peer inventory requires 410
+exact verdicts; the Android source group remains additional. These are required
+inventories, not a statement that the new current-SHA invocations have passed. This does not claim physical mobile
 TUN traffic for every layer combination. Removing the final outer-edge ownership or bypassing actual
 native TLS verification is rejected by the corresponding causal controls.
 Dropping the captured packet endpoint or bypassing the final detour also fails
@@ -393,14 +438,28 @@ covers every shipping Java source; the actual SDK/AAR APK build remains separate
 required.
 
 `deploy/test_ios_imported_router_pinned.py` is mandatory in Apple smoke and
-release preparation. It consumes the actual Swift-produced 337-graph matrix
-and requires native parser verdicts for all of it. Swift harnesses cover
+release preparation. It now requires the actual Swift-produced 338-graph matrix
+and all 339 exact native verdicts, including the parent. The new full pinned
+invocation remains required even when a Swift-only producer or host fixture passes. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
 The local Swift 6.4.2 harness executes actual selection, save and graph-building
 source. This is separate from the required Xcode app/PacketTunnel build, native
 Apple networking and physical-device acceptance.
 
-The local CONNECT evidence has explicit source cutoffs. The complete encrypted
+The new `deploy/test_mobile_imported_socks_xray.py --reference-only` stage
+requires twelve real SOCKS5/REALITY reference leaves plus their parent. It drives
+actual authenticated SOCKS5 and Xray REALITY/Vision outbounds, selected UDP Home
+DNS, distinct entry/final proofs, credential/route/identity rejection and owned
+cancellation/teardown. Its desktop source closure is separate from the mandatory
+mobile parser, and its receipt explicitly records `native_parser: false`.
+The new runner regressions, pinned parser and reference were source-reviewed
+but unexecuted when published in fc261fd0. Passing this reference would still
+not prove Box DNS-router integration, the shipping host proof adapter, OS TUN
+behavior, a mobile Connected result or device acceptance.
+
+The following CONNECT results are historical evidence with explicit source
+cutoffs. They do not certify later configured UoT, selected encrypted DNS or
+SOCKS5/REALITY additions. The complete encrypted
 peer run passed 976 mandatory verdicts (the previous 925 plus 51 new ones) on
 the `bc6cffef`-based snapshot, before the additional explicit UoT-field refusal
 and later Compare-progress merge. The Swift producer passed 5,568 checks and
