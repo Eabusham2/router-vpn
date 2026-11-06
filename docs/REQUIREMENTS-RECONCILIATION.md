@@ -18,7 +18,7 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## November 6 reconciliation through `b53071d4`
+## November 6 reconciliation through `7f801312`
 
 Original user passages were recovered from `mm.md`, the audit/addendum, the later
 32-item request, and the August 13/14 and August 19 external-node/map-first
@@ -31,9 +31,18 @@ a completion denominator. See the [source and evidence ledger](CONTINUATION-EVID
 | External/custom nodes in both hop roles; native owned graphs | Android and Apple now retain 190 imported-entry/paired-final combinations, including 54 nested WG/AWG packet combinations. Shared, actual Java and actual Swift exports reach the pinned native parser; encrypted peers exercise positive and negative paths. Other protocol families, Server/Compare for this direction and physical-device acceptance remain open. |
 | Original #229–240 MTU controls and later packet-envelope correction | Complete nested data/control/junk/Start Layer envelopes bound the configured final capacity. Auto derives a fitting cap and Fixed rejects conflicts. Requested and effective values remain distinct; neither compilation nor configured capacity is fresh physical PMTU evidence. |
 | Original #200–224 and #337 protection, multihop and lifecycle | Windows Local SS2022 entry to SS/HTTP/HTTPS/Hysteria2 final now has independent sources, proofs, physical-entry ownership, exit DNS and complete restoration. Actual native WFP cases are mandatory on AMD64/ARM64; compilation and portable tests do not close native or physical acceptance. Broader graphs/layers/execution choices remain required. |
-| Selected DNS and original connection ownership | Original-daemon local-only preflight, finite owned bootstrap grants, exact selected-server ports/TLS/link, longest-suffix scope selection and the supported single-scope caller are published. Active trust anchors are captured locally from that daemon; this is not full DNSSEC validation. Installed privileged composition, equal-best parallel scopes, full DNSSEC, opportunistic TLS and other source branches remain open. Public-resolver substitution and queries before policy proof remain forbidden. |
+| Selected DNS and original connection ownership | Original-daemon local-only preflight, finite owned bootstrap grants, exact ports/TLS/link, longest-suffix selection and parallel equal-best scope caller are published. Original helper lifetime and joined exact-grant retirement preserve ownership through adoption. Active trust anchors and a pinned validator ABI are prerequisites; full DNSSEC is not shipping. Opportunistic transport and its installed startup adapter are published in `7f801312`, with original frame/deadline ownership preserved. Privileged installed/kernel acceptance remains open; public-resolver substitution and queries before policy proof remain forbidden. |
+| macOS/Linux retained SS2022 entry to Hysteria2 final | Host admission is published in `a2e4f201` with independent original sources. Native PF/TUN, DNS, cancellation and restoration acceptance remain required; provider/source success does not close them. |
+| Original operation cancellation and exact generated source | Latency/DNS cancellation now joins original mailbox retirement (`199e62e8`), with both old-code red cases reproduced and corrected focused race checks passing. Server native preparation includes the exact standardengine dependency (`58f6b0de`) and retains missing/foreign-source rejection. Fresh native execution remains required. |
 | Original #335 | Favorites are optional; latency and last-used ordering remain required. This identifier is not an MTU or Speed Lab identifier. Earlier measurement rows' erroneous #335 citations are corrected without removing their measurement requirements. |
 | Full original and later scope | Setup Center/native separation, map-first UI, complete profiles, 50-sample measurements, exact Compare scoring, Start Layers, retention, all requested platforms, Methods, signing, live/off-LAN/visual and private deployment remain binding. No safe refusal, source gate or historical release closes those obligations. |
+
+The published-source cutoff is `7f80131297c2a350d9f297fc2388c6f99c7b2adf`.
+At the single exact-`58f6b0de` Actions observation on November 6 at 02:57:56 UTC,
+24 push workflows were returned, all attempt 1 and none complete; release
+42153553151 was pending. Earlier projection failures are connected to their
+published correction, not relabeled as passes. The evidence ledger preserves
+source, local checks, native execution, packages and deployment as separate gates.
 
 The older source limits below describe their dated cutoffs. In particular,
 136-case mobile coverage and the missing nested-packet/Windows-entry statements

@@ -8,7 +8,7 @@ original requirements. The live starting branch was
 1,294 commits ahead of the older published `745b3e41` release. Old patches were
 not replayed over that history. The published units below retain normal
 `main` ancestry through
-[`b53071d401c637e1f050335e29a00cf65c7f0474`](https://github.com/Eabusham2/router-vpn/commit/b53071d401c637e1f050335e29a00cf65c7f0474).
+[`7f80131297c2a350d9f297fc2388c6f99c7b2adf`](https://github.com/Eabusham2/router-vpn/commit/7f80131297c2a350d9f297fc2388c6f99c7b2adf).
 Each remote tree was compared with the locally tested committed tree, and the
 remote branch was read back before adoption. A saved patch, local commit or API
 schema was not counted as a successful push.
@@ -43,7 +43,7 @@ overlapping lists are not added into a completion denominator.
 | Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 190 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers | Other imported/final families, Server/Compare for this direction, complete native device/network acceptance |
 | Original #229–240, Auto/Fixed/Retest/Cancel and later packet-envelope limits | `internal/awgpolicy/packet_*`, `internal/mobilemtu`, mobile compiler/metadata | Race tests; complete data/control/cookie/junk/Start Layer bounds; Fixed overflow rejection; full-size decrypted IPv4/IPv6 peer observations | Effective configured cap is explicitly unmeasured; physical PMTU, transitions and Jumbo acceptance remain separate |
 | Original #200–224/#337, exact captured ownership and full temporary-test restoration | Windows retained desktop host, `desktop_external_owned_sources.go`, independent entry/final captures | Shared/client race tests, two architecture test-binary builds, 53 mandatory native leaves and two causal mutations | Hosted WFP runtime and physical acceptance remain separate; the exact Speed Lab/Always-to-Off fixture failures below now have published corrections |
-| Selected DNS/Home AdGuard, LAN/IPv6 and original resolver authority | `internal/standardengine/resolved_*`, retained native resolver helper, finite kernel grants and single-scope caller | Canonical bounded frames, original-daemon local-only preflight, exact upstream port/TLS/link transport and active trust-anchor codec/race tests | Installed privileged composition, equal-best parallel scopes, full DNSSEC validation, opportunistic TLS and other remaining resolver branches are not closed |
+| Selected DNS/Home AdGuard, LAN/IPv6 and original resolver authority | `internal/standardengine/resolved_*`, retained native resolver helper, finite kernel grants and parallel equal-best scope caller | Canonical bounded frames, original-daemon local-only preflight, exact upstream port/TLS/link transport and active trust-anchor codec/race tests | Installed privileged composition and kernel execution remain unaccepted; full DNSSEC validation is not shipping, and opportunistic policy now reaches the installed startup resolver with native acceptance still required |
 | Later independent Off/AES-256-GCM/AES-256-GCM+XOR Start Layers | Mobile original sources, compiler and owned graph | Independent entry/final layer matrix and actual encrypted positive/negative cases | Broader graph/platform coverage remains required; Windows SS entry increment is both layers Off |
 | Complete connection profiles; credential references; stale/cancelled operations cannot mutate a replacement | Typed Android/Apple captures; native retirement; Windows retained source owners | Actual saved-selection/startup fixtures, native retired-read race controls, exact restore-source checks | Full physical permission/reconnect/leak/off-LAN acceptance remains open |
 | Original #335 | Optional Favorites, required latency and last-used ordering | Identifier reconciliation only in this increment | This number is not an MTU/Speed Lab identifier; prior mistaken citations are corrected without deleting measurement scope |
@@ -92,6 +92,18 @@ Production remains exact-SHA ARM64 image-only, without Docker socket access.
 | [`318212c8`](https://github.com/Eabusham2/router-vpn/commit/318212c83b88722040d8de55d6d9e563ba843ae2) | Adds an independent encrypted SS2022 to Hysteria2 reference provider for the desktop host gates. | Ten actual encrypted leaves cover three ciphers and seven negative cases; the combined SS/CONNECT/Hysteria2 race run passes. The TLS rejection requires a typed local verifier failure, peer packet evidence and absence of decrypted data. This provider prerequisite alone does not admit a macOS/Linux shipping path. |
 | [`621b660a`](https://github.com/Eabusham2/router-vpn/commit/621b660a49554153608b6576b86ca4f80afb52e7) | Wires the supported Linux single-scope resolver caller to the original fixed helper and captures the same daemon's active DNSSEC anchors without an upstream lookup. | Isolated standardengine, systembootstrap and client race gates pass; prepared helper-command and actual godbus anchor-codec cases pass. Anchor records require the exact local authenticated trust-anchor flags, and revoked/foreign/cache/AD-only evidence is rejected. Loaded anchors are not full DNSSEC validation. Installed composition and the remaining resolver branches are still open. |
 | [`b53071d4`](https://github.com/Eabusham2/router-vpn/commit/b53071d401c637e1f050335e29a00cf65c7f0474) | Preserves the independently required entry HTTPS proof transport in ordinary external physical-egress capture. | The isolated focused race family passes. SS before a Hysteria2 final retains exact entry TCP plus UDP; WG/AWG/Hysteria2 outer entries deduplicate their actual UDP transport. A direct Hysteria2 path gains no extra TCP authority, and neither final-node nor application-DNS addresses become physical exceptions. |
+| [`a2e4f201`](https://github.com/Eabusham2/router-vpn/commit/a2e4f201f0e29f09c9aa9cf773f4c282456426d2) | Admits retained SS2022 entry to Hysteria2 final in macOS and Linux hosts with independent sources and original protection ownership. | Focused host/provider and runner checks plus native compilation support the source increment. Actual PF/TUN, selected DNS, cancellation and restoration acceptance remain required. |
+| [`133a5505`](https://github.com/Eabusham2/router-vpn/commit/133a5505ec035a9de4b4c57cc13285446cd45f6c) | Preserves the verified native library when launching the original resolver helper. | The helper retains its required Cronet/native-library environment instead of losing it at launch; actual installed composition remains a separate gate. |
+| [`bc85b1f9`](https://github.com/Eabusham2/router-vpn/commit/bc85b1f96bc0bcef2606cfb1e2e070ec6dd1a752) | Runs concurrent captured resolver scopes through one original baseline reservation and generation ledger. | Bootstrap race tests pass; native-tag compilation and mandatory overlap/loser-cancellation/unknown-receipt controls are present. Partial transactions retain the original descriptors; kernel execution is not claimed locally. |
+| [`1eeddc44`](https://github.com/Eabusham2/router-vpn/commit/1eeddc44bed21fe87302fc801ce8b6201b559bbe) | Retains resolver authority beyond successful helper RPC retirement through the original installed boot operation. | Original deadline, successful RPC retirement and cancelled/failed-owner controls remain distinct. Installed service transfer must reprove the same original authority; privileged execution remains required. |
+| [`1026a2d8`](https://github.com/Eabusham2/router-vpn/commit/1026a2d8ecf6502c159f06caed2929ac0b4f6f9d) | Wires equally preferred original DNS scopes into concurrent caller execution with joined cleanup before adoption. | Focused race and response controls pass. Negative/invalid siblings cannot cancel a valid winner; helper frames serialize within the original context. Actual installed parallel peers remain mandatory. |
+| [`25ec89f9`](https://github.com/Eabusham2/router-vpn/commit/25ec89f93c956e2c350e3c9f724ee2b4c263fe18) | Adds the pinned libunbound/OpenSSL private DNSSEC validator ABI prerequisite. | Real signed/forged/negative-answer and cancellation controls exercise the isolated ABI. This library is not yet loaded by shipping runtime: authenticated child/broker, original anchor and NTA policy, chain-query ownership and integration remain unfinished. It is not full DNSSEC delivery. |
+| [`fe0fcc28`](https://github.com/Eabusham2/router-vpn/commit/fe0fcc285ca2349327029da3cefb08592f44454c) | Adds a captured-policy opportunistic TLS-first transport with bounded pre-DNS failure fallback and exact UDP/TCP/port/SNI preservation. | All bootstrap race tests pass (1.240s), native compilation and mandatory inventory pass. Eleven actual peer cases are required, including strict certificate rejection and no fallback after TLS success, cancellation, owner loss or expired grant. The subsequent shipping adapter is recorded below. |
+| [`7481239c`](https://github.com/Eabusham2/router-vpn/commit/7481239c353fa359e71beacacf78fef89cc2b4e1) | Shares identical PF inventory reads within each fresh bounded macOS inspection. | The source correction addresses repeated inventory cost without treating a prior inspection as current ownership. Exact-head macOS runtime remains pending evidence. |
+| [`3b0c08f3`](https://github.com/Eabusham2/router-vpn/commit/3b0c08f38a06b37b3c383efb64a7e1e4816c0921) | Recycles only joined, unpinned bootstrap members after original removal ACK, generation and exact absence proof, then descriptor closure. | All bootstrap race tests pass (1.254s); native compilation and inventory pass. The real three-attempt TLS/UDP/TCP case must leave one retained member. Unknown receipts remain owned. Historical admissions are bounded at 771; the existing concurrent inventory/FD limits are unchanged. No full 257-scope physical execution is asserted. |
+| [`199e62e8`](https://github.com/Eabusham2/router-vpn/commit/199e62e88308edc71c3701feb186b50d636c02d9) | Joins cancellation mailbox retirement before releasing original Latency and DNS measurement owners. | Both isolated old-code red cases failed, independently reproducing the late-cancellation race. The corrected focused race run passes (12.770s). A drained worker receipt cannot hide a pending original cancellation input; foreign inputs are never deleted. |
+| [`58f6b0de`](https://github.com/Eabusham2/router-vpn/commit/58f6b0de65dce91970efc5c1db2b73c8bcfa39b2) | Includes the exact standardengine dependency in prepared server native sources. | All 14 preparer tests pass (19.913s), including actual generated mobiletor/standardengine compilation, network race tests and missing/foreign dependency rejection. Exact source/member/digest assertions and unresolved-import rejection remain enabled. This fixes the preparer failure below; a fresh native run must establish runtime acceptance. |
+| [`7f801312`](https://github.com/Eabusham2/router-vpn/commit/7f80131297c2a350d9f297fc2388c6f99c7b2adf) | Wires captured opportunistic policy into the installed Linux startup resolver and preserves original shared-frame completion when a losing scope is cancelled. | Exact staged-source privileged client/model race tests pass (2.036s/1.089s), prepared fixed-helper observations pass, and six installed composition cases are mandatory. The original deadline remains unchanged; bounded sequence capacity now covers all allowed scope checks. Actual installed TLS/fallback kernel execution remains pending. |
 
 The native mobile results use the pinned production preparation chain, including
 actual source/config equality and mandatory constructor/MTU parsing. They do
@@ -134,32 +146,59 @@ ownership (`b16b851a`), and Windows Tor publication delete-sharing (`14bc170a`).
 Their latest native reruns remain required. None is repaired by dropping a
 negative control, relaxing production ownership or inventing a network result.
 
-The exact-`621b660a` Actions read observed 32 workflows: six completed
-successfully and the remainder queued, pending or running. The authoritative
-release [run 42147992593](https://github.com/Eabusham2/router-vpn/actions/runs/42147992593)
-was pending. This is a dated observation, not a full green release; `b53071d4`
-is newer. Current native builds, package/image identity, production compose and
-final publication require fresh exact-SHA verification. The older `745b3e41`
-release cannot close newer source. A separate isolated root-package compilation
-at `892eeb42` passed with `go test -p=1 ./... -run '^$'`; that is compilation,
-not the full runtime test suite.
+The earlier exact-`621b660a` read observed 32 workflows, six successful and the
+remainder queued/pending/running. Its release run 42147992593 was pending; that
+historical observation is not a green release for newer source.
+
+At source `fe0fcc285ca2349327029da3cefb08592f44454c`, Linux native app
+[run 42152791722](https://github.com/Eabusham2/router-vpn/actions/runs/42152791722),
+jobs 127680221513/127680221518, and generated Node TUN run 42152791758 failed
+before runtime at `prepare-server-tor.py`: `Server Tor shared import closure is
+incomplete: routervpn/mobiletor/desktop_standard_linux_bootstrap_opportunistic.go`.
+The same failure was read on exact `7481239c353fa359e71beacacf78fef89cc2b4e1`,
+[run 42153121604](https://github.com/Eabusham2/router-vpn/actions/runs/42153121604),
+jobs 127680847447 (amd64) and 127680847630 (arm64). The exact dependency projection
+is corrected by `58f6b0de`; these earlier failures do not demonstrate that the
+corrected native runtime has passed.
+
+**Bounded fresh Actions observation:** at **2026-11-06 02:57:56 UTC**, one
+all-events repository Actions read filtered by exact
+`58f6b0de65dce91970efc5c1db2b73c8bcfa39b2` returned **24 workflows**, all push
+runs, attempt 1. None had completed: 23 were queued/pending and one was running.
+The authoritative [release run 42153553151](https://github.com/Eabusham2/router-vpn/actions/runs/42153553151)
+was pending; [Linux Node TUN run 42153553031](https://github.com/Eabusham2/router-vpn/actions/runs/42153553031)
+and [Native MTU run 42153553164](https://github.com/Eabusham2/router-vpn/actions/runs/42153553164)
+were queued. This is a single snapshot, not an assertion that additional
+workflow-call runs cannot appear or that the exact head is green. No cancellation
+or rerun was requested for this observation.
+
+Current native builds, package/image identity, production compose and final
+publication still need exact-SHA verification. The older `745b3e41` release
+cannot close newer source. The earlier isolated root-package
+`go test -p=1 ./... -run '^$'` result at `892eeb42` is compilation evidence,
+not a full runtime test pass.
 
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.
    Original-daemon capture, local-only preflight, finite grants and the supported
-   single-scope caller are now published. Equal-best parallel scopes, complete
-   DNSSEC validation, opportunistic TLS, other unresolved source branches and
-   privileged original-kernel/expiry/ACK-recovery acceptance remain open.
-2. Finish macOS/Linux SS-entry to Hysteria2-final host admission and its mandatory
-   native encrypted, policy, cancellation and restoration acceptance. The shared
-   independent provider and corrected physical projection are prerequisites.
+   parallel equal-best scope caller and joined group retirement are published.
+   Privileged original-kernel/expiry/ACK-recovery and installed service acceptance
+   remain open. Opportunistic transport and its shipping startup adapter are
+   published. The pinned validator is a prerequisite, not shipping DNSSEC:
+   complete validation policy, original trust-chain queries and authenticated
+   isolated integration remain unfinished.
+2. Execute macOS/Linux SS-entry to Hysteria2-final mandatory native encrypted,
+   policy, cancellation and restoration acceptance. Host admission is now published
+   in `a2e4f201`; source/provider success does not establish PF/TUN acceptance.
 3. Resolve current native CI findings against the exact failing source and rerun
    authoritative package/image/compose/publication verification for the resulting
    commit. The older `745b3e41` release cannot close newer source work.
 4. Continue the complete protocol/graph/platform ledger, including presently
    unsupported imported families, broader Start Layer compositions and applicable
-   Server/Compare execution. Safe refusal is unfinished scope, not delivery.
+   Server/Compare execution. Current source specifically still excludes mobile
+   SOCKS5 entry to paired Router paths and independent Start Layers on retained
+   desktop SS-entry paths; those source gaps must be implemented and verified. Safe refusal is unfinished scope, not delivery.
 5. Perform real-device permission, selected-path DNS/leak, reconnect, network
    transition, performance, visual/DPI/orientation/accessibility and off-LAN
    interoperability acceptance for the requested platforms and scenarios.

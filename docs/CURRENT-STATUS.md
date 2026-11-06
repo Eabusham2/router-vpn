@@ -6,11 +6,11 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 published continuation through `b53071d4`
+## November 6 published continuation through `7f801312`
 
 The recovered live baseline was `b04eccee`, already 1,294 commits ahead of the
 older `745b3e41` release. Coherent tested changes are published on `main`
-through `b53071d401c637e1f050335e29a00cf65c7f0474`. Each remote tree was compared
+through `7f80131297c2a350d9f297fc2388c6f99c7b2adf`. Each remote tree was compared
 with its tested local tree before adopting the remote commit. The
 [November 6 evidence ledger](CONTINUATION-EVIDENCE-2026-11-06.md) records the
 original-source reconciliation, changes, executable evidence and open boundaries.
@@ -32,24 +32,48 @@ original-source reconciliation, changes, executable evidence and open boundaries
   found and fixed a missing entry TCP proof allowance before a Hysteria2 final;
   final-node and application-DNS addresses receive no direct physical access.
   Actual Windows WFP runtime and physical acceptance remain separate gates.
-* **Linux resolver policy:** original-daemon capture and local-only preflight,
-  finite original-socket kernel grants, exact upstream port/transport/TLS/link,
-  routing-scope selection and a supported single-scope caller are published.
-  Active DNSSEC trust anchors come from that same daemon without an upstream
-  query; this is not full DNSSEC validation. Isolated race, generated-command
-  and codec checks pass. Installed privileged composition, parallel equal-best
-  scopes, full DNSSEC validation, opportunistic TLS and other remaining source
-  branches are still being implemented and accepted.
-* **macOS/Linux external paths:** the independent encrypted SS2022/Hysteria2
-  provider and exact entry-proof transport projection are published prerequisites.
-  The native host admission and PF/TUN acceptance remain in progress at this
-  cutoff; provider success alone does not close those paths.
+* **Linux resolver policy:** original-daemon capture/local-only preflight, finite
+  original-socket kernel grants and exact upstream port/transport/TLS/link are
+  published. Equal-best scopes now run concurrently through one original group;
+  winner adoption joins losing IO and cleanup. Successful helper RPC retirement
+  no longer ends the original boot-operation authority. Joined original grants
+  can recycle only after exact removal ACK and absence proof; historical
+  admission is separately bounded at 771 without increasing native resource
+  allowances. Privileged installed/kernel execution remains required.
+* **DNS policy still unfinished:** active anchors come from the original daemon.
+  A pinned libunbound/OpenSSL private ABI has real signature and cancellation
+  controls, but is a prerequisite, not shipping DNSSEC validation. Authenticated
+  isolated integration, original chain-query authority and effective trust/NTA
+  policy remain open. Opportunistic TLS-first transport is published with strict
+  TLS unchanged, exact UDP/TCP fallback and no fallback on owner loss/cancellation;
+  the installed startup adapter is now published in `7f801312`. Exact staged
+  client/model race checks pass; six installed composition cases remain mandatory.
+* **macOS/Linux external paths:** retained SS2022 entry to Hysteria2 final host
+  admission is published in `a2e4f201`. Independent encrypted providers and native
+  negative cases remain required. A fresh-inspection PF read-sharing correction
+  is published in `7481239c`; actual PF/TUN acceptance is not established by it.
+* **Measurement cancellation:** `199e62e8` joins original cancellation-mailbox
+  retirement before releasing Latency/DNS owners. Both isolated old-code red
+  cases reproduced the race; the corrected focused race run passed in 12.770s.
+* **Native preparation:** `58f6b0de` fixes the exact missing standardengine source
+  projection that blocked Linux generated-command and native-engine runs before
+  execution. All 14 preparer tests pass, including actual copied-package compile
+  and missing/foreign dependency rejection. Native runtime must now run afresh.
+* **Other source gaps:** mobile SOCKS5 entry to paired Router graphs and
+  independent Start Layers on retained desktop SS-entry paths remain unfinished.
+  Their existing protocol engines are not proof that those host compositions run.
 * **Current delivery:** repaired native fixtures preserve their rejection cases;
   the authoritative Windows scope inventory now requires the new entry tests.
   Current exact-SHA native builds and publication have not yet converged. The old
   release is not evidence for these newer source changes. Physical networking,
   off-LAN behavior, signing, visual acceptance and private deployment remain
   separately unproved.
+
+At the single exact-head Actions read on **2026-11-06 02:57:56 UTC**, source
+`58f6b0de` had 24 push workflows, all attempt 1: 23 queued/pending and one
+running, with none complete. Release run 42153553151 was pending; Linux Node TUN
+42153553031 and Native MTU 42153553164 were queued. This bounded observation is
+not full green CI, packaged release, physical acceptance or deployment evidence.
 
 The November 5 observations below are preserved as historical checkpoints.
 Their 136-case limit, unavailable local Swift tooling, nested-packet refusal and
