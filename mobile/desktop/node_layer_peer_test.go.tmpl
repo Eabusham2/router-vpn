@@ -165,6 +165,7 @@ type desktopNodeLayerServer struct {
 	tcp                                        net.Listener
 	udp                                        net.PacketConn
 	routes                                     []desktopNodeLayerRoute
+	ownedUDP                                   func(string) (string, context.Context, func(), bool)
 	dnsAddress                                 string
 	routerAddress                              string
 	cover                                      atomic.Pointer[desktopNodeRouterCover]
@@ -413,7 +414,19 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 		return cover.exchange(connection, metadata.Destination)
 	}
 	var target string
-	if len(s.routes) != 0 {
+	operation := s.ctx
+	if s.ownedUDP != nil {
+		var found bool
+		var release func()
+		target, operation, release, found = s.ownedUDP(metadata.Destination.String())
+		if release != nil {
+			defer release()
+		}
+		if !found || operation == nil || operation.Err() != nil {
+			s.rejectedUDP.Add(1)
+			return errors.New("layer peer rejected retired original SOCKS association")
+		}
+	} else if len(s.routes) != 0 {
 		var found bool
 		target, found = s.route("udp", metadata.Destination.String())
 		if !found {
@@ -445,13 +458,18 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 			}
 		}
 	}
-	peer, err := (&net.Dialer{}).DialContext(s.ctx, "udp", target)
+	peer, err := (&net.Dialer{}).DialContext(operation, "udp", target)
 	if err != nil {
 		return err
 	}
 	defer peer.Close()
-	stopPeer := context.AfterFunc(s.ctx, func() { _ = peer.Close() })
-	defer stopPeer()
+	retired := make(chan struct{})
+	stopPeer := context.AfterFunc(operation, func() { defer close(retired); _ = peer.Close(); _ = connection.Close() })
+	defer func() {
+		if !stopPeer() {
+			<-retired
+		}
+	}()
 	joined := make(chan struct{})
 	go func() {
 		defer close(joined)

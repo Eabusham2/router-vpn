@@ -48,7 +48,13 @@ func TestRouterVPNImportedSOCKSPacketLayersNativeTraffic(t *testing.T) {
 		t.Run(layer, func(t *testing.T) { desktopImportedSOCKSPacketLayers(t, layer) })
 	}
 }
-func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
+func desktopImportedSOCKSPacketLayers(t *testing.T, layer string, entrySelection ...string) {
+	entryLayer := ""
+	if len(entrySelection) == 1 {
+		entryLayer = entrySelection[0]
+	} else if len(entrySelection) != 0 {
+		t.Fatal("ambiguous entrylayer")
+	}
 	directory := os.Getenv("ROUTERVPN_IMPORTED_ENTRY_FIXTURES")
 	if directory == "" {
 		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
@@ -68,6 +74,12 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 					faults = append(faults, "whitening")
 				}
 			}
+			if entryLayer != "" {
+				faults = append(faults, "entry-layer-key", "entry-private")
+				if entryLayer == "aes-256-gcm+xor-whitening" {
+					faults = append(faults, "entry-whitening")
+				}
+			}
 			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
 					ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 8*time.Second)
@@ -75,6 +87,9 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 					suffix := ""
 					if layer != "" {
 						suffix = "--" + layer
+					}
+					if entryLayer != "" {
+						suffix = "--entry-" + entryLayer
 					}
 					raw, err := os.ReadFile(filepath.Join(directory, "socks5--final-"+mode+suffix+".json"))
 					if err != nil {
@@ -150,6 +165,13 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 					}
 					firstRaw, lastRaw := byTag["entry-wg"], byTag[mobilemultihop.LocalTag]
 					outerRaw := byTag[mobilemultihop.NativeStartLayerTag]
+					var entryOuter map[string]any
+					if entryLayer != "" {
+						entryOuter = byTag[firstRaw["detour"].(string)]
+						if entryOuter == nil || entryOuter["detour"] != nil {
+							t.Fatal("entrylayer lost physical owner")
+						}
+					}
 					expectedDetour := "entry-wg"
 					if layer != "" {
 						expectedDetour = mobilemultihop.NativeStartLayerTag
@@ -250,10 +272,23 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 					entryTarget := net.JoinHostPort(firstRaw["server"].(string), fmt.Sprint(int(firstRaw["server_port"].(float64))))
 					socksLower := &desktopImportedSOCKSLower{desktopSSReferenceLower: desktopSSReferenceLower{virtual: entryTarget, original: socksEntry.address}, peer: socksPeer}
 					lower := &socksLower.desktopSSReferenceLower
-					manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": socksLower}}
+					var physicalOwner adapter.Outbound = socksLower
+					var entryCarrier *desktopImportedSOCKSEntryLayer
+					if entryOuter != nil {
+						entryCarrier = desktopStartImportedSOCKSEntryLayer(t, ctx, socksPeer, entryOuter, entryTarget, socksEntry.address, entryLayer, fault)
+						defer func() { socksEntry.close(); entryCarrier.close(t) }()
+						lower = &desktopSSReferenceLower{virtual: net.JoinHostPort(entryOuter["server"].(string), fmt.Sprint(int(entryOuter["server_port"].(float64)))), original: entryCarrier.peer.address}
+						physicalOwner = lower
+						entryOuter["detour"] = "captured-physical"
+					} else {
+						firstRaw["detour"] = "captured-physical"
+					}
+					manager := &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": physicalOwner}}
 					owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
 					owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
-					firstRaw["detour"] = "captured-physical"
+					if fault == "entry-private" {
+						firstRaw["server"] = "10.93.0.99"
+					}
 					switch fault {
 					case "final-private-key":
 						lastRaw["private_key"] = desktopSSReferenceKey(mobilemultihop.NativeStartLayerMethod, 'x')
@@ -282,7 +317,12 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 							_ = json.Unmarshal(raw, &options)
 							out, e = NewEndpoint(owned, nil, log.NewNOPFactory().Logger(), value["tag"].(string), options)
 						case "shadowsocks", "routervpn-aes-xor":
-							out = desktopSSReferenceLayerClient(t, owned, value["tag"].(string), value["detour"].(string), value["server"].(string), uint16(value["server_port"].(float64)), layer, value["password"].(string))
+							out = desktopSSReferenceLayerClient(t, owned, value["tag"].(string), value["detour"].(string), value["server"].(string), uint16(value["server_port"].(float64)), func() string {
+								if value["type"] == "shadowsocks" {
+									return "aes-256-gcm"
+								}
+								return "aes-256-gcm+xor-whitening"
+							}(), value["password"].(string))
 						case "socks":
 							var options option.SOCKSOutboundOptions
 							_ = json.Unmarshal(raw, &options)
@@ -301,6 +341,9 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 						manager.owners[value["tag"].(string)] = out
 						return out
 					}
+					if entryOuter != nil {
+						create(entryOuter)
+					}
 					first := create(firstRaw)
 					if outerRaw != nil {
 						create(outerRaw)
@@ -313,8 +356,11 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 					}()
 					for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
 						if e := final.(adapter.Lifecycle).Start(stage); e != nil {
-							if (fault == "entry-key" || fault == "auth-downgrade" || fault == "relay-route" || fault == "control-eof") && ctx.Err() == nil {
+							if (fault == "entry-key" || fault == "auth-downgrade" || fault == "relay-route" || fault == "control-eof" || fault == "entry-layer-key" || fault == "entry-whitening" || fault == "entry-private") && ctx.Err() == nil {
 								raw, tcp, udp := peer.stats()
+								if entryCarrier != nil && (fault == "entry-layer-key" || fault == "entry-whitening") && entryCarrier.peer.stats().AuthTCP == 0 {
+									t.Fatal("entrylayer refusal lacked independent authentication failure")
+								}
 								if lower.calls.Load() == 0 || raw != 0 || tcp != 0 || udp != 0 || entryServer.plainTCP.Load() != 0 || entryServer.plainUDP.Load() != 0 {
 									t.Fatal("rejected entry authentication acquired packet final authority")
 								}
@@ -346,7 +392,7 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 					}
 					publicTransport.CloseIdleConnections()
 					stopPublic()
-					blockedEntry := fault == "entry-key" || fault == "auth-downgrade"
+					blockedEntry := fault == "entry-key" || fault == "auth-downgrade" || fault == "entry-layer-key" || fault == "entry-whitening" || fault == "entry-private"
 					if publicOK != (!blockedEntry && fault != "entry-public-ip") {
 						t.Fatal("original packet public identity did not follow real TLS path", fault, publicErr)
 					}
@@ -385,7 +431,7 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 						_ = connection.SetDeadline(deadline)
 						query := new(dns.Msg)
 						query.SetQuestion("example.com.", dns.TypeA)
-						if positive && layer != "" {
+						if positive && (layer != "" || entryLayer != "") {
 							query.SetEdns0(4096, false)
 							query.IsEdns0().Option = append(query.IsEdns0().Option, &dns.EDNS0_PADDING{})
 							initial, _ := query.Pack()
@@ -444,7 +490,7 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 							}
 						}
 					}
-					if positive && layer != "" {
+					if positive && (layer != "" || entryLayer != "") {
 						observed.mu.Lock()
 						count, maximum, invalid := observed.count, observed.maximum, observed.invalid
 						observed.mu.Unlock()
@@ -453,6 +499,20 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 						}
 					}
 					blockedFinal := fault == "layer-key" || fault == "whitening" || blockedEntry || fault == "relay-route" || fault == "control-eof" || fault == "final-private-key" || fault == "final-public-key" || fault == "final-psk" || fault == "final-awg-parameter" || fault == "final-route"
+					if entryCarrier != nil {
+						stats := entryCarrier.peer.stats()
+						if positive && (stats.Streams == 0 || stats.Packets == 0 || entryCarrier.retired.Load() == 0) {
+							t.Fatal("entrylayer or original association retirement bypassed", stats)
+						}
+						if fault == "entry-layer-key" || fault == "entry-whitening" {
+							if stats.AuthTCP == 0 || entryServer.rawTCP.Load()+entryServer.rawUDP.Load() != 0 {
+								t.Fatal("unauthenticated layer reached SOCKS", stats)
+							}
+						}
+						if fault == "entry-private" && entryServer.rawTCP.Load()+entryServer.rawUDP.Load() != 0 {
+							t.Fatal("foreign private tuple reached SOCKS")
+						}
+					}
 					if lower.calls.Load() == 0 {
 						t.Fatal("original physical proxy owner bypassed")
 					}
@@ -470,5 +530,11 @@ func desktopImportedSOCKSPacketLayers(t *testing.T, layer string) {
 			}
 
 		})
+	}
+}
+
+func TestRouterVPNImportedSOCKSEntryLayersPacketNativeTraffic(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) { desktopImportedSOCKSPacketLayers(t, "", layer) })
 	}
 }

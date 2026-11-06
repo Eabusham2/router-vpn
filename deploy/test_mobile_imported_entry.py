@@ -18,8 +18,11 @@ PACKET_FINAL_FILES={"final-"+mode+"--"+name for mode in ("wg","awg2-fast","awg2-
 NESTED_FILES={f'packet-{protocol}--final-{final}--{a or "off"}--{b or "off"}.json' for protocol in ("wireguard","amneziawg") for final in ("wg","awg2-fast","awg2-strong") for a in LAYERS for b in LAYERS}
 SOCKS_FILES={"socks5--final-"+mode+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")}
 SOCKS_LAYER_FILES={"socks5--final-"+mode+"--"+layer+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in LAYERS[1:]}
-FILES=SOCKS_LAYER_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
+SOCKS_ENTRY_LAYER_FILES={"socks5--final-"+mode+"--entry-"+layer+".json" for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in LAYERS[1:]}
+FILES=SOCKS_ENTRY_LAYER_FILES|SOCKS_LAYER_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
 CORE={
+ 'TestImportedEntrySOCKSEntryLayers':[mode+"/"+layer for mode in ("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong") for layer in LAYERS[1:]],
+ 'TestImportedEntrySOCKSEntryLayerAuthority':["missing-provision","foreign-outer","public-private-target","mode-mismatch","unused-provision","both-layers","invented-proof","retained-source"],
  'TestImportedEntrySOCKSPacketFinalLayers':[mode+"/"+layer for mode in ("wg","awg2-fast","awg2-strong") for layer in LAYERS[1:]],
  'TestImportedEntrySOCKSPacketLayerAuthority':["missing-source","foreign-endpoint","private-target","final-jumbo","fixed-conflict","retained-source"],
  'TestImportedEntrySOCKSPairedFinalLayers':[mode+"/"+layer for mode in ("shadowsocks","hysteria2") for layer in LAYERS[1:]],
@@ -46,6 +49,8 @@ CORE={
  'TestImportedEntryRuntimeDistinctProofsAndSelectedDNS': ['success','wrong-public-ip','wrong-paired-final','dns-failure','cancel-during-dns','missing-dns-capability','changed-owner'],
  'TestImportedEntryPairedFinalPolicyAndCipherOwnership': ['2022-blake3-aes-128-gcm','2022-blake3-aes-256-gcm','2022-blake3-chacha20-poly1305','entry-fixed','entry-jumbo','entry-cover-refused','paired-final-cover'],
 }
+SOCKS_ENTRY_PROXY_PEERS=[mode+"/"+layer+"/"+fault for mode in ("shadowsocks","hysteria2") for layer in LAYERS[1:] for fault in (("success","wrong-entry-ip","entry-auth","auth-downgrade","relay-route","control-eof","final-key","final-route","dns-route","final-identity","entry-layer-key","entry-private") + (("entry-whitening",) if layer==LAYERS[2] else ()))] + [mode+"/"+layer for mode in ("shadowsocks","hysteria2") for layer in LAYERS[1:]]
+SOCKS_ENTRY_PACKET_PEERS=[layer+"/"+mode+"/"+fault for layer in LAYERS[1:] for mode in ("wg","awg2-fast","awg2-strong") for fault in (("success","entry-key","auth-downgrade","relay-route","control-eof","final-private-key","final-public-key","final-psk","final-route","dns-route","final-identity","entry-public-ip","entry-layer-key","entry-private") + (("final-awg-parameter",) if mode!="wg" else ()) + (("entry-whitening",) if layer==LAYERS[2] else ()))] + [layer+"/"+mode for layer in LAYERS[1:] for mode in ("wg","awg2-fast","awg2-strong")] + list(LAYERS[1:])
 SOCKS_PACKET_LAYER_PEERS=[layer+"/"+mode+"/"+fault for layer in LAYERS[1:] for mode in ("wg","awg2-fast","awg2-strong") for fault in (("success","entry-key","auth-downgrade","relay-route","control-eof","final-private-key","final-public-key","final-psk","final-route","dns-route","final-identity","entry-public-ip","layer-key") + (("final-awg-parameter",) if mode!="wg" else ()) + (("whitening",) if layer==LAYERS[2] else ()))] + [layer+"/"+mode for layer in LAYERS[1:] for mode in ("wg","awg2-fast","awg2-strong")] + list(LAYERS[1:])
 SOCKS_PACKET_PEERS=[mode+"/"+fault for mode in ("wg","awg2-fast","awg2-strong") for fault in ("success","entry-key","auth-downgrade","relay-route","control-eof","final-private-key","final-public-key","final-psk","final-route","dns-route","final-identity","entry-public-ip")] + [mode+"/final-awg-parameter" for mode in ("awg2-fast","awg2-strong")] + ["wg","awg2-fast","awg2-strong"]
 SOCKS_PEERS=[mode+'/'+fault for mode in ('shadowsocks','hysteria2') for fault in ('success','wrong-entry-ip','entry-auth','auth-downgrade','relay-route','control-eof','final-key','final-route','dns-route','final-identity')] + ['shadowsocks','hysteria2']
@@ -124,6 +129,7 @@ def run(vendor,peers=False,android=False):
   # The new packet-layer family retains its own finite process budget; neither
   # invocation can replace the other's exact mandatory verdict inventory.
   if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImportedSOCKSPacketLayersNativeTraffic$','-count=1','-timeout=90s'],vendor,env,names({'TestRouterVPNImportedSOCKSPacketLayersNativeTraffic':SOCKS_PACKET_LAYER_PEERS}))
+  if peers:execute(base+['-race','./protocol/routervpnamnezia','-run','^TestRouterVPNImportedSOCKSEntryLayers(Proxy|Packet)NativeTraffic$','-count=1','-timeout=90s'],vendor,env,names({'TestRouterVPNImportedSOCKSEntryLayersProxyNativeTraffic':SOCKS_ENTRY_PROXY_PEERS,'TestRouterVPNImportedSOCKSEntryLayersPacketNativeTraffic':SOCKS_ENTRY_PACKET_PEERS}))
  checked_sources(vendor,peers)
  print('Exact imported-entry source, independent layers, distinct proofs, selected DNS and native verdicts passed; no OS device grant inferred.')
 if __name__=='__main__':

@@ -17,8 +17,9 @@ type importedEntry struct {
 
 // NewImportedEntry composes an imported SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
-// composition requires the complete configured data/control envelope. SOCKS5 currently
-// supports these paired finals with both independent Start Layers Off. Compilation proves neither identity.
+// composition requires the complete configured data/control envelope. SOCKS5 supports
+// a captured provisioned entry layer or a paired final layer, with the other node
+// layer Off. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
 	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG source and paired SS/HY2/WG/AWG final in Local execution")
 	var selection externalPolicyCapture
@@ -72,9 +73,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	if selection.Protocol == "socks5" {
 		finalLayer := predecessorText(exit.profile, "start_layer")
-		if entryMeta.StartLayer != "" && entryMeta.StartLayer != "off" ||
+		if entryMeta.StartLayer != "" && entryMeta.StartLayer != "off" && finalLayer != "" && finalLayer != "off" ||
 			finalLayer != "" && finalLayer != "off" && exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong" {
-			return nil, errors.New("imported SOCKS5 requires its ordinary entry and a captured supported paired-final layer")
+			return nil, errors.New("imported SOCKS5 requires captured supported layers with at most one enabled node layer")
 		}
 	}
 	if raw := exit.profile["multihop_execution"]; raw != nil && raw != "" && raw != "local" {

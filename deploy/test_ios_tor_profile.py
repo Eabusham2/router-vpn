@@ -713,6 +713,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    cases += layers.flatMap { first in layers.map { (first,$0,kind,"") } }
   }
   cases += layers.map { ("off",$0,"socks5","") }
+  cases += layers.filter{$0 != "off"}.map { ($0,"off","socks5","") }
   let composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
   let certificate=((composite["profiles"] as! [String:[String:String]])["split"]!)["cert.pem"]!
   var hyBase=base
@@ -918,7 +919,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    }
    if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
     let name: String
-    if kind=="socks5" {name="socks5--final-"+finalMode+(finalLayer=="off" ? "":"--"+finalLayer)+".json"}
+    if kind=="socks5" {name="socks5--final-"+finalMode+(entryLayer != "off" ? "--entry-"+entryLayer:finalLayer=="off" ? "":"--"+finalLayer)+".json"}
     else if ["wireguard","amneziawg"].contains(kind) {name="packet-"+kind+"--final-"+finalMode+"--"+entryLayer+"--"+finalLayer+".json"}
     else {name=(packetFinal ? "final-"+finalMode+"--":finalMode=="hysteria2" ? "final-hysteria2--":"") + (kind=="hysteria2" ? "hysteria2--"+entryLayer+"--"+finalLayer+".json" : entryLayer+"--"+finalLayer+"--"+method+".json")}
     try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent(name))
@@ -929,7 +930,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (205 graphs: preserved199 plus6 captured SOCKS5 paired WG/AWG final layers with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (215 graphs: preserved205 plus10 provisioned SOCKS5 entry layers with paired finals Off with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {
