@@ -89,7 +89,10 @@ core_ready(){
   done
   verified_json_tags "$CONFIG/xray/server.json" "$CONFIG/transports/server.json" || return 1
   # Rebuild stale listener/client ports together while preserving credentials.
-  python3 /src/server/scripts/verify-reality-port.py "$BASE" "$REALITY_PORT" "$XRAY_PQ_PORT"
+  python3 /src/server/scripts/verify-reality-port.py "$BASE" "$REALITY_PORT" "$XRAY_PQ_PORT" || return 1
+  # Existing installations also need the current configured SS declaration.
+  # An endpoint change must refresh the paired client through the same generator.
+  python3 /src/server/scripts/verify-ss-service.py "$BASE" "$ENDPOINT"
 }
 
 advanced_credentials_ready(){
