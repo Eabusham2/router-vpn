@@ -156,6 +156,30 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
     try check("missing SOCKS provision cannot alter selection",model.writes==writes && encoded(model.bundle!)==before)
    }
   }}}
+  for kind in ["http-connect","https-connect"] {
+   var source=try profile("connect-entry","external",kind);source.apiToken=""
+   let transport=ExternalHTTPConnectConfig(host:"198.51.100.8",port:8443,username:" exact user ",password:" exact secret ",tlsServerName:kind=="https-connect" ? "proxy.example.com":nil)
+   if kind=="http-connect" {source.external?.httpConnect=transport}else{source.external?.httpsConnect=transport}
+   let original=bundle(source);var final=finalBundle;final.routerProfiles[0].dnsProtocol="tcp";final.routerProfiles[0].dnsHost="192.168.50.133";final.routerProfiles[0].dnsPort=5353
+   let model=RouterVPNModel();model.bundle=final
+   IOSNodeBundleStore.shared.nodes=[source.id:try encoded(original),paired.id:try encoded(final)]
+   try check("CONNECT picker offers SS2022 only",model.iosImportedRouterFinalModes(entryMode:kind,exitID:paired.id)==["shadowsocks"])
+   try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:kind)
+   let held=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("CONNECT save retains independent credentials and original sources",held.routerProfiles==original.routerProfiles && held.profiles==original.profiles && model.bundle?.profiles==final.profiles)
+   try check("CONNECT save retains exact captured Home TCP DNS",model.bundle?.routerProfiles[0].dnsMode=="home" && model.bundle?.routerProfiles[0].dnsProtocol=="tcp" && model.bundle?.routerProfiles[0].dnsHost=="192.168.50.133" && model.bundle?.routerProfiles[0].dnsPort==5353)
+   for fault in ["udp","entry-layer","final-layer","server","packet-final"] {
+    var first=source,last=final;var execution="local",mode="shadowsocks"
+    if fault=="udp" {last.routerProfiles[0].dnsProtocol="udp"}
+    else if fault=="entry-layer" {first.startLayer="aes-256-gcm"}
+    else if fault=="final-layer" {last.routerProfiles[0].startLayer="aes-256-gcm"}
+    else if fault=="server" {execution="server"}else{mode="wg"}
+    IOSNodeBundleStore.shared.nodes=[source.id:try encoded(bundle(first)),paired.id:try encoded(last)]
+    let refused=RouterVPNModel();refused.bundle=last;let unchanged=try encoded(last)
+    try reject("CONNECT selection refuses unsupported captured policy "+fault){try refused.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:mode,execution:execution,entryMode:kind)}
+    try check("CONNECT rejected save leaves original stored selection",refused.writes==0 && encoded(refused.bundle!)==unchanged)
+   }
+  }
   var packetEntries:[RouterProfile]=[]
   for kind in ["wireguard","amneziawg"] {
    var node=try profile("imported-"+kind,"external",kind);node.apiToken="";node.dnsMode="home";node.external?.socks5=nil
@@ -538,9 +562,9 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
 
 def validate_imported_picker(view):
     entries = view[view.index('    private var nodes:'):view.index('    private var exitNodes:')]
-    if ('["wireguard", "amneziawg", "hysteria2", "socks5"].contains($0.external?.protocolName ?? "")' not in entries
+    if ('["wireguard", "amneziawg", "hysteria2", "socks5", "http-connect", "https-connect"].contains($0.external?.protocolName ?? "")' not in entries
             or 'IOSImportedEntryMultihop.methods.contains' not in entries):
-        raise ValueError('Paired finals must expose exact WG/AWG/HY2/SOCKS5 and SS2022 imported entries')
+        raise ValueError('Paired finals must expose exact WG/AWG/HY2/SOCKS5, CONNECT and SS2022 imported entries')
     branch = view[view.index('                    if externalEntryProtocol != nil {'):]
     branch = branch[:branch.index('                    } else {')]
     for required in ('Picker("Exit transport", selection: $exitMode)',
@@ -556,6 +580,8 @@ def validate_imported_picker(view):
                      'Text("Hysteria2").tag("hysteria2")'):
         if required not in branch:
             raise ValueError('Imported final picker must preserve invalid saved values and require an explicit valid choice')
+    if 'if ["http-connect", "https-connect"].contains(externalEntryProtocol ?? "") {' not in branch or 'TCP-only' not in branch:
+        raise ValueError('CONNECT capability copy must be conditional on the captured CONNECT entry')
     if 'exitMode =' in branch:
         raise ValueError('Imported final picker must not silently rewrite the saved transport')
     requirements = view[view.index('Section("Connection requirements")'):]

@@ -230,7 +230,7 @@ struct IOSMultihopView: View {
     @StateObject private var viaEntry = IOSViaEntryLatency()
     private var nodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
-            ($0.normalizedNodeKind == "external" && ((ordinaryExitProtocol != nil || torExitProtocol != nil) ? RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "") : (["wireguard", "amneziawg", "hysteria2", "socks5"].contains($0.external?.protocolName ?? "") || ($0.external?.protocolName == "shadowsocks" && IOSImportedEntryMultihop.methods.contains($0.external?.shadowsocks?.method ?? ""))))) }
+            ($0.normalizedNodeKind == "external" && ((ordinaryExitProtocol != nil || torExitProtocol != nil) ? RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "") : (["wireguard", "amneziawg", "hysteria2", "socks5", "http-connect", "https-connect"].contains($0.external?.protocolName ?? "") || ($0.external?.protocolName == "shadowsocks" && IOSImportedEntryMultihop.methods.contains($0.external?.shadowsocks?.method ?? ""))))) }
     }
     private var exitNodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
@@ -354,6 +354,10 @@ struct IOSMultihopView: View {
                             if importedFinalModes.contains("awg2-strong") { Text("AmneziaWG Strong").tag("awg2-strong") }
                         }
                         LabeledContent("Execution", value: "Local")
+                        if ["http-connect", "https-connect"].contains(externalEntryProtocol ?? "") {
+                            Text("HTTP/HTTPS CONNECT entries are TCP-only: select SS2022, both layers Off, and Home or custom TCP DNS. Other UDP traffic is blocked; saved DNS is never changed automatically.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         Text("The imported entry keeps its own public-address proof and Start Layer. The paired final node keeps its private identity, DNS and independent Start Layer.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {

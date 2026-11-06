@@ -60,7 +60,7 @@ final class AndroidImportedRouterPath {
  static final class PreparationFailure extends Exception{final String sessionId="";}
  static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{if(current!=e)throw new IllegalStateException("foreign imported record");String original=snapshot(e);return new AndroidMultihopController.Source(e.id,e.name,original.getBytes(StandardCharsets.UTF_8),()->{if(current==null||!original.equals(snapshot(current)))throw new IllegalStateException("changed imported source");});}
  static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{s.require(null);return current;}
- static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{if(AndroidMultihopController.onPrepare!=null)AndroidMultihopController.onPrepare.run();e.require(null);last.require(x);if(!execution.equals("local")||!supports(current.protocol,mode))throw new IllegalStateException("unowned imported preparation");AndroidMultihopController.preparations++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=current.protocol;AndroidMultihopController.lastExitMode=mode;return new AndroidMultihopController.Prepared(null,x,mode,e,last);}
+ static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{if(AndroidMultihopController.onPrepare!=null)AndroidMultihopController.onPrepare.run();e.require(null);last.require(x);if(!execution.equals("local")||!supports(current.protocol,mode))throw new IllegalStateException("unowned imported preparation");AndroidMultihopController.preparations++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=AndroidExternalPolicy.protocol(current.protocol);AndroidMultihopController.lastExitMode=mode;return new AndroidMultihopController.Prepared(null,x,mode,e,last);}
 }
 final class AndroidMultihopController {
  private static final int MAX_BUNDLE=32*1024*1024;
@@ -128,6 +128,8 @@ final class AndroidStartupPolicy{
 }
 '''
 
+STUBS += '\nfinal class AndroidExternalPolicy {' + member((JAVA / 'AndroidExternalPolicy.java').read_text(), '    static String protocol(') + '}\n'
+
 HARNESS = r'''package com.eabusham.routervpn;
 import android.content.Context;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;import java.util.concurrent.*;import java.lang.reflect.*;import org.json.*;
 public final class MultihopStartupLastTest{
@@ -156,14 +158,14 @@ public final class MultihopStartupLastTest{
  }
  static AndroidStandardExitStore.Entry imported(){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="saved-import";e.name="Original import";e.protocol="socks5";AndroidImportedRouterPath.current=e;return e;}
  static void importedRuntime()throws Exception{
-  for(String mode:new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"})try(Fixture f=new Fixture()){
-   AndroidStandardExitStore.Entry e=imported();Callback c=new Callback();f.runtime.connectImported(e,f.exit,mode,"local",c);c.await();
+  for(String protocol:new String[]{"socks5","http","https"})for(String mode:protocol.equals("socks5")?new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"}:new String[]{"shadowsocks"})try(Fixture f=new Fixture()){
+   AndroidStandardExitStore.Entry e=imported();e.protocol=protocol;Callback c=new Callback();f.runtime.connectImported(e,f.exit,mode,"local",c);c.await();
    check(c.ok&&f.engine.starts==1&&AndroidMultihopController.preparations==1,"supported SOCKS imported runtime rejected before preparation: "+mode);
    check(AndroidPathProbe.proofs==1&&LayeredVpnService.mtu==1&&AndroidStartupPolicy.writes==0,"imported runtime skipped owned proof/activation or borrowed paired history");
-   check(AndroidHomeStateStore.current.activeEntryId.equals(e.id)&&AndroidHomeStateStore.current.activeEntryMode.equals("socks5")&&AndroidHomeStateStore.current.runtimeMode.equals(mode),"imported runtime substituted source or final mode");cases++;
+   check(AndroidHomeStateStore.current.activeEntryId.equals(e.id)&&AndroidHomeStateStore.current.activeEntryMode.equals(AndroidExternalPolicy.protocol(protocol))&&AndroidHomeStateStore.current.runtimeMode.equals(mode),"imported runtime substituted source or final mode");cases++;
   }
-  for(String fault:new String[]{"unsupported-entry","unsupported-final","server","auto","same-id","foreign-source","queued-entry","queued-exit","queued-cancel","prepared-entry","started-entry","private-proof"})try(Fixture f=new Fixture()){
-   AndroidStandardExitStore.Entry e=imported();String mode="wg",execution="local";
+  for(String protocol:new String[]{"socks5","http","https"})for(String fault:new String[]{"unsupported-entry","unsupported-final","server","auto","same-id","foreign-source","queued-entry","queued-exit","queued-cancel","prepared-entry","started-entry","private-proof"})try(Fixture f=new Fixture()){
+   AndroidStandardExitStore.Entry e=imported();e.protocol=protocol;String mode=protocol.equals("socks5")?"wg":"shadowsocks",execution="local";
    if(fault.equals("unsupported-entry"))e.protocol="openvpn";if(fault.equals("unsupported-final"))mode="naive-h3";
    if(fault.equals("server")||fault.equals("auto"))execution=fault;if(fault.equals("same-id"))e.id=f.exit.id;if(fault.equals("foreign-source"))AndroidImportedRouterPath.current=null;
    if(fault.equals("prepared-entry"))AndroidMultihopController.onPrepare=()->e.secret="replaced before staging";
@@ -333,11 +335,11 @@ public final class ComposedTest {
  static final class Callback implements AndroidMultihopRuntime.Callback {final CountDownLatch done=new CountDownLatch(1);boolean ok;int completions;public void progress(String s){}public void finished(boolean value,String message){ok=value;completions++;done.countDown();}void await()throws Exception{check(done.await(4,TimeUnit.SECONDS)&&completions==1,"composed runtime did not finish one owned callback");}}
  static byte[] source()throws Exception{return new JSONObject().put("node_id","final").put("profiles",new JSONObject()).put("modes",new JSONArray()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);}
  public static void main(String[] args)throws Exception{
-  for(String mode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"))for(String fault:List.of("none","source-before-stage","source-after-start","proof","cancel")){
+  for(String protocol:List.of("socks5","http","https"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(String fault:List.of("none","source-before-stage","source-after-start","proof","cancel")){
    context=new Context();NativeSingBoxController engine=new NativeSingBoxController();AndroidMultihopController.preparations=0;AndroidMultihopController.onPrepare=null;AndroidPathProbe.proofs=0;AndroidPathProbe.valid=!fault.equals("proof");AndroidPathProbe.duringProof=null;
    LayeredVpnService.captures=0;LayeredVpnService.mtu=0;LayeredVpnService.unhealthy=false;LayeredVpnService.selected="";LayeredVpnService.pins="{}";LayeredVpnService.duringCapture=null;LayeredVpnService.duringMTU=null;
    Path directory=Files.createTempDirectory("composed-imported-home-"),file=directory.resolve("final.json");Files.write(file,source());AndroidNodeStore.Node last=new AndroidNodeStore.Node("final",file.toFile());
-   AndroidStandardExitStore.Entry first=new AndroidStandardExitStore.Entry();first.id="original-socks";first.name="Saved SOCKS";first.protocol="socks5";AndroidImportedRouterPath.current=first;
+   AndroidStandardExitStore.Entry first=new AndroidStandardExitStore.Entry();first.id="original-socks";first.name="Saved SOCKS";first.protocol=protocol;AndroidImportedRouterPath.current=first;
    AndroidMultihopRuntime runtime=new AndroidMultihopRuntime(context,engine);AndroidStartupPolicy.runtime=runtime;
    try{
     if(fault.equals("source-before-stage"))AndroidMultihopController.onPrepare=()->first.secret="changed original source";
@@ -347,18 +349,18 @@ public final class ComposedTest {
     AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
     if(fault.equals("none")){
      check(callback.ok&&engine.starts==1&&AndroidMultihopController.preparations==1,"composed SOCKS runtime/Home rejected published path: "+mode);
-     check(home.connected&&home.pathProof.equals("passed")&&home.activeEntryId.equals(first.id)&&home.activeExitId.equals(last.id)&&home.activeEntryMode.equals("socks5")&&home.runtimeMode.equals(mode)&&home.actualBase.equals("libbox"),"composed runtime adopted wrong real Home identity");
+     check(home.connected&&home.pathProof.equals("passed")&&home.activeEntryId.equals(first.id)&&home.activeExitId.equals(last.id)&&home.activeEntryMode.equals(AndroidExternalPolicy.protocol(protocol))&&home.runtimeMode.equals(mode)&&home.actualBase.equals("libbox"),"composed runtime adopted wrong real Home identity");
      check(LayeredVpnService.captures>0&&LayeredVpnService.mtu==1,"composed runtime activated before owned proof");
     }else check(!callback.ok&&!home.connected&&LayeredVpnService.mtu==0,"composed runtime published cancelled/stale/unproved Home: "+fault);
    }finally{runtime.disconnect();runtime.close();long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(runtime.isActiveOrTransitioning()&&System.nanoTime()<end)Thread.yield();check(!AndroidHomeStateStore.snapshot(context).connected&&engine.state.equals("DOWN"),"composed cleanup retained live Home or native owner: "+fault+"/"+engine.state+"/"+AndroidHomeStateStore.snapshot(context).phase);Files.delete(file);Files.delete(directory);}
   }
-  for(String mode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"))for(boolean alive:List.of(false,true)){
-   context=new Context();AndroidHomeStateStore.beginMultihop(context,"saved-socks","saved-final",mode,"socks5");AndroidHomeStateStore.connectedMultihop(context,"saved-socks","saved-final",mode,"socks5");
+  for(String protocol:List.of("socks5","http","https"))for(String mode:protocol.equals("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks"))for(boolean alive:List.of(false,true)){
+   context=new Context();AndroidHomeStateStore.beginMultihop(context,"saved-socks","saved-final",mode,AndroidExternalPolicy.protocol(protocol));AndroidHomeStateStore.connectedMultihop(context,"saved-socks","saved-final",mode,AndroidExternalPolicy.protocol(protocol));
    NativeSingBoxController engine=new NativeSingBoxController();engine.state=alive?"UP":"DOWN";AndroidMultihopRuntime runtime=new AndroidMultihopRuntime(context,engine);
-   try{check(runtime.isConnected()==alive&&AndroidHomeStateStore.snapshot(context).connected==alive,"published SOCKS live-state reattachment changed exact native liveness");if(alive)check(runtime.activeEntryMode().equals("socks5"),"reattachment changed original entry label");}
+   try{check(runtime.isConnected()==alive&&AndroidHomeStateStore.snapshot(context).connected==alive,"published SOCKS live-state reattachment changed exact native liveness");if(alive)check(runtime.activeEntryMode().equals(AndroidExternalPolicy.protocol(protocol)),"reattachment changed original entry label");}
    finally{runtime.disconnect();runtime.close();}
   }
-  System.out.println("Composed shipping imported runtime + Home: "+checks+" checks /35 cases PASS; native preparation/proof and Android OS boundaries doubled");
+  System.out.println("Composed shipping imported runtime + Home: "+checks+" checks /49 cases PASS; native preparation/proof and Android OS boundaries doubled");
  }
 }
 '''
@@ -378,6 +380,7 @@ def composed_home():
     maximum = (JAVA/'AndroidNativeMAXProfile.java').read_text()
     modes = re.search(r'(?s)    private static final (?:java\.util\.)?Set<String> MODES\s*=.*?;',maximum)[0]
     stubs = STUBS.replace(member(STUBS,'final class AndroidHomeStateStore {'),'')
+    stubs = stubs.replace(member(stubs,'final class AndroidExternalPolicy {'),'')
     stubs = stubs.replace('// REAL_SOURCE_MEMBERS',source_members).replace('// NATIVE_PREDICATES',predicates)
     stubs = stubs.replace('// MAX_PREDICATE',modes+'\n'+member(maximum,'    static boolean isMode(')).replace('// COMPOSITE_PREDICATE',member((JAVA/'AndroidNativeCompositeProfile.java').read_text(),'    static boolean isMode('))
     stubs = stubs.replace('// SHIPPING_IMPORTED_SUPPORTS',member((JAVA/'AndroidImportedRouterPath.java').read_text(),'    static boolean supports('))
@@ -389,7 +392,12 @@ def composed_home():
         (app/'Boundaries.java').write_text(stubs)
         (app/'ComposedTest.java').write_text(COMPOSED)
         for name in ('android/content/SharedPreferences.java','android/content/Context.java','com/wireguard/android/backend/Tunnel.java','org/amnezia/awg/backend/Tunnel.java','com/eabusham/routervpn/HomeBoundaries.java'):
-            target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(home_fixture.SOURCES[name])
+            target=root/name;target.parent.mkdir(parents=True,exist_ok=True)
+            source=home_fixture.SOURCES[name]
+            if name.endswith('HomeBoundaries.java'):
+                boundary=member(source,'final class AndroidExternalPolicy {')
+                source=source.replace(boundary,boundary[:-1]+member((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol(')+'}')
+            target.write_text(source)
         target=root/'android/content/Intent.java';target.write_text('package android.content;public class Intent{}')
         target=root/'android/util/Base64.java';target.parent.mkdir(parents=True)
         target.write_text('package android.util;public class Base64{public static final int DEFAULT=0,NO_WRAP=2;public static byte[] decode(String s,int f){return java.util.Base64.getMimeDecoder().decode(s);}public static String encodeToString(byte[] b,int f){return java.util.Base64.getEncoder().encodeToString(b);}}')
@@ -398,13 +406,15 @@ def composed_home():
         run=['java','-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.ComposedTest']
         subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=45)
         for name,old,new in (
+            ('AndroidMultihopRuntime.java','return AndroidExternalPolicy.protocol(entry.protocol);','return entry.protocol;'),
             ('AndroidMultihopRuntime.java','imported ? !AndroidImportedRouterPath.supports(entryMode,exitMode)','imported ? !java.util.Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode)'),
             ('AndroidMultihopRuntime.java','AndroidImportedRouterPath.supports(state.activeEntryMode,state.runtimeMode)','java.util.Arrays.asList("wireguard","amneziawg").contains(state.activeEntryMode)'),
             ('AndroidHomeStateStore.java','!AndroidImportedRouterPath.supports(entryMode,runtimeMode)','!java.util.Arrays.asList("wireguard","amneziawg").contains(entryMode)')):
             target=app/name;original=target.read_text();assert old in original;target.write_text(original.replace(old,new))
             subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             result=subprocess.run(run,capture_output=True,text=True,timeout=45);target.write_text(original)
-            if not result.returncode or not any(w in result.stderr for w in ('composed SOCKS runtime/Home rejected published path','Invalid live entry transport','published SOCKS live-state reattachment changed exact native liveness')):
+            witnesses = ('composed runtime adopted wrong real Home identity',) if old=='return AndroidExternalPolicy.protocol(entry.protocol);' else ('composed SOCKS runtime/Home rejected published path','Invalid live entry transport','published SOCKS live-state reattachment changed exact native liveness')
+            if not result.returncode or not any(w in result.stderr for w in witnesses):
                 raise AssertionError('Composed old admission did not fail at exact boundary: '+name+'\n'+result.stdout+result.stderr)
             print('Composed actual runtime/Home old admission rejected:',name)
 

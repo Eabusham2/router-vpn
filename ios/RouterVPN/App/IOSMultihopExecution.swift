@@ -386,6 +386,7 @@ enum IOSMultihopExecution {
 enum IOSImportedEntryMultihop {
     static let methods: Set<String> = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"]
     static func supports(entry: String, final: String) -> Bool {
+        if ["http-connect", "https-connect"].contains(entry) { return final == "shadowsocks" }
         if entry == "socks5" { return ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(final) }
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
@@ -394,7 +395,13 @@ enum IOSImportedEntryMultihop {
     }
     static func validate(entry: [String: Any], final: [String: Any]) throws {
         guard let imported = entry["external"] as? [String: Any],
-              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5"].contains(kind) else { throw issue() }
+              let kind = imported["protocol"] as? String, ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(kind) else { throw issue() }
+        if ["http-connect", "https-connect"].contains(kind) {
+            guard ["", "off"].contains(entry["start_layer"] as? String ?? ""),
+                  ["", "off"].contains(final["start_layer"] as? String ?? ""),
+                  ["", "home", "custom"].contains(final["dns_mode"] as? String ?? ""),
+                  final["dns_protocol"] as? String == "tcp" else { throw issue() }
+        }
         if kind == "shadowsocks" {
             guard let transport = imported[kind] as? [String: Any], methods.contains(transport["method"] as? String ?? "") else { throw issue() }
         } else if kind == "hysteria2" {
@@ -439,6 +446,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. HTTP/HTTPS CONNECT requires SS2022, both Start Layers Off and explicitly selected Home or custom TCP DNS; other UDP traffic is blocked. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

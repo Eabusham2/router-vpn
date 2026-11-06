@@ -19,14 +19,16 @@ type importedEntry struct {
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
 // composition requires the complete configured data/control envelope. SOCKS5 currently
 // supports these paired finals with independently provisioned Start Layers.
-// Compilation proves neither identity.
+// HTTP/HTTPS CONNECT permits only an unlayered SS2022 final with captured TCP DNS;
+// other datagrams are refused. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
-	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard or AmneziaWG source and paired SS/HY2/WG/AWG final in Local execution")
+	bad := errors.New("imported entry requires a captured standalone SOCKS5, SS2022, Hysteria2, WireGuard, AmneziaWG or HTTP/HTTPS CONNECT source and a compatible paired final in Local execution")
 	var selection externalPolicyCapture
-	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
+	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg" && selection.Protocol != "socks5" && selection.Protocol != "http-connect" && selection.Protocol != "https-connect") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
 
+	connectEntry := selection.Protocol == "http-connect" || selection.Protocol == "https-connect"
 	// An imported operator address is a public-path proof, never a paired API.
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
 		if v := selection.Profile[key]; v != nil && v != "" {
@@ -114,6 +116,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if selection.Protocol == "socks5" {
 		expectedType = "socks"
 	}
+	if connectEntry {
+		expectedType = "http"
+	}
 	if selection.Protocol == "amneziawg" {
 		expectedType = AmneziaType
 	}
@@ -136,6 +141,11 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	}
 	if final == nil {
 		return nil, bad
+	}
+	if connectEntry {
+		if err := importedCONNECTCapture(last, final, entryMeta.StartLayer, exitMode, exit.profile); err != nil {
+			return nil, err
+		}
 	}
 	outer := final
 	for i := 0; predecessorText(outer, "detour") != ""; i++ {
@@ -245,6 +255,10 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if json.Unmarshal([]byte(configured), &last) != nil {
 		return nil, bad
 	}
+	if connectEntry {
+		route := last["route"].(map[string]any)
+		route["rules"] = append(route["rules"].([]any), map[string]any{"inbound": []string{tun["tag"].(string)}, "network": "udp", "action": "reject"})
+	}
 	// Final private proof is routed through the same selector as application
 	// traffic. There is deliberately no imported-entry private proof listener.
 	last["inbounds"] = append(last["inbounds"].([]any), map[string]any{"type": "mixed", "tag": "routervpn-proof", "listen": "127.0.0.1", "listen_port": 1099})
@@ -266,6 +280,9 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		return nil, err
 	}
 	meta := Metadata{EntryKind: "external", EntryID: selection.ExitID, ExitID: predecessorText(exit.profile, "id"), ExitNodeID: predecessorText(exit.profile, "node_proof_id"), ExitAPI: predecessorText(exit.profile, "router_api"), ExitToken: predecessorText(exit.profile, "api_token"), EntryTag: "entry-wg", EntryMode: selection.Protocol, ExitMode: exitMode, Execution: "local", EntryStartLayer: entryMeta.StartLayer, ExitStartLayer: predecessorText(exit.profile, "start_layer")}
+	if connectEntry {
+		meta.TransportCapability = "tcp-only"
+	}
 	if nested != nil {
 		meta.EntryPacketMTU = strconv.Itoa(entryMTU)
 		meta.ExitPacketRequestedMTU = strconv.Itoa(requestedPacketMTU)

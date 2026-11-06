@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse 235 actual Swift-built imported-entry graphs in pinned Libbox.
+"""Parse 247 actual Swift-built imported-entry graphs in pinned Libbox.
 
 This is an executable host/compiler composition gate, not a device traffic test.
 """
@@ -41,6 +41,8 @@ NAMES |= {"socks5--final-"+mode+"--"+entry+"--"+final+".json"
           for entry in LAYERS for final in LAYERS if (entry,final) != ("off","off")
           and entry != "off" and final != "off"}
 
+NAMES |= {"connect--"+p+"--"+m+"--"+d+".json" for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")}
+
 def digest():
     paths = {Path(__file__).resolve(), ROOT/'ios/RouterVPN/prepare-libbox.sh', ROOT/'go.mod'}
     for directory, pattern in [('ios/RouterVPN/App', '*.swift'), ('ios/RouterVPN/PacketTunnel', '*.swift'), ('internal', '*.go'), ('mobile', '*.go'), ('mobile', '*.tmpl')]:
@@ -57,7 +59,7 @@ def digest():
 
 def require_matrix(root):
     if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != NAMES:
-        raise ValueError('Apple imported matrix must contain exactly 235 original host graphs')
+        raise ValueError('Apple imported matrix must contain exactly 247 original host graphs')
     for name in NAMES:
         info = (root/name).lstat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4*1024*1024:
@@ -80,8 +82,8 @@ def require_verdicts(raw):
                 completed.append(test)
             else:
                 package_passes += 1
-    if len(completed) != 236 or set(completed) != expected or package_passes != 1:
-        raise ValueError('Native Apple imported proof requires all 236 exact passing verdicts')
+    if len(completed) != 248 or set(completed) != expected or package_passes != 1:
+        raise ValueError('Native Apple imported proof requires all 248 exact passing verdicts')
 
 
 def run(vendor):
@@ -113,7 +115,7 @@ def run(vendor):
         require_verdicts(result.stdout)
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: 235 actual Swift graph exports parsed by pinned Libbox; 236 exact native verdicts passed')
+    print('Apple imported Router: 247 actual Swift graph exports parsed by pinned Libbox; 248 exact native verdicts passed')
 
 
 def main():

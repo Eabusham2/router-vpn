@@ -44,6 +44,7 @@ var Targets = []string{"https://1.1.1.1/cdn-cgi/trace", "https://1.0.0.1/cdn-cgi
 // Metadata is captured from the paired entry and exit, never the mutable UI.
 // It contains credentials and must not be returned by a progress/status API.
 type Metadata struct {
+	TransportCapability     string `json:"transport_capability,omitempty"`
 	EntryPacketMTU          string `json:"entry_packet_mtu,omitempty"`
 	ExitPacketRequestedMTU  string `json:"exit_packet_requested_mtu,omitempty"`
 	ExitPacketEffectiveMTU  string `json:"exit_packet_effective_mtu,omitempty"`

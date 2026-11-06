@@ -18,6 +18,8 @@ final class AndroidImportedRouterPath {
             "exit_profile", "exit_start", "dns_bootstrap", "source_sha256"};
 
     static boolean supports(String entryProtocol, String finalMode) {
+        entryProtocol = AndroidExternalPolicy.protocol(entryProtocol);
+        if (Arrays.asList("http-connect", "https-connect").contains(entryProtocol)) return "shadowsocks".equals(finalMode);
         if ("socks5".equals(entryProtocol)) return Arrays.asList("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong").contains(finalMode);
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
@@ -26,9 +28,9 @@ final class AndroidImportedRouterPath {
     }
 
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {
-        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5").contains(entry.protocol)
+        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect").contains(AndroidExternalPolicy.protocol(entry.protocol))
                 || "shadowsocks".equals(entry.protocol) && !Arrays.asList("2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305").contains(entry.method)) {
-            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG or SOCKS5.");
+            throw new IllegalArgumentException("This imported entry path requires Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5 or a TCP-only HTTP/HTTPS CONNECT entry.");
         }
         AndroidStandardExitStore.validate(entry);
     }
@@ -89,11 +91,14 @@ final class AndroidImportedRouterPath {
                 }
                 JSONObject selected = new JSONObject(metadata);
                 String entryMode = new JSONObject(input.getString("entry_capture")).getString("protocol");
-                if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5").contains(entryMode)
+                if (!Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect").contains(entryMode)
                         || !"external".equals(selected.getString("entry_kind")) || !"local".equals(selected.getString("execution"))
                         || !entryMode.equals(selected.getString("entry_mode")) || !input.getString("exit_mode").equals(selected.getString("exit_mode"))
                         || !supports(entryMode, selected.getString("exit_mode"))) {
                     throw new IllegalStateException("The imported-entry compiler changed the selected path.");
+                }
+                if (Arrays.asList("http-connect", "https-connect").contains(entryMode) && !"tcp-only".equals(selected.optString("transport_capability"))) {
+                    throw new IllegalStateException("CONNECT lost its captured TCP-only capability.");
                 }
                 this.input = input.put("source_sha256", source).toString();
                 if (this.input.getBytes(StandardCharsets.UTF_8).length > MAX_INPUT) throw new IllegalStateException("The captured path exceeds its private staging bound.");

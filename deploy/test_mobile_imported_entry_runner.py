@@ -24,6 +24,14 @@ class ImportedEntryVerdicts(unittest.TestCase):
  def test_skip(self):
   expected,events=self.sample();events[-1]['Action']='skip'
   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+ def test_connect_inventory(self):
+  self.assertEqual(len(gate.CONNECT_FILES),12)
+  expected=gate.names({'TestRouterVPNImportedCONNECTNativeTraffic':gate.CONNECT_PEERS})
+  self.assertEqual(len(expected),51)
+  events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
+  gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+  for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
+   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_packet_layer_verdicts(self):
   expected=gate.names({'TestRouterVPNImportedSOCKSPacketLayersNativeTraffic':gate.SOCKS_PACKET_LAYER_PEERS})
   self.assertEqual(len(expected),94)
@@ -39,7 +47,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')]):
    with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_layered_fixture_inventory(self):
-  self.assertEqual(len(gate.FILES),235)
+  self.assertEqual(len(gate.FILES),247)
   self.assertEqual(len(gate.SOCKS_FILES),45)
   for mode in ('shadowsocks','hysteria2','wg','awg2-fast','awg2-strong'):
    for layer in gate.LAYERS[1:]:
@@ -58,7 +66,7 @@ class ImportedEntryVerdicts(unittest.TestCase):
   for case in ('TestRouterVPNImportedSOCKSLayerRelayRetirement','retiring-worker-root-close','replacement-owner','foreign-and-closed'):
    self.assertIn(case,source)
  def test_both_layer_verdicts(self):
-  self.assertEqual(len(gate.FILES),235)
+  self.assertEqual(len(gate.FILES),247)
   expected=gate.names(gate.SOCKS_BOTH_GROUPS)
   self.assertEqual(len(expected),271)
   events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]

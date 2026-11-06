@@ -166,7 +166,8 @@ enum IOSRuntimeSelector {
             ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) &&
             (profile.multihopExecution ?? "local") == "local"
         let importedSOCKS = entryMode == "socks5" && ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) && (profile.multihopExecution ?? "local") == "local"
-        guard multihopModeIDs.contains(entryMode) || importedPacket || importedSOCKS else {
+        let importedCONNECT = ["http-connect", "https-connect"].contains(entryMode) && mode == "shadowsocks" && (profile.multihopExecution ?? "local") == "local"
+        guard multihopModeIDs.contains(entryMode) || importedPacket || importedSOCKS || importedCONNECT else {
             throw IOSRuntimeSelectionError.unsupportedMode("Choose an exact native multihop entry transport.")
         }
         _ = try selectRaw(bundle: bundle, rawProfileID: mode)

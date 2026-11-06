@@ -56,7 +56,7 @@ public final class ImportedRouterTest {
  static void reject(String label,Work work)throws Exception{boolean refused=false;try{work.run();}catch(Exception expected){refused=true;}check(refused,"accepted "+label);check(RouterMultihop.open==0,"owner leaked after "+label);}
  static JSONObject object(String s)throws Exception{return new JSONObject(s);}
  static AndroidStandardExitStore.Entry entry(JSONArray args)throws Exception{
-  JSONObject capture=object(args.getString(1)),profile=capture.getJSONObject("profile"),external=profile.getJSONObject("external"),transport=external.getJSONObject(capture.getString("protocol"));
+  JSONObject capture=object(args.getString(1)),profile=capture.getJSONObject("profile"),external=profile.getJSONObject("external"),transport=external.getJSONObject(capture.getString("protocol").replace("-","_"));
   AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id=capture.getString("exit_id");e.name="Imported first";e.protocol=capture.getString("protocol");e.expectedPublicIp=capture.getString("expected_public_ip");
   if(List.of("wireguard","amneziawg").contains(e.protocol)){
    String endpoint=transport.getString("endpoint");int split=endpoint.lastIndexOf(':');e.server=endpoint.substring(0,split);if(e.server.startsWith("[")&&e.server.endsWith("]"))e.server=e.server.substring(1,e.server.length()-1);e.serverPort=Integer.parseInt(endpoint.substring(split+1));
@@ -64,7 +64,7 @@ public final class ImportedRouterTest {
    if(transport.has("persistent_keepalive_interval"))e.wgKeepalive=transport.getInt("persistent_keepalive_interval");
    for(String key:List.of("addresses","allowed_ips","dns")){JSONArray values=transport.optJSONArray(key);List<String> into=key.equals("addresses")?e.wgAddresses:key.equals("allowed_ips")?e.wgAllowedIps:e.wgDns;for(int i=0;values!=null&&i<values.length();i++)into.add(values.getString(i));}
    if(e.protocol.equals("amneziawg"))e.awgParameters=object(transport.getJSONObject("parameters").toString());
-  }else if(e.protocol.equals("socks5")){e.server=transport.getString("host");e.serverPort=transport.getInt("port");e.username=transport.getString("username");e.password=transport.getString("password");}
+  }else if(List.of("socks5","http-connect","https-connect").contains(e.protocol)){e.server=transport.getString("host");e.serverPort=transport.getInt("port");e.username=transport.getString("username");e.password=transport.getString("password");e.tlsServerName=transport.optString("tls_server_name","");}
   else{e.server=transport.getString("server");e.serverPort=transport.getInt("port");e.method=transport.optString("method","");e.secret=transport.getString("password");e.tlsServerName=transport.optString("tls_server_name","");}
   e.policy=object(profile.toString());for(String name:List.of("external","id","node_kind"))e.policy.remove(name);
   e.startLayer=external.optJSONObject("start_layer");AndroidStandardExitStore.validate(e);return e;
@@ -114,7 +114,14 @@ public final class ImportedRouterTest {
   String before=AndroidStandardExitStore.snapshot(e),beforeFinal=b.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(e,b,finalMode,"local");
   check(before.equals(AndroidStandardExitStore.snapshot(e))&&beforeFinal.equals(b.toString()),"compiler mutated original source");
   JSONObject selected=object(c.metadata),raw=object(c.input),graph=object(c.config);
-  check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(e.protocol)&&selected.getString("exit_mode").equals(finalMode),"host changed selected identities or transport");
+  check(selected.getString("entry_kind").equals("external")&&selected.getString("entry_id").equals(e.id)&&selected.getString("exit_id").equals(profile(b).getString("id"))&&selected.getString("entry_mode").equals(AndroidMultihopRuntime.importedEntryMode(e))&&selected.getString("exit_mode").equals(finalMode),"host changed selected identities or transport");
+  if(List.of("http","https").contains(e.protocol)){
+   check(selected.getString("transport_capability").equals("tcp-only"),"CONNECT capability was lost");
+   JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0),saved=profile(b);
+   check(dns.getString("type").equals("tcp")&&dns.getString("server").equals(saved.getString("dns_host"))&&dns.getInt("server_port")==saved.getInt("dns_port")&&dns.getString("detour").equals("proxy"),"CONNECT changed exact saved DNS");
+   for(String execution:List.of("server","auto"))reject("CONNECT unsupported execution",()->AndroidImportedRouterPath.compile(e,b,finalMode,execution));
+   for(String field:List.of("username","password"))reject("CONNECT replaced source "+field,()->{JSONObject changed=object(c.input),capture=object(changed.getString("entry_capture"));capture.getJSONObject("profile").getJSONObject("external").getJSONObject(AndroidExternalPolicy.protocol(e.protocol).replace("-","_")).put(field,"foreign");changed.put("entry_capture",capture.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});
+  }
   if(e.protocol.equals("socks5")){
    JSONObject captured=object(raw.getString("entry_capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("socks5");JSONObject first=null;JSONArray out=graph.getJSONArray("outbounds");for(int i=0;i<out.length();i++)if(out.getJSONObject(i).optString("tag").equals("entry-wg"))first=out.getJSONObject(i);
    check(first!=null&&first.getString("type").equals("socks")&&first.getString("version").equals("5")&&first.getString("username").equals(e.username)&&first.getString("password").equals(e.password),"SOCKS native credentials changed");
@@ -159,9 +166,9 @@ public final class ImportedRouterTest {
    if(!finalMode.equals("wg"))check(last.has("amnezia"),"host lost captured final AWG parameters");
   }
   check(selected.optString("entry_api").isEmpty()&&selected.optString("entry_token").isEmpty()&&selected.optString("entry_node_id").isEmpty(),"import acquired private pairing");
-  check(raw.getString("exit_start").equals(args.getString(5).isEmpty()?"":object(args.getString(5)).toString())&&object(raw.getString("entry_capture")).getJSONObject("profile").getString("dns_mode").equals("home"),"raw entry policy or inherent final layer changed");
+  check(raw.getString("exit_start").equals(args.getString(5).isEmpty()?"":object(args.getString(5)).toString())&&object(raw.getString("entry_capture")).getJSONObject("profile").getString("dns_mode").equals(object(args.getString(1)).getJSONObject("profile").getString("dns_mode")),"raw entry policy or inherent final layer changed");
   JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
-  check(dns.getString("server").equals("192.168.50.133")&&dns.getString("detour").equals("proxy"),"Home AdGuard final policy lost");
+  check(dns.getString("server").equals(List.of("http","https").contains(e.protocol)?profile(b).getString("dns_host"):"192.168.50.133")&&dns.getString("detour").equals("proxy"),"exact selected final DNS policy lost");
   try{RouterMultihop exact=AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input);check(exact.sourceSHA256().equals(c.source),"reconstruction source changed");exact.close();}finally{check(RouterMultihop.open==0,"pure compilation leaked");}
   AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+finalMode,c.metadata);
   reject("changed final session label",()->AndroidImportedRouterPath.requireSessionMode("multihop-imported-"+(finalMode.equals("shadowsocks")?"hysteria2":"shadowsocks"),c.metadata));
@@ -216,10 +223,10 @@ public final class ImportedRouterTest {
  public static void main(String[] args)throws Exception{
   Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   try(var rows=Files.list(fixtures)){all=rows.filter(p->p.toString().endsWith(".json")).sorted().toList();}
-  check(all.size()==235,"the complete proxy/packet independent entry/final layer matrix is incomplete");
-  String phase=args[3];boolean packet=phase.startsWith("packet-");boolean socks=phase.startsWith("socks5--final-");
-  check(List.of("socks5--final-shadowsocks","socks5--final-hysteria2","socks5--final-wg","socks5--final-awg2-fast","socks5--final-awg2-strong","shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
-  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return socks?(name.equals(phase+".json")||name.startsWith(phase+"--")):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(socks?9:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
+  check(all.size()==247,"the complete proxy/packet independent entry/final layer matrix is incomplete");
+  String phase=args[3];boolean connect=phase.startsWith("connect--");boolean packet=phase.startsWith("packet-");boolean socks=phase.startsWith("socks5--final-");
+  check(List.of("connect--http-connect","connect--https-connect","socks5--final-shadowsocks","socks5--final-hysteria2","socks5--final-wg","socks5--final-awg2-fast","socks5--final-awg2-strong","shadowsocks","hysteria2","packet-wireguard--final-shadowsocks","packet-wireguard--final-hysteria2","packet-amneziawg--final-shadowsocks","packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong","wg","awg2-fast","awg2-strong").contains(phase),"unknown original matrix phase");
+  List<Path> selected=all.stream().filter(p->{String name=p.getFileName().toString();return connect?name.startsWith(phase+"--"):socks?(name.equals(phase+".json")||name.startsWith(phase+"--")):packet?name.startsWith(phase+"--"):phase.equals("shadowsocks")?!name.startsWith("connect--")&&!name.startsWith("socks5--")&&!name.startsWith("packet-")&&!name.startsWith("final-"):name.startsWith("final-"+phase+"--");}).toList();check(selected.size()==(connect?6:socks?9:packet?9:20),"incomplete entry/final phase");for(Path p:selected)one(root,p);
   System.out.println("Android imported-entry original sources: "+checks+" checks; "+phase+", "+selected.size()+" original independent layer graphs");
  }
 }'''
@@ -237,7 +244,7 @@ def main():
         fixtures = temp / "fixtures"
         fixtures.mkdir()
         env = dict(os.environ, ROUTERVPN_IMPORTED_ENTRY_FIXTURES=str(fixtures))
-        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(SOCKS(PairedFinalGraphs|PairedFinalLayers|PacketFinalLayers|EntryLayers|PacketFinalGraphs)|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
+        subprocess.run(["go", "test", "./internal/mobilemultihop", "-run", "^TestImportedEntry(CONNECTGraphs|SOCKS(PairedFinalGraphs|PairedFinalLayers|PacketFinalLayers|EntryLayers|PacketFinalGraphs)|PairedFinal(CompleteLayers|PolicyAndCipherOwnership)|HysteriaPairedFinalCompleteLayers|HysteriaFinalCompleteGraphs|PacketCompleteGraphs|PacketFinalCompleteGraphs|NestedPacketCompleteGraphs)$", "-count=1"], cwd=ROOT, env=env, check=True, timeout=120)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         helper = E.GO.replace('switch args[0]{', 'switch args[0]{'+GO_CASE).replace("github.com/Eabusham2/router-vpn", module)
         (temp / "main.go").write_text(helper)
@@ -262,6 +269,10 @@ def main():
         (app / "AndroidStartLayer.java").write_text("package com.eabusham.routervpn;import org.json.JSONObject;import java.util.Locale;final class AndroidStartLayer{"+layer_constants+layer_methods+"}")
         boundaries=E.BOUNDARIES.replace(block(E.BOUNDARIES,"final class AndroidStartLayer"),"")
         (app / "Boundaries.java").write_text("package com.eabusham.routervpn;\n"+boundaries)
+        runtime = (JAVA / "AndroidMultihopRuntime.java").read_text()
+        if "String firstMode=importedEntryMode(AndroidImportedRouterPath.entry(context,first));" not in runtime:
+            raise AssertionError("Runtime dropped original-source canonical receipt identity")
+        (app / "AndroidMultihopRuntime.java").write_text("package com.eabusham.routervpn;final class AndroidMultihopRuntime{"+block(runtime,"    static String importedEntryMode(")+"}")
         controller = (JAVA / "AndroidMultihopController.java").read_text()
         capture = "\n".join(block(controller, signature) for signature in ("    static final class Prepared {", "    static final class Source {", "    private static final class LoadedBundle {", "    static Source captureSource(", "    private static String sourceDigest(", "    private static byte[] readBundleBytes("))
         (app / "AndroidMultihopController.java").write_text("package com.eabusham.routervpn;import java.io.*;import java.nio.charset.StandardCharsets;import org.json.*;final class AndroidMultihopController{private static final int MAX_BUNDLE=32*1024*1024;"+capture+"}")
@@ -273,7 +284,7 @@ def main():
         private.mkdir()
         command=["java", "-cp", os.pathsep.join((str(classes), str(jar))), "com.eabusham.routervpn.ImportedRouterTest", str(temp / "compiler"), str(private), str(fixtures)]
         # Preserve the original finite bound for each complete final-mode family.
-        for final_mode in ("socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
+        for final_mode in ("connect--http-connect", "connect--https-connect", "socks5--final-shadowsocks", "socks5--final-hysteria2", "socks5--final-wg", "socks5--final-awg2-fast", "socks5--final-awg2-strong", "shadowsocks", "hysteria2", "packet-wireguard--final-shadowsocks", "packet-wireguard--final-hysteria2", "packet-amneziawg--final-shadowsocks", "packet-amneziawg--final-hysteria2","packet-wireguard--final-wg","packet-wireguard--final-awg2-fast","packet-wireguard--final-awg2-strong","packet-amneziawg--final-wg","packet-amneziawg--final-awg2-fast","packet-amneziawg--final-awg2-strong", "wg", "awg2-fast", "awg2-strong"):
             subprocess.run(command+[final_mode], check=True, timeout=180)
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()

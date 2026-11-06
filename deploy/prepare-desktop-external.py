@@ -113,6 +113,7 @@ BOX_TEMPLATES = {
 PEER_TEMPLATES = {
     'node_external_amnezia_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go',
     'node_imported_router_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go',
+    'node_imported_connect_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_connect_entry_test.go',
     'node_imported_socks_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_entry_test.go',
     'node_imported_socks_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_packet_test.go',
     'node_imported_hysteria_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go',

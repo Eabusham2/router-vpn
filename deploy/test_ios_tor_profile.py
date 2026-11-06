@@ -703,6 +703,49 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    reject("two fixed sizes for one TUN"){_ = try ProviderPreparation().prepare(provider:provider,selectedProfile:mtu,strict:true)}
   }
  }
+ @MainActor static func importedCONNECTGraphs()throws {
+  for kind in ["http-connect","https-connect"] {for method in ["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"] {for dnsMode in ["home","custom"] {
+   let key=Data(repeating:115,count:method=="2022-blake3-aes-128-gcm" ? 16:32).base64EncodedString()
+   var transport:[String:Any]=["host":"203.0.113.20","port":443,"username":" exact CONNECT user ","password":" exact CONNECT password "]
+   if kind=="https-connect" {transport["tls_server_name"]="proxy.example.com"}
+   let imported:[String:Any]=["protocol":kind,"expected_public_ip":"203.0.113.88",kind.replacingOccurrences(of:"-",with:"_"):transport]
+   let entry:[String:Any]=["id":"imported-entry","node_kind":"external","start_layer":"off","dns_mode":"home","mtu_policy":"auto","external":imported]
+   let dnsHost=dnsMode=="custom" ? "203.0.113.53" : kind=="https-connect" ? "fd77:77::53":"192.168.50.133"
+   let final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact-paired-token","socks_host":"10.77.0.1","endpoint":"192.0.2.44","start_layer":"off","dns_mode":dnsMode,"dns_protocol":"tcp","dns_host":dnsHost,"dns_port":5353,"adguard_ipv4":"192.168.50.133","adguard_ipv6":"fd77:77::53","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":kind,"multihop_exit_id":"paired-final","multihop_exit_mode":"shadowsocks","multihop_execution":"local"]
+   let base:[String:Any]=["inbounds":[["type":"tun","tag":"tun-in","auto_route":true,"strict_route":true,"mtu":1280]],"outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":method,"password":key],["type":"direct","tag":"direct"]],"route":["auto_detect_interface":true,"final":"proxy","rules":[["protocol":"dns","action":"hijack-dns"]]],"dns":["servers":[["type":"udp","tag":"home-dns","server":"10.77.0.1","detour":"proxy"]],"final":"home-dns"]]
+   let maps=["shadowsocks":["sing-box.json":try json(base).base64EncodedString()]]
+   try IOSImportedEntryMultihop.validate(entry:entry,final:final)
+   let raw=try RouterVPNExternalExitBuilder.importedRouterSource(profile:entry),last=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:maps)
+   let args=["config":raw.config,"capture":raw.capture,"mode":last.mode,"files":last.files,"start":last.start,"profile":try text(final)]
+   let encoded=try bridge(["Op":"imported-router","Config":try text(args)])
+   let graph=try object(Data(encoded.utf8)),outs=graph["outbounds"] as! [[String:Any]],dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+   let first=outs.first{$0["tag"] as? String=="entry-wg"}!,end=outs.first{$0["tag"] as? String=="routervpn-execution-local"}!
+   try check("CONNECT retains exact independent credentials",first["type"] as? String=="http" && first["username"] as? String==transport["username"] as? String && first["password"] as? String==transport["password"] as? String && first["detour"]==nil && end["method"] as? String==method && end["password"] as? String==key && end["network"] as? String=="tcp" && end["detour"] as? String=="entry-wg")
+   try check("CONNECT retains exact selected TCP DNS",dns.count==1 && dns[0]["type"] as? String=="tcp" && dns[0]["server"] as? String==dnsHost && dns[0]["server_port"] as? Int==5353 && dns[0]["detour"] as? String=="proxy")
+   if kind=="https-connect" {let tls=first["tls"] as! [String:Any];try check("CONNECT exact TLS source",tls["enabled"] as? Bool==true && tls["server_name"] as? String=="proxy.example.com" && tls["insecure"]==nil)}
+   var profileJSON=final;profileJSON["name"]="Captured final";profileJSON["socks_host"]="10.77.0.1";profileJSON["socks_port"]=0;profileJSON["socks_username"]="";profileJSON["socks_password"]=""
+   var selected=ClientBundle.empty;selected.routerProfiles=[try JSONDecoder().decode(RouterProfile.self,from:json(profileJSON))];selected.selectedRouterID="paired-final";selected.profiles=maps
+   let selection=try IOSRuntimeSelector.selectMultihop(bundle:selected,rawProfileID:nil)
+   try check("CONNECT public selector retains exact Local captured path",selection.engine == .multihop && selection.rawProfileID=="shadowsocks" && selection.multihopEntryMode==kind)
+   for fault in ["udp-dns","entry-layer","final-layer","server","foreign-home"] {
+    var changed=args,other=final,source=entry
+    if fault=="udp-dns" {other["dns_protocol"]="udp"}
+    else if fault=="entry-layer" {source["start_layer"]="aes-256-gcm"}
+    else if fault=="final-layer" {other["start_layer"]="aes-256-gcm"}
+    else if fault=="server" {other["multihop_execution"]="server"}
+    else {other["dns_mode"]="home";other["dns_host"]="203.0.113.99"}
+    reject("CONNECT refuses unproven source "+fault){
+     try IOSImportedEntryMultihop.validate(entry:source,final:other)
+     let capture=try RouterVPNExternalExitBuilder.importedRouterSource(profile:source)
+     changed["config"]=capture.config;changed["capture"]=capture.capture;changed["profile"]=try text(other)
+     _ = try bridge(["Op":"imported-router","Config":text(changed)])
+    }
+   }
+   if let directory=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_GRAPHS"] {
+    try Data(encoded.utf8).write(to:URL(fileURLWithPath:directory).appendingPathComponent("connect--"+kind+"--"+method+"--"+dnsMode+".json"))
+   }
+  }}}
+ }
  @MainActor static func importedRouterGraphs()throws {
   let key=Data(repeating:105,count:32).base64EncodedString()
   let finalTransport:[String:Any]=["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":key]
@@ -947,8 +990,9 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
+  try importedCONNECTGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (235 graphs: complete independent SOCKS5 layers with original and compatible case names; \(checks) shipping Swift/actual Go compiler checks; no native network proof)")
+   print("Apple imported Router graph: PASS (247 graphs: complete independent SOCKS5 layers with original and compatible case names; \(checks) shipping Swift/actual Go compiler checks; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

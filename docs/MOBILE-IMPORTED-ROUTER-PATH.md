@@ -14,14 +14,16 @@ implement this Local direction for the following captured sources:
 | WireGuard or AmneziaWG | Shadowsocks or Hysteria2 | 36 |
 | WireGuard or AmneziaWG | WireGuard, AmneziaWG Fast or AmneziaWG Strong | 54 |
 | SOCKS5 | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 45 |
+| HTTP CONNECT or HTTPS CONNECT | Shadowsocks 2022, both Start Layers Off, captured Home/custom literal TCP DNS | 12 |
 
-The 235 captured cases include the existing 190 proxy/packet-entry cases and
-45 SOCKS5 cases. Each SOCKS5 final supports all nine independent entry/final
+The 247 captured cases retain the existing 235 proxy/packet/SOCKS5 cases and
+add twelve CONNECT cases: two entry protocols, three SS2022 final ciphers and
+two selected literal TCP DNS policies. Each SOCKS5 final supports all nine independent entry/final
 Start Layer pairs. The earlier five pairs with both layers Off, four
 SOCKS5-to-SS/Hysteria pairs with only a final layer, six SOCKS5-to-WG/AWG
 pairs with only a final layer, and ten pairs with only an entry layer remain
-in the matrix. Twenty pairs with both layers enabled extend the published
-215-case matrix to 235. These counts describe
+in the matrix. Twenty pairs with both layers enabled extended the published
+215-case matrix to 235 before the CONNECT addition. These counts describe
 executable configurations, not completed user requirements.
 
 The later Android host correction `95f36b95` is required for the daily Connect,
@@ -40,7 +42,8 @@ constructing a native owner.
 Execution is Local, inside the application's existing Android VpnService or Apple
 PacketTunnel. A Shadowsocks entry supports `2022-blake3-aes-128-gcm`,
 `2022-blake3-aes-256-gcm`, and `2022-blake3-chacha20-poly1305`. Hysteria2 preserves
-its original server, port, password and verified TLS server name. Entry and final
+its original server, port, password and verified TLS server name. For the
+non-CONNECT entries, entry and final
 retain their separate Off, AES-256-GCM, or AES-256-GCM + XOR whitening choices.
 All nine layer combinations for each entry transport are constructed from the
 original sources. Two alternate SS2022 ciphers are retained for each final family.
@@ -71,6 +74,17 @@ Start Layer requires the paired final's own original assets. A missing layer
 provision, a provision belonging to the other node, or a changed credential
 prevents construction. No second system VPN is started.
 
+A CONNECT entry retains its original proxy address, port and credentials;
+HTTPS also retains the original TLS name and trust. The paired SS2022 final
+keeps its separate credentials and all three supported ciphers. This initial
+composition is explicitly TCP-only, with both Start Layers Off and no UoT
+service authority. It accepts the final's selected Home/private AdGuard or
+custom literal TCP resolver with its exact address family, address and port.
+The default Home UDP policy is refused without changing the saved policy.
+Application DNS is hijacked into that selected final-owned TCP path before
+other UDP traffic is rejected. Host capability labels describe this bound;
+unrelated imported directions keep their own capabilities.
+
 Other imported entry protocols, other paired final transport families, and
 Server/Compare for this new direction remain requirements to implement and
 verify. Existing supported directions retain their own admission and proof
@@ -79,38 +93,40 @@ the complete product delivered.
 
 ## Open graph requirements
 
-At published `a08d7d6f`, the original Router/imported choice for each hop is
-still broader than this implemented Local matrix. These are current source
+The original Router/imported choice for each hop is still broader than this
+implemented Local matrix. These are current source
 limitations, not merely missing credentials, live access or physical tests.
 
 | Direction or capability | Current source boundary | Work still required |
 |---|---|---|
-| Imported HTTP/HTTPS CONNECT → paired Shadowsocks | `NewImportedEntry` excludes both protocols; Android `AndroidImportedRouterPath` and Apple `IOSImportedEntryMultihop` also reject them. Standalone `ExternalPolicy` already validates these imports. | Compose the captured HTTP outbound under the existing owned controller, with exact CONNECT target/authentication and HTTPS trust. Define and enforce TCP-only application capability and final-owned DNS before admission; do not only extend an allowlist. |
+| Imported HTTP/HTTPS CONNECT → paired Shadowsocks with datagrams or Start Layers | The implemented Local SS2022 path requires both layers Off, exact selected literal TCP DNS and no `udp_over_tcp` field in the original final. Default Home UDP, other DNS transports and layered CONNECT remain unimplemented. | Capture authenticated service authority for any compatible datagram transport, preserve the exact selected DNS policy and independently provisioned layers, and prove the real encrypted graph before extending admission. |
 | Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | The same admission excludes these paths. HTTP CONNECT is TCP-only; these final transports require datagrams. Existing external composition correctly rejects a TCP-only predecessor for a UDP-required exit. | An implemented compatible transport design is required. No UDP association, UDP-over-TCP capability or supported final may be invented from successful TCP CONNECT. |
-| Other imported entry protocols and paired final families | The imported constructor and both mobile host adapters admit only the five entry labels and five paired final modes in this document. The ordinary external protocol catalogue additionally supports HTTP/HTTPS CONNECT and OpenVPN; Trojan/VLESS are not in that catalogue. | Implement and validate the particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path before offering it. New protocols need their own import/admission work; existing standalone support is not proof of this direction. |
+| Other imported entry protocols and paired final families | The imported constructor and both mobile host adapters admit the seven entry labels and five paired final modes in this document, subject to each entry's specific bounds. The ordinary external protocol catalogue additionally supports OpenVPN; Trojan/VLESS are not in that catalogue. | Implement and validate the particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path before offering it. New protocols need their own import/admission work; existing standalone support is not proof of this direction. |
 | Imported entry → paired final with Server or Compare | The constructor requires captured Local execution; both host adapters enforce Local and restoration deliberately does not invent a Compare winner. | Design actual execution and proof authority, measurement/comparison and restore semantics for this direction. An ordinary imported entry has no paired Router API/token; a public-address proof cannot grant server-side authority. |
 
-CONNECT→SS is a bounded design option; it is not an implemented capability. Its final-selected Home/custom DNS must retain the
-original transport, address, port, TLS name and HTTP path. UDP or DoH3 selection
+Any extension of CONNECT→SS must retain the final-selected Home/custom DNS
+transport, address, port, TLS name and HTTP path. UDP or DoH3 selection
 cannot silently become TCP/DoH or a public resolver just to make the graph work.
 The existing `externalUDP`, `externalExitRequiresUDP` and selected-DNS validator
 already express those transport limits for ordinary external composition; the
-imported-entry compiler must carry them through its paired-final ownership and
-host capability presentation if this direction is implemented.
+imported-entry compiler carries those limits through paired-final ownership and
+host capability presentation for the bounded TCP path.
 
-Required executable evidence would include actual CONNECT→encrypted-SS traffic
-and final-owned TCP-capable DNS, exact auth/target/HTTPS trust rejection,
-independent layer provisioning, public-entry/private-final proof, no UDP escape,
-unsupported-final rejection, cancellation and joined restoration. The existing
+The new `node_imported_connect_entry_test.go.tmpl` executes CONNECT→encrypted-SS
+traffic, final-owned TCP DNS, exact auth/target/HTTPS trust rejection,
+public-entry/private-final proof, UDP refusal, unsupported-final rejection,
+cancellation and retained restoration. Independent layer provisioning and
+datagram support require further implementation and evidence. The existing
 `node_external_ss_connect_test.go.tmpl` exercises **SS→CONNECT**, the reverse
 direction, and cannot certify that work. Actual Android/Swift capture and stale
 source controls, pinned native parsing, and physical acceptance remain separate
-stages. No follow-up graph implementation is included in `a08d7d6f`.
+stages.
 
 ## Selection and saved state
 
 Android's multihop editor lists eligible imported entries alongside Router
-entries. Choosing an imported SS2022, Hysteria2, WireGuard, AmneziaWG or SOCKS5 entry allows
+entries. Choosing an imported SS2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5,
+HTTP CONNECT or HTTPS CONNECT entry allows
 selection of its paired Router final and an eligible complete transport from
 the table above. The picker
 compiles each offered choice from captured sources and retains the final-file
@@ -260,6 +276,13 @@ Neither substitutes a paired entry for an import nor reruns an unrelated
 Compare selection during restoration. Ordinary `wireguard` and `amneziawg` entry
 labels remain distinct from the paired raw-mode catalogue. Home state, startup,
 permission recreation and live usage retain those original protocol identities.
+Android's stored `http`/`https` labels are canonicalized through its existing
+external-policy mapping into the captured `http-connect`/`https-connect`
+identities. Saved profiles, startup and Home retain the same canonical identity;
+changing it cannot adopt an older proof. The CONNECT Retest witnesses use the
+actual MTU controller and retained native outbound for refusal, cancellation
+and successor retention, with the OS TUN capture/apply boundary modeled. They
+do not establish measured PMTU through a TCP-only entry.
 
 The pinned native WG/AWG stack drains an admitted packet delivery before entering
 gVisor teardown. Late writes and attaches cannot revive the retired dispatcher.
@@ -282,8 +305,8 @@ strict paired-final admission,
 public-entry/private-final/DNS proof, full Run-to-Healthy measurement ownership,
 retirement, and malformed or forged source rejection.
 
-`deploy/test_mobile_imported_entry.py` consumes the exact 235 shared source
-fixtures and the 235 emitted by the actual Android helper. The pinned
+`deploy/test_mobile_imported_entry.py` consumes the exact 247 shared source
+fixtures and the 247 emitted by the actual Android helper. The pinned
 libbox constructor must reproduce their original config and source digest.
 Its actual native parser, MTU profile reader, and MTU planner must accept them.
 The required fixture gate rejects missing, skipped, duplicated, foreign, or
@@ -292,9 +315,9 @@ across the implemented entry and final families, including the complete SOCKS5
 layer matrix and Hysteria2 finals behind their actual AES transport. Every
 group and negative case in the runner's explicit inventory must execute and
 pass once. The expanded groups run separately under the unchanged finite
-native-test deadlines. All 235 layer/cipher graphs separately require the
+native-test deadlines. All 247 layer/cipher graphs separately require the
 native parser and typed MTU planner; the shared and Android source matrices
-require 472 exact native verdicts in total. This does not claim physical mobile
+require 496 exact native verdicts in total. This does not claim physical mobile
 TUN traffic for every layer combination. Removing the final outer-edge ownership or bypassing actual
 native TLS verification is rejected by the corresponding causal controls.
 Dropping the captured packet endpoint or bypassing the final detour also fails
@@ -314,12 +337,33 @@ covers every shipping Java source; the actual SDK/AAR APK build remains separate
 required.
 
 `deploy/test_ios_imported_router_pinned.py` is mandatory in Apple smoke and
-release preparation. It consumes the actual Swift-produced 235-graph matrix
+release preparation. It consumes the actual Swift-produced 247-graph matrix
 and requires native parser verdicts for all of it. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
 The local Swift 6.4.2 harness executes actual selection, save and graph-building
 source. This is separate from the required Xcode app/PacketTunnel build, native
 Apple networking and physical-device acceptance.
+
+The local CONNECT evidence has explicit source cutoffs. The complete encrypted
+peer run passed 976 mandatory verdicts (the previous 925 plus 51 new ones) on
+the `bc6cffef`-based snapshot, before the additional explicit UoT-field refusal
+and later Compare-progress merge. The Swift producer passed 5,568 checks and
+the pinned Apple parser passed 248 verdicts before those two changes. The
+Android/shared 496-verdict parser run used the `d847152e`-based source, including
+the UoT refusal and corrected runtime capability. After the progress merge,
+the focused shared race run passed 457 imported-entry verdicts and 12 Compare
+progress verdicts. All twelve complete CONNECT source/capture/config arrays
+remained byte-identical to the full encrypted run. Existing HY fixtures
+regenerate certificates, so the complete 247-source arrays are not claimed
+byte-identical. Final actual host fixtures additionally passed 2,481 Swift
+selection checks, 110 CONNECT profile checks, and the Android runtime/Home
+checks with the original and canonical-admission causal controls retained.
+After preserving the concurrent `9e0341f0` baseline, the actual Android startup
+deadline fixture passed 3,785 checks across 1,089 cases and all three premature
+deadline/dependency mutations, including delayed native readiness and ordinary
+timeout teardown.
+These results do not claim that the entire encrypted suite was rerun on the
+final published commit; exact-SHA integrated CI remains a separate gate.
 
 Exact-SHA Android/iOS builds, release publication, physical-device routing,
 permission and network transitions, leaks, off-LAN interoperability, visual

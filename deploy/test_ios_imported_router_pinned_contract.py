@@ -51,10 +51,13 @@ class ImportedGate(unittest.TestCase):
         self.assertFalse(socks & socks_layers)
         self.assertFalse(socks_layers & (original | packet | packet_final | nested))
         self.assertFalse(socks & (original | packet | packet_final | nested))
-        self.assertEqual(G.NAMES, original | packet | packet_final | nested | socks | socks_layers)
+        connect={"connect--"+p+"--"+m+"--"+d+".json" for p in ("http-connect","https-connect") for m in ("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305") for d in ("home","custom")}
+        self.assertEqual(len(connect),12)
+        self.assertFalse(connect & (original | packet | packet_final | nested | socks | socks_layers))
+        self.assertEqual(G.NAMES, original | packet | packet_final | nested | socks | socks_layers | connect)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 237)
+        self.assertEqual(len(self.events()), 249)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

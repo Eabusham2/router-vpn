@@ -223,13 +223,18 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         boolean remember=!AndroidMTUMeasurementGate.held();
         connectCaptured(entry,exit,exitMode,execution,execution,entryMode,null,null,null,null,remember,callback);
     }
+    // Stored ordinary-node aliases must match the native captured receipt.
+    static String importedEntryMode(AndroidStandardExitStore.Entry entry) {
+        return AndroidExternalPolicy.protocol(entry.protocol);
+    }
+
     synchronized void connectImported(AndroidStandardExitStore.Entry entry, AndroidNodeStore.Node exit, String exitMode,
                                       String execution, Callback callback) {
         try {
             if (entry==null||exit==null||!"local".equals(execution)||!AndroidImportedRouterPath.supports(entry.protocol,exitMode))
                 throw new IllegalArgumentException("This imported entry requires a supported paired final transport and Local execution.");
             AndroidMultihopController.Source first=AndroidImportedRouterPath.captureSource(context,entry);
-            String firstMode=AndroidImportedRouterPath.entry(context,first).protocol;
+            String firstMode=importedEntryMode(AndroidImportedRouterPath.entry(context,first));
             byte[] original=AndroidPrivateFileStore.read(exit.file,AndroidNodeStore.MAX_BUNDLE);
             AndroidMultihopController.Source last=AndroidMultihopController.captureSource(exit.file,original);
             connectCaptured(null,exit,exitMode,execution,execution,firstMode,first,last,"{}",null,

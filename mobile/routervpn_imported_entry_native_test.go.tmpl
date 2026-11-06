@@ -24,7 +24,7 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 		t.Skip("exact generated compiler sources supplied by native mobile gate")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 235 {
+	if err != nil || len(entries) != 247 {
 		t.Fatal("incomplete original layer matrix", err)
 	}
 	expected := map[string]bool{"cipher-aes128.json": true, "cipher-chacha20.json": true}
@@ -65,6 +65,14 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 					}
 					expected["socks5--final-"+label+".json"] = true
 				}
+			}
+		}
+	}
+
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
+			for _, mode := range []string{"home", "custom"} {
+				expected["connect--"+protocol+"--"+method+"--"+mode+".json"] = true
 			}
 		}
 	}
@@ -132,6 +140,15 @@ func routerImportedSourceGraphs(t *testing.T, environment string) {
 						layerName = "off--" + layerName
 					}
 				}
+			}
+			if strings.HasPrefix(name, "connect--") {
+				parts := strings.Split(strings.TrimSuffix(name, ".json"), "--")
+				if len(parts) != 4 || metadata["transport_capability"] != "tcp-only" {
+					t.Fatal("CONNECT capability changed")
+				}
+				expectedMode = parts[1]
+				expectedFinal = "shadowsocks"
+				layerName = "off--off.json"
 			}
 			if metadata["exit_mode"] != expectedFinal {
 				t.Fatal("captured final transport mode changed")
@@ -224,6 +241,14 @@ func TestRouterImportedEntryAppleNativeGraphs(t *testing.T) {
 					}
 					expected["socks5--final-"+label+".json"] = true
 				}
+			}
+		}
+	}
+
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
+			for _, mode := range []string{"home", "custom"} {
+				expected["connect--"+protocol+"--"+method+"--"+mode+".json"] = true
 			}
 		}
 	}

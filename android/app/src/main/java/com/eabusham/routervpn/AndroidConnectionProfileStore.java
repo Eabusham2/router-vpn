@@ -203,7 +203,7 @@ final class AndroidConnectionProfileStore {
         AndroidNodeStore.Node last=findNode(finalId);
         AndroidStandardExitStore.Entry first=AndroidStandardExitStore.copy(exits.get(p.getString(MULTI_ENTRY,"")));
         String mode=p.getString(MULTI_MODE,""),execution=normalizeExecution(p.getString("multihop_execution","local"));
-        if(last==null||!finalId.equals(p.getString(SELECTED_ID,""))||!finalId.equals(nodes.activeId())||!first.protocol.equals(p.getString("multihop_entry_mode","")))
+        if(last==null||!finalId.equals(p.getString(SELECTED_ID,""))||!finalId.equals(nodes.activeId())||!AndroidExternalPolicy.protocol(first.protocol).equals(p.getString("multihop_entry_mode","")))
             throw new IllegalStateException("The imported path lost its selected final node or entry mode.");
         AndroidImportedRouterPath.compile(first,AndroidImportedRouterPath.finalBundle(last.file),mode,execution);
         return new ImportedRouterSelection(first,last,mode,execution);
@@ -231,7 +231,7 @@ final class AndroidConnectionProfileStore {
         Map<String,Object> next=new LinkedHashMap<>(previous);
         next.put(SELECTED_KIND,"router-vpn");next.put(SELECTED_ID,last.id);next.put(MODE_KEY,mode);next.put(MULTI_ON,true);
         next.put(MULTI_ENTRY,original.id);next.put(MULTI_EXIT,last.id);next.put(MULTI_MODE,mode);next.put(MULTI_ENTRY_KIND,"external");
-        next.put("multihop_execution","local");next.put("multihop_entry_mode",original.protocol);
+        next.put("multihop_execution","local");next.put("multihop_entry_mode",AndroidExternalPolicy.protocol(original.protocol));
         requireExternalUnchanged(original);
         if(!java.util.Arrays.equals(originalFinal,readLimited(last.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("The paired final node changed before selection.");
         PreferenceUpdate preferenceUpdate=new PreferenceUpdate(previous,next);boolean attempted=false;

@@ -195,8 +195,8 @@ final class AndroidExternalPolicy {
 
     /** Original ordinary entry transport; its DNS policy never replaces the final node's. */
     static Captured captureImportedEntry(AndroidStandardExitStore.Entry entry) throws Exception {
-        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5").contains(entry.protocol)) {
-            throw new IllegalArgumentException("Choose an imported Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG or SOCKS5 entry.");
+        if (entry == null || !Arrays.asList("shadowsocks", "hysteria2", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect").contains(protocol(entry.protocol))) {
+            throw new IllegalArgumentException("Choose an imported Shadowsocks 2022, Hysteria2, WireGuard, AmneziaWG, SOCKS5 or TCP-only CONNECT entry.");
         }
         return capture(AndroidStandardExitStore.copy(entry), null, "external", null, "local");
     }
