@@ -1822,3 +1822,38 @@ transferred to this reconstruction. Its interrupted Windows crosscompile has no
 known result. Publication submits the reviewed test repair to mandatory exact-SHA
 CI; Python execution, Windows AMD64/ARM64 compilation, native cases and causal
 controls remain required evidence.
+
+
+## Windows controller fixture: match native heartbeat publication cadence
+
+Exact `e4207fb8a4d1cae38d9e420d9e2c2230ec8e1359`
+[authoritative AMD64 ALL job 128099424238](https://github.com/Eabusham2/router-vpn/actions/runs/42277994251/job/128099424238)
+passed its positive suite, including all four temporary-restoration leaves.
+Its `all-temporary-failure-release` causal run then timed out at 60 seconds
+before the initial connection completed. Root read the actual failed log:
+the controller waited at its startup timer while the modeled child was in
+Windows `FlushFileBuffers`, called by the real private atomic writer for
+`node-mtu-status.json`. This is not the intended causal failure and is not a
+successful negative-control receipt. The stack alone does not establish how
+long that particular flush blocked or prove a single cause of the timeout.
+
+Source comparison found a concrete fixture discrepancy. The native writer in
+`mobile/desktop/mtu_node.go.tmpl` polls Stop every 25 ms but publishes periodic
+heartbeats every 250 ms, with immediate publication for consumed commands.
+The controller fixture polled and durably published every 25 ms.
+
+Reviewed one-file correction `f3e826ca23926f7280c33cc5de589c0842a90831` gives
+the modeled child's periodic heartbeat the native 250 ms cadence. The final
+source also follows the reviewer's concurrency correction: sample the new
+timestamp under the existing child mutex, preserving the prior ordering with
+callbacks that update the live record. The initial ready/live records and
+explicit live-field callbacks still publish immediately. Stop and malformed
+control-file checks still run every 25 ms, before the periodic gate. Real
+atomic file writes, workspace identity, process ownership, readiness, restoration
+and the consumer's two-second freshness checks remain unchanged.
+
+Independent source review is clear. No production source, deadline, failure
+assertion or causal-control case changes. The executor remains unavailable;
+no final-file execution is claimed. The same Windows positive suite and all
+eight intended causal controls must pass on the resulting source before this
+fixture change can be credited with resolving the observed native CI failure.

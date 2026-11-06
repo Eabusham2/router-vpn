@@ -290,6 +290,9 @@ func (child *desktopNodeConnectionChild) serve() {
 	defer close(child.exited)
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
+	// start already published the initial live record. Match the native
+	// 250 ms heartbeat cadence while retaining 25 ms Stop observation.
+	heartbeat := time.Now()
 	for {
 		select {
 		case <-child.cancel:
@@ -313,8 +316,12 @@ func (child *desktopNodeConnectionChild) serve() {
 		if !errors.Is(err, os.ErrNotExist) {
 			return
 		}
+		if time.Since(heartbeat) < 250*time.Millisecond {
+			continue
+		}
 		child.mu.Lock()
-		child.live.Heartbeat = time.Now().UnixMilli()
+		heartbeat = time.Now()
+		child.live.Heartbeat = heartbeat.UnixMilli()
 		live := child.live
 		child.mu.Unlock()
 		if child.publish("node-mtu-status.json", live) != nil {
