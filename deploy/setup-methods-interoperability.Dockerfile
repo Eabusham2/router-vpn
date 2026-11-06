@@ -20,8 +20,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=production-transport /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY deploy/test_aux_interoperability.py /src/deploy/
-COPY server/scripts/generate-transports.sh server/scripts/generate-setup-assets.py server/scripts/normalize-setup-imports.py server/scripts/import_payloads.py /src/server/scripts/
+COPY server/scripts/ss_service_capability.py server/scripts/generate-transports.sh server/scripts/generate-setup-assets.py server/scripts/normalize-setup-imports.py server/scripts/import_payloads.py /src/server/scripts/
 COPY server/scripts/atomic-private-write.py server/scripts/atomic-private-batch.py server/scripts/verified-regular-read.py server/scripts/preserve-generated-state.py /src/server/scripts/
+
+COPY server/portainer-current.yaml /src/server/portainer-current.yaml
 
 FROM method-base AS socks-method-import
 RUN apt-get update \

@@ -83,9 +83,9 @@ python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/hysteria2/cert.pem" < "$
 
 GEN_TMP=$(mktemp -d "$BASE/config/transports/.generate.XXXXXX")
 trap 'rm -rf "${TLS_TMP:-}" "${GEN_TMP:-}" "${CHECK_CONFIG:-}"' EXIT
-python3 - "$GEN_TMP" "$ENDPOINT" "$ADGUARD4" "$HY2_PORT" "$SS_PORT" "$SS_KEY" "$HY2_PASSWORD" "$CERT_NAME" <<'PY'
+python3 - "$GEN_TMP" "$ENDPOINT" "$ADGUARD4" "$HY2_PORT" "$SS_PORT" "$SS_KEY" "$HY2_PASSWORD" "$CERT_NAME" "$SING_BOX_IMAGE" <<'PY'
 import json,pathlib,sys
-(tmp,endpoint,dns,hp,sp,sskey,hy2pass,tls_name)=sys.argv[1:]
+(tmp,endpoint,dns,hp,sp,sskey,hy2pass,tls_name,image)=sys.argv[1:]
 tmp=pathlib.Path(tmp); hp,sp=map(int,(hp,sp))
 server={
  "log":{"level":"warn"},
@@ -124,11 +124,17 @@ values={
 }
 for name,value in values.items():
  (tmp/name).write_text(json.dumps(value,indent=2)+"\n",encoding="utf-8")
+import runpy
+capability=runpy.run_path("/src/server/scripts/ss_service_capability.py")
+configured_image=capability["configured_service_image"](pathlib.Path("/src/server/portainer-current.yaml").read_bytes())
+claim=capability["declaration"]((tmp/"server.json").read_bytes(),(tmp/"shadowsocks.json").read_bytes(),image,configured_image)
+(tmp/"ss-service.json").write_bytes(capability["encoded"](claim))
 PY
 python3 "$PRIVATE_BATCH" \
   "$BASE/config/transports/server.json=$GEN_TMP/server.json" \
   "$BASE/client-bundle/generated/hysteria2/sing-box.json=$GEN_TMP/hysteria2.json" \
   "$BASE/client-bundle/generated/shadowsocks/sing-box.json=$GEN_TMP/shadowsocks.json" \
+  "$BASE/config/transports/ss-service.json=$GEN_TMP/ss-service.json" \
   "$BASE/config/transports/generated-secrets.json=$GEN_TMP/generated-secrets.json"
 rm -rf "$GEN_TMP"
 GEN_TMP=

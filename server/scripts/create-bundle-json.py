@@ -136,6 +136,27 @@ else:
     logical_modes = read_json(logical_path, private=True, expected=list)
 profiles = read_generated_profiles(base / "client-bundle/generated")
 
+# Issue configured packet capability only from the same private server/client
+# generation. This grants no live proof; the retained client must prove UoT.
+ss_capability = runpy.run_path(str(SCRIPT_DIR / "ss_service_capability.py"))
+ss_files = profiles.get("shadowsocks", {})
+if ss_capability["ASSET"] in ss_files:
+    raise RuntimeError("generated SS source contains an unverified capability sidecar")
+try:
+    ss_body = read_verified_regular(base / "config/transports/ss-service.json", MAX_PRIVATE_JSON, private=True)
+except FileNotFoundError:
+    ss_declaration = None
+else:
+    ss_declaration = decode_json(ss_body, base / "config/transports/ss-service.json", dict)
+if ss_declaration is not None:
+    if "sing-box.json" not in ss_files:
+        raise RuntimeError("configured SS capability has no captured client source")
+    server_body = read_verified_regular(base / "config/transports/server.json", MAX_PRIVATE_JSON, private=True)
+    source_body = base64.b64decode(ss_files["sing-box.json"], validate=True)
+    ss_claim = ss_capability["capture"](ss_declaration, server_body, source_body, node_proof_id, endpoint)
+    if ss_claim is not None:
+        ss_files[ss_capability["ASSET"]] = base64.b64encode(ss_capability["encoded"](ss_claim)).decode()
+
 dns_benchmark = read_optional_private_json(base / "config" / "dns-fastest.json")
 winner = dns_benchmark.get("winner") or {}
 dns_results = dns_benchmark.get("results") or []

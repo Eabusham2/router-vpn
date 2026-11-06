@@ -287,6 +287,12 @@ bundle_test = subprocess.run(
 )
 assert bundle_test.returncode == 0, "private bundle generation transaction test failed: " + (bundle_test.stdout + bundle_test.stderr)[-4000:]
 
+capability_test = subprocess.run(
+    [sys.executable, str(ROOT / "server/scripts/test_ss_service_capability.py")],
+    cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+)
+assert capability_test.returncode == 0, "private SS service capability capture failed: " + (capability_test.stdout + capability_test.stderr)[-4000:]
+
 # Pairing/private bundles may contain the node API credential needed by the client,
 # but never the Setup Center/admin bearer secret used for management mutations.
 for forbidden in ("setup_token", "setup-center.token", "ROUTER_VPN_ADMIN_TOKEN_FILE", "admin_token"):
