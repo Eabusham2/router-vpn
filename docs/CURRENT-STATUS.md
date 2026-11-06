@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `1cac6bf7`
+## November 6 product continuation through `9e0341f0`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`1cac6bf7beaedc795c6e0acacb41123c25ddca58`](https://github.com/Eabusham2/router-vpn/commit/1cac6bf7beaedc795c6e0acacb41123c25ddca58).
+[`9e0341f0ddd5614330e95564cbd8fa09857c7c3c`](https://github.com/Eabusham2/router-vpn/commit/9e0341f0ddd5614330e95564cbd8fa09857c7c3c).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 38 units.
+with separately attributed contributor evidence; it is not one of these 40 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -244,7 +244,9 @@ It was preserved before `35725083`; its contributor evidence is separate.
 - **Ordinary SS DNS fixture (unit 34):** `8a71c473` restores its captured TCP
   DNS selector while retaining explicitly UDP-capable Server cases. Pinned
   preparation, 689 source records and native compilation pass. Local traffic
-  is blocked at netlink enumeration; matching Windows acceptance remains open.
+  is blocked at netlink enumeration. Subsequent AMD64/ARM64 ordinary native
+  composition passes at `bc6cffef`; its OS-permit/TUN boundaries remain explicit
+  fixtures and actual WFP acceptance is separate.
 - **Owned UoT prerequisite (unit 35):** `6859097b` adds explicitly enabled
   version-2 authenticated datagrams to the existing AES/XOR TCP owner. Actual
   SS2022/UoT/whitening peers pass normal and low-memory race gates, including
@@ -268,7 +270,20 @@ It was preserved before `35725083`; its contributor evidence is separate.
 - **Darwin UoT provider fixture (unit 38):** `1cac6bf7` uses the existing owned
   UDP buffer policy, preserving payload and bounds. Normal/low-memory race checks
   pass and a setup-error causal control fails the intended unchanged assertion.
-  The corresponding macOS job has not yet established repaired acceptance.
+  Exact `1cac6bf7` run 42184535561 now passes all three macOS/Ubuntu/Apple
+  composition jobs, closing that specific native fixture failure.
+- **Android deadline fixture (unit 39):** `b25c93fb` includes the actual shared
+  capability predicate in the inherited whole-runtime timing harness. The
+  original five missing-symbol errors reproduce; 3,785 checks / 1,089 cases and
+  all three budget controls pass with the actual 21-second startup and 20-second
+  expiry unchanged. All nine remaining Android child gates and four final
+  contracts subsequently pass in frozen `9e0341f0`, with unchanged source hashes.
+  This is segmented evidence, not a full uninterrupted current-SHA runtime pass.
+- **CONNECT callback retirement (unit 40):** `9e0341f0` joins the pinned client's
+  original socket Close when cancellation races response publication. All 26
+  checksum/preparation tests pass, and a deterministic real-client control
+  rejects the original unjoined behavior. No imported CONNECT host admission
+  is enabled by this prerequisite.
 
 Concurrent `bc6cffef` Windows Local execution, `2d59d74e`/`fb465836` deeper
 private-DNS dependencies, `12409a40` invalid Compare-score cleanup and evidence
@@ -277,6 +292,10 @@ missing compiled Home DNS dependency. An independent actual Swift/Go export
 passes 68,661 checks; its 396 Local and 528 padding graphs pass that published
 consumer, with four missing/changed-hash controls and all twelve contracts.
 The redundant local fix was not republished.
+Concurrent `3800b4ee` joined private-DNS dependency groups are also preserved. Concurrent
+`9cf424f3` bounded CONNECT source and `c06e59be` protected private-DNS resolution
+are preserved with their separate contributor evidence; they are not replayed
+or included as new authored units here.
 
 At **08:09:14 UTC**, exact `71bfaba7` has nineteen workflow attempts: seven
 successful, eight queued, three in progress and one pending. Authoritative
@@ -521,8 +540,11 @@ Apple and Android Home DNS substitution defects have their separately tested
 published repairs. The independent SOCKS layer source unit is now published
 as `a08d7d6f` after the full mandatory native and host gates passed. Its earlier
 UDP NAT failure and the separate `775ac68e` repair remain in the evidence ledger.
-HTTP/HTTPS CONNECT imported entries, other paired final families, and
-Server/Compare in this direction remain concrete implementation requirements,
+The newer concurrent `9cf424f3` adds TCP-only HTTP/HTTPS CONNECT to paired
+SS2022 with both layers Off and exact Home/custom literal TCP DNS, retaining
+all 235 earlier graph cases plus twelve bounded captures. Its broader datagram,
+DNS and independent-layer requirements, OpenVPN imported entries, other paired
+final families, and Server/Compare remain concrete implementation requirements,
 not merely missing live-access evidence. See the
 [open graph boundaries](MOBILE-IMPORTED-ROUTER-PATH.md#open-graph-requirements).
 All remaining original Methods/recovery/platform/graph obligations stay open
