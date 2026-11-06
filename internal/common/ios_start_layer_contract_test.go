@@ -53,7 +53,10 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	provider := repoFile(t, "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
 	for _, required := range []string{
 		"try IOSStartLayer.validateWireGuard(profile: selectedProfile)",
-		"rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
+		"try validateCapturedSSSource(root, nodeID: expectedNodeID)",
+		`rawFiles = try rawProfileID == "shadowsocks"`,
+		"? capturedSSProfile(root, profile: selectedProfile, nodeID: expectedNodeID)",
+		": layeredProfile(root, rawProfileID: rawProfileID)",
 		"let completeChain = IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID)",
 		"let composedFiles = try completeChain ? rawFiles",
 		": IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",

@@ -9,8 +9,10 @@ original requirements. The live starting branch was
 not replayed over that history. The published units below retain normal
 `main` ancestry through
 [`75897b4d7099b500762b6402ed967d4442f2705d`](https://github.com/Eabusham2/router-vpn/commit/75897b4d7099b500762b6402ed967d4442f2705d).
-Each published remote tree was compared with the local committed tree; exact
-validation cutoffs are recorded below. The remote branch was read back before adoption. A saved patch, local commit or API
+For the local publication units, each remote tree was compared with its local
+committed tree; exact validation cutoffs are recorded below. The later fixture-only
+reconciliation during the workspace outage uses remote source review and CI,
+without a claim of unavailable local execution. The remote branch was read back before adoption. A saved patch, local commit or API
 schema was not counted as a successful push.
 
 The November 5 recovery metadata remains intact. Six frozen Apple files could
@@ -594,6 +596,156 @@ requesting 16 bytes, and the regression runner then exits successfully.
 No production transport, firewall grant, rejection witness or native timeout is
 relaxed. The full Windows phase still needs execution at the repaired source;
 the local encrypted round trip does not stand in for WFP or device acceptance.
+
+## Native follow-up and current fixture reconciliation
+
+This additive record retains the original requirements and all earlier evidence.
+The following source changes were committed, published directly to `main`
+with normal ancestry, and independently read back from the remote branch during
+this continuation. The later `25d0354f` hop-observation change and
+`b792e879` performance-fixture correction were preserved, not overwritten.
+
+| Published commit | Change | Observed verification | What remains unproved |
+|---|---|---|---|
+| [`6e903116`](https://github.com/Eabusham2/router-vpn/commit/6e903116717ea5a979fbadd207a7faf2320ff097) | Includes the shipping captured SS source helpers in the standalone Apple provider compile fixture. | The original missing-method Swift compile failure reproduced; the complete extracted provider fixture then compiled with both helpers. | This compile-only check does not execute Tor, NetworkExtension, a packaged application or a physical device. |
+| [`0978f794`](https://github.com/Eabusham2/router-vpn/commit/0978f794d7ebf4ac05fd37f3755f3013964527b4) | Retains original and returned Windows socket observations after duplicate protocol rejection, without replacing the original refusal. | AMD64 and ARM64 test binaries compiled with four actual Winsock cases. Fifteen runner controls retain required parent/leaf receipts. Assertions use kernel protocol readback rather than merely obtaining a RawConn. | Actual Windows execution is required; cross-compilation does not explain or repair the observed UDP/TCP mismatch. |
+| [`e2a43e58`](https://github.com/Eabusham2/router-vpn/commit/e2a43e5896217d21ba0e83e4a961cf0e8f60026d) | Records original, returned and imported endpoint observations after the native fixture's original inspection fails. | The exact fixture and existing peer overlays compiled for AMD64 and ARM64 alongside the preceding socket cases. | These are observations after failure, not admission authority or proof that the OpenVPN WFP endpoint failure is repaired. |
+| [`3ba4b5ea`](https://github.com/Eabusham2/router-vpn/commit/3ba4b5eac1a20786a222c82cb8eca15f9104c751) | Preserves the first private Server API/operation rejection and first underlying Start failure in the authenticated native fixture receipt. Redacts captured secrets before bounded rendering and handles absent providers. | The complete extracted receipt methods, actual production Manager and pinned Box dependencies pass the focused race run in 1.034 seconds. Seven runner inventory checks pass. The mandatory baseline now includes `lease-failure-diagnostic`, giving 24 Server verdicts. | The focused test does not prove a successful Box startup, native WFP path or real private-server connection. The original native rejection still needs a diagnosed and verified repair. |
+
+Production validation, firewall admission, retry behavior and runtime deadlines
+were not relaxed by these diagnostic and fixture changes. The exact local
+manifest recorded for the two-architecture socket observation build has SHA256
+`a3f088df3092efb87cc61d32ed7caba11c0fe064da9b46ced34b825cc485e30d`.
+The final Server diagnostic manifest has SHA256
+`37c5789edd6d9fac74b4ad9b71353e998318716736098a24a0a4d0397fde30a5`.
+These identify previously recorded local evidence; a hash is not a substitute
+for retrieving and inspecting its associated artifact.
+
+### Current source-contract failures
+
+At `25d0354f2462c85fd016a954f77e6269f958d1d3`, the MTU contract
+[run 42203546383](https://github.com/Eabusham2/router-vpn/actions/runs/42203546383),
+job `127844460187`, reached the actual performance shipping fixture and failed
+because its sparse checkout lacked `daemon/`. The real preparer writes the
+caller-bound instance observer there. Concurrent
+[`b792e879`](https://github.com/Eabusham2/router-vpn/commit/b792e879dcbe32856c99521cfab6e5a98b9cff15)
+already repairs that fixture and verifies both observer files' input membership
+and exact projected bytes. That published repair is preserved without replay.
+
+The Multihop, recovered-requirements and release-gap runs at the same SHA
+reported the same two obsolete `internal/common` source markers:
+
+- The Apple contract required the old direct `layeredProfile` assignment.
+  The shipping compiler now validates the original SS declaration and selects
+  `capturedSSProfile` for Shadowsocks, while retaining the ordinary
+  `layeredProfile` branch. The corrected contract requires all four current
+  statements; existing Start Layer, MTU, engine/proof ordering and seventeen
+  MAX/composite mutation controls remain intact.
+- The native owner contract required the old
+  `StartedService.Instance()` call. The corrected contract requires the
+  captured engine, original bounded context, exact service/Box and
+  `IdentityContext` checks, plus the daemon's cancellable lock/unlock and
+  context result. It explicitly rejects restoration of the old uncancellable
+  getter in that bridge.
+
+These are fixture corrections against inspected shipping code, not changes to
+production routing, credentials, source validation or cancellation. The execution
+workspace became unavailable before a local Go/Python run of these corrections.
+Only source review is established at publication; exact-commit CI must execute
+the corrected tests.
+
+The actual Windows native engine jobs in Aux proxies
+[run 42203545965](https://github.com/Eabusham2/router-vpn/actions/runs/42203545965),
+jobs `127848549346` and `127848549200`, separately executed and failed three
+desktop MTU cases: applied-cancellation restoration did not reach a candidate,
+physical-path replacement did not reach a candidate, and the mailbox case
+reported a captured runtime failure. Both architectures' failures are separate
+from the source markers above and remain open at this record.
+
+### Unpublished source and verification boundaries
+
+No unpublished draft below was imported into `main` merely to report progress:
+
+- **CONNECT UoT:** twenty-two prepared paths retain 337 existing captures and
+  add six bounded Local captures, for 343. The focused shared race test passed
+  in 1.176 seconds and twenty-one inventory/receipt checks passed. Fresh desktop
+  and mobile source projection completed. The full native run then stopped
+  during compilation with `signal: killed` in pinned sing-box and sing-openvpn
+  packages, before accepting any of the 1,162 encrypted-peer verdicts.
+  The 688 shared/Android and 344 Apple parser verdicts remain pending.
+  Original TCP-only graphs, UDP Home policy, exact service authority and the
+  upstream caller-context changes must remain preserved.
+  The focused race pass predates the upstream context merge; it is not a pass
+  of all later merged source. The frozen final run starts from historical local
+  `ddd40fff61876ba609994e9b475fbff712ceca07`, not a published commit.
+  Its recorded production-equivalent publication is `3ba4b5ea`; the subsequent
+  `25d0354f` hop changes were not applied during the run. The twenty-two draft
+  paths are listed below to locate the work, not reconstruct unknown bytes.
+- **Windows independent final layers:** the reviewed twenty-file draft covers
+  paired WG entry with its entry layer Off and independent SS2022 final
+  AES/AES+XOR layers across Local, Server and Compare. The proposed native
+  inventory adds 111 verdicts; those are required cases, not an executed pass.
+  Review revision two preserves the 24-case Server baseline and adds direct
+  candidate-row checks plus two focused comparison-removal controls.
+  Its source manifest SHA256 is
+  `1e1c160ded079ce0c50d2ee7c8a03eef6aad1b8e848661682cc8bab4cb879abc`.
+  The focused race and actual mutation-control execution remain pending.
+- **Second SS forward reply buffer:** this is distinct from the published
+  `7b516259` DNS-peer allocation repair. The draft exposes the downstream
+  writer's headroom and reserves bounded front/rear capacity around the full
+  UDP payload. A saved partial log contains eighteen passing encrypted cases.
+  The runner's final exit and required causal controls were not established
+  before access to the workspace was lost, so the draft remains unpublished.
+- **Linux resolver ancestry:** the eighteen-file draft has focused model,
+  candidate and transport race evidence, but no completed client/installed
+  composition result. Two compiler-killed client attempts and unavailable
+  further validation do not establish its required acceptance.
+
+The workspace disconnected after these drafts were prepared. Their last
+recorded local names include `connect-uot-ddd-review-files.json`,
+`connect-uot-ddd-gate-inputs.json`,
+`windows-layer-review-fixes-manifest.json` and
+`resolved-ancestry-review-manifest.json`. They must be located and checked
+against their recorded bytes and newer `main` before any restoration. This
+document does not assert that the unavailable workspace or full draft bytes
+have been independently backed up or are currently downloadable.
+
+The unpublished UoT path inventory is:
+
+```text
+android/app/src/main/java/com/eabusham/routervpn/AndroidImportedRouterPath.java
+android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+android/test_android_connection_profiles.py
+android/test_android_imported_router.py
+deploy/prepare-desktop-external.py
+deploy/test_ios_imported_router_pinned.py
+deploy/test_ios_imported_router_pinned_contract.py
+deploy/test_ios_tor_pinned.py
+deploy/test_ios_tor_profile.py
+deploy/test_mobile_imported_entry.py
+deploy/test_mobile_imported_entry_runner.py
+internal/mobilemultihop/imported_connect.go
+internal/mobilemultihop/imported_entry.go
+ios/RouterVPN/App/IOSMultihopExecution.swift
+ios/RouterVPN/App/IOSMultihopView.swift
+ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift
+mobile/desktop/node_external_ss_entry_test.go.tmpl
+mobile/desktop/node_imported_connect_entry_test.go.tmpl
+mobile/routervpn_imported_entry_native_test.go.tmpl
+internal/mobilemultihop/ss_uot_asset.go
+internal/mobilemultihop/imported_connect_uot_test.go
+mobile/desktop/node_imported_connect_uot_test.go.tmpl
+```
+
+The UoT manifest's own checksum and individual file hashes were not retained in
+this text record; they must be read from the recovered manifest. The prepared
+serial compiler warmup was never started and has no timing or memory receipts.
+
+The newest listed release at this observation remains the older twelve-asset
+`745b3e41` prerelease. None of these newer source changes establishes a complete
+new native/package/image/compose release, production signing, private deployment
+or physical-device acceptance. No router, AdGuard or private server configuration
+was changed.
 
 ## Remaining work and acceptance boundaries
 

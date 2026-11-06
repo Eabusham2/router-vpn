@@ -23,7 +23,8 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 		"ios/RouterVPN/App/IOSMultihopView.swift":                                                  {"multihopExecution", "server", "auto"},
 		"ios/RouterVPN/App/IOSConnectionProfilesView.swift":                                        {"multihopExecution", "forKey: .multihopExecution", "profile.multihopExecution = prefs.multihopExecution"},
 		"deploy/prepare-mobile-multihop.py":                                                        {"routechoice", "multihoprelay", "mobilemultihop"},
-		"mobile/routervpn_multihop_bridge.go.tmpl":                                                 {"SelectOutbound(tag)", "DialContext(ctx", "StartedService.Instance()"},
+		"mobile/routervpn_multihop_bridge.go.tmpl":                                                 {"SelectOutbound(tag)", "DialContext(ctx", "routerCapturedMultihopEngine(ctx, server)", "server.StartedService.RouterVPNInstanceContext(ctx)", "engine.IdentityContext(ctx)", "instance: instance.Box()", "context.WithTimeout(context.Background(), routerMultihopObservationTimeout)"},
+		"mobile/daemon/instance_context.go.tmpl":                                                   {"RouterVPNInstanceContext(ctx context.Context)", "adapter.RouterVPNRLockContext(ctx, &s.serviceAccess)", "defer s.serviceAccess.RUnlock()", "return s.instance, ctx.Err()"},
 		"server/scripts/provision-multihop-relays.py":                                              {"registry_lock", "check-multihop-registry", "native_wireguard"},
 	}
 	for file, markers := range files {
@@ -35,6 +36,9 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 			if !strings.Contains(string(body), marker) {
 				t.Errorf("%s: missing shipping owner %q", file, marker)
 			}
+		}
+		if file == "mobile/routervpn_multihop_bridge.go.tmpl" && strings.Contains(string(body), "StartedService.Instance()") {
+			t.Error("native multihop observation must use its original bounded context, not the uncancellable instance getter")
 		}
 	}
 }
