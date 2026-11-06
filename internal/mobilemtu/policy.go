@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/nativeopenvpn"
 	"strconv"
 	"strings"
@@ -254,6 +255,43 @@ func NewPlan(config string, actual int) (*Plan, error) {
 				}
 				ceiling = min(ceiling, (outer-overhead)/16*16)
 			}
+		}
+	}
+	// Validate through a Start Layer too; its datagrams still have to fit the
+	// original predecessor interface. Never let a wrapper hide control overhead.
+	if packet["type"] == "wireguard" || packet["type"] == awgpolicy.Type {
+		next, _ := packet["detour"].(string)
+		entry := all[next]
+		var layer map[string]any
+		if entry != nil && (entry["type"] == "shadowsocks" || entry["type"] == "routervpn-aes-xor") {
+			layer = entry
+			next, _ = layer["detour"].(string)
+			entry = all[next]
+			if next != "" && (entry == nil || entry["tag"] == layer["tag"] || entry["tag"] == packet["tag"]) {
+				return nil, errors.New("missing or cyclic Start Layer predecessor")
+			}
+		}
+		if entry != nil && (entry["type"] == "wireguard" || entry["type"] == awgpolicy.Type) {
+			if entry["tag"] == packet["tag"] {
+				return nil, errors.New("cyclic nested packet envelope")
+			}
+			e, failure := awgpolicy.EndpointEnvelope(packet, layer)
+			if failure != nil {
+				return nil, failure
+			}
+			outer, failure := intField(entry, "mtu", 0)
+			if failure != nil {
+				return nil, failure
+			}
+			inner, failure := intField(packet, "mtu", 0)
+			if failure != nil {
+				return nil, failure
+			}
+			cap, failure := e.Capacity(outer, inner, true)
+			if failure != nil {
+				return nil, failure
+			}
+			ceiling = min(ceiling, cap)
 		}
 	}
 	if packet["type"] == "openvpn-client" {

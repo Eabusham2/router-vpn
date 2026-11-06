@@ -87,7 +87,11 @@ func TestMTUPacketEnvelopeAndNestedGraph(t *testing.T) {
 	}
 	// An AWG exit adds its transport padding to the encapsulation budget.
 	endpoints[0].(map[string]any)["type"] = "routervpn-amneziawg"
-	endpoints[0].(map[string]any)["amnezia"] = map[string]any{"s4": "32"}
+	endpoints[0].(map[string]any)["amnezia"] = map[string]any{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10-19", "h2": "20-29", "h3": "30-39", "h4": "40-49"}
+	if _, err = NewPlan(encoded(graph), 1380); err == nil {
+		t.Fatal("oversized native endpoint hidden by smaller TUN")
+	}
+	endpoints[0].(map[string]any)["mtu"] = 1408
 	plan, err = NewPlan(encoded(graph), 1380)
 	if err != nil || plan.Ceiling != 1408 {
 		t.Fatal(plan, err)
