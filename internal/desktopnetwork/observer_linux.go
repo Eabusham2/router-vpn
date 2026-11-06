@@ -8,22 +8,41 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
 )
 
 type linuxObserver struct {
-	mu              sync.Mutex
-	file            *os.File
-	joined          chan struct{}
-	closing, closed bool
-	sequence        uint32
-	waiters         map[uint32]chan error
-	emit            func(Event, error)
+	namespace, originalNamespace *os.File
+	namespaceInfo                os.FileInfo
+	mu                           sync.Mutex
+	file                         *os.File
+	joined                       chan struct{}
+	closing, closed              bool
+	sequence                     uint32
+	waiters                      map[uint32]chan error
+	emit                         func(Event, error)
 }
 
 func openNativeObserver(emit func(Event, error)) (nativeObserver, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	namespace, err := os.Open("/proc/thread-self/ns/net")
+	if err != nil {
+		return nil, err
+	}
+	adopted := false
+	defer func() {
+		if !adopted {
+			namespace.Close()
+		}
+	}()
+	namespaceInfo, err := namespace.Stat()
+	if err != nil {
+		return nil, err
+	}
 	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC|syscall.SOCK_NONBLOCK, syscall.NETLINK_ROUTE)
 	if err != nil {
 		return nil, err
@@ -53,7 +72,8 @@ func openNativeObserver(emit func(Event, error)) (nativeObserver, error) {
 		syscall.Close(fd)
 		return nil, errors.New("native network observer has no original socket")
 	}
-	o := &linuxObserver{file: file, joined: make(chan struct{}), waiters: make(map[uint32]chan error), emit: emit}
+	o := &linuxObserver{namespace: namespace, originalNamespace: namespace, namespaceInfo: namespaceInfo, file: file, joined: make(chan struct{}), waiters: make(map[uint32]chan error), emit: emit}
+	adopted = true
 	go o.run()
 	return o, nil
 }
@@ -221,6 +241,18 @@ func (o *linuxObserver) Close() error {
 	<-o.joined
 	if err != nil {
 		return err
+	}
+	if o.namespace != nil {
+		if o.namespace != o.originalNamespace {
+			return errors.New("network observer namespace owner changed during Close")
+		}
+		info, statErr := o.namespace.Stat()
+		if statErr != nil || !os.SameFile(info, o.namespaceInfo) {
+			return errors.New("network observer namespace descriptor was replaced during Close")
+		}
+		if err = o.namespace.Close(); err != nil {
+			return err
+		}
 	}
 	o.mu.Lock()
 	o.closed = true

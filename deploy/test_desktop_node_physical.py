@@ -143,15 +143,19 @@ STANDARD_PARENT_NATIVE_SUITE = ("standard-idle-parent-loss", "./cmd/sing-box",
                                 "^TestRouterVPNStandardIdleParentNamespace$",
                                 ("TestRouterVPNStandardIdleParentNamespace",
                                  "TestRouterVPNStandardIdleParentNamespace/idle-after-startup-expiry"))
+STANDARD_RESOLVED_SUITE = ("standard-resolved-observation", "./cmd/sing-box", "^TestRouterVPNResolvedFixedCommandObservation$",
+                          ("TestRouterVPNResolvedFixedCommandObservation", *("TestRouterVPNResolvedFixedCommandObservation/"+case for case in
+                           ("success", "lost-parent", "lost-daemon", "local-refusal", "wrong-local-name", "wrong-policy", "lost-send", "late-parent", "cancelled"))))
 NATIVE_MTU_CASES = ("full-search-and-winner", "failed-candidate-and-original-restore", "cancelled-work-and-fresh-stop")
 NATIVE_MTU_MODEL_TESTS = tuple("TestRouterVPNTun" + name for name in ("ReplacementAndRollback", "FailureDoesNotStartAnOverlappingReader", "InvalidationAndStaleCapture", "MutationIsSerialized", "TransactionRetainsOriginalAndPartialCandidateEvidence", "TransactionPreservesFailedConstructionAndRetry", "TransactionBoundsHistoryBeforeAcquisition", "TransactionCancelledAcquisitionAndNativeClose", "BorrowedPlatformKeepsCapturedRollback", "FullSearchRetainsEveryOriginalAttempt"))
 
 NATIVE_RESOLVER_TESTS = tuple("TestRouterVPNNativeLinuxResolver" + name for name in (
     "DaemonCapability", "CredentialRefusals", "MutationNeedsOriginalReply", "LateReplyRetry",
     "RejectsReplacedCapability", "OriginalWireSerial", "RetireRequiresBound", "StartupBound",
-    "OriginalUnixConnection", "ObservedBusAbsence", "DefinitelyUnsentRetires", "ClosesDecodedFDArrays", "NamedBusNamespace"))
+    "OriginalUnixConnection", "ObservedBusAbsence", "DefinitelyUnsentRetires", "ClosesDecodedFDArrays", "NamedBusNamespace", "ResolvedAuthorityOriginalBroker", "ResolvedAuthorityPropertyCodec", "ResolvedAuthoritySignalIdentity"))
 NATIVE_RESOLVER_LEAVES = {
-    "NamedBusNamespace": ("original-authenticated", "replaced-endpoint", "untrusted-ancestor", "cancelled-original-child"),
+    "ResolvedAuthorityOriginalBroker": ("local-hosts", "local-synthetic", "no-local-source", "remote-error", "network-origin", "cache-origin", "unauthenticated", "policy-port", "physical-owner", "daemon-signal", "foreign-signal"),
+    "NamedBusNamespace": ("original-authenticated", "replaced-endpoint", "untrusted-ancestor", "cancelled-original-child", "resolved-authority", "resolved-authority-namespace", "resolved-authority-daemon-namespace"),
     "CredentialRefusals": ("missing-processfd", "invalid-processfd", "foreign-namespace", "unreceived-file"),
     "MutationNeedsOriginalReply": ("bus-no-reply", "foreign-owner", "wrong-serial", "transport-only"),
     "LateReplyRetry": ("success", "daemon-error"),
@@ -1009,7 +1013,7 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, required, "original SS2022 entry and final")
     if name == LINUX_LAYERED_ENTRY_SUITE[0]:
         require_native_verdicts(output, required, "Linux original layered entry")
-    if name in (STANDARD_MTU_SUITE[0], STANDARD_MTU_RETIRE_SUITE[0], STANDARD_MTU_NATIVE_SUITE[0], STANDARD_PARENT_SUITE[0], STANDARD_PARENT_NATIVE_SUITE[0]):
+    if name in (STANDARD_RESOLVED_SUITE[0], STANDARD_MTU_SUITE[0], STANDARD_MTU_RETIRE_SUITE[0], STANDARD_MTU_NATIVE_SUITE[0], STANDARD_PARENT_SUITE[0], STANDARD_PARENT_NATIVE_SUITE[0]):
         require_native_verdicts(output, required, "standard service original MTU reader")
     if name == "native-address-retirement":
         require_native_verdicts(output, NATIVE_ADDRESS_RETIREMENT_VERDICTS, "native partial address retirement")
@@ -1229,6 +1233,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(STANDARD_MTU_SUITE)
         suites.append(STANDARD_MTU_RETIRE_SUITE)
         suites.append(STANDARD_MTU_NATIVE_SUITE)
+        suites.append(STANDARD_RESOLVED_SUITE)
         suites.append(STANDARD_PARENT_SUITE)
         suites.append(STANDARD_PARENT_NATIVE_SUITE)
         suites.append(('native-retirement-bound', 'github.com/sagernet/sing-tun', '^TestDesktopNetworkRetirementKeepsSeparateBound$', ('TestDesktopNetworkRetirementKeepsSeparateBound',)))

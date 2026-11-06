@@ -208,9 +208,13 @@ def main():
     print("Captured network state/receipt and transition cases passed.")
 
     native_env = dict(env, ROUTERVPN_NATIVE_NETWORK_EVENTS="1")
+    read_only_names = ["TestNativeNetworkObserverReadOnlyBarrier"]
+    if sys.platform == "linux":
+        read_only_names.append("TestResolvedOriginalObserverNamespace")
     read_only = execute([go, "test", "-race", "-v", "-count=1", "-timeout=30s",
-                         "./internal/desktopnetwork", "-run", "^TestNativeNetworkObserverReadOnlyBarrier$"], env=native_env, timeout=60)
-    require_pass(read_only.stdout, "TestNativeNetworkObserverReadOnlyBarrier")
+                         "./internal/desktopnetwork", "-run", "^("+"|".join(read_only_names)+")$"], env=native_env, timeout=60)
+    for name in read_only_names:
+        require_pass(read_only.stdout, name)
     print("Actual native read-only subscription, snapshot and joined close passed.")
 
     with tempfile.TemporaryDirectory(prefix="routervpn-network-gate-") as temporary:

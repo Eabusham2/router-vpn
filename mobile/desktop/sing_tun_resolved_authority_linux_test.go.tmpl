@@ -1,0 +1,441 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
+)
+
+func TestRouterVPNNativeLinuxResolverResolvedAuthorityPropertyCodec(t *testing.T) {
+	for _, manager := range []bool{true, false} {
+		index := int32(7)
+		if manager {
+			index = 0
+		}
+		original := resolvedAuthorityProperties(manager, 5353)
+		// Round-trip real godbus variant/struct encoding, not Go fixture types.
+		message := &dbus.Message{Type: dbus.TypeMethodReply, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(uint32(1)), dbus.FieldSignature: dbus.MakeVariant(dbus.SignatureOf(original))}, Body: []any{original}}
+		var encoded bytes.Buffer
+		if err := message.EncodeTo(&encoded, binary.LittleEndian); err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := dbus.DecodeMessage(&encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var properties map[string]dbus.Variant
+		if err = dbus.Store(decoded.Body, &properties); err != nil {
+			t.Fatal(err)
+		}
+		scope, _, host, err := resolvedDecodeScope(properties, index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if scope.DNS[0].Index != 7 || scope.DNS[0].Port != 5353 || scope.DNS[0].ServerName != "original.example" || scope.CurrentDNS == nil || scope.CurrentDNS.Port != 5353 || scope.Domains[0].Index != 7 || manager && host != "different-from-helper" {
+			t.Fatal("original index/port/SNI/selection/hostname lost", scope, host)
+		}
+		delete(properties, "DNSEx")
+		if _, _, _, err = resolvedDecodeScope(properties, index); err == nil {
+			t.Fatal("missing extended DNS accepted as ordinary default")
+		}
+		properties = resolvedAuthorityProperties(manager, 5353)
+		properties["DNSSEC"] = dbus.MakeVariant(true)
+		if _, _, _, err = resolvedDecodeScope(properties, index); err == nil {
+			t.Fatal("wrong policy wire type accepted")
+		}
+	}
+}
+
+func TestRouterVPNNativeLinuxResolverResolvedAuthoritySignalIdentity(t *testing.T) {
+	for _, sender := range []string{":1.77", ":1.999", "org.freedesktop.DBus"} {
+		a := &RouterVPNResolvedAuthority{}
+		r := &a.native.routervpnResolver
+		r.unique = ":1.77"
+		r.signalObserver = a.observeSignal
+		msg := &dbus.Message{Type: dbus.TypeSignal, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldSender: dbus.MakeVariant(sender), dbus.FieldInterface: dbus.MakeVariant("org.freedesktop.DBus"), dbus.FieldMember: dbus.MakeVariant("NameOwnerChanged")}, Body: []any{"org.freedesktop.resolve1", ":1.77", ":1.88"}}
+		r.incoming(msg)
+		if (a.signalFailure != nil) != (sender != ":1.999") {
+			t.Fatal("signal adopted foreign sender or lost original authority", sender)
+		}
+	}
+}
+
+// Called only inside the existing named-bus fixture's private original
+// user/network/mount namespaces. Physical policy values are modeled here;
+// the public constructor and actual named bus/daemon namespace checks are real.
+func resolvedNamedAuthorityCase(t *testing.T, selected string) {
+	t.Helper()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	info, err := os.Stat("/proc/thread-self/ns/net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := info.Sys().(*syscall.Stat_t)
+	physical := &resolvedPhysicalFixture{device: uint64(stat.Dev), inode: stat.Ino, indexes: []int32{7}}
+	if selected == "resolved-authority-namespace" {
+		physical.inode++
+		owner, err := OpenRouterVPNResolvedAuthority(ctx, physical)
+		if owner != nil {
+			defer owner.Close(ctx)
+		}
+		if err == nil {
+			t.Fatal("foreign observer namespace adopted before named bus capture")
+		}
+		return
+	}
+	if err = os.Mkdir("/run/dbus", 0755); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/run/dbus/system_bus_socket"
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.SetUnlinkOnClose(false)
+	originalInfo, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	deadline, _ := ctx.Deadline()
+	_ = listener.SetDeadline(deadline)
+	originalPath := path
+	var replacement *net.UnixListener
+	var replacementInfo os.FileInfo
+	defer func() {
+		if replacement != nil {
+			replacement.Close()
+		}
+		for _, item := range []struct {
+			path string
+			info os.FileInfo
+		}{{originalPath, originalInfo}, {path, replacementInfo}} {
+			if item.info == nil {
+				continue
+			}
+			current, err := os.Lstat(item.path)
+			if err != nil || !os.SameFile(current, item.info) {
+				t.Error("named authority cleanup lost original endpoint", err)
+				continue
+			}
+			if err = os.Remove(item.path); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	pidfd := -1
+	daemon := exec.Command("/usr/bin/cat")
+	input, err := daemon.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.Stdout = io.Discard
+	daemon.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
+	if selected == "resolved-authority-daemon-namespace" {
+		daemon.SysProcAttr.Cloneflags = syscall.CLONE_NEWNET
+	}
+	if err = daemon.Start(); err != nil {
+		t.Fatal(err)
+	}
+	process := os.NewFile(uintptr(pidfd), "named-authority-original-daemon")
+	joined := make(chan struct{})
+	go func() { _ = daemon.Wait(); close(joined) }()
+	defer func() { input.Close(); <-joined; process.Close() }()
+	served := make(chan error, 1)
+	accepted := make(chan *net.UnixConn, 1)
+	var changed atomic.Bool
+	go func() {
+		connection, err := listener.AcceptUnix()
+		if err == nil {
+			accepted <- connection
+			_ = connection.SetDeadline(deadline)
+			err = resolverTestBusModel(connection, pidfd, "", resolvedAuthorityModel("local-synthetic", &changed))
+			connection.Close()
+		}
+		served <- err
+	}()
+	owner, err := OpenRouterVPNResolvedAuthority(ctx, physical)
+	defer func() {
+		stop, finish := context.WithTimeout(context.Background(), 2*time.Second)
+		defer finish()
+		if owner != nil {
+			if err := owner.Close(stop); err != nil {
+				t.Error(err)
+			}
+		}
+		listener.Close()
+		select {
+		case connection := <-accepted:
+			connection.Close()
+		default:
+		}
+		select {
+		case err := <-served:
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+				t.Error(err)
+			}
+		case <-stop.Done():
+			t.Error("original named authority broker did not join")
+		}
+	}()
+	if selected == "resolved-authority-daemon-namespace" {
+		if err == nil {
+			t.Fatal("daemon from another namespace adopted equal numeric link")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal("actual named original authority", err)
+	}
+	if _, err = owner.Preflight(ctx, "original-host.example"); err != nil {
+		t.Fatal("original named local-only preflight", err)
+	}
+	originalPath = path + ".original"
+	if err = os.Rename(path, originalPath); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err = net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement.SetUnlinkOnClose(false)
+	replacementInfo, err = os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = owner.Policy(ctx); err == nil {
+		t.Fatal("original authority adopted replacement named endpoint")
+	}
+}
+
+type resolvedPhysicalFixture struct {
+	device, inode uint64
+	indexes       []int32
+	fail          atomic.Bool
+}
+
+func (p *resolvedPhysicalFixture) Identity() string { return strings.Repeat("a", 64) }
+func (p *resolvedPhysicalFixture) CurrentContext(ctx context.Context) error {
+	if p.fail.Load() {
+		return errors.New("original physical observer failed")
+	}
+	return ctx.Err()
+}
+func (p *resolvedPhysicalFixture) ResolvedNamespace(ctx context.Context) (uint64, uint64, []int32, error) {
+	return p.device, p.inode, append([]int32(nil), p.indexes...), p.CurrentContext(ctx)
+}
+
+// The fixture speaks actual EXTERNAL D-Bus with SCM_RIGHTS ProcessFD. The
+// resolver properties and physical observer are modeled; this does not claim
+// a named system bus, host resolved daemon, or privileged Netlink acceptance.
+func TestRouterVPNNativeLinuxResolverResolvedAuthorityOriginalBroker(t *testing.T) {
+	for _, fault := range []string{"local-hosts", "local-synthetic", "no-local-source", "remote-error", "network-origin", "cache-origin", "unauthenticated", "policy-port", "physical-owner", "daemon-signal", "foreign-signal"} {
+		t.Run(fault, func(t *testing.T) {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			a := &RouterVPNResolvedAuthority{}
+			r := &a.native.routervpnResolver
+			var setupErr error
+			r.namespace, setupErr = os.Open("/proc/thread-self/ns/net")
+			if setupErr != nil {
+				t.Fatal(setupErr)
+			}
+			r.originalNamespace = r.namespace
+			r.namespaceInfo, setupErr = r.namespace.Stat()
+			if setupErr != nil {
+				t.Fatal(setupErr)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if err := a.Close(ctx); err != nil {
+					t.Error(err)
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			a.lifetime = ctx
+			a.deadline, _ = ctx.Deadline()
+			stat := r.namespaceInfo.Sys().(*syscall.Stat_t)
+			a.namespaceDevice, a.namespaceInode = uint64(stat.Dev), stat.Ino
+			physical := &resolvedPhysicalFixture{device: a.namespaceDevice, inode: a.namespaceInode, indexes: []int32{7}}
+			a.physical = physical
+			a.identity = physical.Identity()
+			a.links = []int32{7}
+			pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+			if err != nil {
+				t.Fatal("actual resolver broker socket", err)
+			}
+			open := func(fd int) *net.UnixConn {
+				f := os.NewFile(uintptr(fd), "resolved-authority-fixture")
+				conn, e := net.FileConn(f)
+				f.Close()
+				if e != nil {
+					t.Fatal(e)
+				}
+				return conn.(*net.UnixConn)
+			}
+			client, server := open(pair[0]), open(pair[1])
+			defer server.Close()
+			_ = server.SetDeadline(time.Now().Add(7 * time.Second))
+			pidfd := -1
+			daemon := exec.Command("/usr/bin/cat")
+			input, err := daemon.StdinPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			daemon.Stdout = io.Discard
+			daemon.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
+			if err = daemon.Start(); err != nil {
+				t.Fatal(err)
+			}
+			owner := os.NewFile(uintptr(pidfd), "original-fixture-daemon")
+			joined := make(chan struct{})
+			go func() { _ = daemon.Wait(); close(joined) }()
+			defer func() { input.Close(); <-joined; owner.Close() }()
+			var changed atomic.Bool
+			model := resolvedAuthorityModel(fault, &changed)
+			done := make(chan error, 1)
+			go func() { done <- resolverTestBusModel(server, pidfd, "", model) }()
+			defer func() {
+				stop, doneCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer doneCancel()
+				if err := a.Close(stop); err != nil {
+					t.Error("original authority cleanup", err)
+				}
+				server.Close()
+				select {
+				case err := <-done:
+					if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+						t.Error(err)
+					}
+				case <-time.After(time.Second):
+					t.Error("broker did not join")
+				}
+			}()
+			if err = r.authenticate(ctx, client); err != nil {
+				t.Fatal(err)
+			}
+			if err = a.captureOriginal(ctx); err != nil {
+				t.Fatal("original policy capture", err)
+			}
+			if fault == "policy-port" {
+				changed.Store(true)
+			}
+			if fault == "physical-owner" {
+				physical.fail.Store(true)
+			}
+			if fault == "daemon-signal" || fault == "foreign-signal" {
+				sender := r.unique
+				if fault == "foreign-signal" {
+					sender = ":1.999"
+				}
+				r.incoming(&dbus.Message{Type: dbus.TypeSignal, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldSender: dbus.MakeVariant(sender)}})
+			}
+			result, err := a.Preflight(ctx, "original-host.example")
+			positive := fault == "local-hosts" || fault == "local-synthetic" || fault == "no-local-source" || fault == "foreign-signal"
+			if !positive {
+				if err == nil {
+					t.Fatal("causal fault admitted", fault, result)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response RouterVPNResolvedLocalResult
+			if err = json.Unmarshal([]byte(result), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.PolicySHA256 != ResolvedPolicySHA256(a.policy) || response.Name != "original-host.example" || response.Local != (fault != "no-local-source") {
+				t.Fatal("preflight detached from exact name/policy", response)
+			}
+		})
+	}
+}
+
+func resolvedAuthorityProperties(manager bool, port uint16) map[string]dbus.Variant {
+	properties := map[string]dbus.Variant{"LLMNR": dbus.MakeVariant("no"), "MulticastDNS": dbus.MakeVariant("no"), "DNSSEC": dbus.MakeVariant("no"), "DNSOverTLS": dbus.MakeVariant("no"), "DNSSECNegativeTrustAnchors": dbus.MakeVariant([]string{}), "DefaultRoute": dbus.MakeVariant(true)}
+	if manager {
+		properties["DNSEx"] = dbus.MakeVariant([]resolvedManagerDNS{{7, unix.AF_INET, []byte{192, 0, 2, 53}, port, "original.example"}})
+		properties["CurrentDNSServerEx"] = dbus.MakeVariant(resolvedManagerDNS{7, unix.AF_INET, []byte{192, 0, 2, 53}, port, "original.example"})
+		properties["FallbackDNSEx"] = dbus.MakeVariant([]resolvedManagerDNS{})
+		properties["Domains"] = dbus.MakeVariant([]resolvedManagerDomain{{7, ".", true}})
+		properties["LLMNRHostname"] = dbus.MakeVariant("different-from-helper")
+	} else {
+		properties["DNSEx"] = dbus.MakeVariant([]resolvedLinkDNS{{unix.AF_INET, []byte{192, 0, 2, 53}, port, "original.example"}})
+		properties["CurrentDNSServerEx"] = dbus.MakeVariant(resolvedLinkDNS{unix.AF_INET, []byte{192, 0, 2, 53}, port, "original.example"})
+		properties["Domains"] = dbus.MakeVariant([]resolvedLinkDomain{{".", true}})
+	}
+	return properties
+}
+
+func resolvedAuthorityModel(fault string, changed *atomic.Bool) func(*dbus.Message) ([]any, string, error) {
+	return func(request *dbus.Message) ([]any, string, error) {
+		member, _ := request.Headers[dbus.FieldMember].Value().(string)
+		switch member {
+		case "GetId":
+			return []any{strings.Repeat("b", 32)}, "", nil
+		case "AddMatch":
+			return nil, "", nil
+		case "GetLink":
+			return []any{dbus.ObjectPath("/org/freedesktop/resolve1/link/_7")}, "", nil
+		case "GetAll":
+			manager := request.Body[0] == "org.freedesktop.resolve1.Manager"
+			port := uint16(5353)
+			if changed.Load() {
+				port++
+			}
+			properties := resolvedAuthorityProperties(manager, port)
+			return []any{properties}, "", nil
+		case "ResolveHostname":
+			if len(request.Body) != 4 || request.Body[0] != int32(0) || request.Body[1] != "original-host.example" || request.Body[2] != int32(unix.AF_UNSPEC) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
+				return nil, "", errors.New("preflight changed exact original local-only operation")
+			}
+			if fault == "no-local-source" {
+				return []any{"no local source"}, "org.freedesktop.resolve1.NoSource", nil
+			}
+			if fault == "remote-error" {
+				return []any{"not a local miss"}, "org.freedesktop.DBus.Error.UnknownMethod", nil
+			}
+			flags := uint64(1<<9 | 1<<19)
+			if fault == "network-origin" {
+				flags |= 1 << 23
+			}
+			if fault == "cache-origin" {
+				flags |= 1 << 20
+			}
+			if fault == "unauthenticated" {
+				flags &^= 1 << 9
+			}
+			if fault == "local-hosts" {
+				flags = 1 << 9
+			}
+			return []any{[]struct {
+				Index, Family int32
+				Address       []byte
+			}{{0, unix.AF_INET, []byte{127, 0, 0, 2}}}, "original-host.example", flags}, "", nil
+		}
+		return nil, "", errors.New("unexpected resolved authority method")
+	}
+}

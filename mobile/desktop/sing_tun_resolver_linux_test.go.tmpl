@@ -460,6 +460,10 @@ func TestRouterVPNNativeLinuxResolverOriginalUnixConnection(t *testing.T) {
 	}
 }
 func resolverTestBus(server *net.UnixConn, processFD int, shape string) error {
+	return resolverTestBusModel(server, processFD, shape, nil)
+}
+
+func resolverTestBusModel(server *net.UnixConn, processFD int, shape string, model func(*dbus.Message) ([]any, string, error)) error {
 	input := bufio.NewReader(server)
 	first, err := input.ReadByte()
 	if err != nil {
@@ -515,6 +519,7 @@ func resolverTestBus(server *net.UnixConn, processFD int, shape string) error {
 		destination, _ := request.Headers[dbus.FieldDestination].Value().(string)
 		sender := "org.freedesktop.DBus"
 		var body []any
+		var remoteError string
 		switch member {
 		case "Hello":
 			body = []any{":1.42"}
@@ -550,9 +555,20 @@ func resolverTestBus(server *net.UnixConn, processFD int, shape string) error {
 			}
 			sender = ":1.77"
 		default:
-			return errors.New("unexpected resolver method")
+			if model == nil {
+				return errors.New("unexpected resolver method")
+			}
+			body, remoteError, err = model(request)
+			if err != nil {
+				return err
+			}
+			sender = destination
 		}
 		reply := &dbus.Message{Type: dbus.TypeMethodReply, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(request.Serial()), dbus.FieldSender: dbus.MakeVariant(sender), dbus.FieldDestination: dbus.MakeVariant(":1.42")}, Body: body}
+		if remoteError != "" {
+			reply.Type = dbus.TypeError
+			reply.Headers[dbus.FieldErrorName] = dbus.MakeVariant(remoteError)
+		}
 		if len(body) > 0 {
 			reply.Headers[dbus.FieldSignature] = dbus.MakeVariant(dbus.SignatureOf(body...))
 		}
@@ -719,7 +735,7 @@ func TestRouterVPNNativeLinuxResolverClosesDecodedFDArrays(t *testing.T) {
 // fresh original user/network/mount namespaces with a private /run tmpfs.
 func TestRouterVPNNativeLinuxResolverNamedBusNamespace(t *testing.T) {
 	const marker = "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE"
-	cases := []string{"original-authenticated", "replaced-endpoint", "untrusted-ancestor", "cancelled-original-child"}
+	cases := []string{"original-authenticated", "replaced-endpoint", "untrusted-ancestor", "cancelled-original-child", "resolved-authority", "resolved-authority-namespace", "resolved-authority-daemon-namespace"}
 	selected := os.Getenv(marker)
 	if selected == "" {
 		if os.Geteuid() != 0 {
@@ -874,7 +890,11 @@ func TestRouterVPNNativeLinuxResolverNamedBusNamespace(t *testing.T) {
 			}
 			select {} // Original parent cancellation must join this exact process.
 		}
-		resolverNamedBusCase(t, selected)
+		if strings.HasPrefix(selected, "resolved-authority") {
+			resolvedNamedAuthorityCase(t, selected)
+		} else {
+			resolverNamedBusCase(t, selected)
+		}
 		t.Log("NAMED-RESOLVER original-authentication-and-cleanup=" + selected)
 	})
 }

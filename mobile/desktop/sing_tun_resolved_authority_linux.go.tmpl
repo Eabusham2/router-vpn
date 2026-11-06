@@ -1,0 +1,512 @@
+//go:build linux
+
+package tun
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"net/netip"
+	"os"
+	"reflect"
+	"runtime"
+	"syscall"
+	"time"
+
+	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
+)
+
+// RouterVPNResolvedPhysical is implemented by the original live physical
+// observer. A caller cannot replace namespace provenance with numeric ifindex.
+type RouterVPNResolvedPhysical interface {
+	Identity() string
+	CurrentContext(context.Context) error
+	ResolvedNamespace(context.Context) (uint64, uint64, []int32, error)
+}
+
+type RouterVPNResolvedAuthority struct {
+	namedBus                        bool
+	native                          NativeTun // owns only its resolver; never creates a TUN
+	physical                        RouterVPNResolvedPhysical
+	lifetime                        context.Context
+	deadline                        time.Time
+	policy                          []byte
+	identity                        string
+	busID                           string
+	links                           []int32
+	namespaceDevice, namespaceInode uint64
+	signalFailure                   error // protected by native.routervpnResolver.wireMu
+}
+
+func OpenRouterVPNResolvedAuthority(ctx context.Context, physical RouterVPNResolvedPhysical) (*RouterVPNResolvedAuthority, error) {
+	if ctx == nil || ctx.Err() != nil || physical == nil {
+		return nil, errors.New("resolved authority requires original bounded owner")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("resolved authority requires original deadline")
+	}
+	a := &RouterVPNResolvedAuthority{namedBus: true, physical: physical, lifetime: ctx, deadline: deadline, identity: physical.Identity()}
+	if !resolvedDigest(a.identity, 32) {
+		return nil, errors.New("resolved authority omitted physical identity")
+	}
+	// Return the partially created original owner on failure so cleanup never
+	// forgets an authenticated connection or an outstanding read-only call.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r := &a.native.routervpnResolver
+	r.namespace, _ = os.Open("/proc/thread-self/ns/net")
+	if r.namespace == nil {
+		return a, errors.New("resolved authority cannot capture original namespace")
+	}
+	r.originalNamespace = r.namespace
+	var err error
+	r.namespaceInfo, err = r.namespace.Stat()
+	if err != nil {
+		return a, err
+	}
+	stat, ok := r.namespaceInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return a, errors.New("resolved authority namespace is not native")
+	}
+	a.namespaceDevice, a.namespaceInode = uint64(stat.Dev), stat.Ino
+	device, inode, links, err := physical.ResolvedNamespace(ctx)
+	if err != nil || device != a.namespaceDevice || inode != a.namespaceInode {
+		return a, errors.Join(errors.New("resolved authority and observer differ in original namespace"), err)
+	}
+	a.links = append([]int32(nil), links...)
+	exists, err := r.captureBus(ctx)
+	if err != nil || !exists {
+		return a, errors.Join(errors.New("resolved authority requires original named system bus"), err)
+	}
+	return a, a.captureOriginal(ctx)
+}
+
+func (a *RouterVPNResolvedAuthority) captureOriginal(ctx context.Context) error {
+	r := &a.native.routervpnResolver
+	var err error
+	if err = a.busRead(ctx, "GetId", &a.busID); err != nil {
+		return err
+	}
+	if !resolvedDigest(a.busID, 16) {
+		return errors.New("resolved authority invalid bus identity")
+	}
+	if err = a.busRead(ctx, "GetNameOwner", &r.unique, "org.freedesktop.resolve1"); err != nil {
+		return err
+	}
+	if !resolvedUniqueOwner(r.unique) {
+		return errors.New("resolved authority invalid daemon unique owner")
+	}
+	p, err := r.query(ctx, "GetConnectionCredentials", r.unique)
+	if err != nil {
+		return err
+	}
+	if err = r.captureDaemon(p); err != nil {
+		return err
+	}
+	if err = r.clear(p); err != nil {
+		return err
+	}
+	r.wireMu.Lock()
+	r.signalObserver = a.observeSignal
+	r.wireMu.Unlock()
+	for _, match := range []string{"type='signal',sender='" + r.unique + "'", "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.freedesktop.resolve1'"} {
+		p, err = r.query(ctx, "AddMatch", match)
+		if err != nil {
+			return err
+		}
+		if err = r.clear(p); err != nil {
+			return err
+		}
+	}
+	first, err := a.capturePolicy(ctx)
+	if err != nil {
+		return err
+	}
+	second, err := a.capturePolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(first, second) {
+		return errors.New("resolved policy changed during original capture")
+	}
+	if err = a.current(ctx); err != nil {
+		return err
+	}
+	a.policy = append([]byte(nil), first...)
+	return nil
+}
+
+func (a *RouterVPNResolvedAuthority) busRead(ctx context.Context, method string, out any, args ...any) error {
+	r := &a.native.routervpnResolver
+	p, err := r.query(ctx, method, args...)
+	if err != nil {
+		return err
+	}
+	err = p.call.Store(out)
+	return errors.Join(err, r.clear(p))
+}
+
+// The interceptor is invoked under the original wire mutex, before a later
+// method reply can act as an ordered barrier. Any original-daemon signal
+// invalidates this snapshot, even if a subsequent property read reverts.
+func (a *RouterVPNResolvedAuthority) observeSignal(msg *dbus.Message) {
+	if msg.Type != dbus.TypeSignal {
+		return
+	}
+	sender, _ := msg.Headers[dbus.FieldSender].Value().(string)
+	iface, _ := msg.Headers[dbus.FieldInterface].Value().(string)
+	member, _ := msg.Headers[dbus.FieldMember].Value().(string)
+	if sender == a.native.routervpnResolver.unique || sender == "org.freedesktop.DBus" && iface == "org.freedesktop.DBus" && member == "NameOwnerChanged" && len(msg.Body) == 3 && msg.Body[0] == "org.freedesktop.resolve1" {
+		a.signalFailure = errors.New("original resolved authority changed after capture")
+	}
+}
+
+func (a *RouterVPNResolvedAuthority) current(ctx context.Context) error {
+	if a == nil || ctx == nil || a.lifetime == nil || a.physical == nil || ctx.Err() != nil || a.lifetime.Err() != nil {
+		return errors.New("resolved authority lost original operation")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || deadline.After(a.deadline) {
+		return errors.New("resolved authority cannot renew original deadline")
+	}
+	r := &a.native.routervpnResolver
+	if r.closed || r.retiring || a.physical.Identity() != a.identity {
+		return errors.New("resolved authority lost original owner")
+	}
+	if a.namedBus {
+		if err := r.busCurrent(); err != nil {
+			return err
+		}
+	}
+	if err := r.namespaceCurrent(); err != nil {
+		return err
+	}
+	if err := r.transportCurrent(); err != nil {
+		return err
+	}
+	if err := r.daemonCurrent(); err != nil {
+		return err
+	}
+	device, inode, links, err := a.physical.ResolvedNamespace(ctx)
+	if err != nil || device != a.namespaceDevice || inode != a.namespaceInode || !reflect.DeepEqual(links, a.links) {
+		return errors.Join(errors.New("resolved authority physical namespace or cohort changed"), err)
+	}
+	var id, owner string
+	if err = a.busRead(ctx, "GetId", &id); err != nil {
+		return err
+	}
+	if id != a.busID {
+		return errors.New("resolved system bus identity changed")
+	}
+	if err = a.busRead(ctx, "GetNameOwner", &owner, "org.freedesktop.resolve1"); err != nil {
+		return err
+	}
+	if owner != r.unique {
+		return errors.New("resolved original daemon was replaced")
+	}
+	r.wireMu.Lock()
+	defer r.wireMu.Unlock()
+	return errors.Join(a.signalFailure, r.wireFailure, ctx.Err())
+}
+
+func (a *RouterVPNResolvedAuthority) read(ctx context.Context, path, method string, out []any, args ...any) error {
+	r := &a.native.routervpnResolver
+	if err := r.daemonCurrent(); err != nil {
+		return err
+	}
+	if err := r.issue(ctx, r.unique, path, method, false, args...); err != nil {
+		return err
+	}
+	p, err := r.join(ctx)
+	if err != nil {
+		if p != nil && p.call != nil && resolvedIsRemoteError(err) {
+			return errors.Join(err, r.clear(p), r.daemonCurrent(), ctx.Err())
+		}
+		return err
+	}
+	err = p.call.Store(out...)
+	return errors.Join(err, r.clear(p), r.daemonCurrent(), ctx.Err())
+}
+
+func (a *RouterVPNResolvedAuthority) Policy(ctx context.Context) (string, error) {
+	if a == nil {
+		return "", errors.New("missing original resolved authority")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r := &a.native.routervpnResolver
+	if err := LockContext(ctx, &r.mu); err != nil {
+		return "", err
+	}
+	defer r.mu.Unlock()
+	if err := a.current(ctx); err != nil {
+		return "", err
+	}
+	raw, err := a.capturePolicy(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(a.policy) == 0 || !bytes.Equal(raw, a.policy) {
+		return "", errors.New("resolved original policy changed")
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	return string(a.policy), nil
+}
+
+func (a *RouterVPNResolvedAuthority) Close(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+	return a.native.routervpnLinuxResolverRetire(ctx)
+}
+
+type resolvedManagerDNS struct {
+	Index, Family int32
+	Address       []byte
+	Port          uint16
+	ServerName    string
+}
+type resolvedLinkDNS struct {
+	Family     int32
+	Address    []byte
+	Port       uint16
+	ServerName string
+}
+type resolvedManagerDomain struct {
+	Index       int32
+	Name        string
+	RoutingOnly bool
+}
+type resolvedLinkDomain struct {
+	Name        string
+	RoutingOnly bool
+}
+
+func resolvedAddress(index, family int32, address []byte, port uint16, name string) (ResolvedDNS, error) {
+	ip, ok := netip.AddrFromSlice(address)
+	if !ok || family == unix.AF_INET && len(address) != 4 || family == unix.AF_INET6 && len(address) != 16 || family != unix.AF_INET && family != unix.AF_INET6 {
+		return ResolvedDNS{}, errors.New("resolved daemon returned invalid native address family")
+	}
+	return ResolvedDNS{Index: index, Address: ip.String(), Port: port, ServerName: name}, nil
+}
+
+func resolvedProperty(properties map[string]dbus.Variant, key string, out any) error {
+	value, ok := properties[key]
+	if !ok {
+		return fmt.Errorf("original resolved policy omitted %s", key)
+	}
+	return dbus.Store([]any{value.Value()}, out)
+}
+
+func (a *RouterVPNResolvedAuthority) scope(ctx context.Context, path, iface string, index int32) (ResolvedScope, []ResolvedDNS, string, error) {
+	var properties map[string]dbus.Variant
+	s := ResolvedScope{Index: index}
+	if err := a.read(ctx, path, "org.freedesktop.DBus.Properties.GetAll", []any{&properties}, iface); err != nil {
+		return s, nil, "", err
+	}
+	return resolvedDecodeScope(properties, index)
+}
+
+func resolvedDecodeScope(properties map[string]dbus.Variant, index int32) (ResolvedScope, []ResolvedDNS, string, error) {
+	s := ResolvedScope{Index: index}
+	if len(properties) > 128 {
+		return s, nil, "", errors.New("resolved properties exceed bounded inventory")
+	}
+	for key, out := range map[string]any{"LLMNR": &s.LLMNR, "MulticastDNS": &s.MulticastDNS, "DNSOverTLS": &s.DNSOverTLS, "DNSSEC": &s.DNSSEC, "DNSSECNegativeTrustAnchors": &s.NegativeTrustAnchors} {
+		if err := resolvedProperty(properties, key, out); err != nil {
+			return s, nil, "", err
+		}
+	}
+	var fallback []ResolvedDNS
+	var hostname string
+	if index == 0 {
+		var dns, fallbackRows []resolvedManagerDNS
+		var current resolvedManagerDNS
+		var domains []resolvedManagerDomain
+		for key, out := range map[string]any{"DNSEx": &dns, "FallbackDNSEx": &fallbackRows, "CurrentDNSServerEx": &current, "Domains": &domains, "LLMNRHostname": &hostname} {
+			if err := resolvedProperty(properties, key, out); err != nil {
+				return s, nil, "", err
+			}
+		}
+		if len(dns) > 64 || len(fallbackRows) > 64 || len(domains) > 128 {
+			return s, nil, "", errors.New("resolved manager inventory exceeds bound")
+		}
+		for _, row := range dns {
+			value, err := resolvedAddress(row.Index, row.Family, row.Address, row.Port, row.ServerName)
+			if err != nil {
+				return s, nil, "", err
+			}
+			s.DNS = append(s.DNS, value)
+		}
+		for _, row := range fallbackRows {
+			value, err := resolvedAddress(row.Index, row.Family, row.Address, row.Port, row.ServerName)
+			if err != nil {
+				return s, nil, "", err
+			}
+			fallback = append(fallback, value)
+		}
+		if len(current.Address) == 0 && (current.Index != 0 || current.Family != 0 || current.Port != 0 || current.ServerName != "") {
+			return s, nil, "", errors.New("resolved current server omitted captured address")
+		}
+		if len(current.Address) > 0 {
+			value, err := resolvedAddress(current.Index, current.Family, current.Address, current.Port, current.ServerName)
+			if err != nil {
+				return s, nil, "", err
+			}
+			s.CurrentDNS = &value
+		}
+		for _, row := range domains {
+			s.Domains = append(s.Domains, ResolvedDomain{Index: row.Index, Name: row.Name, RoutingOnly: row.RoutingOnly})
+		}
+	} else {
+		var dns []resolvedLinkDNS
+		var current resolvedLinkDNS
+		var domains []resolvedLinkDomain
+		for key, out := range map[string]any{"DNSEx": &dns, "CurrentDNSServerEx": &current, "Domains": &domains, "DefaultRoute": &s.DefaultRoute} {
+			if err := resolvedProperty(properties, key, out); err != nil {
+				return s, nil, "", err
+			}
+		}
+		if len(dns) > 64 || len(domains) > 128 {
+			return s, nil, "", errors.New("resolved link inventory exceeds bound")
+		}
+		for _, row := range dns {
+			value, err := resolvedAddress(index, row.Family, row.Address, row.Port, row.ServerName)
+			if err != nil {
+				return s, nil, "", err
+			}
+			s.DNS = append(s.DNS, value)
+		}
+		if len(current.Address) == 0 && (current.Family != 0 || current.Port != 0 || current.ServerName != "") {
+			return s, nil, "", errors.New("resolved current link server omitted captured address")
+		}
+		if len(current.Address) > 0 {
+			value, err := resolvedAddress(index, current.Family, current.Address, current.Port, current.ServerName)
+			if err != nil {
+				return s, nil, "", err
+			}
+			s.CurrentDNS = &value
+		}
+		for _, row := range domains {
+			s.Domains = append(s.Domains, ResolvedDomain{Index: index, Name: row.Name, RoutingOnly: row.RoutingOnly})
+		}
+	}
+	return s, fallback, hostname, nil
+}
+
+func (a *RouterVPNResolvedAuthority) capturePolicy(ctx context.Context) ([]byte, error) {
+	p := ResolvedPolicy{Schema: 1, Authority: ResolvedAuthority{BusID: a.busID, UniqueOwner: a.native.routervpnResolver.unique, PID: a.native.routervpnResolver.pid, NamespaceDevice: a.namespaceDevice, NamespaceInode: a.namespaceInode, PhysicalSHA256: a.identity}}
+	var err error
+	p.Manager, p.FallbackDNS, p.LLMNRHostname, err = a.scope(ctx, "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager", 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, index := range a.links {
+		var path dbus.ObjectPath
+		if err = a.read(ctx, "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager.GetLink", []any{&path}, index); err != nil {
+			if resolvedRemoteErrorName(err) == "org.freedesktop.resolve1.NoSuchLink" {
+				continue
+			}
+			return nil, err
+		}
+		if !path.IsValid() || string(path) != fmt.Sprintf("/org/freedesktop/resolve1/link/_%d", index) {
+			return nil, errors.New("resolved link object does not name original physical index")
+		}
+		link, _, _, err := a.scope(ctx, string(path), "org.freedesktop.resolve1.Link", index)
+		if err != nil {
+			return nil, err
+		}
+		p.Links = append(p.Links, link)
+	}
+	return p.Canonical()
+}
+
+type RouterVPNResolvedLocalResult = ResolvedLocalResult
+
+// Preflight asks the original daemon, not the helper's hosts file or hostname.
+// NO_NETWORK|NO_CACHE|NO_SEARCH leaves local synthetic/hosts authority enabled.
+// https://www.freedesktop.org/software/systemd/man/252/org.freedesktop.resolve1.html
+func (a *RouterVPNResolvedAuthority) Preflight(ctx context.Context, name string) (string, error) {
+	if a == nil || !ResolvedName(name, false) {
+		return "", errors.New("resolved preflight requires exact bounded name")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r := &a.native.routervpnResolver
+	if err := LockContext(ctx, &r.mu); err != nil {
+		return "", err
+	}
+	defer r.mu.Unlock()
+	if err := a.current(ctx); err != nil {
+		return "", err
+	}
+	raw, err := a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(raw, a.policy) {
+		return "", errors.Join(errors.New("resolved preflight policy changed"), err)
+	}
+	const flags = uint64(1<<15 | 1<<12 | 1<<8)
+	if err = r.issue(ctx, r.unique, "/org/freedesktop/resolve1", "org.freedesktop.resolve1.Manager.ResolveHostname", false, int32(0), name, int32(unix.AF_UNSPEC), flags); err != nil {
+		return "", err
+	}
+	call, err := r.join(ctx)
+	result := RouterVPNResolvedLocalResult{PolicySHA256: ResolvedPolicySHA256(a.policy), Name: name}
+	if err != nil {
+		if resolvedRemoteErrorName(err) != "org.freedesktop.resolve1.NoSource" {
+			return "", err
+		}
+		// Only the exact authenticated daemon's no-source verdict proves the
+		// local-only operation had no answer. Other errors never admit upstream.
+	} else {
+		var rows []struct {
+			Index, Family int32
+			Address       []byte
+		}
+		if err = call.call.Store(&rows, &result.CanonicalName, &result.Flags); err != nil {
+			return "", err
+		}
+		if len(rows) == 0 || len(rows) > 128 || !ResolvedName(result.CanonicalName, false) || result.Flags&(1<<9) == 0 || result.Flags&(1<<20|1<<23) != 0 {
+			return "", errors.New("resolved local-only response has no authenticated local origin")
+		}
+		for _, row := range rows {
+			value, err := resolvedAddress(row.Index, row.Family, row.Address, 0, "")
+			if err != nil {
+				return "", err
+			}
+			result.Addresses = append(result.Addresses, value)
+		}
+		result.Local = true
+	}
+	if err = r.clear(call); err != nil {
+		return "", err
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	raw, err = a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(raw, a.policy) {
+		return "", errors.Join(errors.New("resolved policy changed during local-only preflight"), err)
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	encoded, err := result.Canonical()
+	return string(encoded), err
+}
+
+func resolvedRemoteErrorName(err error) string {
+	var value dbus.Error
+	if errors.As(err, &value) {
+		return value.Name
+	}
+	var pointer *dbus.Error
+	if errors.As(err, &pointer) && pointer != nil {
+		return pointer.Name
+	}
+	return ""
+}
+func resolvedIsRemoteError(err error) bool { return resolvedRemoteErrorName(err) != "" }

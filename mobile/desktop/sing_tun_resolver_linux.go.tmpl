@@ -63,6 +63,7 @@ type routerVPNResolverCall struct {
 type routerVPNLinuxResolver struct {
 	mu                                            sync.Mutex
 	wireMu                                        sync.Mutex
+	signalObserver                                func(*dbus.Message)
 	namespace, originalNamespace                  *os.File
 	namespaceInfo                                 os.FileInfo
 	busPath                                       string
@@ -308,6 +309,9 @@ func resolverMessageFDs(value any, result map[int]*os.File) error {
 func (r *routerVPNLinuxResolver) incoming(msg *dbus.Message) {
 	r.wireMu.Lock()
 	defer r.wireMu.Unlock()
+	if r.signalObserver != nil {
+		r.signalObserver(msg)
+	}
 	p := r.pending
 	serial, _ := msg.Headers[dbus.FieldReplySerial].Value().(uint32)
 	fds := map[int]*os.File{}

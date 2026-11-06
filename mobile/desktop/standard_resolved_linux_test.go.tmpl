@@ -1,0 +1,108 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+)
+
+type resolvedCommandReader struct {
+	policy, local       string
+	policyErr, localErr error
+	name                string
+}
+
+func (r *resolvedCommandReader) Policy(context.Context) (string, error) { return r.policy, r.policyErr }
+func (r *resolvedCommandReader) Preflight(_ context.Context, name string) (string, error) {
+	r.name = name
+	return r.local, r.localErr
+}
+
+type resolvedCommandPeer struct {
+	frames    [][]byte
+	checks    int
+	failCheck int
+	failSend  bool
+}
+
+func (p *resolvedCommandPeer) Current(ctx context.Context) error {
+	p.checks++
+	if p.checks == p.failCheck {
+		return errors.New("original peer lost")
+	}
+	return ctx.Err()
+}
+func (p *resolvedCommandPeer) Send(ctx context.Context, body []byte) error {
+	if p.failSend {
+		return errors.New("original send failed")
+	}
+	p.frames = append(p.frames, append([]byte(nil), body...))
+	return ctx.Err()
+}
+
+func TestRouterVPNResolvedFixedCommandObservation(t *testing.T) {
+	for _, fault := range []string{"success", "lost-parent", "lost-daemon", "local-refusal", "wrong-local-name", "wrong-policy", "lost-send", "late-parent", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			policy := standardengine.ResolvedPolicy{Schema: 1, Authority: standardengine.ResolvedAuthority{BusID: strings.Repeat("a", 32), UniqueOwner: ":1.77", PID: 1, NamespaceInode: 3, PhysicalSHA256: strings.Repeat("b", 64)}, LLMNRHostname: "original-host"}
+			raw, err := policy.Canonical()
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := "entry.example"
+			hash := standardengine.ResolvedPolicySHA256(raw)
+			local := standardengine.ResolvedLocalResult{PolicySHA256: hash, Name: name}
+			if fault == "wrong-local-name" {
+				local.Name = "replacement.example"
+			}
+			if fault == "wrong-policy" {
+				local.PolicySHA256 = strings.Repeat("c", 64)
+			}
+			localRaw, err := local.Canonical()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &resolvedCommandReader{policy: string(raw), local: string(localRaw)}
+			peer := &resolvedCommandPeer{}
+			switch fault {
+			case "lost-parent":
+				peer.failCheck = 1
+			case "lost-daemon":
+				reader.policyErr = errors.New("daemon replaced")
+			case "local-refusal":
+				reader.localErr = errors.New("unknown daemon method")
+			case "lost-send":
+				peer.failSend = true
+			case "late-parent":
+				peer.failCheck = 2
+			case "cancelled":
+				cancel()
+			}
+			capture := strings.Repeat("d", 64)
+			err = routerVPNResolvedObserve(ctx, reader, peer, capture, 0, name)
+			if fault != "success" {
+				if err == nil {
+					t.Fatal("fixed command admitted causal fault", fault)
+				}
+				if fault != "late-parent" && len(peer.frames) != 0 {
+					t.Fatal("failed observation emitted captured bytes")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := standardengine.DecodeResolvedFrames(peer.frames, capture, 0, name)
+			if err != nil || string(result.Policy) != string(raw) || reader.name != name || peer.checks != 2 {
+				t.Fatal("fixed command omitted exact source/guard", err)
+			}
+		})
+	}
+}

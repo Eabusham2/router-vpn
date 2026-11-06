@@ -359,12 +359,21 @@ def prepare(vendor):
         if target.is_symlink():
             raise ValueError('Linked native network receipt destination')
         target.write_bytes(raw.replace(b'package desktopnetwork\n', b'package tun\n', 1))
+    for name in ('resolved_policy.go', 'resolved_protocol.go', 'resolved_local.go'):
+        path = ROOT/'internal/standardengine'/name
+        raw = path.read_bytes()
+        if path.is_symlink() or raw.count(b'package standardengine\n') != 1:
+            raise ValueError('Native resolved policy source boundary changed')
+        target = destination/('routervpn_'+name)
+        if target.is_symlink():
+            raise ValueError('Linked native resolved policy destination')
+        target.write_bytes(raw.replace(b'package standardengine\n', b'package tun\n', 1))
     inbound = vendor/'protocol/tun/inbound.go'
     raw = inbound.read_bytes()
     prepared = inbound_retirement_patch(raw)
     if prepared != raw:
         inbound.write_bytes(prepared)
-    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux_test.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
+    for name in ('sing_tun_monitor_context.go.tmpl', 'sing_tun_monitor_context_test.go.tmpl', 'sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_inventory_linux.go.tmpl', 'sing_tun_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux.go.tmpl', 'sing_tun_address_retirement_linux_test.go.tmpl', 'sing_tun_retirement_socket_linux.go.tmpl', 'sing_tun_retirement_linux_test.go.tmpl', 'sing_tun_retirement_native_linux_test.go.tmpl', 'sing_tun_resolver_linux.go.tmpl', 'sing_tun_resolver_linux_test.go.tmpl', 'sing_tun_resolved_authority_linux.go.tmpl', 'sing_tun_resolved_authority_linux_test.go.tmpl', 'sing_tun_dns_test.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_network_darwin_test.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         path = ROOT/'mobile/desktop'/name
         if path.is_symlink():
             raise ValueError('Linked native network receipt template')

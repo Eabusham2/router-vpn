@@ -1,0 +1,234 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/standardengine"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	var capture string
+	command := &cobra.Command{Use: "routervpn-resolved-policy", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(_ *cobra.Command, _ []string) error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := routerVPNRunResolved(ctx, capture); err != nil {
+			return errors.New("original resolved authority capture, observation or cleanup failed")
+		}
+		return nil
+	}}
+	command.Flags().StringVar(&capture, "capture-sha256", "", "original inherited resolved capture")
+	mainCommand.AddCommand(command)
+}
+
+type routerVPNResolvedReader interface {
+	Policy(context.Context) (string, error)
+	Preflight(context.Context, string) (string, error)
+}
+type routerVPNResolvedPeer interface {
+	Current(context.Context) error
+	Send(context.Context, []byte) error
+}
+
+func routerVPNResolvedObserve(ctx context.Context, reader routerVPNResolvedReader, peer routerVPNResolvedPeer, capture string, sequence uint32, name string) error {
+	if reader == nil || peer == nil {
+		return errors.New("resolved observation lost original native owner")
+	}
+	if err := peer.Current(ctx); err != nil {
+		return err
+	}
+	policy, err := reader.Policy(ctx)
+	if err != nil {
+		return err
+	}
+	local, err := reader.Preflight(ctx, name)
+	if err != nil {
+		return err
+	}
+	frames, err := standardengine.BuildResolvedFrames(capture, sequence, name, policy, local)
+	if err != nil {
+		return err
+	}
+	for _, frame := range frames {
+		if err = peer.Send(ctx, frame); err != nil {
+			return err
+		}
+	}
+	return peer.Current(ctx)
+}
+
+// This fixed helper never opens public DNS sockets. It keeps the same original
+// authenticated daemon/physical authority alive until explicit Close, original
+// parent loss, cancellation, or the unchanged captured deadline. Receiving an
+// RPC does not renew that lifetime. Close acknowledgement is the joined child
+// exit after cleanup, never an early message claiming resources are gone.
+func routerVPNRunResolved(parent context.Context, expected string) (failure error) {
+	captureFile := os.NewFile(standardengine.CaptureFD, "original-resolved-capture")
+	imageFile := os.NewFile(3, "original-resolved-sealed-image")
+	parentFile := os.NewFile(standardengine.ParentFD, "original-resolved-parent")
+	channelFile := os.NewFile(standardengine.ChannelFD, "original-resolved-channel")
+	defer captureFile.Close()
+	defer imageFile.Close()
+	var channel *linuxprocess.Channel
+	var witness *linuxprocess.Witness
+	var peer *linuxprocess.Bootstrap
+	var observer *desktopnetwork.Tracker
+	var authority *tun.RouterVPNResolvedAuthority
+	var stop context.CancelFunc
+	var watchJoined <-chan struct{}
+	parentFailures := make(chan error, 1)
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+		if watchJoined != nil {
+			<-watchJoined
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if authority != nil {
+			failure = errors.Join(failure, authority.Close(cleanup))
+		}
+		if observer != nil {
+			failure = errors.Join(failure, observer.Close())
+		}
+		if peer != nil {
+			failure = errors.Join(failure, peer.Close(cleanup))
+		}
+		if channel != nil {
+			failure = errors.Join(failure, channel.Close(cleanup))
+		}
+		if witness != nil {
+			failure = errors.Join(failure, witness.Close(cleanup))
+		}
+		if parentFile != nil {
+			failure = errors.Join(failure, parentFile.Close())
+		}
+		if channelFile != nil {
+			failure = errors.Join(failure, channelFile.Close())
+		}
+		select {
+		case err := <-parentFailures:
+			failure = errors.Join(failure, err)
+		default:
+		}
+	}()
+	for _, file := range []*os.File{captureFile, imageFile, parentFile, channelFile} {
+		if err := linuxprocess.SetCloseOnExec(file); err != nil {
+			return err
+		}
+	}
+	raw, err := standardengine.ReadSealed(captureFile, 2048)
+	if err != nil {
+		return err
+	}
+	capture, err := standardengine.DecodeResolvedCapture(raw, expected)
+	if err != nil {
+		return err
+	}
+	deadline := time.Unix(0, capture.DeadlineNS)
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > 2*time.Minute {
+		return errors.New("resolved helper lost original bounded deadline")
+	}
+	bounded, end := context.WithDeadline(parent, deadline)
+	defer end()
+	lifetime, cancel := context.WithCancel(bounded)
+	stop = cancel
+	channel, err = linuxprocess.CaptureChannel(channelFile)
+	channelFile = nil
+	if err != nil {
+		return err
+	}
+	witness, err = linuxprocess.CaptureDirectory(lifetime, parentFile, channel.CreatorPID())
+	parentFile = nil
+	if err != nil {
+		return err
+	}
+	parentFile, err = witness.DuplicateDirectory(lifetime)
+	if err != nil {
+		return err
+	}
+	image, err := linuxprocess.CaptureSealedImage(imageFile)
+	if err != nil {
+		return err
+	}
+	peer, err = linuxprocess.BindInheritedSealedParent(lifetime, channel, parentFile, expected, image)
+	channel, parentFile = nil, nil
+	if err != nil {
+		return err
+	}
+	originalParent, _, err := peer.ObservationsContext(lifetime, expected)
+	if err != nil {
+		return err
+	}
+	actual, err := witness.Current(lifetime)
+	if err != nil || actual != originalParent {
+		return errors.Join(errors.New("resolved parent observer differs from authenticated original"), err)
+	}
+	joined := make(chan struct{})
+	watchJoined = joined
+	go func() {
+		defer close(joined)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-lifetime.Done():
+				return
+			case <-ticker.C:
+			}
+			check, finish := context.WithTimeout(lifetime, 100*time.Millisecond)
+			actual, err := witness.Current(check)
+			pending := common.ObservationContextExpired(check, err)
+			finish()
+			if pending {
+				continue
+			}
+			if err != nil || actual != originalParent {
+				parentFailures <- errors.Join(errors.New("resolved helper lost original parent"), err)
+				cancel()
+				return
+			}
+		}
+	}()
+	observer, err = desktopnetwork.Open(lifetime, nil)
+	if err != nil {
+		return err
+	}
+	authority, err = tun.OpenRouterVPNResolvedAuthority(lifetime, observer)
+	if err != nil {
+		return err
+	}
+	if err = routerVPNResolvedObserve(lifetime, authority, peer, expected, 0, capture.Name); err != nil {
+		return err
+	}
+	for sequence := uint32(1); sequence <= 64; sequence++ {
+		body, err := peer.ReceiveAfterReady(lifetime)
+		if err != nil {
+			return err
+		}
+		request, err := standardengine.DecodeResolvedRequest(body, expected, sequence)
+		if err != nil {
+			return err
+		}
+		if request.Action == "close" {
+			return nil
+		}
+		if err = routerVPNResolvedObserve(lifetime, authority, peer, expected, sequence, capture.Name); err != nil {
+			return err
+		}
+	}
+	return errors.New("resolved helper exhausted original bounded observation count")
+}
