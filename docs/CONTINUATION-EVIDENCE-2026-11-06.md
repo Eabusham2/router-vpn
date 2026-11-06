@@ -8,7 +8,7 @@ original requirements. The live starting branch was
 1,294 commits ahead of the older published `745b3e41` release. Old patches were
 not replayed over that history. The published units below retain normal
 `main` ancestry through
-[`12409a40b5e271d02180060666ca0cdaa4b5504b`](https://github.com/Eabusham2/router-vpn/commit/12409a40b5e271d02180060666ca0cdaa4b5504b).
+[`ad8a1f25b10e6fd4fa2d48de81f5ee9f2904ad25`](https://github.com/Eabusham2/router-vpn/commit/ad8a1f25b10e6fd4fa2d48de81f5ee9f2904ad25).
 Each remote tree was compared with the locally tested committed tree, and the
 remote branch was read back before adoption. A saved patch, local commit or API
 schema was not counted as a successful push.
@@ -40,7 +40,7 @@ overlapping lists are not added into a completion denominator.
 
 | Requirement / correction | Platforms and shipping paths | Executable evidence | Remaining boundary |
 |---|---|---|---|
-| Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 235 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers; subsequent rows retain their exact source and verdict counts | Other imported/final families, Server/Compare for this direction, complete native device/network acceptance |
+| Router/custom entry and final roles; original #214–224; native single VPN owner | Android `AndroidImportedRouter*` helpers and multihop host; Apple PacketTunnel/imported runtime; `internal/mobilemultihop/imported_entry.go` | 247 preserved/extended source graphs, actual Java and Swift exports, pinned native parsing and encrypted peers; subsequent rows retain their exact source and verdict counts | Other imported/final families, CONNECT datagrams/layers, Server/Compare for this direction, complete native device/network acceptance |
 | Original #229–240, Auto/Fixed/Retest/Cancel and later packet-envelope limits | `internal/awgpolicy/packet_*`, `internal/mobilemtu`, mobile compiler/metadata | Race tests; complete data/control/cookie/junk/Start Layer bounds; Fixed overflow rejection; full-size decrypted IPv4/IPv6 peer observations | Effective configured cap is explicitly unmeasured; physical PMTU, transitions and Jumbo acceptance remain separate |
 | Original #200–224/#337, exact captured ownership and full temporary-test restoration | Windows retained desktop host, `desktop_external_owned_sources.go`, independent entry/final captures | Shared/client race tests, two architecture test-binary builds, 53 mandatory native leaves and two causal mutations | Hosted WFP runtime and physical acceptance remain separate; the exact Speed Lab/Always-to-Off fixture failures below now have published corrections |
 | Selected DNS/Home AdGuard, LAN/IPv6 and original resolver authority | `internal/standardengine/resolved_*`, retained native resolver helper, finite kernel grants and parallel equal-best scope caller | Canonical bounded frames, original-daemon local-only preflight, exact upstream port/TLS/link transport and active trust-anchor codec/race tests | Installed privileged composition and kernel execution remain unaccepted; captured DNSSEC child/cohort, cross-domain alias caller, bounded authenticated compatibility fallback and typed root collector are published; remaining semantic branches and installed native acceptance are still required |
@@ -300,6 +300,21 @@ Their current bytes were preserved. These commits do not by themselves imply
 that every imported OpenVPN graph is admitted or that a configured interface
 capacity is measured physical PMTU.
 
+### Captured CONNECT and shipping deeper private DNS
+
+| Published commit | Delivered behavior and focused evidence | Remaining boundary |
+|---|---|---|
+| [`3800b4ee`](https://github.com/Eabusham2/router-vpn/commit/3800b4ee9e24b43a95492c279bab017d8277a1f7) | Adds opaque protected DS reply/chain ownership. Exact two-question dependency groups must close before a root group can inherit the original context, lease and protection. Direct and opportunistic ordinary APIs cannot bypass the dependency purpose. The related private/DNSSEC/opportunistic race run passes in 1.204s; strict dependency inventory and both source/registry checks pass. The held-mutex cancellation witness returns before release and joins. | This prerequisite alone did not activate shipping lookup. Raw model packets cannot manufacture protected reply tokens; installed kernel execution remains distinct. |
+| [`9cf424f3`](https://github.com/Eabusham2/router-vpn/commit/9cf424f3a24665bf048bb543921ab9bcd978f219) | Adds twelve HTTP/HTTPS CONNECT → paired SS2022 Local graphs, both layers Off, retaining exact Home/custom literal TCP DNS and independent source/proof identity. The inventory grows from 235 to 247; the complete encrypted peer run passes 976 verdicts. Actual Swift/Go producer checks, Apple parsing, Android/shared parsing, saved profiles and runtime/Home integration pass with the precise cutoffs in `MOBILE-IMPORTED-ROUTER-PATH.md`. Final merged race checks preserve the published Compare-progress fix. Current Android startup timing additionally passes 3,785 checks/1,089 cases and three causal controls. | TCP-only capability is explicit. Default Home UDP, UoT, Start Layers, datagram finals and Server/Compare remain unfinished for this direction. The full 976 run predates the explicit UoT-field refusal/progress merge; all twelve complete CONNECT captures remain unchanged. Native package/device acceptance is separate. |
+| [`c06e59be`](https://github.com/Eabusham2/router-vpn/commit/c06e59bebaf4a98effa8a1327c9834e0fe6a3114) | Wires the three-label candidate into the shipping Linux lookup after the original cohort joins. Two protected DS replies and a separate authenticated root verdict must retain the exact original plan, candidate and current physical owner. Workers/child processes/groups join successfully before final proof adoption. Full `TestResolved` race passes in 3.158s; strict new caller and transport groups pass in 1.568s/1.046s; two inventory checks pass in 0.105s. Positive equal-best siblings, provisional negatives, invalid/incomplete dependencies, cancellation and stale ownership are covered. | No original deadline, query budget or 32-cohort bound increases. Only available auxiliary capacity is used. Actual installed deep-private RPC/kernel execution remains required. |
+| [`ad8a1f25`](https://github.com/Eabusham2/router-vpn/commit/ad8a1f25b10e6fd4fa2d48de81f5ee9f2904ad25) | Repairs the exact Android Home fixture composition failure exposed by run 42186961587 at `9cf424f3`: the extracted imported capability now compiles with the actual external `supports` and `protocol` methods. The complete shipping Home store/controller fixture passes 7,891 checks, 372 identity pairs, 24 no-write rejections and nine serialized adoption races; the transaction-lock and both old-admission mutants still reject. CONNECT identity and unsupported finals are explicit cases. | Production admission is unchanged. Android OS/native handles remain explicit boundaries in this host fixture; actual APK/native CI and device behavior remain separate. |
+
+Concurrent `b25c93fb` includes the actual imported capability in the startup
+deadline fixture. Concurrent `9e0341f0` joins the original CONNECT handshake
+socket close before returning a cancelled response, with a deterministic actual
+protocol witness and guarded pinned-source preparation. Both were inspected and
+preserved before the CONNECT publication.
+
 The actual macOS whitening job at `bc6cffef`,
 [run 42182257699/job 127774343908](https://github.com/Eabusham2/router-vpn/actions/runs/42182257699/job/127774343908),
 failed the independent userspace UoT provider's 17,000-byte datagram with EOF;
@@ -307,8 +322,10 @@ the separate real Box provider passed. The post-decryption fixture UDP dial
 omitted the bounded socket-buffer control already used by the shipping relay
 and echo listener. Concurrent `1cac6bf7` installs that control and retains the
 actual provider error in diagnostics. Its diff was inspected and preserved;
-the equivalent unpublished local edit was not duplicated. A passing macOS
-rerun is still required. This fixture correction changes no system-wide socket
+the equivalent unpublished local edit was not duplicated. The exact `1cac6bf7`
+[rerun 42184535561](https://github.com/Eabusham2/router-vpn/actions/runs/42184535561)
+now passes macOS, Linux and Apple composition. The macOS log explicitly records
+the previously failing userspace packet case as passed. This fixture correction changes no system-wide socket
 settings and does not relax the datagram size or deadline.
 
 At `bc6cffef`, the
@@ -318,6 +335,16 @@ TUN traffic, selected DNS, MTU rollback, pre-acknowledgement TUN closure and
 original namespace cleanup/join. This is the generated-command namespace gate,
 not the separate installed resolver-service/private-negative suite and not
 physical-device or private-network acceptance.
+
+At the same `bc6cffef` source, Windows physical-composition run 42182258201
+has successful native bootstrap and captured startup jobs on AMD64 and ARM64.
+The subsequent 08:27 UTC read reports AMD64 actual WFP job 127778848122 failed
+and ARM64 WFP job 127778848079 cancelled. The observed failure is the SOCKS
+`home-lan-off` selected-DNS proof after its ordinary TCP/UDP deny controls passed;
+the normal On-connect/Always SOCKS cases pass. The provider observed a control
+association but no UDP DNS. The underlying per-socket cause requires diagnosis;
+neither the earlier four successes nor a proposed filter explanation establishes
+WFP acceptance.
 
 **Release observation at 2026-11-06 08:04:06 UTC:** remote `main` was
 `12409a40`; the releases collection still ended with the October 24
@@ -453,8 +480,9 @@ not a full runtime test pass.
    traversal, authenticated sticky-DO compatibility continuation, and the typed
    root-trust collector are now published bounded paths. Remaining DNSSEC
    semantic branches still require implementation/evidence. The exact three-label
-   DS model and authenticated-child controls are published; its original protected
-   transport and lookup caller are not yet wired at this cutoff. Transient monitor
+   DS model, authenticated-child controls, original protected transport and
+   shipping lookup caller are published. Installed deep-private execution is
+   still pending. Transient monitor
    fields or generic bogus/transport results are not fallback authority. Actual
    Unix monitor, original D-Bus broker and installed native acceptance remain
    pending. A configured mode or unauthenticated snapshot is not negotiated-state
@@ -470,7 +498,9 @@ not a full runtime test pass.
    Server/Compare execution. Mobile SOCKS5 to paired SS/HY/WG/AWG Local paths and retained desktop SS-entry
    independent layers to SS/HY2 are now published as bounded increments. All five
    paired mobile finals support Off, AES-256-GCM, and AES-256-GCM + XOR whitening behind ordinary SOCKS; the independent entry/final layer matrix and its bounded packet envelopes are now published. Server/Compare remain open for this imported-entry direction. Wider
-   graph/mode coverage must still be implemented and verified. Safe refusal is
+   Twelve mobile CONNECT-to-SS2022 Local graphs with selected literal TCP DNS
+   are published; CONNECT UDP/Home DNS and independent layers remain open.
+   Wider graph/mode coverage must still be implemented and verified. Safe refusal is
    unfinished scope, not delivery. Windows paired WG to external SS2022 now has
    bounded Local and Server host integration; its Compare host and actual WFP
    acceptance remain separate from the shared progress correction above.
