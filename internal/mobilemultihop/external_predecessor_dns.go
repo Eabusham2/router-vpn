@@ -154,10 +154,8 @@ func predecessorResolverSelection(value any) (map[string]any, error) {
 	case map[string]any:
 		result = predecessorCopy(value)
 	}
-	if !maxFields(result, "server", "strategy", "disable_cache", "rewrite_ttl", "client_subnet") || !exactID.MatchString(predecessorText(result, "server")) {
-		return nil, externalPredecessorError
-	}
-	if raw, exists := result["strategy"]; exists && raw != "" && raw != "prefer_ipv4" && raw != "prefer_ipv6" && raw != "ipv4_only" && raw != "ipv6_only" {
+	server := predecessorText(result, "server")
+	if !exactID.MatchString(server) || externalDNSQuery(result, server) != nil {
 		return nil, externalPredecessorError
 	}
 	return result, nil

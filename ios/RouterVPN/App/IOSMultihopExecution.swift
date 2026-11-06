@@ -412,15 +412,24 @@ enum IOSImportedEntryMultihop {
         if ["http-connect", "https-connect"].contains(kind) {
             let uot = try configuredCONNECTUoT(final: final, profiles: profiles)
             let layers = uot ? ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] : ["", "off"]
-            let transports = uot ? ["udp", "tcp"] : ["tcp"]
+            let transports = uot ? ["udp", "tcp", "tls", "https", "h3"] : ["tcp", "tls", "https"]
             guard entry["start_layer"] == nil || entry["start_layer"] is String,
                   ["start_layer", "dns_mode", "dns_protocol"].allSatisfy({ final[$0] == nil || final[$0] is String }) else { throw issue() }
-            let dnsMode = final["dns_mode"] as? String ?? ""
-            let savedTransport = final["dns_protocol"] as? String ?? ""
-            let transport = uot && ["", "home"].contains(dnsMode) && savedTransport.isEmpty ? "udp" : savedTransport
+            let dnsMode = (final["dns_mode"] as? String ?? "").lowercased()
+            let savedTransport = (final["dns_protocol"] as? String ?? "").lowercased()
+            let selected: String
+            switch dnsMode {
+            case "", "home": selected = savedTransport.isEmpty ? "udp" : savedTransport
+            case "custom": selected = savedTransport
+            case "dot": selected = "tls"
+            case "doh", "rescue": selected = "https"
+            case "doh3": selected = "h3"
+            case "fastest": selected = "udp"
+            default: throw issue()
+            }
+            let transport = ["dot": "tls", "doh": "https", "doh3": "h3"][selected] ?? selected
             guard ["", "off"].contains(entry["start_layer"] as? String ?? ""),
                   layers.contains(final["start_layer"] as? String ?? ""),
-                  ["", "home", "custom"].contains(final["dns_mode"] as? String ?? ""),
                   transports.contains(transport) else { throw issue() }
         }
         if kind == "shadowsocks" {
@@ -467,6 +476,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. HTTP/HTTPS CONNECT requires SS2022 and an Off entry. Captured UoT-v2 service authority permits UDP or TCP DNS and final AES or AES+XOR; without it, both layers must be Off with explicit TCP DNS. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. HTTP/HTTPS CONNECT requires SS2022 and an Off entry. Selected TCP, DoT and DoH DNS use the captured stream path. Captured UoT-v2 service authority additionally permits UDP/DoH3 and final AES or AES+XOR; without it, both layers must be Off. Resolver hostnames require their saved bootstrap through the same final. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

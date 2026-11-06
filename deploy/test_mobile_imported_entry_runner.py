@@ -103,6 +103,16 @@ class ImportedEntryVerdicts(unittest.TestCase):
   events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
   gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,events[:-1])),expected)
+ def test_selected_connect_dns_inventory(self):
+  self.assertEqual(len(gate.CONNECT_DNS_FILES),44)
+  self.assertEqual(len(gate.FILES),337)
+  self.assertEqual(len(gate.CONNECT_SERVICE_FILES),24)
+  expected=gate.names({'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(gate.CONNECT_DNS_FILES)})
+  self.assertEqual(len(expected),45)
+  events=[{'Action':a,'Test':n} for n in sorted(expected) for a in ('run','pass')]
+  gate.require_verdicts('\n'.join(map(json.dumps,events)),expected)
+  for mutation in (events[:-1],events+[events[-1]],events[:-1]+[dict(events[-1],Action='skip')],events+[{'Action':'pass','Test':'foreign'}]):
+   with self.assertRaises(ValueError):gate.require_verdicts('\n'.join(map(json.dumps,mutation)),expected)
  def test_shipping_invocations(self):
   self.assertIn("test_mobile_imported_entry.py'),str(vendor),'--android'",(ROOT/'deploy/test_android_multihop_pinned.py').read_text())
   self.assertIn('"deploy/test_mobile_imported_entry.py", source, "--native-peers"',(ROOT/'deploy/test_desktop_node_physical.py').read_text())

@@ -113,6 +113,21 @@ public final class ImportedRouterTest {
   check(completed,"source check deadlocked behind store mutation owner");
  }
  static String serviceSHA(byte[] data)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));}
+ static void encryptedCONNECTDNS(AndroidStandardExitStore.Entry entry,JSONObject original,boolean service)throws Exception{
+  for(String protocol:List.of("tls","https","h3"))for(boolean hostname:List.of(false,true)){
+   JSONObject bundle=object(original.toString()),p=profile(bundle);
+   if(!service){bundle.getJSONObject("profiles").getJSONObject("shadowsocks").remove("routervpn-ss-service.json");p.put("start_layer","off");}
+   p.put("dns_mode",hostname?Map.of("tls","dot","https","doh","h3","doh3").get(protocol):"custom").put("dns_protocol",protocol).put("dns_host",hostname?"resolver.example.net":"203.0.113.53").put("dns_port",8853).put("dns_server_name","resolver.example.net").put("dns_path","/owned-dns-query");
+   if(hostname)p.put("dns_bootstrap",new JSONObject().put("server",new JSONObject().put("type",service?"udp":"tcp").put("tag","external-dns-bootstrap").put("server","203.0.113.54").put("server_port",5354).put("detour","proxy")).put("query",new JSONObject().put("server","external-dns-bootstrap").put("timeout","3s").put("disable_optimistic_cache",true)));
+   if(!service&&protocol.equals("h3")){reject("unprovisioned CONNECT cannot carry H3",()->AndroidImportedRouterPath.compile(entry,bundle,"shadowsocks","local"));continue;}
+   String before=bundle.toString();AndroidImportedRouterPath.Compiled c=AndroidImportedRouterPath.compile(entry,bundle,"shadowsocks","local");JSONObject input=object(c.input),dns=object(c.config).getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+   check(dns.getString("type").equals(protocol)&&dns.getString("server").equals(p.getString("dns_host"))&&dns.getInt("server_port")==8853&&dns.getString("detour").equals("proxy")&&dns.getJSONObject("tls").getString("server_name").equals("resolver.example.net"),"encrypted CONNECT changed selected DNS identity");
+   if(!protocol.equals("tls"))check(dns.getString("path").equals("/owned-dns-query"),"encrypted CONNECT changed DNS path");
+   check(before.equals(bundle.toString()),"encrypted CONNECT changed captured node");
+   RouterMultihop restored=AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,c.input);restored.close();
+   if(hostname){check(input.getString("dns_bootstrap").equals(p.getJSONObject("dns_bootstrap").toString()),"encrypted CONNECT changed captured bootstrap");reject("changed CONNECT bootstrap cannot restore",()->{JSONObject changed=object(c.input),bootstrap=object(changed.getString("dns_bootstrap"));bootstrap.getJSONObject("server").put("server","203.0.113.99");changed.put("dns_bootstrap",bootstrap.toString());AndroidImportedRouterPath.prepareExecution(c.config,c.metadata,changed.toString());});}
+  }
+ }
  static void configuredCONNECT(AndroidStandardExitStore.Entry entry,JSONObject original)throws Exception{
   for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String mode:List.of("home","custom"))for(String transport:List.of("udp","tcp")){
    JSONObject bundle=object(original.toString()),profile=profile(bundle),files=bundle.getJSONObject("profiles").getJSONObject("shadowsocks");
@@ -121,6 +136,7 @@ public final class ImportedRouterTest {
    byte[] source=Base64.getDecoder().decode(files.getString("sing-box.json"));JSONObject out=object(new String(source,StandardCharsets.UTF_8)).getJSONArray("outbounds").getJSONObject(0);
    JSONObject claim=new JSONObject().put("schema",1).put("node_id",profile.getString("node_proof_id")).put("configured_image","ghcr.io/sagernet/sing-box:v1.13.12").put("uot_version",2).put("endpoint",out.getString("server")).put("port",out.getInt("server_port")).put("method",out.getString("method")).put("key_sha256",serviceSHA(out.getString("password").getBytes(StandardCharsets.UTF_8))).put("source_sha256",serviceSHA(source));
    files.put("routervpn-ss-service.json",Base64.getEncoder().encodeToString(claim.toString().getBytes(StandardCharsets.UTF_8)));
+   if(mode.equals("home")&&transport.equals("udp")){encryptedCONNECTDNS(entry,bundle,true);if(layer.equals("off"))encryptedCONNECTDNS(entry,bundle,false);}
    String before=bundle.toString();AndroidImportedRouterPath.Compiled compiled=AndroidImportedRouterPath.compile(entry,bundle,"shadowsocks","local");
    JSONObject metadata=object(compiled.metadata),dns=object(compiled.config).getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
    check(metadata.getString("transport_capability").equals("uot-v2")&&dns.getString("type").equals(transport)&&dns.getString("server").equals(profile.getString("dns_host"))&&dns.getInt("server_port")==profile.getInt("dns_port"),"configured CONNECT changed DNS or capability");

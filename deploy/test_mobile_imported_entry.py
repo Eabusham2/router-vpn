@@ -35,7 +35,12 @@ for protocol in ("http-connect","https-connect"):
 CONTEXT_CORE={'TestImportedOwnerContextRetiresHeldControllerRead':['identity','selection'],'TestImportedStartupCloseJoinsAdmittedIdentityRead':[],'TestImportedProofContextUsesAdmittedReader':['entry-proof','private-proof','owner-check','measurement-proof'],'TestImportedMeasurementClosesLateOriginalConnection':['cancel','hop-owner','controller-owner']}
 CONTEXT_NATIVE={'TestRouterNativeProofContextRetiresHeldReads':['identity','dial','dns','hop-identity','hop-dial','capture','selected','manager-dial','manager-selected'],'TestRouterNativeProofDialClosesLateConnection':['cancel','instance-replaced','outbound-replaced','connection-and-error']}
 FILES=OPENVPN.FILES|CONNECT_FILES|SOCKS_FILES|NESTED_FILES|PACKET_FINAL_FILES|PACKET_FILES|BASE_FILES|{"final-hysteria2--"+name for name in BASE_FILES}
+CONNECT_DNS_ROWS=[p+"/"+l+"/"+t+"/"+a for p in ("http-connect","https-connect") for l in ("plain","off",*LAYERS[1:]) for t in ("tls","https","h3") for a in ("literal","hostname") if not(l=="plain" and t=="h3")]
+CONNECT_DNS_FILES={row.replace("/","--")+".json" for row in CONNECT_DNS_ROWS}
 CORE={
+ "TestImportedEntryCONNECTSelectedEncryptedDNS":CONNECT_DNS_ROWS,
+ "TestImportedEntryCONNECTSelectedDNSRefusals":["plain-h3","plain-udp-bootstrap","missing-bootstrap","foreign-bootstrap-route","foreign-query","hostname-bootstrap","unused-bootstrap","insecure-tls","changed-home","unknown-protocol"],
+ "TestImportedEntryCONNECTSelectedDNSProviders":["plain-home-tls","plain-home-https","plain-rescue","uot-home-tls","uot-home-https","uot-home-h3","uot-rescue","uot-fastest"],
  "TestImportedEntryCONNECTServiceConfiguredGraphs":[p+"/"+l+"/"+d+"/"+t for p in ("http-connect","https-connect") for l in ("off",*LAYERS[1:]) for d in ("home","custom") for t in ("udp","tcp")],
  "TestImportedEntryCONNECTServiceAuthorityRefusals":["missing","foreign-node","stale-source","wrong-key","wrong-port","wrong-image","wrong-version","extra-asset","entry-layer","unsupported-layer","inline-uot","dns-h3","wrong-home"],
  "TestImportedEntryCONNECTServiceDefaultHomeAndInvalidTCPAuthority":["default-home","tcp-foreign-node","tcp-malformed","tcp-stale-source"],
@@ -162,6 +167,7 @@ def run(vendor,peers=False,android=False):
  with tempfile.TemporaryDirectory(prefix='routervpn-imported-entry-') as temporary:
   fixtures=Path(temporary)/'sources';fixtures.mkdir();env['ROUTERVPN_IMPORTED_ENTRY_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES']='1'
   service=Path(temporary)/'configured-service';service.mkdir();env['ROUTERVPN_CONNECT_SERVICE_FIXTURES']=str(service)
+  selected_dns=Path(temporary)/'selected-dns';selected_dns.mkdir();env['ROUTERVPN_CONNECT_DNS_FIXTURES']=str(selected_dns)
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedEntry','-count=1','-timeout=60s'],ROOT,env,names(CORE))
   env['ROUTERVPN_IMPORTED_OPENVPN_FIXTURES']=str(fixtures);env['ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_FIXTURES']='1'
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^TestImportedOpenVPN','-count=1','-timeout=60s'],ROOT,env,names(OPENVPN.CORE))
@@ -169,7 +175,8 @@ def run(vendor,peers=False,android=False):
   execute(['go','test','-mod=readonly','-race','-json','./internal/mobilemultihop','-run','^('+'|'.join(CONTEXT_CORE)+')$','-count=1','-timeout=20s'],ROOT,env,names(CONTEXT_CORE))
   if {p.name for p in fixtures.iterdir()}!=FILES:raise ValueError('Incomplete captured imported source matrix')
   if {p.name for p in service.iterdir()}!=CONNECT_SERVICE_FILES:raise ValueError('Incomplete configured CONNECT service matrix')
-  groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES)}
+  if {p.name for p in selected_dns.iterdir()}!=CONNECT_DNS_FILES:raise ValueError('Incomplete selected CONNECT DNS matrix')
+  groups={'TestRouterImportedEntryPairedFinalNativeGraphs':sorted(FILES),'TestRouterImportedCONNECTConfiguredServiceGraphs':sorted(CONNECT_SERVICE_FILES),'TestRouterImportedCONNECTSelectedDNSGraphs':sorted(CONNECT_DNS_FILES)}
   if android:
    folder=Path(temporary)/'android';folder.mkdir();env['ROUTERVPN_ANDROID_IMPORTED_ENTRY_FIXTURES']=str(folder)
    subprocess.run([sys.executable,str(ROOT/'android/test_android_imported_router.py')],cwd=ROOT,env=env,check=True,timeout=240)

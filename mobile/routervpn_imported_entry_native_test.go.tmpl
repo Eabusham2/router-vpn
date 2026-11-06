@@ -396,3 +396,98 @@ func TestRouterImportedCONNECTConfiguredServiceGraphs(t *testing.T) {
 		})
 	}
 }
+
+func TestRouterImportedCONNECTSelectedDNSGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_CONNECT_DNS_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_IMPORTED_ENTRY_FIXTURES") == "1" {
+			t.Fatal("selected CONNECT DNS fixtures absent")
+		}
+		t.Skip("selected DNS fixtures supplied by parser gate")
+	}
+	expected := map[string]bool{}
+	for _, entry := range []string{"http-connect", "https-connect"} {
+		for _, carrier := range []string{"plain", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, protocol := range []string{"tls", "https", "h3"} {
+				for _, address := range []string{"literal", "hostname"} {
+					if carrier != "plain" || protocol != "h3" {
+						expected[entry+"--"+carrier+"--"+protocol+"--"+address+".json"] = true
+					}
+				}
+			}
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		t.Fatal("incomplete selected DNS matrix", err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			if !expected[entry.Name()] || entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+				t.Fatal("foreign selected DNS fixture")
+			}
+			raw, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source []string
+			if json.Unmarshal(raw, &source) != nil || len(source) != 9 {
+				t.Fatal("invalid selected DNS capture")
+			}
+			plan, err := NewRouterImportedEntryMultihop(source[0], source[1], source[2], source[3], source[4], source[5], source[6])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer plan.Close()
+			if plan.Config() != source[8] || plan.SourceSHA256() != source[7] {
+				t.Fatal("selected DNS parser changed captured source or graph")
+			}
+			axes := strings.Split(strings.TrimSuffix(entry.Name(), ".json"), "--")
+			var metadata map[string]string
+			var profile, graph map[string]any
+			if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || json.Unmarshal([]byte(source[4]), &profile) != nil || json.Unmarshal([]byte(plan.Config()), &graph) != nil {
+				t.Fatal("invalid selected DNS graph")
+			}
+			capability, layer := "uot-v2", axes[1]
+			if layer == "plain" {
+				capability, layer = "tcp-only", "off"
+			}
+			normalized := metadata["exit_start_layer"]
+			if normalized == "" {
+				normalized = "off"
+			}
+			if metadata["entry_mode"] != axes[0] || metadata["execution"] != "local" || metadata["entry_kind"] != "external" || metadata["exit_mode"] != "shadowsocks" || normalized != layer || metadata["transport_capability"] != capability || profile["dns_protocol"] != axes[2] {
+				t.Fatal("selected DNS filename lost captured axes")
+			}
+			dns := graph["dns"].(map[string]any)
+			servers := dns["servers"].([]any)
+			primary := servers[0].(map[string]any)
+			if dns["final"] != primary["tag"] || primary["type"] != axes[2] || primary["server"] != profile["dns_host"] || primary["server_port"] != profile["dns_port"] || primary["detour"] != "proxy" || primary["tls"].(map[string]any)["server_name"] != profile["dns_server_name"] {
+				t.Fatal("selected encrypted resolver changed")
+			}
+			if axes[2] != "tls" && primary["path"] != profile["dns_path"] {
+				t.Fatal("selected DNS path changed")
+			}
+			if axes[3] == "literal" {
+				if len(servers) != 1 || source[6] != "" || profile["dns_host"] != "203.0.113.53" || profile["dns_mode"] != "custom" {
+					t.Fatal("literal DNS acquired bootstrap")
+				}
+			} else {
+				var captured map[string]any
+				if len(servers) != 2 || json.Unmarshal([]byte(source[6]), &captured) != nil || profile["dns_host"] != "resolver.example.net" || profile["dns_mode"] != map[string]string{"tls": "dot", "https": "doh", "h3": "doh3"}[axes[2]] {
+					t.Fatal("hostname DNS lost explicit capture")
+				}
+				same := func(a, b any) bool { x, _ := json.Marshal(a); y, _ := json.Marshal(b); return string(x) == string(y) }
+				if !same(primary["domain_resolver"], captured["query"]) || !same(servers[1], captured["server"]) {
+					t.Fatal("bootstrap transport or query changed")
+				}
+			}
+			if err := CheckConfig(plan.Config()); err != nil {
+				t.Fatal("pinned runtime rejected selected encrypted DNS", err)
+			}
+			if plan.Healthy() {
+				t.Fatal("configured DNS manufactured live proof")
+			}
+		})
+	}
+}

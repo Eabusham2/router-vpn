@@ -125,6 +125,44 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   }
   print("PASS configured CONNECT "+selectedKind+" "+selectedLayer+" "+String(checks)+" checks")
  }
+ static func selectedDNS(_ finalBundle:ClientBundle,_ paired:RouterProfile,_ kind:String,_ carrier:String)throws {
+  var source=try profile("encrypted-connect-entry","external",kind);source.apiToken=""
+  let connect=ExternalHTTPConnectConfig(host:"198.51.100.8",port:8443,username:" original user ",password:" original password ",tlsServerName:kind=="https-connect" ? "proxy.example.com":nil)
+  if kind=="http-connect" {source.external?.httpConnect=connect}else{source.external?.httpsConnect=connect}
+  let original=bundle(source)
+  func hash(_ data:Data)->String{CryptoKit.SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+  var cases=0
+  for transport in ["tls","https","h3"] {for hostname in [false,true] {
+   var final=finalBundle
+   var selected=try JSONSerialization.jsonObject(with:JSONEncoder().encode(final.routerProfiles[0])) as! [String:Any]
+   selected["start_layer"]=carrier=="plain" ? "off":carrier
+   selected["dns_mode"]=hostname ? ["tls":"dot","https":"doh","h3":"doh3"][transport]! : "custom"
+   selected["dns_protocol"]=transport;selected["dns_host"]=hostname ? "resolver.example.net":"203.0.113.53";selected["dns_port"]=8853
+   selected["dns_server_name"]="resolver.example.net";selected["dns_path"]="/owned-dns-query"
+   if hostname {selected["dns_bootstrap"]=["server":["type":carrier=="plain" ? "tcp":"udp","tag":"external-dns-bootstrap","server":"203.0.113.54","server_port":5354,"detour":"proxy"],"query":["server":"external-dns-bootstrap","timeout":"3s","disable_optimistic_cache":true]] as [String:Any]}
+   final.routerProfiles[0]=try JSONDecoder().decode(RouterProfile.self,from:encoded(selected))
+   if carrier != "plain" {
+    let raw=Data(base64Encoded:final.profiles["shadowsocks"]!["sing-box.json"]!)!,graph=try JSONSerialization.jsonObject(with:raw) as! [String:Any],out=(graph["outbounds"] as! [[String:Any]])[0]
+    let claim:[String:Any]=["schema":1,"node_id":final.routerProfiles[0].nodeProofID!,"configured_image":"ghcr.io/sagernet/sing-box:v1.13.12","uot_version":2,"endpoint":out["server"]!,"port":out["server_port"]!,"method":out["method"]!,"key_sha256":hash(Data((out["password"] as! String).utf8)),"source_sha256":hash(raw)]
+    final.profiles["shadowsocks"]!["routervpn-ss-service.json"]=try encoded(claim).base64EncodedString()
+   }
+   IOSNodeBundleStore.shared.nodes=[source.id:try encoded(original),paired.id:try encoded(final)]
+   let model=RouterVPNModel();model.bundle=final
+   if carrier=="plain" && transport=="h3" {try reject("unprovisioned CONNECT refuses selected H3"){try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:kind)};cases+=1;continue}
+   try model.saveIOSMultihop(enabled:true,entryID:source.id,exitID:paired.id,exitMode:"shadowsocks",execution:"local",entryMode:kind)
+   let held=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("selected encrypted DNS retains original profiles",held.routerProfiles==original.routerProfiles && model.bundle!.routerProfiles[0].dnsBootstrap==final.routerProfiles[0].dnsBootstrap && model.bundle!.routerProfiles[0].dnsProtocol==transport && model.bundle!.routerProfiles[0].dnsHost==final.routerProfiles[0].dnsHost && model.bundle!.profiles==final.profiles)
+   let config:[String:Any]=["engine":"multihop-libbox","mode":"shadowsocks","bundle":try encoded(model.bundle!),"entryBundle":try encoded(original)]
+   let captured=try IOSMultihopExecution.Source(configuration:config,digest:hash)
+   var changed=model.bundle!;changed.routerProfiles[0].dnsServerName="different.example.net"
+   var replaced=config;replaced["bundle"]=try encoded(changed)
+   let altered=try IOSMultihopExecution.Source(configuration:replaced,digest:hash)
+   try check("selected DNS identity changes source capture",captured != altered)
+   cases+=1
+  }}
+  guard cases==6 else {throw IOSImportedEntryMultihop.issue()}
+  print("PASS selected DNS "+kind+" "+carrier+" 6 cases")
+ }
  static func run()throws {
   defer { RouterVPNTorTestClose() }
   var imported=try profile("imported-first","external","shadowsocks");imported.apiToken="";imported.dnsMode="home"
@@ -132,6 +170,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   var paired=try profile("paired-final","router-vpn");paired.external=nil;paired.dnsMode="home"
   var finalBundle=bundle(paired)
   finalBundle.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:8,count:32).base64EncodedString()]]]).base64EncodedString()]
+  if CommandLine.arguments.count == 5 && CommandLine.arguments[2] == "selected-dns" { try selectedDNS(finalBundle,paired,CommandLine.arguments[3],CommandLine.arguments[4]);return }
   if CommandLine.arguments.count == 4 { try configured(finalBundle,paired,CommandLine.arguments[2],CommandLine.arguments[3]);return }
   let importedBundle=bundle(imported),mixed=RouterVPNModel();mixed.bundle=finalBundle
   IOSNodeBundleStore.shared.nodes=[imported.id:try encoded(importedBundle),paired.id:try encoded(finalBundle)]
@@ -710,6 +749,13 @@ def main():
                     raise ValueError('Missing or foreign configured CONNECT Swift verdict: '+repr(result.stdout))
                 print(result.stdout, end='', flush=True)
         print('Configured CONNECT Swift matrix: PASS (24 combinations, 336 checks across 6 bounded processes)')
+        for kind in ('http-connect', 'https-connect'):
+            for carrier in ('plain', 'off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'):
+                result = subprocess.run([str(work/'test'), str(compiler), 'selected-dns', kind, carrier], env=runtime_env, check=True, timeout=30, text=True, stdout=subprocess.PIPE)
+                if result.stdout != f'PASS selected DNS {kind} {carrier} 6 cases\n':
+                    raise ValueError('Missing or foreign selected DNS Swift verdict: '+repr(result.stdout))
+                print(result.stdout, end='', flush=True)
+        print('Selected CONNECT DNS Swift matrix: PASS (44 accepted captures and 4 unavailable-H3 refusals)')
 
 
 if __name__ == '__main__':

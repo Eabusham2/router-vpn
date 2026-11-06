@@ -129,6 +129,7 @@ func TestImportedEntryCONNECTServiceAuthorityRefusals(t *testing.T) {
 				graph["outbounds"].([]any)[0].(map[string]any)["udp_over_tcp"] = map[string]any{"enabled": true, "version": 2}
 				assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(externalTestJSON(t, graph)))
 			case "dns-h3":
+				// This historical label now covers absent TLS identity; valid owned H3 is tested separately.
 				profile["dns_protocol"] = "h3"
 			case "wrong-home":
 				profile["dns_host"] = "10.99.0.1"
