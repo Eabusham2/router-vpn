@@ -16,6 +16,93 @@ PATCH = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PATCH)
 
 
+UDPNAT_GO = r'''
+package udpnat
+
+import (
+ "context"
+ "errors"
+ "sync"
+ "sync/atomic"
+ "testing"
+ "time"
+ "github.com/sagernet/sing/common/buf"
+ M "github.com/sagernet/sing/common/metadata"
+ N "github.com/sagernet/sing/common/network"
+)
+type routerOwnerWriter struct {closed atomic.Bool; packets atomic.Int32}
+func (w *routerOwnerWriter) WritePacket(b *buf.Buffer,_ M.Socksaddr)error {defer b.Release();if w.closed.Load(){return errors.New("closed owner")};w.packets.Add(1);return nil}
+func (w *routerOwnerWriter) Close()error {w.closed.Store(true);return nil}
+type routerOwner struct {connection *conn; close func(error)}
+type routerOwnerHandler struct {owners chan routerOwner}
+func (h *routerOwnerHandler) NewPacketConnectionEx(_ context.Context,c N.PacketConn,_,_ M.Socksaddr,close N.CloseHandlerFunc){h.owners<-routerOwner{c.(*conn),close}}
+// The fixture witness runs after the actual legacy handler's Close/DeleteIf.
+var routerVPNLegacyRetirements sync.Map
+func routerVPNTestLegacyRetired(c *conn){if done,ok:=routerVPNLegacyRetirements.LoadAndDelete(c);ok {close(done.(chan struct{}))}}
+type routerLegacyOwnerHandler struct {owners chan routerOwner}
+func (h *routerLegacyOwnerHandler) NewPacketConnection(_ context.Context,c N.PacketConn,_ M.Metadata)error {
+ release,retired:=make(chan struct{}),make(chan struct{})
+ var once sync.Once
+ routerVPNLegacyRetirements.Store(c.(*conn),retired)
+ h.owners<-routerOwner{c.(*conn),func(error){once.Do(func(){close(release)});<-retired}}
+ <-release
+ return nil
+}
+func (*routerLegacyOwnerHandler) NewError(context.Context,error){}
+func routerOwnerService(legacy bool)(*Service[int],chan routerOwner){
+ owners:=make(chan routerOwner,3)
+ if legacy {return New[int](60,&routerLegacyOwnerHandler{owners}),owners}
+ return NewEx[int](60,&routerOwnerHandler{owners}),owners
+}
+func routerOwnerTake(t *testing.T,ch <-chan routerOwner)routerOwner {t.Helper();select{case o:=<-ch:return o;case <-time.After(time.Second):t.Fatal("original handler not published");return routerOwner{}}}
+func routerOwnerDrain(c *conn){for{select{case p:=<-c.data:p.data.Release();default:return}}}
+func routerOwnerSend(s *Service[int], variant string, initialize func(N.PacketConn)(context.Context,N.PacketWriter)) {
+ ctx:=context.Background();source,destination:=M.ParseSocksaddr("192.0.2.1:1000"),M.ParseSocksaddr("192.0.2.2:2000")
+ body:=buf.As([]byte("owned packet"))
+ switch variant {
+ case "NewPacket":s.NewPacket(ctx,7,body,M.Metadata{Source:source,Destination:destination},func(c N.PacketConn)N.PacketWriter{_,w:=initialize(c);return w})
+ case "NewPacketEx":s.NewPacketEx(ctx,7,body,source,destination,func(c N.PacketConn)N.PacketWriter{_,w:=initialize(c);return w})
+ case "NewContextPacket":s.NewContextPacket(ctx,7,body,M.Metadata{Source:source,Destination:destination},initialize)
+ case "NewContextPacketEx":s.NewContextPacketEx(ctx,7,body,source,destination,initialize)
+ default:panic("unknown fixture variant")
+ }
+}
+var routerVPNPublicationWitness func(*conn)
+func routerVPNTestPublicationWitness(c *conn){if routerVPNPublicationWitness!=nil {routerVPNPublicationWitness(c)}}
+func TestRouterVPNUDPNATInitializedBeforePublication(t *testing.T){
+ for _,variant:=range []string{"NewPacket","NewPacketEx","NewContextPacket","NewContextPacketEx"}{t.Run(variant,func(t *testing.T){
+ handler:=&routerOwnerHandler{make(chan routerOwner,2)};s:=NewEx[int](60,handler)
+ writer:=&routerOwnerWriter{};observed:=make(chan bool,1)
+ // The byte-guarded fixture hook executes at the actual constructor return,
+ // before LoadOrStore can publish this conn. No scheduler/timer inference.
+ routerVPNPublicationWitness=func(c *conn){observed<-c.source==writer && c.ctx!=nil && c.cancel!=nil}
+ defer func(){routerVPNPublicationWitness=nil}()
+ routerOwnerSend(s,variant,func(N.PacketConn)(context.Context,N.PacketWriter){return context.Background(),writer})
+ owner:=routerOwnerTake(t,handler.owners);defer routerOwnerDrain(owner.connection);defer owner.close(nil)
+ if !<-observed {t.Fatal("UDP owner published before source initialization")}
+ })}
+}
+func TestRouterVPNUDPNATRetiredHandlerCannotDeleteReplacement(t *testing.T){
+ for _,variant:=range []string{"NewPacket","NewPacketEx","NewContextPacket","NewContextPacketEx"}{for _,legacy:=range []bool{false,true}{name:=variant+"/ex";if legacy {name=variant+"/legacy"};t.Run(name,func(t *testing.T){
+ s,owners:=routerOwnerService(legacy)
+ firstWriter,nextWriter:=&routerOwnerWriter{},&routerOwnerWriter{}
+ routerOwnerSend(s,variant,func(N.PacketConn)(context.Context,N.PacketWriter){return context.Background(),firstWriter})
+ first:=routerOwnerTake(t,owners);defer routerOwnerDrain(first.connection)
+ _=first.connection.Close()
+ routerOwnerSend(s,variant,func(N.PacketConn)(context.Context,N.PacketWriter){return context.Background(),nextWriter})
+ next:=routerOwnerTake(t,owners);defer routerOwnerDrain(next.connection);defer next.close(nil)
+ if next.connection==first.connection || nextWriter.closed.Load(){t.Fatal("replacement was not independently admitted")}
+ // Completion of the original handler occurs only after a new owner exists.
+ first.close(nil)
+ current,found:=s.nat.Load(7)
+ if !found || current!=next.connection || nextWriter.closed.Load() {t.Fatal("retired handler deleted replacement UDP owner")}
+ if err:=next.connection.WritePacket(buf.As([]byte("replacement payload")),M.ParseSocksaddr("192.0.2.2:2000"));err!=nil || nextWriter.packets.Load()!=1 {t.Fatal("original cleanup disabled replacement writer",err)}
+ select{case <-next.connection.ctx.Done():t.Fatal("original cleanup canceled replacement context");default:}
+ })}}
+}
+'''
+
+
 class PacketPreparation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -526,6 +613,81 @@ class PacketPreparation(unittest.TestCase):
             PATCH.prepare(self.root)
             PATCH.verify(self.root)
         self.assertFalse((self.root/'.routervpn-sources/sing').exists())
+
+
+
+    def test_udp_nat_upgrade_validates_complete_group_and_rejects_partial_aliases(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        preserved = {name: (self.target/name).read_bytes() for name in PATCH.PATCHES if name not in PATCH.UDPNAT_FILES}
+        for fault in ('partial', 'foreign', 'alias', 'complete'):
+            with self.subTest(fault=fault):
+                for name in PATCH.UDPNAT_FILES:
+                    path = self.target/name
+                    path.unlink()
+                    path.write_bytes(self.originals[name])
+                name = 'common/udpnat/service.go'
+                path = self.target/name
+                if fault == 'partial':
+                    path.write_bytes(PATCH.transform(name, self.originals[name]))
+                elif fault == 'foreign':
+                    path.write_bytes(self.originals[name]+b'\n// foreign owner\n')
+                elif fault == 'alias':
+                    alias = self.root/'aliased-udp-owner'
+                    if alias.exists(): alias.unlink()
+                    alias.hardlink_to(path)
+                before = {name: (self.target/name).read_bytes() for name in PATCH.PATCHES}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'):
+                    if fault == 'complete':
+                        PATCH.prepare(self.root)
+                        PATCH.prepare(self.root)
+                        PATCH.verify_tree(self.target)
+                    else:
+                        with self.assertRaises(ValueError): PATCH.prepare(self.root)
+                        self.assertEqual({name: (self.target/name).read_bytes() for name in PATCH.PATCHES}, before)
+                self.assertEqual({name: (self.target/name).read_bytes() for name in preserved}, preserved)
+        self.assert_cache_unchanged()
+
+    def test_actual_udp_nat_publication_and_retirement_with_independent_causal_controls(self):
+        service = self.target/'common/udpnat/service.go'
+        fixed = service.read_bytes()
+        fixture = self.target/'common/udpnat/routervpn_owner_test.go'
+        fixture.write_text(UDPNAT_GO)
+        def witnessed(data):
+            marker = b'\t\treturn c\n\t})'
+            self.assertEqual(data.count(marker), 1)
+            data = data.replace(marker, b'\t\trouterVPNTestPublicationWitness(c)\n'+marker, 1)
+            legacy = b'\n\t\t\t\ts.nat.DeleteIf(key, func(current *conn) bool { return current == c })\n'
+            if legacy not in data:
+                legacy = b'\n\t\t\t\ts.nat.Delete(key)\n'
+            self.assertEqual(data.count(legacy), 1)
+            return data.replace(legacy, legacy+b'\t\t\t\trouterVPNTestLegacyRetired(c)\n', 1)
+        service.write_bytes(witnessed(fixed))
+        command = ['go', 'test', '-mod=readonly', '-race', './common/udpnat', '-count=1', '-timeout=15s']
+        try:
+            result = subprocess.run(command+['-run', '^TestRouterVPNUDPNAT'], cwd=self.target, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            unpublished = fixed
+            for old, new in reversed(PATCH.UDPNAT_FILES['common/udpnat/service.go'][1][:3]):
+                self.assertEqual(unpublished.count(new.encode()), 1)
+                unpublished = unpublished.replace(new.encode(), old.encode(), 1)
+            mutations = [
+                (unpublished, '^TestRouterVPNUDPNATInitializedBeforePublication$', 'UDP owner published before source initialization'),
+                (fixed.replace(b'\n\t\t\t\t\ts.nat.DeleteIf(key, func(current *conn) bool { return current == c })\n', b'\n\t\t\t\t\ts.nat.Delete(key)\n'), '^TestRouterVPNUDPNATRetiredHandlerCannotDeleteReplacement$/[^/]+/ex$', 'retired handler deleted replacement UDP owner'),
+                (fixed.replace(b'\n\t\t\t\ts.nat.DeleteIf(key, func(current *conn) bool { return current == c })\n', b'\n\t\t\t\ts.nat.Delete(key)\n'), '^TestRouterVPNUDPNATRetiredHandlerCannotDeleteReplacement$/[^/]+/legacy$', 'retired handler deleted replacement UDP owner'),
+            ]
+            for mutated, selector, failure in mutations:
+                service.write_bytes(witnessed(mutated))
+                result = subprocess.run(command+['-run', selector], cwd=self.target, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+                self.assertNotEqual(result.returncode, 0, 'causal owner regression was accepted')
+                self.assertIn(failure, result.stdout)
+                self.assertNotIn('panic: test timed out', result.stdout)
+        finally:
+            service.write_bytes(fixed)
+            fixture.unlink()
+        PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
 
 
 if __name__ == '__main__':

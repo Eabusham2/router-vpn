@@ -235,6 +235,38 @@ READ_FILES = {
 }
 PATCHES.update(READ_FILES)
 
+# A rejected/closed UDP association can be replaced under the same cache key
+# before its original handler completes. Publish the immutable reply writer
+# inside the existing cache constructor, and retire only that original value.
+# Pinned sing-shadowsocks v0.2.8 has six init callbacks: writer allocation,
+# optionally auth.ContextWithUser (context.WithValue), only. Sing delegates
+# likewise only wrap/allocate writers. These audited constructors do not block,
+# perform I/O, or reenter this cache; packet handlers still run outside its lock.
+UDPNAT_FILES = {
+    'common/udpnat/service.go': ('5b491b5120aa008091e2d66e1505288d7be68d93', (
+        ('\tc, loaded := s.nat.LoadOrStore(key, func() *conn {\n',
+         '\tvar initializedContext context.Context\n\tc, loaded := s.nat.LoadOrStore(key, func() *conn {\n'),
+        ('\t\tc.ctx, c.cancel = context.WithCancelCause(ctx)\n\t\treturn c\n',
+         '\t\tc.ctx, c.cancel = context.WithCancelCause(ctx)\n'
+         '\t\tinitializedContext, c.source = init(c)\n\t\treturn c\n'),
+        ('\t\tctx, c.source = init(c)\n', '\t\tctx = initializedContext\n'),
+        ('\n\t\t\t\t\ts.nat.Delete(key)\n', '\n\t\t\t\t\ts.nat.DeleteIf(key, func(current *conn) bool { return current == c })\n'),
+        ('\n\t\t\t\ts.nat.Delete(key)\n', '\n\t\t\t\ts.nat.DeleteIf(key, func(current *conn) bool { return current == c })\n'),
+        ('\n\t\ts.nat.Delete(key)\n', '\n\t\ts.nat.DeleteIf(key, func(current *conn) bool { return current == c })\n'),
+    )),
+    'common/cache/lrucache.go': ('664d3a78ca27148f677ec6f8e570a5e332a2b919', (
+        ('// Delete removes the value associated with a key.\n',
+         '// DeleteIf retires a captured value only while it still owns this key.\n'
+         '// The predicate must not call back into the cache or perform I/O.\n'
+         'func (c *LruCache[K, V]) DeleteIf(key K, matches func(V) bool) {\n'
+         '\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n'
+         '\tif le, ok := c.cache[key]; ok && matches(le.Value.value) {\n'
+         '\t\tc.deleteElement(le)\n\t}\n}\n\n'
+         '// Delete removes the value associated with a key.\n'),
+    )),
+}
+PATCHES.update(UDPNAT_FILES)
+
 
 def git_blob(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
@@ -296,7 +328,7 @@ def verify_tree(directory, allow_packet_only=False):
         if total > MAX_BYTES or len(rows) >= 5000:
             raise ValueError('Prepared sing exceeds source bounds')
         data = path.read_bytes()
-        if allow_packet_only and relative in (BUFFER_FILES | ASSOCIATION_FILES | AUTH_FILES) and git_blob(data) == PATCHES[relative][0]:
+        if allow_packet_only and relative in (BUFFER_FILES | ASSOCIATION_FILES | AUTH_FILES | UDPNAT_FILES) and git_blob(data) == PATCHES[relative][0]:
             # A prior owned copy may predate either complete fix group. Only
             # exact pristine files may be upgraded, and only after every group
             # and the entire module reverse to the original pinned checksum.
@@ -324,7 +356,7 @@ def verify_tree(directory, allow_packet_only=False):
         rows.append((PREFIX + relative, hashlib.sha256(original).hexdigest()))
     if h1(rows) != SUM:
         raise ValueError('Prepared sing differs from its pinned module plus packet synchronization')
-    for group in (BUFFER_FILES, ASSOCIATION_FILES, AUTH_FILES):
+    for group in (BUFFER_FILES, ASSOCIATION_FILES, AUTH_FILES, UDPNAT_FILES):
         changed = pristine_upgrades.intersection(group)
         if changed and changed != set(group):
             raise ValueError('Prepared sing has a partial UDP capacity, association or authentication policy')
