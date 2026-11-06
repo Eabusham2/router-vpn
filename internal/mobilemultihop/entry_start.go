@@ -9,6 +9,7 @@ import (
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativecomposite"
 	"strings"
 )
 
@@ -46,6 +47,9 @@ func NewWithEntryStartLayer(config, metadata, start string) (*Controller, error)
 	}
 	profile, err := json.Marshal(request.Profile)
 	if err != nil {
+		return nil, err
+	}
+	if err := validatePairedStartService(string(profile), selected.EntryNodeID); err != nil {
 		return nil, err
 	}
 	encoded, err := CompileProxyEntry(string(profile), "shadowsocks")
@@ -237,4 +241,27 @@ func rewriteEntryStartHost(entry map[string]any, mode, host string) error {
 	}
 	entry["server"] = host
 	return validateProxyEntry(entry, mode)
+}
+
+// Ordinary source compilation cannot know which node a paired caller selected.
+// Bind optional configured service metadata before that source is composed into
+// either hop. Legacy captures without this metadata keep their original path.
+func validatePairedStartService(profile, node string) error {
+	assets, err := nodeProfileAssets(profile)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, data := range assets {
+			clear(data)
+		}
+	}()
+	claim, present := assets[nativecomposite.SSServiceAsset]
+	if !present {
+		return nil
+	}
+	if !proofID.MatchString(node) {
+		return errors.New("paired Start Layer lost its captured node")
+	}
+	return nativecomposite.ValidateSSServiceCompanion(assets["sing-box.json"], claim, node)
 }

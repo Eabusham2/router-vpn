@@ -32,6 +32,9 @@ func NewWithStartLayers(config, metadata, entrySource, exitSource string) (*Cont
 	if e != nil {
 		return nil, e
 	}
+	if err := validatePairedStartService(string(profile), meta.ExitNodeID); err != nil {
+		return nil, err
+	}
 	text, e := CompileProxyEntry(string(profile), "shadowsocks")
 	if e != nil {
 		return nil, errors.New("exit layer requires the selected node's self-contained AES source")
