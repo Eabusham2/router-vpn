@@ -340,7 +340,7 @@ class NativeObservationVerdicts(unittest.TestCase):
 class NativeMTUOperationVerdicts(unittest.TestCase):
     def test_each_original_operation_and_cleanup_verdict_is_required(self):
         expected = {
-            "mtu-operation-context": 15, "mtu-owner-context": 7,
+            "mtu-operation-context": 27, "mtu-owner-context": 8,
             "mtu-manager-context": 4, "mtu-cleanup-context": 4, "mtu-startup-context": 1, "mtu-finalization-context": 5,
         }
         self.assertEqual(set(expected), set(NODE.MTU_CONTEXT_VERDICTS))
