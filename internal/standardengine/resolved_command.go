@@ -62,6 +62,8 @@ func (r ResolvedRequest) Canonical() ([]byte, error) {
 		valid = valid && (r.Name == "" || ResolvedName(r.Name, false)) && r.Index == 0 && r.Type == 0
 	case "close":
 		valid = valid && r.Name == "" && r.Index == 0 && r.Type == 0
+	case "server-state":
+		valid = valid && ResolvedName(r.Name, false) && r.Index >= 0 && r.Type == 0
 	case "anchor":
 		valid = valid && ResolvedName(r.Name, true) && r.Index >= 0 && (r.Type == 43 || r.Type == 48)
 	default:

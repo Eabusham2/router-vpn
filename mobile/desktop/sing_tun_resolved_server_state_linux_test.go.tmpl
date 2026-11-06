@@ -1,0 +1,176 @@
+//go:build linux
+
+package tun
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNNativeLinuxResolverResolvedServerMonitor(t *testing.T) {
+	for _, scenario := range []string{"original", "foreign-pid", "foreign-uid", "renamed-socket", "cancelled", "incomplete", "extra-frame", "oversized"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory, err := os.MkdirTemp("", "rvpn-monitor-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(directory)
+			path := filepath.Join(directory, "monitor")
+			listener, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			listener.SetUnlinkOnClose(false)
+			defer listener.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			done := make(chan struct{})
+			serverErr := make(chan error, 1)
+			go func() {
+				defer close(done)
+				connection, err := listener.AcceptUnix()
+				if err != nil {
+					if scenario != "foreign-pid" && scenario != "foreign-uid" {
+						serverErr <- err
+					}
+					return
+				}
+				defer connection.Close()
+				deadline, _ := ctx.Deadline()
+				connection.SetDeadline(deadline)
+				request, err := bufio.NewReader(connection).ReadBytes(0)
+				if err != nil {
+					if scenario != "foreign-pid" && scenario != "foreign-uid" {
+						serverErr <- err
+					}
+					return
+				}
+				if !bytes.Equal(request, []byte("{\"method\":\"io.systemd.Resolve.Monitor.DumpServerState\",\"parameters\":{\"allowInteractiveAuthentication\":false}}\x00")) {
+					serverErr <- &net.AddrError{Err: "monitor changed fixed read-only method", Addr: string(request)}
+					return
+				}
+				switch scenario {
+				case "renamed-socket":
+					if err = os.Rename(path, path+".old"); err != nil {
+						serverErr <- err
+						return
+					}
+					replacement, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: path})
+					if err != nil {
+						serverErr <- err
+						return
+					}
+					defer replacement.Close()
+				case "cancelled":
+					cancel()
+					return
+				case "incomplete":
+					connection.Write([]byte(`{"parameters":`))
+					return
+				case "extra-frame":
+					connection.Write([]byte("{}\x00{}\x00"))
+					return
+				case "oversized":
+					chunk := bytes.Repeat([]byte{'x'}, 32768)
+					for written := 0; written <= MaxResolvedServerDump; written += len(chunk) {
+						if _, err = connection.Write(chunk); err != nil {
+							return
+						}
+					}
+					return
+				}
+				_, err = connection.Write([]byte("{\"parameters\":{\"dump\":[]}}\x00"))
+				if err != nil {
+					serverErr <- err
+				}
+			}()
+			pid, uid := int32(os.Getpid()), uint32(os.Getuid())
+			if scenario == "foreign-pid" {
+				pid++
+			}
+			if scenario == "foreign-uid" {
+				uid++
+			}
+			result, err := resolvedReadServerMonitor(ctx, path, pid, uid)
+			listener.Close()
+			select {
+			case <-done:
+			case <-time.After(6 * time.Second):
+				t.Fatal("original monitor worker did not join")
+			}
+			if scenario == "original" {
+				if err != nil || string(result) != "{\"parameters\":{\"dump\":[]}}" {
+					t.Fatal("original peer reply lost", string(result), err)
+				}
+			} else if err == nil {
+				t.Fatal("changed or unbounded original peer admitted", scenario)
+			}
+			select {
+			case err := <-serverErr:
+				if scenario != "foreign-uid" {
+					t.Fatal(err)
+				}
+			default:
+			}
+		})
+	}
+}
+
+func TestRouterVPNNativeLinuxResolverResolvedServerPIDMapping(t *testing.T) {
+	t.Run("native-original", func(t *testing.T) {
+		directory, err := os.Open("/proc/self")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer directory.Close()
+		name, err := os.Readlink("/proc/self")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := strconv.ParseUint(name, 10, 31)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := resolvedMonitorPeerPID(directory, uint32(pid))
+		if err != nil || actual != int32(os.Getpid()) {
+			t.Fatal("original proc/PID namespace mapping", actual, err)
+		}
+	})
+
+	for _, scenario := range []string{"same", "nested", "wrong-proc", "missing", "duplicate", "zero", "overflow"} {
+		t.Run(scenario, func(t *testing.T) {
+			raw := "Pid:\t945\nNSpid:\t945\n"
+			want := int32(945)
+			switch scenario {
+			case "nested":
+				raw = "Pid:\t945\nNSpid:\t945\t41\n"
+				want = 41
+			case "wrong-proc":
+				raw = "Pid:\t946\nNSpid:\t945\n"
+			case "missing":
+				raw = "Pid:\t945\n"
+			case "duplicate":
+				raw += "NSpid:\t945\n"
+			case "zero":
+				raw = "Pid:\t945\nNSpid:\t945\t0\n"
+			case "overflow":
+				raw = "Pid:\t945\nNSpid:\t945\t2147483648\n"
+			}
+			peer, err := resolvedMonitorPIDMapping([]byte(raw), 945)
+			if scenario == "same" || scenario == "nested" {
+				if err != nil || peer != want {
+					t.Fatal(peer, err)
+				}
+			} else if err == nil {
+				t.Fatal("foreign or incomplete original mapping admitted", peer)
+			}
+		})
+	}
+}

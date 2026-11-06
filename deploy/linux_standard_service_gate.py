@@ -675,3 +675,20 @@ AUXILIARY['resolved-dnssec-query'][1]['TestResolvedDNSSECAliasQueryAuthority']=(
 AUXILIARY['dnssec-child-protocol'][1]['TestDNSSECCapturedAliasPurpose']=()
 
 SOURCE.add("internal/mobiletor/desktop_standard_linux_bootstrap_dnssec_alias_test.go")
+
+# Read-only compatibility state from the same original systemd-resolved process.
+SOURCE.update({'internal/standardengine/resolved_server_state.go',
+ 'internal/standardengine/resolved_server_state_command.go',
+ 'internal/standardengine/resolved_server_state_test.go',
+ 'cmd/client/linux_standard_service_resolved_server_state_linux.go',
+ 'cmd/client/linux_standard_service_resolved_server_state_linux_test.go',
+ 'mobile/desktop/sing_tun_resolved_server_state_linux.go.tmpl',
+ 'mobile/desktop/sing_tun_resolved_server_state_linux_test.go.tmpl'})
+AUXILIARY['resolved-server-state']=('./internal/standardengine',{
+ 'TestResolvedServerStateExactSelectedDecision':(),
+ 'TestResolvedServerStateRejectsChangedAuthority':('address','port','sni','scope','mode','inconsistent-support','unknown-feature'),
+ 'TestResolvedServerStateSupportDecision':('supported','bad-opt','missing-rrsig','do-off','tcp-two','tcp-three','strict'),
+ 'TestResolvedServerStateNativeTupleFormatting':()})
+AUXILIARY['resolved-server-state-owner']=('./cmd/client',{'TestResolvedServerStateCancelledAdmission':()})
+AUXILIARY_TESTS.update({'internal/standardengine/resolved_server_state_test.go':'resolved-server-state',
+ 'cmd/client/linux_standard_service_resolved_server_state_linux_test.go':'resolved-server-state-owner'})

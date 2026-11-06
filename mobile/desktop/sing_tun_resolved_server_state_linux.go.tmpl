@@ -1,0 +1,254 @@
+//go:build linux
+
+package tun
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"golang.org/x/sys/unix"
+	"io"
+	"net"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const resolvedServerMonitorPath = "/run/systemd/resolve/io.systemd.Resolve.Monitor"
+
+// ServerState observes the original daemon's currently selected server state.
+// The monitor peer must be the very process already authenticated through the
+// retained D-Bus ProcessFD; a matching socket pathname or decoded PID is not
+// independent authority. This call performs no resolver network query.
+func (a *RouterVPNResolvedAuthority) ServerState(ctx context.Context, index int32, name string) (out string, failure error) {
+	if a == nil || index < 0 || !ResolvedName(name, false) {
+		return "", errors.New("server state omitted original selected scope")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r := &a.native.routervpnResolver
+	if err := LockContext(ctx, &r.mu); err != nil {
+		return "", err
+	}
+	defer r.mu.Unlock()
+	if err := a.current(ctx); err != nil {
+		return "", err
+	}
+	policyRaw, err := a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(policyRaw, a.policy) {
+		return "", errors.Join(errors.New("server state changed original policy"), err)
+	}
+	policy, err := DecodeResolvedPolicy(policyRaw, ResolvedPolicySHA256(policyRaw))
+	if err != nil {
+		return "", err
+	}
+	stat, ok := r.procInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", errors.New("server state omitted original process credential")
+	}
+	peerPID, err := resolvedMonitorPeerPID(r.proc, r.pid)
+	if err != nil {
+		return "", err
+	}
+	body, err := resolvedReadServerMonitor(ctx, resolvedServerMonitorPath, peerPID, stat.Uid)
+	if err != nil {
+		return "", err
+	}
+	if err = a.current(ctx); err != nil {
+		return "", err
+	}
+	after, err := a.capturePolicy(ctx)
+	if err != nil || !bytes.Equal(policyRaw, after) {
+		return "", errors.Join(errors.New("server monitor policy changed during observation"), err)
+	}
+	state, err := SelectResolvedServerState(body, policy, name, index)
+	if err != nil {
+		return "", err
+	}
+	raw, err := state.Canonical()
+	return string(raw), err
+}
+
+func resolvedReadServerMonitor(ctx context.Context, path string, pid int32, uid uint32) (body []byte, failure error) {
+	if ctx == nil {
+		return nil, errors.New("monitor omitted original context")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || ctx.Err() != nil || pid <= 0 {
+		return nil, errors.New("server monitor omitted bounded original daemon")
+	}
+	descriptor, err := unix.Open(path, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	original := os.NewFile(uintptr(descriptor), "original-resolved-monitor")
+	defer func() { failure = errors.Join(failure, original.Close()) }()
+	info, err := original.Stat()
+	if err != nil {
+		return nil, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode()&os.ModeSocket == 0 || stat.Uid != uid {
+		return nil, errors.New("monitor name does not belong to original daemon credential")
+	}
+	currentName := func() error {
+		named, err := os.Lstat(path)
+		if err != nil || !os.SameFile(info, named) {
+			return errors.New("original monitor socket was replaced")
+		}
+		held, err := original.Stat()
+		if err != nil || !os.SameFile(info, held) {
+			return errors.New("original monitor descriptor was replaced")
+		}
+		return nil
+	}
+	if err = currentName(); err != nil {
+		return nil, err
+	}
+	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { failure = errors.Join(failure, connection.Close()) }()
+	native, ok := connection.(*net.UnixConn)
+	if !ok {
+		return nil, errors.New("monitor lost original native Unix transport")
+	}
+	peer := func() error {
+		raw, err := native.SyscallConn()
+		if err != nil {
+			return err
+		}
+		var observed error
+		err = raw.Control(func(fd uintptr) {
+			credential, e := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+			if e != nil {
+				observed = e
+				return
+			}
+			if credential.Pid != pid || credential.Uid != uid {
+				observed = errors.New("monitor peer differs from retained original daemon")
+			}
+		})
+		return errors.Join(err, observed)
+	}
+	if err = peer(); err != nil {
+		return nil, err
+	}
+	if err = currentName(); err != nil {
+		return nil, err
+	}
+	if err = native.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	joined := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = native.SetDeadline(time.Unix(1, 0)); close(joined) })
+	defer func() {
+		if !stop() {
+			<-joined
+		}
+	}()
+	const request = "{\"method\":\"io.systemd.Resolve.Monitor.DumpServerState\",\"parameters\":{\"allowInteractiveAuthentication\":false}}\x00"
+	if n, err := io.WriteString(native, request); err != nil || n != len(request) {
+		return nil, errors.Join(io.ErrShortWrite, err)
+	}
+	reader := bufio.NewReader(io.LimitReader(native, MaxResolvedServerDump+1))
+	wire, err := reader.ReadBytes(0)
+	if err != nil || len(wire) < 2 || len(wire) > MaxResolvedServerDump+1 {
+		return nil, errors.Join(errors.New("monitor omitted one complete bounded reply"), err)
+	}
+	if reader.Buffered() != 0 {
+		return nil, errors.New("monitor sent extra unsolicited frames")
+	}
+	if err = peer(); err != nil {
+		return nil, err
+	}
+	if err = currentName(); err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	return bytes.Clone(wire[:len(wire)-1]), nil
+}
+
+// SO_PEERCRED uses the caller PID namespace; ProcessFD fdinfo uses the procfs
+// mount namespace. Derive their relation from the retained original process,
+// never from a pathname interpreted in an unrelated namespace.
+func resolvedMonitorPeerPID(process *os.File, original uint32) (peer int32, failure error) {
+	if process == nil || original == 0 {
+		return 0, errors.New("monitor omitted retained daemon process")
+	}
+	nsfd, err := unix.Openat(int(process.Fd()), "ns/pid", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return 0, err
+	}
+	namespace := os.NewFile(uintptr(nsfd), "original-daemon-pid-namespace")
+	defer func() { failure = errors.Join(failure, namespace.Close()) }()
+	own, err := os.Open("/proc/thread-self/ns/pid")
+	if err != nil {
+		return 0, err
+	}
+	defer func() { failure = errors.Join(failure, own.Close()) }()
+	actual, err := namespace.Stat()
+	mine, other := own.Stat()
+	if err != nil || other != nil || !os.SameFile(actual, mine) {
+		return 0, errors.New("monitor daemon and helper have different PID namespaces")
+	}
+	fd, err := unix.Openat(int(process.Fd()), "status", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return 0, err
+	}
+	file := os.NewFile(uintptr(fd), "original-daemon-pid-mapping")
+	defer func() { failure = errors.Join(failure, file.Close()) }()
+	raw, err := io.ReadAll(io.LimitReader(file, 16385))
+	if err != nil || len(raw) > 16384 {
+		return 0, errors.New("monitor original PID mapping exceeded bound")
+	}
+	return resolvedMonitorPIDMapping(raw, original)
+}
+func resolvedMonitorPIDMapping(raw []byte, original uint32) (int32, error) {
+	seenPID, seenMapping := false, false
+	var peer int32
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "Pid:") {
+			if seenPID {
+				return 0, errors.New("duplicate original process PID")
+			}
+			seenPID = true
+			fields := strings.Fields(strings.TrimPrefix(line, "Pid:"))
+			if len(fields) != 1 {
+				return 0, errors.New("invalid original process PID")
+			}
+			value, err := strconv.ParseUint(fields[0], 10, 31)
+			if err != nil || value != uint64(original) {
+				return 0, errors.New("original process PID changed")
+			}
+		}
+		if strings.HasPrefix(line, "NSpid:") {
+			if seenMapping {
+				return 0, errors.New("duplicate original process PID mapping")
+			}
+			seenMapping = true
+			fields := strings.Fields(strings.TrimPrefix(line, "NSpid:"))
+			if len(fields) == 0 || len(fields) > 32 {
+				return 0, errors.New("invalid original PID namespace depth")
+			}
+			for i, field := range fields {
+				value, err := strconv.ParseUint(field, 10, 31)
+				if err != nil || value == 0 || i == 0 && value != uint64(original) {
+					return 0, errors.New("original PID namespace mapping changed")
+				}
+				peer = int32(value)
+			}
+		}
+	}
+	if !seenPID || !seenMapping || peer <= 0 {
+		return 0, errors.New("original process omitted exact PID mapping")
+	}
+	return peer, nil
+}
