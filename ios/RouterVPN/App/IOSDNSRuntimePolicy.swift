@@ -91,6 +91,15 @@ enum IOSDNSRuntimePolicy {
 
     static func patch(_ source: ClientBundle) throws -> ClientBundle {
         guard let profile = selectedProfile(in: source) else { throw error("The selected Router VPN profile is missing or ambiguous; another node's DNS policy was not substituted.") }
+        if profile.normalizedNodeKind == "router-vpn", let assets = source.profiles["shadowsocks"], assets["routervpn-ss-service.json"] != nil {
+            let nested = profile.nodeProofID ?? ""
+            let node = nested.isEmpty ? source.nodeProofID : nested
+            guard node.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                  source.nodeProofID.isEmpty || source.nodeProofID == node else {
+                throw error("The configured SS source has no matching captured node identity.")
+            }
+            try IOSMultihopStartLayer.validateCapturedSSService(assets, node: node)
+        }
         guard profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return source }
         var bundle = source
         var profiles = bundle.profiles
@@ -107,6 +116,10 @@ enum IOSDNSRuntimePolicy {
         let nativeIDs: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"]
         for rawID in Array(profiles.keys).filter({ !nativeIDs.contains($0) }) {
             guard var encodedFiles = profiles[rawID] else { continue }
+            // The sidecar binds these exact original bytes, including DNS.
+            // PacketTunnel applies the saved resolver to its runtime projection
+            // after verifying the original source and captured node again.
+            if rawID == "shadowsocks", encodedFiles["routervpn-ss-service.json"] != nil { continue }
             var nativeXray = false
             if encodedFiles["xray.json"] != nil && IOSNativeXrayProfile.modeIDs.contains(rawID) {
                 var decoded: [String: Data] = [:]

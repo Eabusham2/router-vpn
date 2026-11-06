@@ -4,8 +4,13 @@ on:
     paths:
       - 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'
       - 'ios/RouterVPN/App/IOSMultihopStartLayer.swift'
+      - 'ios/RouterVPN/App/IOSDNSRuntimePolicy.swift'
+      - 'ios/RouterVPN/App/RouterVPNModel.swift'
+      - 'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift'
+      - 'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift'
       - 'internal/nativecomposite/**'
       - 'deploy/test_ios_ss_service_asset.py'
+      - 'deploy/test_ios_ss_service_dns.py'
       - 'deploy/ios_test_crypto_bridge.py'
       - 'deploy/test_ios_start_layer.py'
       - 'internal/startwhitening/**'
@@ -67,3 +72,4 @@ jobs:
         run: |
           python3 deploy/test_ios_start_layer.py
           python3 deploy/test_ios_ss_service_asset.py
+          python3 deploy/test_ios_ss_service_dns.py

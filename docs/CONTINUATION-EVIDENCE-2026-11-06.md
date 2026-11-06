@@ -505,6 +505,52 @@ cannot close newer source. The earlier isolated root-package
 `go test -p=1 ./... -run '^$'` result at `892eeb42` is compilation evidence,
 not a full runtime test pass.
 
+## Configured SS source and Apple runtime DNS follow-up
+
+The configured SS declaration introduced in `29bf1fb5`, preserved-upgrade
+verification in `66c81cde`, and native asset compatibility in `0752df09` bind the
+original private source bytes to their captured node. Subsequent upstream
+`3f9701e3` and `fd48f71c` add independent paired-owner validation and real
+generated-store/capture fixtures. These changes remain in normal `main`
+ancestry; this Apple follow-up was reconciled on `df96e9cc` without replacing
+those newer paths.
+
+Apple DNS preparation now validates the configured declaration before use and
+keeps the original SS source unchanged. PacketTunnel verifies that source again,
+then applies the saved resolver only to its runtime projection. An unset DNS
+selection retains the complete original resolver, including its TCP port or
+encrypted hostname/bootstrap graph. Explicit Home, custom, DoT, DoH and DoH3
+policies use their captured transport, port, TLS identity and request path.
+Resolver hostname bootstrap stays inside the selected proxy.
+
+Manual Xray startup now carries its resolved AES source with the selected
+candidate. The extension compares the complete candidate with the original,
+allowing only the SS server-address resolution. Keys, ports, protocol fields,
+DNS and other graph contents cannot be substituted; an already literal server
+must retain the same IP identity, including equivalent IPv6 spellings. The
+passive declaration is consumed only in that verified runtime projection.
+
+Focused executable evidence for this follow-up:
+
+- `deploy/test_ios_ss_service_dns.py`: **522 checks passed** using the shipping
+  Swift DNS/capture/graph code and exact extracted PacketTunnel/launch bodies.
+  This includes independent layer selections, IPv4/IPv6 Home transports,
+  encrypted-hostname bootstrap, unset and explicit resolver policies, paired
+  final graphs, malformed/stale/foreign metadata, and resolved-candidate
+  credential/graph substitution controls. Two separately compiled source
+  mutants were rejected for rewriting the original source and omitting the
+  selected runtime DNS policy.
+- `deploy/test_ios_xray_start_layer.py`: the existing actual Swift plus shared
+  Go compiler suite passed **754 checks** with the updated launch handoff.
+- `ios/RouterVPN/test_dns_policy_contract.py`, Python syntax checks and
+  `git diff --check` passed. The macOS authenticated Start Layer workflow now
+  requires the new Swift regression alongside its existing cases.
+
+The local Linux Swift fixture uses the existing IP parser boundary and a real
+Go SHA256-backed CryptoKit test module. It does not start NetworkExtension or
+prove asynchronous host ownership, native packaged execution, peer traffic,
+physical DNS/leak behavior, or Apple signing. Those gates remain separate.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.

@@ -366,6 +366,67 @@ enum RouterVPNMultihopGraph {
         try singleWireGuardPolicy(pqDNSPolicy(files, profile: profile), profile: profile)
     }
 
+    /// The native Xray resolver changes only its captured SS server address.
+    /// A launch projection cannot substitute another node's credentials or
+    /// change any other source field while consuming the original declaration.
+    static func validateResolvedSSSource(_ original: Data, resolved: Data) throws {
+        guard !original.isEmpty, original.count <= maxBytes, !resolved.isEmpty, resolved.count <= maxBytes,
+              var before = try JSONSerialization.jsonObject(with: original) as? [String: Any],
+              let after = try JSONSerialization.jsonObject(with: resolved) as? [String: Any],
+              var oldOutputs = before["outbounds"] as? [[String: Any]],
+              let newOutputs = after["outbounds"] as? [[String: Any]],
+              oldOutputs.filter({ $0["type"] as? String == "shadowsocks" }).count == 1,
+              newOutputs.filter({ $0["type"] as? String == "shadowsocks" }).count == 1,
+              let oldIndex = oldOutputs.firstIndex(where: { $0["type"] as? String == "shadowsocks" }),
+              let next = newOutputs.first(where: { $0["type"] as? String == "shadowsocks" }),
+              let oldHost = oldOutputs[oldIndex]["server"] as? String, !oldHost.isEmpty,
+              let host = next["server"] as? String, serverIP(host) else {
+            throw issue("Resolved Xray AES lost its original captured source.")
+        }
+        if literalIP(oldHost), !sameServerIP(oldHost, host) {
+            throw issue("Resolved Xray AES changed an already literal captured server.")
+        }
+        oldOutputs[oldIndex]["server"] = host; before["outbounds"] = oldOutputs
+        guard try JSONSerialization.data(withJSONObject: before, options: [.sortedKeys]) ==
+                  JSONSerialization.data(withJSONObject: after, options: [.sortedKeys]) else {
+            throw issue("Resolved Xray AES changed its original credentials or graph.")
+        }
+    }
+
+    private static func sameServerIP(_ first: String, _ second: String) -> Bool {
+        var first4 = in_addr(), second4 = in_addr()
+        if inet_pton(AF_INET, first, &first4) == 1 {
+            return inet_pton(AF_INET, second, &second4) == 1 && first4.s_addr == second4.s_addr
+        }
+        var first6 = in6_addr(), second6 = in6_addr()
+        guard inet_pton(AF_INET6, first, &first6) == 1, inet_pton(AF_INET6, second, &second6) == 1 else { return false }
+        return withUnsafeBytes(of: first6) { Data($0) } == withUnsafeBytes(of: second6) { Data($0) }
+    }
+
+    /// The caller has verified the original configured SS source and removed
+    /// its passive declaration. DNS changes belong only to this runtime graph.
+    static func ssServiceDNSPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
+        guard Set(files.keys) == Set(["sing-box.json"]), let data = files["sing-box.json"], data.count <= maxBytes,
+              var graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let outputs = graph["outbounds"] as? [[String: Any]],
+              outputs.filter({ $0["tag"] as? String == "proxy" }).count == 1,
+              let proxy = outputs.first(where: { $0["tag"] as? String == "proxy" }),
+              proxy["type"] as? String == "shadowsocks", proxy["method"] as? String == "2022-blake3-aes-256-gcm",
+              (graph["route"] as? [String: Any])?["final"] as? String == "proxy" else {
+            throw issue("Configured SS DNS lost its original private graph.")
+        }
+        // No saved override means the complete original resolver remains in
+        // effect; an imported TCP/encrypted resolver must not become UDP/53.
+        if try setting(profile, "dns_mode", "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return files }
+        // An explicit saved policy replaces the original DNS as a whole. Its
+        // bootstrap is selected from this captured profile, never from an
+        // unrelated imported resolver or the physical network.
+        graph["dns"] = try selectedDNS(profile, importedDNS: "", requireImportedMatch: false)
+        let result = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
+        guard result.count <= maxBytes else { throw issue("Configured SS DNS graph exceeds its bound.") }
+        return ["sing-box.json": result]
+    }
+
     /// Freeze the selected exit resolver without adding single-node route rules.
     /// Multihop's graph builder subsequently enforces both nodes' IPv6/LAN
     /// policies; the independent Rosenpass and WG/AWG identities are unchanged.

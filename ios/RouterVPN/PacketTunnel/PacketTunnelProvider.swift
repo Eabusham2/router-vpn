@@ -681,6 +681,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let entryProofID = try suppliedNodeProof(root: entryRoot, selectedProfile: entryProfile)
         let exitProofID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
+        try validateCapturedSSSource(entryRoot, nodeID: entryProofID)
+        try validateCapturedSSSource(root, nodeID: exitProofID)
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
         let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
@@ -779,6 +781,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard let compiled else { throw self.tunnelError(58, "Native Xray exit compilation returned no graph.") }
                 return compiled
             }
+        } else if exitMode == "shadowsocks" {
+            rawFiles = try capturedSSProfile(root, profile: exitProfile, nodeID: exitProofID)
         } else {
             rawFiles = try layeredProfile(root, rawProfileID: exitMode)
         }
@@ -1067,6 +1071,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let rawProfileID = (provider["rawProfileID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
         var expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
+        try validateCapturedSSSource(root, nodeID: expectedNodeID)
         var rawFiles: [String: Data]
         if IOSNativeMAXProfile.modeIDs.contains(rawProfileID) {
             guard let profiles = root["profiles"] as? [String: Any],
@@ -1134,7 +1139,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: native.endpoint, profile: selectedProfile, dnsServers: native.dns)
             rawFiles = try RouterVPNMultihopGraph.singleWireGuardPolicy(rawFiles, profile: selectedProfile)
         } else {
-            rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
+            rawFiles = try rawProfileID == "shadowsocks"
+                ? capturedSSProfile(root, profile: selectedProfile, nodeID: expectedNodeID)
+                : layeredProfile(root, rawProfileID: rawProfileID)
             if ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"].contains(rawProfileID) {
                 guard let profiles = root["profiles"] as? [String: Any], let assets = profiles[rawProfileID] as? [String: String],
                       let source = rawFiles["sing-box.json"],
@@ -1170,6 +1177,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                   var profiles = root["profiles"] as? [String: Any],
                   var shadowsocks = profiles["shadowsocks"] as? [String: Any] else {
                 throw tunnelError(58, "A frozen Xray Start Layer source has no matching captured graph.")
+            }
+            guard let encoded = shadowsocks["sing-box.json"] as? String, encoded.utf8.count <= 6 * 1024 * 1024,
+                  let original = Data(base64Encoded: encoded, options: []), original.base64EncodedString() == encoded else {
+                throw tunnelError(58, "The original Xray AES source is missing or malformed.")
+            }
+            try RouterVPNMultihopGraph.validateResolvedSSSource(original, resolved: source)
+            if shadowsocks["routervpn-ss-service.json"] != nil {
+                guard let original = profiles["shadowsocks"] as? [String: String] else { throw tunnelError(58, "The original SS source is malformed.") }
+                try IOSMultihopStartLayer.validateCapturedSSService(original, node: expectedNodeID)
+                shadowsocks.removeValue(forKey: "routervpn-ss-service.json")
             }
             shadowsocks["sing-box.json"] = source.base64EncodedString()
             profiles["shadowsocks"] = shadowsocks; compositionRoot["profiles"] = profiles
@@ -1765,6 +1782,22 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         return text
     }
+    private func validateCapturedSSSource(_ root: [String: Any], nodeID: String) throws {
+        guard let profiles = root["profiles"] as? [String: Any],
+              let source = profiles["shadowsocks"] as? [String: Any], source["routervpn-ss-service.json"] != nil else { return }
+        guard let original = source as? [String: String] else { throw tunnelError(58, "The original SS source is malformed.") }
+        try IOSMultihopStartLayer.validateCapturedSSService(original, node: nodeID)
+    }
+
+    private func capturedSSProfile(_ root: [String: Any], profile: [String: Any], nodeID: String) throws -> [String: Data] {
+        let files = try layeredProfile(root, rawProfileID: "shadowsocks")
+        guard files["routervpn-ss-service.json"] != nil else { return files }
+        let original = files.mapValues { $0.base64EncodedString() }
+        try IOSMultihopStartLayer.validateCapturedSSService(original, node: nodeID)
+        guard let source = files["sing-box.json"] else { throw tunnelError(58, "The original SS source is missing.") }
+        return try RouterVPNMultihopGraph.ssServiceDNSPolicy(["sing-box.json": source], profile: profile)
+    }
+
     private func layeredProfile(_ root: [String: Any], rawProfileID: String) throws -> [String: Data] {
         guard let profiles = root["profiles"] as? [String: Any], let raw = profiles[rawProfileID] as? [String: Any], raw["sing-box.json"] != nil else { throw tunnelError(32, "Selected iOS raw profile does not contain sing-box.json.") }
         var result: [String: Data] = [:], total = 0

@@ -92,7 +92,9 @@ def main():
   subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(APP/'IOSHomeDNSPolicy.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSRuntimeSelection.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'),str(tmp/'Tests.swift'),'-o',str(tmp/'tests')],check=True,timeout=90)
   subprocess.run([str(tmp/'tests'),str(tmp/'compiler')],check=True,timeout=90)
  source=(APP/'RouterVPNModel.swift').read_text()
- for marker in ['LibboxRouterResolveXrayStartLayerProfile','let capturedAES = aesInput, capturedPolicy = startPolicy','launchBundle.profiles["shadowsocks"]?["sing-box.json"] = aes.base64EncodedString()','self.bundle?.profiles == bundle.profiles','where name != "start-layer-source.json"']:
+ for marker in ['LibboxRouterResolveXrayStartLayerProfile','let capturedAES = aesInput, capturedPolicy = startPolicy','for (name, data) in replacements { launchFiles[name] = data }','self.bundle?.profiles == bundle.profiles']:
   assert marker in source,marker
+ assert 'launchBundle.profiles["shadowsocks"]?["sing-box.json"] =' not in source
+ assert 'where name != "start-layer-source.json"' not in source
  print('Original saved bundle remains unchanged; compile/network/device acceptance are separate gates.')
 if __name__=='__main__':main()

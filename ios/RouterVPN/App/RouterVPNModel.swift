@@ -456,12 +456,9 @@ final class RouterVPNModel: ObservableObject {
                 throw IOSRuntimeSelectionError.unsupportedMode("Native Xray preparation returned an invalid asset set.")
             }
             var launchFiles = selection.files
-            for (name, data) in replacements where name != "start-layer-source.json" { launchFiles[name] = data }
-            if let aes = replacements["start-layer-source.json"] {
-                // Launch-only address alignment; do not mutate bundle/self.bundle.
-                guard launchBundle.profiles["shadowsocks"] != nil else { throw IOSRuntimeSelectionError.invalidSingBoxConfig }
-                launchBundle.profiles["shadowsocks"]?["sing-box.json"] = aes.base64EncodedString()
-            }
+            // Keep the original SS source and its service declaration intact.
+            // PacketTunnel consumes this candidate's resolved AES projection.
+            for (name, data) in replacements { launchFiles[name] = data }
             launchBundle.profiles[selection.rawProfileID] = launchFiles.mapValues { $0.base64EncodedString() }
             launchBundle = try IOSDNSRuntimePolicy.patch(launchBundle)
         }
