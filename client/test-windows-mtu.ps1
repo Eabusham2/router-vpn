@@ -1,9 +1,11 @@
 param([string]$Source=(Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'),[switch]$Live,[string]$Scenario='accepted')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
+if($Live){[Console]::Error.WriteLine('desktop-mtu-live phase=source-load')}
 Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 Add-Type -AssemblyName System.Net.Http
 . ([ScriptBlock]::Create((Get-Content -LiteralPath $Source -Raw -Encoding UTF8)))
+if($Live){[Console]::Error.WriteLine('desktop-mtu-live phase=source-loaded')}
 $script:Checks=0
 function Check([bool]$Condition,[string]$Message){if(-not$Condition){throw $Message};$script:Checks++}
 function Reject([scriptblock]$Action,[string]$Message){$Failed=$false;try{&$Action}catch{$Failed=$true};Check $Failed $Message}
@@ -42,22 +44,28 @@ function CompleteAll($S){
 }
 
 if($Live){
+    [Console]::Error.WriteLine('desktop-mtu-live phase=visual-setup')
     $Visual=$env:OS-eq'Windows_NT';$Owner=$null
     if($Visual){
         Add-Type -AssemblyName PresentationFramework
+        [Console]::Error.WriteLine('desktop-mtu-live phase=owner-show')
         $Owner=New-Object System.Windows.Window;$Owner.Show()
+        [Console]::Error.WriteLine('desktop-mtu-live phase=panel-show')
         Show-RouterVPNMTUDialog -BaseUrl 'http://127.0.0.1:8788' -Owner $Owner
         $S=$global:RouterVPNMTUView
         Check ($S.Window.IsVisible-and$Owner.IsEnabled) 'Actual MTU panel blocked the main window'
     }else{$S=New-RouterVPNMTUState 'http://127.0.0.1:8788';$S.Client=New-RouterVPNMTUClient}
+    [Console]::Error.WriteLine('desktop-mtu-live phase=panel-ready')
     $Until=[DateTime]::UtcNow.AddSeconds(8);$Pulses=0
     $Pump={
         Update-RouterVPNMTUView $S
         if($Visual){[Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{},[Windows.Threading.DispatcherPriority]::Background)}
         Start-Sleep -Milliseconds 5
     }
+    [Console]::Error.WriteLine('desktop-mtu-live phase=status-wait')
     while(-not$S.Session-and-not$S.Retired-and[DateTime]::UtcNow-lt$Until){&$Pump}
     Check ($S.Session-and-not$S.Retired) 'Real loopback status did not capture a connection'
+    [Console]::Error.WriteLine('desktop-mtu-live phase=status-captured')
     if($Scenario-eq'configured'){
         Check (-not$S.OptimizationAllowed-and$S.Detail.Contains('Effective interface MTU: 9000')) 'Configured live capacity was not retained'
         if($Visual){
@@ -73,27 +81,40 @@ if($Live){
         Write-Host "PASS: $script:Checks real Windows configured-capacity checks (WPF=$Visual)"
         return
     }
+    [Console]::Error.WriteLine('desktop-mtu-live phase=retest-dispatch')
     if($Visual){$S.Window.FindName('Retest').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}
     else{[void](Start-RouterVPNMTURetest $S)}
+    [Console]::Error.WriteLine('desktop-mtu-live phase=retest-returned')
     Check ($S.Own-and$S.Request-and-not$S.RunDone) 'Actual Retest callback blocked on its POST'
     if($Scenario-ne'early'){
+        [Console]::Error.WriteLine('desktop-mtu-live phase=acceptance-wait')
         while(-not$S.Seen-and-not$S.Retired-and[DateTime]::UtcNow-lt$Until){&$Pump;$Pulses++}
         Check $S.Seen 'Real loopback request was not accepted'
+        [Console]::Error.WriteLine('desktop-mtu-live phase=accepted')
     }
     if($Scenario-ne'replaced'){
+        [Console]::Error.WriteLine('desktop-mtu-live phase=cancel-dispatch')
         if($Visual){$S.Window.FindName('CancelTest').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}
         else{Cancel-RouterVPNMTUTest $S}
+        [Console]::Error.WriteLine('desktop-mtu-live phase=cancel-returned')
     }
+    [Console]::Error.WriteLine('desktop-mtu-live phase=terminal-wait')
     while((-not$S.Terminal-or-not$S.RunDone)-and[DateTime]::UtcNow-lt$Until){&$Pump;$Pulses++}
     if($Scenario-ne'early'){Check ($Pulses-gt0) 'UI dispatch was not exercised while HTTP work was pending'}
     if($Scenario-eq'replaced'){Check ($S.Retired-and$S.Terminal) 'Real replaced session did not retire its captured observer'}
     elseif($Scenario-eq'early'){Check ($S.Terminal-and$S.RunDone-and-not$S.Seen) 'Real unaccepted POST did not drain after cancellation'}
     else{Check ($S.Terminal-and$S.RunDone-and-not$S.Retired-and$S.Status-ceq'Previous MTU restored.') 'Real Cancel failed to retain exact restoration after POST409'}
+    [Console]::Error.WriteLine('desktop-mtu-live phase=terminal-observed')
+    [Console]::Error.WriteLine('desktop-mtu-live phase=panel-close')
     if($Visual){Check $Owner.IsEnabled 'MTU measurement blocked main connection controls';$S.Window.Close()}
+    [Console]::Error.WriteLine('desktop-mtu-live phase=panel-close-returned')
     [void](Close-RouterVPNMTUView $S)
+    [Console]::Error.WriteLine('desktop-mtu-live phase=drain-wait')
     while(-not$S.Closed-and[DateTime]::UtcNow-lt$Until){&$Pump}
     Check $S.Closed 'Real HTTP tasks did not drain on close'
+    [Console]::Error.WriteLine('desktop-mtu-live phase=drained')
     if($Visual){$Owner.Close()}
+    [Console]::Error.WriteLine('desktop-mtu-live phase=owner-closed')
     Write-Host "PASS: $script:Checks real Windows MTU loopback $Scenario checks (WPF=$Visual)"
     return
 }

@@ -1092,3 +1092,16 @@ Validation before publication: root and two independent Astra reviews of the exa
 
 Evidence: [AMD64 native OpenVPN run](https://github.com/Eabusham2/router-vpn/actions/runs/42226553516/job/127927707989). The existing Server lease cleanup and pending mixed wrong-key inspection failures remain open independently.
 
+
+## 2026-11-06 — Preserve the failing Windows MTU live-fixture phase
+
+Windows native job 127923331079 on `bab34e59` passed 107 shipping MTU source checks and then exceeded the unchanged 25-second subprocess bound in its first PowerShell live case, `accepted`. The captured command output was discarded when Python raised TimeoutExpired, so that failure did not identify whether startup, UI creation, dispatcher work, measurement, cancellation, or cleanup consumed the budget. The HTTP server's connection reset was logged at child termination and does not establish the original cause.
+
+The Python wrapper now prints a bounded tail of captured stdout and stderr before re-raising the original TimeoutExpired exception. It prints at most 8,192 bytes or characters from each stream and never prints the command arguments. Diagnostic output errors cannot replace the original timeout. Normal command handling is unchanged.
+
+The PowerShell fixture adds fixed live-phase markers around source loading, owner/panel creation, status acquisition, retest and cancel dispatch, terminal observation, and drain/close. These markers carry no credentials or dynamic connection profile. Removing the markers reproduces the original PowerShell executable lines and assertions exactly.
+
+The 25-second process bound, 8-second live bound, HTTP bounds, all accepted/cancelled/stale/failure expectations, and every existing causal mutant remain unchanged. The same relevant source previously completed both PowerShell 7 and PowerShell 5.1 live cases on `98f08601`; elapsed time alone does not justify increasing a leaf deadline. This commit supplies the missing phase evidence for the next actual Windows run; it does not claim the underlying delay is fixed.
+
+Validation before publication: root and independent Astra source review, exact original-line preservation, and fixed-input/output-bound inspection. No local execution is claimed. Evidence: [actual failed native MTU job](https://github.com/Eabusham2/router-vpn/actions/runs/42226553579/job/127923331079).
+

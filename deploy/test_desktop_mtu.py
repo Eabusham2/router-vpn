@@ -10,6 +10,7 @@ import select
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -19,7 +20,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command, *, expect_failure=False, timeout=60):
-    result = subprocess.run([str(x) for x in command], text=True, capture_output=True, timeout=timeout)
+    try:
+        result = subprocess.run([str(x) for x in command], text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        # These are this fixture's captured child streams, not invented results.
+        # subprocess.run has already killed and joined the timed-out child.
+        # Keep fixed labels and bounded tails; never print command arguments.
+        for name, output in (('stdout', error.stdout), ('stderr', error.stderr)):
+            if isinstance(output, bytes):
+                output = output[-8192:].decode('utf-8', errors='replace')
+            elif isinstance(output, str):
+                output = output[-8192:]
+            else:
+                output = ''
+            try:
+                print('desktop-mtu fixture timeout '+name+':', file=sys.stderr)
+                print(output, file=sys.stderr, flush=True)
+            except (OSError, UnicodeError):
+                pass  # A diagnostic sink failure must not replace the timeout.
+        raise
     if expect_failure:
         if result.returncode == 0:
             raise AssertionError('Broken ownership control unexpectedly passed: '+str(command))
