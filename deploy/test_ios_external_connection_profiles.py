@@ -69,7 +69,12 @@ enum IOSExternalExecution {
   guard !failGraph,let p=IOSDNSRuntimePolicy.selectedProfile(in:source),p.multihopEnabled==true,
         let id=p.multihopEntryID,id != p.id,p.multihopExitID==p.id,
         let data=capturedEntryData ?? IOSNodeBundleStore.shared.bundles[id] else{throw TestFailure.error}
-  return try JSONDecoder().decode(ClientBundle.self,from:data)
+  let captured=try JSONDecoder().decode(ClientBundle.self,from:data)
+  if p.normalizedNodeKind=="router-vpn",let entry=captured.routerProfiles.first(where:{$0.id==id}),entry.normalizedNodeKind=="external" {
+   guard let kind=entry.external?.protocolName,kind==p.multihopEntryMode,
+         IOSImportedEntryMultihop.supports(entry:kind,final:p.multihopExitMode ?? "") else {throw TestFailure.error}
+  }
+  return captured
  }
  func importBundle(_ data:Data)throws {if failImport{throw TestFailure.error};let decoded=try JSONDecoder().decode(ClientBundle.self,from:data);bundle=decoded;imports+=1}
 }
@@ -316,11 +321,58 @@ enum IOSExternalExecution {
    }
   }}
  }
- static func main()throws {
-  defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
-  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try missingDNSPreservesHome();try externalExecutionPersistence()
-  print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
+ static func importedRouterPersistence()throws {
+  let generated=try JSONDecoder().decode(ClientBundle.self,from:Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_CONNECT_SERVICE_BUNDLE"]!)))
+  for kind in ["socks5","http-connect","https-connect","openvpn"] {
+   let entryLayer="off",finalLayer="off",transport="tcp"
+   var first=profile(kind,"entry");first.apiToken="";first.startLayer=entryLayer
+   if kind=="openvpn" {let fixture=try json(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_CLIENT_FIXTURE"]!))),layers=fixture["layers"] as! [String:[String:Any]];first.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:data(layers["off"]!["external"]!))}
+   if entryLayer != "off" {first.external?.startLayer=try JSONDecoder().decode(ExternalStartLayer.self,from:data(["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"captured-entry","server":"198.51.100.1","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:106,count:32).base64EncodedString()]]))}
+   var source=generated,p=generated.routerProfiles[0];p.startLayer=finalLayer;p.dnsMode="home";p.dnsProtocol=transport;p.dnsHost="fd77:77::1";p.adGuardIPv6="fd77:77::1";p.dnsPort=5443;p.ipv6Mode="on";p.mtuPolicy="fixed";p.manualMTU=1380;p.baseTunnel="awg"
+   p.dnsServerName=["tls","https","h3"].contains(transport) ? "home.example":nil;p.dnsPath=["https","h3"].contains(transport) ? "/captured-dns":nil
+   p.multihopEnabled=true;p.multihopEntryID=first.id;p.multihopEntryMode=kind;p.multihopExitID=p.id;p.multihopExitMode="shadowsocks";p.multihopExecution="local";source.routerProfiles[0]=p
+   let model=try reset(p);model.bundle=source;IOSNodeBundleStore.shared.bundles=[p.id:try encoded(source),first.id:try encoded(bundle(first))]
+   let saved=try IOSConnectionProfileStore.add(model:model,name:"Imported Router")
+   try check("imported Router stores exact independent safe policies",saved.preferences?.startLayer==finalLayer && saved.entryPolicy?.preferences.startLayer==entryLayer && saved.preferences?.dnsProtocol==transport && saved.preferences?.dnsHost==p.dnsHost && saved.preferences?.dnsPort==5443)
+   var changed=source;changed.routerProfiles[0].dnsProtocol="udp";changed.routerProfiles[0].dnsPort=53;changed.routerProfiles[0].startLayer="off";changed.routerProfiles[0].manualMTU=1600
+   var currentEntry=bundle(first);if kind=="http-connect"{currentEntry.routerProfiles[0].external?.httpConnect?.password="new current exact password"}else if kind=="https-connect"{currentEntry.routerProfiles[0].external?.httpsConnect?.password="new current exact password"}else if kind=="socks5"{currentEntry.routerProfiles[0].external?.socks5?.password="new current exact password"}else{currentEntry.routerProfiles[0].external?.openVPN?.password="new current exact password"};currentEntry.routerProfiles[0].dnsPort=53
+   IOSNodeBundleStore.shared.bundles=[p.id:try encoded(changed),first.id:try encoded(currentEntry)];model.bundle=bundle(profile("socks5","unrelated"))
+   let before=try encoded(model.bundle!),privateBefore=IOSNodeBundleStore.shared.bundles,writes=model.imports
+   IOSNodeBundleStore.shared.failWrite=true
+   try reject("imported Router failed atomic store cannot adopt"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+   try check("imported Router failure keeps both original owners and selection",IOSNodeBundleStore.shared.bundles==privateBefore && encoded(model.bundle!)==before && model.imports==writes)
+   IOSNodeBundleStore.shared.failWrite=false
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   let restored=try IOSConnectionProfileStore.snapshot(model:model,name:"Readback"),entry=try JSONDecoder().decode(ClientBundle.self,from:IOSNodeBundleStore.shared.bundles[first.id]!)
+   try check("imported Router Load restores exact DNS MTU base and independent layers",restored.preferences==saved.preferences && restored.entryPolicy==saved.entryPolicy && model.bundle!.profiles==source.profiles)
+   try check("imported Router Load retains current private credential reference",entry.routerProfiles[0].external==currentEntry.routerProfiles[0].external && entry.profiles==currentEntry.profiles)
+   let row=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
+   try check("imported Router record never copies private service or credentials",!row.contains("routervpn-ss-service.json") && !row.contains("NEVER_COPY_PASSWORD") && !row.contains("new current exact password") && !row.contains(source.profiles["shadowsocks"]!["sing-box.json"]!))
+   let records=IOSPrivateJSONStore.bytes!,nodes=IOSNodeBundleStore.shared.bundles,selected=try encoded(model.bundle!),imports=model.imports
+   for fault in ["unknown-entry","unsupported-final","unsupported-other-final","foreign-entry","changed-entry-owner","missing-entry"] {
+    var object=try json(records),rows=object["profiles"] as! [[String:Any]],prefs=rows[0]["preferences"] as! [String:Any]
+    if fault=="unknown-entry"{prefs["multihopEntryMode"]="unknown-import"}
+    else if fault=="unsupported-final"{prefs["multihopExitMode"]=kind.contains("connect") ? "wg":"naive-h3"}
+    else if fault=="unsupported-other-final"{prefs["multihopExitMode"]=kind.contains("connect") ? "hysteria2":"ss-v2ray"}
+    else if fault=="foreign-entry"{prefs["multihopEntryID"]="foreign"}
+    else if fault=="changed-entry-owner"{var changed=entry;changed.routerProfiles[0].external?.expectedPublicIP="203.0.113.199";IOSNodeBundleStore.shared.bundles[first.id]=try encoded(changed)}
+    else{IOSNodeBundleStore.shared.bundles.removeValue(forKey:first.id)}
+    rows[0]["preferences"]=prefs;object["profiles"]=rows;IOSPrivateJSONStore.bytes=try data(object)
+    let priorNodes=IOSNodeBundleStore.shared.bundles
+    try reject("imported Router Load rejects "+kind+" "+fault){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+    try check("refused imported Load preserves actual selected and private owners",encoded(model.bundle!)==selected && model.imports==imports && IOSNodeBundleStore.shared.bundles==priorNodes)
+    IOSPrivateJSONStore.bytes=records;IOSNodeBundleStore.shared.bundles=nodes
+   }
+   let updated=try IOSConnectionProfileStore.update(model:model,id:saved.id,name:"Updated Router");try check("imported Router Update keeps exact saved owners",updated.id==saved.id && updated.preferences==saved.preferences && updated.entryPolicy==saved.entryPolicy)
+   try IOSConnectionProfileStore.delete(model:model,id:saved.id)
+   try check("imported Router Delete removes only nonsecret record",IOSConnectionProfileStore.all().isEmpty && IOSNodeBundleStore.shared.bundles[first.id] != nil && model.bundle!.profiles==source.profiles)
+  }
  }
+ static func main() { do {
+  defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
+  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try missingDNSPreservesHome();try externalExecutionPersistence();try importedRouterPersistence()
+  print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
+ } catch {FileHandle.standardError.write(Data(("FAIL shipping connection profile: "+error.localizedDescription+"\n").utf8));exit(1)} }
 }
 '''
 
@@ -340,15 +392,30 @@ def main():
     boundaries = BOUNDARIES.replace(' // SHIPPING_RESTORE', restore)
     with tempfile.TemporaryDirectory(prefix='ios-external-profiles-') as temporary:
         work = Path(temporary)
-        options = [swift, '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
+        options = [swift, '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
         if platform.system() != 'Darwin':
             code = work / 'Network.swift';code.write_text(NETWORK)
             subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Network', str(code), '-emit-module-path', str(work / 'Network.swiftmodule'), '-o', str(work / 'libNetwork.so')], check=True, timeout=60)
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         code = work / 'Tests.swift';code.write_text(source + '\n' + policy + boundaries)
         binary = work / 'tests'
-        subprocess.run(options + [str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'Models.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
-        subprocess.run([str(binary)], env=dict(os.environ, ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json')), check=True, timeout=30)
+        command=options + [str(APP / 'IOSMultihopExecution.swift'),str(APP / 'IOSMultihopStartLayer.swift'),str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'Models.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)]
+        subprocess.run(command, check=True, timeout=120)
+        service_bundle=work/'service-bundle.json'
+        subprocess.run(['python3',str(ROOT/'server/scripts/ss_service_consumer_fixture.py'),'--endpoint','192.0.2.44','--output',str(service_bundle)],check=True,timeout=45)
+        environment=dict(os.environ, ROUTERVPN_CONNECT_SERVICE_BUNDLE=str(service_bundle), ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json'))
+        subprocess.run([str(binary)], env=environment, check=True, timeout=30)
+        guard='IOSConnectionSafePreferences.routerHopModes.union(IOSConnectionSafePreferences.ordinaryExternalModes).contains(p.multihopEntryMode ?? "wg")'
+        original=code.read_text()
+        if original.count(guard)!=1: raise AssertionError('Imported-entry preference boundary changed')
+        old_guard='IOSConnectionSafePreferences.routerHopModes.union(external ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg")'
+        code.write_text(original.replace(guard,old_guard))
+        subprocess.run(command,check=True,timeout=120)
+        rejected=subprocess.run([str(binary)],env=environment,capture_output=True,text=True,timeout=30)
+        if rejected.returncode!=1 or 'FAIL shipping connection profile: Saved multihop requires distinct linked entry/exit ids and a supported exit transport.' not in rejected.stderr:
+            raise AssertionError('Original paired-final imported-entry guard missed its intended rejection: '+rejected.stdout+rejected.stderr)
+        print('Apple paired-final profile original entry guard causal rejected')
+
 
 
 if __name__ == '__main__':

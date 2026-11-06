@@ -573,11 +573,13 @@ private enum IOSConnectionProfileStore {
             p.manualMTU = 0
         }
         if p.multihopEnabled {
+            // Entry source kind is independent of the final node kind. Exact
+            // graph support is checked by iosMultihopEntryBundle before adoption.
             guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,
                   [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
                   let mode = p.multihopExitMode,
                   (external ? IOSConnectionSafePreferences.externalModes : IOSConnectionSafePreferences.routerHopModes).contains(mode),
-                  IOSConnectionSafePreferences.routerHopModes.union(external ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg") else {
+                  IOSConnectionSafePreferences.routerHopModes.union(IOSConnectionSafePreferences.ordinaryExternalModes).contains(p.multihopEntryMode ?? "wg") else {
                 throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
             }
         }
