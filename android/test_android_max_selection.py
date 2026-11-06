@@ -78,9 +78,33 @@ public final class PQSelectionHarness {
   if(a instanceof Number&&b instanceof Number)return Double.compare(((Number)a).doubleValue(),((Number)b).doubleValue())==0;
   return Objects.equals(a,b);
  }
+ static void paddingRates(NativeSingBoxController owner,Path dir,Path app)throws Exception {
+  for(String mode:new String[]{"max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}) {
+   for(Integer rate:new Integer[]{null,0,32,64,192}) {
+    JSONObject b=source(mode,"home","off"),selected=profile(b);
+    if(rate==null)selected.remove("daita_rate_kbps");else selected.put("daita_rate_kbps",rate);
+    String original=b.toString();NativeSingBoxController.validateMAXReadiness(b);
+    check(original.equals(b.toString()),"MAX readiness rewrote the captured padding default");
+    File input=save(dir,b);byte[] before=Files.readAllBytes(input.toPath());
+    var prepared=owner.prepareSession(input,mode);Path folder=app.resolve("layered-sessions").resolve(prepared.sessionId);
+    JSONObject graph=new JSONObject(Files.readString(folder.resolve("sing-box.json")));
+    JSONArray services=graph.getJSONArray("services");int expected=rate==null||rate==0?192:rate;
+    check(services.length()==1&&services.getJSONObject(0).getInt("rate_kbps")==expected,"MAX default or explicit padding rate changed");
+    check(services.getJSONObject(0).getString("packet_tag").equals("proxy")&&services.getJSONObject(0).getString("proof_tag").equals("proxy"),"MAX default padding changed its proved path");
+    check(Arrays.equals(before,Files.readAllBytes(input.toPath())),"MAX default padding rewrote the saved profile");
+   }
+   for(Object bad:new Object[]{-1,1,31,193,32.5,"0",Boolean.TRUE}) {
+    JSONObject b=source(mode,"home","off");profile(b).put("daita_rate_kbps",bad);
+    boolean failed=false;try{NativeSingBoxController.validateMAXReadiness(b);}catch(Exception expected){failed=true;}
+    check(failed,"invalid padding rate became a readiness default");
+    rejected(owner,dir,app,mode,value->profile(value).put("daita_rate_kbps",bad));
+   }
+  }
+ }
  public static void main(String[]args)throws Exception {
   fixtures=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_MAX_PROFILE_FIXTURES"))));
   Path dir=Path.of(args[0]),app=dir.resolve("app");Files.createDirectories(app);NativeSingBoxController owner=new NativeSingBoxController(new Context(app.toFile()));int graphs=0;
+  paddingRates(owner,dir,app);
   for(String mode:new String[]{"max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}){
    check(AndroidNativeMAXProfile.isMode(mode),"exact MAX branch not registered");
    check(NativeSingBoxController.nativeMultihopEntry(mode),"complete MAX entry selection is missing");

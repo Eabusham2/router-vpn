@@ -434,7 +434,9 @@ final class NativeSingBoxController {
         if (!java.util.Arrays.asList("", "on", "auto", "off").contains(AndroidNativeProfilePolicy.stringPolicy(profile, "ipv6_mode", "on"))) throw new IllegalStateException("Unknown IPv6 policy.");
         if (AndroidNativeProfilePolicy.booleanPolicy(profile, "daita_enabled", false)) {
             AndroidNativeProfilePolicy.exactInteger(profile, "daita_port", 45999, 45999, 45999);
-            AndroidNativeProfilePolicy.exactInteger(profile, "daita_rate_kbps", 192, 32, 192);
+            int rate = AndroidNativeProfilePolicy.exactInteger(profile, "daita_rate_kbps", 192, 0, 192);
+            // Zero is the saved default; the shared compiler resolves it to 192.
+            if (rate != 0 && rate < 32) throw new IllegalStateException("Padding rate must be 0 (default) or 32–192 kbps.");
         }
     }
 

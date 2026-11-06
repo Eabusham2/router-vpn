@@ -285,6 +285,11 @@ func Apply(config, profiles string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// Saved Router profiles use zero for the default, as does desktop
+		// normalization. The runtime service still requires a concrete bound.
+		if rate == 0 {
+			rate = MaxCoverKbps
+		}
 		options := CoverOptions{NodeID: text(item.profile, "node_proof_id"), API: text(item.profile, "router_api"), Sink: host, RateKbps: rate, ProofTag: item.proof, PacketTag: item.packet}
 		if err = options.Validate(); err != nil {
 			return "", err
