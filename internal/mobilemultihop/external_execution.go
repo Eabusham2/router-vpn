@@ -47,6 +47,18 @@ func externalSavedExecution(p map[string]any) (string, error) {
 // restored may only be a previously proved local/server choice validated by the
 // host's exact saved-bundle receipt. It cannot change a saved explicit choice.
 func PrepareExternalExecutionCapture(source, capture, restored string) (string, error) {
+	return prepareExternalExecutionCapture(source, capture, restored, false)
+}
+
+// PrepareExternalPairedExecutionCapture explicitly retains both authenticated
+// candidates for a paired Router even when Local is selected. This is not a
+// restored choice: the saved explicit selection and original paired authority
+// are validated independently below. It creates no lease or network activity.
+func PrepareExternalPairedExecutionCapture(source, capture, restored string) (string, error) {
+	return prepareExternalExecutionCapture(source, capture, restored, true)
+}
+
+func prepareExternalExecutionCapture(source, capture, restored string, paired bool) (string, error) {
 	var selected externalPolicyCapture
 	if exactJSON([]byte(capture), &selected, 8<<20) != nil || selected.Execution != nil {
 		return "", errors.New("external execution requires one fresh captured selection")
@@ -55,10 +67,13 @@ func PrepareExternalExecutionCapture(source, capture, restored string) (string, 
 	if err != nil {
 		return "", err
 	}
+	if paired && saved != "local" && saved != "server" {
+		return "", errors.New("paired execution requires an explicit captured Local or Server choice")
+	}
 	if restored != "" && (restored != "local" && restored != "server" || saved != "auto" && restored != saved) {
 		return "", errors.New("restored external execution differs from its saved selection")
 	}
-	if saved == "local" && restored == "" {
+	if saved == "local" && restored == "" && !paired {
 		if _, err := NewExternalPolicy(source, capture); err != nil {
 			return "", err
 		}

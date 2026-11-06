@@ -54,6 +54,7 @@ WORKSPACE_SCOPES = (
     ('^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)', ''),
     ('^TestDesktopWindowsExternalSSEntry', ''),
     ('^TestDesktopWindowsExternalRouterServer', ''),
+    ('^TestDesktopWindowsExternalRouterLocal', ''),
     ('^TestDesktopTorMTU', ''),
     ('^TestDesktopTor(Comparison|Compare|PublicCompare)', ''),
     ('^TestDesktopTorOrdinary', ''),
@@ -496,6 +497,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
                          ("Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'", "Run = '^$'"),
                          ("Run = '^TestDesktopWindowsExternalSSEntry'", "Run = '^$'"),
                          ("Run = '^TestDesktopWindowsExternalRouterServer'", "Run = '^$'"),
+                         ("Run = '^TestDesktopWindowsExternalRouterLocal'", "Run = '^$'"),
                          ("Run = '^TestSpeedLabTor(Comparison|Compare)'", "Run = '^$'"),
                          ("Run = '^TestSpeedLabTor'", "Run = '^$'"),
                          ("Run = '^TestSpeedLab'", "Run = '^$'"),
@@ -521,6 +523,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
             '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)',
             '^TestDesktopWindowsExternalSSEntry',
             '^TestDesktopWindowsExternalRouterServer',
+            '^TestDesktopWindowsExternalRouterLocal',
             '^TestDesktopTor', '^TestSpeedLab',
         )
         names = set()

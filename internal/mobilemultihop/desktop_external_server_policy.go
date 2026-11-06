@@ -6,18 +6,18 @@ import (
 )
 
 // The original compiler already authenticates the complete relay proposal.
-// This additional boundary admits only its exact paired WG/SS2022 Server row
+// This additional boundary admits only its exact paired WG/SS2022 Local/Server row
 // set. Both candidates and their selector remain owned by that same execution.
 func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture ExternalDesktopCapture, session string) (*DesktopExternalPolicy, error) {
 	bad := desktopExternalPolicyError
 	p := original.capture
 	final, _ := p.Profile["external"].(map[string]any)
-	if capture.Execution != "server" || p.Profile["multihop_execution"] != "server" || p.Profile["multihop_entry_mode"] != "wg" ||
+	if (capture.Execution != "server" && capture.Execution != "local") || p.Profile["multihop_execution"] != capture.Execution || p.Profile["multihop_entry_mode"] != "wg" ||
 		p.Entry["node_kind"] != "router-vpn" || capture.EntryNodeID == "" || capture.EntryTag != externalEntryTag ||
 		capture.PredecessorSHA256 == "" || capture.Protocol != "shadowsocks" || !desktopExternalSS2022Import(final) ||
 		capture.StartLayer != "" || capture.EntryStartLayer != "" || len(capture.PhysicalRoots) != 1 ||
 		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
-		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || p.Execution == nil || p.Execution.Selection != "server" {
+		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || p.Execution == nil || p.Execution.Selection != capture.Execution {
 		return nil, bad
 	}
 	root := capture.PhysicalRoots[0]
@@ -52,6 +52,10 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 		return nil, bad
 	}
 	request := p.Execution.Request
+	initial := ServerTag
+	if capture.Execution == "local" {
+		initial = LocalTag
+	}
 	for _, raw := range rows {
 		row, ok := raw.(map[string]any)
 		if !ok {
@@ -73,7 +77,7 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 				return nil, bad
 			}
 		case ExternalFinalTag:
-			want := map[string]any{"type": "selector", "tag": ExternalFinalTag, "outbounds": []any{LocalTag, ServerTag}, "default": ServerTag, "interrupt_exist_connections": true}
+			want := map[string]any{"type": "selector", "tag": ExternalFinalTag, "outbounds": []any{LocalTag, ServerTag}, "default": initial, "interrupt_exist_connections": true}
 			if !reflect.DeepEqual(row, want) {
 				return nil, bad
 			}

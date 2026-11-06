@@ -8,7 +8,7 @@ import (
 // Graph admission is deliberately narrower than an external final's shape.
 // Only this captured SS2022 entry pair gains the Windows retained host.
 func desktopWindowsExternalGraphEligible(profile, entry common.RouterProfile, direct bool, restored string) bool {
-	if !direct && desktopWindowsExternalRouterServerGraph(profile, entry, restored) {
+	if !direct && desktopWindowsExternalRouterPairedGraph(profile, entry, restored) {
 		return true
 	}
 	if !desktopWindowsExternalProfileEligible(profile, direct, restored) {

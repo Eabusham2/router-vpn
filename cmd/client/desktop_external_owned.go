@@ -148,7 +148,7 @@ func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct 
 
 func desktopWindowsExternalEligible(launch *desktopNodeLaunch) bool {
 	return launch != nil && launch.ownedNode == nil && launch.tor == nil && launch.external != nil &&
-		(launch.external.predecessor == "" && launch.external.selection == "local" || desktopWindowsExternalRouterServerOwner(launch.external)) &&
+		(launch.external.predecessor == "" && launch.external.selection == "local" || desktopWindowsExternalRouterPairedOwner(launch.external)) &&
 		launch.policyProfileID == launch.external.profile.ID &&
 		(launch.external.direct && launch.profileID == launch.policyProfileID || !launch.external.direct && launch.profileID == launch.external.entry.ID) &&
 		desktopWindowsExternalGraphEligible(launch.external.profile, launch.external.entry, launch.external.direct, "")
@@ -193,7 +193,7 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 		return nil, errors.Join(err, errors.New("native external verification selected another captured package"))
 	}
 	var files map[string][]byte
-	if !direct && desktopWindowsExternalRouterServerGraph(profile, entry, restored) {
+	if !direct && desktopWindowsExternalRouterPairedGraph(profile, entry, restored) {
 		profile.MultihopEntryMode = "wg"
 		files, err = readDesktopNodeAssets(captured.capture.dataRoot, entry.ID, "wg")
 		if err != nil {
@@ -205,7 +205,7 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 			}
 		}()
 	}
-	launch, err := compileDesktopExternalCaptured(ctx, profile, entry, exit, direct, restored, files, nil, captured.host.lookup)
+	launch, err := compileDesktopWindowsExternalCaptured(ctx, profile, entry, exit, direct, restored, files, nil, captured.host.lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -364,8 +364,8 @@ func prepareDesktopWindowsRetainedExternal(a *app, launch *desktopNodeLaunch) (d
 		persisted.MultihopExitID = profile.ID
 	}
 	persisted.MultihopExecution, persisted.MultihopEntryMode = "local", ""
-	if desktopWindowsExternalRouterServerOwner(launch.external) {
-		persisted.MultihopExecution, persisted.MultihopEntryMode = "server", "wg"
+	if desktopWindowsExternalRouterPairedOwner(launch.external) {
+		persisted.MultihopExecution, persisted.MultihopEntryMode = launch.external.selection, "wg"
 	}
 	owner.persistedToken = desktopOwnedNodeProfileToken(persisted)
 	owner.gate <- struct{}{}

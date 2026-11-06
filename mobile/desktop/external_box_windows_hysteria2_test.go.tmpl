@@ -1155,6 +1155,9 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 			if captured, e := f.policy.Capture(); e == nil && captured.Execution == "server" {
 				t.Fatal("actual Router Server source skipped its durable WFP intent", err)
 			}
+			if captured, e := f.policy.Capture(); e == nil && captured.Execution == "local" && captured.EntryNodeID != "" {
+				t.Fatal("actual Router Local source skipped its durable WFP intent", err)
+			}
 			if f.policy.Metadata().RootTag == "external-entry" {
 				t.Fatal("actual SS entry source skipped its durable WFP intent", err)
 			}

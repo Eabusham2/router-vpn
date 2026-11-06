@@ -18,9 +18,10 @@ import (
 // imported nodes, predecessor and the already proved execution choice.
 type speedLabExternalRestoreSeal struct {
 	identity, sourceSHA256, configSHA256 string
+	executionController                  bool
 }
 
-func speedLabExternalRestoreIdentity(saved *speedLabExternalRestore) (string, error) {
+func speedLabExternalRestoreIdentity(saved *speedLabExternalRestore, controller bool) (string, error) {
 	if saved == nil {
 		return "", errors.New("missing external restore source")
 	}
@@ -29,7 +30,8 @@ func speedLabExternalRestoreIdentity(saved *speedLabExternalRestore) (string, er
 		Profile, Entry         common.RouterProfile
 		Predecessor, Execution string
 		Direct                 bool
-	}{saved.source, saved.profile, saved.entry, saved.predecessor, saved.execution, saved.direct})
+		ExecutionController    bool
+	}{saved.source, saved.profile, saved.entry, saved.predecessor, saved.execution, saved.direct, controller})
 	if err != nil {
 		return "", err
 	}
@@ -60,11 +62,17 @@ func captureSpeedLabExternalRestoreSeal(saved *speedLabExternalRestore, owner *d
 	if json.Unmarshal([]byte(policy.Metadata()), &identity) != nil || identity.SourceSHA256 != owner.expected.SourceSHA256 || identity.ConfigSHA256 != owner.expected.ConfigSHA256 || policy.SourceSHA256() != owner.expected.SourceSHA256 {
 		return errors.New("external restore capture differs from its original compiled proof identity")
 	}
-	sealed, err := speedLabExternalRestoreIdentity(saved)
+	var captured struct {
+		Execution *json.RawMessage `json:"execution"`
+	}
+	if json.Unmarshal(owner.capture, &captured) != nil {
+		return errors.New("external restore lost its original controller capture")
+	}
+	sealed, err := speedLabExternalRestoreIdentity(saved, captured.Execution != nil)
 	if err != nil {
 		return err
 	}
-	saved.seal = &speedLabExternalRestoreSeal{identity: sealed, sourceSHA256: identity.SourceSHA256, configSHA256: identity.ConfigSHA256}
+	saved.seal = &speedLabExternalRestoreSeal{identity: sealed, sourceSHA256: identity.SourceSHA256, configSHA256: identity.ConfigSHA256, executionController: captured.Execution != nil}
 	return nil
 }
 
@@ -72,7 +80,7 @@ func (seal *speedLabExternalRestoreSeal) current(saved *speedLabExternalRestore)
 	if seal == nil || len(seal.sourceSHA256) != 64 || len(seal.configSHA256) != 64 {
 		return errors.New("external restoration has no original source seal")
 	}
-	current, err := speedLabExternalRestoreIdentity(saved)
+	current, err := speedLabExternalRestoreIdentity(saved, seal.executionController)
 	if err != nil || current != seal.identity {
 		return errors.New("external restoration changed its sealed original source")
 	}

@@ -36,9 +36,30 @@ func desktopWindowsExternalRouterServerOwner(owner *desktopExternalRuntime) bool
 
 // The lease remains inside the original child execution controller. Its final
 // result can only be adopted under this exact paired identity and selection.
+// Local and Server keep the same original paired entry and independent final.
+// Compare remains outside this native admission until both candidates and the
+// complete comparison lifecycle have their own native acceptance.
+func desktopWindowsExternalRouterPairedGraph(profile, entry common.RouterProfile, restored string) bool {
+	if profile.MultihopExecution == "server" {
+		return desktopWindowsExternalRouterServerGraph(profile, entry, restored)
+	}
+	if profile.MultihopExecution != "local" || restored != "" && restored != "local" {
+		return false
+	}
+	shape := cloneRouterProfile(profile)
+	shape.MultihopExecution = "server"
+	return desktopWindowsExternalRouterServerGraph(shape, entry, "")
+}
+
+func desktopWindowsExternalRouterPairedOwner(owner *desktopExternalRuntime) bool {
+	return owner != nil && !owner.direct && owner.predecessor != "" &&
+		(owner.selection == "local" || owner.selection == "server") && owner.selection == owner.profile.MultihopExecution &&
+		desktopWindowsExternalRouterPairedGraph(owner.profile, owner.entry, owner.selection)
+}
+
 func desktopWindowsExternalExecutionProof(owner *desktopExternalRuntime, proof mobilemultihop.ExternalProofResult) bool {
-	if desktopWindowsExternalRouterServerOwner(owner) {
-		return proof.Execution == "server" && proof.EntryNodeID == owner.entry.NodeProofID && proof.EntryNodeID == owner.expected.EntryNodeID
+	if desktopWindowsExternalRouterPairedOwner(owner) {
+		return proof.Execution == owner.selection && proof.EntryNodeID == owner.entry.NodeProofID && proof.EntryNodeID == owner.expected.EntryNodeID
 	}
 	return proof.Execution == "local" && proof.EntryNodeID == ""
 }

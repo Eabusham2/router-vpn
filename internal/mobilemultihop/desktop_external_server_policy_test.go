@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func desktopExternalRouterServerFixture(t *testing.T, execution string) *ExternalPolicy {
+func desktopExternalRouterServerFixture(t *testing.T, execution string, paired ...bool) *ExternalPolicy {
 	t.Helper()
 	_, raw := externalExecutionFixture(t, execution)
 	graph, _ := externalTestFixture(t, "shadowsocks", "")
@@ -17,7 +17,11 @@ func desktopExternalRouterServerFixture(t *testing.T, execution string) *Externa
 	capture["entry"], capture["entry_tag"], capture["predecessor_config"] = entry, externalEntryTag, predecessor
 	profile := capture["profile"].(map[string]any)
 	profile["multihop_entry_mode"], profile["kill_switch_policy"] = "wg", "always"
-	prepared, err := PrepareExternalExecutionCapture(source, externalTestJSON(t, capture), "")
+	prepare := PrepareExternalExecutionCapture
+	if len(paired) != 0 && paired[0] {
+		prepare = PrepareExternalPairedExecutionCapture
+	}
+	prepared, err := prepare(source, externalTestJSON(t, capture), "")
 	if err != nil {
 		t.Fatal(err)
 	}

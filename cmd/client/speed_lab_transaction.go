@@ -369,16 +369,18 @@ func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standar
 		// Ordinary Local (including direct/anonymous proxy paths) has no relay
 		// proposal to restore. Supplying a fake retained proposal would require
 		// a Router entry and server credentials that this path never used.
-		retained = ""
+		if !saved.seal.executionController {
+			retained = ""
+		}
 	}
 	launch, err := compileDesktopExternalGraphWithPredecessor(graph, saved.profile, saved.entry, exit, saved.direct, retained, saved.predecessor)
 	if err != nil {
 		return nil, err
 	}
-	// Local capture has no per-session relay lease in its compiled graph.
-	// Server/Compare intentionally renews those credentials from the sealed
-	// source while retaining the already proved execution selection.
-	if (saved.profile.MultihopExecution == "" || saved.profile.MultihopExecution == "local") && launch.external.expected.ConfigSHA256 != saved.seal.configSHA256 {
+	// Ordinary Local has no per-session relay proposal in its compiled graph.
+	// An original execution controller (including explicit paired Local) renews
+	// only its generated credentials from the sealed source and proved choice.
+	if !saved.seal.executionController && (saved.profile.MultihopExecution == "" || saved.profile.MultihopExecution == "local") && launch.external.expected.ConfigSHA256 != saved.seal.configSHA256 {
 		return nil, errors.New("restored external configuration differs from its original proved configuration")
 	}
 	launch.root, launch.external.network, launch.external.selection = saved.root, saved.network, saved.execution

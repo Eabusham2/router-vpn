@@ -65,6 +65,8 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
+// Windows additionally retains the explicitly captured paired Router WG entry
+// with an SS2022 final and Local/Server selector, with both Start Layers Off.
 // This constructor alone cannot enable a mode or a privileged OS firewall owner.
 func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS string) (*DesktopExternalPolicy, error) {
 	if original == nil || !desktopExternalSessionID.MatchString(sessionID) ||
@@ -72,7 +74,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		return nil, desktopExternalPolicyError
 	}
 	capture, err := original.DesktopCapture()
-	if err == nil && targetOS == "windows" && capture.Execution == "server" {
+	if err == nil && targetOS == "windows" && (capture.Execution == "server" || capture.Execution == "local" && original.capture.Execution != nil && original.capture.Entry["node_kind"] == "router-vpn") {
 		return newDesktopExternalRouterServerPolicy(original, capture, sessionID)
 	}
 	entryKind := ""

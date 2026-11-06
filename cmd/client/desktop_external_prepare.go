@@ -107,6 +107,15 @@ func desktopExternalPublicAddress(address netip.Addr) bool {
 // hostname once and compile those literal launch copies. No ordinary query or
 // traffic destination uses the bootstrap resolver.
 func compileDesktopExternalCaptured(ctx context.Context, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string, files, start map[string][]byte, lookup applexray.Lookup) (*desktopNodeLaunch, error) {
+	return compileDesktopExternalCapturedExecution(ctx, profile, entry, exit, direct, restored, files, start, lookup, false)
+}
+
+// Only the captured Windows retained host opts into its proved paired controller.
+func compileDesktopWindowsExternalCaptured(ctx context.Context, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string, files, start map[string][]byte, lookup applexray.Lookup) (*desktopNodeLaunch, error) {
+	return compileDesktopExternalCapturedExecution(ctx, profile, entry, exit, direct, restored, files, start, lookup, true)
+}
+
+func compileDesktopExternalCapturedExecution(ctx context.Context, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string, files, start map[string][]byte, lookup applexray.Lookup, paired bool) (*desktopNodeLaunch, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("external native preparation was cancelled")
 	}
@@ -207,7 +216,7 @@ func compileDesktopExternalCaptured(ctx context.Context, profile, entry common.R
 		if err != nil {
 			return nil, err
 		}
-		return compileDesktopExternalGraphWithPredecessor(graph, p, e, x, direct, restored, predecessor)
+		return compileDesktopExternalGraphCapturedExecution(graph, p, e, x, direct, restored, predecessor, paired)
 	}
 	if len(hosts) == 0 {
 		return compile(nil)

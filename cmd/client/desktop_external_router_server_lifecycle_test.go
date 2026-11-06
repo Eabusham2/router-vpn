@@ -12,12 +12,16 @@ import (
 	"router-vpn/internal/common"
 )
 
-func desktopWindowsRouterServerHostFixture(t *testing.T, kill string) (*desktopWindowsExternalFixture, common.RouterProfile, common.RouterProfile) {
+func desktopWindowsRouterServerHostFixture(t *testing.T, kill string, choices ...string) (*desktopWindowsExternalFixture, common.RouterProfile, common.RouterProfile) {
 	t.Helper()
 	f := newDesktopWindowsExternalFixture(t, kill)
 	p := cloneRouterProfile(f.profiles["shadowsocks"])
 	p.ID = "windows-paired-router-server"
-	p.MultihopExecution, p.MultihopEntryMode = "server", "wg"
+	execution := "server"
+	if len(choices) != 0 {
+		execution = choices[0]
+	}
+	p.MultihopExecution, p.MultihopEntryMode = execution, "wg"
 	p.External.ResponseProbe = &common.ExternalResponseProbe{URL: "https://" + p.Endpoint + "/node-response", ServerName: "exit.example.test"}
 	f.base.a.profiles.Profiles = append(f.base.a.profiles.Profiles, p)
 	f.base.a.profiles.SelectedID = p.ID
@@ -26,23 +30,29 @@ func desktopWindowsRouterServerHostFixture(t *testing.T, kill string) (*desktopW
 	}
 	// This models the already joined child's proof only. The separate native
 	// acceptance suite must obtain it through actual WG, leased SOCKS and SS.
-	f.proofFault = func(proof *desktopExternalProof) { proof.Execution = "server" }
+	f.proofFault = func(proof *desktopExternalProof) { proof.Execution = execution }
 	return f, p, cloneRouterProfile(f.base.profile)
 }
 
 func desktopWindowsRouterServerConnect(f *desktopWindowsExternalFixture, p, e common.RouterProfile) *httptest.ResponseRecorder {
 	direct := false
-	body, _ := json.Marshal(externalProfileConnectRequest{ProfileID: p.ID, EntryID: e.ID, Direct: &direct, Execution: "server", EntryMode: "wg"})
+	body, _ := json.Marshal(externalProfileConnectRequest{ProfileID: p.ID, EntryID: e.ID, Direct: &direct, Execution: p.MultihopExecution, EntryMode: "wg"})
 	response := httptest.NewRecorder()
 	f.base.a.externalProfileConnect(response, httptest.NewRequest(http.MethodPost, "/api/external/connect", bytes.NewReader(body)))
 	return response
 }
 
 func TestDesktopWindowsExternalRouterServerPublicLifecycle(t *testing.T) {
+	testDesktopWindowsRouterPublicLifecycle(t, "server")
+}
+func TestDesktopWindowsExternalRouterLocalPublicLifecycle(t *testing.T) {
+	testDesktopWindowsRouterPublicLifecycle(t, "local")
+}
+func testDesktopWindowsRouterPublicLifecycle(t *testing.T, execution string) {
 	for _, kill := range []string{"on-connect", "always"} {
 		t.Run(kill, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				f, p, e := desktopWindowsRouterServerHostFixture(t, kill)
+				f, p, e := desktopWindowsRouterServerHostFixture(t, kill, execution)
 				response := desktopWindowsRouterServerConnect(f, p, e)
 				if response.Code != http.StatusOK {
 					t.Fatal("paired Server public connect", response.Code, response.Body.String())
@@ -52,11 +62,11 @@ func TestDesktopWindowsExternalRouterServerPublicLifecycle(t *testing.T) {
 					t.Fatal("original retained owner absent")
 				}
 				launch := raw.(*desktopNodeLaunch)
-				if launch.profileID != e.ID || launch.policyProfileID != p.ID || launch.external.windows.entryToken != desktopOwnedNodeProfileToken(e) || launch.external.selection != "server" {
+				if launch.profileID != e.ID || launch.policyProfileID != p.ID || launch.external.windows.entryToken != desktopOwnedNodeProfileToken(e) || launch.external.selection != execution {
 					t.Fatal("Server owner relabeled original entry or final")
 				}
 				proof, err := f.base.a.readDesktopExternalProof(launch)
-				if err != nil || proof.EntryNodeID != e.NodeProofID || proof.Execution != "server" || !proof.EntryProven || !proof.DNSProven {
+				if err != nil || proof.EntryNodeID != e.NodeProofID || proof.Execution != execution || !proof.EntryProven || !proof.DNSProven {
 					t.Fatal("Server proof lost original paired identity", err)
 				}
 				if err := launch.external.windows.CurrentProof(context.Background(), proof); err != nil {
@@ -64,6 +74,9 @@ func TestDesktopWindowsExternalRouterServerPublicLifecycle(t *testing.T) {
 				}
 				changed := proof
 				changed.Execution = "local"
+				if execution == "local" {
+					changed.Execution = "server"
+				}
 				if launch.external.windows.CurrentProof(context.Background(), changed) == nil {
 					t.Fatal("Local proof admitted")
 				}

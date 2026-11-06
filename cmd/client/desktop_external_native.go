@@ -180,6 +180,10 @@ func compileDesktopExternalGraph(graph map[string]any, profile, entry common.Rou
 }
 
 func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, entry common.RouterProfile, exit standardExit, direct bool, restored, predecessor string) (*desktopNodeLaunch, error) {
+	return compileDesktopExternalGraphCapturedExecution(graph, profile, entry, exit, direct, restored, predecessor, false)
+}
+
+func compileDesktopExternalGraphCapturedExecution(graph map[string]any, profile, entry common.RouterProfile, exit standardExit, direct bool, restored, predecessor string, paired bool) (*desktopNodeLaunch, error) {
 	profile = cloneRouterProfile(profile)
 	entry = cloneRouterProfile(entry)
 	if profile.NodeKind != "external" || profile.External == nil || profile.ID != exit.ID || !desktopExternalNativeProtocol(exit.Protocol) {
@@ -252,7 +256,11 @@ func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, e
 	if err != nil {
 		return nil, err
 	}
-	prepared, err := mobilemultihop.PrepareExternalExecutionCapture(string(source), string(rawCapture), restored)
+	prepareExecution := mobilemultihop.PrepareExternalExecutionCapture
+	if paired && !direct && predecessor != "" && desktopWindowsExternalRouterPairedGraph(profile, entry, restored) {
+		prepareExecution = mobilemultihop.PrepareExternalPairedExecutionCapture
+	}
+	prepared, err := prepareExecution(string(source), string(rawCapture), restored)
 	if err != nil {
 		return nil, err
 	}

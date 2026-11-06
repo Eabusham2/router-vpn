@@ -71,12 +71,12 @@ func validateDesktopRetainedExternalSourcesLocked(profile, entry common.RouterPr
 	}
 	selected.MultihopEnabled, selected.MultihopEntryID, selected.MultihopExitID = true, entry.ID, profile.ID
 	selected.MultihopExecution, selected.MultihopEntryMode = "local", ""
-	server := desktopWindowsExternalRouterServerOwner(owner)
-	if server && !desktopWindowsExternalRouterServerGraph(profile, entry, owner.selection) {
-		return errors.New("retained Router Server source changed its captured execution or entry")
+	server := desktopWindowsExternalRouterPairedOwner(owner)
+	if server && !desktopWindowsExternalRouterPairedGraph(profile, entry, owner.selection) {
+		return errors.New("retained Router source changed its captured execution or entry")
 	}
 	if server {
-		selected.MultihopExecution, selected.MultihopEntryMode = "server", "wg"
+		selected.MultihopExecution, selected.MultihopEntryMode = owner.selection, "wg"
 	}
 	selected, err = freezeDesktopExternalProfile(selected, owner.profile.Endpoint)
 	if err != nil || desktopOwnedNodeProfileToken(selected) != desktopOwnedNodeProfileToken(owner.profile) ||
@@ -145,5 +145,5 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 }
 
 func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
-	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterServerOwner(owner))
+	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterPairedOwner(owner))
 }
