@@ -118,9 +118,9 @@ let entryModes=["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","realit
     try check("capture IPv4 and IPv6 even with IPv6-Off",addresses.contains{$0.contains(":")} && addresses.contains{!$0.contains(":")})
     try check("MTU belongs to actual interface",tun["mtu"] as? Int==(entryMode=="wg" || entryMode.hasPrefix("awg2-") ? 1280:1500))
     let dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]],server=servers.last!
-    let kind=["home":"udp","custom":"tcp","dot":"tls","doh":"https","doh3":"h3"][dnsMode]!
+    let kind=["home":"tcp","custom":"tcp","dot":"tls","doh":"https","doh3":"h3"][dnsMode]!
     try check("selected resolver preserved",server["server"] as? String=="192.168.50.133" && server["type"] as? String==kind && server["detour"] as? String=="proxy")
-    try check("selected resolver port preserved",server["server_port"] as? Int==(dnsMode=="home" ? 53:5353))
+    try check("selected resolver port preserved",server["server_port"] as? Int==5353)
     if ["doh","doh3"].contains(dnsMode){try check("DNS path preserved",server["path"] as? String=="/private-dns")}
     try check("separate loopback entry proof",ins.contains{$0["tag"] as? String==P.entryProofTag && $0["listen"] as? String=="127.0.0.1" && $0["listen_port"] as? Int==1098})
     let meta=try json(["entry_id":"entry","exit_id":"exit","entry_node_id":e["node_proof_id"]!,"exit_node_id":x["node_proof_id"]!,"entry_token":"test-entry-token","exit_token":"test-exit-token","entry_api":"http://10.77.0.1:8787","exit_api":"http://10.88.0.1:8787","entry_tag":P.entryTag,"entry_mode":entryMode,"exit_mode":exitMode,"execution":execution])
