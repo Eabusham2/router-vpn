@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -56,7 +57,17 @@ func desktopTorFixturePublicationBarrier(kind string, expected mobiletor.Desktop
 		return
 	}
 	control := os.Getenv("ROUTERVPN_TOR_TEST_RELEASE")
-	request, err := os.ReadFile(control + ".pause")
+	// Retain the original IPC directory and use its native snapshot reader.
+	// On Windows, path-based ReadFile omits delete sharing and can collide
+	// with the parent's still-completing atomic rename of this exact request.
+	root, err := os.OpenRoot(filepath.Dir(control))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "isolated Tor fixture publication control root: %v\n", err)
+		os.Exit(94)
+	}
+	defer root.Close()
+	name := filepath.Base(control)
+	request, err := readDesktopRuntimeSnapshot(root, name+".pause", 1024)
 	if os.IsNotExist(err) {
 		return
 	}
@@ -70,7 +81,7 @@ func desktopTorFixturePublicationBarrier(kind string, expected mobiletor.Desktop
 		os.Exit(95)
 	}
 	for {
-		if resume, err := os.ReadFile(control + ".resume"); err == nil && string(resume) == identity {
+		if resume, err := readDesktopRuntimeSnapshot(root, name+".resume", 1024); err == nil && string(resume) == identity {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
