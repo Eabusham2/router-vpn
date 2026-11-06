@@ -58,7 +58,16 @@ func TestBoundedDiagnostics(t *testing.T){
             host_os, host_arch = subprocess.check_output([compiler, "env", "GOHOSTOS", "GOHOSTARCH"], env=env, text=True, timeout=15).split()
             race = [] if (host_os, host_arch) == ("windows", "arm64") else ["-race"]
             env.update(GOOS=host_os, GOARCH=host_arch, CGO_ENABLED="1" if race else "0")
-            subprocess.run([compiler, "test", *race, "-p=1", "-count=1", "-timeout=15s", "-v", "."], cwd=path, env=env, check=True, timeout=60)
+            binary = path / ("provider-join.test.exe" if host_os == "windows"
+                             else "provider-join.test")
+            print("Provider join phase=compile", flush=True)
+            subprocess.run(
+                [compiler, "test", "-c", *race, "-p=1", "-o", str(binary), "."],
+                cwd=path, env=env, check=True, timeout=180)
+            print("Provider join phase=execute", flush=True)
+            subprocess.run(
+                [str(binary), "-test.count=1", "-test.timeout=15s", "-test.v"],
+                cwd=path, env=env, check=True, timeout=60)
 
 
 if __name__ == "__main__":

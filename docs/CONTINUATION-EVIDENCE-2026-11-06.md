@@ -810,6 +810,32 @@ The original imported I/O object now retains a non-authoritative, mutex-protecte
 
 The test is appended to the mandatory native inventory, preserving every existing positional mutation selector; the runner also checks its unique presence. The source inventory becomes 22 required native parent cases and 16 Python runner methods. This increment is six source/test/runner files plus this evidence entry, reviewed by two Astra agents and the parent. No local compilation or execution was possible. Actual Windows AMD64/ARM64 execution, including the new IPv4 refusal case and all existing ownership controls, remains required; it does not establish equivalent IPv6 refusal coverage or resolve the earlier OpenVPN WFP failure.
 
+### Provider-join compiler and execution budgets
+
+At exact `c602cecf0eebca46a52884886f9c4d0760952732`,
+[Windows AMD64 job 127907229930](https://github.com/Eabusham2/router-vpn/actions/runs/42220220946/job/127907229930)
+stopped in `deploy/test_windows_external_provider_join.py` before its native
+SOCKS command. Python timed out the combined `go test -race` command after
+60 seconds. The log did not contain a Go test-start record, case verdict or
+15-second Go test-timeout panic. The recorded one test was the Python unittest.
+Buffered output prevents assigning the elapsed time conclusively to compilation,
+linking or execution; it does not establish an actual provider join failure.
+
+The existing fixture now compiles its exact test binary in a separately bounded
+180-second phase and executes that binary with the original 15-second Go test
+deadline and 60-second outer execution limit. The compiler allowance is an
+explicit bounded policy choice, not a measured duration from the failed job.
+Phase labels distinguish build failure from execution failure. The existing
+architecture-specific race selection, two-second helper deadline, trailer,
+overflow, failed and stalled child cases, original-child join assertion,
+bounded-diagnostics case and temporary-workspace cleanup are unchanged.
+Production helpers and native SOCKS verdict requirements are unchanged.
+
+Validation before publication was exact-source review and a single-statement
+replacement check during the workspace outage. No local build, native execution,
+passing provider-join verdict or SOCKS acceptance is claimed for this correction.
+Its next CI execution must supply those distinct results.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.
