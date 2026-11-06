@@ -109,6 +109,12 @@ func TestRouterVPNDesktopSSEntryAuthenticationWitness(t *testing.T) {
 // server lifetime. Native entry callers separately validate their physical role;
 // a final provider is reachable only over the entry's fixed loopback routes.
 func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method, password string, address netip.Addr) desktopExternalInstalledSSPeer {
+	return desktopStartSSProviderTransport(t, server, method, password, address, nil, nil)
+}
+
+// Decorators transform only ciphertext on the original owned transport; the
+// listener, accepted connection registry and cancellation joins stay unchanged.
+func desktopStartSSProviderTransport(t *testing.T, server *desktopNodeLayerServer, method, password string, address netip.Addr, wrapStream func(net.Conn) net.Conn, wrapPacket func(net.PacketConn) net.PacketConn) desktopExternalInstalledSSPeer {
 	t.Helper()
 	if !desktopSS2022Credentials(method, password) || server == nil || server.ctx == nil || len(server.routes) == 0 {
 		t.Fatal("SS provider lost captured credential or exact routes")
@@ -161,7 +167,11 @@ func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method
 				defer server.leave(c)
 				_ = c.SetDeadline(time.Now().Add(45 * time.Second))
 				server.rawTCP.Add(1)
-				if desktopSSAuthenticationFailure(service.NewConnection(server.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})) {
+				transport := c
+				if wrapStream != nil {
+					transport = wrapStream(c)
+				}
+				if desktopSSAuthenticationFailure(service.NewConnection(server.ctx, transport, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})) {
 					authTCP.Add(1)
 				}
 			}()
@@ -169,7 +179,11 @@ func desktopStartSSProvider(t *testing.T, server *desktopNodeLayerServer, method
 	}()
 	go func() {
 		defer server.workers.Done()
-		reader := bufio.NewPacketConn(packet)
+		transport := packet
+		if wrapPacket != nil {
+			transport = wrapPacket(packet)
+		}
+		reader := bufio.NewPacketConn(transport)
 		for {
 			body := buf.NewPacket()
 			source, e := reader.ReadPacket(body)
@@ -201,8 +215,19 @@ func desktopStartSSEntry(t *testing.T, parent *desktopNodeLayerServer, request d
 
 // The explicit loopback component also uses this constructor, with no native
 // role or physical acceptance inferred from that component execution.
-func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, address netip.Addr) desktopExternalInstalledSSPeer {
+func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledSSRequest, cert tls.Certificate, final, network string, address netip.Addr, finalPorts ...uint16) desktopExternalInstalledSSPeer {
 	t.Helper()
+	finalPort := uint16(8388)
+	if len(finalPorts) > 1 {
+		t.Fatal("multiple SS final tuples")
+	}
+	if len(finalPorts) == 1 {
+		finalPort = finalPorts[0]
+	}
+	if finalPort != 8388 && finalPort != 8389 {
+		t.Fatal("invalid captured SS final port")
+	}
+	finalDestination := net.JoinHostPort("198.51.100.240", fmt.Sprint(finalPort))
 	target, err := netip.ParseAddrPort(final)
 	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || network != "tcp" && network != "tcp+udp" && network != "udp" {
 		t.Fatal("SS entry lost its original final listener")
@@ -241,10 +266,10 @@ func desktopStartSSEntryAt(t *testing.T, parent *desktopNodeLayerServer, request
 		{Network: "tcp", Destination: "1.1.1.1:443", Physical: listener.Addr().String()},
 	}}
 	if network != "udp" {
-		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "198.51.100.240:8388", Physical: final})
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "tcp", Destination: finalDestination, Physical: final})
 	}
 	if network == "tcp+udp" || network == "udp" {
-		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "198.51.100.240:8388", Physical: final})
+		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: finalDestination, Physical: final})
 	}
 	peer := desktopStartSSProvider(t, server, request.Method, request.Password, address)
 	closeNative, stats := peer.close, peer.stats

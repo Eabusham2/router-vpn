@@ -118,6 +118,12 @@ SS_CONNECT_REFERENCE_ROOT = "TestRouterVPNDesktopInstalledSSCONNECTLoopbackRefer
 SS_CONNECT_REFERENCE_SUITE = ("ss-connect-two-hop-reference", "./protocol/routervpnamnezia", "^" + SS_CONNECT_REFERENCE_ROOT + "$",
     (SS_CONNECT_REFERENCE_ROOT, *(SS_CONNECT_REFERENCE_ROOT + "/method%d-%s" % (method, protocol) for method in range(3) for protocol in ("http-connect", "https-connect")),
      *(SS_CONNECT_REFERENCE_ROOT + "/negative/" + fault for fault in ("entry-key", "entry-method", "username", "password", "server-name", "trust", "final-route", "dns-route"))))
+SS_INDEPENDENT_LAYERS_ROOT = "TestRouterVPNDesktopSSIndependentLayersReference"
+SS_INDEPENDENT_LAYERS_SUITE = ("ss-independent-layers-reference", "./protocol/routervpnamnezia", "^" + SS_INDEPENDENT_LAYERS_ROOT + "$",
+    (SS_INDEPENDENT_LAYERS_ROOT, *(SS_INDEPENDENT_LAYERS_ROOT + "/method%d-method%d/layer%d-layer%d" % (entry, final, first, last)
+      for entry in range(3) for final in range(3) for first in range(3) for last in range(3)),
+     *(SS_INDEPENDENT_LAYERS_ROOT + "/negative/" + fault for fault in ("entry-key", "final-key", "entry-layer-key", "final-layer-key", "entry-whitening", "final-whitening", "entry-private", "final-private", "dns-route"))))
+
 SS_HYSTERIA_REFERENCE_ROOT = "TestRouterVPNDesktopInstalledSSHysteriaLoopbackReference"
 SS_HYSTERIA_REFERENCE_SUITE = ("ss-hysteria-two-hop-reference", "./protocol/routervpnamnezia", "^" + SS_HYSTERIA_REFERENCE_ROOT + "$",
     (SS_HYSTERIA_REFERENCE_ROOT, *(SS_HYSTERIA_REFERENCE_ROOT + "/method%d-hysteria2" % method for method in range(3)),
@@ -1014,7 +1020,7 @@ def execute_baseline_suite(baselines, suite):
     if name == 'native-retirement-bound':
         root = 'TestDesktopNetworkRetirementKeepsSeparateBound'
         require_native_verdicts(output, [root] + [root + '/' + case for case in ('complete-history', 'oversized-writer', 'oversized-parser', 'ready-stays-bounded')], 'native retirement evidence bound')
-    if name in (LINUX_SS_ENTRY_SUITE[0], SS_ENTRY_REFERENCE_SUITE[0], LINUX_SS_CONNECT_SUITE[0], SS_CONNECT_REFERENCE_SUITE[0], SS_HYSTERIA_REFERENCE_SUITE[0]):
+    if name in (LINUX_SS_ENTRY_SUITE[0], SS_ENTRY_REFERENCE_SUITE[0], LINUX_SS_CONNECT_SUITE[0], SS_CONNECT_REFERENCE_SUITE[0], SS_HYSTERIA_REFERENCE_SUITE[0], SS_INDEPENDENT_LAYERS_SUITE[0]):
         require_native_verdicts(output, required, "original SS2022 entry and final")
     if name == LINUX_LAYERED_ENTRY_SUITE[0]:
         require_native_verdicts(output, required, "Linux original layered entry")
@@ -1236,6 +1242,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suites.append(LINUX_SS_CONNECT_SUITE)
         suites.append(SS_CONNECT_REFERENCE_SUITE)
         suites.append(SS_HYSTERIA_REFERENCE_SUITE)
+        suites.append(SS_INDEPENDENT_LAYERS_SUITE)
         suites.append(STANDARD_MTU_SUITE)
         suites.append(STANDARD_MTU_RETIRE_SUITE)
         suites.append(STANDARD_MTU_NATIVE_SUITE)
