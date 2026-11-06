@@ -69,6 +69,19 @@ class StandardServiceGateTests(unittest.TestCase):
             for bad in (output.replace(line,'',1), output+'\n'+line, output.replace(line,line.replace('PASS','SKIP')), output.replace(line,line.replace('PASS','FAIL'))):
                 with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,prefix,guardian.BOOTSTRAP_FINITE_NATIVE)
 
+    def test_scoped_bootstrap_upstream_verdicts_are_mandatory(self):
+        spec=importlib.util.spec_from_file_location('scoped_bootstrap_guardian',ROOT/'deploy/test_desktop_linux_guardian.py')
+        guardian=importlib.util.module_from_spec(spec);spec.loader.exec_module(guardian)
+        self.assertIn('StandardBootstrapUpstream',guardian.STANDARD_KERNEL_CASES)
+        for name in ('desktop_standard_linux_bootstrap_upstream.go','desktop_standard_linux_bootstrap_upstream_test.go','desktop_standard_linux_bootstrap_upstream_native_test.go'):
+            self.assertIn(name,guardian.STANDARD_SOURCE_FILES)
+        prefix='TestDesktopLinuxGuardianKernelStandardBootstrapUpstream/'
+        output='\n'.join('--- PASS: '+prefix+case+' (0.01s)' for case in guardian.BOOTSTRAP_UPSTREAM_NATIVE)
+        guardian.require_socks_verdicts(output,prefix,guardian.BOOTSTRAP_UPSTREAM_NATIVE)
+        for line in output.splitlines():
+            for bad in (output.replace(line,'',1), output+'\n'+line, output.replace(line,line.replace('PASS','SKIP')), output.replace(line,line.replace('PASS','FAIL'))):
+                with self.assertRaises(ValueError): guardian.require_socks_verdicts(bad,prefix,guardian.BOOTSTRAP_UPSTREAM_NATIVE)
+
     def test_bootstrap_removal_uses_original_observed_generation(self):
         source=(ROOT/'internal/mobiletor/desktop_standard_linux_bootstrap.go').read_text()
         start=source.index('func (p *DesktopLinuxStandardProtection) cleanupBootstrapLocked(')

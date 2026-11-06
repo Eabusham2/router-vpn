@@ -69,7 +69,13 @@ func desktopLinuxBootstrapPermitDuration(remaining time.Duration) (time.Duration
 }
 
 func desktopLinuxBootstrapRuleWire(route desktopLinuxBootstrapRoute, local, remote netip.AddrPort, mark uint32, network, set string) ([]byte, error) {
-	if !local.IsValid() || !remote.IsValid() || !local.Addr().IsGlobalUnicast() || !remote.Addr().IsGlobalUnicast() || local.Addr().Is4() != remote.Addr().Is4() || local.Addr().Is4In6() || remote.Addr().Is4In6() || local.Addr().Zone() != "" || remote.Addr().Zone() != "" || local.Port() == 0 || remote.Port() != 53 || mark&0x80000000 == 0 || route.Address != local.Addr() || route.Interface.Index < 1 || len(route.Interface.Name) == 0 || len(route.Interface.Name) >= 16 || strings.ContainsRune(route.Interface.Name, 0) || network != "udp" && network != "tcp" || !desktopLinuxBootstrapSetName(set) {
+	if remote.Port() != 53 {
+		return nil, errors.New("legacy bootstrap rule requires literal DNS port 53")
+	}
+	return desktopLinuxBootstrapRuleWireTarget(route, local, remote, mark, network, set)
+}
+func desktopLinuxBootstrapRuleWireTarget(route desktopLinuxBootstrapRoute, local, remote netip.AddrPort, mark uint32, network, set string) ([]byte, error) {
+	if !local.IsValid() || !remote.IsValid() || !local.Addr().IsGlobalUnicast() || !remote.Addr().IsGlobalUnicast() || local.Addr().Is4() != remote.Addr().Is4() || local.Addr().Is4In6() || remote.Addr().Is4In6() || local.Addr().Zone() != "" || remote.Addr().Zone() != "" || local.Port() == 0 || remote.Port() == 0 || mark&0x80000000 == 0 || route.Address != local.Addr() || route.Interface.Index < 1 || len(route.Interface.Name) == 0 || len(route.Interface.Name) >= 16 || strings.ContainsRune(route.Interface.Name, 0) || network != "udp" && network != "tcp" || !desktopLinuxBootstrapSetName(set) {
 		return nil, errors.New("bootstrap native rule changed exact socket scope")
 	}
 	family, src, dst, size := byte(2), uint32(12), uint32(16), uint32(4)

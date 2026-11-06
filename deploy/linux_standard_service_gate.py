@@ -530,3 +530,6 @@ AUXILIARY.update({
  'resolved-namespace':('./internal/desktopnetwork',{'TestResolvedNamespaceDescriptorProvenance':()}),
 })
 AUXILIARY_TESTS.update({'internal/standardengine/resolved_local_test.go':'resolved-local','internal/standardengine/resolved_command_test.go':'resolved-command'})
+
+# Exact captured upstream transport, independently guarded by native cases.
+SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_upstream'+suffix+'.go' for suffix in ('','_test','_native_test'))

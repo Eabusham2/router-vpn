@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -42,6 +43,7 @@ type desktopLinuxStandardBootstrap struct {
 	grant, removal *desktopLinuxBootstrapGrant
 	retired        bool
 	grantLive      bool
+	upstream       *DesktopLinuxBootstrapDNSUpstream
 }
 type desktopLinuxBootstrapRoute struct {
 	Interface net.Interface
@@ -54,16 +56,21 @@ func desktopLinuxBootstrapRouteFor(ctx context.Context, remote netip.Addr, mark 
 	if len(networks) > 0 {
 		network = networks[0]
 	}
-	if network != "udp" && network != "tcp" {
+	return desktopLinuxBootstrapRouteForTarget(ctx, netip.AddrPortFrom(remote, 53), mark, local, network)
+}
+func desktopLinuxBootstrapRouteForTarget(ctx context.Context, endpoint netip.AddrPort, mark uint32, local netip.AddrPort, network string) (desktopLinuxBootstrapRoute, error) {
+	remote := endpoint.Addr()
+	if !endpoint.IsValid() || endpoint.Port() == 0 || network != "udp" && network != "tcp" {
 		return desktopLinuxBootstrapRoute{}, errors.New("bootstrap route transport changed")
 	}
+
 	var zero desktopLinuxBootstrapRoute
 	args := []string{"-j", "route", "get", remote.String()}
 	if mark != 0 {
 		args = append(args, "mark", fmt.Sprint(mark))
 	}
 	if local.IsValid() {
-		args = append(args, "from", local.Addr().String(), "ipproto", network, "sport", fmt.Sprint(local.Port()), "dport", "53")
+		args = append(args, "from", local.Addr().String(), "ipproto", network, "sport", fmt.Sprint(local.Port()), "dport", fmt.Sprint(endpoint.Port()))
 	}
 	raw, e := desktopLinuxCommand(ctx, "/usr/sbin/ip", args...)
 	if e != nil {
@@ -203,7 +210,12 @@ func (t *desktopLinuxStandardBootstrap) currentSocket(ctx context.Context) error
 			return errors.Join(e, errors.New("bootstrap original connected peer changed"))
 		}
 	}
-	route, e := desktopLinuxBootstrapRouteFor(ctx, t.remote.Addr(), t.mark, t.local, t.network)
+	var route desktopLinuxBootstrapRoute
+	if t.upstream != nil {
+		route, e = t.upstream.route(ctx, t.mark, t.local)
+	} else {
+		route, e = desktopLinuxBootstrapRouteFor(ctx, t.remote.Addr(), t.mark, t.local, t.network)
+	}
 	if e != nil || !reflect.DeepEqual(route, t.route) {
 		return errors.Join(e, errors.New("bootstrap physical route changed"))
 	}
@@ -420,7 +432,14 @@ func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeNetwork(ctx context
 
 // The query may narrow IO; only the original operation bounds cleanup. This
 // allows ordinary resolver timeout/fallback without renewing the original work.
-func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeScoped(original, query context.Context, lease *os.File, resolver netip.Addr, network string, question []byte) (answer []byte, failure error) {
+func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeScoped(original, query context.Context, lease *os.File, resolver netip.Addr, network string, question []byte) ([]byte, error) {
+	if network != "udp" && network != "tcp" {
+		return nil, errors.New("legacy bootstrap requires UDP/TCP literal port53")
+	}
+	return p.BootstrapDNSExchangeUpstream(original, query, lease, DesktopLinuxBootstrapDNSUpstream{Endpoint: netip.AddrPortFrom(resolver, 53), Network: network}, question)
+}
+func (p *DesktopLinuxStandardProtection) bootstrapDNSExchangeScoped(original, query context.Context, lease *os.File, upstream DesktopLinuxBootstrapDNSUpstream, question []byte) (answer []byte, failure error) {
+	network := upstream.socketNetwork()
 	if original == nil || query == nil {
 		return nil, errors.New("bootstrap omitted original/query contexts")
 	}
@@ -452,7 +471,7 @@ func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeScoped(original, qu
 	if !bounded || ctx.Err() != nil {
 		return nil, errors.Join(ctx.Err(), errors.New("bootstrap requires original deadline"))
 	}
-	if network != "udp" && network != "tcp" || !resolver.IsGlobalUnicast() || resolver.IsLoopback() || resolver.Is4In6() || resolver.Zone() != "" || desktopLinuxBootstrapQuestion(question) != nil {
+	if upstream.Validate() != nil || desktopLinuxBootstrapQuestion(question) != nil {
 		return nil, errors.New("bootstrap destination/question/transport outside captured bounds")
 	}
 	if e := p.Current(ctx, lease); e != nil {
@@ -474,11 +493,11 @@ func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeScoped(original, qu
 	if _, e := b.observe(ctx, false); e != nil {
 		return nil, e
 	}
-	route, e := desktopLinuxBootstrapRouteFor(ctx, resolver, 0, netip.AddrPort{}, network)
+	route, e := upstream.route(ctx, 0, netip.AddrPort{})
 	if e != nil {
 		return nil, e
 	}
-	t := &desktopLinuxStandardBootstrap{route: route, remote: netip.AddrPortFrom(resolver, 53), network: network}
+	t := &desktopLinuxStandardBootstrap{route: route, remote: upstream.Endpoint, network: network, upstream: &upstream}
 	p.bootstrap = t
 	b.crossTransfer = "bootstrap"
 	defer func() {
@@ -512,11 +531,24 @@ func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeScoped(original, qu
 	if e = t.currentSocket(ctx); e != nil {
 		return nil, e
 	}
-	if e = t.conn.SetDeadline(deadline); e != nil {
+	// The original raw connection remains the retirement owner. tls.Close sends
+	// close_notify under its own five-second deadline; teardown must not replace
+	// the captured operation budget or send after the finite permit is removed.
+	connection := t.conn
+	var secure *tls.Conn
+	if upstream.Network == "tls" {
+		config, e := upstream.tlsConfig()
+		if e != nil {
+			return nil, e
+		}
+		secure = tls.Client(connection, config)
+		connection = secure
+	}
+	if e = connection.SetDeadline(deadline); e != nil {
 		return nil, e
 	}
 	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { _ = t.conn.SetDeadline(time.Now()); close(done) })
+	stop := context.AfterFunc(ctx, func() { _ = connection.SetDeadline(time.Now()); close(done) })
 	defer func() {
 		if !stop() {
 			<-done
@@ -525,30 +557,17 @@ func (p *DesktopLinuxStandardProtection) BootstrapDNSExchangeScoped(original, qu
 	if e = ctx.Err(); e != nil {
 		return nil, e
 	}
-	if network == "tcp" {
-		frame := make([]byte, len(question)+2)
-		binary.BigEndian.PutUint16(frame, uint16(len(question)))
-		copy(frame[2:], question)
-		for len(frame) > 0 {
-			n, e := t.conn.Write(frame)
-			if e != nil {
-				return nil, e
-			}
-			if n == 0 {
-				return nil, io.ErrShortWrite
-			}
-			frame = frame[n:]
-		}
-		var length [2]byte
-		if _, e = io.ReadFull(t.conn, length[:]); e != nil {
+	if secure != nil {
+		if e = secure.HandshakeContext(ctx); e != nil {
 			return nil, e
 		}
-		size := int(binary.BigEndian.Uint16(length[:]))
-		if size < 12 || size > 16<<10 {
-			return nil, errors.New("bootstrap TCP answer exceeds bound")
+		if e = t.currentSocket(ctx); e != nil {
+			return nil, e
 		}
-		answer = make([]byte, size)
-		if _, e = io.ReadFull(t.conn, answer); e != nil {
+	}
+	if network == "tcp" {
+		answer, e = desktopLinuxBootstrapStreamExchange(connection, question)
+		if e != nil {
 			return nil, e
 		}
 	} else {
@@ -625,7 +644,12 @@ func (t *desktopLinuxStandardBootstrap) prepareSocket(ctx context.Context, fd in
 		return e
 	}
 	set := "rvb_" + hex.EncodeToString(id[:])
-	rule, e := desktopLinuxBootstrapRuleWire(t.route, t.local, t.remote, t.mark, t.network, set)
+	var rule []byte
+	if t.upstream != nil {
+		rule, e = desktopLinuxBootstrapRuleWireForUpstream(t.route, t.local, *t.upstream, t.mark, set)
+	} else {
+		rule, e = desktopLinuxBootstrapRuleWire(t.route, t.local, t.remote, t.mark, t.network, set)
+	}
 	if e != nil {
 		return e
 	}
