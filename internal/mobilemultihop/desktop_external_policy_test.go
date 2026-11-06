@@ -316,7 +316,12 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 		graph, selection := externalTestFixture(t, "shadowsocks", entry)
 		selection["profile"].(map[string]any)["kill_switch_policy"] = "always"
 		original := externalDesktopCompile(t, graph, selection)
-		if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err == nil {
+		plan, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows")
+		if entry == "shadowsocks" {
+			if err != nil || plan == nil || plan.Metadata().RootTag != "external-entry" || plan.OriginalPolicy() != original {
+				t.Fatal("SS2022 entry lost its captured composed authority", err)
+			}
+		} else if err == nil {
 			t.Fatal("predecessor or private node was silently admitted as direct", entry)
 		}
 	}

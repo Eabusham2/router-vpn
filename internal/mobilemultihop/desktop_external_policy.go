@@ -59,7 +59,7 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 // NewDesktopExternalPolicy derives the captured ordinary transport lower path.
 // Darwin additionally admits the exact Local external WG/AWG entry -> SS, HTTP(S) CONNECT, Hysteria2 (with its captured exit AES/XOR layer), SOCKS5, WireGuard or AmneziaWG graph.
 // Linux admits bounded Local WireGuard entry -> SS2022, HTTP(S) CONNECT or Hysteria2 finals, including the captured HY2 exit AES/XOR layer.
-// Linux also retains an ordinary SS2022 entry -> SS2022 or TCP-only HTTP(S) CONNECT final with both layers Off.
+// Linux and Windows also retain an ordinary SS2022 entry -> SS2022 or TCP-only HTTP(S) CONNECT final with both layers Off.
 // Darwin also admits an ordinary Local SS2022 entry -> SS2022 or HTTP(S) CONNECT final without layers.
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
@@ -72,8 +72,11 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	}
 	capture, err := original.DesktopCapture()
 	entryKind := ""
-	if err == nil && (targetOS == "darwin" || targetOS == "linux") {
+	if err == nil && (targetOS == "darwin" || targetOS == "linux" || targetOS == "windows") {
 		entryKind = desktopExternalEntryKind(original, capture)
+		if targetOS == "windows" && entryKind != "shadowsocks" {
+			entryKind = ""
+		}
 		// Linux initially admits this exact independently captured Local pair.
 		// Other entry/final/layer compositions retain their separate host gates.
 		if targetOS == "linux" {

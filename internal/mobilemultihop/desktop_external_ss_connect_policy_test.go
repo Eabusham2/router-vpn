@@ -67,11 +67,16 @@ func TestDesktopExternalDarwinSSCONNECTKeepsOriginalSourcesAndTCPDNS(t *testing.
 						if e != nil || !reflect.DeepEqual(linuxCapture, actual) || !reflect.DeepEqual(externalTestFind(t, linuxGraph, ExternalFinalTag), externalTestFind(t, derived, ExternalFinalTag)) || !reflect.DeepEqual(linuxGraph["dns"], derived["dns"]) || !reflect.DeepEqual(linuxGraph["route"], derived["route"]) {
 							t.Fatal("Linux CONNECT replaced captured graph or final DNS", e)
 						}
-						for _, target := range []string{"windows"} {
-							if next, e := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); e == nil || next != nil {
-								t.Fatal("CONNECT widened another retained host")
-							}
+						win, e := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows")
+						if e != nil || win == nil || win.OriginalPolicy() != original || win.Metadata().TargetOS != "windows" {
+							t.Fatal("Windows CONNECT lost original policy", e)
 						}
+						wc, e := win.Capture()
+						wg := externalTestRead(t, win.Config())
+						if e != nil || !reflect.DeepEqual(wc, actual) || !reflect.DeepEqual(wg["dns"], derived["dns"]) || !reflect.DeepEqual(wg["route"], derived["route"]) || !reflect.DeepEqual(externalTestFind(t, wg, ExternalFinalTag), externalTestFind(t, derived, ExternalFinalTag)) {
+							t.Fatal("Windows replaced captured final DNS or transport", e)
+						}
+
 					}
 				}
 			}
@@ -107,7 +112,7 @@ func TestDesktopExternalDarwinSSCONNECTRejectsUnavailableDNSAndGraph(t *testing.
 				if e != nil {
 					return
 				}
-				for _, target := range []string{"darwin", "linux"} {
+				for _, target := range []string{"darwin", "linux", "windows"} {
 					if next, e := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); e == nil || next != nil {
 						t.Fatal("uncaptured SS CONNECT graph admitted", target, fault)
 					}

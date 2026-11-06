@@ -71,12 +71,6 @@ func TestDesktopExternalDarwinSSEntryOwnsTwoOriginalSourcesAndPolicy(t *testing.
 							}
 							for _, target := range []string{"linux", "windows"} {
 								p, e := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
-								if target == "windows" {
-									if e == nil || p != nil {
-										t.Fatal("SS entry widened another retained host")
-									}
-									continue
-								}
 								if e != nil || p == nil || p.Validate() != nil {
 									t.Fatal("Linux lost its captured SS2022 pair", e)
 								}
@@ -95,7 +89,7 @@ func TestDesktopExternalDarwinSSEntryOwnsTwoOriginalSourcesAndPolicy(t *testing.
 								for _, tag := range []string{"external-entry", ExternalFinalTag} {
 									sameGraph = sameGraph && reflect.DeepEqual(externalTestFind(t, linuxGraph, tag), externalTestFind(t, darwinGraph, tag))
 								}
-								if !sameGraph || len(linuxGraph["outbounds"].([]any)) != 3 || p.OriginalPolicy() != original || p.Metadata().TargetOS != "linux" {
+								if !sameGraph || len(linuxGraph["outbounds"].([]any)) != 3 || p.OriginalPolicy() != original || p.Metadata().TargetOS != target {
 									t.Fatal("Linux rewrote captured SS credentials or route")
 								}
 							}
