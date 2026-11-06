@@ -451,7 +451,7 @@ def routing_fixture_image(binary):
 
 
 def linux_routing_receipt_test(binary, *, cwd, env, duration, selector="^TestRouterVPNNativeLinuxRouting"):
-    if selector not in ("^TestRouterVPNNativeLinuxRouting", "^TestRouterVPNNativeLinuxResolver", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", STANDARD_MTU_RETIRE_SUITE[2], STANDARD_PARENT_SUITE[2], STANDARD_PARENT_NATIVE_SUITE[2]):
+    if selector not in ("^TestRouterVPNNativeLinuxRouting", "^TestRouterVPNNativeLinuxResolver", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$", STANDARD_MTU_RETIRE_SUITE[2], STANDARD_MTU_NATIVE_SUITE[2], STANDARD_PARENT_SUITE[2], STANDARD_PARENT_NATIVE_SUITE[2]):
         raise ValueError("Native privilege cannot execute another fixture selector")
     if platform.system() != "Linux" or env.get("GOOS") != "linux":
         raise ValueError("The native routing receipt fixture requires native Linux")
@@ -462,7 +462,7 @@ def linux_routing_receipt_test(binary, *, cwd, env, duration, selector="^TestRou
     runner = namespace_runner()
     sudo = runner.privilege_tool()
     captured = dict(env)
-    for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER", "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE", "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE", "ROUTERVPN_NATIVE_MTU_TRANSACTION_CASE"):
+    for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER", "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE", "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE", "ROUTERVPN_NATIVE_MTU_TRANSACTION_CASE", "ROUTERVPN_STANDARD_MTU_CLAIM_FAILURE"):
         captured.pop(name, None)
     with routing_fixture_image(binary) as staged:
         command = [str(staged), "-test.run=" + selector, "-test.count=1",
@@ -593,14 +593,14 @@ class BaselineBinaries:
         return self.verify(package)
 
     def execute(self, name, package, selector, duration):
-        privileged = {"native-routing-receipt": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting"), "native-resolver-lifetime": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver"), "native-mtu-transaction": (".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$"), STANDARD_MTU_RETIRE_SUITE[0]: STANDARD_MTU_RETIRE_SUITE[1:3], STANDARD_PARENT_SUITE[0]: STANDARD_PARENT_SUITE[1:3], STANDARD_PARENT_NATIVE_SUITE[0]: STANDARD_PARENT_NATIVE_SUITE[1:3]}
+        privileged = {"native-routing-receipt": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting"), "native-resolver-lifetime": ("github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxResolver"), "native-mtu-transaction": (".", "^TestRouterVPNNativeLinuxMTUTransactionNamespace$"), STANDARD_MTU_RETIRE_SUITE[0]: STANDARD_MTU_RETIRE_SUITE[1:3], STANDARD_MTU_NATIVE_SUITE[0]: STANDARD_MTU_NATIVE_SUITE[1:3], STANDARD_PARENT_SUITE[0]: STANDARD_PARENT_SUITE[1:3], STANDARD_PARENT_NATIVE_SUITE[0]: STANDARD_PARENT_NATIVE_SUITE[1:3]}
         if name in privileged and (package, selector) != privileged[name]:
             raise ValueError("Node routing privilege cannot execute another package or selector")
         binary = self.binary(package)
         with stage("execute baseline " + name):
             if name == "native-routing-receipt":
                 status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration)
-            elif name in ("native-resolver-lifetime", "native-mtu-transaction", STANDARD_MTU_RETIRE_SUITE[0], STANDARD_PARENT_SUITE[0], STANDARD_PARENT_NATIVE_SUITE[0]):
+            elif name in ("native-resolver-lifetime", "native-mtu-transaction", STANDARD_MTU_RETIRE_SUITE[0], STANDARD_MTU_NATIVE_SUITE[0], STANDARD_PARENT_SUITE[0], STANDARD_PARENT_NATIVE_SUITE[0]):
                 status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration, selector=selector)
             else:
                 status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],

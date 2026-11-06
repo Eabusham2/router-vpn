@@ -506,6 +506,7 @@ class RoutingNamespaceLauncher(unittest.TestCase):
                     "ROUTERVPN_NATIVE_ROUTING_RETIREMENT_CASE": "foreign-case",
                     "ROUTERVPN_NATIVE_RESOLVER_NAMED_CASE": "foreign-endpoint",
                     "ROUTERVPN_NATIVE_MTU_TRANSACTION_CASE": "foreign-mtu",
+                    "ROUTERVPN_STANDARD_MTU_CLAIM_FAILURE": "foreign-claim",
                     "ROUTERVPN_ROUTING_PARENT_NET": "foreign-network",
                     "ROUTERVPN_ROUTING_PARENT_USER": "foreign-user"}
         self.native = Mock()
@@ -593,13 +594,14 @@ class RoutingNamespaceLauncher(unittest.TestCase):
         self.native.run.assert_not_called()
 
     def test_parent_lifetime_uses_only_each_exact_privileged_selector(self):
-        for suite in (NODE.STANDARD_PARENT_SUITE, NODE.STANDARD_PARENT_NATIVE_SUITE):
+        for suite in (NODE.STANDARD_MTU_NATIVE_SUITE, NODE.STANDARD_PARENT_SUITE, NODE.STANDARD_PARENT_NATIVE_SUITE):
             selector = suite[2]
             self.assertEqual(NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env,
                              duration=90, selector=selector), (0, "actual native fixture output\n"))
             command, options = self.native.run.call_args
             self.assertIn("-test.run=" + selector, command[0])
             self.assertEqual(options["timeout"], 105)
+            self.assertNotIn("ROUTERVPN_STANDARD_MTU_CLAIM_FAILURE", options["env"])
             self.native.run.reset_mock()
             with self.assertRaisesRegex(ValueError, "another fixture selector"):
                 NODE.linux_routing_receipt_test(self.binary, cwd=self.source, env=self.env,
@@ -802,7 +804,7 @@ class BaselineRoutingDispatch(unittest.TestCase):
             native.assert_not_called()
 
     def test_parent_lifetime_preserves_exact_original_binary_privilege(self):
-        for suite in (NODE.STANDARD_PARENT_SUITE, NODE.STANDARD_PARENT_NATIVE_SUITE):
+        for suite in (NODE.STANDARD_MTU_NATIVE_SUITE, NODE.STANDARD_PARENT_SUITE, NODE.STANDARD_PARENT_NATIVE_SUITE):
             name, package, selector, _ = suite
             self.baselines.binaries[package] = self.binary, NODE.retained_binary(self.binary)
             with patch.object(NODE, "linux_routing_receipt_test", return_value=(0, "native pass")) as native, \
