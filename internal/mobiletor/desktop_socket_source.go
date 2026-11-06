@@ -126,3 +126,15 @@ func (s *desktopSocket) create(ctx context.Context) error {
 	}
 	return nil
 }
+
+// DesktopSocketLeaseCleanup is an original native capability, never a host
+// boolean. Sealing is inert; terminal quiescence is irreversible and keeps the
+// same physical control transport while independently proving data permits gone.
+type DesktopSocketLeaseCleanup interface {
+	Quiesce(context.Context, string, uint32) error
+	Current(context.Context) error
+	Discard()
+}
+type DesktopSocketLeaseCleanupPolicy interface {
+	SealLeaseCleanup(context.Context, DesktopSocketCapture) (DesktopSocketLeaseCleanup, error)
+}

@@ -74,6 +74,7 @@ type DesktopWindowsSocketPolicy struct {
 	commitBarrier               DesktopWindowsProtectionCommitBarrier
 	commitAction                string
 	tunnel                      []desktopWFPRule
+	terminalCleanup             *desktopWindowsLeaseCleanup // protected by gate; never cleared after quiescence
 	tunnelName                  string
 	tunnelIndex                 uint32
 	tunnelLUID                  uint64

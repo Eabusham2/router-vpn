@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -50,6 +51,7 @@ type ExternalNetworkOwner struct {
 	ready     bool
 	active    bool
 	retired   bool
+	dataRetired atomic.Bool
 	closed    bool
 }
 
@@ -252,13 +254,15 @@ func (n *ExternalNetworkOwner) CurrentContext(ctx context.Context) error {
 	if err := desktopnetwork.LockContext(ctx, &n.mu); err != nil {
 		return err
 	}
-	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil && !n.dataRetired.Load()
 	broker, capture := n.broker, n.brokerCapture()
 	n.mu.Unlock()
 	if !current || broker == nil {
 		return net.ErrClosed
 	}
-	return broker.MatchesContext(ctx, capture)
+	if err := broker.MatchesContext(ctx, capture); err != nil { return err }
+	if n.dataRetired.Load() { return net.ErrClosed }
+	return nil
 }
 
 func (n *ExternalNetworkOwner) SocketCurrentContext(ctx context.Context) error {
@@ -282,10 +286,10 @@ func (n *ExternalNetworkOwner) Current() bool {
 		return false
 	}
 	n.mu.Lock()
-	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil && !n.dataRetired.Load()
 	broker, capture := n.broker, n.brokerCapture()
 	n.mu.Unlock()
-	return current && broker != nil && broker.Matches(capture)
+	return current && broker != nil && broker.Matches(capture) && !n.dataRetired.Load()
 }
 
 // SocketCurrent preserves normal activation for the ordinary lazy transports.
@@ -497,3 +501,80 @@ func (n *ExternalNetworkOwner) changePhysicalTunnel(ctx context.Context, name st
 	}
 	return errors.Join(err, n.CurrentContext(bounded))
 }
+
+// ExternalLeaseControl captures the original physical generation separately
+// from data readiness. It exposes observation and a sealed terminal barrier,
+// never an address-taking dial or a replacement native source.
+type ExternalLeaseControl struct {
+	network *ExternalNetworkOwner
+	source mobiletor.DesktopSocketSource
+	broker *mobiletor.DesktopSocketBroker
+	capture mobiletor.DesktopSocketCapture
+}
+func (n *ExternalNetworkOwner) CaptureLeaseControl(ctx context.Context) (*ExternalLeaseControl,error) {
+	if runtime.GOOS != "windows" || n == nil { return nil,errors.New("native lease control is unavailable") }
+	if err := n.CurrentContext(ctx); err != nil { return nil,err }
+	if err := desktopnetwork.LockContext(ctx,&n.mu); err != nil { return nil,err }
+	if n.dataRetired.Load() { n.mu.Unlock(); return nil,net.ErrClosed }
+	control := &ExternalLeaseControl{network:n,source:n.source,broker:n.broker,capture:n.brokerCapture()}
+	n.mu.Unlock()
+	if _,ok := control.source.(mobiletor.DesktopSocketLeaseCleanupPolicy); !ok {
+		return nil,errors.New("native source has no sealed terminal lease barrier")
+	}
+	if err := control.Current(ctx); err != nil { return nil,err }
+	if n.dataRetired.Load() { return nil,net.ErrClosed }
+	return control,nil
+}
+func (c *ExternalLeaseControl) Current(ctx context.Context) error {
+	if c == nil || c.network == nil || c.broker == nil || c.source == nil { return net.ErrClosed }
+	n := c.network
+	if err := desktopnetwork.LockContext(ctx,&n.mu); err != nil { return err }
+	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil &&
+		n.source == c.source && n.broker == c.broker && n.brokerCapture() == c.capture
+	n.mu.Unlock()
+	if !current { return errors.New("lease control changed its original physical source") }
+	if err := c.broker.MatchesContext(ctx,c.capture); err != nil { return err }
+	if err := desktopnetwork.LockContext(ctx,&n.mu); err != nil { return err }
+	current = n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil &&
+		n.source == c.source && n.broker == c.broker && n.brokerCapture() == c.capture
+	n.mu.Unlock()
+	if !current { return errors.New("lease control changed its original physical source") }
+	return ctx.Err()
+}
+func (c *ExternalLeaseControl) RevokeData() {
+	// This affects only the already captured native network object. It cannot
+	// activate a source, reopen sockets, or change a replacement Box.
+	if c != nil && c.network != nil { c.network.dataRetired.Store(true) }
+}
+func (c *ExternalLeaseControl) SealLeaseCleanup(ctx context.Context) (mobiletor.DesktopSocketLeaseCleanup,error) {
+	if err := c.Current(ctx); err != nil { return nil,err }
+	if c.network.dataRetired.Load() { return nil,net.ErrClosed }
+	policy,ok := c.source.(mobiletor.DesktopSocketLeaseCleanupPolicy)
+	if !ok { return nil,errors.New("lease control has no native terminal policy") }
+	control,err := policy.SealLeaseCleanup(ctx,c.capture)
+	if err != nil { return nil,err }
+	if control == nil { return nil,errors.New("native source omitted its terminal lease barrier") }
+	owned := &externalNetworkLeaseCleanup{owner:c,control:control}
+	if err := c.Current(ctx); err != nil || c.network.dataRetired.Load() {
+		control.Discard()
+		return nil,errors.Join(err,net.ErrClosed)
+	}
+	return owned,nil
+}
+type externalNetworkLeaseCleanup struct {
+	owner *ExternalLeaseControl
+	control mobiletor.DesktopSocketLeaseCleanup
+}
+func (c *externalNetworkLeaseCleanup) Quiesce(ctx context.Context,name string,index uint32) error {
+	if err := c.owner.Current(ctx); err != nil { return err }
+	if !c.owner.network.dataRetired.Load() { return errors.New("terminal lease barrier preceded data revocation") }
+	if err := c.control.Quiesce(ctx,name,index); err != nil { return err }
+	return c.owner.Current(ctx)
+}
+func (c *externalNetworkLeaseCleanup) Current(ctx context.Context) error {
+	if err := c.owner.Current(ctx); err != nil { return err }
+	if !c.owner.network.dataRetired.Load() { return errors.New("terminal lease barrier has active data admission") }
+	if err := c.control.Current(ctx); err != nil { return err }
+	return c.owner.Current(ctx)
+}
+func (c *externalNetworkLeaseCleanup) Discard() { c.control.Discard() }

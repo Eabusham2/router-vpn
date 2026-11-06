@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -63,6 +64,7 @@ type desktopWFPRouterServerReceipt struct {
 	Health, Discovery, Creates, Deletes, RelayTCP, RelayUDP, FinalTCP, FinalUDP, Responses, LocalTCP, LocalUDP int32
 	Live                                                                                                       bool
 	Lanes                                                                                                      [2]desktopWFPRouterLaneReceipt
+	StopRequestsMatch bool
 }
 type desktopWFPRouterServer struct {
 	diagnostic                                                                                                 desktopWFPRouterLeaseDiagnostic
@@ -78,6 +80,8 @@ type desktopWFPRouterServer struct {
 	associations                                                                                               map[uint16]*desktopWFPRouterAssociation
 	final                                                                                                      string
 	fault                                                                                                      string
+	stopRequest multihoprelay.Request
+	stopCaptured, stopRequestsMatch bool
 	health, discovery, creates, deletes, relayTCP, relayUDP, finalTCP, finalUDP, responses, localTCP, localUDP atomic.Int32
 }
 type desktopWFPRouterRelayProcess struct {
@@ -220,9 +224,9 @@ func (r *desktopWFPRouterServer) receipt() *desktopWFPRouterServerReceipt {
 	p := r.process
 	r.mu.Unlock()
 	r.mu.Lock()
-	lanes, diagnostic := r.lanes, r.diagnostic
+	lanes, diagnostic, stopRequestsMatch := r.lanes, r.diagnostic, r.stopRequestsMatch
 	r.mu.Unlock()
-	return &desktopWFPRouterServerReceipt{diagnostic, r.request.NodeID, r.health.Load(), r.discovery.Load(), r.creates.Load(), r.deletes.Load(), r.relayTCP.Load(), r.relayUDP.Load(), r.finalTCP.Load(), r.finalUDP.Load(), r.responses.Load(), r.localTCP.Load(), r.localUDP.Load(), p != nil && p.Alive(), lanes}
+	return &desktopWFPRouterServerReceipt{diagnostic, r.request.NodeID, r.health.Load(), r.discovery.Load(), r.creates.Load(), r.deletes.Load(), r.relayTCP.Load(), r.relayUDP.Load(), r.finalTCP.Load(), r.finalUDP.Load(), r.responses.Load(), r.localTCP.Load(), r.localUDP.Load(), p != nil && p.Alive(), lanes, stopRequestsMatch}
 }
 
 // Diagnostics belong only to this independent test provider's original
@@ -782,12 +786,28 @@ func (r *desktopWFPRouterServer) api(ctx context.Context, c net.Conn) error {
 				response = lease
 			}
 		} else if request.Method == "DELETE" {
-			if e := r.manager.Delete(ctx, netip.MustParseAddr("10.78.0.2"), q); e != nil {
+			matches := true
+			if r.fault == "lease-stop-retry" {
+				r.mu.Lock()
+				if !r.stopCaptured {
+					r.stopRequest, r.stopCaptured, r.stopRequestsMatch = q, true, true
+				} else if q != r.stopRequest {
+					r.stopRequestsMatch = false
+				}
+				matches = r.stopRequestsMatch
+				r.mu.Unlock()
+			}
+			if !matches {
+				status = 409
+				operationError = errors.New("stop retry changed its original authenticated request")
+			} else if e := r.manager.Delete(ctx, netip.MustParseAddr("10.78.0.2"), q); e != nil {
 				status = 409
 				operationError = e
 			} else {
-				r.deletes.Add(1)
-				response = map[string]any{"node_id": r.request.NodeID, "session_id": q.SessionID, "stopped": true}
+				attempt := r.deletes.Add(1)
+				session := q.SessionID
+				if r.fault == "lease-stop-retry" && attempt == 1 { session += "-wrong-receipt" }
+				response = map[string]any{"node_id": r.request.NodeID, "session_id": session, "stopped": true}
 			}
 		} else {
 			status = 405
@@ -1285,7 +1305,7 @@ func desktopWFPStartRouterServerPeer(t *testing.T, p *desktopExternalIntegration
 		t.Fatal("Router Server original capture missing")
 	}
 	switch q.Fault {
-	case "", "entry-token", "entry-proof", "private-key", "psk", "final-key", "dns", "exit", "trust", "held", "lease-expired", "lease-credentials", "compare-local-reject", "compare-server-reject", "compare-both-reject", "compare-local-timeout", "compare-server-timeout", "compare-final-local", "compare-final-server", "compare-final-both", "compare-held-server":
+	case "", "entry-token", "entry-proof", "private-key", "psk", "final-key", "dns", "exit", "trust", "held", "lease-expired", "lease-credentials", "lease-stop-retry", "compare-local-reject", "compare-server-reject", "compare-both-reject", "compare-local-timeout", "compare-server-timeout", "compare-final-local", "compare-final-server", "compare-final-both", "compare-held-server":
 	default:
 		t.Fatal("unknown Router Server negative")
 	}
@@ -1403,8 +1423,8 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 	roots.AddCert(cert)
 	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
 	x509.SetFallbackRoots(roots)
-	for _, name := range []string{"on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof"} {
-		if execution == "local" && (name == "reject/lease-expired" || name == "reject/lease-credentials") {
+	for _, name := range []string{"on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof", "lease-stop-retry"} {
+		if execution == "local" && (name == "reject/lease-expired" || name == "reject/lease-credentials" || name == "lease-stop-retry") {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
@@ -1420,7 +1440,9 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 			}
 			var retained mobiletor.DesktopWindowsProtectionTarget
 			desktopExternalWFPCleanup(t, &retained)
-			peer := desktopExternalWFPStartReferenceProtocol(t, ca, fault, "router-server")
+			peerFault := fault
+			if name == "lease-stop-retry" { peerFault = name }
+			peer := desktopExternalWFPStartReferenceProtocol(t, ca, peerFault, "router-server")
 			original, source, capture := desktopWFPRouterServerOriginal(t, peer, kill, execution)
 			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
 			f.start(t)
@@ -1499,8 +1521,9 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 			if execution == "local" && (r.LocalTCP == 0 || r.LocalUDP == 0 || r.Creates != 0 || r.Deletes != 0 || r.Live || r.RelayTCP != 0 || r.RelayUDP != 0) {
 				t.Fatal("Local bypassed original final or acquired a relay", reply)
 			}
-			f.snapshot(t, peer)
+			before := f.snapshot(t, peer)
 			desktopExternalWFPRequireBlocked(t, peer)
+			if name == "lease-stop-retry" { desktopWFPRouterServerLeaseStopRetry(t, f, peer, before) }
 			retained = f.drain(t)
 			reply = peer.call(t, "stats", "")
 			if reply.RouterServer.Live || execution == "server" && reply.RouterServer.Deletes == 0 || execution == "local" && (reply.RouterServer.Creates != 0 || reply.RouterServer.Deletes != 0) {
@@ -1562,5 +1585,128 @@ func desktopWFPTestRouterExecution(t *testing.T, execution string) {
 				}
 			}
 		})
+	}
+}
+
+
+// This positive native path keeps the production Box alive after an unverified
+// DELETE receipt, exactly as routerVPNExternalNative.Close does. It never opens
+// a second WG peer or sends cleanup over an ordinary-network socket.
+func desktopWFPRouterServerLeaseStopRetry(t *testing.T,f *desktopExternalWFPFixture,peer *desktopExternalWFPReference,before mobiletor.DesktopWindowsNodeCompositionReadback){
+	t.Helper()
+	ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second)
+	err:=mobiletor.DesktopWindowsNodeCompositionVerifyInertLeaseBarrier(ctx,f.prepared)
+	cancel()
+	if err!=nil{t.Fatal("inert native lease capture changed the active path",err)}
+	ctx,cancel=context.WithTimeout(context.Background(),3*time.Second)
+	connection,err:=f.proof.engine.Dial(ctx,"external-entry",desktopWFPRouterServerAPI)
+	cancel()
+	if err!=nil||connection==nil{t.Fatal("native original entry stream could not be retained before Cancel",err)}
+	defer connection.Close()
+	ctx,cancel=context.WithTimeout(context.Background(),time.Second)
+	release,err:=mobiletor.DesktopWindowsNodeCompositionHoldLeaseBarrier(ctx,f.prepared)
+	cancel()
+	if err!=nil{t.Fatal("actual original terminal policy could not be held",err)}
+	defer release()
+	cancelled:=make(chan struct{})
+	admission,admissionCancel:=context.WithTimeout(context.Background(),time.Second)
+	defer admissionCancel()
+	go func(){f.proof.Cancel();close(cancelled)}()
+	for !f.proof.engine.dataRetired(){
+		select{
+		case <-cancelled:t.Fatal("native Cancel returned before the original held WFP barrier joined")
+		case <-admission.Done():t.Fatal("native Cancel did not revoke its captured data admission")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	// Joining the original owner's short transition lock observes RevokeData,
+	// rather than guessing that a delay allowed the cancelling goroutine to run.
+	owner:=f.proof.engine.leaseCleanup
+	if err:=adapter.RouterVPNLockContext(admission,&owner.mu);err!=nil{t.Fatal("native cancellation transition did not complete",err)}
+	terminal:=owner.transition.Load()==routerVPNExternalLeaseTerminal
+	owner.mu.Unlock()
+	if !terminal||f.network.Current(){t.Fatal("held native terminal barrier retained ordinary proof admission")}
+	if n,err:=connection.Write([]byte("retired"));n!=0||!errors.Is(err,net.ErrClosed){
+		t.Fatal("returned native data stream remained writable after lease cancellation",n,err)
+	}
+	select{
+	case <-cancelled:t.Fatal("native Cancel returned before the original held WFP barrier joined")
+	case <-time.After(100*time.Millisecond):
+	}
+	// Never spend provider IPC time while holding the real monitor/barrier gate.
+	release()
+	select{
+	case <-cancelled:
+	case <-time.After(4*time.Second):t.Fatal("native Cancel did not join its bounded original WFP barrier")
+	}
+	during:=peer.call(t,"stats","").RouterServer
+	if during==nil||during.Deletes!=0{t.Fatal("terminal Cancel issued a stop before its owned explicit Close")}
+	readback:=func()mobiletor.DesktopWindowsNodeCompositionReadback{
+		t.Helper()
+		ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second)
+		defer cancel()
+		actual,err:=mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+		if err!=nil||actual.Closed||actual.Target!=before.Target||actual.Capture!=before.Capture||
+			actual.Owner!=before.Owner||actual.Calls!=before.Calls||actual.TunnelName!=""||
+			actual.TunnelIndex!=0||actual.TunnelLUID!=0||len(actual.Grants)!=1||len(before.Grants)!=1{
+			t.Fatal("terminal native barrier lost its exact retained physical owner or TUN absence",err)
+		}
+		expected:=before.Grants[0]
+		if actual.Grants[0].Sequence<expected.Sequence { t.Fatal("terminal cleanup reused an older physical permit") }
+		expected.Sequence=actual.Grants[0].Sequence // The same lower may renew its bounded grant.
+		if actual.Grants[0]!=expected { t.Fatal("terminal cleanup replaced the original WG socket or tuple") }
+		return actual
+	}
+	_ = readback()
+	ctx,cancel=context.WithTimeout(context.Background(),3*time.Second)
+	err=mobiletor.DesktopWindowsNodeCompositionVerifyLeaseBarrier(ctx,f.prepared)
+	cancel()
+	if err!=nil{t.Fatal("actual native terminal token admitted replacement or lost repeatable absence",err)}
+	ctx,cancel=context.WithTimeout(context.Background(),time.Second)
+	if control,err:=f.network.CaptureLeaseControl(ctx);control!=nil||err==nil{
+		cancel()
+		t.Fatal("data-retired original network minted another cleanup observer")
+	}
+	cancel()
+	if next,err:=f.box.RouterVPNDesktopExternalCreateProof(f.policy);next!=nil||err==nil{
+		t.Fatal("data-retired Box admitted another proof owner")
+	}
+
+	if f.proof.Healthy()||f.network.Current(){t.Fatal("terminal native path remained reported healthy")}
+	ctx,cancel=context.WithTimeout(context.Background(),time.Second)
+	if err:=f.proof.VerifyCurrentPathContext(ctx);err==nil{
+		cancel()
+		t.Fatal("cancelled original proof was accepted as a current path")
+	}
+	cancel()
+	ctx,cancel=context.WithTimeout(context.Background(),time.Second)
+	if stale,err:=f.proof.engine.Dial(ctx,"external-entry",desktopWFPRouterServerAPI);stale!=nil||err==nil{
+		cancel()
+		if stale!=nil{_ = stale.Close()}
+		t.Fatal("ordinary entry dial survived terminal cancellation")
+	}
+	cancel()
+	ctx,cancel=context.WithTimeout(context.Background(),time.Second)
+	if stale,err:=f.proof.engine.DNSMeasurementDial(ctx,"1.1.1.1:53");stale!=nil||err==nil{
+		cancel()
+		if stale!=nil{_ = stale.Close()}
+		t.Fatal("DNS measurement dial survived terminal cancellation")
+	}
+	cancel()
+	_ = readback()
+	if err:=f.proof.Close();err==nil{
+		t.Fatal("unverified original Server stop acknowledgement was accepted")
+	}
+	first:=peer.call(t,"stats","").RouterServer
+	if first==nil||first.Deletes!=1||first.Live||!first.StopRequestsMatch||f.closed{
+		t.Fatal("unacknowledged native stop lost its original retained attempt")
+	}
+	_ = readback()
+	if err:=f.proof.Close();err!=nil{
+		t.Fatal("same native Server stop could not retry its unchanged original request",err)
+	}
+	second:=peer.call(t,"stats","").RouterServer
+	if second==nil||second.Deletes!=2||second.Live||!second.StopRequestsMatch{
+		t.Fatal("native retry replaced the exact authenticated stop request")
 	}
 }

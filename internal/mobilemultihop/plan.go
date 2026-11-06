@@ -111,6 +111,8 @@ type Controller struct {
 	leaseMu             sync.Mutex
 	leaseDeadline       atomic.Pointer[time.Time]
 	ownsLease           bool
+	leaseStop           LeaseStop
+	leaseStopCapture    LeaseStopCapture
 	renewCancel         context.CancelFunc
 	renewDone           chan struct{}
 	imported            *importedEntry

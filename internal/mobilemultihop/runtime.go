@@ -201,11 +201,16 @@ func (c *Controller) acquire(ctx context.Context) error {
 		c.proposal.ExpectedPQClientIdentity = pqClientIdentity
 		c.expected.Request = c.proposal
 	}
+	// Seal the final authenticated request before a PUT can create remote state.
+	if err := c.sealLeaseStop(ctx); err != nil {
+		return err
+	}
 	c.ownsLease = true // An expired HTTP request may nevertheless have created it.
 	if e = c.renewLocked(ctx); e != nil {
 		var rejected controlError
 		if errors.As(e, &rejected) && rejected.status >= 400 && rejected.status < 500 {
 			c.ownsLease = false
+			c.discardLeaseStop()
 		}
 	}
 	return e
@@ -218,6 +223,9 @@ func (c *Controller) renewLocked(ctx context.Context) error {
 		return err
 	}
 	if err := c.validateServerIdentityPins(true); err != nil {
+		return err
+	}
+	if err := c.checkLeaseStop(); err != nil {
 		return err
 	}
 	body, _ := json.Marshal(c.proposal)
@@ -258,10 +266,21 @@ func (c *Controller) release() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	if err := c.checkLeaseStop(); err != nil {
+		return err
+	}
+	if c.leaseStop != nil {
+		if err := c.leaseStop.Stop(ctx); err != nil {
+			return errors.Join(errors.New("server lease cleanup is unverified; its original owner remains retained"), err)
+		}
+		c.ownsLease = false
+		c.discardLeaseStop()
+		return nil
+	}
 	body, _ := json.Marshal(c.proposal)
 	data, e := c.leaseRequest(ctx, "DELETE", body)
 	if e != nil {
-		return errors.New("server lease cleanup is unverified; it remains owned until confirmed or expired")
+		return errors.New("server lease cleanup is unverified; its original owner remains retained")
 	}
 	var response struct {
 		Node    string `json:"node_id"`

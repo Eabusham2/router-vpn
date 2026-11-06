@@ -91,6 +91,10 @@ func (e *routerVPNExternalMeasurementEngine) Identity() string {
 	return e.core.Identity()
 }
 func (e *routerVPNExternalMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if e == nil || e.core == nil { return nil,errors.New("external measurement owner retired") }
+	ctx,finish,err := e.core.beginData(ctx)
+	if err != nil { return nil,err }
+	defer finish()
 	if e.Identity() == "" || ctx.Err() != nil {
 		return nil, errors.New("external measurement owner retired")
 	}

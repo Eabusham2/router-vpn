@@ -14,6 +14,9 @@ import (
 // proof. A non-nil error-path socket is returned to the DNS service, which keeps
 // its proof activity until retrying the actual native Close succeeds.
 func (e *routerVPNExternalNativeEngine) DNSMeasurementDial(ctx context.Context, address string) (net.Conn, error) {
+	ctx,finish,err := e.beginData(ctx)
+	if err != nil { return nil,err }
+	defer finish()
 	if ctx == nil || ctx.Err() != nil || e.Identity() == "" || !dnsmeasure.AllowedPublicAddress(address) {
 		return nil, errors.New("DNS native destination or owner is unavailable")
 	}
@@ -22,7 +25,9 @@ func (e *routerVPNExternalNativeEngine) DNSMeasurementDial(ctx context.Context, 
 		return nil, errors.New("DNS measurement has no captured final route")
 	}
 	connection, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
-	if err != nil || connection == nil || ctx.Err() != nil || e.Identity() == "" {
+	var ownershipErr error
+	if connection != nil { connection,ownershipErr = e.keepData(connection) }
+	if err != nil || ownershipErr != nil || connection == nil || ctx.Err() != nil || e.Identity() == "" {
 		return connection, errors.New("DNS native dial failed or became stale")
 	}
 	return connection, nil

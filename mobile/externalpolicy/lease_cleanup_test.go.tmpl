@@ -1,0 +1,430 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type routerVPNExternalLeaseTestStream struct {
+	net.Conn
+	writes atomic.Int32
+	closes atomic.Int32
+	allowClose atomic.Bool
+	writeEntered chan struct{}
+	writeRelease chan struct{}
+	closeEntered chan struct{}
+	closeRelease chan struct{}
+	writeOnce sync.Once
+	closeOnce sync.Once
+}
+func (c *routerVPNExternalLeaseTestStream) Write(p []byte)(int,error) {
+	c.writes.Add(1)
+	c.writeOnce.Do(func(){if c.writeEntered != nil { close(c.writeEntered) }})
+	if c.writeRelease != nil { <-c.writeRelease }
+	return len(p),nil
+}
+func (c *routerVPNExternalLeaseTestStream) Close() error {
+	c.closes.Add(1)
+	c.closeOnce.Do(func(){if c.closeEntered != nil { close(c.closeEntered) }})
+	if c.closeRelease != nil { <-c.closeRelease }
+	if !c.allowClose.Load() { return errors.New("fixture original stream close not joined") }
+	return c.Conn.Close()
+}
+func routerVPNExternalLeaseTestPipe(t *testing.T) *routerVPNExternalLeaseTestStream {
+	t.Helper()
+	client,peer := net.Pipe()
+	raw := &routerVPNExternalLeaseTestStream{Conn:client}
+	raw.allowClose.Store(true)
+	t.Cleanup(func(){_ = client.Close();_ = peer.Close()})
+	return raw
+}
+func routerVPNExternalLeaseTestWait(t *testing.T,done <-chan struct{},message string) {
+	t.Helper()
+	select { case <-done: case <-time.After(3*time.Second): t.Fatal(message) }
+}
+func routerVPNExternalLeaseTestKeep(t *testing.T,scope *routerVPNExternalDataScope,raw net.Conn) *routerVPNExternalDataConn {
+	t.Helper()
+	_,finish,err := scope.begin(context.Background())
+	if err != nil { t.Fatal(err) }
+	defer finish()
+	connection,err := scope.keep(raw)
+	if err != nil { t.Fatal(err) }
+	owned,ok := connection.(*routerVPNExternalDataConn)
+	if !ok { t.Fatal("actual data scope returned an unowned stream") }
+	return owned
+}
+func TestRouterVPNExternalLeaseNativeDialRetiresReturnedDataStream(t *testing.T) {
+	raw := routerVPNExternalLeaseTestPipe(t)
+	engine,_,_ := newRouterVPNDNSDialFixture(t,func(context.Context,string,M.Socksaddr)(net.Conn,error){return raw,nil})
+	physical := &boundedIdentityPhysical{}
+	engine.physical = physical
+	engine.leaseCleanup = newRouterVPNExternalLeaseCleanup(engine,nil)
+	connection,err := engine.Dial(context.Background(),mobilemultihop.ExternalFinalTag,"1.1.1.1:443")
+	if err != nil || connection == nil { t.Fatal("original shipping Dial did not return its stream",err) }
+	engine.leaseCleanup.data.retire()
+	if n,err := connection.Write([]byte("retired")); n != 0 || !errors.Is(err,net.ErrClosed) || raw.writes.Load() != 0 {
+		t.Fatal("already-returned ordinary stream retained post-cancel write authority",n,err)
+	}
+	if identity,err := engine.IdentityContext(context.Background()); identity != "" || err == nil || physical.cancelled.Load() {
+		t.Fatal("logical data retirement either admitted proof or destroyed separate control authority",identity,err)
+	}
+	if connection,err := engine.Dial(context.Background(),mobilemultihop.ExternalFinalTag,"1.1.1.1:443"); connection != nil || err == nil {
+		t.Fatal("new ordinary dial survived data retirement")
+	}
+	if connection,err := engine.DNSMeasurementDial(context.Background(),"1.1.1.1:53"); connection != nil || err == nil {
+		t.Fatal("new DNS measurement dial survived data retirement")
+	}
+	ctx,cancel := context.WithTimeout(context.Background(),time.Second)
+	defer cancel()
+	if err := engine.leaseCleanup.data.wait(ctx); err != nil { t.Fatal("actual original data stream did not drain",err) }
+}
+
+func TestRouterVPNExternalLeaseDrainJoinsEnteredStreamIO(t *testing.T) {
+	scope := newRouterVPNExternalDataScope(context.Background())
+	raw := routerVPNExternalLeaseTestPipe(t)
+	raw.writeEntered,raw.writeRelease = make(chan struct{}),make(chan struct{})
+	var release sync.Once
+	defer release.Do(func(){close(raw.writeRelease)})
+	connection := routerVPNExternalLeaseTestKeep(t,scope,raw)
+	done := make(chan struct{})
+	go func(){defer close(done);_,_ = connection.Write([]byte("entered"))}()
+	routerVPNExternalLeaseTestWait(t,raw.writeEntered,"actual original write did not enter")
+	scope.retire()
+	routerVPNExternalLeaseTestWait(t,connection.startClose().done,"original close did not finish")
+	select { case <-scope.drained: t.Fatal("close receipt hid an entered original write"); default: }
+	ctx,cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := scope.wait(ctx); !errors.Is(err,context.Canceled) { t.Fatal("canceled drain observation fabricated success",err) }
+	release.Do(func(){close(raw.writeRelease)})
+	routerVPNExternalLeaseTestWait(t,done,"entered original write did not join")
+	ctx,cancel = context.WithTimeout(context.Background(),time.Second)
+	defer cancel()
+	if err := scope.wait(ctx); err != nil { t.Fatal("joined original stream stayed pending",err) }
+}
+func TestRouterVPNExternalLeaseLateNativeSocketRemainsOwnedUntilClose(t *testing.T) {
+	raw := routerVPNExternalLeaseTestPipe(t)
+	raw.closeEntered,raw.closeRelease = make(chan struct{}),make(chan struct{})
+	entered,release := make(chan struct{}),make(chan struct{})
+	var releaseDial,releaseClose sync.Once
+	defer releaseDial.Do(func(){close(release)})
+	defer releaseClose.Do(func(){close(raw.closeRelease)})
+	engine,_,_ := newRouterVPNDNSDialFixture(t,func(context.Context,string,M.Socksaddr)(net.Conn,error){
+		close(entered)
+		<-release
+		return raw,errors.New("fixture late native error")
+	})
+	engine.leaseCleanup = newRouterVPNExternalLeaseCleanup(engine,nil)
+	type result struct { connection net.Conn; err error }
+	done := make(chan result,1)
+	go func(){connection,err := engine.DNSMeasurementDial(context.Background(),"1.1.1.1:53");done <- result{connection,err}}()
+	routerVPNExternalLeaseTestWait(t,entered,"native socket constructor did not enter")
+	engine.leaseCleanup.data.retire()
+	releaseDial.Do(func(){close(release)})
+	var got result
+	select { case got = <-done: case <-time.After(3*time.Second): t.Fatal("late native dial did not return") }
+	if got.connection == nil || got.err == nil { t.Fatal("late error-path socket lost retryable ownership") }
+	routerVPNExternalLeaseTestWait(t,raw.closeEntered,"late original socket was not closed")
+	select { case <-engine.leaseCleanup.data.drained: t.Fatal("late socket was discarded before actual Close joined"); default: }
+	releaseClose.Do(func(){close(raw.closeRelease)})
+	ctx,cancel := context.WithTimeout(context.Background(),time.Second)
+	defer cancel()
+	if err := engine.leaseCleanup.data.wait(ctx); err != nil { t.Fatal("late original socket did not drain",err) }
+}
+func TestRouterVPNExternalLeaseFailedCloseRetainsExactStreamForRetry(t *testing.T) {
+	scope := newRouterVPNExternalDataScope(context.Background())
+	raw := routerVPNExternalLeaseTestPipe(t)
+	raw.allowClose.Store(false)
+	connection := routerVPNExternalLeaseTestKeep(t,scope,raw)
+	if err := connection.Close(); err == nil { t.Fatal("fixture close unexpectedly joined") }
+	scope.retire()
+	ctx,cancel := context.WithTimeout(context.Background(),time.Second)
+	defer cancel()
+	if err := scope.wait(ctx); err == nil { t.Fatal("failed actual Close was discarded as successful drain") }
+	select { case <-scope.drained: t.Fatal("failed close removed original stream ownership"); default: }
+	raw.allowClose.Store(true)
+	if err := scope.wait(ctx); err != nil { t.Fatal("same original stream could not be retried",err) }
+	calls := raw.closes.Load()
+	if err := connection.Close(); err != nil || raw.closes.Load() != calls {
+		t.Fatal("successful original Close was performed twice",err)
+	}
+}
+
+type routerVPNExternalLeaseTestBarrier struct {
+	tun adapter.Inbound
+	revoked atomic.Bool
+	ready atomic.Bool
+	discarded atomic.Bool
+	quiesces atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+	revocation chan struct{}
+	revokeOnce sync.Once
+	failure error
+}
+func (b *routerVPNExternalLeaseTestBarrier) RevokeData(){b.revoked.Store(true);b.revokeOnce.Do(func(){close(b.revocation)})}
+func (b *routerVPNExternalLeaseTestBarrier) Quiesce(ctx context.Context,tun adapter.Inbound)error{
+	b.quiesces.Add(1)
+	if !b.revoked.Load() || tun != b.tun || b.discarded.Load(){return net.ErrClosed}
+	close(b.entered)
+	select{case <-ctx.Done():return ctx.Err();case <-b.release:}
+	if b.failure != nil{return b.failure}
+	b.ready.Store(true)
+	return nil
+}
+func (b *routerVPNExternalLeaseTestBarrier) Current(ctx context.Context,tun adapter.Inbound)error{
+	if !b.ready.Load()||b.discarded.Load()||tun!=b.tun{return net.ErrClosed}
+	return ctx.Err()
+}
+func (b *routerVPNExternalLeaseTestBarrier) Discard(){b.discarded.Store(true)}
+func routerVPNExternalLeaseTestOwner(t *testing.T)(*routerVPNExternalNativeEngine,*boundedIdentityPhysical,*routerVPNExternalLeaseStop,*routerVPNExternalLeaseTestBarrier,func()){
+	t.Helper()
+	engine,replace,_:=newRouterVPNDNSDialFixture(t,func(context.Context,string,M.Socksaddr)(net.Conn,error){return nil,errors.New("unrequested data dial")})
+	physical:=&boundedIdentityPhysical{}
+	engine.physical=physical
+	engine.entryTag="captured-entry"
+	engine.leaseCleanup=newRouterVPNExternalLeaseCleanup(engine,nil)
+	barrier:=&routerVPNExternalLeaseTestBarrier{tun:engine.tun,entered:make(chan struct{}),release:make(chan struct{}),revocation:make(chan struct{})}
+	stop:=&routerVPNExternalLeaseStop{owner:engine.leaseCleanup,barrier:barrier,entry:engine.routes[engine.entryTag],
+		tag:engine.entryTag,address:"10.77.0.1:8787",quiesceDone:make(chan struct{})}
+	engine.leaseCleanup.pending=stop
+	return engine,physical,stop,barrier,replace
+}
+func TestRouterVPNExternalLeaseCancelJoinsHeldBarrierAndOriginalData(t *testing.T){
+	synctest.Test(t,func(t *testing.T){
+		engine,physical,stop,barrier,_:=routerVPNExternalLeaseTestOwner(t)
+		var releaseOnce sync.Once
+		release:=func(){releaseOnce.Do(func(){close(barrier.release)})}
+		defer release()
+		operation,finish,err:=engine.leaseCleanup.data.begin(context.Background())
+		if err!=nil{t.Fatal(err)}
+		defer finish()
+		cancelled:=make(chan struct{})
+		go func(){engine.leaseCleanup.cancel();close(cancelled)}()
+		<-barrier.entered
+		synctest.Wait()
+		select{case <-cancelled:t.Fatal("Cancel returned before its actual terminal barrier completed");default:}
+		if operation.Err()==nil||!engine.dataRetired()||!barrier.revoked.Load()||physical.cancelled.Load(){
+			t.Fatal("held terminal barrier retained ordinary admission or prematurely destroyed the original control")
+		}
+		if identity,err:=engine.IdentityContext(context.Background());identity!=""||err==nil||physical.cancelled.Load(){
+			t.Fatal("ordinary identity denial revoked the retained cleanup owner")
+		}
+		release()
+		<-cancelled
+		if !barrier.ready.Load()||barrier.quiesces.Load()!=1||physical.cancelled.Load(){
+			t.Fatal("Cancel did not return with the original acknowledged barrier")
+		}
+		ctx,cancel:=context.WithTimeout(context.Background(),time.Second)
+		err=stop.current(ctx)
+		cancel()
+		if !errors.Is(err,context.DeadlineExceeded){
+			t.Fatal("cleanup was admitted before the original entered operation joined",err)
+		}
+		if physical.cancelled.Load(){t.Fatal("expired observation destroyed a healthy acknowledged barrier")}
+		finish()
+		if err:=stop.current(context.Background());err!=nil{t.Fatal("same original barrier was not retryable after drain",err)}
+		engine.leaseCleanup.cancel()
+		if barrier.quiesces.Load()!=1{t.Fatal("repeated Cancel executed the terminal operation twice")}
+	})
+}
+func TestRouterVPNExternalLeaseBarrierFailureCannotAuthorizeStop(t *testing.T){
+	synctest.Test(t,func(t *testing.T){
+		engine,physical,stop,barrier,_:=routerVPNExternalLeaseTestOwner(t)
+		barrier.failure=errors.New("original native barrier failed")
+		close(barrier.release)
+		engine.leaseCleanup.cancel()
+		if !physical.cancelled.Load()||barrier.ready.Load(){t.Fatal("failed terminal barrier retained the original physical data path")}
+		if err:=stop.current(context.Background());err==nil{t.Fatal("failed terminal barrier authorized cleanup")}
+		if engine.leaseCleanup.pending!=stop||stop.discarded.Load(){t.Fatal("failed barrier dropped unresolved original lease ownership")}
+	})
+}
+func TestRouterVPNExternalLeaseRetainedGraphRejectsReplacement(t *testing.T){
+	synctest.Test(t,func(t *testing.T){
+		engine,physical,stop,barrier,replace:=routerVPNExternalLeaseTestOwner(t)
+		close(barrier.release)
+		engine.leaseCleanup.cancel()
+		if err:=stop.current(context.Background());err!=nil{t.Fatal(err)}
+		replace()
+		if err:=stop.current(context.Background());err==nil||!physical.cancelled.Load(){
+			t.Fatal("retained stop adopted a replacement graph or failed to revoke its old authority",err)
+		}
+	})
+}
+
+func TestRouterVPNExternalLeaseMeasurementMissingCore(t *testing.T){
+	for _,engine:=range []*routerVPNExternalMeasurementEngine{nil,{}}{
+		if connection,err:=engine.Dial(context.Background(),mobilemultihop.ExternalFinalTag,"1.1.1.1:443");connection!=nil||err==nil{
+			t.Fatal("missing original measurement core admitted a stream")
+		}
+	}
+}
+
+type routerVPNExternalLeaseRacingPhysical struct {
+	*boundedIdentityPhysical
+	stage string
+	entered chan struct{}
+	release chan struct{}
+	once sync.Once
+}
+func(p *routerVPNExternalLeaseRacingPhysical)pause(){
+	p.once.Do(func(){close(p.entered);<-p.release})
+}
+func(p *routerVPNExternalLeaseRacingPhysical)current()bool{
+	if strings.HasPrefix(p.stage,"legacy"){p.pause()}
+	if p.stage=="legacy-error"{return false}
+	return p.boundedIdentityPhysical.current()
+}
+func(p *routerVPNExternalLeaseRacingPhysical)currentContext(ctx context.Context)error{
+	if !strings.HasPrefix(p.stage,"legacy")&&p.stage!="tun-error"{p.pause()}
+	if p.stage=="current-error"{return net.ErrClosed}
+	return p.boundedIdentityPhysical.currentContext(ctx)
+}
+func(p *routerVPNExternalLeaseRacingPhysical)validTUNContext(ctx context.Context,_ adapter.Inbound)error{
+	if p.stage=="tun-error"{p.pause();return net.ErrClosed}
+	return p.boundedIdentityPhysical.currentContext(ctx)
+}
+func TestRouterVPNExternalLeaseInFlightObservationCannotRetireTerminalControl(t *testing.T){
+	for _,stage:=range []string{"current-error","tun-error","context-success","legacy-error","legacy-success","context-replacement","legacy-replacement"}{
+		t.Run(stage,func(t *testing.T){synctest.Test(t,func(t *testing.T){
+			engine,physical,stop,barrier,replace:=routerVPNExternalLeaseTestOwner(t)
+			racing:=&routerVPNExternalLeaseRacingPhysical{boundedIdentityPhysical:physical,stage:stage,entered:make(chan struct{}),release:make(chan struct{})}
+			engine.physical=racing
+			close(barrier.release)
+			type result struct{identity string;err error}
+			observed:=make(chan result,1)
+			go func(){
+				if strings.HasPrefix(stage,"legacy"){
+					identity:=engine.Identity()
+					var err error
+					if identity==""{err=net.ErrClosed}
+					observed<-result{identity,err}
+				}else{
+					identity,err:=engine.IdentityContext(context.Background())
+					observed<-result{identity,err}
+				}
+			}()
+			<-racing.entered
+			cancelled:=make(chan struct{})
+			go func(){engine.leaseCleanup.cancel();close(cancelled)}()
+			<-barrier.revocation
+			if strings.HasSuffix(stage,"replacement"){replace()}
+			close(racing.release)
+			answer:=<-observed
+			<-cancelled
+			if answer.identity!=""||answer.err==nil{
+				t.Fatal("started-before-Cancel observation published an ordinary identity after terminal retirement")
+			}
+			if physical.cancelled.Load(){
+				t.Fatal("in-flight ordinary observation destroyed the separately retained terminal control")
+			}
+			err:=stop.current(context.Background())
+			if strings.HasSuffix(stage,"replacement"){
+				if err==nil||!physical.cancelled.Load(){t.Fatal("retained cleanup accepted actual replacement or failed to revoke its source",err)}
+			}else if err!=nil||physical.cancelled.Load(){
+				t.Fatal("intentional data retirement destroyed the proved original cleanup owner",err)
+			}
+		})})
+	}
+}
+func TestRouterVPNExternalLeaseObservationStillRevokesActualOwnerLoss(t *testing.T){
+	for _,stage:=range []string{"current-error","tun-error","legacy-error"}{
+		t.Run(stage,func(t *testing.T){synctest.Test(t,func(t *testing.T){
+			engine,physical,_,_,_:=routerVPNExternalLeaseTestOwner(t)
+			racing:=&routerVPNExternalLeaseRacingPhysical{boundedIdentityPhysical:physical,stage:stage,entered:make(chan struct{}),release:make(chan struct{})}
+			close(racing.release)
+			engine.physical=racing
+			if strings.HasPrefix(stage,"legacy"){
+				if engine.Identity()!=""{t.Fatal("failed original physical owner retained an identity")}
+			}else if identity,err:=engine.IdentityContext(context.Background());identity!=""||err==nil{
+				t.Fatal("failed original physical owner retained bounded identity",err)
+			}
+			if !physical.cancelled.Load()||engine.leaseCleanup.transition.Load()!=routerVPNExternalLeaseFailed{
+				t.Fatal("real uncancelled owner loss was misclassified as intentional terminal retirement")
+			}
+		})})
+	}
+}
+
+func TestRouterVPNExternalLeaseFailedTransitionDeniesBeforePhysicalCancel(t *testing.T){
+	raw:=routerVPNExternalLeaseTestPipe(t)
+	engine,_,_:=newRouterVPNDNSDialFixture(t,func(context.Context,string,M.Socksaddr)(net.Conn,error){return raw,nil})
+	physical:=&boundedIdentityPhysical{}
+	engine.physical=physical
+	engine.entryTag="captured-entry"
+	engine.leaseCleanup=newRouterVPNExternalLeaseCleanup(engine,nil)
+	barrier:=&routerVPNExternalLeaseTestBarrier{tun:engine.tun,entered:make(chan struct{}),release:make(chan struct{}),revocation:make(chan struct{})}
+	stop:=&routerVPNExternalLeaseStop{owner:engine.leaseCleanup,barrier:barrier,entry:engine.routes[engine.entryTag],
+		tag:engine.entryTag,address:"10.77.0.1:8787",quiesceDone:make(chan struct{})}
+	engine.leaseCleanup.pending=stop
+	connection,err:=engine.Dial(context.Background(),mobilemultihop.ExternalFinalTag,"1.1.1.1:443")
+	if err!=nil||connection==nil{t.Fatal("original data stream unavailable",err)}
+	physical.observe=func(context.Context)error{return net.ErrClosed}
+	scope:=engine.leaseCleanup.data
+	scope.mu.Lock()
+	held:=true
+	var workers []<-chan struct{}
+	defer func(){
+		if held{scope.mu.Unlock()}
+		for _,done:=range workers{
+			select{case <-done:case <-time.After(3*time.Second):t.Error("original failed-transition test worker did not join")}
+		}
+	}()
+	failed,failedDone:=make(chan error,1),make(chan struct{})
+	workers=append(workers,failedDone)
+	go func(){defer close(failedDone);_,err:=engine.IdentityContext(context.Background());failed<-err}()
+	// Observe the actual CAS while retirement is held at its original mutex.
+	// Mutex waits are not durably blocked in testing/synctest.
+	deadline:=time.NewTimer(3*time.Second)
+	defer deadline.Stop()
+	for engine.leaseCleanup.transition.Load()!=routerVPNExternalLeaseFailed{
+		select{case <-deadline.C:t.Fatal("actual identity failure did not claim its original transition");case <-time.After(time.Millisecond):}
+	}
+	if physical.cancelled.Load()||scope.retired.Load(){
+		t.Fatal("controlled actual failure did not pause between its atomic claim and physical retirement")
+	}
+	type ioResult struct{n int;err error}
+	written,writeDone:=make(chan ioResult,1),make(chan struct{})
+	workers=append(workers,writeDone)
+	go func(){defer close(writeDone);n,err:=connection.Write([]byte("retired"));written<-ioResult{n,err}}()
+	identified,identityDone:=make(chan bool,1),make(chan struct{})
+	workers=append(workers,identityDone)
+	go func(){defer close(identityDone);identity,err:=engine.IdentityContext(context.Background());identified<-identity==""&&err!=nil}()
+	dialed,dialDone:=make(chan bool,1),make(chan struct{})
+	workers=append(workers,dialDone)
+	go func(){defer close(dialDone);c,err:=engine.Dial(context.Background(),mobilemultihop.ExternalFinalTag,"1.1.1.1:443");dialed<-c==nil&&err!=nil}()
+	select{
+	case result:=<-written:
+		if result.n!=0||!errors.Is(result.err,net.ErrClosed)||raw.writes.Load()!=0{t.Fatal("failed transition admitted an already-returned stream")}
+	case <-time.After(3*time.Second):t.Fatal("failed transition left stream admission waiting behind physical retirement")
+	}
+	select{
+	case rejected:=<-identified:if !rejected{t.Fatal("failed transition published a new ordinary identity")}
+	case <-time.After(3*time.Second):t.Fatal("failed transition did not immediately reject ordinary identity")
+	}
+	select{
+	case rejected:=<-dialed:if !rejected{t.Fatal("failed transition admitted a new ordinary dial")}
+	case <-time.After(3*time.Second):t.Fatal("failed transition left ordinary dial admission waiting")
+	}
+	scope.mu.Unlock()
+	held=false
+	select{
+	case err:=<-failed:if err==nil||!physical.cancelled.Load(){t.Fatal("actual failure did not revoke its original source",err)}
+	case <-time.After(3*time.Second):t.Fatal("original failed observation did not return after release")
+	}
+	engine.leaseCleanup.cancel()
+	if barrier.quiesces.Load()!=0||engine.leaseCleanup.pending!=stop{
+		t.Fatal("failed winner manufactured terminal authority or dropped original unresolved ownership")
+	}
+	if err:=stop.current(context.Background());err==nil{t.Fatal("failed winner authorized a retained stop")}
+}

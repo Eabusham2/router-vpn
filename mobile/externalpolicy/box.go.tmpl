@@ -130,7 +130,11 @@ func (r *RouterVPNExternalProofRequest) Run() (string, error) {
 func (r *RouterVPNExternalProofRequest) Cancel() {
 	if r != nil {
 		if r.engine != nil && r.engine.physical != nil {
-			r.engine.physical.cancel()
+			if r.engine.leaseCleanup != nil {
+				r.engine.leaseCleanup.cancel()
+			} else {
+				r.engine.physical.cancel()
+			}
 		}
 		if r.request != nil {
 			r.request.Cancel()
@@ -152,7 +156,7 @@ func (r *RouterVPNExternalProofRequest) VerifyCurrentPathContext(ctx context.Con
 	}
 	err := r.request.VerifyCurrentPathContext(ctx)
 	if err != nil && !mobiletor.ObservationContextExpired(ctx, err) && r.engine != nil && r.engine.physical != nil {
-		r.engine.physical.cancelObservation()
+		r.engine.revokeOrdinaryOwner(true)
 	}
 	return err
 }
@@ -196,6 +200,8 @@ type routerVPNExternalNativeEngine struct {
 	dns      map[string]adapter.DNSTransport
 	services map[string]adapter.Service
 	physical routerVPNExternalPhysicalBinding
+	entryTag string
+	leaseCleanup *routerVPNExternalLeaseCleanup
 }
 
 func (e *routerVPNExternalNativeEngine) OpenVPNRemote(tag string) (nativeopenvpn.RemoteReceipt, error) {
@@ -359,12 +365,13 @@ func (s *Box) routerVPNCapturedEngine(entryTag, tunTag, finalTag, dnsTag string,
 		}
 		services[configured.Tag] = owner
 	}
-	return &routerVPNExternalNativeEngine{box: s, tun: tun, tunTag: tunTag, dns: dns, owners: owners, routes: routes, services: services}, nil
+	return &routerVPNExternalNativeEngine{box: s, tun: tun, tunTag: tunTag, dns: dns, owners: owners, routes: routes, services: services, entryTag: entryTag}, nil
 }
 func (e *routerVPNExternalNativeEngine) Identity() string {
 	if e == nil {
 		return ""
 	}
+	if !e.ordinaryObservationCurrent() { return "" }
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.identityLocked()
@@ -376,6 +383,7 @@ func (e *routerVPNExternalNativeEngine) IdentityContext(ctx context.Context) (st
 	if e == nil {
 		return "", errors.New("external native owner is unavailable")
 	}
+	if !e.ordinaryObservationCurrent() { return "",net.ErrClosed }
 	if err := adapter.RouterVPNRLockContext(ctx, &e.mu); err != nil {
 		return "", err
 	}
@@ -383,6 +391,9 @@ func (e *routerVPNExternalNativeEngine) IdentityContext(ctx context.Context) (st
 	return e.identityLockedContext(ctx)
 }
 func (e *routerVPNExternalNativeEngine) identityLockedContext(ctx context.Context) (string, error) {
+	// Logical cancellation is not a failed native readback. Its separately
+	// captured stop owner is the only authority that may retain control.
+	if !e.ordinaryObservationCurrent() { return "",net.ErrClosed }
 	if ctx == nil {
 		return "", errors.New("external graph observation has no caller")
 	}
@@ -394,7 +405,7 @@ func (e *routerVPNExternalNativeEngine) identityLockedContext(ctx context.Contex
 	}
 	invalid := func(message string) (string, error) {
 		if e.physical != nil {
-			e.physical.cancelObservation()
+			e.revokeOrdinaryOwner(true)
 		}
 		return "", errors.New(message)
 	}
@@ -421,7 +432,7 @@ func (e *routerVPNExternalNativeEngine) identityLockedContext(ctx context.Contex
 		}
 		if err := physical.currentContext(ctx); err != nil {
 			if !mobiletor.ObservationContextExpired(ctx, err) {
-				e.physical.cancelObservation()
+				e.revokeOrdinaryOwner(true)
 			}
 			return "", err
 		}
@@ -463,7 +474,7 @@ func (e *routerVPNExternalNativeEngine) identityLockedContext(ctx context.Contex
 	if physical != nil {
 		if err := physical.validTUNContext(ctx, e.tun); err != nil {
 			if !mobiletor.ObservationContextExpired(ctx, err) {
-				e.physical.cancelObservation()
+				e.revokeOrdinaryOwner(true)
 			}
 			return "", err
 		}
@@ -471,10 +482,14 @@ func (e *routerVPNExternalNativeEngine) identityLockedContext(ctx context.Contex
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if !e.ordinaryObservationCurrent() { return "",net.ErrClosed }
 	return fmt.Sprintf("%p", e.box), nil
 }
 
 func (e *routerVPNExternalNativeEngine) identityLocked() (identity string) {
+	// Check before the integrity-failure defer: ordinary denial must not
+	// accidentally cancel the separately sealed cleanup owner.
+	if !e.ordinaryObservationCurrent() { return "" }
 	if e == nil {
 		return ""
 	}
@@ -483,7 +498,7 @@ func (e *routerVPNExternalNativeEngine) identityLocked() (identity string) {
 			// A manager may remove an object and then return its dependency
 			// error without closing it. Revoke this exact physical generation
 			// on every identity failure, not only a changed interface readback.
-			e.physical.cancel()
+			e.revokeOrdinaryOwner(false)
 		}
 	}()
 	if e.box == nil || e.box.ctx.Err() != nil || e.physical != nil && !e.physical.current() {
@@ -519,9 +534,13 @@ func (e *routerVPNExternalNativeEngine) identityLocked() (identity string) {
 	if e.physical != nil && !e.physical.validTUN(e.tun) {
 		return ""
 	}
+	if !e.ordinaryObservationCurrent() { return "" }
 	return fmt.Sprintf("%p", e.box)
 }
 func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	ctx,finish,err := e.beginData(ctx)
+	if err != nil { return nil,err }
+	defer finish()
 	if _, err := e.IdentityContext(ctx); err != nil {
 		return nil, err
 	}
@@ -540,8 +559,10 @@ func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address s
 		return nil, errors.New("external proof cannot use a default resolver")
 	}
 	connection, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	var ownershipErr error
+	if connection != nil { connection,ownershipErr = e.keepData(connection) }
 	_, identityErr := e.IdentityContext(ctx)
-	if err != nil || identityErr != nil || ctx.Err() != nil {
+	if err != nil || ownershipErr != nil || identityErr != nil || ctx.Err() != nil {
 		if connection != nil {
 			_ = connection.Close()
 		}
@@ -577,6 +598,9 @@ func routerVPNExternalDNSFailureCode(err error) (string, uint64) {
 }
 
 func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag string) error {
+	parent,finish,err := e.beginData(parent)
+	if err != nil { return err }
+	defer finish()
 	if _, err := e.IdentityContext(parent); err != nil {
 		return err
 	}

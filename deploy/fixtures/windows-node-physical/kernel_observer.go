@@ -644,3 +644,98 @@ func (r *DesktopWindowsNodeSocketRetirement) Cleanup(ctx context.Context) error 
 	})
 	return errors.Join(heldErr, err)
 }
+
+// The native Server retry case holds this original gate only long enough to
+// prove Cancel cannot return before its actual terminal WFP operation. This
+// helper exists only in the explicit executable-scoped test overlay.
+func DesktopWindowsNodeCompositionHoldLeaseBarrier(ctx context.Context,target DesktopWindowsProtectionTarget)(func(),error){
+	desktopWindowsNodeComposition.Lock()
+	p:=desktopWindowsNodeComposition.owner
+	desktopWindowsNodeComposition.Unlock()
+	if p==nil||ctx==nil{return nil,net.ErrClosed}
+	select{case <-ctx.Done():return nil,ctx.Err();case <-p.gate:}
+	release:=func(){p.gate<-struct{}{}}
+	if p.closed||p.terminalCleanup!=nil||p.capture!=target.Capture||
+		desktopWindowsProtectionTarget(p.capture,p.options.KillSwitchPolicy,p.metadata)!=target||
+		!p.Current(p.capture,p.owner)||len(p.tunnel)==0{
+		release()
+		return nil,errors.New("held terminal barrier lost its original native policy")
+	}
+	if err:=errors.Join(p.assertBaseline(),p.assertTunnel());err!=nil{release();return nil,err}
+	if err:=ctx.Err();err!=nil{release();return nil,err}
+	var once sync.Once
+	return func(){once.Do(release)},nil
+}
+
+// Exercise the actual token after the shipping Cancel acknowledged it. This
+// repeats the original receipt and tries rejected successors without changing
+// Snapshot's independent socket, token, tuple or WFP baseline validation.
+func DesktopWindowsNodeCompositionVerifyLeaseBarrier(ctx context.Context,target DesktopWindowsProtectionTarget)error{
+	desktopWindowsNodeComposition.Lock()
+	p:=desktopWindowsNodeComposition.owner
+	desktopWindowsNodeComposition.Unlock()
+	if p==nil{return net.ErrClosed}
+	type captured struct{token *desktopWindowsLeaseCleanup;name string;index uint32}
+	original,err:=desktopWindowsPolicyCall(p,ctx,true,func()(captured,error){
+		token:=p.terminalCleanup
+		if p.closed||token==nil||!token.joined||!token.ownerCurrent()||
+			desktopWindowsProtectionTarget(p.capture,p.options.KillSwitchPolicy,p.metadata)!=target{
+			return captured{},errors.New("terminal barrier has no original acknowledged token")
+		}
+		if err:=token.absent();err!=nil{return captured{},err}
+		return captured{token,token.name,token.index},nil
+	})
+	if err!=nil{return err}
+	token:=original.token
+	if err:=token.Current(ctx);err!=nil{return err}
+	if err:=token.Quiesce(ctx,original.name,original.index);err!=nil{return err}
+	if err:=p.BindTunnel(ctx,p.capture,original.name,original.index);err==nil{
+		return errors.New("terminal native policy permitted a later TUN bind")
+	}
+	if _,err:=p.SealLeaseCleanup(ctx,p.capture);err==nil{
+		return errors.New("terminal native policy permitted a replacement cleanup capture")
+	}
+	if err:=token.Quiesce(ctx,original.name,original.index+1);err==nil{
+		return errors.New("terminal token accepted a different native interface")
+	}
+	foreign:=&desktopWindowsLeaseCleanup{policy:p,capture:p.capture,owner:p.owner}
+	if err:=foreign.Quiesce(ctx,original.name,original.index);err==nil{
+		return errors.New("another token replaced the original terminal operation")
+	}
+	return token.Current(ctx)
+}
+
+func DesktopWindowsNodeCompositionVerifyInertLeaseBarrier(ctx context.Context,target DesktopWindowsProtectionTarget)error{
+	desktopWindowsNodeComposition.Lock()
+	p:=desktopWindowsNodeComposition.owner
+	desktopWindowsNodeComposition.Unlock()
+	if p==nil||desktopWindowsProtectionTarget(p.capture,p.options.KillSwitchPolicy,p.metadata)!=target{return net.ErrClosed}
+	before,err:=DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err!=nil{return err}
+	inert,err:=p.SealLeaseCleanup(ctx,p.capture)
+	if err!=nil{return err}
+	inert.Discard()
+	if err:=inert.Quiesce(ctx,before.TunnelName,before.TunnelIndex);err==nil{
+		return errors.New("discarded inert token retired the actual native TUN")
+	}
+	wrong:=p.capture
+	wrong.SessionID+="-foreign"
+	if token,err:=p.SealLeaseCleanup(ctx,wrong);err==nil||token!=nil{
+		if token!=nil{token.Discard()}
+		return errors.New("another capture obtained native lease cleanup authority")
+	}
+	after,err:=DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err!=nil{return err}
+	if after.Target!=before.Target||after.Capture!=before.Capture||after.Owner!=before.Owner||
+		after.Calls!=before.Calls||after.Closed||after.TunnelName!=before.TunnelName||
+		after.TunnelIndex!=before.TunnelIndex||after.TunnelLUID!=before.TunnelLUID||
+		len(after.Grants)!=len(before.Grants){
+		return errors.New("inert cleanup capture changed the active native path")
+	}
+	if len(before.Grants)!=1{return errors.New("inert cleanup test requires its one original WG lower")}
+	grant:=before.Grants[0]
+	if after.Grants[0].Sequence<grant.Sequence{return errors.New("inert cleanup capture returned an older physical permit")}
+	grant.Sequence=after.Grants[0].Sequence
+	if after.Grants[0]!=grant{return errors.New("inert cleanup capture replaced its original physical socket or tuple")}
+	return nil
+}

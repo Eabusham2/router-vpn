@@ -32,6 +32,7 @@ class NativeNodeScope(unittest.TestCase):
             "routervpn/desktoppt/node_physical_windows.go": ROOT / "mobile/desktop/node_physical_windows.go.tmpl",
             "routervpn/desktoppt/node_physical.go": ROOT / "mobile/desktop/node_physical.go.tmpl",
         }
+        self.files.update({relative: ROOT / "mobile/externalpolicy" / name for relative, name in GATE.EXTERNAL_LEASE_SOURCES.items()})
         self.original = {}
         for relative, actual in self.files.items():
             path = self.source / relative
@@ -196,6 +197,10 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
+        policy = root / "mobile/externalpolicy"
+        policy.mkdir(parents=True)
+        for name in GATE.EXTERNAL_LEASE_SOURCES.values():
+            (policy / name).write_bytes((ROOT / "mobile/externalpolicy" / name).read_bytes())
         for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
@@ -426,6 +431,10 @@ class OrdinarySOCKSScope(unittest.TestCase):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
+        policy = root / "mobile/externalpolicy"
+        policy.mkdir(parents=True)
+        for name in GATE.EXTERNAL_LEASE_SOURCES.values():
+            (policy / name).write_bytes((ROOT / "mobile/externalpolicy" / name).read_bytes())
         for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_socks_test.go.tmpl"
@@ -540,11 +549,21 @@ class OrdinarySOCKSScope(unittest.TestCase):
 
 
 class OrdinaryPacketScope(unittest.TestCase):
-    setUp = OrdinaryHysteria2Scope.setUp
+    def setUp(self):
+        OrdinaryHysteria2Scope.setUp(self)
+        for relative, actual in (
+                ("routervpn_external_policy.go", ROOT / "mobile/externalpolicy/box.go.tmpl"),
+                ("routervpn_external_lease_cleanup.go", ROOT / "mobile/externalpolicy/lease_cleanup.go.tmpl"),
+                ("experimental/libbox/routervpn/mobilemultihop/lease_cleanup.go", ROOT / "internal/mobilemultihop/lease_cleanup.go")):
+            self.original[relative] = actual.read_bytes()
+            path = self.source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.original[relative])
 
     def test_router_local_requires_every_exact_unique_verdict(self):
         required = GATE.EXTERNAL_LOCAL_CASES
         self.assertEqual(len(required), 15)
+        self.assertNotIn(GATE.EXTERNAL_LOCAL_ROOT + "/lease-stop-retry", required)
         complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
         with contextlib.redirect_stdout(io.StringIO()):
             GATE.report_external_local(0, complete)
@@ -569,7 +588,8 @@ class OrdinaryPacketScope(unittest.TestCase):
 
     def test_router_server_requires_every_unique_native_and_retirement_verdict(self):
         required = GATE.EXTERNAL_SERVER_CASES
-        self.assertEqual(len(required), 24)
+        self.assertEqual(len(required), 25)
+        self.assertIn(GATE.EXTERNAL_SERVER_ROOT + "/lease-stop-retry", required)
         self.assertEqual(len(required), len(set(required)))
         self.assertIn(GATE.EXTERNAL_SERVER_ROOT + "/reject/psk", required)
         self.assertIn(GATE.EXTERNAL_SERVER_ROOT + "/successor-and-original-restore", required)
@@ -585,10 +605,72 @@ class OrdinaryPacketScope(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "required native result"):
                 GATE.report_external_server(status, output)
 
+    def test_all_shipping_lease_scope_results_are_mandatory(self):
+        required = GATE.EXTERNAL_LEASE_UNIT_CASES
+        self.assertEqual(len(GATE.EXTERNAL_LEASE_UNIT_ROOTS), 11)
+        self.assertEqual(len(required), 21)
+        self.assertEqual(len(required), len(set(required)))
+        complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+        with contextlib.redirect_stdout(io.StringIO()):
+            GATE.report_external_lease_unit(0, complete)
+            for case in required:
+                line = "--- PASS: " + case + " (0.01s)\n"
+                for output in (complete.replace(line, ""), complete + line, complete.replace(line, "expected: " + line)):
+                    with self.assertRaises(ValueError): GATE.report_external_lease_unit(0, output)
+            for suffix in ("--- SKIP: hidden", "DATA RACE", "panic: crash", "--- FAIL: hidden", "FAIL"):
+                with self.assertRaises(ValueError): GATE.report_external_lease_unit(0, complete + suffix + "\n")
+            with self.assertRaises(ValueError): GATE.report_external_lease_unit(1, complete)
+
+    def test_lease_generated_source_requires_every_exact_shipping_dependency(self):
+        before = GATE.external_lease_sources(self.source)
+        self.assertEqual(len(before), 7)
+        for relative in GATE.EXTERNAL_LEASE_SOURCES:
+            path = self.source / relative
+            original = path.read_bytes()
+            with self.subTest(relative=relative):
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, "original generated source"):
+                    GATE.external_lease_sources(self.source)
+                path.write_bytes(original + b"\n// replaced compiled dependency\n")
+                with self.assertRaisesRegex(ValueError, "shipping bytes"):
+                    GATE.external_lease_sources(self.source)
+                path.write_bytes(original)
+        self.assertEqual(GATE.external_lease_sources(self.source), before)
+
+    def test_lease_controls_use_exact_isolated_shipping_copies(self):
+        self.assertEqual(len(GATE.EXTERNAL_LEASE_CONTROLS), 6)
+        for label, (patches, cases, witness) in GATE.EXTERNAL_LEASE_CONTROLS.items():
+            with self.subTest(label=label):
+                directory = self.observer / label
+                directory.mkdir()
+                mapping = json.loads(GATE.external_overlay(self.source, directory, label).read_text())["Replace"]
+                self.assertEqual(len(mapping), 5 + len({relative for relative, _, _ in patches}))
+                self.assertTrue(cases)
+                self.assertTrue(witness)
+                for relative, before, after in patches:
+                    copy = Path(mapping[str(self.source / relative)]).read_text(encoding="utf-8")
+                    self.assertNotIn(before, copy)
+                    if after: self.assertIn(after, copy)
+                for relative, raw in self.original.items():
+                    self.assertEqual((self.source / relative).read_bytes(), raw)
+                relative, before, _ = patches[0]
+                original = self.source / relative
+                raw = original.read_bytes()
+                original.write_text(original.read_text(encoding="utf-8").replace(before, "changed-original-boundary", 1), encoding="utf-8")
+                try:
+                    with self.assertRaisesRegex(ValueError, "exact production boundary"):
+                        GATE.external_overlay(self.source, directory, label)
+                finally:
+                    original.write_bytes(raw)
+
     def test_packet_fixture_remains_part_of_the_exact_native_scope_digest(self):
         root = self.workspace / "repository"
         mobile = root / "mobile/desktop"
         mobile.mkdir(parents=True)
+        policy = root / "mobile/externalpolicy"
+        policy.mkdir(parents=True)
+        for name in GATE.EXTERNAL_LEASE_SOURCES.values():
+            (policy / name).write_bytes((ROOT / "mobile/externalpolicy" / name).read_bytes())
         for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_packet_test.go.tmpl"
@@ -638,11 +720,19 @@ class OrdinaryPacketScope(unittest.TestCase):
                 self.assertIn("-mod=readonly", command)
                 self.assertIn("-race", command)
                 selected = Path(next(value.removeprefix("-overlay=") for value in command if value.startswith("-overlay=")))
-                self.assertEqual(len(json.loads(selected.read_text())["Replace"]), 6 if "missing-durable-intent" in selected.parent.name else 5)
+                label = selected.parent.name.removeprefix("external-packet-")
+                self.assertEqual(len(json.loads(selected.read_text())["Replace"]), 6 if label == "missing-durable-intent" or label in GATE.EXTERNAL_LEASE_CONTROLS else 5)
                 Path(command[command.index("-o") + 1]).write_bytes(b"captured-native-packet-image/" + selected.parent.name.encode())
-                return (1, "compile failed") if fault == "compile" else (0, "")
+                return (1, "compile failed") if fault == "compile" or fault == "lease-compile" and label in GATE.EXTERNAL_LEASE_CONTROLS else (0, "")
             binary = Path(command[0])
             if binary.parent.name == "external-packet":
+                if "-test.run=^TestRouterVPNExternalLease" in command:
+                    self.assertIn("-test.timeout=60s", command)
+                    self.assertEqual(kwargs["timeout"], 75)
+                    required = GATE.EXTERNAL_LEASE_UNIT_CASES
+                    if fault == "lease-leaf": required = required[:-1]
+                    if fault == "lease-image": binary.write_bytes(b"changed-lease-image")
+                    return 0, "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
                 if any("PacketReference|" in value for value in command):
                     self.assertIn("-test.timeout=60s", command)
                     self.assertEqual(kwargs["timeout"], 75)
@@ -680,6 +770,24 @@ class OrdinaryPacketScope(unittest.TestCase):
                     output = output.replace("--- PASS: " + GATE.EXTERNAL_PACKET_CASES[protocol][-1] + " (0.01s)\n", "")
                 return 0, output
             label = binary.parent.name.removeprefix("external-packet-")
+            if label in GATE.EXTERNAL_LEASE_CONTROLS:
+                _, cases, witness = GATE.EXTERNAL_LEASE_CONTROLS[label]
+                root = cases[0].split("/")[0]
+                expression = "^" + GATE.re.escape(root) + "$"
+                if all("/" in case for case in cases):
+                    expression += "/^(" + "|".join(GATE.re.escape(case.split("/", 1)[1]) for case in cases) + ")$"
+                self.assertIn("-test.run=" + expression, command)
+                self.assertIn("-test.timeout=60s", command)
+                self.assertEqual(kwargs["timeout"], 75)
+                output = "".join("--- FAIL: " + case + " (0.01s)\n" + witness + "\n" for case in cases)
+                if fault == "lease-prefix": output = output.replace("--- FAIL:", "expected: --- FAIL:")
+                if fault == "lease-duplicate": output += output
+                if fault == "lease-panic": output += "panic: test timed out\n"
+                if isinstance(fault, str) and fault.startswith("lease-cleanup-"):
+                    output += "    original_fixture_test.go:1: " + GATE.EXTERNAL_LEASE_CLEANUP_FAILURES[int(fault.removeprefix("lease-cleanup-"))] + "\n"
+                if fault == "lease-witness": output = output.replace(witness, "unrelated failure")
+                if fault == "lease-mutant-image": binary.write_bytes(b"changed-lease-negative-image")
+                return (0 if fault == label else 1), output
             compare = any(GATE.EXTERNAL_COMPARE_ROOT in value for value in command)
             local = any(GATE.EXTERNAL_LOCAL_ROOT in value for value in command)
             server = any(GATE.EXTERNAL_SERVER_ROOT in value for value in command)
@@ -705,14 +813,19 @@ class OrdinaryPacketScope(unittest.TestCase):
             GATE.execute_external_packet(self.source, self.workspace, build, {"captured": "environment"})
         return calls
 
-    def test_all_three_protocols_share_one_owned_build_and_both_controls(self):
+    def test_packet_native_scope_and_lease_controls_keep_each_owned_image(self):
         calls = self.dispatch()
-        self.assertEqual([timeout for _, timeout in calls], [600, 75, 195, 195, 195, 195, 195, 195, 600, 75, 75, 75, 75, 600, 75, 75, 75, 75])
+        self.assertEqual([timeout for _, timeout in calls], [600, 75, 75, 195, 195, 195, 195, 195, 195, 600, 75, 75, 75, 75, 600, 75, 75, 75, 75] + [600, 75] * len(GATE.EXTERNAL_LEASE_CONTROLS))
+        self.assertEqual(len({command[command.index("-o") + 1] for command, _ in calls if "-c" in command}), 3 + len(GATE.EXTERNAL_LEASE_CONTROLS))
         self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
 
     def test_packet_dispatch_rejects_changed_images_missing_leaves_and_invalid_controls(self):
         for fault, message in (("compile", "compilation failed"), ("image", "native executable changed"), ("leaf", "required native result"), ("reference", "required encrypted result"), ("server-leaf", "required native result"), ("server-image", "native executable changed"), ("local-leaf", "required native result"), ("local-image", "native executable changed"), ("compare-leaf", "required native result"), ("compare-image", "native executable changed"),
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("lease-leaf", "required result"), ("lease-image", "native executable changed"), ("lease-compile", "control did not compile"),
+                               ("lease-prefix", "exact defect"), ("lease-duplicate", "exact defect"), ("lease-panic", "exact defect"), ("lease-witness", "exact defect"), ("lease-mutant-image", "control executable changed"),
+                               *((label, "exact defect") for label in GATE.EXTERNAL_LEASE_CONTROLS),
+                               *(("lease-cleanup-" + str(index), "exact defect") for index in range(len(GATE.EXTERNAL_LEASE_CLEANUP_FAILURES))),
                                ("prefix", "exact defect"), ("duplicate", "exact defect"), ("panic", "exact defect"), ("witness", "exact defect"), ("mutant-image", "control executable changed")):
             with self.subTest(fault=fault):
                 previous = self.workspace
@@ -1076,7 +1189,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         self.assertEqual(len(set(calls)), 7)
         self.assertEqual(len(results), 7)
         self.assertIn("all seven native phases and their controls passed", output)
-        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3, 5, 3])
+        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3 + len(GATE.EXTERNAL_LEASE_CONTROLS), 5, 3])
 
     def test_partial_wrong_target_changed_source_or_missing_images_never_complete(self):
         for fault in ("missing", "source", "phase", "target", "image", "unrelated-image", "mutated-source", "oversized"):
@@ -1124,6 +1237,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         self.assertEqual(GATE.PHASE_TIMEOUTS["node-baseline"], 2 * 180 + 90 + 60 + 300 + 30 + 600 + 300 + 3600 + 600 + 1215)
         self.assertEqual(GATE.PHASE_TIMEOUTS["node-controls"] - GATE.PHASE_TIMEOUTS["node-baseline"], 4 * (600 + 105) - 600 - 1215)
         self.assertEqual(GATE.PHASE_TIMEOUTS["external-socks"], 2 * 180 + 90 + 60 + 600 + 315 + 6 * (600 + 75))
+        self.assertEqual(GATE.PHASE_TIMEOUTS["external-packet"], 2 * 180 + 90 + 60 + 600 + 2 * 75 + 6 * 195 + 2 * (600 + 4 * 75) + len(GATE.EXTERNAL_LEASE_CONTROLS) * (600 + 75))
 
     def test_builder_calls_complete_phase_orchestrator_without_old_aggregate(self):
         source = (ROOT / "deploy/build-native-runtime.py").read_text()

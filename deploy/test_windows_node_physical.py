@@ -88,16 +88,81 @@ EXTERNAL_OPENVPN_OWNERSHIP_CASES = (EXTERNAL_OPENVPN_OWNERSHIP, *(EXTERNAL_OPENV
 EXTERNAL_OPENVPN_WITNESS_CASES = EXTERNAL_OPENVPN_CODEC_CASES + EXTERNAL_OPENVPN_OWNERSHIP_CASES
 EXTERNAL_SERVER_ROOT = "TestRouterVPNDesktopExternalWindowsRouterServerWFP"
 EXTERNAL_SERVER_ASSOCIATION = "TestRouterVPNDesktopExternalWindowsRouterAssociationRetirement"
-EXTERNAL_SERVER_LEAVES = ("on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof")
+EXTERNAL_SERVER_LEAVES = ("on-connect", "always", "successor-and-original-restore", "foreign-predecessor", "commit-refused", "reject/entry-token", "reject/entry-proof", "reject/private-key", "reject/psk", "reject/final-key", "reject/dns", "reject/exit", "reject/trust", "reject/lease-expired", "reject/lease-credentials", "cancelled-proof", "lease-stop-retry")
 EXTERNAL_SERVER_CASES = (EXTERNAL_SERVER_ROOT, *(EXTERNAL_SERVER_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES), EXTERNAL_SERVER_ASSOCIATION,
     *(EXTERNAL_SERVER_ASSOCIATION + "/" + leaf for leaf in ("api-original-challenge-and-stop-receipt", "lease-failure-diagnostic", "close-joins-original-packet-worker", "control-close-joins-before-udp-tuple-release", "successor-retains-own-association", "handshake-cancel-joins-both-streams")))
 EXTERNAL_LOCAL_ROOT = "TestRouterVPNDesktopExternalWindowsRouterLocalWFP"
-EXTERNAL_LOCAL_CASES = (EXTERNAL_LOCAL_ROOT, *(EXTERNAL_LOCAL_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf not in ("reject/lease-expired", "reject/lease-credentials")))
+EXTERNAL_LOCAL_CASES = (EXTERNAL_LOCAL_ROOT, *(EXTERNAL_LOCAL_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf not in ("reject/lease-expired", "reject/lease-credentials", "lease-stop-retry")))
 EXTERNAL_COMPARE_ROOT = "TestRouterVPNDesktopExternalWindowsRouterCompareWFP"
 EXTERNAL_COMPARE_LEAVES = ("on-connect", "always", "local-only", "server-only", "local-timeout", "server-timeout", "neither-valid", "final-repeat-refusal", "saved-winner-restoration", "cancelled-proof", "cancelled-server-proof", "foreign-predecessor", "commit-refused")
 EXTERNAL_COMPARE_PROTOCOL = "TestRouterVPNDesktopExternalWindowsRouterCompareProtocol"
 EXTERNAL_COMPARE_CASES = (EXTERNAL_COMPARE_ROOT, *(EXTERNAL_COMPARE_ROOT + "/" + leaf for leaf in EXTERNAL_COMPARE_LEAVES), EXTERNAL_COMPARE_PROTOCOL,
     *(EXTERNAL_COMPARE_PROTOCOL + "/" + leaf for leaf in ("measurement-a", "measurement-b", "nonce-proof", "missing-nonce-value", "changed-host", "leaked-token", "changed-method")))
+EXTERNAL_LEASE_UNIT_ROOTS = tuple("TestRouterVPNExternalLease" + suffix for suffix in (
+    "NativeDialRetiresReturnedDataStream", "DrainJoinsEnteredStreamIO", "LateNativeSocketRemainsOwnedUntilClose",
+    "FailedCloseRetainsExactStreamForRetry", "CancelJoinsHeldBarrierAndOriginalData", "BarrierFailureCannotAuthorizeStop",
+    "RetainedGraphRejectsReplacement", "MeasurementMissingCore", "InFlightObservationCannotRetireTerminalControl",
+    "ObservationStillRevokesActualOwnerLoss", "FailedTransitionDeniesBeforePhysicalCancel"))
+EXTERNAL_LEASE_UNIT_CASES = (*EXTERNAL_LEASE_UNIT_ROOTS,
+    *("TestRouterVPNExternalLeaseInFlightObservationCannotRetireTerminalControl/" + leaf for leaf in
+      ("current-error", "tun-error", "context-success", "legacy-error", "legacy-success", "context-replacement", "legacy-replacement")),
+    *("TestRouterVPNExternalLeaseObservationStillRevokesActualOwnerLoss/" + leaf for leaf in
+      ("current-error", "tun-error", "legacy-error")))
+EXTERNAL_LEASE_SOURCES = {
+    "routervpn_external_policy.go": "box.go.tmpl",
+    "routervpn_external_lease_cleanup.go": "lease_cleanup.go.tmpl",
+    "routervpn_external_lease_cleanup_test.go": "lease_cleanup_test.go.tmpl",
+    "routervpn_external_measurement.go": "measurement.go.tmpl",
+    "routervpn_dns_dial.go": "dns_dial.go.tmpl",
+    "routervpn_external_observation_test.go": "observation_test.go.tmpl",
+    "routervpn_dns_dial_test.go": "dns_dial_test.go.tmpl",
+}
+EXTERNAL_LEASE_CLEANUP_FAILURES = (
+    "original failed-transition test worker did not join",
+    "external physical monitor did not join", "external default monitor did not join",
+    "provider image writer did not close", "external provider cleanup",
+    "external WFP native source did not join", "external cleanup has no exact retained owner",
+    "external exact retained cleanup",
+)
+EXTERNAL_LEASE_CONTROLS = {
+    "missing-lease-cancel-join": (
+        (("routervpn_external_lease_cleanup.go", "\t<-stop.quiesceDone\n", ""),),
+        ("TestRouterVPNExternalLeaseCancelJoinsHeldBarrierAndOriginalData",),
+        "Cancel returned before its actual terminal barrier completed"),
+    "missing-lease-stream-retirement": (
+        (("routervpn_external_policy.go", "connection,ownershipErr = e.keepData(connection)", "ownershipErr = nil"),),
+        (EXTERNAL_SERVER_ROOT + "/lease-stop-retry",),
+        "returned native data stream remained writable after lease cancellation"),
+    "missing-lease-stop-session": (
+        (("experimental/libbox/routervpn/mobilemultihop/lease_cleanup.go",
+          "receipt.Session != s.capture.proposal.SessionID", "false"),),
+        (EXTERNAL_SERVER_ROOT + "/lease-stop-retry",),
+        "unverified original Server stop acknowledgement was accepted"),
+    "missing-lease-terminal-arbitration": (
+        (("routervpn_external_lease_cleanup.go",
+          "owner.transition.Load() == routerVPNExternalLeaseTerminal { return }",
+          "owner.transition.Load() == routerVPNExternalLeaseTerminal {}"),),
+        tuple("TestRouterVPNExternalLeaseInFlightObservationCannotRetireTerminalControl/" + leaf
+              for leaf in ("current-error", "tun-error", "legacy-error")),
+        "in-flight ordinary observation destroyed the separately retained terminal control"),
+    "missing-lease-final-identity": (
+        (("routervpn_external_policy.go",
+          'if !e.ordinaryObservationCurrent() { return "",net.ErrClosed }\n\treturn fmt.Sprintf("%p", e.box), nil',
+          'return fmt.Sprintf("%p", e.box), nil'),
+         ("routervpn_external_policy.go",
+          'if !e.ordinaryObservationCurrent() { return "" }\n\treturn fmt.Sprintf("%p", e.box)',
+          'return fmt.Sprintf("%p", e.box)')),
+        tuple("TestRouterVPNExternalLeaseInFlightObservationCannotRetireTerminalControl/" + leaf
+              for leaf in ("context-success", "legacy-success")),
+        "started-before-Cancel observation published an ordinary identity after terminal retirement"),
+    "missing-lease-failed-admission": (
+        (("routervpn_external_lease_cleanup.go",
+          "owner.data.admission = func() bool { return owner.transition.Load() == routerVPNExternalLeaseActive }",
+          "owner.data.admission = func() bool { return true }"),),
+        ("TestRouterVPNExternalLeaseFailedTransitionDeniesBeforePhysicalCancel",),
+        "failed transition left stream admission waiting behind physical retirement"),
+}
+
 EXTERNAL_SS_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsSSEntryWFP"
 EXTERNAL_SS_ENTRY_NETWORKS = ("shadowsocks", "http-connect", "https-connect", "hysteria2")
 EXTERNAL_SS_ENTRY_LEAVES = ("on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
@@ -121,6 +186,20 @@ LOOPBACK_COMPOSITION = LOOPBACK_SOURCE + ''' else {
 \t\t\t\tdesktopWFPAddress(desktopWFPLocalAddress, address),
 \t\t\t\tdesktopWFPAddress(desktopWFPRemoteAddress, address))...)
 \t\t}'''
+
+
+def external_lease_sources(source):
+    records = {}
+    for relative, name in EXTERNAL_LEASE_SOURCES.items():
+        template = ROOT / "mobile/externalpolicy" / name
+        generated = source / relative
+        if template.is_symlink() or not template.is_file() or generated.is_symlink() or not generated.is_file():
+            raise ValueError("Windows lease scope lost its original generated source: " + relative)
+        expected = template.read_bytes()
+        if generated.read_bytes() != expected:
+            raise ValueError("Windows lease scope differs from shipping bytes: " + relative)
+        records["lease-source/" + relative] = hashlib.sha256(expected).hexdigest()
+    return records
 
 
 def checked_sources(source):
@@ -169,6 +248,7 @@ def checked_sources(source):
             raise ValueError("Ordinary Windows OpenVPN escaped its explicit native test scope")
         records["external_" + name] = hashlib.sha256(native.read_bytes()).hexdigest()
     records.update(OPENVPN_BOX.source_inputs())
+    records.update(external_lease_sources(source))
     records["kernel_runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
 
@@ -231,7 +311,7 @@ def external_overlay(source, directory, mutation=None):
     # scope the durable constructor used by the real external journal owner.
     # No socket, tunnel, proof, TLS or admission operation is replaced.
     scope_mutation = mutants(source)[2] if mutation == "ordinary-udp-deny" else None
-    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent", "missing-socks-release", "missing-socks-readback", "missing-socks-grant-removal"):
+    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent", "missing-socks-release", "missing-socks-readback", "missing-socks-grant-removal") and mutation not in EXTERNAL_LEASE_CONTROLS:
         raise ValueError("Unknown ordinary Hysteria2 native control")
     path = overlay(source, directory, scope_mutation)
     mapping = json.loads(path.read_text(encoding="utf-8"))["Replace"]
@@ -264,6 +344,17 @@ def external_overlay(source, directory, mutation=None):
         copied = directory / "external-missing-native-retirement-readback.go"
         copied.write_text(raw, encoding="utf-8")
         mapping[str(source / relative)] = str(copied)
+    if mutation in EXTERNAL_LEASE_CONTROLS:
+        # Exact isolated copies exercise each shipping defect. No source or
+        # generated cache is changed, and the ordinary WFP overlay stays intact.
+        for relative, before, after in EXTERNAL_LEASE_CONTROLS[mutation][0]:
+            original = source / relative
+            if original.is_symlink() or not original.is_file():
+                raise ValueError("Lease control lost its exact generated source")
+            copied = Path(mapping[str(original)]) if str(original) in mapping else directory / ("lease-" + str(len(mapping)) + ".go")
+            raw = copied.read_text(encoding="utf-8") if str(original) in mapping else original.read_text(encoding="utf-8")
+            copied.write_text(BOOT.IDENTITY.replace_once(raw, before, after), encoding="utf-8")
+            mapping[str(original)] = str(copied)
     path.write_text(json.dumps({"Replace": mapping}, sort_keys=True), encoding="utf-8")
     return path
 
@@ -420,6 +511,12 @@ def report_external_compare(status, output):
         raise ValueError("Paired Windows Router Compare omitted its required native result")
 
 
+def report_external_lease_unit(status, output):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_LEASE_UNIT_CASES) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Windows shipping lease scope omitted its required result")
+
+
 def execute_external_packet(source, workspace, build, captured):
     directory = workspace / "external-packet"
     directory.mkdir()
@@ -430,6 +527,10 @@ def execute_external_packet(source, workspace, build, captured):
     if status:
         raise ValueError("Actual ordinary Windows packet compilation failed:\n" + output[-32768:])
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNExternalLease", "-test.count=1", "-test.timeout=60s", "-test.v"], cwd=source, env=captured, timeout=75)
+    report_external_lease_unit(status, output)
+    if executable_digest(binary) != digest:
+        raise ValueError("Windows shipping lease native executable changed")
     reference = "TestRouterVPNDesktopExternalPacketReference"
     authority = reference + "Authority"
     status, output = BOOT.IDENTITY.run([binary, "-test.run=^(" + reference + "|" + authority + ")$", "-test.count=1", "-test.timeout=60s", "-test.v"],
@@ -489,6 +590,30 @@ def execute_external_packet(source, workspace, build, captured):
             if executable_digest(binary) != control_digest:
                 raise ValueError("Ordinary native control executable changed")
         print("Rejected actual ordinary packet and paired Server native control: " + label, flush=True)
+
+    for label, (_, cases, witness) in EXTERNAL_LEASE_CONTROLS.items():
+        changed = workspace / ("external-packet-" + label)
+        changed.mkdir()
+        selected = external_overlay(source, changed, label)
+        binary = changed / "external-packet.test.exe"
+        status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."],
+            cwd=source, env=captured, timeout=600)
+        if status:
+            raise ValueError("Windows lease control did not compile: " + label + "\n" + output[-16384:])
+        control_digest = executable_digest(binary)
+        roots = {case.split("/")[0] for case in cases}
+        if len(roots) != 1:
+            raise ValueError("Windows lease control has unrelated test owners")
+        expression = "^" + re.escape(next(iter(roots))) + "$"
+        if all("/" in case for case in cases):
+            expression += "/^(" + "|".join(re.escape(case.split("/", 1)[1]) for case in cases) + ")$"
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"],
+            cwd=source, env=captured, timeout=75)
+        if status == 0 or any(not exact_native_verdict(output, "FAIL", case) for case in cases) or output.count(witness) != len(cases) or socks_native_aborted(output) or any(message in output for message in EXTERNAL_LEASE_CLEANUP_FAILURES):
+            raise ValueError("Windows lease control missed its exact defect: " + label + "\n" + output[-16384:])
+        if executable_digest(binary) != control_digest:
+            raise ValueError("Windows lease control executable changed")
+        print("Rejected Windows lease control: " + label, flush=True)
 
 
 def report_external_openvpn(status, output, network):
@@ -639,7 +764,7 @@ PHASE_TIMEOUTS = {
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
-    "external-packet": _PHASE_COMMON + 600 + 75 + 6 * 195 + 2 * (600 + 4 * 75),
+    "external-packet": _PHASE_COMMON + 600 + 2 * 75 + 6 * 195 + 2 * (600 + 4 * 75) + len(EXTERNAL_LEASE_CONTROLS) * (600 + 75),
     "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + 3 * 195 + 4 * (600 + 75),
 }
 _PHASE_IMAGES = {
@@ -653,7 +778,7 @@ _PHASE_IMAGES = {
                            ("", "-ordinary-tcp-deny", "-ordinary-udp-deny", "-missing-durable-intent",
                             "-missing-socket-release", "-missing-endpoint-readback", "-missing-grant-removal")),
     "external-packet": tuple("external-packet" + suffix + "/external-packet.test.exe" for suffix in
-                            ("", "-ordinary-udp-deny", "-missing-durable-intent")),
+                            ("", "-ordinary-udp-deny", "-missing-durable-intent", *("-" + label for label in EXTERNAL_LEASE_CONTROLS))),
     "external-openvpn": tuple("external-openvpn" + suffix + "/external-openvpn.test.exe" for suffix in
                              ("", "-ordinary-udp-deny", "-missing-durable-intent", "-missing-mac-callback", "-missing-session-correlation")),
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
@@ -110,13 +111,19 @@ func (s *Box) RouterVPNDesktopExternalCreateProof(policy *mobilemultihop.Desktop
 	}
 	binding := &routerVPNDesktopExternalBinding{ctx: ctx, policy: policy, network: network, interfaceName: tunOptions.InterfaceName}
 	engine.physical = binding
+	guard := binding.currentContext
+	if runtime.GOOS == "windows" && (capture.Execution == "server" || capture.Execution == "auto") {
+		binding.leaseControl,err = network.CaptureLeaseControl(ctx)
+		if err != nil { return nil,err }
+		guard = binding.leaseControl.Current
+	}
 	bounded, ok := reader.(interface {
 		RouterVPNDesktopMTUContext(context.Context, func(context.Context) error) (string, int, int, error)
 	})
 	if !ok {
 		return nil, errors.New("ordinary desktop TUN lacks its bounded generation guard")
 	}
-	name, index, mtu, err := bounded.RouterVPNDesktopMTUContext(ctx, binding.currentContext)
+	name, index, mtu, err := bounded.RouterVPNDesktopMTUContext(ctx, guard)
 	if err != nil || name == "" || index < 1 || mtu != capture.ConfiguredMTU || binding.interfaceName != "" && name != binding.interfaceName {
 		return nil, errors.New("ordinary desktop native TUN differs from its captured interface policy")
 	}
@@ -126,6 +133,9 @@ func (s *Box) RouterVPNDesktopExternalCreateProof(policy *mobilemultihop.Desktop
 	binding.inbound, binding.reader, binding.name, binding.index, binding.mtu = engine.tun, reader, name, index, mtu
 	if engine.Identity() == "" {
 		return nil, errors.New("ordinary desktop graph retired while binding its native TUN")
+	}
+	if runtime.GOOS == "windows" && (capture.Execution == "server" || capture.Execution == "auto") {
+		engine.leaseCleanup = newRouterVPNExternalLeaseCleanup(engine,binding.sealLeaseCleanup)
 	}
 	request, err := mobilemultihop.NewExternalProofRequest(ctx, policy.OriginalPolicy(), policy.Metadata().SessionID, engine)
 	if err != nil {
@@ -164,6 +174,8 @@ type routerVPNDesktopExternalBinding struct {
 	name          string
 	index, mtu    int
 	detached      bool
+	terminalCleanup *routerVPNDesktopExternalLeaseBarrier
+	leaseControl *routervpndesktoppt.ExternalLeaseControl
 }
 
 func (b *routerVPNDesktopExternalBinding) current() bool {
@@ -228,6 +240,7 @@ func (b *routerVPNDesktopExternalBinding) cancel() {
 }
 
 func (b *routerVPNDesktopExternalBinding) bindTUN(ctx context.Context, reader routerVPNDesktopTorTUN, name string, index uint32) error {
+	if b.terminalCleanup != nil { return errors.New("ordinary desktop TUN entered terminal cleanup") }
 	if err := b.currentContext(ctx); err != nil {
 		return err
 	}
@@ -287,6 +300,7 @@ func (b *routerVPNDesktopExternalBinding) retireTUN(ctx context.Context, expecte
 }
 
 func (b *routerVPNDesktopExternalBinding) adoptTUN(ctx context.Context, current adapter.Inbound) error {
+	if b.terminalCleanup != nil { return errors.New("ordinary desktop TUN entered terminal cleanup") }
 	if err := b.currentContext(ctx); err != nil {
 		return err
 	}
@@ -447,4 +461,69 @@ func (l *RouterVPNExternalMTULease) ClaimDesktopTUNContext(ctx context.Context, 
 		return binding.readbackContext(ctx, e.tun)
 	}
 	return reader.RouterVPNDesktopMTUContext(ctx, guard)
+}
+
+type routerVPNDesktopExternalLeaseBarrier struct {
+	binding *routerVPNDesktopExternalBinding
+	control mobiletor.DesktopSocketLeaseCleanup
+	discarded atomic.Bool
+	// The owning engine lock protects the frozen native reader.
+	frozen bool
+	inbound adapter.Inbound
+	reader routerVPNDesktopTorTUN
+	name string
+	index int
+}
+func (b *routerVPNDesktopExternalBinding) sealLeaseCleanup(ctx context.Context) (routerVPNExternalLeaseBarrier,error) {
+	if runtime.GOOS != "windows" || b == nil || b.network == nil || b.leaseControl == nil {
+		return nil,errors.New("ordinary desktop has no verified terminal lease barrier")
+	}
+	if err := b.currentContext(ctx); err != nil { return nil,err }
+	control,err := b.leaseControl.SealLeaseCleanup(ctx)
+	if err != nil { return nil,err }
+	return &routerVPNDesktopExternalLeaseBarrier{binding:b,control:control},nil
+}
+func (c *routerVPNDesktopExternalLeaseBarrier) Quiesce(ctx context.Context, expected adapter.Inbound) error {
+	if c == nil || c.discarded.Load() || c.control == nil { return errors.New("terminal lease barrier is retired") }
+	b := c.binding
+	if !c.frozen {
+		if b.terminalCleanup != nil { return errors.New("terminal lease barrier belongs to another attempt") }
+		if err := b.leaseControl.Current(ctx); err != nil { return err }
+		if b.detached || b.inbound != expected || b.reader == nil { return errors.New("terminal lease barrier lost its captured TUN") }
+		reader,ok := b.reader.(interface{RouterVPNDesktopMTUInterfaceContext(context.Context)(string,int,int,error)})
+		if !ok { return errors.New("terminal lease barrier has no bounded native TUN readback") }
+		name,index,mtu,err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+		if err != nil { return err }
+		if name != b.name || index != b.index || mtu != b.mtu { return errors.New("terminal lease barrier changed its actual native TUN") }
+		if err := b.leaseControl.Current(ctx); err != nil { return err }
+		c.inbound,c.reader,c.name,c.index,c.frozen = expected,b.reader,name,index,true
+		b.terminalCleanup = c
+	}
+	if b.terminalCleanup != c || expected != c.inbound || b.inbound != c.inbound ||
+		b.reader != c.reader || b.name != c.name || b.index != c.index {
+		return errors.New("terminal lease barrier changed its original reader")
+	}
+	if err := c.control.Quiesce(ctx,c.name,uint32(c.index)); err != nil { return err }
+	b.detached = true
+	return nil
+}
+func (c *routerVPNDesktopExternalLeaseBarrier) Current(ctx context.Context, expected adapter.Inbound) error {
+	if c == nil || c.discarded.Load() || !c.frozen || c.control == nil { return errors.New("terminal lease barrier has no acknowledged reader") }
+	b := c.binding
+	if b.terminalCleanup != c || !b.detached || expected != c.inbound || b.inbound != c.inbound ||
+		b.reader != c.reader || b.name != c.name || b.index != c.index {
+		return errors.New("terminal lease barrier lost its original reader")
+	}
+	return c.control.Current(ctx)
+}
+func (c *routerVPNDesktopExternalLeaseBarrier) Discard() {
+	if c == nil || c.discarded.Swap(true) { return }
+	c.control.Discard()
+	// A terminal barrier is irreversible. Never clear binding.terminalCleanup.
+}
+
+func (c *routerVPNDesktopExternalLeaseBarrier) RevokeData() {
+	if c != nil && c.binding != nil && c.binding.leaseControl != nil {
+		c.binding.leaseControl.RevokeData()
+	}
 }

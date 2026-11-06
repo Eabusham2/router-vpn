@@ -54,6 +54,8 @@ def prepare(vendor, *, mobile=True):
         (vendor/'experimental/libbox/routervpn_external_policy_bridge_test.go').write_bytes((ROOT/'mobile/externalpolicy/bridge_test.go.tmpl').read_bytes())
         (vendor/'experimental/libbox/routervpn_external_policy_graph_test.go').write_bytes((ROOT/'mobile/externalpolicy/graph_test.go.tmpl').read_bytes())
     for source, target in (
+        ('lease_cleanup.go', 'routervpn_external_lease_cleanup.go'),
+        ('lease_cleanup_test.go', 'routervpn_external_lease_cleanup_test.go'),
         ('measurement.go', 'routervpn_external_measurement.go'),
         ('measurement_test.go', 'routervpn_external_measurement_test.go'),
         ('tor_measurement.go', 'routervpn_tor_measurement.go'),

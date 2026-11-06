@@ -1292,3 +1292,86 @@ cross-compilation, exit 0. That cross-compilation does not execute macOS or
 validate the native CGO PF implementation. The exact operation failure and
 any corrective production change still require subsequent native evidence.
 No new release or deployment is established by this diagnostic change.
+
+
+## 2026-11-06 17:19 UTC — retain authenticated Server cleanup through terminal data retirement
+
+This unit addresses the observed Windows Server cleanup failures by separating
+terminal ordinary-data retirement from the original lease's fixed authenticated
+stop operation. The reviewed source is
+`b05511a520229ce8a7166f71bbf8112ef35afb42`, following
+`7516473e7b66ea91a40bf85d611825aba215e054` and
+`459e0beceae362915b10add2f82f0067590073ba`.
+Its twenty-one source/test files are applied to the current normal ancestry
+after `cffeed1211f539e9d38eab3a5b39dc6b12be6754`, preserving the separately
+published OpenVPN fixture and Darwin corrections.
+
+Before the final challenged PUT can have a server-side effect, the controller
+seals an argument-free DELETE capability bound to the original private API,
+token, proposal, challenge, node, session and entry. It does not expose a new
+address-, method-, or body-taking control interface, borrow the ordinary system
+resolver, follow redirects, or accept a different node/session acknowledgement.
+A timed-out PUT retains that original cleanup owner. Active comparison release
+and subsequent reacquisition keep their original separate captures.
+
+The Box lifecycle now arbitrates Active, Terminal and Failed transitions
+atomically. Terminal retirement closes ordinary admission and joins its
+original native retirement barrier and entered data I/O before the captured
+stop request can run. A stale observation which began before Cancel cannot
+destroy that separately retained terminal capability or publish a late
+ordinary identity. Genuine owner loss or replacement still fails closed and
+immediately denies admission, including while physical retirement is blocked.
+Windows retirement proves the original TUN/WFP keys absent and the baseline
+present; it cannot rebind the retired TUN. A failed or expired barrier does not
+authorize DELETE. A failed close, ambiguous acknowledgement, or unfinished
+original operation retains the owner for cleanup rather than substituting a
+new stream or declaring that expiry proved success. Non-Windows behavior where
+the native barrier is not required remains separate.
+
+The shipping generated-source checks include the exact new lease files and
+their existing fixture dependencies. The Windows gate preserves its Local
+and Compare inventories and the current twenty-five Server verdicts. Six
+causal variants are registered: four portable Box lifecycle controls and two
+actual native Server/WFP controls. Every control rejects unrelated panic,
+race, timeout and cleanup failures as substitutes for its intended witness.
+No production or per-process test timeout was increased.
+
+**Executed validation, with its limits:**
+
+- Shared lease tests under Go 1.26.3 `-race`: fourteen parent tests and
+  twenty-one child verdicts passed in 2.025 seconds at `7516473e`. The
+  successor changes only a generated Box test's join ordering.
+- Fresh official desktop preparation at the reviewed `b05511a5` source
+  verified all 2,179 captured source records. Pinned core
+  `1ac1a339cb1223e9c70eae14c44411c75033c02d`, Xray
+  `50231eaff98ccc31b5cbd247a721c16e97fe5ec1`, Go 1.26.3; desktop input
+  digest `a918385cfbfa9bfaae4dc1ab3ac2ec56a41ba9f367dfa73ba14d1bad3b3f0781`.
+- The real generated Box compiled with its pinned feature tags and
+  `-race -mod=readonly` in 49.662 seconds. All twenty-one required
+  `TestRouterVPNExternalLease` verdicts passed in 1.462 seconds.
+  The 137,446,584-byte baseline image has SHA256
+  `2cc16d613944cf2e6356f7ff6e85488b1017074f9b4cbc759f3198bd14620abc`.
+- Four independently compiled broken Box variants were rejected for the
+  intended missing Cancel join, terminal arbitration, final identity guards,
+  and immediate Failed-state admission. Their seven designated leaf failures
+  all appeared without cleanup errors or panic. Compile durations were
+  44.842–49.468 seconds; executions were 0.064–3.075 seconds. These are
+  Linux/AMD64 Box/control results, not executed Windows WFP evidence.
+- Twenty-four selected runner scope/orchestration/OpenVPN witness tests and
+  eight native-node source-scope tests passed. Windows AMD64 and ARM64
+  `internal/mobiletor` test binaries cross-compiled successfully with
+  CGO disabled. Cross-compilation does not execute either native platform.
+
+The first missing-final-identity causal attempt correctly exposed a test
+cleanup defect: its fatal assertion ran before the original cancellation
+worker joined. The final review moves that join before evaluating the
+captured failure result, without changing production behavior; all corrected
+controls were rerun. A full-preparer re-entry also proved non-idempotent after
+its final module tidy and left an incomplete MTU projection. That tree was
+not compiled or accepted. A fresh official checkout/preparation supplied the
+verified final tree; no checksum or generated-source check was weakened.
+
+The two actual Windows Server/WFP causal controls and complete native packet
+execution remain pending exact-source CI. No all-platform release, private
+deployment, or physical-device acceptance is established by these local
+results. The larger requirement ledger remains open.

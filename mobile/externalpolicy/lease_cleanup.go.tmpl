@@ -1,0 +1,459 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// This capability is installed only by the Windows factory backed by its
+// original native policy. Other factories retain their existing behavior.
+type routerVPNExternalLeaseBarrier interface {
+	RevokeData()
+	Quiesce(context.Context, adapter.Inbound) error
+	Current(context.Context, adapter.Inbound) error
+	Discard()
+}
+type routerVPNExternalLeaseBarrierFactory func(context.Context) (routerVPNExternalLeaseBarrier, error)
+
+// Ordinary operations and their returned streams belong to a separate scope
+// from the argument-free remote stop. Retaining WireGuard for that stop must
+// not retain a previously returned measurement or proof stream.
+type routerVPNExternalDataScope struct {
+	mu sync.Mutex
+	ctx context.Context
+	cancel context.CancelFunc
+	retired atomic.Bool
+	admission func() bool // Immutable original transition guard, installed before publication.
+	pending int
+	connections map[*routerVPNExternalDataConn]bool
+	drained chan struct{}
+	drainedOnce sync.Once
+	changed chan struct{}
+}
+func newRouterVPNExternalDataScope(parent context.Context) *routerVPNExternalDataScope {
+	ctx, cancel := context.WithCancel(parent)
+	return &routerVPNExternalDataScope{ctx:ctx, cancel:cancel,
+		connections:make(map[*routerVPNExternalDataConn]bool), drained:make(chan struct{}),changed:make(chan struct{},1)}
+}
+func (s *routerVPNExternalDataScope) admitted() bool { return s.admission == nil || s.admission() }
+func (s *routerVPNExternalDataScope) notify() {
+	select { case s.changed <- struct{}{}: default: }
+}
+func (s *routerVPNExternalDataScope) checkDrainedLocked() {
+	if s.retired.Load() && s.pending == 0 && len(s.connections) == 0 {
+		s.drainedOnce.Do(func(){close(s.drained)})
+	}
+	s.notify()
+}
+func (s *routerVPNExternalDataScope) begin(parent context.Context) (context.Context, func(), error) {
+	if parent == nil || parent.Err() != nil || !s.admitted() { return nil, nil, net.ErrClosed }
+	s.mu.Lock()
+	if s.retired.Load() || s.ctx.Err() != nil || !s.admitted() {
+		s.mu.Unlock()
+		return nil, nil, net.ErrClosed
+	}
+	s.pending++
+	s.mu.Unlock()
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(s.ctx, cancel)
+	var once sync.Once
+	finish := func() {
+		once.Do(func() {
+			stop()
+			cancel()
+			s.mu.Lock()
+			s.pending--
+			s.checkDrainedLocked()
+			s.mu.Unlock()
+		})
+	}
+	if s.retired.Load() || ctx.Err() != nil || !s.admitted() {
+		finish()
+		return nil, nil, net.ErrClosed
+	}
+	return ctx, finish, nil
+}
+func (s *routerVPNExternalDataScope) beginIO() (func(), error) {
+	if !s.admitted() { return nil,net.ErrClosed }
+	s.mu.Lock()
+	if s.retired.Load() || s.ctx.Err() != nil || !s.admitted() {
+		s.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	s.pending++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		s.pending--
+		s.checkDrainedLocked()
+		s.mu.Unlock()
+	}, nil
+}
+func (s *routerVPNExternalDataScope) keep(connection net.Conn) (net.Conn, error) {
+	if connection == nil { return nil, errors.New("external data dial returned no owned stream") }
+	owned := &routerVPNExternalDataConn{Conn:connection, scope:s}
+	s.mu.Lock()
+	// Every caller holds an entered data operation until keep returns. Thus
+	// a late returned socket cannot arrive after the scope has acknowledged drain.
+	if s.pending == 0 {
+		s.mu.Unlock()
+		return nil,errors.Join(errors.New("external stream has no entered original operation"),connection.Close())
+	}
+	retired := s.retired.Load() || s.ctx.Err() != nil || !s.admitted()
+	s.connections[owned] = true
+	s.notify()
+	s.mu.Unlock()
+	if retired {
+		owned.startClose()
+		return owned,net.ErrClosed
+	}
+	return owned, nil
+}
+func (s *routerVPNExternalDataScope) retire() {
+	s.mu.Lock()
+	if s.retired.Swap(true) {
+		s.mu.Unlock()
+		return
+	}
+	connections := make([]*routerVPNExternalDataConn,0,len(s.connections))
+	for connection := range s.connections { connections = append(connections, connection) }
+	s.checkDrainedLocked()
+	s.mu.Unlock()
+	s.cancel()
+	for _, connection := range connections { connection.startClose() }
+}
+func (s *routerVPNExternalDataScope) wait(ctx context.Context) error {
+	if ctx == nil || !s.retired.Load() { return net.ErrClosed }
+	attempts := make(map[*routerVPNExternalDataConn]*routerVPNExternalDataClose)
+	for {
+		if err := ctx.Err(); err != nil { return err }
+		s.mu.Lock()
+		connections := make([]*routerVPNExternalDataConn,0,len(s.connections))
+		for connection := range s.connections { connections = append(connections,connection) }
+		s.mu.Unlock()
+		for _,connection := range connections {
+			if attempts[connection] == nil { attempts[connection] = connection.startClose() }
+		}
+		for _,attempt := range attempts {
+			select {
+			case <-attempt.done:
+				if attempt.err != nil && !errors.Is(attempt.err,net.ErrClosed) { return attempt.err }
+			default:
+			}
+		}
+		select {
+		case <-ctx.Done(): return ctx.Err()
+		case <-s.drained: return ctx.Err()
+		case <-s.changed:
+		}
+	}
+}
+type routerVPNExternalDataClose struct {
+	done chan struct{}
+	err error
+}
+type routerVPNExternalDataConn struct {
+	net.Conn
+	scope *routerVPNExternalDataScope
+	mu sync.Mutex
+	closed bool
+	closing *routerVPNExternalDataClose
+}
+func (c *routerVPNExternalDataConn) Read(p []byte) (int,error) {
+	finish,err := c.scope.beginIO()
+	if err != nil { return 0,err }
+	defer finish()
+	return c.Conn.Read(p)
+}
+func (c *routerVPNExternalDataConn) Write(p []byte) (int,error) {
+	finish,err := c.scope.beginIO()
+	if err != nil { return 0,err }
+	defer finish()
+	return c.Conn.Write(p)
+}
+func (c *routerVPNExternalDataConn) startClose() *routerVPNExternalDataClose {
+	c.mu.Lock()
+	if c.closing != nil {
+		if c.closed {
+			existing := c.closing
+			c.mu.Unlock()
+			return existing
+		}
+		select {
+		case <-c.closing.done:
+			// A failed close remains owned. A later explicit cleanup attempt
+			// retries that same connection object, never a numeric handle.
+		default:
+			existing := c.closing
+			c.mu.Unlock()
+			return existing
+		}
+	}
+	attempt := &routerVPNExternalDataClose{done:make(chan struct{})}
+	c.closing = attempt
+	c.mu.Unlock()
+	go func() {
+		attempt.err = c.Conn.Close()
+		closed := attempt.err == nil || errors.Is(attempt.err,net.ErrClosed)
+		c.mu.Lock()
+		c.closed = closed
+		c.mu.Unlock()
+		if closed {
+			c.scope.mu.Lock()
+			delete(c.scope.connections,c)
+			close(attempt.done)
+			c.scope.checkDrainedLocked()
+			c.scope.mu.Unlock()
+		} else {
+			close(attempt.done)
+			c.scope.notify()
+		}
+	}()
+	return attempt
+}
+func (c *routerVPNExternalDataConn) Close() error {
+	attempt := c.startClose()
+	<-attempt.done
+	return attempt.err
+}
+
+func (e *routerVPNExternalNativeEngine) beginData(ctx context.Context) (context.Context,func(),error) {
+	if e == nil { return nil,nil,net.ErrClosed }
+	if e.leaseCleanup == nil { return ctx,func(){},nil }
+	return e.leaseCleanup.data.begin(ctx)
+}
+func (e *routerVPNExternalNativeEngine) keepData(connection net.Conn) (net.Conn,error) {
+	if e.leaseCleanup == nil { return connection,nil }
+	return e.leaseCleanup.data.keep(connection)
+}
+func (e *routerVPNExternalNativeEngine) dataRetired() bool {
+	return e != nil && e.leaseCleanup != nil && e.leaseCleanup.data.retired.Load()
+}
+
+// One irreversible transition linearizes ordinary failure against terminal
+// cancellation. A second retired-flag read would still allow failure revocation
+// to race after Cancel; a mutex wait here would change bounded observations.
+const (
+	routerVPNExternalLeaseActive uint32 = iota
+	routerVPNExternalLeaseTerminal
+	routerVPNExternalLeaseFailed
+)
+func (e *routerVPNExternalNativeEngine) revokeOrdinaryOwner(observation bool) {
+	if e == nil || e.physical == nil { return }
+	if owner := e.leaseCleanup; owner != nil {
+		if !owner.transition.CompareAndSwap(routerVPNExternalLeaseActive,routerVPNExternalLeaseFailed) &&
+			owner.transition.Load() == routerVPNExternalLeaseTerminal { return }
+		owner.data.retire()
+	}
+	if observation { e.physical.cancelObservation() } else { e.physical.cancel() }
+}
+func (e *routerVPNExternalNativeEngine) ordinaryObservationCurrent() bool {
+	if e == nil { return false }
+	if owner := e.leaseCleanup; owner != nil {
+		return owner.transition.Load() == routerVPNExternalLeaseActive && !owner.data.retired.Load()
+	}
+	return true
+}
+
+type routerVPNExternalLeaseCleanup struct {
+	transition atomic.Uint32
+	engine *routerVPNExternalNativeEngine
+	factory routerVPNExternalLeaseBarrierFactory
+	data *routerVPNExternalDataScope
+	mu sync.Mutex
+	pending *routerVPNExternalLeaseStop
+}
+type routerVPNExternalLeaseStop struct {
+	owner *routerVPNExternalLeaseCleanup
+	barrier routerVPNExternalLeaseBarrier
+	entry adapter.Outbound
+	tag, address string
+	discarded atomic.Bool
+	quiesceOnce sync.Once
+	quiesceDone chan struct{}
+	quiesceErr error
+	tun adapter.Inbound // Captured once under engine.mu at terminal transition.
+}
+func newRouterVPNExternalLeaseCleanup(engine *routerVPNExternalNativeEngine, factory routerVPNExternalLeaseBarrierFactory) *routerVPNExternalLeaseCleanup {
+	owner := &routerVPNExternalLeaseCleanup{engine:engine, factory:factory, data:newRouterVPNExternalDataScope(engine.box.ctx)}
+	owner.data.admission = func() bool { return owner.transition.Load() == routerVPNExternalLeaseActive }
+	return owner
+}
+func (e *routerVPNExternalNativeEngine) LeaseStopRequired() bool {
+	return e != nil && e.leaseCleanup != nil
+}
+func (e *routerVPNExternalNativeEngine) CaptureLeaseStop(ctx context.Context, capture mobilemultihop.LeaseStopCapture) (mobilemultihop.LeaseStop,error) {
+	if e == nil || e.leaseCleanup == nil { return nil,errors.New("native lease stop is not supported by this factory") }
+	if _,err := e.IdentityContext(ctx); err != nil { return nil,err }
+	tag,address := capture.Route()
+	if tag == "" || tag != e.entryTag || e.routes[tag] == nil {
+		return nil,errors.New("native lease stop is not the original entry route")
+	}
+	owner := e.leaseCleanup
+	barrier,err := owner.factory(ctx)
+	if err != nil { return nil,err }
+	if barrier == nil { return nil,errors.New("native lease stop has no terminal barrier") }
+	stop := &routerVPNExternalLeaseStop{owner:owner, barrier:barrier, entry:e.routes[tag],
+		tag:tag,address:address,quiesceDone:make(chan struct{})}
+	sealed,err := mobilemultihop.NewOwnedLeaseStop(capture,stop.dial,stop.current,stop.discard)
+	if err != nil { barrier.Discard(); return nil,err }
+	if err := adapter.RouterVPNLockContext(ctx,&owner.mu); err != nil {
+		barrier.Discard()
+		return nil,err
+	}
+	if owner.transition.Load() != routerVPNExternalLeaseActive || owner.data.retired.Load() || owner.pending != nil {
+		owner.mu.Unlock()
+		barrier.Discard()
+		return nil,errors.New("native lease stop factory already retired or owns another attempt")
+	}
+	owner.pending = stop
+	owner.mu.Unlock()
+	if _,err := e.IdentityContext(ctx); err != nil {
+		sealed.Discard()
+		return nil,err
+	}
+	return sealed,nil
+}
+func (o *routerVPNExternalLeaseCleanup) cancel() {
+	o.mu.Lock()
+	terminal := o.transition.CompareAndSwap(routerVPNExternalLeaseActive,routerVPNExternalLeaseTerminal) ||
+		o.transition.Load() == routerVPNExternalLeaseTerminal
+	o.data.retire()
+	stop := o.pending
+	if stop != nil { stop.barrier.RevokeData() }
+	o.mu.Unlock()
+	if stop == nil || !terminal {
+		o.engine.physical.cancel()
+		return
+	}
+	stop.startQuiescence()
+	// Cancel returns only after the one bounded original WFP barrier has
+	// acknowledged removal, or its failure has revoked the original lower.
+	<-stop.quiesceDone
+}
+func (s *routerVPNExternalLeaseStop) discard() {
+	if s.discarded.Swap(true) { return }
+	s.barrier.Discard()
+	o := s.owner
+	o.mu.Lock()
+	if o.pending == s { o.pending = nil }
+	retired := o.data.retired.Load()
+	o.mu.Unlock()
+	if retired { o.engine.physical.cancel() }
+}
+func (s *routerVPNExternalLeaseStop) startQuiescence() {
+	s.quiesceOnce.Do(func() {
+		go func() {
+			defer close(s.quiesceDone)
+			ctx,cancel := context.WithTimeout(context.Background(),3*time.Second)
+			defer cancel()
+			e := s.owner.engine
+			if err := adapter.RouterVPNWriteLockContext(ctx,&e.mu); err != nil {
+				s.quiesceErr = err
+			} else {
+				if s.discarded.Load() || !s.owner.data.retired.Load() {
+					s.quiesceErr = net.ErrClosed
+				} else {
+					s.tun = e.tun
+					s.quiesceErr = s.barrier.Quiesce(ctx,s.tun)
+				}
+				e.mu.Unlock()
+			}
+			if s.quiesceErr != nil {
+				// An unproved TUN barrier cannot retain a physical data path.
+				// Keep the original lease/token as unresolved ownership; never
+				// revive a canceled native source or dial around it.
+				e.physical.cancel()
+			}
+		}()
+	})
+}
+func (s *routerVPNExternalLeaseStop) stillOwned(ctx context.Context) error {
+	if s == nil || ctx == nil || ctx.Err() != nil || s.discarded.Load() { return net.ErrClosed }
+	o := s.owner
+	if err := adapter.RouterVPNLockContext(ctx,&o.mu); err != nil { return err }
+	current := o.pending == s && o.transition.Load() != routerVPNExternalLeaseFailed
+	o.mu.Unlock()
+	if !current { return errors.New("native lease stop belongs to another attempt") }
+	return nil
+}
+func (s *routerVPNExternalLeaseStop) current(ctx context.Context) error {
+	if err := s.stillOwned(ctx); err != nil { return err }
+	o,e := s.owner,s.owner.engine
+	if !o.data.retired.Load() {
+		if _,err := e.IdentityContext(ctx); err != nil { return err }
+		return s.stillOwned(ctx)
+	}
+	s.startQuiescence()
+	select {
+	case <-ctx.Done(): return ctx.Err()
+	case <-s.quiesceDone:
+	}
+	if s.quiesceErr != nil { return s.quiesceErr }
+	if err := o.data.wait(ctx); err != nil {
+		if !mobiletor.ObservationContextExpired(ctx,err) { e.physical.cancel() }
+		return err
+	}
+	if err := adapter.RouterVPNRLockContext(ctx,&e.mu); err != nil { return err }
+	defer e.mu.RUnlock()
+	if err := s.retainedGraph(ctx); err != nil { return err }
+	if err := s.barrier.Current(ctx,s.tun); err != nil {
+		if !mobiletor.ObservationContextExpired(ctx,err) { e.physical.cancelObservation() }
+		return err
+	}
+	return s.stillOwned(ctx)
+}
+
+// This is not an Engine identity. It authorizes only this sealed stop after
+// ordinary operations have drained and the exact terminal barrier is current.
+func (s *routerVPNExternalLeaseStop) retainedGraph(ctx context.Context) error {
+	e := s.owner.engine
+	if e == nil { return errors.New("native lease stop lost its original graph") }
+	invalid := func() error {
+		if e.physical != nil { e.physical.cancelObservation() }
+		return errors.New("native lease stop captured graph was replaced")
+	}
+	if e.box == nil || e.box.ctx.Err() != nil || e.tun != s.tun ||
+		e.routes[s.tag] != s.entry || e.physical == nil { return invalid() }
+	select { case <-e.box.done: return invalid(); default: }
+	for tag,owner := range e.owners {
+		actual,found,err := adapter.RouterVPNOutboundContext(ctx,e.box.outbound,tag)
+		if err != nil { return err }
+		if !found || actual != owner { return invalid() }
+	}
+	for tag,owner := range e.dns {
+		actual,found,err := adapter.RouterVPNTransportContext(ctx,e.box.dnsTransport,tag)
+		if err != nil { return err }
+		if !found || actual != owner { return invalid() }
+	}
+	for tag,owner := range e.services {
+		actual,found,err := adapter.RouterVPNServiceContext(ctx,e.box.service,tag)
+		if err != nil { return err }
+		if !found || actual != owner { return invalid() }
+	}
+	actual,found,err := adapter.RouterVPNInboundContext(ctx,e.box.inbound,e.tunTag)
+	if err != nil { return err }
+	if !found || actual != s.tun { return invalid() }
+	return ctx.Err()
+}
+func (s *routerVPNExternalLeaseStop) dial(ctx context.Context) (net.Conn,error) {
+	if err := s.current(ctx); err != nil { return nil,err }
+	connection,err := s.entry.DialContext(ctx,"tcp",M.ParseSocksaddr(s.address))
+	currentErr := s.current(ctx)
+	if err != nil || currentErr != nil || ctx.Err() != nil {
+		// The fixed shared stop retains every nonnil error-path stream before
+		// attempting Close; preserve its only original reference here.
+		return connection,errors.Join(err,currentErr,ctx.Err(),errors.New("native lease stop lost its retained entry stream"))
+	}
+	if connection == nil { return nil,errors.New("native lease stop returned no original stream") }
+	return connection,nil
+}
