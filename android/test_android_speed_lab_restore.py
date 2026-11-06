@@ -51,6 +51,10 @@ final class AndroidMultihopRuntime {
  // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  String execution="local",selected="local",serverPins="original-public-pins";
+ // This fixture owns paired Router multihop only. Imported-entry runtime
+ // capture/launch is exercised by the separate shipping imported-path gates.
+ AndroidStandardExitStore.Entry capturedOrdinaryEntry(AndroidHomeStateStore.Snapshot home){if("multihop".equals(home.logicalMode)&&!NativeSingBoxController.nativeMultihopEntry(home.activeEntryMode))throw new AssertionError("paired Speed Lab fixture cannot supply an imported native owner");return null;}
+ void connectImported(AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit,String mode,String execution,Callback cb){throw new AssertionError("paired Speed Lab fixture cannot launch an imported native graph");}
  RestoreCapture captureRestore(AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home)throws Exception{return new RestoreCapture(execution,selected,home,a,b,serverPins);}
  boolean captureCurrent(RestoreCapture capture){return capture!=null&&capture.owner.matchesHome(AndroidHomeStateStore.current)&&capture.owner.pins.equals(serverPins)&&capture.policy.equals(execution)&&capture.selected.equals(selected);}
  boolean restoredMatches(RestoreCapture capture,AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home){try{capture.require(a,b);return capture.policy.equals(execution)&&capture.selected.equals(selected)&&capture.owner.pins.equals(serverPins)&&capture.owner.entryMode.equals(home.activeEntryMode)&&capture.owner.exitMode.equals(home.runtimeMode);}catch(Exception changed){return false;}}
