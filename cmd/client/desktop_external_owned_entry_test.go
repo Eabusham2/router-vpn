@@ -295,15 +295,27 @@ func TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner(t *testing.T
 				f, p, e := windowsSSEntryHostFixture(t, protocol, "always")
 				a, k := f.base.a, f.base.kernel
 				off := &desktopProtectionOffFixture{a: a, slot: a.nodeProtection, kernel: k, profile: p}
-				a.nodeProtection.backend.recover = func(ctx context.Context, target mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error) {
+				a.nodeProtection.backend.recoverWithBarrier = func(ctx context.Context, target mobiletor.DesktopWindowsProtectionTarget, barrier mobiletor.DesktopWindowsProtectionCommitBarrier) (desktopNodeProtectionRelease, error) {
 					off.calls++
-					if ctx.Err() != nil || k.locked || k.target == nil || *k.target != target {
+					if ctx.Err() != nil || barrier == nil || k.locked || k.target == nil || *k.target != target {
 						return nil, errors.New("paired Off replaced its original joined target")
 					}
 					owner := &desktopProtectionOffFixtureOwner{fixture: off, target: target, armed: true}
+					off.beforeClose = func(ctx context.Context) error {
+						if err := barrier(ctx, mobiletor.DesktopWindowsProtectionCommit{Action: "off", Previous: copyDesktopNodeProtectionTarget(&target)}); err != nil {
+							return err
+						}
+						if f.store.head.Phase != "intent" || f.store.head.Intent == nil || f.store.head.Intent.Action != "off" || f.store.head.Committed.Target == nil || *f.store.head.Committed.Target != target {
+							return errors.New("paired Off removal preceded its exact durable intent")
+						}
+						return nil
+					}
 					off.owners = append(off.owners, owner)
 					k.locked = true
 					return owner, nil
+				}
+				a.nodeProtection.backend.recover = func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error) {
+					return nil, errors.New("paired durable Off used callback-free native removal")
 				}
 				connected := windowsSSEntryConnect(f, p, e)
 				if connected.Code != http.StatusOK {
