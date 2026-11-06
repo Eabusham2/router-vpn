@@ -9,6 +9,7 @@ import (
 	"errors"
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativecomposite"
 	"strings"
 	"unicode/utf8"
 )
@@ -134,6 +135,15 @@ func CompileProxyEntry(profile, mode string) (string, error) {
 		return "", bad
 	}
 	used := map[string]bool{"sing-box.json": true}
+	if _, present := assets[nativecomposite.SSServiceAsset]; present {
+		if mode != "shadowsocks" {
+			return "", bad
+		}
+		if err := nativecomposite.ValidateSSServiceCompanion(assets["sing-box.json"], assets[nativecomposite.SSServiceAsset], ""); err != nil {
+			return "", err
+		}
+		used[nativecomposite.SSServiceAsset] = true
+	}
 	if mode == "hysteria2" || multihoprelay.NaiveMode(mode) {
 		tls, ok := entry["tls"].(map[string]any)
 		if !ok {

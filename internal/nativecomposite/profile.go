@@ -130,8 +130,18 @@ func Compile(mode, profile, metadata, start string) (string, error) {
 	}
 	if layer != "" {
 		assets, err := decodeProfile(start)
-		if err != nil || len(assets) != 1 || len(assets["sing-box.json"]) == 0 {
+		defer func() {
+			for _, data := range assets {
+				clear(data)
+			}
+		}()
+		if err != nil || (len(assets) != 1 && len(assets) != 2) || len(assets["sing-box.json"]) == 0 {
 			return "", errors.New("composite Start Layer requires its exact generated AES source")
+		}
+		if len(assets) == 2 {
+			if err := ValidateSSServiceCompanion(assets["sing-box.json"], assets[SSServiceAsset], policy["node_id"].(string)); err != nil {
+				return "", err
+			}
 		}
 		parameters, _ := json.Marshal(map[string]any{"mode": layer, "raw_mode": mode, "node_kind": "router-vpn", "router_api": policy["router_api"]})
 		if mode == "ss-v2ray" {

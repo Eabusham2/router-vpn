@@ -1,4 +1,8 @@
 import Foundation
+import CoreFoundation
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 /// Captures a selected entry's Start Layer before any asynchronous work. The
 /// native compiler validates its encryption, peer identity and graph ownership.
@@ -21,16 +25,57 @@ enum IOSMultihopStartLayer {
         }
     }
 
+    /// Configured service authority is passive here. It never establishes live
+    /// readiness or enables UoT on an ordinary captured Start Layer.
+    static func validateCapturedSSService(_ files: [String: String], node: String? = nil) throws {
+        let bad = "Captured SS service declaration must match its original paired source."
+        guard Set(files.keys) == Set(["sing-box.json", "routervpn-ss-service.json"]),
+              let encoded = files["sing-box.json"], let encodedClaim = files["routervpn-ss-service.json"],
+              let base = Data(base64Encoded: encoded), let data = Data(base64Encoded: encodedClaim),
+              base.count <= 4 * 1024 * 1024, data.count <= 16384,
+              base.base64EncodedString() == encoded, data.base64EncodedString() == encodedClaim,
+              let original = try JSONSerialization.jsonObject(with: base) as? [String: Any],
+              let claim = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(claim.keys) == Set(["schema","node_id","configured_image","uot_version","endpoint","port","method","key_sha256","source_sha256"]),
+              let schema = claim["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.doubleValue == 1,
+              let version = claim["uot_version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(), version.doubleValue == 2,
+              claim["configured_image"] as? String == "ghcr.io/sagernet/sing-box:v1.13.12",
+              let owner = claim["node_id"] as? String, owner.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+              node == nil || node == owner,
+              let rows = original["outbounds"] as? [[String: Any]], rows.filter({$0["tag"] as? String == "proxy"}).count == 1,
+              let out = rows.first(where: {$0["tag"] as? String == "proxy"}),
+              Set(out.keys) == Set(["type","tag","server","server_port","method","password"]),
+              out["type"] as? String == "shadowsocks", out["method"] as? String == "2022-blake3-aes-256-gcm",
+              let endpoint = out["server"] as? String, !endpoint.isEmpty, claim["endpoint"] as? String == endpoint,
+              let port = out["server_port"] as? NSNumber, CFGetTypeID(port) != CFBooleanGetTypeID(), port.doubleValue >= 1, port.doubleValue <= 65535, port.doubleValue == Double(port.intValue),
+              let capturedPort = claim["port"] as? NSNumber, CFGetTypeID(capturedPort) != CFBooleanGetTypeID(), capturedPort == port,
+              claim["method"] as? String == out["method"] as? String,
+              let key = out["password"] as? String, !key.isEmpty else { throw issue(bad) }
+        #if canImport(CryptoKit)
+        let sourceHash = CryptoKit.SHA256.hash(data: base).map { String(format: "%02x", $0) }.joined()
+        let keyHash = CryptoKit.SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        guard claim["source_sha256"] as? String == sourceHash, claim["key_sha256"] as? String == keyHash else { throw issue(bad) }
+        #else
+        throw issue("Captured SS service validation requires the platform SHA-256 provider.")
+        #endif
+    }
     static func capture(profile: [String: Any], profiles: [String: [String: String]]) throws -> Capture {
         let mode = try selected(profile)
         if mode == "off" { return Capture(mode: mode, source: nil, graphProfile: profile) }
         let rawKind = profile["node_kind"] ?? "router-vpn"
         guard let kind = rawKind as? String else { throw issue("Invalid captured node kind.") }
-        guard kind == "router-vpn", let assets = profiles["shadowsocks"], assets.count == 1,
+        guard kind == "router-vpn", let assets = profiles["shadowsocks"], (assets.count == 1 || assets.count == 2),
               let encoded = assets["sing-box.json"], !encoded.isEmpty, encoded.utf8.count < maximumBytes,
               let raw = Data(base64Encoded: encoded, options: []), !raw.isEmpty,
               raw.base64EncodedString() == encoded, String(data: raw, encoding: .utf8) != nil else {
             throw issue("Entry Start Layer requires the exact bounded AES assets of the captured home node.")
+        }
+        if assets.count == 2 {
+            guard let node = profile["node_proof_id"] as? String,
+                  node.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
+                throw issue("Captured SS service requires its original paired node identity.")
+            }
+            try validateCapturedSSService(assets, node: node)
         }
         let bytes = try JSONSerialization.data(withJSONObject: ["mode": mode, "profile": assets], options: [.sortedKeys])
         guard bytes.count <= maximumBytes else { throw issue("Captured entry layer exceeds its private input bound.") }

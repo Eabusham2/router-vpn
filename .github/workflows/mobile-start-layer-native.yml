@@ -3,6 +3,10 @@ on:
   push:
     paths:
       - 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'
+      - 'ios/RouterVPN/App/IOSMultihopStartLayer.swift'
+      - 'internal/nativecomposite/**'
+      - 'deploy/test_ios_ss_service_asset.py'
+      - 'deploy/ios_test_crypto_bridge.py'
       - 'deploy/test_ios_start_layer.py'
       - 'internal/startwhitening/**'
       - 'internal/mobilemultihop/**'
@@ -43,6 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           go test -race -count=1 ./internal/startwhitening ./cmd/start-layer-relay
+          go test -race -count=1 ./internal/nativecomposite ./internal/mobilemultihop -run TestPairedSSServiceCompanion
           python3 deploy/test_prepare_mobile_whitening.py
           python3 deploy/test_native_runner_dependencies.py
           SING="$RUNNER_TEMP/routervpn-whitening-core"
@@ -59,4 +64,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Execute actual Swift Start Layer composition
-        run: python3 deploy/test_ios_start_layer.py
+        run: |
+          python3 deploy/test_ios_start_layer.py
+          python3 deploy/test_ios_ss_service_asset.py

@@ -10,6 +10,7 @@ import (
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/mobileperf"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativecomposite"
 )
 
 // NodeProfile is one complete, private, single-system-TUN configuration. It is
@@ -93,15 +94,32 @@ func NewNodeProfile(mode, files, profileJSON, start, dnsBootstrap string) (*Node
 			clear(data)
 		}
 	}()
+	if claim, present := assets[nativecomposite.SSServiceAsset]; present {
+		if mode != "shadowsocks" {
+			return nil, errors.New("SS service declaration attached to a foreign mode")
+		}
+		if err := nativecomposite.ValidateSSServiceCompanion(assets["sing-box.json"], claim, predecessorText(profile, "node_proof_id")); err != nil {
+			return nil, err
+		}
+	}
 	policy, _ := json.Marshal(map[string]any{"mode": layer, "raw_mode": mode, "node_kind": "router-vpn", "router_api": api})
 	var aes []byte
 	if start != "" {
 		captured, err := nodeProfileAssets(start)
-		if err != nil || len(captured) != 1 || len(captured["sing-box.json"]) == 0 {
+		defer func() {
+			for _, data := range captured {
+				clear(data)
+			}
+		}()
+		if err != nil || (len(captured) != 1 && len(captured) != 2) || len(captured["sing-box.json"]) == 0 {
 			return nil, errors.New("native Start Layer requires its one exact AES source")
 		}
+		if len(captured) == 2 {
+			if err := nativecomposite.ValidateSSServiceCompanion(captured["sing-box.json"], captured[nativecomposite.SSServiceAsset], predecessorText(profile, "node_proof_id")); err != nil {
+				return nil, err
+			}
+		}
 		aes = captured["sing-box.json"]
-		defer clear(aes)
 	} else if layer != "" && !MAXMode(mode) && mode != "shadowsocks" {
 		return nil, errors.New("selected Start Layer source is missing")
 	}
