@@ -9,6 +9,7 @@ import (
 	"github.com/miekg/dns"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -54,6 +55,31 @@ func main() {
 		name := question.Name
 		if name == "." && question.Qtype == dns.TypeDNSKEY {
 			m.Answer = sign([]dns.RR{key}, false)
+		} else if strings.HasPrefix(name, "host.") && strings.Count(name, ".") == 3 && (question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
+			if question.Qtype == dns.TypeA {
+				m.Answer = []dns.RR{rr(name + " 60 IN A 192.0.2.9")}
+			} else {
+				m.Answer = []dns.RR{rr(name + " 60 IN AAAA 2001:db8::9")}
+			}
+		} else if question.Qtype == dns.TypeDS && (strings.HasSuffix(name, ".private.") || strings.HasSuffix(name, ".forged.")) {
+			m.Ns = []dns.RR{rr("zone.private. 60 IN SOA ns.private. hostmaster.private. 1 60 60 60 60")}
+			if strings.Contains(name, "positive.") {
+				record := key.ToDS(dns.SHA256)
+				record.Hdr.Name = name
+				m.Answer = []dns.RR{record}
+			}
+			if strings.Contains(name, "signed.") {
+				m.Ns = sign(m.Ns, false)
+			}
+			if strings.Contains(name, "alias.") {
+				m.Answer = []dns.RR{rr(name + " 60 IN CNAME other.private.")}
+			}
+			if strings.Contains(name, "servfail.") {
+				m.Rcode = dns.RcodeServerFailure
+			}
+			if strings.Contains(name, "foreign.") {
+				m.Question[0].Name = "other.private."
+			}
 		} else if (name == "absent.private." || name == "empty.private.") && (question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
 			// Original private zone negatives deliberately lack signatures.
 			// The separate private. denial remains signed by the root.

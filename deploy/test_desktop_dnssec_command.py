@@ -22,6 +22,8 @@ PRIVATE_PARENT='TestRouterVPNDNSSECPrivateTLDCommand'
 PRIVATE_CASES=(PRIVATE_PARENT,*(PRIVATE_PARENT+'/'+case for case in ('root-secure','root-forged','root-expired','root-insecure','root-nodata','root-wrong-name','root-unrelated-nta','root-alias-nxdomain')))
 NEGATIVE_PARENT='TestRouterVPNDNSSECPrivateTLDNegativeCommand'
 NEGATIVE_CASES=(NEGATIVE_PARENT,*(NEGATIVE_PARENT+'/'+case for case in ('original-nxdomain-a','original-nxdomain-aaaa','original-nodata-a','original-nodata-aaaa')))
+DS_PARENT='TestRouterVPNDNSSECPrivateDSCommand'
+DS_CASES=(DS_PARENT,*(DS_PARENT+'/'+case for case in ('deep-root-secure','deep-root-forged','deep-ds-positive','deep-ds-signed','deep-ds-alias','deep-ds-servfail','deep-ds-foreign','deep-original-a','deep-original-aaaa')))
 PRIVATE_FIXTURE=ROOT/'mobile/dnssec/private_tld_fixture.go.tmpl'
 
 def execute(source,bundle,target,go='go'):
@@ -60,6 +62,9 @@ def execute(source,bundle,target,go='go'):
         negative=G.UID.run([unshare,'--user','--map-root-user','--net',sys.executable,'-c',G.NAMESPACE,os.readlink('/proc/self/ns/net'),binary,'-test.run','^'+NEGATIVE_PARENT+'$','-test.v','-test.timeout=55s'],cwd=tmp,env=env,timeout=65)
         G.CASES=NEGATIVE_CASES;G.require_verdicts(negative)
         print(negative,end='' if negative.endswith('\n') else '\n',flush=True)
+        dependencies=G.UID.run([unshare,'--user','--map-root-user','--net',sys.executable,'-c',G.NAMESPACE,os.readlink('/proc/self/ns/net'),binary,'-test.run','^'+DS_PARENT+'$','-test.v','-test.timeout=55s'],cwd=tmp,env=env,timeout=65)
+        G.CASES=DS_CASES;G.require_verdicts(dependencies)
+        print(dependencies,end='' if dependencies.endswith('\n') else '\n',flush=True)
         implementation=package/'standard_dnssec_command_linux.go'
         original=implementation.read_text()
         start=original.index('\treceipt, err := standardengine.DNSSECTerminalReceipt')

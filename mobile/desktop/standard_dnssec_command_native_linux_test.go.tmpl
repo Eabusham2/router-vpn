@@ -41,7 +41,11 @@ func TestRouterVPNDNSSECPrivateTLDCommand(t *testing.T)    { dnssecAuthenticated
 func TestRouterVPNDNSSECPrivateTLDNegativeCommand(t *testing.T) {
 	dnssecAuthenticatedCommand(t, true, true)
 }
+func TestRouterVPNDNSSECPrivateDSCommand(t *testing.T) {
+	dnssecAuthenticatedCommand(t, true, false, true)
+}
 func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool, originalNegative ...bool) {
+	deep := len(originalNegative) > 1 && originalNegative[1]
 	negative := len(originalNegative) > 0 && originalNegative[0]
 	libraryPath, peerPath := os.Getenv("ROUTERVPN_DNSSEC_NATIVE_LIBRARY"), os.Getenv("ROUTERVPN_DNSSEC_NATIVE_PEER")
 	if privateTLD {
@@ -104,6 +108,9 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool, originalNegative 
 	}
 	if negative {
 		scenarios = []string{"original-nxdomain-a", "original-nxdomain-aaaa", "original-nodata-a", "original-nodata-aaaa"}
+	}
+	if deep {
+		scenarios = []string{"deep-root-secure", "deep-root-forged", "deep-ds-positive", "deep-ds-signed", "deep-ds-alias", "deep-ds-servfail", "deep-ds-foreign", "deep-original-a", "deep-original-aaaa"}
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario, func(t *testing.T) {
@@ -170,6 +177,45 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool, originalNegative 
 				}
 			}
 
+			var dependencies *standardengine.ResolvedPrivateDSDependencies
+			if deep {
+				original := "host.zone.private"
+				switch scenario {
+				case "deep-root-forged":
+					original = "host.zone.forged"
+				case "deep-ds-positive":
+					original = "host.positive.private"
+				case "deep-ds-signed":
+					original = "host.signed.private"
+				case "deep-ds-alias":
+					original = "host.alias.private"
+				case "deep-ds-servfail":
+					original = "host.servfail.private"
+				case "deep-ds-foreign":
+					original = "host.foreign.private"
+				}
+				policy, plan := dnssecCommandPrivatePlan(t, original, info.Anchor, false)
+				originalType := uint16(1)
+				if scenario == "deep-original-aaaa" {
+					originalType = 28
+				}
+				dependencies, err = standardengine.NewResolvedPrivateDSDependencies(policy, plan, originalType, strings.Repeat("c", 64))
+				if err != nil {
+					t.Fatal(err)
+				}
+				input := dependencies.Inputs()
+				capture.Anchors = input.TrustAnchors
+				capture.Insecure = input.InsecureDomains
+				capture.Name = dependencies.TLD()
+				capture.Type = 1
+				capture.PlanSHA256 = standardengine.SHA256(dependencies.Canonical())
+				if strings.HasPrefix(scenario, "deep-original-") {
+					capture.Name = original + "."
+					if scenario == "deep-original-aaaa" {
+						capture.Type = 28
+					}
+				}
+			}
 			raw, err := capture.Canonical()
 			if err != nil {
 				t.Fatal(err)
@@ -327,8 +373,20 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool, originalNegative 
 					if negative {
 						want = 3
 					}
+					if deep && (scenario == "deep-root-forged" || strings.HasPrefix(scenario, "deep-original-")) {
+						want = 3
+					}
 					if message.State != want {
 						t.Fatal("actual crypto verdict changed", message.State)
+					}
+					if deep && strings.HasPrefix(scenario, "deep-original-") {
+						var packet dns.Msg
+						if err := packet.Unpack(message.Packet); err != nil {
+							t.Fatal(err)
+						}
+						if message.RCode != 0 || message.NXDomain != 0 || message.HaveData != 1 || len(packet.Question) != 1 || packet.Question[0].Name != capture.Name || packet.Question[0].Qtype != capture.Type || len(packet.Answer) != 1 || packet.Answer[0].Header().Rrtype != capture.Type {
+							t.Fatal("deep original bogus candidate changed exact question/data", message, packet.String())
+						}
 					}
 					if negative {
 						var packet dns.Msg
@@ -350,7 +408,7 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool, originalNegative 
 							}
 						}
 					}
-					if privateTLD && !negative {
+					if privateTLD && !negative && !deep {
 						q := new(dns.Msg)
 						q.SetQuestion(capture.Name, dns.TypeA)
 						q.Id = binary.BigEndian.Uint16(message.Packet)
@@ -362,6 +420,41 @@ func dnssecAuthenticatedCommand(t *testing.T, privateTLD bool, originalNegative 
 						accepted := privateProof.CheckVerdict(raw, message) == nil
 						if accepted != (scenario == "root-secure" || scenario == "root-unrelated-nta") {
 							t.Fatal("private-TLD proof meaning escaped original association", scenario, accepted)
+						}
+					}
+					if deep && !strings.HasPrefix(scenario, "deep-original-") {
+						var replies []standardengine.ResolvedPrivateDSReply
+						address := net.JoinHostPort("127.0.0.1", strconv.Itoa(info.Port))
+						for _, wanted := range dependencies.Questions() {
+							query := new(dns.Msg)
+							query.SetQuestion(wanted.Name, wanted.Type)
+							packet, err := query.Pack()
+							if err != nil {
+								t.Fatal(err)
+							}
+							if _, err = dependencies.Question(packet); err != nil {
+								t.Fatal(err)
+							}
+							answer, _, err := (&dns.Client{Net: "tcp", Timeout: time.Second}).ExchangeContext(ctx, query, address)
+							if err != nil {
+								t.Fatal(err)
+							}
+							response, err := answer.Pack()
+							if err != nil {
+								t.Fatal(err)
+							}
+							replies = append(replies, standardengine.ResolvedPrivateDSReply{AuthoritySHA256: standardengine.SHA256(dependencies.Canonical()), Question: packet, Response: response})
+						}
+						root := new(dns.Msg)
+						root.SetQuestion(capture.Name, 1)
+						root.Id = binary.BigEndian.Uint16(message.Packet)
+						packet, err := root.Pack()
+						if err != nil {
+							t.Fatal(err)
+						}
+						_, err = dependencies.Complete(replies, packet, message)
+						if (err == nil) != (scenario == "deep-root-secure") {
+							t.Fatal("actual dependency/root proof escaped exact completed chain", scenario, err)
 						}
 					}
 					return
@@ -461,7 +554,15 @@ func dnssecCommandRootPlan(t *testing.T, name, anchor string, island bool) *stan
 
 func dnssecCommandPrivateProof(t *testing.T, tld, anchor string, unrelated bool) *standardengine.ResolvedPrivateTLDProof {
 	t.Helper()
-	name := "host." + strings.TrimSuffix(tld, ".")
+	policy, plan := dnssecCommandPrivatePlan(t, "host."+strings.TrimSuffix(tld, "."), anchor, unrelated)
+	proof, err := standardengine.NewResolvedPrivateTLDProof(policy, plan, 1, strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proof
+}
+func dnssecCommandPrivatePlan(t *testing.T, name, anchor string, unrelated bool) (standardengine.ResolvedPolicy, *standardengine.ResolvedDNSSECPlan) {
+	t.Helper()
 	server := standardengine.ResolvedDNS{Address: "192.0.2.53"}
 	policy := standardengine.ResolvedPolicy{Schema: 1, Authority: standardengine.ResolvedAuthority{BusID: strings.Repeat("a", 32), UniqueOwner: ":1.42", PID: 42, NamespaceInode: 9, PhysicalSHA256: strings.Repeat("b", 64)}, LLMNRHostname: "original-host", Manager: standardengine.ResolvedScope{DNS: []standardengine.ResolvedDNS{server}, CurrentDNS: &server, DNSSEC: "allow-downgrade", DNSOverTLS: "no"}}
 	if unrelated {
@@ -503,9 +604,5 @@ func dnssecCommandPrivateProof(t *testing.T, tld, anchor string, unrelated bool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := standardengine.NewResolvedPrivateTLDProof(policy, plan, 1, strings.Repeat("c", 64))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return proof
+	return policy, plan
 }
