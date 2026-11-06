@@ -63,7 +63,6 @@ func TestResolvedAdapterSelectedUpstream(t *testing.T) {
 		"dnssec-required":   func(p *standardengine.ResolvedPolicy) { p.Manager.DNSSEC = "yes" },
 		"dnssec-downgrade":  func(p *standardengine.ResolvedPolicy) { p.Manager.DNSSEC = "allow-downgrade" },
 		"unknown-dnssec":    func(p *standardengine.ResolvedPolicy) { p.Manager.DNSSEC = "" },
-		"opportunistic-tls": func(p *standardengine.ResolvedPolicy) { p.Manager.DNSOverTLS = "opportunistic" },
 		"unknown-tls":       func(p *standardengine.ResolvedPolicy) { p.Manager.DNSOverTLS = "" },
 		"missing-selection": func(p *standardengine.ResolvedPolicy) { p.Manager.CurrentDNS = nil },
 	} {
@@ -84,6 +83,15 @@ func TestResolvedAdapterSelectedUpstream(t *testing.T) {
 		rows, err := resolvedSelectedUpstreams(p, "vpn.example", "udp")
 		if err != nil || len(rows) != 2 || rows[0].InterfaceIndex == rows[1].InterfaceIndex {
 			t.Fatal("equal-best scopes were lost", rows, err)
+		}
+	})
+
+	t.Run("opportunistic-tls", func(t *testing.T) {
+		p := resolvedAdapterPolicy()
+		p.Manager.DNSOverTLS = "opportunistic"
+		rows, err := resolvedSelectedUpstreams(p, "vpn.example", "tcp")
+		if err != nil || len(rows) != 1 || rows[0].opportunistic == nil || !rows[0].opportunistic.MatchesPolicy(p) {
+			t.Fatal("original opportunistic policy omitted", rows, err)
 		}
 	})
 

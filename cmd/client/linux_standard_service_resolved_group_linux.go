@@ -17,6 +17,15 @@ type resolvedGroupRetirementError struct{ err error }
 func (e *resolvedGroupRetirementError) Error() string { return e.err.Error() }
 func (e *resolvedGroupRetirementError) Unwrap() error { return e.err }
 
+type resolvedQueryScope struct {
+	mobiletor.DesktopLinuxBootstrapDNSUpstream
+	opportunistic *mobiletor.DesktopLinuxOpportunisticDNS
+	current       func(context.Context) error
+}
+type resolvedOpportunisticQueryGroup interface {
+	ExchangeOpportunistic(context.Context, *mobiletor.DesktopLinuxOpportunisticDNS, []byte, func(context.Context) error) ([]byte, error)
+}
+
 type resolvedQueryGroup interface {
 	Exchange(context.Context, mobiletor.DesktopLinuxBootstrapDNSUpstream, []byte) ([]byte, error)
 	Close(context.Context) error
@@ -26,7 +35,7 @@ type resolvedQueryGroup interface {
 // fully validated positive answer cancels siblings; a negative answer remains
 // provisional until every other scope has completed. The group must release
 // and join its original sockets/grants before any answer can be adopted.
-func resolveOriginalScopes(ctx context.Context, group resolvedQueryGroup, upstreams []mobiletor.DesktopLinuxBootstrapDNSUpstream, question []byte) ([]byte, error) {
+func resolveOriginalScopes(ctx context.Context, group resolvedQueryGroup, upstreams []resolvedQueryScope, question []byte) ([]byte, error) {
 	query, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
@@ -39,12 +48,23 @@ func resolveOriginalScopes(ctx context.Context, group resolvedQueryGroup, upstre
 	var workers sync.WaitGroup
 	for i, upstream := range upstreams {
 		workers.Add(1)
-		go func(index int, server mobiletor.DesktopLinuxBootstrapDNSUpstream) {
+		go func(index int, server resolvedQueryScope) {
 			defer workers.Done()
-			answer, err := group.Exchange(query, server, question)
-			if err == nil && server.Network == "udp" && common.ValidateDNSForwardResponse(question, answer) == nil && answer[2]&2 != 0 {
+			var answer []byte
+			var err error
+			if server.opportunistic != nil {
+				transport, ok := group.(resolvedOpportunisticQueryGroup)
+				if !ok {
+					err = errors.New("original group omitted captured opportunistic transport")
+				} else {
+					answer, err = transport.ExchangeOpportunistic(query, server.opportunistic, question, server.current)
+				}
+			} else {
+				answer, err = group.Exchange(query, server.DesktopLinuxBootstrapDNSUpstream, question)
+			}
+			if err == nil && server.opportunistic == nil && server.Network == "udp" && common.ValidateDNSForwardResponse(question, answer) == nil && answer[2]&2 != 0 {
 				server.Network = "tcp"
-				answer, err = group.Exchange(query, server, question)
+				answer, err = group.Exchange(query, server.DesktopLinuxBootstrapDNSUpstream, question)
 			}
 			positive := false
 			if err == nil {

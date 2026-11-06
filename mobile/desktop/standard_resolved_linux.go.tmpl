@@ -214,7 +214,7 @@ func routerVPNRunResolved(parent context.Context, expected string) (failure erro
 	if err = routerVPNResolvedObserve(lifetime, authority, peer, expected, 0, capture.Name); err != nil {
 		return err
 	}
-	for sequence := uint32(1); sequence <= 64; sequence++ {
+	for sequence := uint32(1); sequence <= standardengine.MaxResolvedRequests; sequence++ {
 		body, err := peer.ReceiveAfterReady(lifetime)
 		if err != nil {
 			return err

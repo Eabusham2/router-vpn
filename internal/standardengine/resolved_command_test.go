@@ -114,3 +114,23 @@ func TestResolvedFixedCommandWholePolicyFrames(t *testing.T) {
 		})
 	}
 }
+
+func TestResolvedFixedCommandBoundedCohortSequence(t *testing.T) {
+	capture := strings.Repeat("a", 64)
+	for _, sequence := range []uint32{64, 65, 72110, MaxResolvedRequests} {
+		r := ResolvedRequest{Schema: 1, CaptureSHA256: capture, Sequence: sequence, Action: "observe"}
+		raw, err := r.Canonical()
+		if err != nil {
+			t.Fatal(sequence, err)
+		}
+		if _, err = DecodeResolvedRequest(raw, capture, sequence); err != nil {
+			t.Fatal(sequence, err)
+		}
+	}
+	for _, sequence := range []uint32{0, MaxResolvedRequests + 1, ^uint32(0)} {
+		r := ResolvedRequest{Schema: 1, CaptureSHA256: capture, Sequence: sequence, Action: "observe"}
+		if _, err := r.Canonical(); err == nil {
+			t.Fatal("original sequence bound lost", sequence)
+		}
+	}
+}

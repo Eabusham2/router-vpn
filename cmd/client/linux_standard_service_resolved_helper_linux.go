@@ -222,16 +222,46 @@ func (h *linuxResolvedHelper) currentLocked(ctx context.Context) error {
 // observe consumes the original sequence-zero greeting once, then asks that
 // same helper to recheck the original daemon, full policy and local-only name.
 func (h *linuxResolvedHelper) observe(ctx context.Context, name string) (standardengine.ResolvedPolicy, standardengine.ResolvedLocalResult, error) {
+	return h.observeScoped(ctx, ctx, name)
+}
+
+// Once a scope owns a framed read, another scope winning may cancel its query
+// but must not abandon half a shared response. The original operation and the
+// original scope deadline still bound the complete frame transaction.
+func resolvedFrameContext(admission, operation context.Context) (context.Context, context.CancelFunc, error) {
+	if admission == nil || operation == nil || admission.Err() != nil || operation.Err() != nil {
+		return nil, nil, errors.New("resolved frame lost original operation")
+	}
+	deadline, ok := admission.Deadline()
+	original, bounded := operation.Deadline()
+	if !ok || !bounded {
+		return nil, nil, errors.New("resolved frame omitted original bounded deadline")
+	}
+	if original.Before(deadline) {
+		deadline = original
+	}
+	ctx, cancel := context.WithDeadline(operation, deadline)
+	return ctx, cancel, nil
+}
+func (h *linuxResolvedHelper) observeScoped(admission, operation context.Context, name string) (standardengine.ResolvedPolicy, standardengine.ResolvedLocalResult, error) {
 	if h == nil {
 		return standardengine.ResolvedPolicy{}, standardengine.ResolvedLocalResult{}, errors.New("resolved helper absent")
 	}
-	if err := desktopnetwork.LockContext(ctx, &h.mu); err != nil {
+	if err := desktopnetwork.LockContext(admission, &h.mu); err != nil {
 		return standardengine.ResolvedPolicy{}, standardengine.ResolvedLocalResult{}, err
 	}
 	defer h.mu.Unlock()
+	ctx, finish, err := resolvedFrameContext(admission, operation)
+	if err != nil {
+		return standardengine.ResolvedPolicy{}, standardengine.ResolvedLocalResult{}, err
+	}
+	defer finish()
 	policy, local, err := h.readObservation(ctx, name)
 	if err != nil && h != nil {
 		h.failure = errors.Join(h.failure, err)
+	}
+	if err == nil {
+		err = admission.Err()
 	}
 	return policy, local, err
 }
@@ -250,7 +280,7 @@ func (h *linuxResolvedHelper) readObservation(ctx context.Context, name string) 
 		return policy, local, err
 	}
 	if h.policy != nil {
-		if h.sequence >= 63 {
+		if h.sequence >= standardengine.MaxResolvedRequests-1 {
 			return policy, local, errors.New("resolved original observation budget exhausted")
 		}
 		h.sequence++
@@ -340,7 +370,7 @@ func (h *linuxResolvedHelper) closeLocked(ctx context.Context) error {
 	}
 	// An authenticated close requests joined daemon/channel retirement. A
 	// cancellation or partial handshake still retains the original child below.
-	if h.policy != nil && h.failure == nil && h.original.Err() == nil && h.sequence < 64 {
+	if h.policy != nil && h.failure == nil && h.original.Err() == nil && h.sequence < standardengine.MaxResolvedRequests {
 		h.sequence++
 		raw, err := (standardengine.ResolvedRequest{Schema: 1, CaptureSHA256: h.captureSHA, Sequence: h.sequence, Action: "close"}).Canonical()
 		if err != nil {
@@ -456,7 +486,7 @@ func (h *linuxResolvedHelper) anchor(ctx context.Context, index int32, name stri
 			return result, err
 		}
 	}
-	if h.sequence >= 63 {
+	if h.sequence >= standardengine.MaxResolvedRequests-1 {
 		return result, errors.New("resolved original anchor observation budget exhausted")
 	}
 	h.sequence++

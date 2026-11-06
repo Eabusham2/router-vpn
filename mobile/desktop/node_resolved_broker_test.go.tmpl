@@ -112,6 +112,9 @@ func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
 				"Domains": dbus.MakeVariant([]domain{}), "LLMNRHostname": dbus.MakeVariant("original-resolved"),
 				"LLMNR": dbus.MakeVariant("no"), "MulticastDNS": dbus.MakeVariant("no"), "DNSOverTLS": dbus.MakeVariant("no"), "DNSSEC": dbus.MakeVariant("no"), "DNSSECNegativeTrustAnchors": dbus.MakeVariant([]string{}),
 			}
+			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC") == "1" {
+				values["DNSOverTLS"] = dbus.MakeVariant("opportunistic")
+			}
 			if parallel {
 				if len(request.Body) != 1 {
 					return nil, "", errors.New("unknown scope properties")

@@ -48,7 +48,7 @@ class InstalledReverseServiceVerdict(unittest.TestCase):
 class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_resolved_composition_requires_original_helper_receipt(self):
         self.assertEqual(G.CASES[524:], G.RESOLVED_CASES)
-        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel'))
+        self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback'))
         for case in G.RESOLVED_CASES:
             self.assertIn(case, G.HOSTNAME_CASES)
             self.assertIn(case, G.PUBLIC_CASES)

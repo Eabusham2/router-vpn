@@ -605,3 +605,9 @@ SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_opportunistic
 # Joined original-member retirement keeps finite cohort resources reusable.
 SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_group_retire'+suffix+'.go'
  for suffix in ('','_test'))
+
+# Shipping captured opportunistic dispatch and original shared-frame cancellation.
+AUXILIARY['resolved-group'][1].update({
+ 'TestResolvedFrameScopeCancellation':(),
+ 'TestResolvedGroupOpportunisticDispatch':('captured-policy','owner-changed','terminal-truncation-not-retried')})
+AUXILIARY['resolved-command'][1]['TestResolvedFixedCommandBoundedCohortSequence']=()

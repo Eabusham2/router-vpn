@@ -6,6 +6,14 @@ import (
 	"errors"
 )
 
+// MaxResolvedRequests covers 7 searched names * 2 address families * 5
+// attempts * (257 equal-best scopes * 4 opportunistic guards + 2 cohort
+// observations), plus 7 name preflights, greeting and transfer/close. This is
+// 72110 operations; the next power of two leaves bounded anchor-query headroom.
+// Frames are consumed incrementally. The original two-minute deadline never
+// renews and limits total work independently of this sequence bound.
+const MaxResolvedRequests uint32 = 1 << 17
+
 // The fixed resolver helper receives these bytes through the existing sealed
 // capture descriptor and authenticates their digest with its original parent.
 type ResolvedCapture struct {
@@ -44,7 +52,7 @@ type ResolvedRequest struct {
 }
 
 func (r ResolvedRequest) Canonical() ([]byte, error) {
-	valid := r.Schema == 1 && resolvedDigest(r.CaptureSHA256, 32) && r.Sequence > 0 && r.Sequence <= 64
+	valid := r.Schema == 1 && resolvedDigest(r.CaptureSHA256, 32) && r.Sequence > 0 && r.Sequence <= MaxResolvedRequests
 	switch r.Action {
 	case "observe":
 		valid = valid && (r.Name == "" || ResolvedName(r.Name, false)) && r.Index == 0 && r.Type == 0
@@ -96,7 +104,7 @@ const resolvedChunkSize = 8 << 10
 const maxResolvedObservation = MaxResolvedPolicy + (20 << 10)
 
 func BuildResolvedFrames(capture string, sequence uint32, name, policy, local string) ([][]byte, error) {
-	if !resolvedDigest(capture, 32) || sequence > 64 {
+	if !resolvedDigest(capture, 32) || sequence > MaxResolvedRequests {
 		return nil, errors.New("resolved response lost original capture")
 	}
 	if _, err := DecodeResolvedPolicy([]byte(policy), ResolvedPolicySHA256([]byte(policy))); err != nil {
@@ -126,7 +134,7 @@ func BuildResolvedFrames(capture string, sequence uint32, name, policy, local st
 func DecodeResolvedFrames(frames [][]byte, capture string, sequence uint32, name string) (ResolvedObservation, error) {
 	bad := errors.New("resolved frames lost original whole observation")
 	var result ResolvedObservation
-	if !resolvedDigest(capture, 32) || sequence > 64 || len(frames) == 0 || len(frames) > (maxResolvedObservation+resolvedChunkSize-1)/resolvedChunkSize {
+	if !resolvedDigest(capture, 32) || sequence > MaxResolvedRequests || len(frames) == 0 || len(frames) > (maxResolvedObservation+resolvedChunkSize-1)/resolvedChunkSize {
 		return result, bad
 	}
 	var raw []byte

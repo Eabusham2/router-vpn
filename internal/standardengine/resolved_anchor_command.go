@@ -10,7 +10,7 @@ import (
 // policy hash binds it to the complete policy already held by the same helper.
 func BuildResolvedAnchorFrames(capture string, sequence uint32, raw []byte) ([][]byte, error) {
 	var anchor ResolvedAnchorResult
-	if !resolvedDigest(capture, 32) || sequence == 0 || sequence > 64 || len(raw) == 0 || len(raw) > MaxResolvedAnchor || json.Unmarshal(raw, &anchor) != nil {
+	if !resolvedDigest(capture, 32) || sequence == 0 || sequence > MaxResolvedRequests || len(raw) == 0 || len(raw) > MaxResolvedAnchor || json.Unmarshal(raw, &anchor) != nil {
 		return nil, errors.New("resolved anchor frame omitted bounded original identity")
 	}
 	canonical, err := anchor.Canonical()
@@ -31,7 +31,7 @@ func BuildResolvedAnchorFrames(capture string, sequence uint32, raw []byte) ([][
 func DecodeResolvedAnchorFrames(frames [][]byte, capture string, sequence uint32, policy string, index int32, name string, kind uint16) (ResolvedAnchorResult, error) {
 	var zero ResolvedAnchorResult
 	bad := errors.New("resolved anchor frames changed original request or loaded-store observation")
-	if !resolvedDigest(capture, 32) || sequence == 0 || sequence > 64 || len(frames) == 0 || len(frames) > 8 {
+	if !resolvedDigest(capture, 32) || sequence == 0 || sequence > MaxResolvedRequests || len(frames) == 0 || len(frames) > 8 {
 		return zero, bad
 	}
 	var raw []byte

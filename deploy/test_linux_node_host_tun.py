@@ -189,7 +189,7 @@ SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT +
 def check_ss_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
 
-RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel')
+RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback')
 CASES += RESOLVED_CASES
 HOSTNAME_CASES += RESOLVED_CASES
 PUBLIC_CASES += RESOLVED_CASES

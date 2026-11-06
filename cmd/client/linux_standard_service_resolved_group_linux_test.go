@@ -60,7 +60,7 @@ func TestResolvedGroupIndependentScopes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			servers := []mobiletor.DesktopLinuxBootstrapDNSUpstream{{Endpoint: netip.MustParseAddrPort("192.0.2.53:2053"), Network: "udp", InterfaceIndex: 7}, {Endpoint: netip.MustParseAddrPort("192.0.2.54:3053"), Network: "udp", InterfaceIndex: 8}}
+			servers := []resolvedQueryScope{{DesktopLinuxBootstrapDNSUpstream: mobiletor.DesktopLinuxBootstrapDNSUpstream{Endpoint: netip.MustParseAddrPort("192.0.2.53:2053"), Network: "udp", InterfaceIndex: 7}}, {DesktopLinuxBootstrapDNSUpstream: mobiletor.DesktopLinuxBootstrapDNSUpstream{Endpoint: netip.MustParseAddrPort("192.0.2.54:3053"), Network: "udp", InterfaceIndex: 8}}}
 			f := &resolvedScopeFixture{barrier: make(chan struct{}), count: 2}
 			first := make(chan struct{})
 			f.run = func(work context.Context, s mobiletor.DesktopLinuxBootstrapDNSUpstream, question []byte) ([]byte, error) {
@@ -159,5 +159,90 @@ func TestResolvedHelperFrameLockIsBounded(t *testing.T) {
 	h.mu.Unlock()
 	if err := h.current(context.Background()); err == nil {
 		t.Fatal("empty helper acquired authority")
+	}
+}
+
+func TestResolvedFrameScopeCancellation(t *testing.T) {
+	operation, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	scope, cancel := context.WithCancel(operation)
+	frame, finish, err := resolvedFrameContext(scope, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	scopeDeadline, _ := scope.Deadline()
+	frameDeadline, _ := frame.Deadline()
+	cancel()
+	if frame.Err() != nil || !scopeDeadline.Equal(frameDeadline) {
+		t.Fatal("loser cancellation abandoned or renewed shared frame")
+	}
+	stop()
+	if frame.Err() == nil {
+		t.Fatal("original operation cancellation was ignored")
+	}
+}
+
+type resolvedOpportunisticFixture struct {
+	resolvedScopeFixture
+	answer []byte
+	calls  int
+}
+
+func (f *resolvedOpportunisticFixture) ExchangeOpportunistic(ctx context.Context, capability *mobiletor.DesktopLinuxOpportunisticDNS, question []byte, current func(context.Context) error) ([]byte, error) {
+	f.calls++
+	if capability == nil || current == nil {
+		return nil, errors.New("captured opportunistic owner omitted")
+	}
+	if err := current(ctx); err != nil {
+		return nil, err
+	}
+	if err := current(ctx); err != nil {
+		return nil, err
+	}
+	return f.answer, nil
+}
+func TestResolvedGroupOpportunisticDispatch(t *testing.T) {
+	q, err := dnsmeasure.TransportBootstrapQuery("vpn.example", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"captured-policy", "owner-changed", "terminal-truncation-not-retried"} {
+		t.Run(name, func(t *testing.T) {
+			policy := resolvedAdapterPolicy()
+			policy.Manager.DNSOverTLS = "opportunistic"
+			scopes, err := resolvedSelectedUpstreams(policy, "vpn.example", "udp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			scopes[0].current = func(context.Context) error {
+				calls++
+				if name == "owner-changed" {
+					return errors.New("original daemon changed")
+				}
+				return nil
+			}
+			f := &resolvedOpportunisticFixture{answer: resolvedScopeAnswer(q, 0)}
+			f.resolvedScopeFixture.run = func(context.Context, mobiletor.DesktopLinuxBootstrapDNSUpstream, []byte) ([]byte, error) {
+				return nil, errors.New("opportunistic escaped typed transport")
+			}
+			if name == "terminal-truncation-not-retried" {
+				f.answer[2] |= 2
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			answer, err := resolveOriginalScopes(ctx, f, scopes, q)
+			if f.calls != 1 || calls == 0 || !f.closed {
+				t.Fatal("original opportunistic owner or joined group omitted", f.calls, calls, f.closed)
+			}
+			if name == "captured-policy" {
+				if err != nil || answer == nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || answer != nil {
+				t.Fatal("invalid opportunistic result adopted")
+			}
+		})
 	}
 }

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel"}
+var linuxHostTUNResolvedCases = []string{"service-boot-resolved-udp", "service-boot-resolved-tcp", "service-boot-resolved-local", "service-boot-resolved-parallel", "service-boot-resolved-opportunistic-tls", "service-boot-resolved-opportunistic-fallback"}
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNResolvedCases...) }
 func linuxHostTUNResolvedCase(scenario string) bool {
@@ -80,6 +80,9 @@ func linuxHostTUNResolvedBroker(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	}
 	if scenario == "service-boot-resolved-parallel" {
 		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_PARALLEL=1")
+	}
+	if scenario == "service-boot-resolved-opportunistic-tls" || scenario == "service-boot-resolved-opportunistic-fallback" {
+		command.Env = append(command.Env, "ROUTERVPN_RESOLVED_COMPOSITION_OPPORTUNISTIC=1")
 	}
 	command.Stderr = os.Stderr
 	output, err := command.StdoutPipe()

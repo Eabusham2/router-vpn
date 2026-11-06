@@ -59,7 +59,7 @@ func (o *linuxBootBootstrapExchange) PreflightResolvedName(ctx context.Context, 
 // The transport primitive receives only this exact selected tuple. DNSSEC is
 // deliberately not inferred from AD: local validation for validating modes is
 // still required before those policies can be executed by this adapter.
-func resolvedSelectedUpstreams(policy standardengine.ResolvedPolicy, name, network string) ([]mobiletor.DesktopLinuxBootstrapDNSUpstream, error) {
+func resolvedSelectedUpstreams(policy standardengine.ResolvedPolicy, name, network string) ([]resolvedQueryScope, error) {
 	if network != "udp" && network != "tcp" {
 		return nil, errors.New("resolved caller changed captured DNS transport")
 	}
@@ -70,9 +70,15 @@ func resolvedSelectedUpstreams(policy standardengine.ResolvedPolicy, name, netwo
 	if len(routes) == 0 || len(routes) > 257 {
 		return nil, errors.New("resolved scope count exceeds original bound")
 	}
-	upstreams := make([]mobiletor.DesktopLinuxBootstrapDNSUpstream, 0, len(routes))
+	upstreams := make([]resolvedQueryScope, 0, len(routes))
 	for _, route := range routes {
-		upstream, err := resolvedRouteUpstream(route, network)
+		var upstream resolvedQueryScope
+		var err error
+		if route.DNSOverTLS == "opportunistic" && route.DNSSEC == "no" {
+			upstream.opportunistic, err = mobiletor.NewDesktopLinuxOpportunisticDNS(policy, name, route.Index, network)
+		} else {
+			upstream.DesktopLinuxBootstrapDNSUpstream, err = resolvedRouteUpstream(route, network)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -129,6 +135,23 @@ func (o *linuxBootBootstrapExchange) exchangeResolved(ctx context.Context, netwo
 	upstreams, err := resolvedSelectedUpstreams(policy, o.resolvedName, network)
 	if err != nil {
 		return nil, err
+	}
+	for i := range upstreams {
+		if capability := upstreams[i].opportunistic; capability != nil {
+			upstreams[i].current = func(check context.Context) error {
+				if err := check.Err(); err != nil {
+					return err
+				}
+				observed, local, err := resolver.helper.observeScoped(check, o.operation, o.resolvedName)
+				if err != nil {
+					return err
+				}
+				if local.Local || !capability.MatchesPolicy(observed) {
+					return errors.New("opportunistic exchange lost original daemon policy or local decision")
+				}
+				return check.Err()
+			}
+		}
 	}
 	if err = o.Current(ctx); err != nil {
 		return nil, err

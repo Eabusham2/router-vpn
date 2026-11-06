@@ -6,11 +6,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
@@ -49,6 +55,7 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 	}
 	var mu sync.Mutex
 	count := 0
+	countTLS := 0
 	reply := func(query []byte, truncated bool) ([]byte, error) {
 		if len(query) < 12 {
 			return nil, errors.New("short bootstrap question")
@@ -103,7 +110,7 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 		return bootHostnameParallelDNS(reply, countFile)
 	}
 	errorsOut := make(chan error, 2)
-	if mode != "tcp" {
+	if mode != "tcp" && mode != "opportunistic-tls" {
 		conn, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP(bootHostnameFixtureResolver), Port: 53})
 		if e != nil {
 			return e
@@ -128,20 +135,54 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 			}
 		}()
 	}
-	if mode == "tcp" || mode == "truncated" {
-		listener, e := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.ParseIP(bootHostnameFixtureResolver), Port: 53})
+	if mode == "tcp" || mode == "truncated" || mode == "opportunistic-tls" || mode == "opportunistic-fallback" {
+		listener, e := net.Listen("tcp4", net.JoinHostPort(bootHostnameFixtureResolver, "53"))
 		if e != nil {
 			return e
+		}
+		if mode == "opportunistic-tls" {
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				return err
+			}
+			certificate := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{"fixture.untrusted.invalid"}}
+			raw, err := x509.CreateCertificate(rand.Reader, certificate, certificate, &key.PublicKey, key)
+			if err != nil {
+				return err
+			}
+			listener = tls.NewListener(listener, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{raw}, PrivateKey: key}}})
 		}
 		defer listener.Close()
 		go func() {
 			for {
-				conn, e := listener.AcceptTCP()
+				conn, e := listener.Accept()
 				if e != nil {
 					errorsOut <- e
 					return
 				}
 				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				if mode == "opportunistic-fallback" {
+					var header [5]byte
+					_, e = io.ReadFull(conn, header[:])
+					if e == nil && (header[0] != 22 || header[1] != 3) {
+						e = errors.New("opportunistic plaintext skipped original TLS attempt")
+					}
+					if e == nil {
+						mu.Lock()
+						countTLS++
+						e = os.WriteFile(countFile+".tls", []byte(strconv.Itoa(countTLS)), 0600)
+						mu.Unlock()
+					}
+					if e == nil {
+						_, e = conn.Write([]byte("plain"))
+					}
+					conn.Close()
+					if e != nil {
+						errorsOut <- e
+						return
+					}
+					continue
+				}
 				var size [2]byte
 				_, e = io.ReadFull(conn, size[:])
 				n := int(binary.BigEndian.Uint16(size[:]))
@@ -194,6 +235,12 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	}
 	if scenario == "service-boot-resolved-parallel" {
 		mode = "parallel"
+	}
+	if scenario == "service-boot-resolved-opportunistic-tls" {
+		mode = "opportunistic-tls"
+	}
+	if scenario == "service-boot-resolved-opportunistic-fallback" {
+		mode = "opportunistic-fallback"
 	}
 	hostsOnly := scenario == "service-boot-hosts"
 	resolved := linuxHostTUNResolvedCase(scenario)
@@ -312,6 +359,13 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			}
 			if e != nil || parse != nil || count < minimum {
 				t.Error("public Node Connect omitted actual A/AAAA bootstrap", e, parse, count)
+			}
+			if mode == "opportunistic-fallback" {
+				b, err := os.ReadFile(countFile + ".tls")
+				n, parse := strconv.Atoi(string(b))
+				if err != nil || parse != nil || n < 2 {
+					t.Error("original opportunistic TLS attempts omitted", err, parse, n)
+				}
 			}
 			if mode == "parallel" {
 				b, err := os.ReadFile(countFile + ".parallel")
