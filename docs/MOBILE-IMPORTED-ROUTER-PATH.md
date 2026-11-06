@@ -12,11 +12,12 @@ previously missing direction to Android and iOS/iPadOS:
 |---|---|---:|
 | Shadowsocks 2022 or Hysteria2 | Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast, AmneziaWG Strong | 100 |
 | WireGuard or AmneziaWG | Shadowsocks or Hysteria2 | 36 |
+| WireGuard or AmneziaWG | WireGuard, AmneziaWG Fast or AmneziaWG Strong | 54 |
 
-The 136 cases preserve the earlier 76 and add sixty proxy-entry/packet-final
-combinations. Imported WireGuard/AmneziaWG entry followed by a paired packet
-final is still refused until the nested packet envelope is implemented and
-verified; refusal does not complete that requirement.
+The 190 cases preserve all 136 previously supported combinations and add
+fifty-four packet-entry/packet-final combinations. The added direction validates
+the complete data, handshake, cookie and enabled-junk envelope, including the
+final's independently captured Start Layer, before constructing a native owner.
 
 Execution is Local, inside the application's existing Android VpnService or Apple
 PacketTunnel. A Shadowsocks entry supports `2022-blake3-aes-128-gcm`,
@@ -38,7 +39,9 @@ outer AES transport comes from the same final node's original SS asset map,
 separate from the inner QUIC transport and the imported entry's own layer.
 WireGuard and AmneziaWG finals likewise use their own raw same-node SS assets
 when a final Start Layer is selected. Their complete endpoint object retains its
-captured keys, packet MTU and all AWG fields. The paired WG public identity and
+captured keys and all AWG fields. The original requested packet MTU remains in
+the captured source; a nested Auto graph may derive a smaller final endpoint
+cap before startup, as described below. The paired WG public identity and
 the selected AWG transport's independent peer key are not substituted for one
 another.
 
@@ -118,6 +121,14 @@ identities. A transport that must authenticate during Start may reject there;
 the fixture requires a live original context and no acquired final authority.
 Timeouts and cancellation cannot satisfy certificate-refusal assertions.
 
+Nested packet tests add seven successful encrypted paths, including WG-to-WG,
+AWG Fast-to-WG, AWG Strong-to-AWG, independent entry/final layers, both layers,
+and an IPv6 carrier. Fourteen negative cases reject changed private/public keys,
+PSKs, AWG parameters, layer keys, final/DNS routes and proof identities. The
+independent decrypted peers observe full-size IPv4/IPv6 payloads and reject
+fragmentation; a UDP socket being bound is not sufficient evidence. Closing the
+captured graph joins its workers and prevents a late dial from reusing them.
+
 Application DNS comes from the final's captured policy, including Home AdGuard.
 The imported source's standalone DNS configuration remains part of its original
 source digest, but it does not replace the final's DNS in this two-hop graph.
@@ -145,12 +156,21 @@ entry outbound; it does not relax general hop validation. Network changes,
 owner replacement, or retirement revoke those factories and their retained
 operations.
 
-The complete compiled graph supplies the MTU plan. Fixed-value conflicts are
+The complete compiled graph supplies the MTU plan. For a nested packet final,
+`internal/awgpolicy` accounts for the actual IPv4/IPv6 carrier, 16-byte transport
+padding, AWG data/control parameters and the selected authenticated outer layer.
+The entry endpoint keeps its original MTU. Auto derives a fitting final endpoint
+cap; Fixed must fit unchanged. Oversized control packets are rejected even when
+data would fit. Metadata records the original request, effective endpoint cap,
+data overhead and largest control envelope as **configured-unmeasured**.
+Those values are configuration bounds, not a measured physical path MTU.
+
+Fixed-value conflicts are
 validated, and compatible Jumbo is virtual TUN capacity, not a claim of a
 9,000-byte physical path. The existing Auto/Retest/Cancel transaction retains
 its original native interface and proof owner. No cached measurement becomes
-fresh proof merely because a source compiles. The packet endpoint and its
-captured MTU remain unchanged when the application TUN is retuned. Packet-entry
+fresh proof merely because a source compiles. The already-compiled packet
+endpoint and its cap remain unchanged when the application TUN is retuned. Packet-entry
 and packet-final graph tests verify that application TUN retuning preserves each
 complete captured packet endpoint; the new final tests use a 1392 target. This is configuration/lifecycle evidence;
 it is not proof that a particular physical path carries 1400-byte or Jumbo
@@ -178,26 +198,32 @@ A deterministic native race test covers the actual stack and rejects both lost
 delivery retention and draining under the stack lock. This correction is shared
 by Android and Apple runtime preparation.
 
+The original AmneziaWG bind also checks its captured generation, connection and
+context before and after receiving. A retired native UDP error becomes
+`net.ErrClosed`, so the upstream receive worker exits promptly. A late successful
+read cannot publish a packet into a successor. The lifecycle regression covers
+both native close errors and late success, using the actual bind implementation.
+
 ## Executable gates and evidence limits
 
-The shared compiler/runtime race tests pass 218 verdicts covering the independent
+The shared compiler/runtime race tests cover the independent
 layer matrix, all three SS2022 entry ciphers, Hysteria2 TLS/password capture,
 WG/AWG endpoint capture, policy and source ownership,
 strict paired-final admission,
 public-entry/private-final/DNS proof, full Run-to-Healthy measurement ownership,
 retirement, and malformed or forged source rejection.
 
-`deploy/test_mobile_imported_entry.py` consumes the exact 136 shared source
-fixtures and the 136 emitted by the actual Android helper. The pinned
+`deploy/test_mobile_imported_entry.py` consumes the exact 190 shared source
+fixtures and the 190 emitted by the actual Android helper. The pinned
 libbox constructor must reproduce their original config and source digest.
 Its actual native parser, MTU profile reader, and MTU planner must accept them.
 The required fixture gate rejects missing, skipped, duplicated, foreign, or
 malformed cases. The Linux native peer gate executes actual encrypted pairs across both entry
 and final families, including a Hysteria2 final with an AES outer transport. It
-requires 59 verdicts, preserving the prior 42 and adding the packet-final parent
-and sixteen new scenarios, with negative routing, key, certificate, DNS and
-identity controls. All 136 layer/cipher graphs separately require the native
-parser and typed MTU planner; the two source matrices require 274 exact verdicts
+requires 81 verdicts: six group parents and 75 encrypted peer scenarios, with
+negative routing, key, certificate, DNS and identity controls. All 190
+layer/cipher graphs separately require the native parser and typed MTU planner;
+the two source matrices require 382 exact verdicts
 in total. This does not claim encrypted mobile TUN traffic for every
 layer combination. Removing the final outer-edge ownership or bypassing actual
 native TLS verification is rejected by the corresponding causal controls.
@@ -211,18 +237,19 @@ Android gates exercise the actual helper, saved-profile store, permission
 controller, startup policy, multihop runtime, MTU session, node-usage recorder,
 and service composition with explicit OS/native boundaries. Deliberate source
 mutations must fail the intended assertions. The mandatory imported-profile
-dispatcher passes all six families (3,154 checks/336 cases); the new final families
-account for 1,493/161. Original preference, forward-apply and rollback ownership
+dispatcher includes the three added nested final families as well as the six
+existing families. Original preference, forward-apply and rollback ownership
 retain their 57 focused checks and seven causal controls. The Java syntax gate
 covers every shipping Java source; the actual SDK/AAR APK build remains separately
 required.
 
 `deploy/test_ios_imported_router_pinned.py` is mandatory in Apple smoke and
-release preparation. It consumes the actual Swift-produced 136-graph matrix
+release preparation. It consumes the actual Swift-produced 190-graph matrix
 and requires native parser verdicts for all of it. Swift harnesses cover
 selection, profiles, restoration, typed MTU, and PacketTunnel composition.
-Local Swift/Xcode execution was unavailable during implementation; Python source
-checks and a Go helper build are not reported as an Apple native pass.
+The local Swift 6.4.2 harness executes actual selection, save and graph-building
+source. This is separate from the required Xcode app/PacketTunnel build, native
+Apple networking and physical-device acceptance.
 
 Exact-SHA Android/iOS builds, release publication, physical-device routing,
 permission and network transitions, leaks, off-LAN interoperability, visual

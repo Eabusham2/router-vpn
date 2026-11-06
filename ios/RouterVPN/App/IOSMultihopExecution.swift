@@ -389,7 +389,7 @@ enum IOSImportedEntryMultihop {
         if ["shadowsocks", "hysteria2"].contains(final) {
             return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry)
         }
-        return ["shadowsocks", "hysteria2"].contains(entry) && ["wg", "awg2-fast", "awg2-strong"].contains(final)
+        return ["wireguard", "amneziawg", "shadowsocks", "hysteria2"].contains(entry) && ["wg", "awg2-fast", "awg2-strong"].contains(final)
     }
     static func validate(entry: [String: Any], final: [String: Any]) throws {
         guard let imported = entry["external"] as? [String: Any],
@@ -438,6 +438,6 @@ enum IOSImportedEntryMultihop {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ImportedEntry", code: 1, userInfo: [NSLocalizedDescriptionKey:
-            "Choose a Local imported entry and a different paired Router VPN final with their original settings. Shadowsocks 2022 and Hysteria2 entries also support paired WireGuard and AmneziaWG finals; imported packet entries require Shadowsocks or Hysteria2 finals."])
+            "Choose a Local imported entry and a different paired Router VPN final with their original settings. WireGuard and AmneziaWG finals require the captured entry capacity to fit their complete packet and handshake envelope. Auto may derive a smaller final endpoint MTU; Fixed overflow is refused. These configured bounds are not a measured path MTU."])
     }
 }

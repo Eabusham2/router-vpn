@@ -170,27 +170,27 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
     try check("HY2 final failed selection is transactional",refused.writes==0 && encoded(refused.bundle!)==saved)
    }
   }}
-  for mode in ["wg","awg2-fast","awg2-strong"] {for originalEntry in [imported,hysteria] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  for mode in ["wg","awg2-fast","awg2-strong"] {for originalEntry in [imported,hysteria]+packetEntries {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    var selectedFinal=finalBundle;selectedFinal.routerProfiles[0].startLayer=layer
    selectedFinal.profiles[mode]=[mode=="wg" ? "wg.conf":"awg.conf":Data(("captured original "+mode+" credentials").utf8).base64EncodedString()]
    let model=RouterVPNModel();model.bundle=selectedFinal
    IOSNodeBundleStore.shared.nodes=[originalEntry.id:try encoded(bundle(originalEntry)),paired.id:try encoded(selectedFinal)]
    try check("actual picker offers captured packet final assets",model.iosImportedRouterFinalModes(entryMode:originalEntry.external!.protocolName,exitID:paired.id).contains(mode))
-   try check("actual picker rejects packet entry to packet final",!model.iosImportedRouterFinalModes(entryMode:"wireguard",exitID:paired.id).contains(mode))
+   try check("actual picker refuses unsupported imported proxy family",!model.iosImportedRouterFinalModes(entryMode:"socks5",exitID:paired.id).contains(mode))
    try model.saveIOSMultihop(enabled:true,entryID:originalEntry.id,exitID:paired.id,exitMode:mode,execution:"local",entryMode:originalEntry.external!.protocolName)
    let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
    try check("packet final save keeps paired raw assets DNS and independent layer",model.bundle?.profiles==selectedFinal.profiles && model.bundle?.routerProfiles[0].dnsMode=="home" && model.bundle?.routerProfiles[0].startLayer==layer && model.bundle?.routerProfiles[0].multihopExitMode==mode && captured.routerProfiles==[originalEntry])
-   for fault in ["missing-final-assets","missing-layer-assets","server","auto","packet-entry"] {
+   for fault in ["missing-final-assets","missing-layer-assets","server","auto","unsupported-entry"] {
     if fault=="missing-layer-assets" && layer=="off" {continue}
     var changed=selectedFinal,first=originalEntry,execution="local"
     if fault=="missing-final-assets"{changed.profiles.removeValue(forKey:mode)}
     else if fault=="missing-layer-assets"{changed.profiles.removeValue(forKey:"shadowsocks")}
-    else if fault=="packet-entry"{first=packetEntries[0]}
+    else if fault=="unsupported-entry"{first=try profile("unsupported-entry","external","socks5");first.apiToken=""}
     else{execution=fault}
     let refused=RouterVPNModel();refused.bundle=changed
     IOSNodeBundleStore.shared.nodes=[first.id:try encoded(bundle(first)),paired.id:try encoded(changed)]
     let saved=try encoded(changed)
-    if fault=="missing-final-assets" || fault=="missing-layer-assets" || fault=="packet-entry" {
+    if fault=="missing-final-assets" || fault=="missing-layer-assets" || fault=="unsupported-entry" {
      try check("actual picker refuses missing or incompatible packet source",!refused.iosImportedRouterFinalModes(entryMode:first.external!.protocolName,exitID:paired.id).contains(mode))
     }
     try reject("packet final selection rejects "+fault){try refused.saveIOSMultihop(enabled:true,entryID:first.id,exitID:paired.id,exitMode:mode,execution:execution,entryMode:first.external!.protocolName)}

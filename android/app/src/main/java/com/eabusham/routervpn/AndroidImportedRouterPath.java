@@ -21,7 +21,7 @@ final class AndroidImportedRouterPath {
         boolean proxyEntry = Arrays.asList("shadowsocks", "hysteria2").contains(entryProtocol);
         return (proxyEntry || Arrays.asList("wireguard", "amneziawg").contains(entryProtocol))
                 && (Arrays.asList("shadowsocks", "hysteria2").contains(finalMode)
-                || proxyEntry && Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(finalMode));
+                || Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(finalMode));
     }
 
     static void requireEntry(AndroidStandardExitStore.Entry entry) throws Exception {

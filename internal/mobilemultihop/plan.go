@@ -44,21 +44,27 @@ var Targets = []string{"https://1.1.1.1/cdn-cgi/trace", "https://1.0.0.1/cdn-cgi
 // Metadata is captured from the paired entry and exit, never the mutable UI.
 // It contains credentials and must not be returned by a progress/status API.
 type Metadata struct {
-	EntryKind       string `json:"entry_kind,omitempty"`
-	EntryID         string `json:"entry_id"`
-	ExitID          string `json:"exit_id"`
-	EntryNodeID     string `json:"entry_node_id"`
-	ExitNodeID      string `json:"exit_node_id"`
-	EntryAPI        string `json:"entry_api"`
-	ExitAPI         string `json:"exit_api"`
-	EntryToken      string `json:"entry_token"`
-	ExitToken       string `json:"exit_token"`
-	EntryTag        string `json:"entry_tag"`
-	EntryMode       string `json:"entry_mode,omitempty"`
-	EntryStartLayer string `json:"entry_start_layer,omitempty"`
-	ExitMode        string `json:"exit_mode"`
-	ExitStartLayer  string `json:"exit_start_layer,omitempty"`
-	Execution       string `json:"execution"`
+	EntryPacketMTU         string `json:"entry_packet_mtu,omitempty"`
+	ExitPacketRequestedMTU string `json:"exit_packet_requested_mtu,omitempty"`
+	ExitPacketEffectiveMTU string `json:"exit_packet_effective_mtu,omitempty"`
+	PacketDataOverhead     string `json:"packet_data_overhead,omitempty"`
+	PacketControlMax       string `json:"packet_control_max,omitempty"`
+	PacketMTUState         string `json:"packet_mtu_state,omitempty"`
+	EntryKind              string `json:"entry_kind,omitempty"`
+	EntryID                string `json:"entry_id"`
+	ExitID                 string `json:"exit_id"`
+	EntryNodeID            string `json:"entry_node_id"`
+	ExitNodeID             string `json:"exit_node_id"`
+	EntryAPI               string `json:"entry_api"`
+	ExitAPI                string `json:"exit_api"`
+	EntryToken             string `json:"entry_token"`
+	ExitToken              string `json:"exit_token"`
+	EntryTag               string `json:"entry_tag"`
+	EntryMode              string `json:"entry_mode,omitempty"`
+	EntryStartLayer        string `json:"entry_start_layer,omitempty"`
+	ExitMode               string `json:"exit_mode"`
+	ExitStartLayer         string `json:"exit_start_layer,omitempty"`
+	Execution              string `json:"execution"`
 	// Runtime-only restore pins from a previously proved server owner. An
 	// initial connection may omit them; discovery cannot replace captured pins.
 	ExpectedPacketPublicKey  string `json:"expected_packet_public_key,omitempty"`

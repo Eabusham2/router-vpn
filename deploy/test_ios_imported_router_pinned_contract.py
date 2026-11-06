@@ -32,10 +32,15 @@ class ImportedGate(unittest.TestCase):
         packet_final = {'final-'+mode+'--'+name for mode in ('wg','awg2-fast','awg2-strong') for name in ss | hy}
         self.assertEqual(len(packet_final),60)
         self.assertFalse(packet_final & (original | packet))
-        self.assertEqual(G.NAMES, original | packet | packet_final)
+        nested = {'packet-'+kind+'--final-'+final+'--'+a+'--'+b+'.json'
+                  for kind in ('wireguard', 'amneziawg') for final in ('wg', 'awg2-fast', 'awg2-strong')
+                  for a in G.LAYERS for b in G.LAYERS}
+        self.assertEqual(len(nested),54)
+        self.assertFalse(nested & (original | packet | packet_final))
+        self.assertEqual(G.NAMES, original | packet | packet_final | nested)
         self.assertEqual(len(ss), 11)
         self.assertEqual(len(hy), 9)
-        self.assertEqual(len(self.events()), 138)
+        self.assertEqual(len(self.events()), 192)
 
     def test_exact_verdicts(self):
         G.require_verdicts(self.encode(self.events()))

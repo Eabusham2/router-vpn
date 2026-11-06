@@ -68,7 +68,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor-server-mtu-authority":var predecessor *mobiletor.PredecessorProof;predecessor,err=mobiletor.NewPredecessorProof(r.Source);if err==nil{value,err=mobiletor.ServerMTUAuthority(r.Config,r.Policy,r.Node,predecessor)}
  case "tor-mtu-authority":var predecessor *mobiletor.PredecessorProof;if r.Source!=""{predecessor,err=mobiletor.NewPredecessorProof(r.Source)};if err==nil{value,err=mobiletor.MTUAuthorityWithPredecessor(r.Config,r.Policy,r.Node,predecessor)}
  case "imported-final-baseline":var plan *mobilemultihop.NodeProfile;plan,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,"");if err==nil{value=plan.Config()}
- case "imported-router":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],a["mode"],a["files"],a["profile"],a["start"],"");if err==nil{value=plan.Config()}}
+ case "imported-router","imported-router-metadata","imported-router-source":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],a["mode"],a["files"],a["profile"],a["start"],"");if err==nil{value=plan.Config();if r.Op=="imported-router-metadata"{value=plan.Metadata()};if r.Op=="imported-router-source"{value=plan.SourceSHA256()};err=plan.Close()}}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
@@ -723,17 +723,14 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    var imported:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"203.0.113.20","port":443,"method":method,"password":entryKey]]
    if kind == "hysteria2" {imported=["protocol":kind,"expected_public_ip":"203.0.113.88","hysteria2":["server":"203.0.113.20","port":443,"password":" exact HY2 password ","tls_server_name":"entry.example.test"]]}
    if ["wireguard","amneziawg"].contains(kind) {
-    var packet:[String:Any]=["private_key":Data(repeating:11,count:32).base64EncodedString(),"peer_public_key":Data(repeating:12,count:32).base64EncodedString(),"preshared_key":Data(repeating:13,count:32).base64EncodedString(),"addresses":["10.91.0.2/32","fd91::2/128"],"endpoint":"203.0.113.20:51820","allowed_ips":["0.0.0.0/0","::/0"],"mtu":1380,"persistent_keepalive_interval":29]
+    var packet:[String:Any]=["private_key":Data(repeating:11,count:32).base64EncodedString(),"peer_public_key":Data(repeating:12,count:32).base64EncodedString(),"preshared_key":Data(repeating:13,count:32).base64EncodedString(),"addresses":["10.91.0.2/32","fd91::2/128"],"endpoint":"203.0.113.20:51820","allowed_ips":["0.0.0.0/0","::/0"],"mtu":packetFinal ? 1500:1380,"persistent_keepalive_interval":29]
     if kind=="amneziawg" {packet["parameters"]=["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]}
     imported=["protocol":kind,"expected_public_ip":"203.0.113.88",kind:packet]
    }
    if entryLayer != "off" {imported["start_layer"]=["mode":entryLayer,"api":"http://10.93.0.1:8787","transport":["type":"shadowsocks","tag":"private-start-layer","server":"203.0.113.20","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key]]}
    let entry:[String:Any]=["id":"imported-entry","node_kind":"external","start_layer":entryLayer,"dns_mode":"home","mtu_policy":"auto","external":imported]
    var final:[String:Any]=["id":"paired-final","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.77.0.1:8787","api_token":"exact-paired-token","endpoint":"192.0.2.44","start_layer":finalLayer,"dns_mode":"home","adguard_ipv4":"192.168.50.133","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":true,"multihop_enabled":true,"multihop_entry_id":"imported-entry","multihop_entry_mode":kind,"multihop_exit_id":"paired-final","multihop_exit_mode":finalMode,"multihop_execution":"local"]
-   if packetFinal && ["wireguard","amneziawg"].contains(kind) {
-    reject("packet entry to packet final requires separate nested MTU proof"){try IOSImportedEntryMultihop.validate(entry:entry,final:final)}
-    continue
-   }
+   let nestedPacket=packetFinal && ["wireguard","amneziawg"].contains(kind)
    var finalMaps=["shadowsocks":assets,"hysteria2":hyAssets]
    if packetFinal {
     let original=try root(finalMode,finalLayer,[:],composite)
@@ -775,10 +772,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    if ["wireguard","amneziawg"].contains(kind) {
     let endpoints=graph["endpoints"] as! [[String:Any]],native=endpoints.first{$0["tag"] as? String=="entry-wg"}!
     let packet=imported[kind] as! [String:Any],peer=(native["peers"] as! [[String:Any]])[0]
-    try check("packet entry remains one exact native endpoint",endpoints.count==1 && native["type"] as? String==(kind=="amneziawg" ? "routervpn-amneziawg":"wireguard") && !outs.contains{["wireguard","routervpn-amneziawg"].contains($0["type"] as? String ?? "")})
+    try check("packet entry remains one exact native endpoint",endpoints.count==(packetFinal ? 2:1) && native["type"] as? String==(kind=="amneziawg" ? "routervpn-amneziawg":"wireguard") && !outs.contains{["wireguard","routervpn-amneziawg"].contains($0["type"] as? String ?? "")})
     try check("packet keys and PSK survive composition",native["private_key"] as? String==packet["private_key"] as? String && peer["public_key"] as? String==packet["peer_public_key"] as? String && peer["pre_shared_key"] as? String==packet["preshared_key"] as? String)
     try check("packet routes and keepalive stay captured",native["address"] as? [String]==packet["addresses"] as? [String] && peer["allowed_ips"] as? [String]==packet["allowed_ips"] as? [String] && peer["persistent_keepalive_interval"] as? Int==29)
-    try check("packet endpoint MTU remains independent of single VPN",native["mtu"] as? Int==1380 && inbounds.first{$0["type"] as? String=="tun"}?["mtu"] as? Int==1280)
+    try check("packet endpoint MTU remains independent of single VPN",native["mtu"] as? Int==(packetFinal ? 1500:1380) && inbounds.first{$0["type"] as? String=="tun"}?["mtu"] as? Int==1280)
     if entryLayer=="off" {
      try check("packet peer address stays captured",peer["address"] as? String=="203.0.113.20" && peer["port"] as? Int==51820 && native["detour"]==nil)
     } else {
@@ -814,8 +811,47 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
     let original=try tagged(baseline,"proxy")
     var normalized=native;normalized["tag"]="proxy"
     if finalLayer=="off" {normalized.removeValue(forKey:"detour")}
-    try check("paired packet final preserves all native credentials MTU and padding",try json(normalized)==json(original))
-    try check("paired packet final remains native and keeps independent MTU",native["type"] as? String==(finalMode=="wg" ? "wireguard":"routervpn-amneziawg") && native["mtu"] as? Int==1420 && inbounds.first{$0["type"] as? String=="tun"}?["mtu"] as? Int==1280)
+    var expected=original
+    if nestedPacket {
+     let metadata=try object(Data(bridge(["Op":"imported-router-metadata","Config":text(args)]).utf8))
+     let effective=Int(metadata["exit_packet_effective_mtu"] as? String ?? "") ?? 0
+     let overhead=Int(metadata["packet_data_overhead"] as? String ?? "") ?? 0
+     let control=Int(metadata["packet_control_max"] as? String ?? "") ?? 0
+     try check("nested packet cap is explicit configured-unmeasured evidence \(kind) \(finalMode) \(entryLayer) \(finalLayer) entry=\(metadata["entry_packet_mtu"] ?? "missing") requested=\(metadata["exit_packet_requested_mtu"] ?? "missing") effective=\(effective) overhead=\(overhead) control=\(control)",metadata["packet_mtu_state"] as? String=="configured-unmeasured" && metadata["entry_packet_mtu"] as? String=="1500" && metadata["exit_packet_requested_mtu"] as? String=="1420" && effective>=1280 && effective<=1420 && overhead>=60 && control>0 && control<=1500)
+     try check("derived Auto cap governs actual final endpoint",native["mtu"] as? Int==effective && ((effective+15)/16)*16+overhead<=1500)
+     expected["mtu"]=effective
+     try check("raw final asset still carries original endpoint MTU",original["mtu"] as? Int==1420)
+     let identity=try bridge(["Op":"imported-router-source","Config":text(args)])
+     var replacedEntry=entry,replacedExternal=imported,replacedPacket=imported[kind] as! [String:Any]
+     replacedPacket["preshared_key"]=Data(repeating:14,count:32).base64EncodedString();replacedExternal[kind]=replacedPacket;replacedEntry["external"]=replacedExternal
+     let replacedSource=try RouterVPNExternalExitBuilder.importedRouterSource(profile:replacedEntry)
+     var replacedArgs=args;replacedArgs["config"]=replacedSource.config;replacedArgs["capture"]=replacedSource.capture
+     let replacementIdentity=try bridge(["Op":"imported-router-source","Config":text(replacedArgs)])
+     try check("native source identity binds original nested packet credentials",identity.count==64 && replacementIdentity.count==64 && identity != replacementIdentity)
+     if finalLayer != "off" {
+      var changedMaps=finalMaps,changedAssets=finalMaps[finalMode]!
+      let name=finalMode=="wg" ? "wg.conf":"awg.conf"
+      let originalText=String(decoding:Data(base64Encoded:changedAssets[name]!)!,as:UTF8.self)
+      let changedText=originalText.replacingOccurrences(of:"MTU=1420",with:"MTU=1480")
+      try check("raw packet MTU replacement changes exact original asset",changedText != originalText)
+      changedAssets[name]=Data(changedText.utf8).base64EncodedString();changedMaps[finalMode]=changedAssets
+      let alternate=try RouterVPNExternalExitBuilder.importedRouterFinalSource(profile:final,profiles:changedMaps)
+      var alternateArgs=args;alternateArgs["files"]=alternate.files
+      let alternateGraph=try object(Data(bridge(["Op":"imported-router","Config":text(alternateArgs)]).utf8))
+      let alternateIdentity=try bridge(["Op":"imported-router-source","Config":text(alternateArgs)])
+      try check("equal effective caps cannot erase different raw final MTU identity",try tagged(alternateGraph,"routervpn-execution-local")["mtu"] as? Int==effective && alternateIdentity != identity)
+     }
+     var fixed=final;fixed["mtu_policy"]="fixed";fixed["manual_mtu"]=1500
+     var fixedArgs=args;fixedArgs["profile"]=try text(fixed)
+     reject("actual compiler refuses Fixed nested overflow"){_ = try bridge(["Op":"imported-router","Config":text(fixedArgs)])}
+     var smallEntry=entry,smallExternal=imported,smallPacket=imported[kind] as! [String:Any]
+     smallPacket["mtu"]=1280;smallExternal[kind]=smallPacket;smallEntry["external"]=smallExternal
+     let small=try RouterVPNExternalExitBuilder.importedRouterSource(profile:smallEntry)
+     var smallArgs=args;smallArgs["config"]=small.config;smallArgs["capture"]=small.capture
+     reject("actual compiler refuses entry capacity below nested IPv6 floor"){_ = try bridge(["Op":"imported-router","Config":text(smallArgs)])}
+    }
+    try check("paired packet final preserves all native credentials and padding",try json(normalized)==json(expected))
+    try check("paired packet final remains native and keeps independent MTU",native["type"] as? String==(finalMode=="wg" ? "wireguard":"routervpn-amneziawg") && (native["mtu"] as? Int)==(expected["mtu"] as? Int) && inbounds.first{$0["type"] as? String=="tun"}?["mtu"] as? Int==1280)
     for fault in ["missing-final-assets","missing-layer-assets"] {
      var maps=finalMaps
      if fault=="missing-final-assets" {maps.removeValue(forKey:finalMode)}
@@ -880,7 +916,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   defer{RouterVPNTorTestClose()}
   try importedRouterGraphs()
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_IMPORTED_ROUTER_ONLY"]=="1" {
-   print("Apple imported Router graph: PASS (136 graphs: preserved76 plus60 proxy entries with paired WG/AWG finals and independent layers; shipping Swift inputs and actual Go compiler; no native network proof)")
+   print("Apple imported Router graph: PASS (190 graphs: preserved136 plus54 nested packet entries and paired finals with configured MTU bounds; shipping Swift inputs and actual Go compiler; no native network proof)")
    return
   }
   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {

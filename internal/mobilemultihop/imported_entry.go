@@ -3,8 +3,10 @@ package mobilemultihop
 import (
 	"encoding/json"
 	"errors"
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobileperf"
 	"router-vpn/internal/routechoice"
+	"strconv"
 )
 
 // importedEntry is created only from the complete independently validated
@@ -15,16 +17,14 @@ type importedEntry struct {
 
 // NewImportedEntry composes an imported SS2022, Hysteria2, WireGuard or AmneziaWG predecessor and a paired
 // Shadowsocks, Hysteria2, WireGuard or AmneziaWG final. Packet-to-packet
-// composition is not admitted here. Compilation proves neither identity.
+// composition requires the complete configured data/control envelope. Compilation proves neither identity.
 func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap string) (*Controller, error) {
 	bad := errors.New("imported entry requires a captured standalone SS2022, Hysteria2, WireGuard or AmneziaWG source and paired SS/HY2/WG/AWG final in Local execution")
 	var selection externalPolicyCapture
 	if exactJSON([]byte(entryCapture), &selection, 8<<20) != nil || selection.Entry != nil || selection.EntryTag != "" || selection.PredecessorConfig != "" || selection.Execution != nil || (selection.Protocol != "shadowsocks" && selection.Protocol != "hysteria2" && selection.Protocol != "wireguard" && selection.Protocol != "amneziawg") || selection.Profile["node_kind"] != "external" || (exitMode != "shadowsocks" && exitMode != "hysteria2" && exitMode != "wg" && exitMode != "awg2-fast" && exitMode != "awg2-strong") {
 		return nil, bad
 	}
-	if (exitMode == "wg" || exitMode == "awg2-fast" || exitMode == "awg2-strong") && (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg") {
-		return nil, errors.New("imported packet entry to paired packet final requires a separately verified nested packet envelope")
-	}
+
 	// An imported operator address is a public-path proof, never a paired API.
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
 		if v := selection.Profile[key]; v != nil && v != "" {
@@ -144,6 +144,25 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 	if (exitMode == "wg" || exitMode == "awg2-fast" || exitMode == "awg2-strong") && predecessorText(final, "detour") != "" && predecessorText(outer, "server") != predecessorText(exit.profile, "endpoint") {
 		return nil, errors.New("paired packet final and Start Layer belong to different node endpoints")
 	}
+	var nested *awgpolicy.PacketEnvelope
+	if (selection.Protocol == "wireguard" || selection.Protocol == "amneziawg") && awgpolicy.WireGuardFamily(exitMode) {
+		var layer map[string]any
+		if outer != nil && predecessorText(final, "detour") != "" {
+			layer = outer
+		}
+		envelope, failure := awgpolicy.EndpointEnvelope(final, layer)
+		if failure != nil {
+			return nil, failure
+		}
+		nested = &envelope
+	}
+	requestedPacketMTU, effectivePacketMTU := 0, 0
+	if nested != nil {
+		requestedPacketMTU, err = mtuNumber(final["mtu"])
+		if err != nil {
+			return nil, err
+		}
+	}
 	outer["detour"] = "entry-wg"
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := first[family].([]any)
@@ -154,9 +173,26 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		last[family] = append(existing, rows...)
 	}
 	tun := last["inbounds"].([]any)[0].(map[string]any)
-	mtu, _, policy, err := externalMTUPolicy(tun, final, original, exit.profile, selection.Profile)
+	envelope := 0
+	if nested != nil {
+		envelope = nested.DataOverhead
+	}
+	mtu, entryMTU, policy, err := externalMTUPolicyWithPacketEnvelope(tun, final, original, exit.profile, selection.Profile, envelope)
 	if err != nil {
 		return nil, err
+	}
+	if nested != nil {
+		requested := requestedPacketMTU
+		if policy == "fixed" {
+			requested = mtu
+		}
+		cap, failure := nested.Capacity(entryMTU, requested, policy == "fixed")
+		if failure != nil {
+			return nil, failure
+		}
+		final["mtu"] = cap
+		effectivePacketMTU = cap
+		mtu = min(mtu, cap)
 	}
 	tun["mtu"] = mtu
 	selectedProfile := predecessorCopy(exit.profile)
@@ -224,6 +260,14 @@ func NewImportedEntry(entryConfig, entryCapture, exitMode, exitFiles, exitProfil
 		return nil, err
 	}
 	meta := Metadata{EntryKind: "external", EntryID: selection.ExitID, ExitID: predecessorText(exit.profile, "id"), ExitNodeID: predecessorText(exit.profile, "node_proof_id"), ExitAPI: predecessorText(exit.profile, "router_api"), ExitToken: predecessorText(exit.profile, "api_token"), EntryTag: "entry-wg", EntryMode: selection.Protocol, ExitMode: exitMode, Execution: "local", EntryStartLayer: entryMeta.StartLayer, ExitStartLayer: predecessorText(exit.profile, "start_layer")}
+	if nested != nil {
+		meta.EntryPacketMTU = strconv.Itoa(entryMTU)
+		meta.ExitPacketRequestedMTU = strconv.Itoa(requestedPacketMTU)
+		meta.ExitPacketEffectiveMTU = strconv.Itoa(effectivePacketMTU)
+		meta.PacketDataOverhead = strconv.Itoa(nested.DataOverhead)
+		meta.PacketControlMax = strconv.Itoa(nested.ControlMax)
+		meta.PacketMTUState = "configured-unmeasured"
+	}
 	metadata, _ := json.Marshal(meta)
 	source, _ := json.Marshal([]string{"routervpn-imported-entry-v1", entryConfig, entryCapture, exitMode, exitFiles, exitProfile, exitStart, dnsBootstrap})
 	c := &Controller{meta: meta, config: string(encoded), progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}, imported: &importedEntry{source: externalDigest(source), metadata: string(metadata), profile: profile, publicIP: selection.ExpectedPublicIP}}

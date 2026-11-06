@@ -163,7 +163,7 @@ enum IOSRuntimeSelector {
         // Imported packet labels are not paired raw profile IDs. The model
         // captures their independent entry bundle before provider startup.
         let importedPacket = ["wireguard", "amneziawg"].contains(entryMode) &&
-            ["shadowsocks", "hysteria2"].contains(mode) &&
+            ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) &&
             (profile.multihopExecution ?? "local") == "local"
         guard multihopModeIDs.contains(entryMode) || importedPacket else {
             throw IOSRuntimeSelectionError.unsupportedMode("Choose an exact native multihop entry transport.")

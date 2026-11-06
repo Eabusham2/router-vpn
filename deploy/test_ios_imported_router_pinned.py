@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse 136 actual Swift-built imported-entry graphs in pinned Libbox.
+"""Parse 190 actual Swift-built imported-entry graphs in pinned Libbox.
 
 This is an executable host/compiler composition gate, not a device traffic test.
 """
@@ -26,7 +26,7 @@ PROXY_NAMES = set(NAMES)
 NAMES = NAMES | {'final-hysteria2--'+name for name in NAMES}
 NAMES |= {'final-'+mode+'--'+name for mode in ('wg','awg2-fast','awg2-strong') for name in PROXY_NAMES}
 NAMES |= {'packet-'+kind+'--final-'+final+'--'+entry_layer+'--'+final_layer+'.json'
-          for kind in ('wireguard', 'amneziawg') for final in ('shadowsocks', 'hysteria2')
+          for kind in ('wireguard', 'amneziawg') for final in ('shadowsocks', 'hysteria2', 'wg', 'awg2-fast', 'awg2-strong')
           for entry_layer in LAYERS for final_layer in LAYERS}
 
 
@@ -46,7 +46,7 @@ def digest():
 
 def require_matrix(root):
     if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != NAMES:
-        raise ValueError('Apple imported matrix must contain exactly 136 original host graphs')
+        raise ValueError('Apple imported matrix must contain exactly 190 original host graphs')
     for name in NAMES:
         info = (root/name).lstat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4*1024*1024:
@@ -69,8 +69,8 @@ def require_verdicts(raw):
                 completed.append(test)
             else:
                 package_passes += 1
-    if len(completed) != 137 or set(completed) != expected or package_passes != 1:
-        raise ValueError('Native Apple imported proof requires all 137 exact passing verdicts')
+    if len(completed) != 191 or set(completed) != expected or package_passes != 1:
+        raise ValueError('Native Apple imported proof requires all 191 exact passing verdicts')
 
 
 def run(vendor):
@@ -102,7 +102,7 @@ def run(vendor):
         require_verdicts(result.stdout)
         if before != digest():
             raise ValueError('Apple imported source changed during its executable proof')
-    print('Apple imported Router: 136 actual Swift graph exports parsed by pinned Libbox; 137 exact native verdicts passed')
+    print('Apple imported Router: 190 actual Swift graph exports parsed by pinned Libbox; 191 exact native verdicts passed')
 
 
 def main():

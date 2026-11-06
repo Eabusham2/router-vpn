@@ -406,7 +406,7 @@ public final class StartupTest {
   f.policy(mode,true);AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id=ENTRY;entry.protocol=protocol;entry.secret="IMPORTED_SOURCE_SECRET";entry.policy="IMPORTED_POLICY";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));
   f.prefs().edit().putBoolean("multihop_on",true).putString("multihop_entry_kind","external").putString("multihop_entry",ENTRY).putString("multihop_exit",FIRST).putString("multihop_entry_mode",protocol).putString("multihop_exit_mode",finalMode).putString("multihop_execution","local").apply();return entry;
  }
- static void importedRouterStartup(Path root,String family)throws Exception{for(String protocol:family.equals("imported-packet")?List.of("wireguard","amneziawg"):List.of("shadowsocks","hysteria2"))for(String finalMode:family.equals("imported-packet-final")?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")){
+ static void importedRouterStartup(Path root,String family)throws Exception{for(String protocol:(family.equals("imported-packet")||family.equals("imported-nested"))?List.of("wireguard","amneziawg"):List.of("shadowsocks","hysteria2"))for(String finalMode:(family.equals("imported-packet-final")||family.equals("imported-nested"))?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")){
   for(String mode:List.of("smart-auto","auto","last"))for(boolean rotate:new boolean[]{false,true}){
    Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=importedRouter(f,mode,protocol,finalMode);String collidingPrivate=Files.readString(f.nodes.file(ENTRY).toPath());Bundle state=f.request();
    check(f.captured.multihop()&&!f.captured.external()&&f.captured.entry==null&&f.captured.ordinaryEntry!=null&&f.captured.ordinaryEntry!=entry&&f.captured.exit.id.equals(FIRST),"mixed startup fabricated private entry or external final");
@@ -430,7 +430,7 @@ public final class StartupTest {
    boolean refused=false;try{f.capture();}catch(Exception expected){refused=true;}check(refused&&f.starts()==0,"invalid imported Router startup was accepted: "+invalid);
   }
  }}
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){switch(args[1]){case "private-last":routerLastReceipts(root);break;case "strict":strictReceipts(root);break;case "external-last":externalLastReceipts(root);break;case "missing-external-last":missingExternalLast(root);break;case "changed":changes(root);break;case "ordinary":ordinaryStartup(root);break;case "imported":case "imported-packet":case "imported-packet-final":importedRouterStartup(root,args[1]);System.out.println("Android "+args[1]+" startup: "+checks+" exact entry/final, permission, source and cancellation checks PASS");break;default:throw new AssertionError("unknown causal group");}return;}defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);routerLastReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){switch(args[1]){case "private-last":routerLastReceipts(root);break;case "strict":strictReceipts(root);break;case "external-last":externalLastReceipts(root);break;case "missing-external-last":missingExternalLast(root);break;case "changed":changes(root);break;case "ordinary":ordinaryStartup(root);break;case "imported":case "imported-packet":case "imported-packet-final":case "imported-nested":importedRouterStartup(root,args[1]);System.out.println("Android "+args[1]+" startup: "+checks+" exact entry/final, permission, source and cancellation checks PASS");break;default:throw new AssertionError("unknown causal group");}return;}defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);routerLastReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
 }
 '''
 
@@ -505,7 +505,7 @@ def main():
         run=['java','-Dfixture.privatejson='+str(validator),'-cp',os.pathsep.join((str(root/'classes'),str(jar))),'com.eabusham.routervpn.StartupTest',str(root/'data')]
         (root/'data').mkdir();subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=60)
         # Keep both complete families mandatory, each under the original JVM bound.
-        for family in ("imported", "imported-packet", "imported-packet-final"):
+        for family in ("imported", "imported-packet", "imported-packet-final", "imported-nested"):
             subprocess.run([*run, family], check=True, timeout=60)
         controls=(
             ('AndroidUnifiedConnectionController.java','if(startup!=null&&startup.lastMultihop!=null)','if(false&&startup!=null&&startup.lastMultihop!=null)','Router Last reran Compare or changed its historical winner'),

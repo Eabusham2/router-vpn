@@ -123,16 +123,16 @@ for marker in ('requireMutable("importing or replacing a Router VPN node")', 're
     assert marker in node_store, f"Android node-store mutation gate missing {marker!r}"
 
 # Imported paths must use the compiler's exact directional pair predicate at
-# all durable boundaries; generic packet support must not admit packet-over-packet.
+# all durable boundaries; nested packet readiness still requires the actual captured compiler.
 assert store.count('AndroidImportedRouterPath.supports(') == 3, "imported pair validation missing from load/snapshot/readRows"
 product = read("ProductActivity.java")
-assert "Shadowsocks 2022 and Hysteria2 entries can use a complete Shadowsocks, Hysteria2, WireGuard, AmneziaWG Fast or AmneziaWG Strong final transport; WireGuard and AmneziaWG entries can use Shadowsocks or Hysteria2 finals." in product
+assert "Imported Shadowsocks 2022, Hysteria2, WireGuard and AmneziaWG entries can use a complete paired final transport. Packet finals require the captured entry capacity to fit their data and handshake envelope; Auto may reduce the final endpoint MTU, while Fixed overflow is refused. These configured bounds are not a measured path MTU." in product
 chooser = product.split('private void chooseImportedRouterTransport(', 1)[1].split('private ', 1)[0]
 assert '"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"' in chooser
 assert 'AndroidImportedRouterPath.compile(' in chooser
 assert 'no complete supported final transport for the selected entry and layers' in chooser
 harness = (ROOT / "test_android_connection_profiles.py").read_text(encoding="utf-8")
-for family in ('imported-router', 'imported-wireguard-router', 'imported-amneziawg-router', 'imported-final-wg', 'imported-final-awg2-fast', 'imported-final-awg2-strong'):
+for family in ('imported-router', 'imported-wireguard-router', 'imported-amneziawg-router', 'imported-final-wg', 'imported-final-awg2-fast', 'imported-final-awg2-strong', 'imported-nested-wg', 'imported-nested-awg2-fast', 'imported-nested-awg2-strong'):
     assert harness.count('"' + family + '"') >= 2, f"mandatory profile family missing: {family}"
 
 print("Android connection profile safety contract: PASS")
