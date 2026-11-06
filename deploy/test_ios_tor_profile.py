@@ -289,7 +289,8 @@ def provider_source():
     return support + compilation + inputs + preparation + ''.join(method(name) for name in (
         'compileLibbox', 'performanceFiles', 'multihopWireGuardEndpoint',
         'nativeAmneziaEndpoint', 'selectedRouterProfile', 'wireGuardLikeProfile',
-        'layeredProfile', 'strictKillSwitchRequested', 'suppliedNodeProof',
+        'validateCapturedSSSource', 'capturedSSProfile', 'layeredProfile',
+        'strictKillSwitchRequested', 'suppliedNodeProof',
         'deriveNodeProof', 'selectedProofURL', 'privateLiteralHost')) + external + '}\n'
 
 
