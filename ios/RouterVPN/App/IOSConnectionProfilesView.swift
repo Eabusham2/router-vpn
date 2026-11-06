@@ -4,7 +4,7 @@ import SwiftUI
 
 private let iosConnectionProfilesKey = "routervpn.connection-profiles.v1"
 private let iosConnectionProfilesFile = "connection-profiles.json"
-private let iosConnectionProfilesSchemaVersion = 5
+private let iosConnectionProfilesSchemaVersion = 6
 private let iosConnectionProfilesMaximumBytes = 512 * 1024
 private let iosConnectionModeKey = "routervpn.unified.mode.v1"
 private let iosConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
@@ -105,6 +105,15 @@ private extension IOSConnectionSafePreferences {
     }
 }
 
+private struct IOSConnectionEntryCapture: Codable, Hashable {
+    var nodeID: String
+    var nodeKind: String
+    var nodeProofID: String?
+    var externalProtocol: String?
+    var externalPublicIP: String?
+    var preferences: IOSConnectionSafePreferences
+}
+
 private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
     var id: String
     var name: String
@@ -120,6 +129,7 @@ private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
     // remain in the linked node's private store.
     var externalProtocol: String? = nil
     var externalPublicIP: String? = nil
+    var entryPolicy: IOSConnectionEntryCapture? = nil
 
     var autoRequirementsSummary: String {
         guard let preferences else { return "AUTO n/a" }
@@ -170,7 +180,7 @@ private enum IOSConnectionProfileStore {
                 return sorted(values)
             }
             // The pre-v4 private store was a raw array. Treat that exact shape as
-            // known schema v1, validate it fully, then atomically rewrite v5.
+            // known schema v1, validate it fully, then atomically rewrite v6.
             let values = try validateStoredProfiles(decoder.decode([IOSConnectionProfileRecord].self, from: data))
             try persist(values)
             return sorted(values)
@@ -204,11 +214,37 @@ private enum IOSConnectionProfileStore {
         if completeExternal && selected.external?.matchesStartLayer(selected.startLayer) != true { throw issue("The selected external Start Layer no longer matches its private node settings.") }
         let prefs: IOSConnectionSafePreferences?
         if selected.normalizedNodeKind == "router-vpn" || completeExternal {
-            if selected.multihopEnabled == true {
-                guard let bundle = model.bundle else { throw issue("The selected multihop bundle is missing.") }
-                _ = try model.iosMultihopEntryBundle(for: bundle)
+            prefs = capturePreferences(selected)
+        } else {
+            prefs = nil
+        }
+        var record = IOSConnectionProfileRecord(id: id ?? UUID().uuidString.lowercased(), name: name, nodeID: selected.id,
+                                          nodeKind: selected.normalizedNodeKind, mode: selection.mode,
+                                          customLayers: selection.layers, preferences: prefs, updatedAt: Date(),
+                                          externalProtocol: completeExternal ? selected.external?.protocolName : nil,
+                                          externalPublicIP: completeExternal ? selected.external?.expectedPublicIP : nil)
+        if selected.multihopEnabled == true, let source = model.bundle {
+            let entryBundle = try model.iosMultihopEntryBundle(for: source)
+            guard let entryID = selected.multihopEntryID,
+                  entryBundle.routerProfiles.filter({ $0.id == entryID }).count == 1,
+                  let entry = entryBundle.routerProfiles.first(where: { $0.id == entryID }) else {
+                throw issue("The selected entry no longer has one linked private source.")
             }
-            prefs = IOSConnectionSafePreferences(
+            record.entryPolicy = IOSConnectionEntryCapture(nodeID: entry.id, nodeKind: entry.normalizedNodeKind,
+                nodeProofID: entry.nodeProofID, externalProtocol: entry.external?.protocolName,
+                externalPublicIP: entry.external?.expectedPublicIP, preferences: capturePreferences(entry))
+        }
+        let validated = try validateStoredProfiles([record])[0]
+        if torExternal, let captured = validated.preferences {
+            // Run the shipping Tor parser on the exact normalized preferences
+            // that will be saved, without starting a circuit or claiming proof.
+            try IOSExternalExecution.validateDeviceDraft(applying(captured, to: selected))
+        }
+        return validated
+    }
+
+    private static func capturePreferences(_ selected: RouterProfile) -> IOSConnectionSafePreferences {
+        return IOSConnectionSafePreferences(
                 homeLANAccess: selected.homeLANAccess ?? true,
                 homeLANCIDRs: selected.homeLANCIDRs ?? [],
                 killSwitch: selected.killSwitch ?? false,
@@ -240,21 +276,6 @@ private enum IOSConnectionProfileStore {
                 multihopExitMode: selected.multihopExitMode,
                 multihopExecution: selected.multihopExecution ?? "local"
             )
-        } else {
-            prefs = nil
-        }
-        let record = IOSConnectionProfileRecord(id: id ?? UUID().uuidString.lowercased(), name: name, nodeID: selected.id,
-                                          nodeKind: selected.normalizedNodeKind, mode: selection.mode,
-                                          customLayers: selection.layers, preferences: prefs, updatedAt: Date(),
-                                          externalProtocol: completeExternal ? selected.external?.protocolName : nil,
-                                          externalPublicIP: completeExternal ? selected.external?.expectedPublicIP : nil)
-        let validated = try validateStoredProfiles([record])[0]
-        if torExternal, let captured = validated.preferences {
-            // Run the shipping Tor parser on the exact normalized preferences
-            // that will be saved, without starting a circuit or claiming proof.
-            try IOSExternalExecution.validateDeviceDraft(applying(captured, to: selected))
-        }
-        return validated
     }
 
     static func add(model: RouterVPNModel, name: String) throws -> IOSConnectionProfileRecord {
@@ -303,12 +324,11 @@ private enum IOSConnectionProfileStore {
                 bundle.selectedRouterID = saved.nodeID
                 bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
                 bundle.endpoint = profile.endpoint
-                if prefs.multihopEnabled { _ = try model.iosMultihopEntryBundle(for: bundle) }
             }
             // Old external records deliberately contain no preference snapshot.
             // They retain selection-only behavior; new records restore policy.
             bundle.selectedRouterID = saved.nodeID
-            do { try model.importBundle(JSONEncoder().encode(bundle)) }
+            do { try applySavedPath(saved, selected: bundle, original: nodeData, model: model) }
             catch { throw issue("Could not select the saved Custom/external node: \(error.localizedDescription)") }
             UserDefaults.standard.set("smart-auto", forKey: iosConnectionModeKey)
             return saved
@@ -329,13 +349,52 @@ private enum IOSConnectionProfileStore {
         bundle.routerAPI = profile.routerAPI
         bundle.adGuardIPv4 = profile.adGuardIPv4
         bundle.adGuardIPv6 = profile.adGuardIPv6
-        if prefs.multihopEnabled { _ = try model.iosMultihopEntryBundle(for: bundle) }
-
-        do { try model.importBundle(JSONEncoder().encode(bundle)) }
+        do { try applySavedPath(saved, selected: bundle, original: nodeData, model: model) }
         catch { throw issue("Could not apply saved connection preferences: \(error.localizedDescription)") }
         UserDefaults.standard.set(effectiveMode, forKey: iosConnectionModeKey)
         if let preparedPreset { UserDefaults.standard.set(preparedPreset, forKey: iosConnectionCustomPresetsKey) }
         return saved
+    }
+
+    private static func applySavedPath(_ saved: IOSConnectionProfileRecord, selected: ClientBundle,
+                                       original: Data, model: RouterVPNModel) throws {
+        guard let capture = saved.entryPolicy else {
+            // Historical snapshots did not capture entry settings. Keep their
+            // reference-only behavior; never fabricate a captured entry policy.
+            if saved.preferences?.multihopEnabled == true { _ = try model.iosMultihopEntryBundle(for: selected) }
+            try model.importBundle(JSONEncoder().encode(selected))
+            return
+        }
+        guard let entryData = IOSNodeBundleStore.shared.bundleData(containing: capture.nodeID, current: model.bundle),
+              var entryBundle = try? JSONDecoder().decode(ClientBundle.self, from: entryData),
+              entryBundle.routerProfiles.filter({ $0.id == capture.nodeID }).count == 1,
+              let index = entryBundle.routerProfiles.firstIndex(where: { $0.id == capture.nodeID }) else {
+            throw issue("The captured entry is no longer linked.")
+        }
+        let source = entryBundle.routerProfiles[index]
+        guard source.normalizedNodeKind == capture.nodeKind, source.nodeProofID == capture.nodeProofID,
+              source.external?.protocolName == capture.externalProtocol,
+              source.external?.expectedPublicIP == capture.externalPublicIP else {
+            throw issue("The captured entry's paired identity or external protocol/public identity changed. Update the saved connection profile.")
+        }
+        let restored = applying(capture.preferences, to: source)
+        if restored.normalizedNodeKind == "external" {
+            guard restored.external?.matchesStartLayer(restored.startLayer) == true else {
+                throw issue("The saved entry Start Layer no longer matches its private provisioned transport.")
+            }
+        }
+        entryBundle.routerProfiles[index] = restored
+        entryBundle.selectedRouterID = capture.nodeID
+        var selected = selected
+        let replacements: [(original: Data, updated: ClientBundle)]
+        if entryData == original {
+            guard let index = selected.routerProfiles.firstIndex(where: { $0.id == capture.nodeID }) else {
+                throw issue("The captured entry changed its private record.")
+            }
+            selected.routerProfiles[index] = restored
+            replacements = [(original, selected)]
+        } else { replacements = [(original, selected), (entryData, entryBundle)] }
+        try model.restoreConnectionProfile(replacements, selectedID: saved.nodeID)
     }
 
     private static func applying(_ prefs: IOSConnectionSafePreferences, to source: RouterProfile) -> RouterProfile {
@@ -443,6 +502,30 @@ private enum IOSConnectionProfileStore {
                 } else {
                     guard record.externalProtocol == nil, record.externalPublicIP == nil else { throw issue("External identity cannot be detached from its saved policy.") }
                 }
+            }
+            if var entry = record.entryPolicy {
+                guard record.preferences?.multihopEnabled == true,
+                      record.preferences?.multihopEntryID == entry.nodeID,
+                      entry.nodeID != record.nodeID,
+                      entry.nodeID.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil else {
+                    throw issue("Saved entry policy is not owned by this connection's exact graph.")
+                }
+                if entry.nodeKind == "router-vpn" {
+                    guard let proof = entry.nodeProofID, proof.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                          entry.externalProtocol == nil, entry.externalPublicIP == nil else {
+                        throw issue("Saved Router entry has no exact paired public identity.")
+                    }
+                    entry.preferences = try validatePreferences(entry.preferences)
+                } else {
+                    guard entry.nodeKind == "external", (entry.nodeProofID ?? "").isEmpty,
+                          let proto = entry.externalProtocol, IOSConnectionSafePreferences.ordinaryExternalModes.contains(proto),
+                          let address = entry.externalPublicIP, !address.contains("%"),
+                          IPv4Address(address) != nil || IPv6Address(address) != nil else {
+                        throw issue("Saved external entry has no exact protocol/public identity.")
+                    }
+                    entry.preferences = try validatePreferences(entry.preferences, external: true)
+                }
+                record.entryPolicy = entry
             }
             validated.append(record)
         }
@@ -673,7 +756,7 @@ struct IOSConnectionProfilesView: View {
     }
     private func add() { do { let p = try IOSConnectionProfileStore.add(model: model, name: name); status = "Added \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh(); selectedID = p.id } catch { status = error.localizedDescription } }
     private func update() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.update(model: model, id: selectedID, name: name); status = "Updated \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh() } catch { status = error.localizedDescription } }
-    private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode) • \(p.autoRequirementsSummary). Connect separately to prove the path." } catch { status = error.localizedDescription } }
+    private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode) • \(p.autoRequirementsSummary). Connect separately to prove the path."; if p.preferences?.multihopEnabled == true && p.entryPolicy == nil { status += " Older profile: entry settings use the current linked node. Update to capture them." } } catch { status = error.localizedDescription } }
     private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(model: model, id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
 }
 

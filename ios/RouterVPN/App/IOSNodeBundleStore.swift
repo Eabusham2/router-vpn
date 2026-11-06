@@ -60,6 +60,58 @@ final class IOSNodeBundleStore {
         _ = try store(source, replaceExistingRecord: true)
     }
 
+    /// A saved connection may own policy on two independently linked nodes.
+    /// Prepare both original records before one durable commit; never expose a
+    /// restored entry with an old exit, or overwrite a concurrently relinked node.
+    func restoreConnectionProfile(
+        _ replacements: [(original: Data, updated: ClientBundle)], selectedID: String,
+        current: ClientBundle?, prepare: (ClientBundle) throws -> ClientBundle,
+        validate: (ClientBundle, [ClientBundle]) throws -> Void
+    ) throws -> (bundle: ClientBundle, data: Data) {
+        try ensureStorageReady()
+        guard (1...2).contains(replacements.count) else { throw profileRestoreError() }
+        let originalRecords = records
+        let available = readableRecords(current: current)
+        var next = available, seen = Set<String>(), prepared: [ClientBundle] = []
+        var selected: (bundle: ClientBundle, data: Data)?
+        for replacement in replacements {
+            let owners = available.filter { $0.value == replacement.original }
+            guard owners.count == 1, let key = owners.keys.first, seen.insert(key).inserted else {
+                throw profileRestoreError()
+            }
+            let original = try decodeStoredBundle(replacement.original)
+            guard replacement.updated.profiles == original.profiles else { throw profileRestoreError() }
+            let candidate = try prepare(normalizedBundle(replacement.updated))
+            guard Set(candidate.routerProfiles.map(\.id)) == Set(original.routerProfiles.map(\.id)),
+                  candidate.routerProfiles.count == original.routerProfiles.count,
+                  try owningRecordKey(candidate, in: available) == key else { throw profileRestoreError() }
+            for profile in candidate.routerProfiles {
+                guard let prior = original.routerProfiles.first(where: { $0.id == profile.id }),
+                      profile.nodeProofID == prior.nodeProofID,
+                      profile.normalizedNodeKind == prior.normalizedNodeKind,
+                      profile.external == prior.external,
+                      profile.apiToken == prior.apiToken else { throw profileRestoreError() }
+            }
+            let data = try JSONEncoder().encode(candidate)
+            next[key] = data
+            prepared.append(candidate)
+            if candidate.selectedRouterID == selectedID {
+                guard selected == nil else { throw profileRestoreError() }
+                selected = (candidate, data)
+            }
+        }
+        guard let selected else { throw profileRestoreError() }
+        try validate(selected.bundle, prepared)
+        guard records == originalRecords else { throw profileRestoreError() }
+        try commitRecords(next)
+        return selected
+    }
+
+    private func profileRestoreError() -> NSError {
+        NSError(domain: "RouterVPN.NodeStore", code: 6, userInfo: [NSLocalizedDescriptionKey:
+            "A linked node changed while restoring the saved connection. Its current credentials and settings were preserved."])
+    }
+
     func profiles(current: ClientBundle?) -> [RouterProfile] {
         guard storageError == nil else { return [] }
         let available = readableRecords(current: current)

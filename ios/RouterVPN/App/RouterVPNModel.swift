@@ -184,6 +184,29 @@ final class RouterVPNModel: ObservableObject {
         }
     }
 
+    func restoreConnectionProfile(
+        _ replacements: [(original: Data, updated: ClientBundle)], selectedID: String
+    ) throws {
+        guard !profileMutationBlocked, iosSpeedLabOwnership.admit(.profile) else { throw CancellationError() }
+        let committed = try IOSNodeBundleStore.shared.restoreConnectionProfile(
+            replacements, selectedID: selectedID, current: persistedNodeBundle,
+            prepare: { value in
+                try IOSExternalExecution.validateImported(value)
+                return try IOSDNSRuntimePolicy.patch(value)
+            },
+            validate: { selected, prepared in
+                guard let profile = IOSDNSRuntimePolicy.selectedProfile(in: selected),
+                      let entryID = profile.multihopEntryID,
+                      let entry = prepared.first(where: { $0.routerProfiles.contains(where: { $0.id == entryID }) }) else {
+                    throw CancellationError()
+                }
+                _ = try self.iosMultihopEntryBundle(for: selected, capturedEntryData: JSONEncoder().encode(entry))
+            })
+        apply(committed.bundle)
+        UserDefaults.standard.set(committed.data, forKey: bundleKey)
+        multihopProgressGeneration = UUID(); multihopProgressText = ""
+    }
+
     /// Measurement commits use the same atomic node store as explicit edits.
     /// Never call import/save again after the durable commit already succeeded.
     func commitNodeLatency(_ result: IOSLatencyResult, network: UInt64, expectedRecord: Data,

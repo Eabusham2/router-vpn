@@ -26,10 +26,10 @@ extension RouterVPNModel {
     }
     /// Return the complete entry bundle, never the selected exit's raw files
     /// with a different display id. Capture before suspension/start.
-    func iosMultihopEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
+    func iosMultihopEntryBundle(for exitBundle: ClientBundle, capturedEntryData: Data? = nil) throws -> ClientBundle {
         if let selected = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle), selected.normalizedNodeKind == "external",
            Self.ordinaryExternalHopProtocols.contains(selected.external?.protocolName ?? "") {
-            return try iosOrdinaryExternalEntryBundle(for: exitBundle)
+            return try iosOrdinaryExternalEntryBundle(for: exitBundle, capturedEntryData: capturedEntryData)
         }
         let selectedExit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle)
         let torExit = selectedExit?.normalizedNodeKind == "external" && ["tor", "tor-bridge"].contains(selectedExit?.external?.protocolName ?? "")
@@ -38,7 +38,7 @@ extension RouterVPNModel {
               exit.multihopExitID == exit.id, let entryID = exit.multihopEntryID, entryID != exit.id,
               let mode = exit.multihopExitMode,
               (IOSRuntimeSelector.multihopModeIDs.contains(mode) || (torExit && mode == exit.external?.protocolName)),
-              let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
+              let data = capturedEntryData ?? IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
         }
@@ -66,7 +66,7 @@ extension RouterVPNModel {
         }
         if torExit, entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
            entry.routerProfiles.first(where: { $0.id == entryID })?.normalizedNodeKind == "external" {
-            return try iosOrdinaryExternalEntryBundle(for: exitBundle)
+            return try iosOrdinaryExternalEntryBundle(for: exitBundle, capturedEntryData: capturedEntryData)
         }
         guard IOSRuntimeSelector.multihopModeIDs.contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
         let entryAsset = IOSNativeMAXProfile.modeIDs.contains(entryMode) ? (entryMode.hasSuffix("-awg") ? "awg.conf" : "wg.conf") : ["wg", "wg-pq"].contains(entryMode) ? "wg.conf" : (["awg2-fast", "awg2-strong", "awg2-pq"].contains(entryMode) ? "awg.conf" : (["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(entryMode) ? "xray.json" : "sing-box.json"))
@@ -104,7 +104,7 @@ extension RouterVPNModel {
         return entry
     }
 
-    private func iosOrdinaryExternalEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
+    private func iosOrdinaryExternalEntryBundle(for exitBundle: ClientBundle, capturedEntryData: Data? = nil) throws -> ClientBundle {
         let tor = ["tor", "tor-bridge"].contains(IOSDNSRuntimePolicy.selectedProfile(in: exitBundle)?.external?.protocolName ?? "")
         guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle), exit.normalizedNodeKind == "external",
               let exitMode = exit.external?.protocolName, tor || Self.ordinaryExternalHopProtocols.contains(exitMode),
@@ -112,7 +112,7 @@ extension RouterVPNModel {
               (tor ? ["local"] : ["local", "server", "auto"]).contains(exit.multihopExecution ?? "local"),
               exit.external?.expectedPublicIP.isEmpty == tor,
               let entryID = exit.multihopEntryID, entryID != exit.id, let mode = exit.multihopEntryMode,
-              let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
+              let data = capturedEntryData ?? IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
             throw iosMultihopError("Choose distinct linked entry and external exit nodes with their exact saved transports.")
         }

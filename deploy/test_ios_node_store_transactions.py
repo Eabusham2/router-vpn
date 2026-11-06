@@ -7,6 +7,7 @@ Swift. This specifically catches temporary Speed Lab state leaking into records.
 """
 from pathlib import Path
 import shutil
+import platform
 import subprocess
 import tempfile
 
@@ -118,6 +119,59 @@ func temporary(_ source: ClientBundle) -> ClientBundle {
  static func reject(_ name: String, _ operation: () throws -> Void) throws {
   do { try operation() } catch { checks += 1; return }
   throw NSError(domain: "NodeStoreRejection", code: 1, userInfo: [NSLocalizedDescriptionKey: name])
+ }
+ static func savedPathTransactions() throws {
+  let store=IOSNodeBundleStore.shared
+  store.reset()
+  let first=bundle(try node("entry",proof:String(repeating:"c",count:64)))
+  let second=bundle(try node("exit",proof:String(repeating:"d",count:64)))
+  try store.save(first);try store.save(second)
+  let entryID="rvpn-"+String(repeating:"c",count:16),exitID="rvpn-"+String(repeating:"d",count:16)
+  let originalEntry=store.bundleData(containing:entryID,current:nil)!,originalExit=store.bundleData(containing:exitID,current:nil)!
+  var entry=try JSONDecoder().decode(ClientBundle.self,from:originalEntry),exit=try JSONDecoder().decode(ClientBundle.self,from:originalExit)
+  entry.routerProfiles[0].startLayer="aes-256-gcm";entry.routerProfiles[0].baseTunnel="awg"
+  entry.routerProfiles[0].dnsProtocol="tls";entry.routerProfiles[0].dnsPort=8853;entry.routerProfiles[0].manualMTU=1400
+  exit.routerProfiles[0].startLayer="aes-256-gcm+xor-whitening";exit.routerProfiles[0].baseTunnel="wg"
+  exit.routerProfiles[0].dnsProtocol="https";exit.routerProfiles[0].dnsPort=8443;exit.routerProfiles[0].manualMTU=1420
+  let initial=store.records,initialWrites=store.writes
+  var validations=0
+  for fault in ["first-prepare","second-prepare","validate","write","swapped","private-assets","duplicate","stale"] {
+   store.records=initial;store.writes=initialWrites;store.failWrite=fault=="write"
+   var replacements=[(original:originalExit,updated:exit),(original:originalEntry,updated:entry)]
+   if fault=="swapped"{replacements[1].updated=exit}
+   if fault=="private-assets"{replacements[1].updated.profiles=[:]}
+   if fault=="duplicate"{replacements[1]=replacements[0]}
+   if fault=="stale"{var changed=entry;changed.routerProfiles[0].apiToken="new current secret";try store.save(changed)}
+   let before=store.records,writes=store.writes
+   var preparations=0
+   try reject("saved path refuses "+fault){
+    _=try store.restoreConnectionProfile(replacements,selectedID:exitID,current:nil,prepare:{ candidate in
+     preparations+=1
+     if fault=="first-prepare" && preparations==1 || fault=="second-prepare" && preparations==2 {throw NSError(domain:"Prepare",code:1)}
+     return candidate
+    },validate:{ _,_ in if fault=="validate"{throw NSError(domain:"Graph",code:1)} })
+   }
+   try check("failed "+fault+" never partially commits either private node",store.records==before && store.writes==writes)
+   store.failWrite=false
+  }
+  store.records=initial;store.writes=initialWrites
+  let committed=try store.restoreConnectionProfile([(originalExit,exit),(originalEntry,entry)],selectedID:exitID,current:nil,prepare:{ $0 },validate:{ selected,all in
+   try check("validate complete staged graph before persistence",store.records==initial && store.writes==initialWrites && selected.selectedRouterID==exitID && all.count==2)
+   validations+=1
+  })
+  let loadedEntry=try JSONDecoder().decode(ClientBundle.self,from:store.bundleData(containing:entryID,current:nil)!),loadedExit=try JSONDecoder().decode(ClientBundle.self,from:store.bundleData(containing:exitID,current:nil)!)
+  try check("both node records commit exactly once",store.writes==initialWrites+1 && validations==1)
+  try check("independent entry/exit Start Layers and base survive",loadedEntry.routerProfiles[0].startLayer=="aes-256-gcm" && loadedExit.routerProfiles[0].startLayer=="aes-256-gcm+xor-whitening" && loadedEntry.routerProfiles[0].baseTunnel=="awg" && loadedExit.routerProfiles[0].baseTunnel=="wg")
+  try check("independent DNS and MTU survive",loadedEntry.routerProfiles[0].dnsPort==8853 && loadedExit.routerProfiles[0].dnsPort==8443 && loadedEntry.routerProfiles[0].manualMTU==1400 && loadedExit.routerProfiles[0].manualMTU==1420)
+  try check("each node retains its original private assets",loadedEntry.profiles==first.profiles && loadedExit.profiles==second.profiles && loadedEntry.routerProfiles[0].apiToken==first.routerProfiles[0].apiToken && loadedExit.routerProfiles[0].apiToken==second.routerProfiles[0].apiToken)
+  try check("returned selection is exact durable exit",committed.data==store.bundleData(containing:exitID,current:nil))
+  // Validation is synchronous but must not overwrite a reentrant owner change.
+  let entryData=store.bundleData(containing:entryID,current:nil)!,exitData=store.bundleData(containing:exitID,current:nil)!
+  var newer=loadedEntry;newer.routerProfiles[0].apiToken="newer linked credentials"
+  try reject("validation cannot overwrite newer owner") {
+   _=try store.restoreConnectionProfile([(exitData,loadedExit),(entryData,loadedEntry)],selectedID:exitID,current:nil,prepare:{$0},validate:{_,_ in try store.save(newer)})
+  }
+  try check("newer private record survives rejected restore",try JSONDecoder().decode(ClientBundle.self,from:store.bundleData(containing:entryID,current:nil)!).routerProfiles[0].apiToken=="newer linked credentials")
  }
  static func main() throws {
   defer { UserDefaults.standard.removePersistentDomain(forName: UserDefaults.suite) }
@@ -296,6 +350,7 @@ func temporary(_ source: ClientBundle) -> ClientBundle {
   try reject("newer user mutation revokes statistics commit") { try model.commitNodeLatency(measurements, network: 42, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
   model.iosSpeedLabOwnership.finish(statisticsOwner)
 
+  try savedPathTransactions()
   store.reset()
   let proof = String(repeating: "a", count: 64), router = bundle(try node("legacy-router", proof: String(repeating: "a", count: 64)))
   try store.save(router)
@@ -340,7 +395,13 @@ def main():
         work = Path(folder)
         source = work / "Test.swift"
         source.write_text(body)
-        subprocess.run([swift, "-swift-version", "6", "-module-cache-path", str(work / "module-cache"), str(APP / "Models.swift"), str(APP / "IOSNodeLatencyStatistics.swift"), str(APP / "IOSSpeedLabOwnership.swift"), str(source), "-o", str(work / "test")], check=True, timeout=90)
+        options = [swift, "-swift-version", "6", "-module-cache-path", str(work / "module-cache")]
+        if platform.system() != "Darwin":
+            from test_ios_physical_path import LINUX_CRYPTO
+            crypto = work / "CryptoKit.swift"; crypto.write_text(LINUX_CRYPTO)
+            subprocess.run(options + ["-emit-module", "-emit-library", "-module-name", "CryptoKit", str(crypto), "-lcrypto", "-emit-module-path", str(work / "CryptoKit.swiftmodule"), "-o", str(work / "libCryptoKit.so")], check=True, timeout=90)
+            options += ["-I", str(work), "-L", str(work), "-lCryptoKit", "-Xlinker", "-rpath", "-Xlinker", str(work)]
+        subprocess.run(options + [ str(APP / "Models.swift"), str(APP / "IOSNodeLatencyStatistics.swift"), str(APP / "IOSSpeedLabOwnership.swift"), str(source), "-o", str(work / "test")], check=True, timeout=90)
         subprocess.run([str(work / "test")], check=True, timeout=30)
 
 

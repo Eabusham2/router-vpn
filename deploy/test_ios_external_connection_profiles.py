@@ -33,7 +33,18 @@ BOUNDARIES = r'''
 }
 @MainActor final class IOSNodeBundleStore {
  static let shared=IOSNodeBundleStore()
- var bundles:[String:Data]=[:]
+ var bundles:[String:Data]=[:],failWrite=false
+ func restoreConnectionProfile(_ replacements:[(original:Data,updated:ClientBundle)],selectedID:String,current:ClientBundle?,prepare:(ClientBundle)throws->ClientBundle,validate:(ClientBundle,[ClientBundle])throws->Void)throws->(bundle:ClientBundle,data:Data){
+  var next=bundles,prepared:[ClientBundle]=[]
+  for replacement in replacements {
+   guard bundles.values.contains(replacement.original) else{throw TestFailure.error}
+   let value=try prepare(replacement.updated);prepared.append(value)
+   for p in value.routerProfiles{next[p.id]=try JSONEncoder().encode(value)}
+  }
+  guard let selected=prepared.first(where:{$0.selectedRouterID==selectedID})else{throw TestFailure.error}
+  try validate(selected,prepared);if failWrite{throw TestFailure.error}
+  let data=try JSONEncoder().encode(selected);bundles=next;return(selected,data)
+ }
  func bundleData(containing id:String,current:ClientBundle?)->Data? {bundles[id]}
 }
 enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFixture",code:1)}}
@@ -41,16 +52,23 @@ enum IOSExternalExecution {
  // Tor snapshots run the real native parser in test_ios_tor_connection_profiles.
  // This ordinary-exit fixture must never call that path accidentally.
  static func validateDeviceDraft(_ profile:RouterProfile)throws {throw TestFailure.error}
+ static func validateImported(_ bundle:ClientBundle)throws {}
 }
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?, allNodeProfiles:[RouterProfile]=[], profileMutationBlocked=false
  var imports=0, graphChecks=0, failGraph=false, failImport=false
+ let iosSpeedLabOwnership=IOSSpeedLabOwnership()
+ let bundleKey="test.connection.bundle"
+ var multihopProgressGeneration=UUID(),multihopProgressText=""
+ var persistedNodeBundle:ClientBundle?{bundle}
+ func apply(_ value:ClientBundle){bundle=value;imports+=1}
+ // SHIPPING_RESTORE
  var selectedNodeProfile:RouterProfile? {bundle.flatMap{IOSDNSRuntimePolicy.selectedProfile(in:$0)}}
- func iosMultihopEntryBundle(for source:ClientBundle)throws->ClientBundle {
+ func iosMultihopEntryBundle(for source:ClientBundle,capturedEntryData:Data?=nil)throws->ClientBundle {
   graphChecks+=1
   guard !failGraph,let p=IOSDNSRuntimePolicy.selectedProfile(in:source),p.multihopEnabled==true,
         let id=p.multihopEntryID,id != p.id,p.multihopExitID==p.id,
-        let data=IOSNodeBundleStore.shared.bundles[id] else{throw TestFailure.error}
+        let data=capturedEntryData ?? IOSNodeBundleStore.shared.bundles[id] else{throw TestFailure.error}
   return try JSONDecoder().decode(ClientBundle.self,from:data)
  }
  func importBundle(_ data:Data)throws {if failImport{throw TestFailure.error};let decoded=try JSONDecoder().decode(ClientBundle.self,from:data);bundle=decoded;imports+=1}
@@ -110,9 +128,15 @@ enum IOSExternalExecution {
    try check("saving does not alter active selection",model.imports==0 && model.bundle!.profiles==source.profiles && model.bundle!.routerProfiles==source.routerProfiles)
    var changed=source;changed.routerProfiles[0].dnsMode="rescue";changed.routerProfiles[0].manualMTU=1600;changed.routerProfiles[0].multihopEnabled=false;changed.routerProfiles[0].homeLANAccess=true
    IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(changed)
+   var changedEntry=try JSONDecoder().decode(ClientBundle.self,from:IOSNodeBundleStore.shared.bundles["entry"]!)
+   changedEntry.routerProfiles[0].dnsProtocol="udp";changedEntry.routerProfiles[0].dnsPort=53
+   changedEntry.routerProfiles[0].manualMTU=1500;changedEntry.routerProfiles[0].ipv6Mode="on"
+   IOSNodeBundleStore.shared.bundles["entry"]=try JSONEncoder().encode(changedEntry)
    model.bundle=bundle(profile("socks5","other"));let before=model.graphChecks
    _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
    let restored=model.selectedNodeProfile!
+   let restoredEntry=try JSONDecoder().decode(ClientBundle.self,from:IOSNodeBundleStore.shared.bundles["entry"]!).routerProfiles[0]
+   try check("Load restores independently captured entry policy",restoredEntry.dnsProtocol=="tcp" && restoredEntry.dnsPort==5353 && restoredEntry.manualMTU==1380 && restoredEntry.ipv6Mode=="off")
    try check("load restores exact nonsecret choices",restored.dnsMode==p.dnsMode && restored.dnsProtocol==p.dnsProtocol && restored.dnsHost==p.dnsHost && restored.dnsPort==p.dnsPort && restored.dnsServerName==p.dnsServerName && restored.dnsPath==p.dnsPath && restored.manualMTU==1380 && restored.mtuPolicy=="fixed")
    try check("load validates saved graph before import",model.graphChecks==before+1 && model.imports==1 && restored.multihopEntryID=="entry" && restored.multihopEntryMode=="wireguard" && restored.multihopExitMode==kind)
    try check("load preserves exact imported secrets and owned files",restored.external==p.external && restored.apiToken==p.apiToken && restored.socksPassword==p.socksPassword && model.bundle!.profiles==source.profiles)
@@ -310,7 +334,10 @@ def main():
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
     modes = next(line for line in dns.splitlines() if 'static let modeIDs =' in line)
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]
-    policy = 'enum IOSDNSRuntimePolicy {\n' + modes + '\n' + selected + '}\n'
+    policy = 'enum IOSDNSRuntimePolicy {\nstatic func patch(_ b:ClientBundle)throws->ClientBundle{b}\n' + modes + '\n' + selected + '}\n'
+    model = (APP / 'RouterVPNModel.swift').read_text()
+    restore = model[model.index('    func restoreConnectionProfile('):model.index('    /// Measurement commits')]
+    boundaries = BOUNDARIES.replace(' // SHIPPING_RESTORE', restore)
     with tempfile.TemporaryDirectory(prefix='ios-external-profiles-') as temporary:
         work = Path(temporary)
         options = [swift, '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
@@ -318,9 +345,9 @@ def main():
             code = work / 'Network.swift';code.write_text(NETWORK)
             subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Network', str(code), '-emit-module-path', str(work / 'Network.swiftmodule'), '-o', str(work / 'libNetwork.so')], check=True, timeout=60)
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        code = work / 'Tests.swift';code.write_text(source + '\n' + policy + BOUNDARIES)
+        code = work / 'Tests.swift';code.write_text(source + '\n' + policy + boundaries)
         binary = work / 'tests'
-        subprocess.run(options + [str(APP / 'Models.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
+        subprocess.run(options + [str(APP / 'Models.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary)], env=dict(os.environ, ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json')), check=True, timeout=30)
 
 

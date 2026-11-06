@@ -184,7 +184,14 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    var changed=p;changed.homeLANAccess=true;changed.homeLANCIDRs=["10.0.0.0/8"];changed.ipv6Mode="on";changed.killSwitch=false;changed.killSwitchPolicy="off";changed.mtuPolicy="auto";changed.manualMTU=0;changed.jumboTUN=false;changed.startupMode="manual";changed.autoConnect=false;changed.dnsMode="rescue";changed.dnsHost="1.1.1.1";changed.multihopEnabled=false;changed.multihopExecution=execution=="local" ? "server":"local"
    changed.daitaEnabled = !(p.daitaEnabled ?? false);changed.daitaRateKbps=96
    if let lines=p.external?.torBridge?.bridges{changed.external?.torBridge?.bridges=lines.map{$0.replacingOccurrences(of:"198.51.100.9",with:"198.51.100.10")}}
-   try replaceLinked(changed);try selectOther(model)
+   try replaceLinked(changed)
+   if p.multihopEnabled==true {
+    var changedEntry=try entry();changedEntry.routerProfiles[0].dnsMode="custom";changedEntry.routerProfiles[0].dnsProtocol="tcp";changedEntry.routerProfiles[0].dnsHost="9.9.9.9";changedEntry.routerProfiles[0].dnsPort=5353
+    changedEntry.routerProfiles[0].ipv6Mode="off";changedEntry.routerProfiles[0].mtuPolicy="fixed";changedEntry.routerProfiles[0].manualMTU=1400
+    changedEntry.routerProfiles[0].apiToken="CURRENT_ROTATED_ENTRY_TOKEN";changedEntry.apiToken="CURRENT_ROTATED_ENTRY_TOKEN"
+    try IOSNodeBundleStore.shared.save(changedEntry)
+   }
+   try selectOther(model)
    let other=IOSNodeBundleStore.shared.records["bundle-other-tor"],entry=IOSNodeBundleStore.shared.records["router-"+String(repeating:"a",count:64)]
    actions.load()
    try check("visible Load restores exact policy",actions.status.hasPrefix("Loaded") && model.selectedNodeProfile?.id==p.id)
@@ -193,10 +200,11 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    try check("Load restores exact enabled and dormant rates",model.selectedNodeProfile?.daitaEnabled==p.daitaEnabled && model.selectedNodeProfile?.daitaRateKbps==p.daitaRateKbps)
    if p.multihopEnabled==true {
     let restoredEntry=try model.iosMultihopEntryBundle(for:model.bundle!)
-    try check("restored execution retains its separate private entry",restoredEntry.selectedRouterID==entryID && restoredEntry.apiToken=="NEVER_COPY_ENTRY_TOKEN" && model.selectedNodeProfile?.multihopExecution==p.multihopExecution)
+    try check("full graph restores captured entry policy",restored.entryPolicy==saved.entryPolicy)
+    try check("restored execution retains its separate private entry",restoredEntry.selectedRouterID==entryID && restoredEntry.apiToken=="CURRENT_ROTATED_ENTRY_TOKEN" && model.selectedNodeProfile?.multihopExecution==p.multihopExecution)
    }
    try check("Load keeps current node-owned bridge material",model.selectedNodeProfile?.external==changed.external)
-   try check("Load never modifies unrelated entry or node",IOSNodeBundleStore.shared.records["bundle-other-tor"]==other && IOSNodeBundleStore.shared.records["router-"+String(repeating:"a",count:64)]==entry)
+   try check("Load never modifies unrelated nodes",IOSNodeBundleStore.shared.records["bundle-other-tor"]==other && (p.multihopEnabled==true || IOSNodeBundleStore.shared.records["router-"+String(repeating:"a",count:64)]==entry))
    try check("historical MTU remains separate from policy",model.selectedNodeProfile?.effectiveMTU==9000 && model.selectedNodeProfile?.manualMTU==captured.manualMTU)
    try check("Load does not connect or claim circuit proof",!model.connected && actions.status.contains("Connect separately to prove"))
    actions.name="Updated Tor path";actions.update()
@@ -207,14 +215,14 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
   }}}}}
  }
  static func legacyAndDefaults()throws {
-  for schema in 1...4 {
+  for schema in 1...5 {
    let p=try profile("obfs4"),model=try reset(p)
    let legacy=IOSConnectionProfileRecord(id:"legacy",name:"Legacy Tor",nodeID:p.id,nodeKind:"external",mode:"external",customLayers:[],preferences:nil,updatedAt:Date(timeIntervalSince1970:0))
    IOSPrivateJSONStore.bytes=try encoded(IOSConnectionProfileEnvelope(schemaVersion:schema,profiles:[legacy]))
    let before=try encoded(model.bundle!)
    _=try IOSConnectionProfileStore.load(model:model,id:"legacy")
    try check("legacy Tor remains selection-only",encoded(model.bundle!)==before && IOSConnectionProfileStore.all()[0].preferences==nil)
-   try check("legacy envelope migrates without invented preferences",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==5)
+   try check("legacy envelope migrates without invented preferences",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==6)
    let updated=try IOSConnectionProfileStore.update(model:model,id:"legacy",name:"Captured now")
    try check("explicit Update captures a complete legacy Tor profile",updated.id=="legacy" && updated.preferences != nil && updated.externalPublicIP=="")
   }
@@ -238,6 +246,30 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
    try check("unset restores default while legacy retains unrecorded rate",model.selectedNodeProfile?.daitaRateKbps==(legacy ? 96:0))
   }
+ }
+ static func sharedRecordAndLegacyEntry()throws {
+  var p=try profile("obfs4");graph(&p)
+  let model=try reset(p),store=IOSNodeBundleStore.shared
+  var combined=try entry();combined.routerProfiles.append(p);combined.selectedRouterID=p.id
+  store.records=[:];try model.importBundle(encoded(combined))
+  let saved=try IOSConnectionProfileStore.add(model:model,name:"One private owner")
+  let originalAssets=model.bundle!.profiles
+  var changed=model.bundle!;changed.routerProfiles[0].ipv6Mode="off";changed.routerProfiles[0].mtuPolicy="fixed";changed.routerProfiles[0].manualMTU=1420
+  changed.routerProfiles[1].ipv6Mode="on";changed.routerProfiles[1].manualMTU=1400
+  try model.importBundle(encoded(changed))
+  let writes=store.writes
+  _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+  let restored=try IOSConnectionProfileStore.snapshot(model:model,name:"Readback")
+  try check("one shared owner restores both policies and selected exit",store.writes==writes+1 && store.records.count==1 && model.selectedNodeProfile?.id==p.id && restored.preferences==saved.preferences && restored.entryPolicy==saved.entryPolicy)
+  try check("shared owner retains raw private assets and separate entry token",model.bundle?.profiles==originalAssets && model.bundle?.routerProfiles.first(where:{$0.id==entryID})?.apiToken=="NEVER_COPY_ENTRY_TOKEN" && model.selectedNodeProfile?.apiToken=="")
+  let legacyModel=try reset(p),legacy=try IOSConnectionProfileStore.add(model:legacyModel,name:"Old graph")
+  var envelope=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:IOSPrivateJSONStore.bytes!)
+  envelope.schemaVersion=5;envelope.profiles[0].entryPolicy=nil;IOSPrivateJSONStore.bytes=try encoded(envelope)
+  var currentEntry=try entry();currentEntry.routerProfiles[0].ipv6Mode="off";currentEntry.routerProfiles[0].mtuPolicy="fixed";currentEntry.routerProfiles[0].manualMTU=1420;try store.save(currentEntry)
+  let entryBytes=store.bundleData(containing:entryID,current:nil)!
+  let actions=ProfileActions(legacyModel);actions.selectedID=legacy.id;actions.load()
+  try check("legacy multihop retains current uncaptured entry",actions.status.hasPrefix("Loaded") && actions.status.contains("Older profile: entry settings use the current linked node") && store.bundleData(containing:entryID,current:nil)==entryBytes && IOSConnectionProfileStore.all()[0].entryPolicy==nil)
+  try check("legacy migration never fabricates entry capture",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==6)
  }
  static func nativeRejections()throws {
   for fault in ["fixed-ip","other-owner","bridge-port","bridge-malformed","custom-udp","doh3","resolver-hostname","dns-bootstrap","ipv6","jumbo-fixed","lan-range","start-layer","cover-small","cover-large"] {
@@ -266,9 +298,9 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
   }
  }
  static func restoreRejections()throws {
-  for fault in ["protocol","fixed-ip","foreign-node","bridge-owner","bridge-port","bridge-malformed","node-read","node-write","profile-read","missing-entry","external-entry","server-missing-entry","server-external-entry","invalid-execution","saved-dns","saved-jumbo","connected","transitioning","disconnecting"] {
+  for fault in ["protocol","fixed-ip","foreign-node","bridge-owner","bridge-port","bridge-malformed","node-read","node-write","profile-read","missing-entry","external-entry","server-missing-entry","server-external-entry","entry-proof","graph-node-write","entry-assets","invalid-execution","saved-dns","saved-jumbo","connected","transitioning","disconnecting"] {
    var p=try profile("obfs4")
-   if ["missing-entry","external-entry","server-missing-entry","server-external-entry","invalid-execution"].contains(fault){graph(&p,fault.hasPrefix("server-") ? "server":"local")}
+   if ["missing-entry","external-entry","server-missing-entry","server-external-entry","entry-proof","graph-node-write","entry-assets","invalid-execution"].contains(fault){graph(&p,fault.hasPrefix("server-") ? "server":"local")}
    let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Captured graph")
    var linked=p
    if fault=="protocol"{linked.external?.protocolName="tor";linked.external?.torBridge=nil}
@@ -281,10 +313,17 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    let store=IOSNodeBundleStore.shared
    if fault=="foreign-node"{store.records.removeValue(forKey:"bundle-tor-exit")}
    if fault=="node-read"{store.storageError=testError("Unavailable private nodes")}
-   if fault=="node-write"{store.failWrite=true}
+   if fault=="node-write" || fault=="graph-node-write"{store.failWrite=true}
+   if fault=="entry-proof" || fault=="entry-assets" {
+    let key="router-"+String(repeating:"a",count:64)
+    var altered=try JSONDecoder().decode(ClientBundle.self,from:store.records[key]!)
+    if fault=="entry-proof"{altered.routerProfiles[0].nodeProofID=String(repeating:"b",count:64)}
+    if fault=="entry-assets"{altered.profiles=[:]}
+    store.records[key]=try encoded(altered)
+   }
    if fault=="profile-read"{IOSPrivateJSONStore.failRead=true}
    if fault=="missing-entry" || fault=="server-missing-entry"{store.records.removeValue(forKey:"router-"+String(repeating:"a",count:64))}
-   if ["external-entry","server-external-entry","invalid-execution","saved-dns","saved-jumbo"].contains(fault){
+   if ["external-entry","server-external-entry","entry-proof","graph-node-write","entry-assets","invalid-execution","saved-dns","saved-jumbo"].contains(fault){
     var envelope=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:IOSPrivateJSONStore.bytes!)
     if fault=="external-entry" || fault=="server-external-entry"{envelope.profiles[0].preferences?.multihopEntryID="other-tor";envelope.profiles[0].preferences?.multihopEntryMode="wireguard"}
     if fault=="invalid-execution"{envelope.profiles[0].preferences?.multihopExecution="both"}
@@ -380,7 +419,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    try check("ordinary Tor Add preserves graph with imported entry mode",actions.profiles.count==1 && actions.profiles[0].preferences?.multihopEntryMode==mode && actions.profiles[0].preferences?.multihopEntryID=="ordinary-entry" && actions.profiles[0].preferences?.multihopExecution=="local")
    let saved=actions.profiles[0],preferences=saved.preferences!,stored=IOSPrivateJSONStore.bytes!
    let clear=String(decoding:stored,as:UTF8.self)
-   try check("ordinary Tor connection profile keeps only private node references",!clear.contains("NEVER_COPY_ORDINARY_CREDENTIAL") && !clear.contains("private_key") && !clear.contains("entry-resolver.example.test") && !clear.contains("NEVER_COPY_NODE_ASSET"))
+   try check("ordinary Tor connection profile captures DNS policy but only references credentials",!clear.contains("NEVER_COPY_ORDINARY_CREDENTIAL") && !clear.contains("private_key") && clear.contains("entry-resolver.example.test") && !clear.contains("NEVER_COPY_NODE_ASSET"))
    var changed=p;changed.multihopEnabled=false;changed.multihopEntryMode="wg";changed.dnsHost="149.112.112.112";changed.manualMTU=1400
    try replaceLinked(changed);try selectOther(model)
    let nodes=IOSNodeBundleStore.shared.records,entryBytes=IOSNodeBundleStore.shared.bundleData(containing:"ordinary-entry",current:nil)
@@ -388,9 +427,9 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    actions.load()
    try check("ordinary Tor Load restores exact complete selected policy",actions.status.hasPrefix("Loaded") && model.selectedNodeProfile?.multihopEntryMode==mode && IOSConnectionProfileStore.snapshot(model:model,name:"Readback").preferences==preferences)
    let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
-   try check("ordinary Tor Load preserves exact linked entry",captured.routerProfiles==savedEntry.routerProfiles && captured.apiToken.isEmpty && captured.nodeProofID.isEmpty)
+   try check("ordinary Tor Load preserves exact linked entry",captured.routerProfiles.map(\.id)==savedEntry.routerProfiles.map(\.id) && captured.profiles==savedEntry.profiles && captured.apiToken.isEmpty && captured.nodeProofID.isEmpty)
    try check("ordinary Tor Load preserves node-owned credentials and DNS bootstrap",captured.routerProfiles[0].external==lower.routerProfiles[0].external && captured.routerProfiles[0].dnsBootstrap==lower.routerProfiles[0].dnsBootstrap)
-   try check("ordinary Tor Load leaves predecessor private record untouched",IOSNodeBundleStore.shared.bundleData(containing:"ordinary-entry",current:nil)==entryBytes)
+   try check("ordinary Tor Load retains captured entry policy",try IOSConnectionProfileStore.snapshot(model:model,name:"Readback").entryPolicy==saved.entryPolicy)
    for fault in ["server","auto","home","missing-entry"] {
     try selectOther(model)
     var envelope=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:stored)
@@ -406,12 +445,12 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    actions.name="Updated ordinary Tor";actions.update()
    try check("ordinary Tor Update keeps same private references",actions.status.hasPrefix("Updated") && actions.profiles[0].id==saved.id && actions.profiles[0].preferences==preferences)
    actions.delete()
-   try check("ordinary Tor Delete preserves node credentials",actions.profiles.isEmpty && IOSNodeBundleStore.shared.bundleData(containing:"ordinary-entry",current:nil)==entryBytes && nodes.keys.allSatisfy{IOSNodeBundleStore.shared.records[$0] != nil})
+   try check("ordinary Tor Delete preserves node credentials",actions.profiles.isEmpty && IOSNodeBundleStore.shared.bundleData(containing:"ordinary-entry",current:nil) != nil && nodes.keys.allSatisfy{IOSNodeBundleStore.shared.records[$0] != nil})
   }}
  }
  static func main(){
   defer{RouterVPNTorTestClose();UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)}
-  do{try matrix();try legacyAndDefaults();try nativeRejections();try restoreRejections();try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles();print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")}
+  do{try matrix();try legacyAndDefaults();try sharedRecordAndLegacyEntry();try nativeRejections();try restoreRejections();try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles();print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")}
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
 }
@@ -435,8 +474,8 @@ def main():
     for name in ('Add','Load','Update','Delete'):
         assert 'Button("'+name+'"' in callbacks and 'IOSConnectionProfileStore.'+name.lower()+'(' in actions
     source = SWIFT.replace(' // SHIPPING_NODE_STORE', node[node.index('    func link('):node.index('    private func storeDirectory(')])
-    source = source.replace(' // SHIPPING_BLOCKED', member(model, 'var profileMutationBlocked:'))
-    source = source.replace(' // SHIPPING_IMPORT', member(model, '    func importBundle('))
+    source = source.replace(' // SHIPPING_BLOCKED', member(model, 'var profileMutationBlocked:') + '\n' + member(model, '    var persistedNodeBundle:'))
+    source = source.replace(' // SHIPPING_IMPORT', member(model, '    func importBundle(') + '\n' + member(model, '    func restoreConnectionProfile('))
     source = source.replace(' // SHIPPING_SAVE', member(model, '    func saveRouter('))
     source = source.replace(' // SHIPPING_APPLY', member(model, '    private func apply('))
     source = source.replace(' // SHIPPING_LEGACY_MODES', member(model, '    private func legacyLogicalModes('))
@@ -451,12 +490,15 @@ def main():
         subprocess.run([go,'build','-o',str(compiler),str(compiler_source)],cwd=ROOT,check=True,timeout=120)
         options = [swift,'-swift-version','6','-module-cache-path',str(work/'modules')]
         suffix = '.dylib' if platform.system()=='Darwin' else '.so'
-        modules = [('Libbox',T.LIBBOX)] + ([] if platform.system()=='Darwin' else [('Network',T.NETWORK)])
+        modules = [('Libbox',T.LIBBOX)]
+        if platform.system() != 'Darwin':
+            from test_ios_physical_path import LINUX_CRYPTO
+            modules += [('Network',T.NETWORK), ('CryptoKit',LINUX_CRYPTO)]
         for name,body in modules:
             path=work/(name+'.swift');path.write_text(body)
-            subprocess.run(options+['-emit-module','-emit-library','-module-name',name,str(path),'-emit-module-path',str(work/(name+'.swiftmodule')),'-o',str(work/('lib'+name+suffix))],check=True,timeout=90)
+            subprocess.run(options+(['-lcrypto'] if name=='CryptoKit' else [])+['-emit-module','-emit-library','-module-name',name,str(path),'-emit-module-path',str(work/(name+'.swiftmodule')),'-o',str(work/('lib'+name+suffix))],check=True,timeout=90)
         options+=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
-        if platform.system()!='Darwin':options+=['-lNetwork']
+        if platform.system()!='Darwin':options+=['-lNetwork','-lCryptoKit']
         shipping=[APP/name for name in ['IOSMultihopExecution.swift','Models.swift','IOSExternalExecution.swift','IOSDNSRuntimePolicy.swift','IOSRuntimeSelection.swift','IOSNativeXrayProfile.swift','IOSNativePQProfile.swift','IOSMultihopStartLayer.swift','IOSNodeLatencyStatistics.swift','IOSSpeedLabOwnership.swift']]
         code=work/'Tests.swift';code.write_text(store+'\n'+source)
         binary=work/'tests'

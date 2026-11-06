@@ -6,9 +6,9 @@ SOURCE = (ROOT / "App" / "IOSConnectionProfilesView.swift").read_text(encoding="
 assert SOURCE.strip(), "iOS connection profile source is empty"
 
 for marker in (
-    'iosConnectionProfilesSchemaVersion = 5',
+    'iosConnectionProfilesSchemaVersion = 6',
     'Unsupported connection profile store schema',
-    'known schema v1, validate it fully, then atomically rewrite v5',
+    'known schema v1, validate it fully, then atomically rewrite v6',
     'decodeIfPresent(Bool.self, forKey: .homeLANAccess) ?? true',
     'decodeIfPresent(String.self, forKey: .killSwitchPolicy) ?? (killSwitch ? "always" : "off")',
     'decodeIfPresent(String.self, forKey: .ipv6Mode) ?? "on"',
@@ -37,7 +37,7 @@ for marker in (
     'let effectiveMode = try normalizeMode(saved.mode)',
     'profile.multihopEnabled = prefs.multihopEnabled',
     'profile.multihopExitMode = prefs.multihopExitMode',
-    'model.iosMultihopEntryBundle(for: bundle)',
+    'model.iosMultihopEntryBundle(for: source)',
     'Saved multihop requires distinct linked entry/exit ids',
     'bundleData(containing: saved.nodeID, current: model.bundle)',
     'guard !model.profileMutationBlocked else',
