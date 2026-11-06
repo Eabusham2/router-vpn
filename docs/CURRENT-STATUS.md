@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `81f1e4f5`
+## November 6 product continuation through `765353ba`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,13 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`81f1e4f58f6a299a694bfeeaef1f97740efa0690`](https://github.com/Eabusham2/router-vpn/commit/81f1e4f58f6a299a694bfeeaef1f97740efa0690).
+[`765353bae2d610ceeea5ab6be89c1ed27c0ea8ca`](https://github.com/Eabusham2/router-vpn/commit/765353bae2d610ceeea5ab6be89c1ed27c0ea8ca).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 56 units.
+with separately attributed contributor evidence; it is not one of these 60 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -33,6 +33,50 @@ This ledger does not claim independent execution of that unit.
 Concurrent [`090c09ec`](https://github.com/Eabusham2/router-vpn/commit/090c09ec54f875ad0bf0031a3b6da5d3a254dc4f)
 subsequently adds joined resolver-owner handling before private-domain fallback.
 It was preserved before `35725083`; its contributor evidence is separate.
+
+### Newer published units 57–60 and execution boundary
+
+`25d0354f` makes shared hop-measurement construction, admission and observation
+respect their original caller. Cancellation owns partially admitted work and
+its scope cleanup; late status cannot mutate a replacement request. The complete
+shared race suite passes 100 verdicts in 35 parents, with two rejected causal
+controls and exact-source restoration. Native factory and Tor adoption remain
+separate requirements.
+
+`b792e879` repairs the performance shipping fixture's missing upstream daemon
+directory, the concrete failure in MTU policy contract run `42203546383`.
+It also asserts exact source bytes and input membership for both observer
+files. This is a seven-line fixture-only change. Committed bytes and remote
+ancestry were verified; local execution was unavailable, so CI remains required.
+
+`20f1e423` corrects a separate native MTU regression: a legacy desktop
+owner has the context method in its type but was constructed without the
+required callbacks. The controller now checks construction-time availability.
+Explicit context operations refuse that owner without poisoning its existing
+legacy path; available native observation failures never downgrade. Twelve
+shared and one composed native regression verdicts are added. The original
+three Windows failure cases remain unchanged. Source review and committed-byte
+verification are complete; execution at the new exact SHA remains required.
+
+`765353ba` repairs the Darwin SS consumer fixture's aliased temporary
+root before private test state is generated. The real iOS smoke log showed
+the production node-proof guard rejecting `/var`; that guard remains unchanged.
+This is a fixture correction with macOS execution still required.
+
+Concurrent `40567e35` already corrects the Apple captured-SS and native
+instance-observation source assertions. Its separate evidence ledger and all
+other concurrent work are preserved; this continuation does not replay it.
+
+The execution environment went offline during the latest bounded CONNECT
+native compile. No native binary or final process-join result was obtained
+from that attempt. CONNECT's wider transport/layer/selected-DNS extension,
+ordinary external constructor adoption and the Tor status prerequisite remain
+unpublished, with different test boundaries. Their last known local work and
+restart gates are in the
+[execution recovery record](CONTINUATION-RECOVERY-2026-11-06-EXECUTOR.md).
+The record does not replace the code or declare these requirements complete.
+GitHub remains the authority for published work; fetch current main before
+restoring any local delta.
 
 ### Newer published units 53–56
 

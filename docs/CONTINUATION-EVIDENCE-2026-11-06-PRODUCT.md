@@ -6,12 +6,12 @@ This ledger supplements [the earlier November 6 ledger](CONTINUATION-EVIDENCE-20
 and [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md). It does not replace
 the original requirements or cancel an unfinished requirement. The recorded
 published product work below ends at
-[`81f1e4f58f6a299a694bfeeaef1f97740efa0690`](https://github.com/Eabusham2/router-vpn/commit/81f1e4f58f6a299a694bfeeaef1f97740efa0690).
+[`765353bae2d610ceeea5ab6be89c1ed27c0ea8ca`](https://github.com/Eabusham2/router-vpn/commit/765353bae2d610ceeea5ab6be89c1ed27c0ea8ca).
 This is a source/evidence cutoff, not a claim that the branch stops moving or
 that this revision has completed its release gates.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 56 units.
+with separately attributed contributor evidence; it is not one of these 60 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
@@ -207,6 +207,49 @@ Before these publications, the publisher re-read `main` and preserved concurrent
 changes `0978f794`/`e2a43e58`. Their contributor evidence remains separately
 attributed. Every changed parent path of units 55 and 56 matched the newer
 branch before normal-ancestry publication; no older snapshot was restored.
+
+### Units 57–60: shared measurement ownership and native CI corrections
+
+| Published commit | Change and requirement connection | Observed verification | Remaining boundary |
+|---|---|---|---|
+| [`25d0354f`](https://github.com/Eabusham2/router-vpn/commit/25d0354f2462c85fd016a954f77e6269f958d1d3) | Shared hop measurements retain the original caller through constructor identity, admission identity/scope, active validity and status observation. Cancellation is registered before admission callbacks; callbacks run outside the service mutex; partial owned scopes are released before admission drain. A late status read cannot invalidate a replacement request or overwrite cancellation. | The complete shared hop-measurement race suite passes 100 verdicts in 35 parents (7.392 seconds). Both context-adoption and stale-status causal controls reject the intended broken behavior. Exact restoration passes 25 focused race verdicts in 10 parents (1.333 seconds). Fourteen new verdicts include constructor lifetime, admission cancellation, partial-scope cleanup, replacement, status and the real fifty-sample latency completion boundary. | Legacy engines/scopes retain their compatibility behavior. Native factory adoption, ordinary external construction and Tor observations require their own evidence. This shared-core result is not a device or native-package pass. |
+| [`b792e879`](https://github.com/Eabusham2/router-vpn/commit/b792e879dcbe32856c99521cfab6e5a98b9cff15) | The sparse performance shipping fixture now preserves the upstream `daemon` directory and verifies exact bytes/input membership for both instance-observation files. | Source review and the GitHub commit/file reads confirm one file, seven additions, zero deletions and the exact intended contents. The [failed MTU policy job](https://github.com/Eabusham2/router-vpn/actions/runs/42203546383/job/127844460187) identified the missing directory at `deploy/test_mobile_performance_shipping.py` / `prepare-mobile-multihop.py:102`. The remote branch was verified after normal-ancestry publication. | The execution workspace became unavailable before this fixture could run locally. Exact-commit CI is pending at publication; no local execution result is claimed. Runtime code and the preparer's validation remain unchanged. |
+| [`20f1e423`](https://github.com/Eabusham2/router-vpn/commit/20f1e423a90c039cf0380d7821c57e55d720fee1) | The MTU controller distinguishes the context capability of each captured owner from its Go method set. Legacy desktop owners retain their existing observation path; explicit context construction/admission rejects unavailable capability before callbacks or publication. Available context errors and cancellation never trigger fallback. | Independent source review traces both failed Windows jobs through the actual legacy desktop constructor, shared controller and owner invalidation. Twelve shared and one composed native regression verdicts are added; the three originally failing Windows tests and limits are unchanged. Committed file bytes and normal remote ancestry are verified at publication. | The executor remains unavailable. No execution or formatter result is claimed for this correction. Its shared race suite and original Windows AMD64/ARM64 native cases must pass at the new exact SHA; this row is a source correction, not verified native acceptance. |
+| [`765353ba`](https://github.com/Eabusham2/router-vpn/commit/765353bae2d610ceeea5ab6be89c1ed27c0ea8ca) | The genuine SS consumer fixture resolves only its freshly owned temporary root before generating private state, avoiding Darwin's system `/var` alias while retaining production symlink refusal. | The actual [iOS smoke failure](https://github.com/Eabusham2/router-vpn/actions/runs/42206637885/job/127854847064) reaches `ensure-node-proof.py` through the real bundle generator and rejects `/var`. The exact fixture and guard were source-reviewed; committed bytes and remote publication were verified. | macOS fixture/Xcode execution at the new exact SHA remains required. No production guard, permissions, source identity check or private-state validation was weakened. |
+
+The same three native MTU assertions also failed on Linux AMD64/ARM64 in
+[run 42206638017](https://github.com/Eabusham2/router-vpn/actions/runs/42206638017).
+The correction is shared across the affected constructors. The mandatory
+desktop context runner now requires all twelve added shared parent/child
+verdicts and the composed owner verdict; its existing selectors, original
+verdicts and failure-case deadlines remain intact. These are required future
+execution results, not source-derived passes.
+
+Concurrent Windows server-proof/runner work
+[`3ba4b5ea`](https://github.com/Eabusham2/router-vpn/commit/3ba4b5eac1a20786a222c82cb8eca15f9104c751)
+was preserved before unit 57; its independent execution evidence is not
+attributed to this continuation. Shared `measure.go` restored after the causal
+checks has SHA-256
+`063253177bbe3d4ecfda8542d4f42d03c9b3e45b86dfc283089cbb8687038da0`.
+The original operation budget and legacy cache/rollback policies were not
+extended to make these tests pass.
+
+### Execution outage and unpublished work
+
+The execution environment was explicitly reported unavailable on November 6
+while the final native CONNECT compile was active. Subsequent shell access
+failed; GitHub reads and writes remained available. The last compile output
+reported killed compiler processes, with no native binary or runtime verdict.
+Its final owned-process join could not be verified after transport loss.
+
+Completed source work through unit 60 is on `main`. The larger CONNECT
+extension, ordinary external construction and Tor status prerequisite are
+**not published or accepted**. Their last known local checkpoints, changed
+paths, retained evidence and exact restart gates are recorded in
+[the execution recovery record](CONTINUATION-RECOVERY-2026-11-06-EXECUTOR.md).
+That record is an index to inaccessible work, not a copy of its code or proof
+that a lost execution environment can be recovered. Do not reconstruct or
+publish those changes from a summary.
 
 ## Published independent SOCKS layers — reconciled final evidence
 
@@ -742,7 +785,7 @@ The complete original scope remains open. Apple captured per-hop profile
 restoration, the persisted Start Layer fixture correction and macOS Performance
 cancellation are now published with the bounded evidence in their rows. Other
 original native UI, settings, Methods, recovery and graph requirements retain
-their individual closure obligations; these fifty-six units are not a replacement scope.
+their individual closure obligations; these sixty units are not a replacement scope.
 
 The concrete Apple Home DNS substitution gap reported at `8fdc2ef7` is repaired
 in `5b32bcf5` with the bounded evidence above. Intentional UDP/53 for Fastest node
