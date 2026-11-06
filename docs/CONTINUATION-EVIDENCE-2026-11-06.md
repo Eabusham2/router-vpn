@@ -1105,3 +1105,16 @@ The 25-second process bound, 8-second live bound, HTTP bounds, all accepted/canc
 
 Validation before publication: root and independent Astra source review, exact original-line preservation, and fixed-input/output-bound inspection. No local execution is claimed. Evidence: [actual failed native MTU job](https://github.com/Eabusham2/router-vpn/actions/runs/42226553579/job/127923331079).
 
+
+## 2026-11-06 — Compile iOS MAX with its actual captured SS helpers
+
+Both the standalone iOS smoke job 127932413496 and authoritative iOS job 127932408863 on `0ab1606c` failed in the MAX fixture's generated Swift compilation because its extracted startMultihop implementation calls validateCapturedSSSource and capturedSSProfile, but the fixture omitted those shipping methods. The earlier owned-strategy CryptoKit correction had already allowed 117 owned, 77 provider, and 53 driver checks to pass.
+
+The MAX fixture now extracts the existing contiguous shipping range beginning at validateCapturedSSSource and ending before strictKillSwitchRequested. That range contains exactly the two missing captured-source helpers and the already included layeredProfile parser. It is the same helper range used by the existing SS DNS fixture. Both referenced helper types are already part of this fixture's Swift compilation.
+
+All following cases and mutations are unchanged. The composite fixture imports the same MAX prefix and receives the same real methods. No production source, mocked replacement helper, weakened validator, extra lifecycle behavior, or new compile dependency is introduced.
+
+Validation before publication: root and two independent Astra source reviews, exact extraction boundaries and compiled helper inputs verified, and the remainder of the fixture confirmed byte-for-byte unchanged. A fresh actual Swift/native run remains required; this source correction alone is not an iOS package or device result.
+
+Evidence: [standalone iOS compile failure](https://github.com/Eabusham2/router-vpn/actions/runs/42229778716/job/127932413496), [authoritative iOS compile failure](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408863).
+

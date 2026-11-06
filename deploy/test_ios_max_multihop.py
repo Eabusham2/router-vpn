@@ -67,7 +67,9 @@ PROVIDER = r'''
  }
 '''
 PROVIDER += method('multihopMAX', 'startMultihop') + prepare
-PROVIDER += method('selectedRouterProfile', 'wireGuardLikeProfile') + method('layeredProfile', 'strictKillSwitchRequested') + method('suppliedNodeProof', 'deriveNodeProof') + '}\n'
+# startMultihop also calls the captured SS helpers. Include their unchanged
+# shipping bodies together with the layered file parser.
+PROVIDER += method('selectedRouterProfile', 'wireGuardLikeProfile') + method('validateCapturedSSSource', 'strictKillSwitchRequested') + method('suppliedNodeProof', 'deriveNodeProof') + '}\n'
 PROVIDER += r'''
 func apiResult(_ error:inout NSError?,_ action:()throws->String)->String?{do{return try action()}catch let caught{error=caught as NSError;return nil}}
 func LibboxRouterCompileMAXProfile(_ mode:String,_ files:String,_ policy:String,_ error:inout NSError?)->String?{apiResult(&error){try maxCompile(mode,files,policy)}}
