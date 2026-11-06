@@ -6,12 +6,16 @@ This ledger supplements [the earlier November 6 ledger](CONTINUATION-EVIDENCE-20
 and [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md). It does not replace
 the original requirements or cancel an unfinished requirement. The recorded
 published product work below ends at
-[`3ac3542d3f492deaec271b11d14e736ac90cdc32`](https://github.com/Eabusham2/router-vpn/commit/3ac3542d3f492deaec271b11d14e736ac90cdc32).
+[`9afd2a32b6086c9c96fd347a7742d63b374cdcea`](https://github.com/Eabusham2/router-vpn/commit/9afd2a32b6086c9c96fd347a7742d63b374cdcea).
 This is a source/evidence cutoff, not a claim that the branch stops moving or
 that this revision has completed its release gates.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 21 units.
+with separately attributed contributor evidence; it is not one of these 24 units.
+The publisher also preserved concurrent
+[`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
+eleven Linux private-domain DNSSEC files, with separate contributor evidence.
+This ledger does not claim independent execution of that unit.
 
 The initial live reconciliation found
 [`8f05dbe658fb6589e606e9995b613a3136a3d70e`](https://github.com/Eabusham2/router-vpn/commit/8f05dbe658fb6589e606e9995b613a3136a3d70e),
@@ -99,16 +103,17 @@ Counts are executable checks, not counts of completed user requirements.
 | [`a5000cc3`](https://github.com/Eabusham2/router-vpn/commit/a5000cc3636eea8b2a6e77bafd3477ca2ec84e6e) | The Apple Start Layer source contract now names shipping saved-profile schema 7 instead of stale schema 5. All layer and exact extension-source assertions remain. | Original focused failure independently reproduced in 0.011 seconds; three focused Apple contracts pass in 0.012 seconds after the one-literal correction. | This repairs a source contract, not native or physical Apple acceptance. |
 | [`3341e6c2`](https://github.com/Eabusham2/router-vpn/commit/3341e6c28434aacef08ddcbb8dfb1ab8aacc7333) | The captured-directory Tor fixture waits for its exact Close request and completed publication before cancelling. A real publication-lock schedule retains the original claim when a 100 ms Close expires before request issue, rejects replacement and retries the same request identity/generation. The pinned-directory and replacement-sentinel checks remain. | Four focused lifecycle race tests pass in 4.019 and 4.026 seconds. A temporary replacement-path cleanup mutation makes the real test fail in 1.222 seconds with a directory-ownership/publication diagnostic. The mutation driver expected a different failure string and failed its extra diagnostic assertion; the underlying ownership negative did reject the mutation. Production was restored before the final passing run. | Production cleanup, deadline and cancellation code are unchanged. This is private IPC fixture evidence, not physical Tor traffic acceptance. |
 | [`06615f64`](https://github.com/Eabusham2/router-vpn/commit/06615f64672cc8165357b42ea7f275c071edeee0) | Native SIP003 fixture Home cases now use the captured node-owned IPv4/IPv6 addresses. Other DNS modes retain public/hostname inputs; four public/foreign Home cases must fail in the Home-policy error domain. The default valid Home input prevents unrelated DNS rejection from masking protocol negatives. | Actual Swift SIP003 selection/DNS/credential checks pass 191 in a serial run. Independent review verifies the exact private addresses against the original fixture and inclusion of the shipping Home helper. Prior unchanged 90-second compiler timeouts occurred under concurrent compilation and remain unsuccessful attempts. | Production DNS validation is unchanged. Native Apple SDK, PacketTunnel and physical path acceptance remain separate. |
-
 | [`1969d8c3`](https://github.com/Eabusham2/router-vpn/commit/1969d8c309ee67b69c0df50f6ce991e04e4dc556) | Windows Advanced Performance now retains one panel and its exact request owner through Cancel, title-bar close and Alt-F4. Closed or stale callbacks cannot adopt results; old panels cannot cancel another global operation. Hop tests capture connected active-graph identities before measurement instead of mutable selection drafts. | The actual complete UI transformation and existing async owner pass 32 callback checks with transport/WPF doubles and four causal mutations. Existing help composition passes 19 checks, routed candidates 197 and async ownership fourteen groups. Source/package readback confirms the new fixture ships in installed and Portable packages. | Local execution used PowerShell 7.6.9. Native Windows PowerShell 5.1 and WPF are required by the added CI/package gates. Backend graph validation remains separate; the status/read-to-request sequence is not claimed atomic. Physical throughput and UI acceptance remain unproved. |
 | [`f4d222cb`](https://github.com/Eabusham2/router-vpn/commit/f4d222cb7bf8c730b36986e67e8e834af63fbb4c) | Android Home DNS preserves the selected current-node private IPv4/IPv6 address, all five transports, exact port, TLS name and HTTP path through Save/quick actions, native preparation and captured-profile restoration. A DNS sheet cannot adopt settings after its node/profile identity changes. | The original IPv6 HTTPS/5443 to IPv4 UDP/53 substitution is reproduced and rejected by two causal controls. Home checks pass 517; real-store checks pass 374 across eleven cases plus a node-validation control; existing graph checks pass 3,598. Both actual Android producers pass 15,121 checks and five controls; all 205 current captured inputs, source hashes and compiled graphs remain byte-identical using the same generated certificate inputs, without normalization. | Portable Java/Go execution does not establish actual VpnService, device selected-DNS proof or physical routing. This unit's exact 205-graph comparison does not establish the separate pending 235-graph feature. |
 | [`775ac68e`](https://github.com/Eabusham2/router-vpn/commit/775ac68e333c3c74021b702733e1381233bcc3e7) | Checksum-owned pinned sing preparation initializes a UDP NAT connection before publishing it and retires a cache entry only when its pointer still matches the original owner. All three retirement sites use the cache's locked conditional deletion, preserving a replacement flow. | The full preparation suite passes 24 tests in 11.133 seconds. Exact constructor-publication and Ex/legacy post-cleanup witnesses reject three independent causal mutations without scheduling sleeps. The actual formerly racy wrapped-AWG relay-route case passes eight repetitions under race in 7.024 seconds. Independent source review verifies all six pinned initializer callbacks perform only context/writer construction. | This is the bounded fix for the race found by the mandatory SOCKS gate; the entire updated native gate still must pass. Whole-group source validation precedes sequential writes and interrupted partial states fail closed; the upgrade is not a filesystem-atomic multi-file transaction. Physical OS routing remains separate. |
-
 | [`3ac3542d`](https://github.com/Eabusham2/router-vpn/commit/3ac3542d3f492deaec271b11d14e736ac90cdc32) | Android session audit now requires both captured node and profile identities, the shipping guard call and its updated warning. It replaces the stale profile-only warning expectation exposed by the Home DNS fix. | The original audit failure is reproduced; focused and full recovered native UI gates pass with the required Swift toolchain on PATH. The first full attempt lacked local `swiftc` and required no additional source correction. | This is a source-audit repair. It does not establish device UI behavior, VpnService DNS proof or a successful exact-SHA native release. |
+| [`880a865e`](https://github.com/Eabusham2/router-vpn/commit/880a865e9270cd91d26970cb0ff08285e90e5083) | Apple Router DNS editor Save now requires the exact profile captured when the editor loaded, extending the existing external-profile guard to Router profiles. Loading an unavailable selection clears the prior captured profile. | Actual Swift settings checks pass 694 with four causal controls; measurement checks pass 324 with four controls. A stale fixture's `@MainActor` spacing was corrected so the shipping declaration is extracted correctly. | This binds editor adoption to its captured profile; it does not establish physical device DNS proof, native UI accessibility or installed PacketTunnel behavior. |
+| [`fde9861a`](https://github.com/Eabusham2/router-vpn/commit/fde9861ac524b01e813fc328cb4216e4d8598578) | The Apple Xray fixture expects the Home transport and port it actually requests: TCP on 5353. It no longer expects the obsolete silent UDP/53 substitution. | The actual Swift/native graph fixture passes 87 graphs and 1,167 checks. Selected address, resolver detour and the other DNS transport assertions remain. | Two fixture expectations change; production DNS code is unchanged. Native Apple SDK, physical traffic and release acceptance remain separate. |
+| [`9afd2a32`](https://github.com/Eabusham2/router-vpn/commit/9afd2a32b6086c9c96fd347a7742d63b374cdcea) | Android daily Router DNS Retest owns its captured request/socket through cancel and dialog close. Result adoption binds the exact node/profile/source bytes, publication generation and latest operation identity across panels. Shared store locking prevents cross-instance selection between validation and publication; change-away/back, byte-identical replacement and rollback invalidate old captures. | Exact original shipping callbacks reproduce a first-node result being written into another node sharing the same profile ID. The repaired actual Java callback, real loopback HTTP and store harness passes 80 checks plus five causal controls: atomic publication, generation, latest operation, dismiss and cancel. A final small-token amendment passes the focused seven-check replacement fixture and its causal control. Session-mutation/numeric and node-store transaction contracts pass. | Android widgets, Libbox admission and private-file platform calls are explicit doubles. The existing VPN mutation guard still refuses unsafe persistence; completed queries then report results not saved. Global latest identity retains no completed private Job. Home-node query RTT remains separate from native selected-policy DNS proof; no device or current release pass is inferred. |
 
 ## Unpublished integration — excluded from the source cutoff
 
-The following row deliberately has no commit SHA. It is not part of the twenty-one
+The following row deliberately has no commit SHA. It is not part of the twenty-four
 published units above and must not be treated as a shipped capability extension.
 
 | Commit SHA | Pending unit | Evidence available so far | Required before publication |
@@ -118,6 +123,16 @@ published units above and must not be treated as a shipped capability extension.
 The Android Home DNS substitution previously listed here is now repaired in
 published `f4d222cb`, with its exact scope and device boundary in the table above.
 The broader SOCKS feature deliberately remains without a published commit SHA.
+The prior-source host/native gates and bounded NAT repair do not certify the
+latest merge. Concurrent
+[`ea460eae`](https://github.com/Eabusham2/router-vpn/commit/ea460eae005fb8ae7225c3dc17aa00dd991f2135)
+adds ten provisioned entry-only captures to the earlier 205 baseline, producing
+the current published 215-capture inventory. The merged 235-capture feature
+retains those cases and must finish its current host and native gates before
+publication. Concurrent
+[`ddbf7d3c`](https://github.com/Eabusham2/router-vpn/commit/ddbf7d3c80e7da97ec8900555b1f94fbbad882a1)
+Windows Router Server physical-policy work is preserved with separate contributor
+evidence; it is not one of the 24 units in this ledger.
 
 ## Newer source supersedes specific earlier open descriptions
 
@@ -138,6 +153,25 @@ before publishing `e0b769ff`. This ledger records reconciliation, not independen
 validation of that contributor unit.
 
 ## Current CI and publication evidence
+
+At **2026-11-06 06:18:53 UTC**, an independent read found live `main` at
+`c6a33ff145168ed1aadf2008b66191611fcedd7d`. The exact published `9afd2a32`
+query returned 28 attempt-1 runs: seven successful, fourteen cancelled, six
+running and one queued. [Authoritative release 42173361380](https://github.com/Eabusham2/router-vpn/actions/runs/42173361380)
+was running; [iOS compile smoke 42173361103](https://github.com/Eabusham2/router-vpn/actions/runs/42173361103)
+and [Windows native contract 42173361263](https://github.com/Eabusham2/router-vpn/actions/runs/42173361263)
+were cancelled. [Recovered native UI 42173361163](https://github.com/Eabusham2/router-vpn/actions/runs/42173361163)
+passed at `9afd2a32`; the earlier [UI run 42171426259](https://github.com/Eabusham2/router-vpn/actions/runs/42171426259)
+also passed at `3ac3542d`. These are specific workflow successes, not a completed
+native release or certification of the newer live branch.
+
+The single targeted macOS Intel retry is still running at that read: run
+42167793365 attempt 2, new job 127740178604, at original `a5000cc3`. Its original
+failure and earlier unchanged-source pass remain below. No retry success or
+current-SHA release evidence is claimed. The Windows protocol-readback/partial
+keeper repair is independently reviewed but remains unpublished in this cutoff;
+its actual AMD64/ARM64 kernel tests remain required. The historical wrong-protocol
+failure is not declared resolved by source diagnostics alone.
 
 After publication, the root publisher verified live `main` at `775ac68e` and
 reported 26 queued/pending exact-SHA runs at approximately 05:54 UTC. Its
@@ -345,7 +379,7 @@ The complete original scope remains open. Apple captured per-hop profile
 restoration, the persisted Start Layer fixture correction and macOS Performance
 cancellation are now published with the bounded evidence in their rows. Other
 original native UI, settings, Methods, recovery and graph requirements retain
-their individual closure obligations; these twenty-one units are not a replacement scope.
+their individual closure obligations; these twenty-four units are not a replacement scope.
 
 The concrete Apple Home DNS substitution gap reported at `8fdc2ef7` is repaired
 in `5b32bcf5` with the bounded evidence above. Intentional UDP/53 for Fastest node

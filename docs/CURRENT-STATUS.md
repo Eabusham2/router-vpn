@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `3ac3542d`
+## November 6 product continuation through `9afd2a32`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,13 +19,17 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`3ac3542d3f492deaec271b11d14e736ac90cdc32`](https://github.com/Eabusham2/router-vpn/commit/3ac3542d3f492deaec271b11d14e736ac90cdc32).
+[`9afd2a32b6086c9c96fd347a7742d63b374cdcea`](https://github.com/Eabusham2/router-vpn/commit/9afd2a32b6086c9c96fd347a7742d63b374cdcea).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 21 units.
+with separately attributed contributor evidence; it is not one of these 24 units.
+The publisher also preserved concurrent
+[`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
+eleven Linux private-domain DNSSEC files, with separate contributor evidence.
+This ledger does not claim independent execution of that unit.
 
 - **Apple imported-entry fixture:** `ae8ecead` corrects stale expectations after
   SOCKS5 support was implemented. Actual Swift/Go selection checks pass 2,080
@@ -142,12 +146,33 @@ with separately attributed contributor evidence; it is not one of these 21 units
   Focused and full recovered UI gates pass with the required Swift PATH; the first
   missing-`swiftc` attempt remains an environment failure. No production code changes.
 
+- **Apple captured DNS editor:** `880a865e` requires the exact loaded profile for
+  Router as well as external DNS saves. Actual Swift settings checks pass 694
+  with four causal controls; measurement checks pass 324 with four controls.
+  The stale `@MainActor` extraction spacing was repaired in its fixture.
+- **Apple Xray DNS fixture:** `fde9861a` expects the requested Home TCP/5353
+  rather than obsolete UDP/53 substitution. The actual fixture passes 87 graphs
+  and 1,167 checks; production DNS code is unchanged.
+- **Android Router DNS Retest:** `9afd2a32` retains the original cancellable socket
+  request until worker join and binds adoption to node/profile/source bytes,
+  publication generation and the latest cross-panel operation identity. The
+  actual old callback reproduces a wrong-node write with a shared profile ID.
+  The repaired Java/TCP/store fixture passes 80 checks and five causal controls;
+  the final small identity-token change passes seven focused checks and its
+  control. Store/source checks are atomic across independent instances; rollback
+  invalidates captures. Unsafe persistence remains blocked by the existing VPN
+  mutation guard and is reported as results not saved. Device/native DNS proof
+  remains separate from these home-node query measurements.
+
 Concurrent Linux root-DS unit `7e2a55fa` and narrower SOCKS paired-final layer
 unit `ad4da5e7` were preserved with their separate contributor evidence. The
 latter adds four SS/Hysteria final-layer captures. Concurrent `dbb0a4ca` adds six
 WG/AWG packet-final cases; together these establish the published 205-capture
 baseline with separately attributed evidence. The broader 45-combination SOCKS
-entry/final layer unit is still unpublished at this cutoff.
+entry/final layer unit is still unpublished at this cutoff. Concurrent `ea460eae` subsequently adds ten entry-only layer
+captures, taking the published host baseline to 215. Its contributor evidence
+and concurrent Windows Router Server policy `ddbf7d3c` remain separately
+attributed. The pending 235-capture extension must preserve that updated baseline.
 
 Several specific source gaps in the historical `7f801312` checkpoint below are
 superseded. `98d6af64` and `95ffbb72` implement Local mobile SOCKS5 entries to
@@ -158,6 +183,25 @@ is separate from macOS measurement checks. `c626af1f`, `90a7d70f` and `693cc705`
 advance captured resolved DNSSEC validation through sealed children and original
 alias-proof ownership. These changes do not establish universal protocol/graph
 coverage, installed native acceptance or physical-device readiness.
+
+At **2026-11-06 06:18:53 UTC**, an independent read found live `main` at
+`c6a33ff145168ed1aadf2008b66191611fcedd7d`. The exact published `9afd2a32`
+query returned 28 attempt-1 runs: seven successful, fourteen cancelled, six
+running and one queued. [Authoritative release 42173361380](https://github.com/Eabusham2/router-vpn/actions/runs/42173361380)
+was running; [iOS compile smoke 42173361103](https://github.com/Eabusham2/router-vpn/actions/runs/42173361103)
+and [Windows native contract 42173361263](https://github.com/Eabusham2/router-vpn/actions/runs/42173361263)
+were cancelled. [Recovered native UI 42173361163](https://github.com/Eabusham2/router-vpn/actions/runs/42173361163)
+passed at `9afd2a32`; the earlier [UI run 42171426259](https://github.com/Eabusham2/router-vpn/actions/runs/42171426259)
+also passed at `3ac3542d`. These are specific workflow successes, not a completed
+native release or certification of the newer live branch.
+
+The single targeted macOS Intel retry is still running at that read: run
+42167793365 attempt 2, new job 127740178604, at original `a5000cc3`. Its original
+failure and earlier unchanged-source pass remain below. No retry success or
+current-SHA release evidence is claimed. The Windows protocol-readback/partial
+keeper repair is independently reviewed but remains unpublished in this cutoff;
+its actual AMD64/ARM64 kernel tests remain required. The historical wrong-protocol
+failure is not declared resolved by source diagnostics alone.
 
 After publication, the root publisher verified live `main` at `775ac68e` and
 reported 26 queued/pending exact-SHA runs at approximately 05:54 UTC. Its
