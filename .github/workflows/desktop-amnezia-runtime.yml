@@ -23,6 +23,7 @@ on:
       - 'client/RouterVPN-Windows-SpeedLab.ps1'
       - 'client/test-windows-speed-lab-paths.ps1'
       - 'client/macos/RouterVPNMacSpeedLab*.swift'
+      - 'client/macos/RouterVPNMacTelemetry.swift'
       - 'client/linux/routervpn-speed-lab-*.inc'
       - 'client/test-windows-external-amnezia.ps1'
       - 'client/macos/RouterVPNMacExternalNode.swift'
@@ -59,6 +60,7 @@ on:
       - 'deploy/test_desktop_network_cohort*.py'
       - 'internal/desktopnetwork/**'
       - 'deploy/test_macos_speed_lab_transport.py'
+      - 'deploy/test_macos_performance_measurement.py'
       - '.github/workflows/desktop-amnezia-runtime.yml'
 permissions:
   contents: read
@@ -117,6 +119,7 @@ jobs:
         run: |
           set -o pipefail
           python3 deploy/test_macos_speed_lab_transport.py 2>&1 | tee "$RUNNER_TEMP/macos-speed-lab-transport.log"
+          python3 deploy/test_macos_performance_measurement.py 2>&1 | tee "$RUNNER_TEMP/macos-performance-measurement.log"
       - name: Verify the packaged native AWG process
         shell: bash
         run: |
@@ -139,5 +142,6 @@ jobs:
             ${{ runner.temp }}/desktop-external-comparison.log
             ${{ runner.temp }}/desktop-network-cohort.log
             ${{ runner.temp }}/macos-speed-lab-transport.log
+            ${{ runner.temp }}/macos-performance-measurement.log
           if-no-files-found: error
           retention-days: 7

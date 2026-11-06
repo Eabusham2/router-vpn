@@ -19,7 +19,9 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
 
     init(url: URL, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
         guard url.scheme == "http", url.host == "127.0.0.1", url.user == nil, url.password == nil,
-              ["/api/speed-lab/options", "/api/speed-lab/run", "/api/profile/fastest"].contains(url.path), url.query == nil, url.fragment == nil else {
+              ["/api/speed-lab/options", "/api/speed-lab/run", "/api/profile/fastest",
+               "/api/profiles", "/api/multihop/status", "/api/connection/live-latency",
+               "/api/connection/speed-test", "/api/profile/latency", "/api/multihop/speed-test"].contains(url.path), url.query == nil, url.fragment == nil else {
             throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local Speed Lab endpoint."])
         }
         if url.path == "/api/profile/fastest" {
@@ -30,6 +32,29 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                   CFGetTypeID(selected) == CFBooleanGetTypeID(), selected.boolValue else {
                 throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Fastest requires a bounded 50-sample selection request."])
             }
+        }
+        // Performance uses this same owned transport, with explicit bounded
+        // schemas. Adding read/measurement endpoints does not grant mutation API access.
+        func bounded(_ maximum: TimeInterval) -> Bool { timeout.isFinite && timeout > 0 && timeout <= maximum }
+        func number(_ key: String, equals expected: Double) -> Bool {
+            guard let value = body?[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() else { return false }
+            return value.doubleValue == expected
+        }
+        func identifier(_ key: String) -> String? {
+            guard let value = body?[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return value
+        }
+        let performanceValid: Bool
+        switch url.path {
+        case "/api/profiles", "/api/multihop/status": performanceValid = body == nil && bounded(5)
+        case "/api/connection/live-latency": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["samples"]) && number("samples", equals: 5) && bounded(12)
+        case "/api/connection/speed-test": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["bytes"]) && number("bytes", equals: 8388608) && bounded(45)
+        case "/api/profile/latency": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["id", "samples"]) && identifier("id") != nil && number("samples", equals: 50) && bounded(180)
+        case "/api/multihop/speed-test": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["entry_id", "exit_id", "bytes"]) && identifier("entry_id") != nil && identifier("exit_id") != nil && identifier("entry_id") != identifier("exit_id") && number("bytes", equals: 4194304) && bounded(70)
+        default: performanceValid = true
+        }
+        guard performanceValid else {
+            throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid bounded Performance request."])
         }
         var request = URLRequest(url: url)
         request.httpMethod = body == nil ? "GET" : "POST"

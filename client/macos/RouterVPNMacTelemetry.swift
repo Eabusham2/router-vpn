@@ -273,27 +273,13 @@ extension ProductWindowController {
     }
 
     @objc private func openUnifiedPerformance() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 760, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        panel.title = "Router VPN Performance"
-        panel.minSize = NSSize(width: 600, height: 380)
-        let controller = NSWindowController(window: panel)
+        if let existing = objc_getAssociatedObject(self, &telemetryPerformanceControllerKey) as? RouterVPNMacPerformanceController, !existing.closed {
+            existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return
+        }
+        let controller = RouterVPNMacPerformanceController(product: self)
         objc_setAssociatedObject(self, &telemetryPerformanceControllerKey, controller, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 10; stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let title = NSTextField(labelWithString: "Latency & path performance")
-        title.font = .systemFont(ofSize: 22, weight: .bold); stack.addArrangedSubview(title)
-        let note = NSTextField(wrappingLabelWithString: "Live RTT measures the active private tunnel. Real path speed transfers to the active exit. Routed hop speed independently transfers to the selected entry and exit private router-agents through the actual multihop routing graph; unreachable hops keep their error instead of receiving a calculated value. Auto MTU remains separate.")
-        note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
-        let result = NSTextField(wrappingLabelWithString: "Choose a real measurement."); result.font = .monospacedSystemFont(ofSize: 12, weight: .regular); result.isSelectable = true; result.identifier = NSUserInterfaceItemIdentifier("telemetry-performance-result"); stack.addArrangedSubview(result)
-        let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
-        let live = NSButton(title: "Live path RTT", target: self, action: #selector(telemetryLivePerformance(_:))); live.bezelStyle = .rounded
-        let durable = NSButton(title: "50-sample selected node", target: self, action: #selector(telemetryDurablePerformance(_:))); durable.bezelStyle = .rounded
-        let speed = NSButton(title: "Real path speed", target: self, action: #selector(telemetrySpeedPerformance(_:))); speed.bezelStyle = .rounded
-        let hops = NSButton(title: "Routed hop speeds", target: self, action: #selector(telemetryHopSpeedPerformance(_:))); hops.bezelStyle = .rounded
-        let mtu = NSButton(title: "Throughput + Auto MTU", target: self, action: #selector(telemetryMtuPerformance(_:))); mtu.bezelStyle = .rounded
-        row.addArrangedSubview(live); row.addArrangedSubview(durable); row.addArrangedSubview(speed); row.addArrangedSubview(hops); row.addArrangedSubview(mtu); stack.addArrangedSubview(row)
-        let external = NSButton(title: "Compare external paths / connect fastest", target: self, action: #selector(openExternalComparison))
-        external.bezelStyle = .rounded; stack.addArrangedSubview(external)
-        panel.contentView = stack; panel.center(); controller.showWindow(nil); panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        controller.window?.center(); controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func openExternalComparison() {
@@ -305,69 +291,180 @@ extension ProductWindowController {
         controller.window?.center(); controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
     }
 
-    private func telemetryResult(_ sender: NSButton) -> NSTextField? {
-        telemetryWalk(sender.window?.contentView, id: "telemetry-performance-result") as? NSTextField
-    }
+    fileprivate func showPerformanceMTU() { showMTUPanel(retest: true) }
+    fileprivate func showPerformanceExternalComparison() { openExternalComparison() }
 
-    private func telemetryAsync(_ sender: NSButton, label: String, work: @escaping () throws -> Data) {
-        guard let result = telemetryResult(sender) else { return }
-        result.stringValue = label
-        sender.isEnabled = false
-        DispatchQueue.global(qos: .userInitiated).async { [weak sender] in
-            do {
-                let data = try work()
-                let text = String(data: data, encoding: .utf8) ?? "No result"
-                DispatchQueue.main.async { result.stringValue = text; sender?.isEnabled = true }
-            } catch {
-                DispatchQueue.main.async { result.stringValue = error.localizedDescription; sender?.isEnabled = true }
+}
+
+// Main-thread owner shared by the panel and its cancellable native request.
+// HTTP cancellation retires the client task; backend admission remains held
+// independently until transfers, the captured path observer and MTU work drain.
+private final class RouterVPNMacPerformanceMeasurement {
+    enum Kind { case live, node, speed, hops }
+    let baseURL: URL
+    private(set) var running = false
+    private(set) var cancelled = false
+    private(set) var closed = false
+    private var generation: UInt64 = 0
+    private var request: RouterVPNMacSpeedLabTransport?
+    var changed: ((String) -> Void)?
+
+    init(baseURL: URL) { self.baseURL = baseURL }
+    deinit { request?.cancel() }
+
+    @discardableResult func start(_ kind: Kind) -> Bool {
+        guard !closed, !running else { return false }
+        generation &+= 1
+        let owner = generation
+        running = true; cancelled = false
+        switch kind {
+        case .live:
+            changed?("Measuring current tunnel RTT…")
+            perform("/api/connection/live-latency", body: ["samples": 5], timeout: 12, owner: owner)
+        case .node:
+            changed?("Running 50-sample selected-node benchmark…")
+            perform("/api/profiles", body: nil, timeout: 5, owner: owner) { [weak self] data in
+                guard let self else { return }
+                guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let id = root["selected_id"] as? String, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    self.finish(.failure(Self.issue("Select a Router VPN node first.")), owner: owner); return
+                }
+                self.perform("/api/profile/latency", body: ["id": id, "samples": 50], timeout: 180, owner: owner)
+            }
+        case .speed:
+            changed?("Transferring 8 MiB down and 8 MiB up through the current VPN path; Auto MTU is held during the transfer…")
+            perform("/api/connection/speed-test", body: ["bytes": 8 * 1024 * 1024], timeout: 45, owner: owner)
+        case .hops:
+            changed?("Checking the active multihop graph before testing its entry and exit…")
+            perform("/api/multihop/status", body: nil, timeout: 5, owner: owner) { [weak self] data in
+                guard let self else { return }
+                guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let connected = root["connected"] as? NSNumber,
+                      CFGetTypeID(connected) == CFBooleanGetTypeID(), connected.boolValue,
+                      let entry = root["entry_id"] as? String, let exit = root["exit_id"] as? String,
+                      !entry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !exit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, entry != exit else {
+                    self.finish(.failure(Self.issue("Connect an actual multihop graph with different entry and exit nodes first.")), owner: owner); return
+                }
+                self.perform("/api/multihop/speed-test", body: ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024], timeout: 70, owner: owner)
             }
         }
+        return true
     }
 
-    @objc private func telemetryLivePerformance(_ sender: NSButton) {
-        telemetryAsync(sender, label: "Measuring current tunnel RTT…") { try self.api.request("/api/connection/live-latency", method: "POST", body: ["samples": 5], timeout: 12) }
+    func cancel() {
+        guard running, !cancelled else { return }
+        cancelled = true
+        if !closed { changed?("Cancelling the owned request…") }
+        request?.cancel()
     }
 
-    @objc private func telemetryDurablePerformance(_ sender: NSButton) {
-        telemetryAsync(sender, label: "Running 50-sample selected-node benchmark…") {
-            let root = try self.api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
-            guard let id = root["selected_id"] as? String, !id.isEmpty else { throw NSError(domain: "RouterVPNMac", code: 41, userInfo: [NSLocalizedDescriptionKey: "Select a Router VPN node first."]) }
-            return try self.api.request("/api/profile/latency", method: "POST", body: ["id": id, "samples": 50], timeout: 180)
-        }
+    func close() {
+        closed = true
+        cancel()
+        // Keep the request until its completion. Forced teardown still cancels
+        // real network work; a stale callback cannot publish into another panel.
     }
 
-    @objc private func telemetrySpeedPerformance(_ sender: NSButton) {
-        telemetryAsync(sender, label: "Transferring 8 MiB down and 8 MiB up through the current VPN path…") { try self.api.request("/api/connection/speed-test", method: "POST", body: ["bytes": 8 * 1024 * 1024], timeout: 45) }
+    private static func issue(_ message: String) -> Error {
+        NSError(domain: "RouterVPNPerformance", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    @objc private func telemetryHopSpeedPerformance(_ sender: NSButton) {
-        let entryIndex = multihopEntryPopup.indexOfSelectedItem
-        let exitIndex = multihopExitPopup.indexOfSelectedItem
-        guard entryIndex >= 0, exitIndex >= 0, entryIndex < multihopNodeIDs.count, exitIndex < multihopNodeIDs.count else {
-            telemetryResult(sender)?.stringValue = "Choose multihop entry and exit nodes first."
+    private func perform(_ path: String, body: [String: Any]?, timeout: TimeInterval, owner: UInt64,
+                         next: ((Data) -> Void)? = nil) {
+        guard !closed, !cancelled, running, generation == owner else { return }
+        do {
+            guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else { throw Self.issue("The local controller endpoint is unavailable.") }
+            let owned = try RouterVPNMacSpeedLabTransport(url: url, body: body, timeout: timeout) { [weak self] result in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.generation == owner, self.running else { return }
+                    self.request = nil
+                    if self.closed { self.running = false; return }
+                    if self.cancelled { self.finish(result, owner: owner); return }
+                    if case .success(let data) = result, let next { next(data) }
+                    else { self.finish(result, owner: owner) }
+                }
+            }
+            request = owned; owned.start()
+        } catch { finish(.failure(error), owner: owner) }
+    }
+
+    private func finish(_ result: Result<Data, Error>, owner: UInt64) {
+        guard generation == owner, running else { return }
+        request = nil; running = false
+        guard !closed else { return }
+        if cancelled {
+            changed?("Client request cancelled. Controller cleanup may still be pending; another throughput test may remain unavailable until that work retires.")
             return
         }
-        let entry = multihopNodeIDs[entryIndex]
-        let exit = multihopNodeIDs[exitIndex]
-        guard entry != exit else {
-            telemetryResult(sender)?.stringValue = "Multihop entry and exit must be different."
-            return
-        }
-        telemetryAsync(sender, label: "Testing routed entry and exit throughput through the active multihop graph…") {
-            try self.api.request("/api/multihop/speed-test", method: "POST", body: ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024], timeout: 70)
+        switch result {
+        case .success(let data): changed?(String(data: data, encoding: .utf8) ?? "No result")
+        case .failure(let error): changed?(error.localizedDescription)
         }
     }
+}
 
-    @objc private func telemetryMtuPerformance(_ sender: NSButton) {
-        showMTUPanel(retest: true)
-    }
+private final class RouterVPNMacPerformanceController: NSWindowController, NSWindowDelegate {
+    fileprivate private(set) var closed = false
+    private var closeWanted = false
+    private weak var product: ProductWindowController?
+    private let measurement = RouterVPNMacPerformanceMeasurement(baseURL: routerVPNProductBaseURL)
+    private let result = NSTextField(wrappingLabelWithString: "Choose a real measurement.")
+    private let cancelButton = NSButton(title: "Cancel measurement", target: nil, action: nil)
+    private var actions: [NSButton] = []
 
-    private func telemetryWalk(_ view: NSView?, id: String) -> NSView? {
-        guard let view else { return nil }
-        if view.identifier?.rawValue == id { return view }
-        for child in view.subviews { if let found = telemetryWalk(child, id: id) { return found } }
-        return nil
+    init(product: ProductWindowController) {
+        self.product = product
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 760, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        super.init(window: panel)
+        panel.title = "Router VPN Performance"; panel.minSize = NSSize(width: 600, height: 380); panel.delegate = self
+        let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
+        let title = NSTextField(labelWithString: "Latency & path performance"); title.font = .systemFont(ofSize: 22, weight: .bold); stack.addArrangedSubview(title)
+        let note = NSTextField(wrappingLabelWithString: "Live RTT measures the active private tunnel. Real path speed transfers to the active exit. Routed hop speeds measure the active entry and exit independently through the actual graph; unreachable hops keep their error. Each transfer reports actual bytes and elapsed time. Auto MTU is held during throughput measurements.")
+        note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
+        result.font = .monospacedSystemFont(ofSize: 12, weight: .regular); result.isSelectable = true
+        result.identifier = NSUserInterfaceItemIdentifier("telemetry-performance-result"); stack.addArrangedSubview(result)
+        let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
+        for (tag, title) in ["Live path RTT", "50-sample selected node", "Real path speed", "Routed hop speeds", "Throughput + Auto MTU"].enumerated() {
+            let button = NSButton(title: title, target: self, action: #selector(measure(_:)))
+            button.tag = tag; button.bezelStyle = .rounded; actions.append(button); row.addArrangedSubview(button)
+        }
+        stack.addArrangedSubview(row)
+        let external = NSButton(title: "Compare external paths / connect fastest", target: self, action: #selector(compareExternal))
+        external.bezelStyle = .rounded; actions.append(external); stack.addArrangedSubview(external)
+        cancelButton.target = self; cancelButton.action = #selector(cancelMeasurement); cancelButton.bezelStyle = .rounded
+        cancelButton.isEnabled = false; stack.addArrangedSubview(cancelButton)
+        measurement.changed = { [weak self] text in self?.render(text) }
+        panel.contentView = stack
     }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func measure(_ sender: NSButton) {
+        guard !closed, !measurement.running else { return }
+        switch sender.tag {
+        case 0: measurement.start(.live)
+        case 1: measurement.start(.node)
+        case 2: measurement.start(.speed)
+        case 3: measurement.start(.hops)
+        case 4: product?.showPerformanceMTU()
+        default: break
+        }
+    }
+    @objc private func compareExternal() { if !closed, !measurement.running { product?.showPerformanceExternalComparison() } }
+    @objc private func cancelMeasurement() { measurement.cancel() }
+    private func render(_ text: String) {
+        guard !closed else { return }
+        result.stringValue = text
+        for action in actions { action.isEnabled = !measurement.running }
+        cancelButton.isEnabled = measurement.running && !measurement.cancelled
+        if closeWanted, !measurement.running { window?.performClose(nil) }
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if measurement.running { closeWanted = true; measurement.cancel(); return false }
+        return true
+    }
+    func windowWillClose(_ notification: Notification) { closed = true; measurement.close() }
 }
 
 // This display parser contains no connection authority. Only a matching,
