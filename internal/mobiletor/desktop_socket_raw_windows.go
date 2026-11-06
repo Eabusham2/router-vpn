@@ -2,6 +2,7 @@ package mobiletor
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"runtime"
 	"sync"
@@ -74,11 +75,45 @@ func desktopSocketLocal(fd syscall.Handle) (netip.AddrPort, error) {
 	return netip.AddrPort{}, errors.New("desktop physical socket has no exact bound address")
 }
 
+// Read the actual provider tuple at each ownership boundary. This does not
+// bind, connect, close, or substitute a descriptor.
+func desktopWindowsSocketProtocolInfo(fd syscall.Handle) (syscall.WSAProtocolInfo, error) {
+	var info syscall.WSAProtocolInfo
+	size := int32(unsafe.Sizeof(info))
+	const protocolInfoW = 0x2005 // SO_PROTOCOL_INFOW
+	if err := syscall.Getsockopt(fd, syscall.SOL_SOCKET, protocolInfoW, (*byte)(unsafe.Pointer(&info)), &size); err != nil {
+		return info, err
+	}
+	if size != int32(unsafe.Sizeof(info)) {
+		return info, fmt.Errorf("Windows socket protocol information size changed (bytes %d/%d)", size, unsafe.Sizeof(info))
+	}
+	return info, nil
+}
+
+func desktopWindowsSocketProtocol(fd syscall.Handle, family, kind, protocol int) error {
+	info, err := desktopWindowsSocketProtocolInfo(fd)
+	if err != nil {
+		return err
+	}
+	if info.AddressFamily != int32(family) || info.SocketType != int32(kind) || info.Protocol != int32(protocol) {
+		// SO_TYPE is an additional diagnostic only. It can never replace a
+		// failed SO_PROTOCOL_INFOW check or admit a different provider tuple.
+		actualKind, typeErr := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, 0x1008 /* SO_TYPE */)
+		return errors.Join(fmt.Errorf("Windows socket creator changed the kernel family or protocol (family %d/%d, type %d/%d, protocol %d/%d; SO_TYPE %d)",
+			info.AddressFamily, family, info.SocketType, kind, info.Protocol, protocol, actualKind), typeErr)
+	}
+	return nil
+}
+
 func desktopSocketDuplicate(fd syscall.Handle) (*desktopSocketKeeper, error) {
 	// WSAGetLastError is thread-local. Capture it on the same OS thread as
 	// the failing native call, before any other Winsock operation can run.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	source, err := desktopWindowsSocketProtocolInfo(fd)
+	if err != nil {
+		return nil, fmt.Errorf("Windows duplicate source protocol readback: %w", err)
+	}
 	var info syscall.WSAProtocolInfo
 	result, _, _ := desktopSocketDuplicateProc.Call(uintptr(fd), uintptr(syscall.Getpid()), uintptr(unsafe.Pointer(&info)))
 	if result != 0 {
@@ -91,7 +126,18 @@ func desktopSocketDuplicate(fd syscall.Handle) (*desktopSocketKeeper, error) {
 	if duplicate == ^uintptr(0) {
 		return nil, desktopSocketWinsockError()
 	}
-	return &desktopSocketKeeper{handle: syscall.Handle(duplicate)}, nil
+	keeper := &desktopSocketKeeper{handle: syscall.Handle(duplicate)}
+	// Consume the one-use duplication data before checking its fields so a
+	// failure still has an owned descriptor to retire. Never silently close
+	// or discard an acquired handle while its caller retains the original.
+	if info.AddressFamily != source.AddressFamily || info.SocketType != source.SocketType || info.Protocol != source.Protocol {
+		return keeper, fmt.Errorf("Windows duplicate transfer metadata changed its source protocol (family %d/%d, type %d/%d, protocol %d/%d)",
+			info.AddressFamily, source.AddressFamily, info.SocketType, source.SocketType, info.Protocol, source.Protocol)
+	}
+	if err := desktopWindowsSocketProtocol(keeper.handle, int(source.AddressFamily), int(source.SocketType), int(source.Protocol)); err != nil {
+		return keeper, fmt.Errorf("Windows duplicated descriptor protocol readback: %w", err)
+	}
+	return keeper, nil
 }
 
 func desktopSocketBindTCP(raw syscall.RawConn, address netip.Addr) (*desktopSocketKeeper, netip.AddrPort, error) {

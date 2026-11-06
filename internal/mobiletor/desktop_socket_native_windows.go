@@ -158,16 +158,8 @@ func desktopSocketNativeRaw(source DesktopSocketNative, network string, address 
 	stage := "source raw control"
 	err = raw.Control(func(handle uintptr) {
 		fd := syscall.Handle(handle)
-		var info syscall.WSAProtocolInfo
-		size := int32(unsafe.Sizeof(info))
-		const protocolInfoW = 0x2005
 		stage = "protocol information readback"
-		if result = syscall.Getsockopt(fd, syscall.SOL_SOCKET, protocolInfoW, (*byte)(unsafe.Pointer(&info)), &size); result != nil {
-			return
-		}
-		if size != int32(unsafe.Sizeof(info)) || info.AddressFamily != int32(family) || info.SocketType != int32(kind) || info.Protocol != int32(protocol) {
-			result = fmt.Errorf("Windows socket creator changed the kernel family or protocol (bytes %d/%d, family %d/%d, type %d/%d, protocol %d/%d)",
-				size, unsafe.Sizeof(info), info.AddressFamily, family, info.SocketType, kind, info.Protocol, protocol)
+		if result = desktopWindowsSocketProtocol(fd, family, kind, protocol); result != nil {
 			return
 		}
 		// SO_ACCEPTCONN is defined only for connection-oriented sockets on

@@ -110,6 +110,35 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "lost its exact production boundary"):
                 GATE.import_mutants(changed)
 
+    def test_sequential_native_creator_and_wrong_protocol_control_are_required(self):
+        self.assertIn("TestDesktopSocketWindowsIdentitySequentialProtocolTransfer", GATE.REQUIRED)
+        source = (ROOT / "internal/mobiletor" / GATE.CREATOR).read_text(encoding="utf-8")
+        changes = GATE.creator_mutants(source)
+        self.assertEqual(len(changes), 1)
+        label, test, witness, changed = changes[0]
+        self.assertEqual(label, "creator-wrong-protocol")
+        self.assertEqual(test, "TestDesktopSocketWindowsIdentitySequentialProtocolTransfer")
+        self.assertNotEqual(source, changed)
+        self.assertIn(witness, (ROOT / "internal/mobiletor/desktop_socket_windows_identity_test.go").read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "lost its exact production boundary"):
+            GATE.creator_mutants(changed)
+
+    def test_partial_duplicate_owner_and_causal_control_are_required(self):
+        self.assertIn("TestDesktopSocketWindowsIdentityRetainsFailedDuplicateReadback", GATE.REQUIRED)
+        source = (ROOT / "internal/mobiletor" / GATE.BROKER).read_text(encoding="utf-8")
+        changes = GATE.broker_mutants(source)
+        self.assertEqual(len(changes), 1)
+        label, test, witness, changed = changes[0]
+        self.assertEqual(label, "failed-duplicate-ownership")
+        self.assertEqual(test, "TestDesktopSocketWindowsIdentityRetainsFailedDuplicateReadback")
+        self.assertNotEqual(source, changed)
+        self.assertIn(witness, (ROOT / "internal/mobiletor/desktop_socket_windows_identity_test.go").read_text(encoding="utf-8"))
+
+    def test_protocol_readback_primitives_are_required_shipping_inputs(self):
+        (self.sources / "desktop_socket_raw_windows.go").unlink()
+        with self.assertRaisesRegex(ValueError, "source/test closure is incomplete"):
+            GATE.checked_sources(self.vendor)
+
     def test_transfer_records_are_required_exact_shipping_inputs(self):
         for name in ("desktop_protection_transfer_record.go", "desktop_protection_transfer_record_test.go"):
             with self.subTest(name=name):

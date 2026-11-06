@@ -28,6 +28,8 @@ IDENTITY = "desktop_socket_windows_identity.go"
 CONNECT = "desktop_socket_windows_identity_connect.go"
 TCP = "desktop_socket_tcp_windows.go"
 IMPORTED = "desktop_socket_native_windows.go"
+CREATOR = "desktop_socket_windows_identity_api.go"
+BROKER = "desktop_socket_broker.go"
 REQUIRED = (
     "TestDesktopSocketWindowsIdentitySDKLayout",
     "TestDesktopSocketWindowsIdentityBoundKernelEndpoints",
@@ -48,6 +50,8 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityRenewsAcrossActualEndpointTransition",
     "TestDesktopSocketWindowsIdentityRejectsConnectedLocalReplacement",
     "TestDesktopSocketWindowsIdentityTCPRetainsBoundDescriptor",
+    "TestDesktopSocketWindowsIdentitySequentialProtocolTransfer",
+    "TestDesktopSocketWindowsIdentityRetainsFailedDuplicateReadback",
 )
 
 
@@ -60,7 +64,7 @@ def checked_sources(source):
         source = PREP.checked_vendor(source)
         target = source / "routervpn/mobiletor"
         package = "./routervpn/mobiletor"
-    required = {IDENTITY, CONNECT, TCP, "desktop_socket_windows_identity_api.go",
+    required = {IDENTITY, CONNECT, TCP, CREATOR, BROKER, "desktop_socket_raw_windows.go",
                 "desktop_socket_windows_identity_test.go",
                 "desktop_socket_native_windows.go", "desktop_socket_source.go",
                 "desktop_protection_transfer_record.go",
@@ -134,6 +138,21 @@ def mutants(text):
         ("atomic-expiry", REQUIRED[1], "lost its atomic bounded creation window",
          replace_once(text, "Expires: p.expires,", "Expires: ^uint32(0),")),
     )
+
+
+def creator_mutants(text):
+    return (("creator-wrong-protocol", REQUIRED[19],
+             "sequential original protocol acquisition failed",
+             replace_once(text,
+                          "a.socket.Call(uintptr(family), uintptr(kind), uintptr(protocol), 0, 0, 0x81",
+                          "a.socket.Call(uintptr(family), uintptr(syscall.SOCK_STREAM), uintptr(syscall.IPPROTO_TCP), 0, 0, 0x81")),)
+
+
+def broker_mutants(text):
+    return (("failed-duplicate-ownership", REQUIRED[20],
+             "failed duplicate readback escaped broker retirement",
+             function_mutant(text, "func (s *desktopSocket) adoptRetained(",
+                             "s.mu.Lock()", "if err != nil { return err }; s.mu.Lock()")),)
 
 
 def connect_mutants(text):
@@ -253,6 +272,8 @@ def execute(source=ROOT, go="go", *, env=None):
     changes += [(CONNECT, *mutation) for mutation in connect_mutants((target / CONNECT).read_text(encoding="utf-8"))]
     changes += [(TCP, *mutation) for mutation in tcp_mutants((target / TCP).read_text(encoding="utf-8"))]
     changes += [(IMPORTED, *mutation) for mutation in import_mutants((target / IMPORTED).read_text(encoding="utf-8"))]
+    changes += [(CREATOR, *mutation) for mutation in creator_mutants((target / CREATOR).read_text(encoding="utf-8"))]
+    changes += [(BROKER, *mutation) for mutation in broker_mutants((target / BROKER).read_text(encoding="utf-8"))]
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-identity-") as directory:
         workspace = Path(directory)
         binary = workspace / "identity.test.exe"
@@ -279,6 +300,9 @@ def execute(source=ROOT, go="go", *, env=None):
                     raise ValueError("Windows identity baseline omitted native imported I/O")
                 if "--- PASS: " + REQUIRED[11] + "/" + network + family + " (" not in output:
                     raise ValueError("Windows identity baseline omitted actual protocol admission")
+                for name in (REQUIRED[19], REQUIRED[20]):
+                    if "--- PASS: " + name + "/" + network + family + " (" not in output:
+                        raise ValueError("Windows identity baseline omitted an exact protocol-transfer/retirement family")
             for outcome in ("connected", "connect-error", "cancelled"):
                 if "--- PASS: " + REQUIRED[18] + "/tcp" + family + "/" + outcome + " (" not in output:
                     raise ValueError("Windows identity baseline omitted exact bound-descriptor ownership")

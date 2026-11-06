@@ -371,6 +371,11 @@ func (a *desktopWindowsIdentityAPI) createUnderToken(token syscall.Token, sid []
 				resultErr = desktopWindowsCallFailure("native socket creation", desktopSocketWinsockError())
 			} else {
 				result = desktopWindowsNativeOwn(syscall.Handle(handle))
+				// Keep ownership even when readback fails; the identity record must
+				// retire this exact acquired handle after thread reversion joins.
+				if err := desktopWindowsSocketProtocol(syscall.Handle(handle), family, kind, protocol); err != nil {
+					resultErr = fmt.Errorf("Windows isolated creator protocol readback before token reversion: %w", err)
+				}
 			}
 		}
 	}

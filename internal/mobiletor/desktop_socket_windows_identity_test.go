@@ -976,6 +976,143 @@ func desktopWindowsIdentityTestIOProof(t *testing.T, phase string, p *DesktopWin
 	}
 }
 
+// Keep TCP and UDP owners alive together, then read both the original and
+// transferred sockets independently. This exercises the actual token creator
+// and transfer, unlike protocol admission using an ordinary test socket.
+func TestDesktopSocketWindowsIdentitySequentialProtocolTransfer(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	handles := make(map[uintptr]bool)
+	var transfers []DesktopSocketCreated
+	t.Cleanup(func() {
+		for _, created := range transfers {
+			if err := created.Native.Close(); err != nil {
+				t.Error("sequential transfer close", err)
+			}
+			if err := desktopWindowsIdentityTestRelease(p, created.Creation); err != nil {
+				t.Error("sequential original release", err)
+			}
+		}
+	})
+	for _, network := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
+		t.Run(network, func(t *testing.T) {
+			address := "::1"
+			if strings.HasSuffix(network, "4") {
+				address = "127.0.0.1"
+			}
+			base := network[:3]
+			creation := desktopWindowsIdentityTestCreation(t, p, base, address)
+			created, err := p.CreateSocket(p.ctx, creation)
+			if created.Native != nil {
+				transfers = append(transfers, created)
+			}
+			if err != nil || created.Native == nil || created.Creation != creation {
+				t.Fatal("sequential original protocol acquisition failed", err)
+			}
+			if err := p.call(p.ctx, false, func() error {
+				record := p.sockets[creation.SocketID]
+				for _, owner := range []DesktopSocketNative{record.original, record.returned} {
+					raw, actual, err := desktopSocketNativeRaw(owner, base, creation.Binding.LocalAddress)
+					if err != nil || actual != network {
+						return errors.Join(err, errors.New("sequential original protocol readback differed"))
+					}
+					handle, err := desktopWindowsRawHandle(raw)
+					if err != nil || handles[handle] {
+						return errors.Join(err, errors.New("sequential transfer reused another live owned descriptor"))
+					}
+					handles[handle] = true
+					wrong := "tcp"
+					if base == "tcp" {
+						wrong = "udp"
+					}
+					if _, _, err := desktopSocketNativeRaw(owner, wrong, creation.Binding.LocalAddress); err == nil || !strings.Contains(err.Error(), "kernel family or protocol") {
+						return errors.New("sequential transfer admitted a real wrong-protocol source")
+					}
+					if _, _, err := desktopSocketNativeRaw(owner, base, creation.Binding.LocalAddress); err != nil {
+						return errors.Join(err, errors.New("wrong-protocol rejection changed the original socket"))
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if len(handles) != 8 {
+		t.Fatal("sequential protocol transfer lost an independent owner")
+	}
+}
+
+// Actual Winsock acquisition/readback and broker drain, with the existing
+// permission fixture only. A deliberately wrong expected protocol produces
+// the real readback error after a bound duplicate has already been acquired.
+func TestDesktopSocketWindowsIdentityRetainsFailedDuplicateReadback(t *testing.T) {
+	for _, family := range []string{"4", "6"} {
+		for _, network := range []string{"tcp", "udp"} {
+			t.Run(network+family, func(t *testing.T) {
+				b, source := desktopWindowsNativeFixtureBroker(t)
+				address, af := netip.MustParseAddr("127.0.0.1"), syscall.AF_INET
+				if family == "6" {
+					address, af = netip.IPv6Loopback(), syscall.AF_INET6
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				s, operation, release, err := b.begin(ctx, network, netip.AddrPortFrom(address, 9))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var joined sync.Once
+				finish := func() { joined.Do(func() { close(s.operation); release(); b.workers.Done() }) }
+				defer finish()
+				defer s.stop()
+				if err := s.prepare(operation); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.create(operation); err != nil {
+					t.Fatal(err)
+				}
+				raw, _, err := desktopSocketNativeRaw(s.sourceNative, network, address)
+				if err != nil {
+					t.Fatal(err)
+				}
+				keeper, local, err := desktopSocketBindTCP(raw, address)
+				if keeper != nil {
+					t.Cleanup(func() { _ = keeper.Close() })
+				}
+				if err != nil || keeper == nil || local.Port() == 0 {
+					t.Fatal("real retained descriptor acquisition", err)
+				}
+				wrongKind, wrongProtocol := syscall.SOCK_STREAM, syscall.IPPROTO_TCP
+				if network == "tcp" {
+					wrongKind, wrongProtocol = syscall.SOCK_DGRAM, syscall.IPPROTO_UDP
+				}
+				readErr := desktopWindowsSocketProtocol(keeper.handle, af, wrongKind, wrongProtocol)
+				if readErr == nil {
+					t.Fatal("wrong-protocol post-acquisition readback was accepted")
+				}
+				if err := s.adoptRetained(keeper, local, readErr); !errors.Is(err, readErr) {
+					t.Fatal("retained readback failure was suppressed", err)
+				}
+				s.stop()
+				if _, err := desktopWindowsSocketProtocolInfo(keeper.handle); err != nil {
+					t.Fatal("retained descriptor closed before operation join", err)
+				}
+				finish()
+				select {
+				case <-s.done:
+				case <-ctx.Done():
+					t.Fatal("failed retained descriptor did not drain", ctx.Err())
+				}
+				if _, err := desktopWindowsSocketProtocolInfo(keeper.handle); !errors.Is(err, syscall.Errno(10038)) {
+					t.Fatal("failed duplicate readback escaped broker retirement", err)
+				}
+				if source.created.Load() != 1 || source.released.Load() != 1 {
+					t.Fatal("failed duplicate retained its original source owner")
+				}
+			})
+		}
+	}
+}
+
 func TestDesktopSocketWindowsIdentityNativeProtocolAdmission(t *testing.T) {
 	for _, family := range []string{"4", "6"} {
 		for _, network := range []string{"tcp", "udp"} {

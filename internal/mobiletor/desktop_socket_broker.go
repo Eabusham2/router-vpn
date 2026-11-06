@@ -472,14 +472,10 @@ func (b *DesktopSocketBroker) DialContext(ctx context.Context, network, address 
 		if err := b.policy.Bind(controlCtx, b.capture, s.binding, actualNetwork, raw); err != nil {
 			return err
 		}
-		keeper, local, err := desktopSocketBindTCP(raw, s.binding.LocalAddress)
-		if err != nil {
+		if err := s.adoptRetained(desktopSocketBindTCP(raw, s.binding.LocalAddress)); err != nil {
 			return err
 		}
-		s.mu.Lock()
-		s.keeper, s.local = keeper, local
-		s.mu.Unlock()
-		_, err = s.permit(controlCtx, remote)
+		_, err := s.permit(controlCtx, remote)
 		return err
 	}
 	var connection net.Conn
@@ -575,12 +571,11 @@ func (b *DesktopSocketBroker) openPacketOwned(ctx context.Context, network strin
 	if err != nil {
 		return nil, fmt.Errorf("desktop UDP imported raw owner: %w", err)
 	}
-	keeper, local, err := desktopSocketRetain(control)
-	if err != nil {
+	if err := s.adoptRetained(desktopSocketRetain(control)); err != nil {
 		return nil, fmt.Errorf("desktop UDP retained handle and local readback: %w", err)
 	}
 	s.mu.Lock()
-	s.keeper, s.local = keeper, local
+	local := s.local
 	s.mu.Unlock()
 	if connected {
 		if _, err := s.permit(operation, remote); err != nil {
@@ -804,6 +799,15 @@ func (b *DesktopSocketBroker) Cancel() {
 			close(b.joined)
 		}()
 	})
+}
+
+// A duplicate may be acquired before its native readback fails. Transfer that
+// ownership before returning the failure; drain retires it after I/O joins.
+func (s *desktopSocket) adoptRetained(keeper *desktopSocketKeeper, local netip.AddrPort, err error) error {
+	s.mu.Lock()
+	s.keeper, s.local = keeper, local
+	s.mu.Unlock()
+	return err
 }
 
 func (s *desktopSocket) stop() {
