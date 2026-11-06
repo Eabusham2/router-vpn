@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -54,10 +53,14 @@ type desktopWFPRouterServerReceipt struct {
 	NodeID                                                                                                     string
 	Health, Discovery, Creates, Deletes, RelayTCP, RelayUDP, FinalTCP, FinalUDP, Responses, LocalTCP, LocalUDP int32
 	Live                                                                                                       bool
+	Lanes                                                                                                      [2]desktopWFPRouterLaneReceipt
 }
 type desktopWFPRouterServer struct {
 	peer                                                                                                       *desktopExternalIntegrationPeer
 	finalPeer                                                                                                  *desktopExternalIntegrationPeer
+	localPeer                                                                                                  *desktopExternalIntegrationPeer
+	localFinal                                                                                                 string
+	lanes                                                                                                      [2]desktopWFPRouterLaneReceipt
 	request                                                                                                    desktopWFPRouterServerRequest
 	manager                                                                                                    *multihoprelay.Manager
 	mu                                                                                                         sync.Mutex
@@ -190,7 +193,10 @@ func (r *desktopWFPRouterServer) receipt() *desktopWFPRouterServerReceipt {
 	r.mu.Lock()
 	p := r.process
 	r.mu.Unlock()
-	return &desktopWFPRouterServerReceipt{r.request.NodeID, r.health.Load(), r.discovery.Load(), r.creates.Load(), r.deletes.Load(), r.relayTCP.Load(), r.relayUDP.Load(), r.finalTCP.Load(), r.finalUDP.Load(), r.responses.Load(), r.localTCP.Load(), r.localUDP.Load(), p != nil && p.Alive()}
+	r.mu.Lock()
+	lanes := r.lanes
+	r.mu.Unlock()
+	return &desktopWFPRouterServerReceipt{r.request.NodeID, r.health.Load(), r.discovery.Load(), r.creates.Load(), r.deletes.Load(), r.relayTCP.Load(), r.relayUDP.Load(), r.finalTCP.Load(), r.finalUDP.Load(), r.responses.Load(), r.localTCP.Load(), r.localUDP.Load(), p != nil && p.Alive(), lanes}
 }
 
 // The independent Router owns a real relay Box compiled by the production
@@ -424,7 +430,7 @@ func (r *desktopWFPRouterServer) packet(ctx context.Context, c N.PacketConn, m M
 // Local forwarding preserves the exact independently captured encrypted final.
 // The Router never decodes SS or fabricates an exit response on this path.
 func (r *desktopWFPRouterServer) localStream(ctx context.Context, c net.Conn) error {
-	remote, err := (&net.Dialer{}).DialContext(ctx, "tcp", r.final)
+	remote, err := (&net.Dialer{}).DialContext(ctx, "tcp", r.localFinal)
 	if err != nil {
 		return err
 	}
@@ -443,7 +449,7 @@ func (r *desktopWFPRouterServer) localStream(ctx context.Context, c net.Conn) er
 	return nil
 }
 func (r *desktopWFPRouterServer) localPacket(ctx context.Context, c N.PacketConn, destination M.Socksaddr) error {
-	remote, err := (&net.Dialer{}).DialContext(ctx, "udp", r.final)
+	remote, err := (&net.Dialer{}).DialContext(ctx, "udp", r.localFinal)
 	if err != nil {
 		return err
 	}
@@ -982,50 +988,20 @@ func desktopWFPRouterServerExternal() map[string]any {
 		"response_probe": map[string]any{"url": "https://198.51.100.240/node-response", "server_name": "captured-proxy.example"}}
 }
 
-func desktopWFPStartRouterServerPeer(t *testing.T, p *desktopExternalIntegrationPeer, q desktopExternalWFPRequest) *desktopWFPRouterServer {
-	t.Helper()
-	if q.RouterServer == nil || q.Packet == nil || q.Packet.Protocol != "wireguard" || q.RouterServer.Token != desktopWFPRouterServerToken || len(q.RouterServer.NodeID) != 64 {
-		t.Fatal("Router Server original capture missing")
-	}
-	switch q.Fault {
-	case "", "entry-token", "entry-proof", "private-key", "psk", "final-key", "dns", "exit", "trust", "held", "lease-expired", "lease-credentials":
-	default:
-		t.Fatal("unknown Router Server negative")
-	}
-	r := &desktopWFPRouterServer{peer: p, request: *q.RouterServer, fault: q.Fault, associations: make(map[uint16]*desktopWFPRouterAssociation)}
+func desktopWFPStartRouterFinal(t *testing.T, r *desktopWFPRouterServer, q desktopExternalWFPRequest, lane int) *desktopExternalIntegrationPeer {
+	p := r.peer
 	tcp, udp, err := desktopWFPSSEntryPortPair(netip.MustParseAddr("127.0.0.1"), net.Listen)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.final = tcp.Addr().String()
+
 	finalCtx, cancel := context.WithCancel(p.ctx)
 	last := &desktopExternalIntegrationPeer{protocol: "shadowsocks", ctx: finalCtx, cancel: cancel, listener: tcp, packet: udp, certificate: p.certificate, connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), badDNS: q.Fault == "dns", badIP: q.Fault == "exit", publicEntered: p.publicEntered, publicRelease: p.publicRelease}
-	r.finalPeer = last
+	t.Cleanup(last.close)
+
 	last.ownedStream = func(ctx context.Context, c net.Conn, m M.Metadata) error {
 		r.finalTCP.Add(1)
-		if m.Destination.String() != "198.51.100.240:443" {
-			return last.serve(c, m.Destination.String())
-		}
-		secure := tls.Server(c, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{last.certificate}, NextProtos: []string{"http/1.1"}})
-		if err := secure.HandshakeContext(ctx); err != nil {
-			return err
-		}
-		request, err := http.ReadRequest(bufio.NewReader(secure))
-		if err != nil {
-			return err
-		}
-		defer request.Body.Close()
-		if request.Method != "GET" || request.Host != "captured-proxy.example" || request.URL.Path != "/node-response" || request.Header.Get("Authorization") != "" || secure.ConnectionState().ServerName != "captured-proxy.example" {
-			return errors.New("final response changed original TLS destination or leaked Router token")
-		}
-		select {
-		case <-time.After(2 * time.Millisecond):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		r.responses.Add(1)
-		body := "owned independent SS node response"
-		return (&http.Response{StatusCode: 200, ProtoMajor: 1, ProtoMinor: 1, ContentLength: int64(len(body)), Body: io.NopCloser(bytes.NewBufferString(body)), Close: true}).Write(secure)
+		return r.serveFinal(ctx, last, lane, c, m.Destination.String())
 	}
 	password := desktopWFPSSEntryPassword("2022-blake3-aes-256-gcm", 41)
 	if q.Fault == "final-key" {
@@ -1084,14 +1060,34 @@ func desktopWFPStartRouterServerPeer(t *testing.T, p *desktopExternalIntegration
 			}
 		}
 	}()
+	return last
+}
+
+func desktopWFPStartRouterServerPeer(t *testing.T, p *desktopExternalIntegrationPeer, q desktopExternalWFPRequest) *desktopWFPRouterServer {
+	t.Helper()
+	if q.RouterServer == nil || q.Packet == nil || q.Packet.Protocol != "wireguard" || q.RouterServer.Token != desktopWFPRouterServerToken || len(q.RouterServer.NodeID) != 64 {
+		t.Fatal("Router Server original capture missing")
+	}
+	switch q.Fault {
+	case "", "entry-token", "entry-proof", "private-key", "psk", "final-key", "dns", "exit", "trust", "held", "lease-expired", "lease-credentials", "compare-local-reject", "compare-server-reject", "compare-both-reject", "compare-local-timeout", "compare-server-timeout", "compare-final-local", "compare-final-server", "compare-final-both", "compare-held-server":
+	default:
+		t.Fatal("unknown Router Server negative")
+	}
+	r := &desktopWFPRouterServer{peer: p, request: *q.RouterServer, fault: q.Fault, associations: make(map[uint16]*desktopWFPRouterAssociation)}
+	r.finalPeer = desktopWFPStartRouterFinal(t, r, q, 1)
+	r.localPeer = desktopWFPStartRouterFinal(t, r, q, 0)
+	r.final, r.localFinal = r.finalPeer.listener.Addr().String(), r.localPeer.listener.Addr().String()
+	last := r.finalPeer
 	exit, err := multihoprelay.ExternalSelection("selected-external-native", "shadowsocks", desktopWFPRouterServerExternal(), nil)
 	if err != nil {
 		last.close()
+		r.localPeer.close()
 		t.Fatal(err)
 	}
 	r.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: "10.78.0.1", FirstPort: 26240, LastPort: 26271, TTLSeconds: 15, Exits: []multihoprelay.Exit{exit}}, r.request.NodeID, r)
 	if err != nil {
 		last.close()
+		r.localPeer.close()
 		t.Fatal(err)
 	}
 	p.ownedStream, p.ownedPacket = r.stream, r.packet
@@ -1127,6 +1123,7 @@ func desktopWFPStartRouterServerPeer(t *testing.T, p *desktopExternalIntegration
 		}
 		closeWG()
 		last.close()
+		r.localPeer.close()
 	}
 	return r
 }

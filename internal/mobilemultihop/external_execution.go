@@ -67,8 +67,8 @@ func prepareExternalExecutionCapture(source, capture, restored string, paired bo
 	if err != nil {
 		return "", err
 	}
-	if paired && saved != "local" && saved != "server" {
-		return "", errors.New("paired execution requires an explicit captured Local or Server choice")
+	if paired && saved != "local" && saved != "server" && saved != "auto" {
+		return "", errors.New("paired execution requires a captured Local, Server or Compare choice")
 	}
 	if restored != "" && (restored != "local" && restored != "server" || saved != "auto" && restored != saved) {
 		return "", errors.New("restored external execution differs from its saved selection")

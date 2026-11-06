@@ -72,11 +72,11 @@ func validateDesktopRetainedExternalSourcesLocked(profile, entry common.RouterPr
 	selected.MultihopEnabled, selected.MultihopEntryID, selected.MultihopExitID = true, entry.ID, profile.ID
 	selected.MultihopExecution, selected.MultihopEntryMode = "local", ""
 	server := desktopWindowsExternalRouterPairedOwner(owner)
-	if server && !desktopWindowsExternalRouterPairedGraph(profile, entry, owner.selection) {
+	if server && (profile.MultihopExecution != owner.profile.MultihopExecution || !desktopWindowsExternalRouterPairedGraph(profile, entry, owner.selection)) {
 		return errors.New("retained Router source changed its captured execution or entry")
 	}
 	if server {
-		selected.MultihopExecution, selected.MultihopEntryMode = owner.selection, "wg"
+		selected.MultihopExecution, selected.MultihopEntryMode = owner.profile.MultihopExecution, "wg"
 	}
 	selected, err = freezeDesktopExternalProfile(selected, owner.profile.Endpoint)
 	if err != nil || desktopOwnedNodeProfileToken(selected) != desktopOwnedNodeProfileToken(owner.profile) ||

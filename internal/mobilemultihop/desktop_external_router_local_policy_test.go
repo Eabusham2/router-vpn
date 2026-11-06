@@ -95,7 +95,7 @@ func TestDesktopWindowsExternalRouterLocalCaptureIsExplicit(t *testing.T) {
 		t.Fatal("execution recaptured")
 	}
 	capture["profile"].(map[string]any)["multihop_execution"] = "auto"
-	if _, err := PrepareExternalPairedExecutionCapture(source, externalTestJSON(t, capture), ""); err == nil {
-		t.Fatal("Compare admitted before native proof")
+	if _, err := PrepareExternalPairedExecutionCapture(source, externalTestJSON(t, capture), ""); err != nil {
+		t.Fatal("captured Compare refused", err)
 	}
 }

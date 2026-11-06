@@ -6,13 +6,13 @@ import (
 )
 
 // The original compiler already authenticates the complete relay proposal.
-// This additional boundary admits only its exact paired WG/SS2022 Local/Server row
+// This additional boundary admits only its exact paired WG/SS2022 execution row
 // set. Both candidates and their selector remain owned by that same execution.
 func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture ExternalDesktopCapture, session string) (*DesktopExternalPolicy, error) {
 	bad := desktopExternalPolicyError
 	p := original.capture
 	final, _ := p.Profile["external"].(map[string]any)
-	if (capture.Execution != "server" && capture.Execution != "local") || p.Profile["multihop_execution"] != capture.Execution || p.Profile["multihop_entry_mode"] != "wg" ||
+	if (capture.Execution != "server" && capture.Execution != "local" && capture.Execution != "auto") || (p.Profile["multihop_execution"] != capture.Execution && p.Profile["multihop_execution"] != "auto") || p.Profile["multihop_entry_mode"] != "wg" ||
 		p.Entry["node_kind"] != "router-vpn" || capture.EntryNodeID == "" || capture.EntryTag != externalEntryTag ||
 		capture.PredecessorSHA256 == "" || capture.Protocol != "shadowsocks" || !desktopExternalSS2022Import(final) ||
 		capture.StartLayer != "" || capture.EntryStartLayer != "" || len(capture.PhysicalRoots) != 1 ||
@@ -53,7 +53,7 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 	}
 	request := p.Execution.Request
 	initial := ServerTag
-	if capture.Execution == "local" {
+	if capture.Execution != "server" {
 		initial = LocalTag
 	}
 	for _, raw := range rows {

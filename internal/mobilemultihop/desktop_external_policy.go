@@ -74,7 +74,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		return nil, desktopExternalPolicyError
 	}
 	capture, err := original.DesktopCapture()
-	if err == nil && targetOS == "windows" && (capture.Execution == "server" || capture.Execution == "local" && original.capture.Execution != nil && original.capture.Entry["node_kind"] == "router-vpn") {
+	if err == nil && targetOS == "windows" && (capture.Execution == "server" || (capture.Execution == "local" || capture.Execution == "auto") && original.capture.Execution != nil && original.capture.Entry["node_kind"] == "router-vpn") {
 		return newDesktopExternalRouterServerPolicy(original, capture, sessionID)
 	}
 	entryKind := ""

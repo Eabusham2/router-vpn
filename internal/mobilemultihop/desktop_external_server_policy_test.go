@@ -37,7 +37,7 @@ func TestDesktopWindowsExternalRouterServerPolicy(t *testing.T) {
 		t.Run(execution, func(t *testing.T) {
 			original := desktopExternalRouterServerFixture(t, execution)
 			policy, err := NewDesktopExternalPolicy(original, strings.Repeat("a", 32), "windows")
-			if execution != "server" {
+			if execution == "local" {
 				if err == nil {
 					t.Fatal("unsupported selection admitted")
 				}

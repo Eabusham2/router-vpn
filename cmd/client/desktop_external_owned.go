@@ -365,7 +365,7 @@ func prepareDesktopWindowsRetainedExternal(a *app, launch *desktopNodeLaunch) (d
 	}
 	persisted.MultihopExecution, persisted.MultihopEntryMode = "local", ""
 	if desktopWindowsExternalRouterPairedOwner(launch.external) {
-		persisted.MultihopExecution, persisted.MultihopEntryMode = launch.external.selection, "wg"
+		persisted.MultihopExecution, persisted.MultihopEntryMode = launch.external.profile.MultihopExecution, "wg"
 	}
 	owner.persistedToken = desktopOwnedNodeProfileToken(persisted)
 	owner.gate <- struct{}{}

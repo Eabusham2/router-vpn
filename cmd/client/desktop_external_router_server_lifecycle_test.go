@@ -48,11 +48,22 @@ func TestDesktopWindowsExternalRouterServerPublicLifecycle(t *testing.T) {
 func TestDesktopWindowsExternalRouterLocalPublicLifecycle(t *testing.T) {
 	testDesktopWindowsRouterPublicLifecycle(t, "local")
 }
-func testDesktopWindowsRouterPublicLifecycle(t *testing.T, execution string) {
+func TestDesktopWindowsExternalRouterComparePublicLifecycle(t *testing.T) {
+	for _, winner := range []string{"local", "server"} {
+		t.Run(winner, func(t *testing.T) { testDesktopWindowsRouterPublicLifecycle(t, "auto", winner) })
+	}
+}
+func testDesktopWindowsRouterPublicLifecycle(t *testing.T, execution string, winners ...string) {
+	winner := execution
+	if len(winners) != 0 {
+		winner = winners[0]
+	}
+
 	for _, kill := range []string{"on-connect", "always"} {
 		t.Run(kill, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f, p, e := desktopWindowsRouterServerHostFixture(t, kill, execution)
+				f.proofFault = func(proof *desktopExternalProof) { proof.Execution = winner }
 				response := desktopWindowsRouterServerConnect(f, p, e)
 				if response.Code != http.StatusOK {
 					t.Fatal("paired Server public connect", response.Code, response.Body.String())
@@ -66,7 +77,7 @@ func testDesktopWindowsRouterPublicLifecycle(t *testing.T, execution string) {
 					t.Fatal("Server owner relabeled original entry or final")
 				}
 				proof, err := f.base.a.readDesktopExternalProof(launch)
-				if err != nil || proof.EntryNodeID != e.NodeProofID || proof.Execution != execution || !proof.EntryProven || !proof.DNSProven {
+				if err != nil || proof.EntryNodeID != e.NodeProofID || proof.Execution != winner || !proof.EntryProven || !proof.DNSProven {
 					t.Fatal("Server proof lost original paired identity", err)
 				}
 				if err := launch.external.windows.CurrentProof(context.Background(), proof); err != nil {
@@ -74,7 +85,7 @@ func testDesktopWindowsRouterPublicLifecycle(t *testing.T, execution string) {
 				}
 				changed := proof
 				changed.Execution = "local"
-				if execution == "local" {
+				if winner == "local" {
 					changed.Execution = "server"
 				}
 				if launch.external.windows.CurrentProof(context.Background(), changed) == nil {

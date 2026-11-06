@@ -1,0 +1,476 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"io"
+	"math"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"testing"
+	"time"
+)
+
+// Each lane is a different encrypted listener with the same captured logical
+// SS identity. Only the original Local forwarding or leased Server Box can
+// reach its listener. Counters never infer a lane from timing or a remote port.
+type desktopWFPRouterLaneReceipt struct {
+	NodeResponses, Measurements, Proofs int32
+	Target                              string
+	MeasurementTargets                  [8]string
+}
+
+func desktopWFPRouterCompareCertificate(t *testing.T, ca *desktopExternalIntegrationCA) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(96109), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{"captured-proxy.example"}, IPAddresses: []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("1.0.0.1")}}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, ca.root, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der, ca.der}, PrivateKey: key}
+}
+
+func (r *desktopWFPRouterServer) serveFinal(ctx context.Context, p *desktopExternalIntegrationPeer, lane int, c net.Conn, target string) error {
+	if target == desktopExternalIntegrationDNS {
+		return p.serve(c, target)
+	}
+	if target != "198.51.100.240:443" && target != "1.1.1.1:443" && target != "1.0.0.1:443" {
+		return errors.New("Router final escaped exact measurement/proof destinations")
+	}
+	secure := tls.Server(c, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{p.certificate}, NextProtos: []string{"http/1.1"}})
+	if err := secure.HandshakeContext(ctx); err != nil {
+		return err
+	}
+	request, err := http.ReadRequest(bufio.NewReader(secure))
+	if err != nil {
+		return err
+	}
+	defer request.Body.Close()
+	if request.Method != http.MethodGet || request.Header.Get("Authorization") != "" {
+		return errors.New("Router final method or credential scope changed")
+	}
+	body := "owned independent SS node response"
+	if target == "198.51.100.240:443" {
+		if request.Host != "captured-proxy.example" || request.URL.Path != "/node-response" || request.URL.RawQuery != "" || secure.ConnectionState().ServerName != "captured-proxy.example" {
+			return errors.New("Router node response changed original identity")
+		}
+		r.mu.Lock()
+		r.lanes[lane].NodeResponses++
+		count := r.lanes[lane].NodeResponses
+		r.mu.Unlock()
+		which := "local"
+		if lane == 1 {
+			which = "server"
+		}
+		if r.fault == "compare-both-reject" || r.fault == "compare-"+which+"-reject" || (r.fault == "compare-final-"+which || r.fault == "compare-final-both") && count > 1 {
+			return errors.New("independent candidate refuses node measurement")
+		}
+		if r.fault == "compare-"+which+"-timeout" {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-p.ctx.Done():
+				return p.ctx.Err()
+			case <-time.After(4 * time.Second):
+				return errors.New("independent candidate exceeded unchanged probe deadline")
+			}
+		}
+		select {
+		case <-time.After(2 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		r.responses.Add(1)
+	} else {
+		host, _, _ := net.SplitHostPort(target)
+		if request.Host != host || request.URL.Path != "/cdn-cgi/trace" {
+			return errors.New("Router public request changed original target")
+		}
+		if request.URL.RawQuery == "" {
+			r.mu.Lock()
+			n := r.lanes[lane].Measurements
+			if n >= int32(len(r.lanes[lane].MeasurementTargets)) {
+				r.mu.Unlock()
+				return errors.New("Router measurement receipt budget exceeded")
+			}
+			r.lanes[lane].MeasurementTargets[n] = host
+			r.lanes[lane].Target = host
+			r.lanes[lane].Measurements++
+			r.mu.Unlock()
+			select {
+			case <-time.After(2 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		} else {
+			nonce, e := hex.DecodeString(request.URL.Query().Get("routervpn_proof"))
+			if host != "1.1.1.1" || len(request.URL.Query()) != 1 || e != nil || len(nonce) != 16 {
+				return errors.New("Router final proof lost independent nonce")
+			}
+			p.publicAttempts.Add(1)
+			p.tlsHandshakes.Add(1)
+			p.publicRequests.Add(1)
+			r.mu.Lock()
+			r.lanes[lane].Proofs++
+			r.mu.Unlock()
+			if p.publicEntered != nil && (r.fault != "compare-held-server" || lane == 1) {
+				r.peer.publicOnce.Do(func() { close(p.publicEntered) })
+				select {
+				case <-p.publicRelease:
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-p.ctx.Done():
+					return p.ctx.Err()
+				}
+			}
+		}
+		ip := desktopExternalIntegrationIP
+		if p.badIP {
+			ip = "203.0.113.89"
+		}
+		body = "ip=" + ip + "\n"
+	}
+	_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	return err
+}
+
+// Each process installs its own fallback CA; this root must run separately
+// from the existing explicit Local and Server roots.
+func TestRouterVPNDesktopExternalWindowsRouterCompareWFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	cert, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(cert)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	for _, name := range []string{"on-connect", "always", "local-only", "server-only", "local-timeout", "server-timeout", "neither-valid", "final-repeat-refusal", "saved-winner-restoration", "cancelled-proof", "cancelled-server-proof", "foreign-predecessor", "commit-refused"} {
+		t.Run(name, func(t *testing.T) {
+			kill, fault := "always", ""
+			if name == "on-connect" {
+				kill = name
+			}
+			switch name {
+			case "local-only":
+				fault = "compare-server-reject"
+			case "server-only":
+				fault = "compare-local-reject"
+			case "local-timeout":
+				fault = "compare-local-timeout"
+			case "server-timeout":
+				fault = "compare-server-timeout"
+			case "neither-valid":
+				fault = "compare-both-reject"
+			case "final-repeat-refusal":
+				fault = "compare-final-both"
+			case "cancelled-proof":
+				fault = "held"
+			case "cancelled-server-proof":
+				fault = "compare-held-server"
+			}
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			peer := desktopExternalWFPStartReferenceProtocol(t, ca, fault, "router-server")
+			original, source, capture := desktopWFPRouterServerOriginal(t, peer, kill, "auto")
+			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			f.start(t)
+			type outcome struct {
+				raw string
+				err error
+			}
+			done := make(chan outcome, 1)
+			go func() { raw, e := f.proof.Run(); done <- outcome{raw, e} }()
+			cancelled := name == "cancelled-proof" || name == "cancelled-server-proof"
+			if cancelled {
+				deadline := time.NewTimer(10 * time.Second)
+				defer deadline.Stop()
+				held := func() bool {
+					reply := peer.call(t, "stats", "")
+					if name == "cancelled-server-proof" {
+						return reply.RouterServer.Creates > 0 && reply.RouterServer.Live && reply.RouterServer.Lanes[1].Proofs > 0
+					}
+					return reply.Attempts > 0
+				}
+				for !held() {
+					select {
+					case result := <-done:
+						t.Fatal("cancelled Compare never entered original proof", result.err)
+					case <-deadline.C:
+						t.Fatal("Compare proof never entered")
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+				f.proof.Cancel()
+				peer.call(t, "release", "")
+			}
+			var result outcome
+			select {
+			case result = <-done:
+			case <-time.After(30 * time.Second):
+				f.proof.Cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("Compare did not join")
+				}
+				t.Fatal("Compare exceeded original bounded operation")
+			}
+			var progress mobilemultihop.Progress
+			if json.Unmarshal([]byte(f.proof.ProgressJSON()), &progress) != nil {
+				t.Fatal("missing actual comparison receipts")
+			}
+			failed := name == "neither-valid" || name == "final-repeat-refusal" || cancelled
+			if failed {
+				if result.err == nil || f.proof.Healthy() || f.network.Current() {
+					t.Fatal("failed comparison became a winner")
+				}
+				if !cancelled {
+					if len(progress.Measurements) != 2 {
+						t.Fatal("missing two failed receipts")
+					}
+					for _, m := range progress.Measurements {
+						if m.Eligible || m.ScoreMS != nil {
+							t.Fatal("invalid candidate retained numeric score", progress)
+						}
+					}
+				}
+				retained = f.drain(t)
+				r := peer.call(t, "stats", "").RouterServer
+				if r.Live || r.Creates != r.Deletes {
+					t.Fatal("failed comparison left owned relay")
+				}
+				desktopExternalWFPRequireBlocked(t, peer)
+				return
+			}
+			var proof mobilemultihop.ExternalProofResult
+			if result.err != nil || json.Unmarshal([]byte(result.raw), &proof) != nil || !proof.EntryProven || !proof.DNSProven || proof.EntryNodeID != peer.initial.RouterServer.NodeID || !f.proof.Healthy() || !f.network.Current() {
+				t.Fatal("actual Compare proof failed", result.err)
+			}
+			reply := peer.call(t, "stats", "")
+			r := reply.RouterServer
+			if r == nil || r.LocalTCP == 0 || r.RelayTCP == 0 || r.Creates == 0 || r.FinalUDP == 0 || reply.DNS == 0 || reply.UDPDNS == 0 {
+				t.Fatal("comparison bypassed independent encrypted lanes or selected DNS")
+			}
+			if len(progress.Measurements) != 2 {
+				t.Fatal("comparison omitted candidate")
+			}
+			best := ""
+			bestScore := math.Inf(1)
+			eligible := 0
+			for _, m := range progress.Measurements {
+				if !m.Eligible {
+					if m.ScoreMS != nil {
+						t.Fatal("invalid candidate scored")
+					}
+					continue
+				}
+				eligible++
+				mean := m.LastNodeMS/2 + m.ExternalMS/2
+				if m.ScoreMS == nil || *m.ScoreMS != mean || m.LastNodeMS <= 0 || m.ExternalMS <= 0 {
+					t.Fatal("actual mean changed", m)
+				}
+				candidate := string(m.Candidate.Execution)
+				if mean < bestScore || mean == bestScore && candidate == "local" {
+					best, bestScore = candidate, mean
+				}
+			}
+			if best == "" || proof.Execution != best {
+				t.Fatal("winner differs from independently recomputed measured averages", proof.Execution, best)
+			}
+			winner := 0
+			if proof.Execution == "server" {
+				winner = 1
+			}
+			if r.Lanes[winner].NodeResponses != 2 || r.Lanes[winner].Measurements != 2 || r.Lanes[winner].Proofs != 3 {
+				t.Fatal("winner did not repeat both probes and independent final proof", r.Lanes)
+			}
+			if eligible == 2 && (r.Lanes[0].Target != r.Lanes[1].Target || r.Lanes[1-winner].Measurements != 1 || r.Lanes[1-winner].NodeResponses != 1) {
+				t.Fatal("candidates changed randomly selected common target", r.Lanes)
+			}
+			if r.Lanes[winner].MeasurementTargets[0] != r.Lanes[winner].MeasurementTargets[1] {
+				t.Fatal("winner repeat changed comparison target")
+			}
+			if r.Lanes[winner].Target != "1.1.1.1" && r.Lanes[winner].Target != "1.0.0.1" {
+				t.Fatal("unapproved comparison target")
+			}
+			if name == "local-only" || name == "server-timeout" {
+				if proof.Execution != "local" || eligible != 1 {
+					t.Fatal("invalid Server eligible")
+				}
+			}
+			if name == "server-only" || name == "local-timeout" {
+				if proof.Execution != "server" || eligible != 1 {
+					t.Fatal("invalid Local eligible")
+				}
+			}
+			f.snapshot(t, peer)
+			retained = f.drain(t)
+			r = peer.call(t, "stats", "").RouterServer
+			if r.Live || r.Creates != r.Deletes {
+				t.Fatal("Compare did not join every original relay")
+			}
+			desktopExternalWFPRequireBlocked(t, peer)
+			if name == "foreign-predecessor" || name == "commit-refused" {
+				expected := retained
+				if name == "foreign-predecessor" {
+					expected.Capture.SourceSHA256 = fmt.Sprintf("%064x", 1)
+				}
+				before := peer.call(t, "stats", "")
+				next := desktopExternalWFPBox(t, original, source, capture, &expected, name == "commit-refused")
+				if e := next.box.RouterVPNStrategyStart(); e == nil || next.admitted != 0 || next.network.Current() {
+					t.Fatal("uncommitted Compare successor acquired owner")
+				}
+				if e := next.close(); e != nil {
+					t.Fatal(e)
+				}
+				if e := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); e != nil {
+					t.Fatal(e)
+				}
+				after := peer.call(t, "stats", "")
+				if after.Packets != before.Packets || *after.RouterServer != *before.RouterServer {
+					t.Fatal("stale successor sent comparison traffic")
+				}
+			}
+			if name == "saved-winner-restoration" {
+				var saved map[string]any
+				if json.Unmarshal([]byte(capture), &saved) != nil {
+					t.Fatal("capture decode")
+				}
+				delete(saved, "execution")
+				if saved["profile"].(map[string]any)["multihop_execution"] != "auto" {
+					t.Fatal("saved Compare overwritten")
+				}
+				body, _ := json.Marshal(saved)
+				fresh, e := mobilemultihop.PrepareExternalExecutionCapture(source, string(body), proof.Execution)
+				if e != nil || fresh == capture {
+					t.Fatal("restored credentials not renewed", e)
+				}
+				restored, e := mobilemultihop.NewExternalPolicy(source, fresh)
+				if e != nil {
+					t.Fatal(e)
+				}
+				before := *peer.call(t, "stats", "").RouterServer
+				next := desktopExternalWFPBox(t, restored, source, fresh, &retained, false)
+				next.start(t)
+				raw, e := next.proof.Run()
+				var again mobilemultihop.ExternalProofResult
+				if e != nil || json.Unmarshal([]byte(raw), &again) != nil || again.Execution != proof.Execution || again.EntryNodeID != proof.EntryNodeID || !next.proof.Healthy() {
+					t.Fatal("restoration changed original proved winner", e)
+				}
+				var restoredProgress mobilemultihop.Progress
+				if json.Unmarshal([]byte(next.proof.ProgressJSON()), &restoredProgress) != nil || len(restoredProgress.Measurements) != 1 || string(restoredProgress.Measurements[0].Candidate.Execution) != proof.Execution {
+					t.Fatal("restoration reran Compare")
+				}
+				after := *peer.call(t, "stats", "").RouterServer
+				if after.Lanes[1-winner] != before.Lanes[1-winner] || after.Lanes[winner].NodeResponses-before.Lanes[winner].NodeResponses != 1 || after.Lanes[winner].Measurements-before.Lanes[winner].Measurements != 1 {
+					t.Fatal("restoration retested other candidate or skipped original winner proofs")
+				}
+				retained = next.drain(t)
+				last := peer.call(t, "stats", "").RouterServer
+				if last.Live || last.Creates != last.Deletes {
+					t.Fatal("restored relay did not join")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalWindowsRouterCompareProtocol(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	cert := desktopWFPRouterCompareCertificate(t, ca)
+	roots := x509.NewCertPool()
+	root, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(root)
+	for _, name := range []string{"measurement-a", "measurement-b", "nonce-proof", "missing-nonce-value", "changed-host", "leaked-token", "changed-method"} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			p := &desktopExternalIntegrationPeer{ctx: ctx, certificate: cert}
+			r := &desktopWFPRouterServer{}
+			target, host, path, method := "1.1.1.1:443", "1.1.1.1", "/cdn-cgi/trace", "GET"
+			valid := name == "measurement-a" || name == "measurement-b" || name == "nonce-proof"
+			if name == "measurement-b" {
+				target, host = "1.0.0.1:443", "1.0.0.1"
+			}
+			if name == "nonce-proof" {
+				path += "?routervpn_proof=0123456789abcdef0123456789abcdef"
+			}
+			if name == "missing-nonce-value" {
+				path += "?routervpn_proof="
+			}
+			if name == "changed-host" {
+				host = "other.example"
+			}
+			if name == "changed-method" {
+				method = "POST"
+			}
+			client, server := net.Pipe()
+			defer client.Close()
+			done := make(chan error, 1)
+			go func() { defer server.Close(); done <- r.serveFinal(ctx, p, 0, server, target) }()
+			tlsClient := tls.Client(client, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: target[:len(target)-4]})
+			if e := tlsClient.HandshakeContext(ctx); e != nil {
+				t.Fatal(e)
+			}
+			request, e := http.NewRequestWithContext(ctx, method, "https://"+host+path, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if name == "leaked-token" {
+				request.Header.Set("Authorization", "Bearer original-router-token")
+			}
+			if e = request.Write(tlsClient); e != nil {
+				t.Fatal(e)
+			}
+			response, readErr := http.ReadResponse(bufio.NewReader(tlsClient), request)
+			if response != nil {
+				_, _ = io.Copy(io.Discard, response.Body)
+				_ = response.Body.Close()
+			}
+			e = <-done
+			if valid {
+				if e != nil || readErr != nil || response.StatusCode != 200 {
+					t.Fatal("original protocol refused", e, readErr)
+				}
+			} else if e == nil {
+				t.Fatal("invalid protocol accepted")
+			}
+			receipt := r.lanes[0]
+			if name == "nonce-proof" {
+				if receipt.Proofs != 1 || receipt.Measurements != 0 || p.publicRequests.Load() != 1 {
+					t.Fatal("nonce proof became measurement")
+				}
+			} else if valid {
+				if receipt.Measurements != 1 || receipt.Proofs != 0 || p.publicRequests.Load() != 0 {
+					t.Fatal("plain measurement became proof")
+				}
+			} else if receipt.Measurements != 0 || receipt.Proofs != 0 || p.publicRequests.Load() != 0 {
+				t.Fatal("invalid protocol produced receipt")
+			}
+		})
+	}
+}

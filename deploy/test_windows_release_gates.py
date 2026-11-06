@@ -55,6 +55,7 @@ WORKSPACE_SCOPES = (
     ('^TestDesktopWindowsExternalSSEntry', ''),
     ('^TestDesktopWindowsExternalRouterServer', ''),
     ('^TestDesktopWindowsExternalRouterLocal', ''),
+    ('^TestDesktopWindowsExternalRouterCompare', ''),
     ('^TestDesktopTorMTU', ''),
     ('^TestDesktopTor(Comparison|Compare|PublicCompare)', ''),
     ('^TestDesktopTorOrdinary', ''),
@@ -498,6 +499,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
                          ("Run = '^TestDesktopWindowsExternalSSEntry'", "Run = '^$'"),
                          ("Run = '^TestDesktopWindowsExternalRouterServer'", "Run = '^$'"),
                          ("Run = '^TestDesktopWindowsExternalRouterLocal'", "Run = '^$'"),
+                         ("Run = '^TestDesktopWindowsExternalRouterCompare'", "Run = '^$'"),
                          ("Run = '^TestSpeedLabTor(Comparison|Compare)'", "Run = '^$'"),
                          ("Run = '^TestSpeedLabTor'", "Run = '^$'"),
                          ("Run = '^TestSpeedLab'", "Run = '^$'"),
@@ -524,6 +526,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
             '^TestDesktopWindowsExternalSSEntry',
             '^TestDesktopWindowsExternalRouterServer',
             '^TestDesktopWindowsExternalRouterLocal',
+            '^TestDesktopWindowsExternalRouterCompare',
             '^TestDesktopTor', '^TestSpeedLab',
         )
         names = set()

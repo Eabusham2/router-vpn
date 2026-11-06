@@ -37,13 +37,14 @@ func desktopWindowsExternalRouterServerOwner(owner *desktopExternalRuntime) bool
 // The lease remains inside the original child execution controller. Its final
 // result can only be adopted under this exact paired identity and selection.
 // Local and Server keep the same original paired entry and independent final.
-// Compare remains outside this native admission until both candidates and the
-// complete comparison lifecycle have their own native acceptance.
+// Compare retains the saved request separately from its proved runtime winner.
 func desktopWindowsExternalRouterPairedGraph(profile, entry common.RouterProfile, restored string) bool {
 	if profile.MultihopExecution == "server" {
 		return desktopWindowsExternalRouterServerGraph(profile, entry, restored)
 	}
-	if profile.MultihopExecution != "local" || restored != "" && restored != "local" {
+	if profile.MultihopExecution != "local" && profile.MultihopExecution != "auto" ||
+		profile.MultihopExecution == "local" && restored != "" && restored != "local" ||
+		profile.MultihopExecution == "auto" && restored != "" && restored != "auto" && restored != "local" && restored != "server" {
 		return false
 	}
 	shape := cloneRouterProfile(profile)
@@ -53,13 +54,14 @@ func desktopWindowsExternalRouterPairedGraph(profile, entry common.RouterProfile
 
 func desktopWindowsExternalRouterPairedOwner(owner *desktopExternalRuntime) bool {
 	return owner != nil && !owner.direct && owner.predecessor != "" &&
-		(owner.selection == "local" || owner.selection == "server") && owner.selection == owner.profile.MultihopExecution &&
+		(owner.selection == "local" || owner.selection == "server" || owner.selection == "auto") &&
+		(owner.selection == owner.profile.MultihopExecution || owner.profile.MultihopExecution == "auto") &&
 		desktopWindowsExternalRouterPairedGraph(owner.profile, owner.entry, owner.selection)
 }
 
 func desktopWindowsExternalExecutionProof(owner *desktopExternalRuntime, proof mobilemultihop.ExternalProofResult) bool {
 	if desktopWindowsExternalRouterPairedOwner(owner) {
-		return proof.Execution == owner.selection && proof.EntryNodeID == owner.entry.NodeProofID && proof.EntryNodeID == owner.expected.EntryNodeID
+		return (proof.Execution == "local" || proof.Execution == "server") && (proof.Execution == owner.selection || owner.selection == "auto" && (proof.Execution == "local" || proof.Execution == "server")) && proof.EntryNodeID == owner.entry.NodeProofID && proof.EntryNodeID == owner.expected.EntryNodeID
 	}
 	return proof.Execution == "local" && proof.EntryNodeID == ""
 }

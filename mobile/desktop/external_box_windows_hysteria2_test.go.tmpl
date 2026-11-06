@@ -298,7 +298,7 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	if request.Layer != nil {
 		peer.latency = &desktopExternalLatencyPeer{certificate: certificate, fault: "latency-ok"}
 	}
-	if request.Fault == "held" {
+	if request.Fault == "held" || request.RouterServer != nil && request.Fault == "compare-held-server" {
 		peer.publicEntered, peer.publicRelease = make(chan struct{}), make(chan struct{})
 	}
 	var protocolErr error
@@ -401,11 +401,11 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 		reply.AuthFailures = peer.authFailures.Load()
 		if routerServer != nil {
 			reply.RouterServer = routerServer.receipt()
-			reply.DNS = routerServer.finalPeer.dnsQueries.Load()
-			reply.UDPDNS = routerServer.finalPeer.udpQueries.Load()
-			reply.TLS = routerServer.finalPeer.tlsHandshakes.Load()
-			reply.Public = routerServer.finalPeer.publicRequests.Load()
-			reply.Attempts = routerServer.finalPeer.publicAttempts.Load()
+			reply.DNS = routerServer.finalPeer.dnsQueries.Load() + routerServer.localPeer.dnsQueries.Load()
+			reply.UDPDNS = routerServer.finalPeer.udpQueries.Load() + routerServer.localPeer.udpQueries.Load()
+			reply.TLS = routerServer.finalPeer.tlsHandshakes.Load() + routerServer.localPeer.tlsHandshakes.Load()
+			reply.Public = routerServer.finalPeer.publicRequests.Load() + routerServer.localPeer.publicRequests.Load()
+			reply.Attempts = routerServer.finalPeer.publicAttempts.Load() + routerServer.localPeer.publicAttempts.Load()
 		}
 		if ssEntry != nil {
 			reply.SSEntryInner = ssEntry.inner
@@ -756,7 +756,11 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 			t.Error("external provider cleanup", err, p.diagnostics.String())
 		}
 	})
-	public, key := desktopExternalWFPCertificate(t, ca.certificate(t, true))
+	publicCertificate := ca.certificate(t, true)
+	if protocol == "router-server" {
+		publicCertificate = desktopWFPRouterCompareCertificate(t, ca)
+	}
+	public, key := desktopExternalWFPCertificate(t, publicCertificate)
 	proxy, proxyKey := desktopExternalWFPCertificate(t, ca.certificate(t, true))
 	if fault == "final-trust" && strings.HasPrefix(protocol, "ss-entry/hysteria2/") {
 		proxy, proxyKey = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
@@ -1162,6 +1166,9 @@ func (f *desktopExternalWFPFixture) start(t *testing.T) {
 			}
 			if captured, e := f.policy.Capture(); e == nil && captured.Execution == "local" && captured.EntryNodeID != "" {
 				t.Fatal("actual Router Local source skipped its durable WFP intent", err)
+			}
+			if captured, e := f.policy.Capture(); e == nil && captured.Execution == "auto" {
+				t.Fatal("actual Router Compare source skipped its durable WFP intent", err)
 			}
 			if f.policy.Metadata().RootTag == "external-entry" {
 				t.Fatal("actual SS entry source skipped its durable WFP intent", err)

@@ -42,7 +42,7 @@ func desktopProtectionSelectionFor(node *mobilemultihop.DesktopNodePolicy, exter
 	paired := err == nil && validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID &&
 		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && meta.RootType == entryKind && meta.RootTag == entryRoot &&
 		(layeredPair || capture.StartLayer == "" && capture.EntryStartLayer == "") && (capture.Protocol == "shadowsocks" || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
-	server := err == nil && (capture.Execution == "server" || capture.Execution == "local") && capture.PredecessorSHA256 != "" && capture.EntryNodeID != "" &&
+	server := err == nil && (capture.Execution == "server" || capture.Execution == "local" || capture.Execution == "auto") && capture.PredecessorSHA256 != "" && capture.EntryNodeID != "" &&
 		validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID && capture.EntryTag == "external-entry" &&
 		meta.RootTag == capture.EntryTag && meta.RootType == "wireguard" && capture.Protocol == "shadowsocks" &&
 		capture.StartLayer == "" && capture.EntryStartLayer == ""

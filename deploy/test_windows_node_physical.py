@@ -79,6 +79,11 @@ EXTERNAL_SERVER_CASES = (EXTERNAL_SERVER_ROOT, *(EXTERNAL_SERVER_ROOT + "/" + le
     *(EXTERNAL_SERVER_ASSOCIATION + "/" + leaf for leaf in ("api-original-challenge-and-stop-receipt", "close-joins-original-packet-worker", "control-close-joins-before-udp-tuple-release", "successor-retains-own-association", "handshake-cancel-joins-both-streams")))
 EXTERNAL_LOCAL_ROOT = "TestRouterVPNDesktopExternalWindowsRouterLocalWFP"
 EXTERNAL_LOCAL_CASES = (EXTERNAL_LOCAL_ROOT, *(EXTERNAL_LOCAL_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf not in ("reject/lease-expired", "reject/lease-credentials")))
+EXTERNAL_COMPARE_ROOT = "TestRouterVPNDesktopExternalWindowsRouterCompareWFP"
+EXTERNAL_COMPARE_LEAVES = ("on-connect", "always", "local-only", "server-only", "local-timeout", "server-timeout", "neither-valid", "final-repeat-refusal", "saved-winner-restoration", "cancelled-proof", "cancelled-server-proof", "foreign-predecessor", "commit-refused")
+EXTERNAL_COMPARE_PROTOCOL = "TestRouterVPNDesktopExternalWindowsRouterCompareProtocol"
+EXTERNAL_COMPARE_CASES = (EXTERNAL_COMPARE_ROOT, *(EXTERNAL_COMPARE_ROOT + "/" + leaf for leaf in EXTERNAL_COMPARE_LEAVES), EXTERNAL_COMPARE_PROTOCOL,
+    *(EXTERNAL_COMPARE_PROTOCOL + "/" + leaf for leaf in ("measurement-a", "measurement-b", "nonce-proof", "missing-nonce-value", "changed-host", "leaked-token", "changed-method")))
 EXTERNAL_SS_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsSSEntryWFP"
 EXTERNAL_SS_ENTRY_NETWORKS = ("shadowsocks", "http-connect", "https-connect", "hysteria2")
 EXTERNAL_SS_ENTRY_LEAVES = ("on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
@@ -124,6 +129,10 @@ def checked_sources(source):
         raise ValueError("Paired Router Server escaped its explicit native test scope")
     records["external_router_server"] = hashlib.sha256(server.read_bytes()).hexdigest()
 
+    compare = ROOT / "mobile/desktop/external_box_windows_compare_test.go.tmpl"
+    if compare.is_symlink() or not compare.is_file() or not compare.read_bytes().startswith(TAG):
+        raise ValueError("Paired Router Compare escaped its explicit native test scope")
+    records["external_router_compare"] = hashlib.sha256(compare.read_bytes()).hexdigest()
     layer = ROOT / "mobile/desktop/external_box_windows_hysteria2_layer_test.go.tmpl"
     if layer.is_symlink() or not layer.is_file() or not layer.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows Hysteria2 layer escaped its explicit native test scope")
@@ -390,6 +399,12 @@ def report_external_local(status, output):
         raise ValueError("Paired Windows Router Local omitted its required native result")
 
 
+def report_external_compare(status, output):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_COMPARE_CASES) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+        raise ValueError("Paired Windows Router Compare omitted its required native result")
+
+
 def execute_external_packet(source, workspace, build, captured):
     directory = workspace / "external-packet"
     directory.mkdir()
@@ -431,6 +446,10 @@ def execute_external_packet(source, workspace, build, captured):
     report_external_local(status, output)
     if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
         raise ValueError("Paired Router Local native executable changed")
+    status, output = BOOT.IDENTITY.run([binary, "-test.run=^(" + EXTERNAL_COMPARE_ROOT + "|" + EXTERNAL_COMPARE_PROTOCOL + ")$", "-test.count=1", "-test.timeout=180s", "-test.v"], cwd=source, env=captured, timeout=195)
+    report_external_compare(status, output)
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+        raise ValueError("Paired Router Compare native executable changed")
     for label, witness in (
             ("ordinary-udp-deny", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
             ("missing-durable-intent", "actual packet source skipped its durable WFP intent")):
@@ -445,7 +464,8 @@ def execute_external_packet(source, workspace, build, captured):
         control_digest = executable_digest(binary)
         for leaf, wanted in ((EXTERNAL_PACKET_ROOT + "/wireguard/always", witness),
                              (EXTERNAL_SERVER_ROOT + "/always", "actual Router Server source skipped its durable WFP intent" if label == "missing-durable-intent" else witness),
-                             (EXTERNAL_LOCAL_ROOT + "/always", "actual Router Local source skipped its durable WFP intent" if label == "missing-durable-intent" else witness)):
+                             (EXTERNAL_LOCAL_ROOT + "/always", "actual Router Local source skipped its durable WFP intent" if label == "missing-durable-intent" else witness),
+                             (EXTERNAL_COMPARE_ROOT + "/always", "actual Router Compare source skipped its durable WFP intent" if label == "missing-durable-intent" else witness)):
             expression = "/".join("^" + part + "$" for part in leaf.split("/"))
             status, output = BOOT.IDENTITY.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"],
                 cwd=source, env=captured, timeout=75)
@@ -581,7 +601,7 @@ PHASE_TIMEOUTS = {
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
-    "external-packet": _PHASE_COMMON + 600 + 75 + 5 * 195 + 2 * (600 + 3 * 75),
+    "external-packet": _PHASE_COMMON + 600 + 75 + 6 * 195 + 2 * (600 + 4 * 75),
     "external-openvpn": _PHASE_COMMON + 600 + 75 + 3 * 195 + 2 * (600 + 75),
 }
 _PHASE_IMAGES = {
