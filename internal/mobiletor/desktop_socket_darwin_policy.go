@@ -600,12 +600,13 @@ func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desk
 	if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != "" {
 		failure := errors.Join(err, fmt.Errorf("Darwin physical guardian rejected or lost %s: %s", request.Operation, reply.Error))
 		p.lose("control-receive-"+request.Operation, failure)
-		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || request.Operation == "grant" && reply.Error != "" {
-			// A sent grant may have failed before or after native application.
-			// Retain its attempted sequence; do not retry retirement against a
-			// possibly older guardian record on this still-open channel. EOF
-			// retires only this original generation. Revoke/Release still wait
-			// for the actual guardian join and independent PF absence proof.
+		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "revoke") && reply.Error != "" {
+			// A sent grant or revoke may have failed before or after native
+			// application. This generation is already invalid; keeping its
+			// channel alive can prevent retirement from reaching guardian join.
+			// Retain the attempted grant sequence. EOF retires only this original
+			// generation; Revoke/Release still require actual guardian join and
+			// independent PF absence before releasing any bound descriptor.
 			// Unknown frames likewise cannot continue on a shifted sequence.
 			p.channel.Close()
 		}

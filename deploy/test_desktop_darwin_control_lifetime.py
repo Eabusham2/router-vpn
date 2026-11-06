@@ -26,7 +26,7 @@ func desktopDarwinReceive(c *net.UnixConn,r *desktopDarwinReply,_ uint32,_ int)(
 '''
 TEST = r'''package probe
 import("context";"encoding/json";"errors";"io";"net";"os";"os/exec";"path/filepath";"testing";"time")
-func TestActualDarwinControlJoinedRejectedGrant(t *testing.T){
+func TestActualDarwinControlJoinedRejectedOperations(t *testing.T){
  for _,scenario:=range []struct{name,operation string;rejected,mismatch bool}{
   {"grant-rejected","grant",true,false},{"revoke-rejected","revoke",true,false},{"probe-rejected","probe",true,false},
   {"grant-success","grant",false,false},{"grant-mismatch","grant",false,true},{"revoke-mismatch","revoke",false,true},
@@ -38,14 +38,14 @@ func TestActualDarwinControlJoinedRejectedGrant(t *testing.T){
   client,err:=net.DialUnix("unix",nil,listener.Addr().(*net.UnixAddr));if err!=nil{t.Fatal(err)}
   peer,err:=listener.AcceptUnix();if err!=nil{client.Close();t.Fatal(err)}
   observed:=make(chan desktopDarwinRequest,1);result:=make(chan error,1);joined:=make(chan struct{})
-  closes:=scenario.mismatch||scenario.operation=="grant"&&scenario.rejected
+  closes:=scenario.mismatch||(scenario.operation=="grant"||scenario.operation=="revoke")&&scenario.rejected
   go func(){defer close(joined);defer peer.Close();_ = peer.SetDeadline(time.Now().Add(2*time.Second))
    var q desktopDarwinRequest;if err:=json.NewDecoder(peer).Decode(&q);err!=nil{result<-err;return};observed<-q
-   reply:=desktopDarwinReply{Sequence:q.Sequence,Capture:q.Capture};if scenario.rejected{reply.Error="captured grant rejected before application"};if scenario.mismatch{reply.Sequence++}
+   reply:=desktopDarwinReply{Sequence:q.Sequence,Capture:q.Capture};if scenario.rejected{reply.Error="captured "+q.Operation+" rejected before native completion"};if scenario.mismatch{reply.Sequence++}
    if err:=json.NewEncoder(peer).Encode(reply);err!=nil{result<-err;return}
    var b [1]byte;n,err:=peer.Read(b[:])
-   if closes{if n!=0||!errors.Is(err,io.EOF){result<-errors.New("rejected grant retained its original peer instead of joined EOF");return}}else{
-    if err!=nil||n!=1||b[0]!='k'{result<-errors.New("non-grant rejection or success lost its original channel");return}
+   if closes{if n!=0||!errors.Is(err,io.EOF){result<-errors.New("rejected "+scenario.operation+" retained its original peer instead of joined EOF");return}}else{
+    if err!=nil||n!=1||b[0]!='k'{result<-errors.New("non-retiring rejection or success lost its original channel");return}
     n,err=peer.Read(b[:]);if n!=0||!errors.Is(err,io.EOF){result<-errors.New("fixture cleanup did not join original peer EOF");return}
    };result<-nil
   }()
@@ -60,7 +60,7 @@ func TestActualDarwinControlJoinedRejectedGrant(t *testing.T){
   var unsubmitted *desktopSocketGrantNotSubmitted
   if errors.As(failure,&unsubmitted){t.Fatal("sent grant result acquired an unsent rollback marker")}
   if scenario.rejected||scenario.mismatch{if failure==nil||p.current||p.loss!="control-receive-"+scenario.operation{t.Fatal("rejected original request did not record source loss")}}else if failure!=nil||!p.current||p.loss!=""{t.Fatal("successful grant lost its original owner",failure)}
-  if !closes{if _,err:=client.Write([]byte{'k'});err!=nil{t.Fatal("non-grant rejection or success lost its original channel",err)};client.Close()}
+  if !closes{if _,err:=client.Write([]byte{'k'});err!=nil{t.Fatal("non-retiring rejection or success lost its original channel",err)};client.Close()}
   select{case err:=<-result:if err!=nil{t.Fatal(err)};case <-ctx.Done():t.Fatal("original control peer result did not join within its captured context",ctx.Err())}
  })}
 }
@@ -84,11 +84,12 @@ def execute(root=ROOT, go=None, mutations=True):
     original = sources(root)
     variants = [('baseline', original, None)]
     if mutations:
-        close = 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || request.Operation == "grant" && reply.Error != ""'
-        assert original.count(close) == 1, 'Native grant rejection lifetime boundary changed'
+        close = 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || (request.Operation == "grant" || request.Operation == "revoke") && reply.Error != ""'
+        assert original.count(close) == 1, 'Native grant/revoke rejection lifetime boundary changed'
         variants += [
-            ('keep-rejected-grant', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture'), 'rejected grant retained its original peer'),
-            ('close-non-grant-error', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != ""'), 'non-grant rejection or success lost its original channel'),
+            ('keep-rejected-grant', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || request.Operation == "revoke" && reply.Error != ""'), 'rejected grant retained its original peer'),
+            ('keep-rejected-revoke', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || request.Operation == "grant" && reply.Error != ""'), 'rejected revoke retained its original peer'),
+            ('close-non-retiring-error', original.replace(close, 'err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != ""'), 'non-retiring rejection or success lost its original channel'),
             ('rollback-sent-result', original.replace('return reply, received, failure', 'return reply, received, desktopSocketUnsubmittedGrant(request.Grant, failure)'), 'sent grant result acquired an unsent rollback marker'),
         ]
     with tempfile.TemporaryDirectory(prefix='darwin-control-lifetime-') as name:
@@ -100,7 +101,7 @@ def execute(root=ROOT, go=None, mutations=True):
             if witness:
                 if result.returncode == 0 or witness not in output or re.search(r'panic:|fatal error:|WARNING: DATA RACE|\[build failed\]', output):
                     raise AssertionError(label+': missing clean intended failure\n'+output)
-            elif result.returncode != 0 or len(re.findall(r'^--- PASS: TestActualDarwinControlJoinedRejectedGrant ', output, re.M)) != 1 or len(re.findall(r'^    --- PASS: TestActualDarwinControlJoinedRejectedGrant/', output, re.M)) != 6:
+            elif result.returncode != 0 or len(re.findall(r'^--- PASS: TestActualDarwinControlJoinedRejectedOperations ', output, re.M)) != 1 or len(re.findall(r'^    --- PASS: TestActualDarwinControlJoinedRejectedOperations/', output, re.M)) != 6:
                 raise AssertionError('Actual original channel lifetime failed\n'+output)
             print('Darwin original control lifetime: '+label+' verified', flush=True)
 

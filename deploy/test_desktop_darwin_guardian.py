@@ -822,6 +822,10 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('native descriptor finish acknowledgment', 'FinishRequiresDescriptorRetirement', 'finish claimed success with an unretired descriptor',
          'desktop_socket_darwin_helper.go', (
              ('if release && len(g.sockets) != 0 {', 'if false && release && len(g.sockets) != 0 {'),)),
+        ('authenticated revoke channel retirement', 'StaleCaptureAndReplacement', 'authenticated revoke rejection kept its invalid original channel alive',
+         'desktop_socket_darwin_policy.go', (
+             ('(request.Operation == "grant" || request.Operation == "revoke") && reply.Error != ""',
+              'request.Operation == "grant" && reply.Error != ""'),)),
     )
     if only_case is not None:
         mutations = tuple(value for value in mutations if value[1] == only_case)

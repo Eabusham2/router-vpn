@@ -1144,3 +1144,26 @@ Validation before publication: root read the completed Intel log and exact runne
 
 Evidence: [Intel job cancellation](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408888), [separate ARM64 retirement failure](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932409218).
 
+
+## 2026-11-06 — Retire an invalid Darwin guardian channel after revoke rejection
+
+An authenticated revoke rejection already invalidated its captured policy, but callLocked closed the original control channel only for a rejected grant or malformed/mismatched reply. Socket drain kept retrying revoke while exceptional PF cleanup required the original guardian to join. Leaving the rejected channel alive could prevent that existing cleanup path from progressing.
+
+The production predicate now closes the same original channel for an authenticated rejected revoke as well. It retains the attempted request sequence and all reply authentication, admission and ownership checks. EOF affects only the original guardian. Revoke/Release still require actual guardian join and independently verified removal of the old PF generation before releasing bound descriptors; a replacement dispatch and the fail-closed baseline remain protected.
+
+The first native PF rejection that triggered the earlier ARM64 capacity hang is still unknown. This commit repairs the separately established channel-lifetime defect, without claiming that every intermittent native cause has been identified.
+
+### Required regression coverage
+
+The existing mandatory native StaleCaptureAndReplacement case now creates an actual owned UDP exchange, captures its acknowledged grant under the existing lock order, installs a fixture-owned reference to the old generation and a separate replacement dispatch, and requires the original guardian's authenticated PF-owner rejection. It then checks channel closure and actual guardian join. A still-retained old namespace must continue to block broker completion and source-port reuse. Only after removing that exact additional reference may the old descriptor drain and its port become reusable; the replacement namespace, dispatch and baseline must remain unchanged.
+
+A new native causal mutation restores precisely the old revoke-channel behavior. The fixture records that defect, closes only its own original channel for cleanup, and fails its dedicated assertion after cleanup. A timeout, panic, unrelated failure or leaked recovery remains insufficient evidence. Native required positive inventory stays at 35; the mutation inventory increases from 44 to 45.
+
+The portable extracted-shipping-method fixture preserves all six scenarios, including non-retiring probe rejection and successful grant behavior, while separately rejecting broken grant and revoke retirement. It now executes the baseline plus four causal variants. The runner still has 41 unittest methods.
+
+The capacity case retains all 130 actual socket iterations. A 15-second fixture-only close bound reaches its existing bounded read-only first-loss, last-failure, descriptor and PF diagnostics before a package alarm can hide them. It does not release a descriptor, return fake close success or alter a production deadline. The existing 12-minute native package bound and 730-second process wrapper are unchanged.
+
+Validation before publication: root traced the actual production call, revoke, close, PF absence and broker-drain paths; a second Astra agent independently reviewed the exact five-file candidate, native types, lock order, cleanup references and original-owner preservation. All five source files were reread at the parent and preserved exactly outside the reviewed changes. No local compilation, native execution or causal-test pass is claimed. New exact-source native runs remain required.
+
+Evidence: [earlier ARM64 retirement hang](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932409218), [prior c602 ARM64 run that passed capacity and its retirement control](https://github.com/Eabusham2/router-vpn/actions/runs/42220221121/job/127900106780).
+

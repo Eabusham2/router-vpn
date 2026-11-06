@@ -1893,8 +1893,19 @@ func TestDesktopDarwinGuardianKernelSocketRetirementReusesCapacity(t *testing.T)
 			t.Fatalf("sequential owned socket %d: %v", index, err)
 		}
 		desktopDarwinExchange(t, connection)
-		if err := connection.Close(); err != nil {
-			t.Fatal(err)
+		// Report the retained original owner through the existing bounded
+		// failure trace before the package alarm can hide its first failure.
+		closed := make(chan error, 1)
+		go func() { closed <- connection.Close() }()
+		timer := time.NewTimer(15 * time.Second)
+		select {
+		case err := <-closed:
+			timer.Stop()
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-timer.C:
+			t.Fatalf("sequential owned socket %d did not retire within the fixture drain bound", index)
 		}
 	}
 }
@@ -2357,39 +2368,184 @@ func TestDesktopDarwinGuardianKernelStaleCaptureAndReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
 	desktopDarwinExchange(t, connection)
+	local := connection.LocalAddr().String()
 	stale := policy.capture
 	stale.NetworkID = strings.Repeat("f", 32)
 	if _, err := policy.Select(context.Background(), stale, "udp", remote); err == nil {
 		t.Fatal("another network generation selected the old socket owner")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	replacement := strings.TrimSpace(desktopDarwinPFPointer(stale))
-	if err := desktopDarwinPFLoadPointer(ctx, stale); err != nil {
-		t.Fatal(err)
+	other := policy.capture
+	other.SessionID = strings.Repeat("d", 32)
+	extra := desktopDarwinPFSlot(other)
+	// Cleanup owns only this fixture's exact references. It never adopts a
+	// changed slot, and the broker still owns all original socket descriptors.
+	t.Cleanup(func() {
+		policy.channel.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, target := range []struct{ anchor, pointer string }{
+			{extra, policy.pf.Pointer}, {policy.pf.Slot, replacement},
+		} {
+			actual, err := desktopDarwinPFRead(ctx, target.anchor)
+			if err != nil {
+				t.Error("replacement fixture could not read its exact cleanup reference", err)
+				continue
+			}
+			if actual == target.pointer {
+				if err := desktopDarwinPFLoad(ctx, target.anchor, "\n"); err != nil {
+					t.Error("replacement fixture could not release its exact reference", err)
+				}
+			} else if actual != "" && !(target.anchor == policy.pf.Slot && actual == policy.pf.Pointer) {
+				t.Error("replacement fixture retained an unrecognized reference", target.anchor, actual)
+			}
+		}
+	})
+	packet, ok := connection.(*desktopConnectedPacket)
+	if !ok {
+		t.Fatal("replacement fixture lost its actual connected UDP owner")
 	}
-	// A replacement dispatch invalidates admission synchronously on readback.
-	if err := policy.pf.verify(ctx, true); err == nil {
-		t.Fatal("replacement PF generation remained current")
+	socket := packet.packet.socket
+	socket.mu.Lock()
+	peer := socket.peers[remote]
+	socket.mu.Unlock()
+	if peer == nil {
+		t.Fatal("replacement fixture lost its acknowledged original peer")
 	}
-	policy.Cancel()
-	policy.command.Process.Kill()
+	retired := func() bool {
+		// Renewal and retirement already take peer.op before policy.mu. Keep
+		// that order while capturing the exact acknowledged native grant.
+		peer.op.Lock()
+		defer peer.op.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := policy.mu.lockContext(ctx); err != nil {
+			t.Fatal(err)
+		}
+		defer policy.mu.Unlock()
+		peer.mu.Lock()
+		grant, receipt, valid := peer.request, peer.receipt, peer.valid
+		peer.mu.Unlock()
+		if !valid || grant.Sequence == 0 || receipt.Grant != grant || !policy.Current(policy.capture, policy.owner) {
+			t.Fatal("replacement fixture did not capture its acknowledged current grant")
+		}
+		if actual, err := desktopDarwinPFRead(ctx, extra); err != nil || actual != "" {
+			t.Fatal("replacement fixture has no fresh independent reference slot", actual, err)
+		}
+		if err := desktopDarwinPFLoad(ctx, extra, policy.pf.Pointer); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopDarwinPFLoadPointer(ctx, stale); err != nil {
+			t.Fatal(err)
+		}
+		// The real replacement invalidates admission and the original
+		// guardian's revoke readback. No transport error stands in for that
+		// authenticated native rejection.
+		if err := policy.pf.verify(ctx, true); err == nil {
+			t.Fatal("replacement PF generation remained current")
+		}
+		reply, file, failure := policy.callLocked(ctx, desktopDarwinRequest{Operation: "revoke", Capture: policy.capture, Grant: grant}, nil, false)
+		if file != nil {
+			file.Close()
+			t.Fatal("native revoke rejection transferred a descriptor")
+		}
+		if failure == nil || reply.Sequence != policy.sequence || reply.Capture != policy.capture ||
+			!strings.Contains(reply.Error, "Darwin PF slot changed its network owner") {
+			t.Fatal("replacement did not produce its authenticated native revoke rejection", reply, failure)
+		}
+		if policy.Current(policy.capture, policy.owner) {
+			t.Fatal("authenticated revoke rejection retained current admission")
+		}
+		raw, closedErr := policy.channel.SyscallConn()
+		if closedErr == nil {
+			closedErr = raw.Control(func(uintptr) {})
+		}
+		closed := errors.Is(closedErr, net.ErrClosed)
+		if closedErr != nil && !closed {
+			t.Fatal("original control-channel observation failed", closedErr)
+		}
+		if !closed {
+			// Keep the causal failure below, but let this original peer reach
+			// EOF so the broken variant can join without a timeout or leak.
+			policy.channel.Close()
+		}
+		return closed
+	}()
+	broker.Cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	select {
 	case <-policy.joined:
 	case <-ctx.Done():
-		t.Fatal("actual guardian did not join")
+		cancel()
+		t.Fatal("rejected original guardian did not join", ctx.Err())
 	}
-	if err := broker.Close(ctx); err != nil {
+	cancel()
+	// An actual foreign reference still retains the empty original native
+	// generation. Joining the guardian alone cannot release its source port.
+	ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+	err = broker.Close(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("original socket drained before independent PF generation absence", err)
+	}
+	if replacement, err := net.ListenPacket("udp4", local); !errors.Is(err, syscall.EADDRINUSE) {
+		if replacement != nil {
+			replacement.Close()
+		}
+		t.Fatal("rejected original owner released its still-retained source port", err)
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := policy.pf.filtersAbsent(ctx); err != nil {
+		t.Fatal("joined original guardian retained its filter rules", err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, policy.pf.Anchor); err != nil || !present {
+		t.Fatal("retained foreign reference did not preserve the original native generation", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, extra); err != nil || actual != policy.pf.Pointer {
+		t.Fatal("original-owner retirement changed the foreign reference", actual, err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace); err != nil || actual != policy.pf.Baseline {
+		t.Fatal("rejected original owner changed its fail-closed baseline", actual, err)
+	}
+	if err := desktopDarwinPFLoad(ctx, extra, "\n"); err != nil {
 		t.Fatal(err)
 	}
-	actual, err := desktopDarwinPFRead(ctx, policy.pf.Slot)
-	if err != nil || actual != replacement {
+	cancel()
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := broker.Close(ctx); err != nil {
+		t.Fatal("original socket did not drain after its exact reference retired", err)
+	}
+	if err := policy.pf.allAbsent(ctx); err != nil {
+		t.Fatal("original native generation survived joined retirement", err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, policy.pf.Anchor); err != nil || present {
+		t.Fatal("independent inventory retained the original native generation", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := net.ListenPacket("udp4", local)
+	if err != nil {
+		t.Fatal("joined original cleanup retained the source port", err)
+	}
+	reused.Close()
+	if actual, err := desktopDarwinPFRead(ctx, policy.pf.Slot); err != nil || actual != replacement {
 		t.Fatal("old-owner cleanup removed the replacement dispatch", actual, err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, desktopDarwinPFGeneration(stale)); err != nil || !present {
+		t.Fatal("old-owner cleanup removed the replacement native generation", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace); err != nil || actual != policy.pf.Baseline {
+		t.Fatal("joined original cleanup changed its fail-closed baseline", actual, err)
 	}
 	if err := desktopDarwinPFLoad(ctx, policy.pf.Slot, "\n"); err != nil {
 		t.Fatal(err)
+	}
+	if !retired {
+		t.Fatal("authenticated revoke rejection kept its invalid original channel alive")
 	}
 }
 

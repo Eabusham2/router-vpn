@@ -312,6 +312,11 @@ class DarwinMutationOverlays(unittest.TestCase):
                     self.assertNotEqual(Path(changed).read_text(), original[source])
                     self.assertEqual(Path(changed).parent, self.output)
                 self.assertTrue(case and witness)
+        revoke = [entry for entry in self.mutations if entry[0] == 'authenticated revoke channel retirement']
+        self.assertEqual(len(revoke), 1, 'the original native revoke lifetime control is mandatory')
+        self.assertEqual(revoke[0][1], 'StaleCaptureAndReplacement')
+        self.assertIn(revoke[0][1], self.gate.CASES)
+        self.assertEqual(revoke[0][3], 'desktop_socket_darwin_policy.go')
 
     def test_quick_deny_control_reaches_both_baselines_without_changing_another_field(self):
         label, case, witness, names, replacements = self.quick
@@ -641,7 +646,7 @@ class MacOSPythonDiscovery(unittest.TestCase):
 
 
 class DarwinOriginalControlLifetime(unittest.TestCase):
-    def test_actual_control_method_joins_rejected_grant_and_preserves_other_operations(self):
+    def test_actual_control_method_joins_rejected_grant_and_revoke_and_preserves_other_operations(self):
         spec = importlib.util.spec_from_file_location('darwin_control_lifetime', ROOT/'deploy/test_desktop_darwin_control_lifetime.py')
         regression = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(regression)
