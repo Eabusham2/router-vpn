@@ -52,6 +52,7 @@ WORKSPACE_SCOPES = (
     ('^TestDesktopDNS', ''),
     ('^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)', ''),
     ('^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)', ''),
+    ('^TestDesktopWindowsExternalSSEntry', ''),
     ('^TestDesktopTorMTU', ''),
     ('^TestDesktopTor(Comparison|Compare|PublicCompare)', ''),
     ('^TestDesktopTorOrdinary', ''),
@@ -490,6 +491,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
         for old, new in (("Run = '^TestDesktopRuntimeWorkspace'", "Run = '^TestDesktopTor'"),
                          ("Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'", "Run = '^$'"),
                          ("Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'", "Run = '^$'"),
+                         ("Run = '^TestDesktopWindowsExternalSSEntry'", "Run = '^$'"),
                          ("Run = '^TestSpeedLab'", "Run = '^$'"),
                          ("Skip = '^TestDesktopTor(MTU|Comparison|Compare|PublicCompare|Ordinary)'", "Skip = '^TestDesktopTor'"),
                          ("Run = '^TestDesktopTor(Comparison|Compare|PublicCompare)'", "Run = '^$'"),
@@ -508,6 +510,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
             '^TestDesktopRuntimeWorkspace', '^TestDesktopDNS',
             '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)',
             '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)',
+            '^TestDesktopWindowsExternalSSEntry',
             '^TestDesktopTor', '^TestSpeedLab',
         )
         names = set()
@@ -527,6 +530,11 @@ class WindowsReleaseGateTests(unittest.TestCase):
             'TestDesktopTorOrdinarySpeedLabRetainsCompiledSourceAndRestoresAfterCancel',
             'TestDesktopTorPlainSpeedLabRestoresProvedExecutionAndSource',
             'TestDesktopTorCheckedCleanupRetainsUnknownChangedAndLinkedFiles',
+            'TestDesktopWindowsExternalSSEntrySources',
+            'TestDesktopWindowsExternalSSEntryPublicLifecycle',
+            'TestDesktopWindowsExternalSSEntryActivationCapturesBothSources',
+            'TestDesktopWindowsExternalSSEntrySpeedLabRestoresBothSources',
+            'TestDesktopWindowsExternalSSEntryAlwaysOffRetriesOriginalOwner',
         ):
             self.assertIn(name, expected)
 
