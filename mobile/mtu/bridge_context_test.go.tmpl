@@ -1,0 +1,404 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+// Test-only access holds the exact native service/manager locks. It refuses a
+// changed private field or type and adds no production observation hook.
+func routerMTUField[T any](t *testing.T, owner any, name string) *T {
+	t.Helper()
+	value := reflect.ValueOf(owner).Elem().FieldByName(name)
+	if !value.IsValid() || !value.CanAddr() || value.Type() != reflect.TypeOf((*T)(nil)).Elem() {
+		t.Fatalf("native MTU fixture field changed: %s", name)
+	}
+	return (*T)(unsafe.Pointer(value.UnsafeAddr()))
+}
+
+type routerMTUContextInbound struct{ tag string }
+
+func (p *routerMTUContextInbound) Type() string                   { return "tun" }
+func (p *routerMTUContextInbound) Tag() string                    { return p.tag }
+func (p *routerMTUContextInbound) Start(adapter.StartStage) error { return nil }
+func (p *routerMTUContextInbound) Close() error                   { return nil }
+
+type routerMTUContextPlatform struct {
+	state                       RouterMTUState
+	reads, begins, ends, aborts int
+	onRead                      func(int)
+}
+
+func (p *routerMTUContextPlatform) CaptureMTU() *RouterMTUState {
+	p.reads++
+	if p.onRead != nil {
+		p.onRead(p.reads)
+	}
+	state := p.state
+	return &state
+}
+func (p *routerMTUContextPlatform) BeginMTUChange(*RouterMTUState) error       { p.begins++; return nil }
+func (p *routerMTUContextPlatform) EndMTUChange() error                        { p.ends++; return nil }
+func (p *routerMTUContextPlatform) BindMTUSocket(*RouterMTUState, int64) error { return nil }
+func (p *routerMTUContextPlatform) ReadMTUCache() string                       { return "" }
+func (p *routerMTUContextPlatform) CompareAndSwapMTUCache(string, string) bool { return true }
+func (p *routerMTUContextPlatform) AbortMTU(string)                            { p.aborts++ }
+
+func routerMTUContextFixture(t *testing.T) (*routerMTUOwner, *inbound.Manager, *routerMTUContextPlatform) {
+	t.Helper()
+	reader := &routerMTUContextInbound{tag: "tun-in"}
+	manager := inbound.NewManager(nil, nil, nil)
+	*routerMTUField[map[string]adapter.Inbound](t, manager, "inboundByTag") = map[string]adapter.Inbound{"tun-in": reader}
+	engine := &box.Box{}
+	*routerMTUField[*inbound.Manager](t, engine, "inbound") = manager
+	instance := &daemon.Instance{}
+	*routerMTUField[*box.Box](t, instance, "instance") = engine
+	started := &daemon.StartedService{}
+	*routerMTUField[*daemon.Instance](t, started, "instance") = instance
+	platform := &routerMTUContextPlatform{state: RouterMTUState{Session: "session", Path: "path", Interface: "tun", MTU: 1380}}
+	owner := &routerMTUOwner{platform: platform, server: &CommandServer{StartedService: started}, instance: instance, inbound: reader, session: "session", path: "path"}
+	return owner, manager, platform
+}
+
+// A signal from the actual caller context confirms observation admission.
+// The test still holds the original mutex until the cancelled call returns.
+type routerMTUObservedContext struct {
+	context.Context
+	reads   atomic.Int32
+	entered chan struct{}
+	at      int32
+}
+
+func (c *routerMTUObservedContext) Err() error {
+	if c.reads.Add(1) == c.at {
+		close(c.entered)
+	}
+	return c.Context.Err()
+}
+
+func TestRouterMTUContextCancellationRetainsNativeLockOwners(t *testing.T) {
+	for _, name := range []string{"owner", "service", "inbound"} {
+		t.Run(name, func(t *testing.T) {
+			owner, manager, platform := routerMTUContextFixture(t)
+			var unlock func()
+			switch name {
+			case "owner":
+				owner.mu.Lock()
+				unlock = owner.mu.Unlock
+			case "service":
+				lock := routerMTUField[sync.RWMutex](t, owner.server.StartedService, "serviceAccess")
+				lock.Lock()
+				unlock = lock.Unlock
+			case "inbound":
+				lock := routerMTUField[sync.Mutex](t, manager, "access")
+				lock.Lock()
+				unlock = lock.Unlock
+			}
+			var once sync.Once
+			release := func() { once.Do(unlock) }
+			defer release()
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &routerMTUObservedContext{Context: parent, entered: make(chan struct{}), at: map[string]int32{"owner": 2, "service": 5, "inbound": 9}[name]}
+			done := make(chan error, 1)
+			go func() { _, err := owner.CaptureContext(ctx); done <- err }()
+			select {
+			case <-ctx.entered:
+			case err := <-done:
+				t.Fatal("native MTU observation returned before its retained lock", err)
+			case <-time.After(time.Second):
+				cancel()
+				release()
+				err := <-done
+				t.Fatal("native MTU observation did not retain the original caller", err)
+			}
+			cancel()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(time.Second):
+				release()
+				err = <-done
+				t.Fatal("native MTU observation waited for a retained lock after cancellation", err)
+			}
+			if !errors.Is(err, context.Canceled) || platform.reads != 0 || owner.invalid.Load() {
+				t.Fatal("cancelled observation mutated or retired original owner", err)
+			}
+			release()
+			state, err := owner.CaptureContext(context.Background())
+			if err != nil || state.Session != "session" || state.MTU != 1380 {
+				t.Fatal("fresh caller lost original owner after cancellation", err)
+			}
+		})
+	}
+}
+
+func TestRouterMTUContextRejectsReplacementAndLateRead(t *testing.T) {
+	for _, name := range []string{"service", "inbound", "cancelled-read", "changed-path", "proof-context"} {
+		t.Run(name, func(t *testing.T) {
+			owner, manager, platform := routerMTUContextFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			old := owner.inbound
+			switch name {
+			case "service":
+				*routerMTUField[*daemon.Instance](t, owner.server.StartedService, "instance") = &daemon.Instance{}
+			case "inbound":
+				(*routerMTUField[map[string]adapter.Inbound](t, manager, "inboundByTag"))["tun-in"] = &routerMTUContextInbound{tag: "tun-in"}
+			case "cancelled-read":
+				platform.onRead = func(int) { cancel() }
+			case "changed-path":
+				platform.onRead = func(int) { platform.state.Path = "replacement" }
+			case "proof-context":
+				owner.proofCurrent = func() bool { t.Fatal("bounded MTU called contextless proof"); return true }
+				owner.proofCurrentContext = func(context.Context) error { cancel(); return context.Canceled }
+			}
+			state, err := owner.CaptureContext(ctx)
+			if err == nil || state != (mobilemtu.State{}) || owner.inbound != old || platform.begins != 0 || platform.aborts != 0 {
+				t.Fatal("foreign or late read adopted/mutated a native reader", state, err)
+			}
+		})
+	}
+}
+
+func TestRouterMTUContextConstructorRetainsCaller(t *testing.T) {
+	owner, _, platform := routerMTUContextFixture(t)
+	lock := routerMTUField[sync.RWMutex](t, owner.server.StartedService, "serviceAccess")
+	lock.Lock()
+	var once sync.Once
+	release := func() { once.Do(lock.Unlock) }
+	defer release()
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &routerMTUObservedContext{Context: parent, entered: make(chan struct{}), at: 2}
+	done := make(chan error, 1)
+	go func() {
+		result, err := newRouterMTUContext(ctx, owner.server, platform, "{}", "{}")
+		if result != nil {
+			err = errors.New("cancelled constructor published an owner")
+		}
+		done <- err
+	}()
+	select {
+	case <-ctx.entered:
+	case err := <-done:
+		t.Fatal("MTU constructor returned before its retained service lock", err)
+	case <-time.After(time.Second):
+		cancel()
+		release()
+		err := <-done
+		t.Fatal("MTU constructor did not retain the original caller", err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("constructor lost original cancellation", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		err := <-done
+		t.Fatal("constructor waited for service replacement lock", err)
+	}
+	if platform.reads != 0 || platform.begins != 0 {
+		t.Fatal("cancelled constructor touched platform")
+	}
+}
+
+type routerMTUContextLease struct {
+	current adapter.Inbound
+	change  func(context.Context, adapter.Inbound, int) (adapter.Inbound, error)
+	health  func(context.Context) error
+}
+
+func (l *routerMTUContextLease) Healthy() bool { return true }
+func (l *routerMTUContextLease) Close()        {}
+func (l *routerMTUContextLease) Inbound() (adapter.Inbound, error) {
+	return nil, errors.New("contextless lease read forbidden")
+}
+func (l *routerMTUContextLease) HealthyContext(ctx context.Context) error {
+	if l.health != nil {
+		return l.health(ctx)
+	}
+	return ctx.Err()
+}
+func (l *routerMTUContextLease) InboundContext(ctx context.Context) (adapter.Inbound, error) {
+	return l.current, ctx.Err()
+}
+func (l *routerMTUContextLease) ChangeMTU(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	return l.change(ctx, expected, mtu)
+}
+func (l *routerMTUContextLease) Lifetime(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	return ctx, func() {}, ctx.Err()
+}
+func (l *routerMTUContextLease) Verify(context.Context, func(context.Context, string, string) (net.Conn, error)) error {
+	return errors.New("no proof fixture")
+}
+func (l *routerMTUContextLease) Resolve(context.Context, string) ([]netip.Addr, error) {
+	return nil, errors.New("no resolver fixture")
+}
+
+func TestRouterMTUContextExternalHealthRetainsCaller(t *testing.T) {
+	for _, name := range []string{"current", "cancel-before", "cancel-during"} {
+		t.Run(name, func(t *testing.T) {
+			owner, _, _ := routerMTUContextFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			owner.external = &routerMTUContextLease{current: owner.inbound, health: func(call context.Context) error {
+				calls++
+				if call != ctx {
+					t.Fatal("external health replaced its original caller")
+				}
+				if name == "cancel-during" {
+					cancel()
+				}
+				return nil
+			}}
+			if name == "cancel-before" {
+				cancel()
+			}
+			err := owner.externalHealthyContext(ctx)
+			if name == "current" && (err != nil || calls != 1) || name != "current" && !errors.Is(err, context.Canceled) || name == "cancel-before" && calls != 0 || name == "cancel-during" && calls != 1 {
+				t.Fatal("external health admitted a late callback or lost the captured lease", calls, err)
+			}
+		})
+	}
+}
+
+func TestRouterMTUContextCancelledMutationRetainsOriginalReadbackAndRollback(t *testing.T) {
+	owner, manager, platform := routerMTUContextFixture(t)
+	before, err := owner.CaptureContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, finish, err := mobilemtu.WithOperationContext(context.Background(), time.Minute, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	ctx, cancel := context.WithCancel(op)
+	defer cancel()
+	lease := &routerMTUContextLease{current: owner.inbound}
+	owner.external = lease
+	owner.proofCurrent = func() bool { t.Fatal("contextless proof bypassed bounded lease"); return false }
+	changes := 0
+	lease.change = func(call context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+		if expected != lease.current || call.Err() != nil {
+			t.Fatal("transaction did not retain exact reader/caller")
+		}
+		changes++
+		reader := &routerMTUContextInbound{tag: "tun-in"}
+		(*routerMTUField[map[string]adapter.Inbound](t, manager, "inboundByTag"))["tun-in"] = reader
+		lease.current = reader
+		platform.state.MTU = int32(mtu)
+		if changes == 1 {
+			cancel()
+			return reader, context.Canceled
+		}
+		return reader, nil
+	}
+	after, err := owner.ChangeMTU(ctx, before, 1400)
+	if !errors.Is(err, context.Canceled) || after.MTU != 1400 || owner.inbound != lease.current || owner.invalid.Load() || platform.aborts != 0 || platform.begins != 1 || platform.ends != 1 {
+		t.Fatal("cancelled mutation lost actual original readback", after, err)
+	}
+	cleanup, err := mobilemtu.OperationCleanupContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline, _ := cleanup.Deadline()
+	restored, err := owner.ChangeMTU(cleanup, after, before.MTU)
+	if err != nil || restored != before || platform.begins != 2 || platform.ends != 2 || platform.aborts != 0 {
+		t.Fatal("exact original rollback failed", restored, err)
+	}
+	again, err := mobilemtu.OperationCleanupContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retained, _ := again.Deadline(); retained != deadline {
+		t.Fatal("readback renewed original cleanup allowance")
+	}
+}
+
+func TestRouterMTUContextLateConnectedSocketIsClosed(t *testing.T) {
+	for _, fault := range []string{"cancel", "replacement"} {
+		t.Run(fault, func(t *testing.T) {
+			owner, _, platform := routerMTUContextFixture(t)
+			expected, err := routerMTUState(&platform.state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			peer := make(chan error, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					peer <- err
+					return
+				}
+				defer conn.Close()
+				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				var b [1]byte
+				_, err = conn.Read(b[:])
+				peer <- err
+			}()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			platform.onRead = func(n int) {
+				if n == 4 {
+					if fault == "cancel" {
+						cancel()
+					} else {
+						*routerMTUField[*daemon.Instance](t, owner.server.StartedService, "instance") = &daemon.Instance{}
+					}
+				}
+			}
+			connection, err := owner.dialBoundSocket(ctx, expected, "tcp", listener.Addr().String())
+			if connection != nil {
+				_ = connection.Close()
+			}
+			if connection != nil || err == nil || platform.reads != 4 {
+				_ = listener.Close()
+				<-peer
+				t.Fatal("late native socket escaped original capture", err, platform.reads)
+			}
+			if err := <-peer; err != io.EOF {
+				t.Fatal("late owned socket did not close before return", err)
+			}
+		})
+	}
+}
+
+func TestRouterMTUContextConstructorKeepsCapturedConfiguration(t *testing.T) {
+	owner, _, platform := routerMTUContextFixture(t)
+	config := `{"inbounds":[{"type":"tun","tag":"tun-in","mtu":1380,"address":["172.29.94.1/30"],"auto_route":true,"strict_route":true}],"outbounds":[{"type":"shadowsocks","tag":"proxy","server":"192.0.2.1","server_port":8388,"password":"original-key","method":"2022-blake3-aes-256-gcm"}],"route":{"final":"proxy","rules":[{"protocol":"dns","action":"hijack-dns"}]},"dns":{"final":"selected","servers":[{"type":"tls","tag":"selected","server":"192.0.2.53","detour":"proxy"}]}}`
+	profile := `{"id":"home","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.77.0.1:8787","api_token":"fixture-token","daita_host":"10.77.0.1","daita_port":45999,"socks_host":"10.77.0.1","mtu_policy":"auto"}`
+	created, err := newRouterMTUContext(context.Background(), owner.server, platform, config, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Close()
+	if created.owner.initialContext != nil || created.owner.instance != owner.instance || created.owner.inbound != owner.inbound || created.controller.Config() != config || platform.begins != 0 {
+		t.Fatal("constructor changed original owner/configuration or retained construction caller")
+	}
+}

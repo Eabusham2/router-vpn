@@ -64,11 +64,17 @@ class NativeRetirementProjection(unittest.TestCase):
             self.assertIn(RETAINED.OBSERVATION_TARGET, verified)
             helper = vendor/RETAINED.OBSERVATION_TARGET
             self.assertEqual(helper.read_bytes(), RETAINED.OBSERVATION_TEMPLATE.read_bytes())
+            manager_observations = []
+            for template, relative in RETAINED.INBOUND_OBSERVATION_TEMPLATES.items():
+                self.assertIn(relative, verified)
+                target = vendor/relative
+                self.assertEqual(target.read_bytes(), template.read_bytes())
+                manager_observations.append(target)
             self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
             RETAINED.prepare(vendor)
             self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
             self.assertEqual(manager.read_text().count("routervpnMTUPending []*RouterVPNTunTransaction"), 1)
-            for target in (manager, manager.parent/"routervpn_mtu.go", manager.parent/"routervpn_mtu_test.go", manager.parent/"routervpn_mtu_native_linux_test.go", helper):
+            for target in (manager, manager.parent/"routervpn_mtu.go", manager.parent/"routervpn_mtu_test.go", manager.parent/"routervpn_mtu_native_linux_test.go", helper, *manager_observations):
                 original = target.read_bytes()
                 mutant = original + b"\n// unowned source replacement\n"
                 target.write_bytes(mutant)
@@ -78,6 +84,13 @@ class NativeRetirementProjection(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     RETAINED.prepare(vendor)
                 self.assertEqual(target.read_bytes(), mutant)
+                target.write_bytes(original)
+            for target in manager_observations:
+                original = target.read_bytes()
+                target.unlink()
+                with self.assertRaises(ValueError):
+                    RETAINED.verify(vendor)
+                self.assertFalse(target.exists())
                 target.write_bytes(original)
             original = helper.read_bytes()
             helper.unlink()

@@ -33,12 +33,12 @@ func (o *routerMTUOwner) externalVerificationTarget() (string, string) {
 }
 
 func (o *routerMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.State) error {
-	if o == nil || o.external == nil {
+	if ctx == nil || o == nil || o.external == nil {
 		return errors.New("external MTU has no retained proof")
 	}
-	state, err := o.Capture()
+	state, err := o.CaptureContext(ctx)
 	if err != nil || state != expected || ctx.Err() != nil {
-		return errors.New("external MTU proof belongs to a stale TUN")
+		return errors.Join(err, ctx.Err(), errors.New("external MTU proof belongs to a stale TUN"))
 	}
 	proofTag, proofAddress := o.externalVerificationTarget()
 	err = o.external.Verify(ctx, func(call context.Context, tag, address string) (net.Conn, error) {
@@ -47,11 +47,27 @@ func (o *routerMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.
 		}
 		return o.dialExternal(call, expected, "tcp", address)
 	})
-	after, captureErr := o.Capture()
+	after, captureErr := o.CaptureContext(ctx)
 	if err != nil || captureErr != nil || after != expected || ctx.Err() != nil {
-		return errors.New("external MTU public/DNS proof failed or became stale")
+		return errors.Join(err, captureErr, ctx.Err(), errors.New("external MTU public/DNS proof failed or became stale"))
 	}
 	return nil
+}
+
+func (o *routerMTUOwner) externalHealthyContext(ctx context.Context) error {
+	if ctx == nil || o == nil || o.external == nil {
+		return errors.New("external MTU lease has no caller or owner")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if bounded, ok := o.external.(interface{ HealthyContext(context.Context) error }); ok {
+		return errors.Join(bounded.HealthyContext(ctx), ctx.Err())
+	}
+	if !o.external.Healthy() {
+		return errors.New("external MTU lease retired")
+	}
+	return ctx.Err()
 }
 
 func (o *routerMTUOwner) dialExternal(parent context.Context, expected mobilemtu.State, network, address string) (net.Conn, error) {
@@ -85,9 +101,9 @@ func (o *routerMTUOwner) dialExternal(parent context.Context, expected mobilemtu
 		connection, err := o.dialBoundSocket(ctx, expected, network, target)
 		if err == nil && connection != nil {
 			owned := newRouterMTUOwnedSocket(ctx, release, connection)
-			if ctx.Err() != nil || !o.external.Healthy() {
+			if healthErr := o.externalHealthyContext(ctx); healthErr != nil {
 				_ = owned.Close()
-				return nil, errors.New("external MTU socket retired during adoption")
+				return nil, errors.Join(healthErr, errors.New("external MTU socket retired during adoption"))
 			}
 			retained = true
 			return owned, nil
@@ -95,7 +111,7 @@ func (o *routerMTUOwner) dialExternal(parent context.Context, expected mobilemtu
 		if connection != nil {
 			_ = connection.Close()
 		}
-		if ctx.Err() != nil || !o.external.Healthy() {
+		if o.externalHealthyContext(ctx) != nil {
 			break
 		}
 	}

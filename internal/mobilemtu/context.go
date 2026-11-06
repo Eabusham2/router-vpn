@@ -158,7 +158,11 @@ func captureContext(ctx context.Context, owner Owner) (State, error) {
 }
 func (c *Controller) capture(ctx context.Context) (State, error) {
 	strict, _ := ctx.Value(boundedOperationKey{}).(bool)
-	if c.bounded || strict {
+	_, contextOwner := c.owner.(ContextOwner)
+	// Native callers can adopt bounded observation without changing their
+	// existing cache contract or public Start/Cancel API. An available context
+	// capability must retain this operation's caller even for legacy New.
+	if c.bounded || strict || contextOwner {
 		return captureContext(ctx, c.owner)
 	}
 	return c.owner.Capture()

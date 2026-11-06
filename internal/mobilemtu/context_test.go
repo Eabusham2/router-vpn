@@ -15,6 +15,70 @@ type contextTestOwner struct {
 	recover func(context.Context, State) (State, error)
 }
 
+type legacyContextTestOwner struct {
+	*contextTestOwner
+	legacyReads int
+}
+
+func (o *legacyContextTestOwner) Capture() (State, error) {
+	o.legacyReads++
+	if o.legacyReads != 1 {
+		return State{}, errors.New("operation bypassed the available caller context")
+	}
+	return o.state, nil
+}
+
+func TestLegacyControllerPrefersCapturedContextOwnerDuringRun(t *testing.T) {
+	owner := &legacyContextTestOwner{contextTestOwner: &contextTestOwner{externalTestOwner: &externalTestOwner{testOwner: &testOwner{state: State{Session: "original", Path: "physical", Interface: "tun-1", MTU: 1380}}}}}
+	cache := NewCache(&testPreferences{})
+	c, err := NewExternal(owner, externalFixtureGraph(), encoded(externalFixtureAuthority()), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if c.bounded || c.cache != cache {
+		t.Fatal("bounded observation changed the original cache contract")
+	}
+	entered := make(chan context.Context, 1)
+	owner.capture = func(ctx context.Context) (State, error) {
+		entered <- ctx
+		<-ctx.Done()
+		return owner.state, nil // A native callback can return after cancellation.
+	}
+	request := strings.Repeat("7", 32)
+	done := make(chan error, 1)
+	go func() { done <- c.Run(request, true) }()
+	var caller context.Context
+	select {
+	case caller = <-entered:
+	case err := <-done:
+		t.Fatal("legacy controller bypassed its context-aware owner", err)
+	case <-time.After(time.Second):
+		c.Cancel(request)
+		<-done
+		t.Fatal("legacy controller did not enter its captured owner")
+	}
+	if !SameOperationContext(caller, caller) {
+		c.Cancel(request)
+		<-done
+		t.Fatal("capture lost the original operation and cleanup authority")
+	}
+	c.Cancel(request)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || caller.Err() != context.Canceled {
+			t.Fatal("original cancellation or late-read rejection was lost", err)
+		}
+	case <-time.After(time.Second):
+		_ = c.Close()
+		<-done
+		t.Fatal("cancelled native capture did not drain")
+	}
+	if owner.legacyReads != 1 || len(owner.applied) != 0 || readStatus(t, c).Measured {
+		t.Fatal("late capture mutated the reader or admitted a result")
+	}
+}
+
 func (o *contextTestOwner) CaptureContext(ctx context.Context) (State, error) {
 	if o.capture != nil {
 		return o.capture(ctx)

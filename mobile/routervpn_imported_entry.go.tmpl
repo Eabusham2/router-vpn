@@ -54,6 +54,7 @@ func (m *RouterMultihop) NewMTU(server *CommandServer, platform RouterMTUPlatfor
 		return nil, err
 	}
 	mtu.owner.proofCurrent = m.Healthy
+	mtu.owner.proofCurrentContext = m.controller.HealthyContext
 	if !m.Healthy() {
 		_ = mtu.Close()
 		return nil, errors.New("imported MTU owner retired")
