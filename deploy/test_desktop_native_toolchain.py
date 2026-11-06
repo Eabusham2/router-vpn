@@ -96,6 +96,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 darwin_route_errors = []
                 physical_errors = []
                 command_retirement_errors = []
+                dnssec_destination = None
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
@@ -359,6 +360,22 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 1800)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_dnssec_namespace.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertIsNotNone(dnssec_destination)
+                        self.assertEqual(args[2:], [str(source.resolve()), str(dnssec_destination), target])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertIs(kwargs['env'], env)
+                        self.assertEqual(kwargs['timeout'], 900)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_dnssec_command.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertIsNotNone(dnssec_destination)
+                        self.assertEqual(args[2:], ['--source', str(source.resolve()), '--bundle', str(dnssec_destination), '--target', target])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertIs(kwargs['env'], env)
+                        self.assertEqual(kwargs['timeout'], 900)
+                        return ''
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
@@ -392,6 +409,23 @@ class NativeSocketUIDGate(unittest.TestCase):
                     if library:
                         file(stage/library, b'captured fixture library')
 
+                def build_dnssec(actual, destination, **options):
+                    nonlocal dnssec_destination
+                    self.assertEqual(system, 'linux')
+                    self.assertEqual(actual, target)
+                    self.assertEqual(options, {'compiled': None, 'env': env})
+                    self.assertIs(options['env'], env)
+                    previous = calls[-1]
+                    self.assertEqual(previous[:2], ['go', 'test'])
+                    self.assertEqual(previous[previous.index('-run')+1], '^TestRouterVPNDesktop(Tor|External)')
+                    dnssec_destination = Path(destination)
+                    self.assertFalse(dnssec_destination.exists())
+                    # These bytes model the producer boundary; they are never
+                    # loaded as a native validator by this orchestration test.
+                    for name in N.DNSSEC.names(actual):
+                        file(dnssec_destination/name, ('modeled DNSSEC payload: '+name).encode())
+                    return dnssec_destination
+
                 original_load = N.load
                 with patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else original_load(name, path)), \
                      patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})), \
@@ -402,11 +436,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
+                     patch.object(N.DNSSEC, 'build', side_effect=build_dnssec) as dnssec, \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
                     expected_error = physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
+                if system == 'linux' and expected_error is CompilerBoundary:
+                    dnssec.assert_called_once_with(target, dnssec_destination, compiled=None, env=env)
+                else:
+                    dnssec.assert_not_called()
                 if physical_failure:
                     phases = [args[4] for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical.py')]
                     self.assertEqual(phases, list(PHYSICAL.PHASES[:5]))
@@ -465,6 +504,17 @@ class NativeSocketUIDGate(unittest.TestCase):
                 self.assertEqual(len(box), 1, 'Native build omitted the complete Box family suite')
                 self.assertEqual([arg for arg in box[0] if arg.startswith('-timeout=')],
                                  ['-timeout=180s' if system == 'linux' else '-timeout=120s'])
+                dnssec_gates = [args for args in calls if len(args) > 1 and args[1] in (
+                    str(ROOT/'deploy/test_desktop_dnssec_namespace.py'),
+                    str(ROOT/'deploy/test_desktop_dnssec_command.py'))]
+                self.assertEqual([args[1] for args in dnssec_gates], [
+                    str(ROOT/'deploy/test_desktop_dnssec_namespace.py'),
+                    str(ROOT/'deploy/test_desktop_dnssec_command.py')] if system == 'linux' else [])
+                if dnssec_gates:
+                    self.assertEqual(calls.index(dnssec_gates[0]), calls.index(box[0])+1)
+                    self.assertEqual(calls.index(dnssec_gates[1]), calls.index(dnssec_gates[0])+1)
+                    self.assertEqual(calls[-3:-1], dnssec_gates)
+                    self.assertEqual(calls[-1][:2], ['go', 'build'])
                 for args in calls:
                     if args[:2] == ['go', 'test'] and args != box[0]:
                         self.assertNotIn('-timeout=180s', args, 'Box aggregate budget changed another native gate')
@@ -1632,7 +1682,7 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
             rows += [{'Package': package, 'Test': parent+'/'+case, 'Action': action} for action in ('run', 'pass')]
         return rows + [{'Package': package, 'Test': parent, 'Action': 'pass'}, {'Package': package, 'Action': 'pass'}]
 
-    def exercise(self, arch, reused, failure=None, output=None, verdict_failure=False):
+    def exercise(self, arch, reused, failure=None, output=None, verdict_failure=False, dnssec_failure=None):
         with tempfile.TemporaryDirectory() as temporary:
             bundle = Path(temporary)/'bundle'
             bundle.mkdir()
@@ -1648,22 +1698,35 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
                         raise failure
                     return '\n'.join(json.dumps(row) for row in self.verdict_rows()) if output is None else output
                 return ''
+            stdout = io.StringIO()
             with patch.object(N.platform, 'system', return_value='Linux'), \
                  patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'aarch64'), \
                  patch.object(N, 'environment', return_value=env), patch.object(N, 'digest', return_value='source'), \
                  patch.object(N, 'reuse', return_value={}), patch.object(N, 'run', side_effect=run), \
-                 patch.object(N, 'verify_linux_standard_configs') as configs:
+                 patch.object(N, 'verify_linux_standard_configs') as configs, \
+                 patch.object(N.DNSSEC, 'test_native_bundle', side_effect=dnssec_failure) as dnssec:
                 invoke = (lambda: N.build('linux/'+arch, bundle)) if reused else (lambda: N.verify_installed_linux_host(Path(temporary)/'core', bundle, 'linux/'+arch, env))
-                if failure is not None or verdict_failure:
-                    with self.assertRaises(type(failure) if failure is not None else ValueError):
-                        invoke()
-                else:
-                    with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stdout(stdout):
+                    if failure is not None or verdict_failure or dnssec_failure is not None:
+                        expected_failure = failure if failure is not None else dnssec_failure
+                        with self.assertRaises(type(expected_failure) if expected_failure is not None else ValueError) as caught:
+                            invoke()
+                        if expected_failure is not None:
+                            self.assertIs(caught.exception, expected_failure)
+                    else:
                         invoke()
             if failure is not None or verdict_failure:
                 configs.assert_not_called()
             else:
                 configs.assert_called_once_with(bundle, env)
+            if reused and failure is None and not verdict_failure:
+                dnssec.assert_called_once_with(bundle.absolute(), 'linux/'+arch, env)
+            else:
+                dnssec.assert_not_called()
+            if failure is not None or verdict_failure or dnssec_failure is not None:
+                self.assertNotIn('Reused verified complete native runtime', stdout.getvalue())
+            elif reused:
+                self.assertIn('Reused verified complete native runtime linux/'+arch, stdout.getvalue())
             self.assertTrue(calls, 'completed or reused bundle omitted actual native DNS execution')
             args, options = calls[0]
             self.assertEqual(args, ['go', 'test', '-json', '-race', '-tags=routervpn_stock_dns_native', './cmd/client',
@@ -1685,6 +1748,12 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
             for error in (subprocess.CalledProcessError(1, 'native-dns'), subprocess.TimeoutExpired('native-dns', 300)):
                 with self.subTest(reused=reused, failure=type(error).__name__):
                     self.exercise('amd64', reused, error)
+
+    def test_failed_or_timed_out_dnssec_gate_cannot_publish_reused_bundle(self):
+        for arch in ('amd64', 'arm64'):
+            for error in (ValueError('native DNSSEC refused'), subprocess.CalledProcessError(1, 'native-dnssec'), subprocess.TimeoutExpired('native-dnssec', 130)):
+                with self.subTest(arch=arch, failure=type(error).__name__):
+                    self.exercise(arch, True, dnssec_failure=error)
 
     def test_zero_case_and_incomplete_success_cannot_publish_new_or_reused_bundle(self):
         rows = self.verdict_rows()

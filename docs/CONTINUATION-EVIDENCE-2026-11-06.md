@@ -786,6 +786,14 @@ This increment was reviewed against the exact current source and its existing pa
 
 At `547a5d27`, AMD64 SOCKS job `127888715514` passed its complete existing phase, including home-LAN denial, selected DNS, restoration and negative controls. AMD64 node-controls job `127888715589` rejected all four required causal mutations, including ordinary UDP denial. Their earlier failures did not recur in these runs; the intervening exchange observer is diagnostic-only and is not evidence of a functional repair. At `98f08601`, Linux generated-command/TUN jobs `127888868351` (AMD64) and `127888868512` (ARM64) passed selected DNS, encrypted traffic, captured MTU/rollback and pre-ACK close. These exact-run results do not establish a complete native release or physical-device acceptance.
 
+### Native build-orchestration DNSSEC fixture boundaries
+
+The authoritative `7f94ebdb` source-gate job `127871326178` ran 58 native-toolchain tests with four errors: the two reused Linux bundle fixtures reached the real DNSSEC receipt reader without a validator receipt, and the two simulated Linux host fixtures reached the real producer with a deliberately minimal environment or the wrong physical architecture. The production environment copies the real environment; these errors were caused by incomplete orchestration fixtures, not evidence that production should weaken cache, architecture or receipt checks.
+
+The fixture now models the producer boundary with explicitly labeled dummy payload bytes, validates the exact namespace and command gate arguments/environment/deadlines, and requires their order after the Box suite and before the existing final compiler boundary. Earlier failures must not reach the producer. Reused-bundle tests still execute their actual builder control flow while modeling the DNSSEC verifier boundary; they require exactly one verifier call after successful stock DNS, no call after stock-DNS failure, and preservation of the original verifier exception. A new test covers refusal, subprocess failure and timeout on both Linux architectures and requires that none emits the successful reuse-publication message.
+
+Only `deploy/test_desktop_native_toolchain.py` changes for this correction. Actual DNSSEC production, architecture restrictions, native verifier, receipts, package gates and negative controls remain unchanged. The proposed file contains 59 test methods; this is source inventory, not an execution result. Local Python execution remains unavailable; the complete file must pass in CI before claiming the four errors resolved.
+
 ## Remaining work and acceptance boundaries
 
 1. Finish and execute the installed Linux resolver/helper/service composition.
