@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "abi": 1,
+  "unbound": {
+    "version": "1.26.2",
+    "url": "https://nlnetlabs.nl/downloads/unbound/unbound-1.26.2.tar.gz",
+    "archive_sha256": "d8ee7aa6bbb3ff1be7d9e57637d0d0ec2f18273a8efff1a0afe2c665858b96f7",
+    "licenses": {
+      "LICENSE": "8eb9a16cbfb8703090bbfa3a2028fd46bb351509a2f90dc1001e51fbe6fd45db"
+    }
+  },
+  "openssl": {
+    "repository": "https://github.com/openssl/openssl",
+    "commit": "45e844fa2a14ec92d146bd8f5778ac130b6625fb",
+    "archive_sha256": "f54250b21795bb01240f3f9b42c384868d04460e339e39275aaaf93487f2d903",
+    "licenses": {
+      "LICENSE.txt": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+    }
+  },
+  "source_date_epoch": 1791478284
+}
