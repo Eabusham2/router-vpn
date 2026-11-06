@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -235,42 +236,102 @@ func TestNativeMultihopHeldStopChild(t *testing.T) {
 }
 
 func TestNativeMultihopFailedConnectPreservesReplacementDuringCleanup(t *testing.T) {
-	f := newNativeMultihopFailureFixture(t, "on-connect")
-	f.hold = filepath.Join(t.TempDir(), "allow-stopped")
-	replacement := exec.Command("replacement-not-started")
-	replaced := make(chan error, 1)
-	f.proof = func(launch *desktopNodeLaunch) error {
-		go func() {
-			deadline := time.Now().Add(5 * time.Second)
-			for time.Now().Before(deadline) {
-				if _, err := os.Stat(filepath.Join(launch.directory, "stop.json")); err == nil {
-					tracker := sessionTrackerFor(f.a)
-					tracker.declareRequest("replacement-request", "replacement-base")
-					f.a.mu.Lock()
-					f.a.cmd = replacement
-					f.a.state = state{Mode: "replacement-mode", LogicalMode: "replacement-logical", RuntimeMode: "replacement-runtime", RouterID: "replacement-node", Phase: "replacement-phase", LastError: "replacement-error", Connected: true}
-					f.a.mu.Unlock()
-					replaced <- os.WriteFile(f.hold, []byte("release original child"), 0600)
-					return
-				}
-				time.Sleep(5 * time.Millisecond)
+	for _, observation := range []string{"requested", "observed"} {
+		t.Run(observation, func(t *testing.T) {
+			f := newNativeMultihopFailureFixture(t, "on-connect")
+			// Drive the real telemetry observation explicitly: its background loop
+			// legitimately projects logical mode/error and must not race the old
+			// cleanup writer whose ownership is being checked here.
+			tracker := &sessionTracker{a: f.a}
+			sessionTrackers.Store(f.a, tracker)
+			f.hold = filepath.Join(t.TempDir(), "allow-stopped")
+			replacement := exec.Command("replacement-not-started")
+			wantState := state{Mode: "replacement-mode", LogicalMode: "replacement-logical", RuntimeMode: "replacement-runtime", RouterID: "replacement-node", Phase: "replacement-phase", LastError: "replacement-error", Connected: true}
+			var wantHistory connectionSession
+			replaced := make(chan error, 1)
+			proofStarted := false
+			f.proof = func(launch *desktopNodeLaunch) error {
+				proofStarted = true
+				go func() {
+					deadline := time.Now().Add(5 * time.Second)
+					for time.Now().Before(deadline) {
+						if _, err := os.Stat(filepath.Join(launch.directory, "stop.json")); err == nil {
+							tracker.declareRequest("replacement-request", "replacement-base")
+							f.a.mu.Lock()
+							f.a.cmd, f.a.state = replacement, wantState
+							f.a.mu.Unlock()
+							if observation == "observed" {
+								tracker.observe(tracker.capture())
+							}
+							// Capture before acknowledging Stop: only the stale original
+							// completion can write between this snapshot and the assertion.
+							wantHistory = tracker.snapshot(0)
+							replaced <- os.WriteFile(f.hold, []byte("release original child"), 0600)
+							return
+						}
+						time.Sleep(5 * time.Millisecond)
+					}
+					replaced <- errors.New("original Stop request was not observed")
+				}()
+				return errors.New("modeled proof failure with concurrent owner replacement")
 			}
-			replaced <- errors.New("original Stop request was not observed")
-		}()
-		return errors.New("modeled proof failure with concurrent owner replacement")
+			response := f.connect()
+			if !proofStarted {
+				t.Fatal("original proof boundary was not reached", response.Code, response.Body.String())
+			}
+			select {
+			case err := <-replaced:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(6 * time.Second):
+				t.Fatal("replacement fixture did not join its bounded Stop observer", response.Code, response.Body.String())
+			}
+			if response.Code != http.StatusConflict {
+				t.Fatal("stale cleanup completion adopted replacement", response.Code, response.Body.String())
+			}
+			if observation == "requested" {
+				if wantHistory.RequestedMode != "replacement-request" || wantHistory.Error != nil {
+					t.Fatal("request-only replacement history was not captured", wantHistory)
+				}
+			} else if wantHistory.RequestedMode != "replacement-logical" || wantHistory.Error == nil || wantHistory.Error.Message != "replacement-error" {
+				t.Fatal("real replacement telemetry observation was not captured", wantHistory)
+			}
+			f.a.mu.Lock()
+			actual, command := f.a.state, f.a.cmd
+			f.a.mu.Unlock()
+			history := tracker.snapshot(0)
+			if command != replacement || !reflect.DeepEqual(actual, wantState) || !reflect.DeepEqual(history, wantHistory) {
+				t.Fatal("stale cleanup changed replacement state or history", actual, history, "captured history", wantHistory)
+			}
+		})
 	}
-	response := f.connect()
-	if err := <-replaced; err != nil {
-		t.Fatal(err)
+}
+
+func TestNativeMultihopReplacementHistoryObservation(t *testing.T) {
+	replacement := exec.Command("replacement-not-started")
+	original := state{Mode: "replacement-mode", LogicalMode: "replacement-logical", RuntimeMode: "replacement-runtime", RouterID: "replacement-node", Phase: "replacement-phase", LastError: "replacement-error", Connected: true}
+	a := &app{state: state{Mode: "off", Phase: "off"}}
+	tracker := &sessionTracker{a: a}
+	t.Cleanup(func() { homeExitProofs.Delete(a) })
+	tracker.declareRequest("replacement-request", "native")
+	requested := tracker.snapshot(0)
+	if requested.RequestedMode != "replacement-request" || requested.RequestedBase != "native" || requested.Error != nil || requested.Phase != "requested" {
+		t.Fatal("declared replacement history did not retain the original request", requested)
 	}
-	if response.Code != http.StatusConflict {
-		t.Fatal("stale cleanup completion adopted replacement", response.Code, response.Body.String())
+	a.cmd, a.state = replacement, original
+	// Capture alone is read-only. The real observation explains the legitimate
+	// CI transition that previously raced the stale-cleanup assertion.
+	captured := tracker.capture()
+	if !reflect.DeepEqual(tracker.snapshot(0), requested) {
+		t.Fatal("capturing replacement state unexpectedly adopted its history")
 	}
-	f.a.mu.Lock()
-	actual, command := f.a.state, f.a.cmd
-	f.a.mu.Unlock()
-	history := sessionTrackerFor(f.a).snapshot(0)
-	if command != replacement || actual.Mode != "replacement-mode" || actual.RouterID != "replacement-node" || actual.Phase != "replacement-phase" || actual.LastError != "replacement-error" || !actual.Connected || history.RequestedMode != "replacement-request" || history.Error != nil {
-		t.Fatal("stale cleanup changed replacement state or history", actual, history)
+	tracker.observe(captured)
+	observed := tracker.snapshot(0)
+	if observed.ID != requested.ID || observed.RequestedMode != original.LogicalMode || observed.RequestedBase != requested.RequestedBase || observed.ActualMode != original.RuntimeMode || observed.RouterID != original.RouterID || observed.Phase != original.Phase || !observed.Connected || observed.Error == nil || observed.Error.Message != original.LastError || observed.LastEventSeq != requested.LastEventSeq+1 {
+		t.Fatal("real replacement observation lost its exact logical identity or diagnostic", requested, observed)
+	}
+	if a.cmd != replacement || !reflect.DeepEqual(a.state, original) {
+		t.Fatal("telemetry observation changed replacement runtime ownership")
 	}
 }
