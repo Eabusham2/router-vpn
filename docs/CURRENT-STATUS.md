@@ -6,7 +6,7 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## November 6 product continuation through `9afd2a32`
+## November 6 product continuation through `35725083`
 
 The full original scope remains the historical 356-item requirement index,
 C1–C7, the later 32-item product/breakage request, the later map-first prompt,
@@ -19,17 +19,20 @@ records the source locators, published units, checks and remaining boundaries.
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
 commits ahead of the historical `745b3e41` release with no divergence. The
 published product units recorded here extend through
-[`9afd2a32b6086c9c96fd347a7742d63b374cdcea`](https://github.com/Eabusham2/router-vpn/commit/9afd2a32b6086c9c96fd347a7742d63b374cdcea).
+[`35725083aae6c921fd5be7eba3c4a5c1d8ac1a64`](https://github.com/Eabusham2/router-vpn/commit/35725083aae6c921fd5be7eba3c4a5c1d8ac1a64).
 An active separate workspace was preserved; work used isolated checkouts and
 live-main reconciliation. This is an evidence cutoff, not a frozen-head or
 completed-release claim.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 24 units.
+with separately attributed contributor evidence; it is not one of these 27 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
 This ledger does not claim independent execution of that unit.
+Concurrent [`090c09ec`](https://github.com/Eabusham2/router-vpn/commit/090c09ec54f875ad0bf0031a3b6da5d3a254dc4f)
+subsequently adds joined resolver-owner handling before private-domain fallback.
+It was preserved before `35725083`; its contributor evidence is separate.
 
 - **Apple imported-entry fixture:** `ae8ecead` corrects stale expectations after
   SOCKS5 support was implemented. Actual Swift/Go selection checks pass 2,080
@@ -133,13 +136,14 @@ This ledger does not claim independent execution of that unit.
   pass 374 plus a control; graph regression passes 3,598. Both actual Android
   producers pass 15,121 checks and five controls, with all 205 current captured
   inputs, hashes and compiled graphs byte-identical. Device/VpnService and the
-  separate pending 235-graph feature retain their own acceptance gates.
+  later 235-graph feature retain separately recorded acceptance gates.
 - **Pinned UDP NAT ownership:** `775ac68e` initializes connections before cache
   publication and conditionally retires only the original pointer at all three
   cleanup sites. The preparation suite passes 24 checks with deterministic
   publication and Ex/legacy retirement witnesses and three causal mutations.
   The formerly racy wrapped-AWG case passes eight repetitions under race.
-  This closes that bounded cause; the full updated SOCKS native gate is pending.
+  This closes that bounded cause; the reconciled full SOCKS native gate now passes
+  in the published `a08d7d6f` unit below.
 
 - **Android session audit:** `3ac3542d` replaces the stale profile-only warning
   expectation with both captured identities, the guard call and matching warning.
@@ -164,15 +168,35 @@ This ledger does not claim independent execution of that unit.
   mutation guard and is reported as results not saved. Device/native DNS proof
   remains separate from these home-node query measurements.
 
-Concurrent Linux root-DS unit `7e2a55fa` and narrower SOCKS paired-final layer
-unit `ad4da5e7` were preserved with their separate contributor evidence. The
-latter adds four SS/Hysteria final-layer captures. Concurrent `dbb0a4ca` adds six
-WG/AWG packet-final cases; together these establish the published 205-capture
-baseline with separately attributed evidence. The broader 45-combination SOCKS
-entry/final layer unit is still unpublished at this cutoff. Concurrent `ea460eae` subsequently adds ten entry-only layer
-captures, taking the published host baseline to 215. Its contributor evidence
-and concurrent Windows Router Server policy `ddbf7d3c` remain separately
-attributed. The pending 235-capture extension must preserve that updated baseline.
+- **Complete independent SOCKS layers:** published `a08d7d6f` retains all 215
+  prior graph names and adds twenty both-enabled pairs, completing 235 graphs
+  with all 45 SOCKS combinations to paired SS/Hysteria2/WG/AWG Fast/Strong.
+  All 354 prior core and 155 entry-only native verdicts remain. Final gates pass
+  397 core and 651 native encrypted-peer verdicts, Android 17,565 checks/five
+  causal controls/472 parser verdicts, and Apple 5,466 checks/236 parser verdicts
+  over its 235 actual exports. The ledger records exact candidate/publication
+  identities, the fixture-only Apple amendment and unchanged source checks.
+  This is Local source/host/native-peer coverage, not physical-device acceptance.
+- **Windows duplicate ownership and diagnostics:** published `80fefcc6` repairs
+  partial-failure duplicate cleanup and adds strict creation/transfer protocol
+  diagnostics. AMD64/ARM64 actual identity suite binaries crosscompile within
+  90 seconds each; six shared broker/actual Unix ownership race tests pass in
+  1.163 seconds and fifteen Python runner tests pass. The historical UDP4/TCP
+  protocol mismatch is not yet proved repaired; new four-family native cases
+  and two causal controls still require Windows CI execution.
+
+- **Android comparison source closure:** published `35725083` compiles the real
+  Home DNS validator and its shipping Start Layer selection dependency in the
+  saved-profile comparison fixture. The original missing-symbol failure is
+  reproduced; all 438 lifecycle/store checks and twenty existing causal controls
+  pass without changing production code or validation rules.
+
+Concurrent `ad4da5e7` contributed four final-only SOCKS proxy cases, `dbb0a4ca`
+six final-only packet cases, and `ea460eae` ten entry-only cases. Their exact
+names, original sources and negative inventories are retained in `a08d7d6f`;
+only the remaining twenty both-enabled combinations are new in that unit.
+Concurrent Linux root-DS `7e2a55fa` and Windows Router Server policy `ddbf7d3c`
+remain preserved with separately attributed contributor evidence.
 
 Several specific source gaps in the historical `7f801312` checkpoint below are
 superseded. `98d6af64` and `95ffbb72` implement Local mobile SOCKS5 entries to
@@ -183,6 +207,22 @@ is separate from macOS measurement checks. `c626af1f`, `90a7d70f` and `693cc705`
 advance captured resolved DNSSEC validation through sealed children and original
 alias-proof ownership. These changes do not establish universal protocol/graph
 coverage, installed native acceptance or physical-device readiness.
+
+The later **attempt 2** of [macOS run 42167793365](https://github.com/Eabusham2/router-vpn/actions/runs/42167793365),
+Intel job 127740178604, completed with failure on original `a5000cc3`.
+The socket-retirement baseline passed in 257.25 seconds and the complete
+IPv4/IPv6 SOCKS association baseline passed in 40.92 seconds. Kernel-identity
+and permit-sequence mutations were rejected. The permit-expiry mutation then
+failed during selected-private UDP association setup before its intended
+assertion. A direct test cleanup Close blocked ahead of the existing bounded
+broker/policy cleanup; the run reached its unchanged 730-second outer timeout.
+At timeout the original test process was a zombie and exact-binary descendants
+were in another process group within its original session; killing the original
+group returned PermissionError. This observation does not prove those children
+remained after the root fixture's final cleanup. The initial setup error was
+lost from the bounded output tail, so its cause remains unproved. A narrow
+fixture cleanup/diagnostic repair is under review; no further retry, deadline
+increase or successful macOS release is claimed.
 
 At **2026-11-06 06:18:53 UTC**, an independent read found live `main` at
 `c6a33ff145168ed1aadf2008b66191611fcedd7d`. The exact published `9afd2a32`
@@ -199,8 +239,8 @@ The single targeted macOS Intel retry is still running at that read: run
 42167793365 attempt 2, new job 127740178604, at original `a5000cc3`. Its original
 failure and earlier unchanged-source pass remain below. No retry success or
 current-SHA release evidence is claimed. The Windows protocol-readback/partial
-keeper repair is independently reviewed but remains unpublished in this cutoff;
-its actual AMD64/ARM64 kernel tests remain required. The historical wrong-protocol
+keeper repair was unpublished at that observation and is now published as
+`80fefcc6`; its actual AMD64/ARM64 kernel tests remain required. The historical wrong-protocol
 failure is not declared resolved by source diagnostics alone.
 
 After publication, the root publisher verified live `main` at `775ac68e` and
@@ -297,10 +337,13 @@ preserving strict source comparisons and all changed-credential negatives.
 No production persistence corruption is inferred; the newer source still needs
 its own CI evidence, which the older `5b32bcf5` snapshot cannot supply.
 Apple and Android Home DNS substitution defects have their separately tested
-published repairs. The broader independent SOCKS entry/final Start Layer unit
-remains unpublished. Its full mandatory native gate found a real UDP NAT race;
-`775ac68e` repairs that cause with bounded evidence, and the complete updated gate
-remains required. Unpublished validation is recorded separately in the ledger.
+published repairs. The independent SOCKS layer source unit is now published
+as `a08d7d6f` after the full mandatory native and host gates passed. Its earlier
+UDP NAT failure and the separate `775ac68e` repair remain in the evidence ledger.
+HTTP/HTTPS CONNECT imported entries, other paired final families, and
+Server/Compare in this direction remain concrete implementation requirements,
+not merely missing live-access evidence. See the
+[open graph boundaries](MOBILE-IMPORTED-ROUTER-PATH.md#open-graph-requirements).
 All remaining original Methods/recovery/platform/graph obligations stay open
 until individually satisfied. One current SHA still needs its complete native
 packages, nine images, compose and publication; matching-host native integration,

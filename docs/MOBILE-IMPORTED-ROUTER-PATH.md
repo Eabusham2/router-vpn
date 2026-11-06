@@ -67,6 +67,36 @@ verify. Existing supported directions retain their own admission and proof
 rules. This document does not mark the complete external-node requirement or
 the complete product delivered.
 
+## Open graph requirements
+
+At published `a08d7d6f`, the original Router/imported choice for each hop is
+still broader than this implemented Local matrix. These are current source
+limitations, not merely missing credentials, live access or physical tests.
+
+| Direction or capability | Current source boundary | Work still required |
+|---|---|---|
+| Imported HTTP/HTTPS CONNECT → paired Shadowsocks | `NewImportedEntry` excludes both protocols; Android `AndroidImportedRouterPath` and Apple `IOSImportedEntryMultihop` also reject them. Standalone `ExternalPolicy` already validates these imports. | Compose the captured HTTP outbound under the existing owned controller, with exact CONNECT target/authentication and HTTPS trust. Define and enforce TCP-only application capability and final-owned DNS before admission; do not only extend an allowlist. |
+| Imported HTTP/HTTPS CONNECT → paired Hysteria2/WG/AWG | The same admission excludes these paths. HTTP CONNECT is TCP-only; these final transports require datagrams. Existing external composition correctly rejects a TCP-only predecessor for a UDP-required exit. | An implemented compatible transport design is required. No UDP association, UDP-over-TCP capability or supported final may be invented from successful TCP CONNECT. |
+| Other imported entry protocols and paired final families | The imported constructor and both mobile host adapters admit only the five entry labels and five paired final modes in this document. The ordinary external protocol catalogue additionally supports HTTP/HTTPS CONNECT and OpenVPN; Trojan/VLESS are not in that catalogue. | Implement and validate the particular protocol/source capture, encrypted graph, credential/reference ownership, restoration and native path before offering it. New protocols need their own import/admission work; existing standalone support is not proof of this direction. |
+| Imported entry → paired final with Server or Compare | The constructor requires captured Local execution; both host adapters enforce Local and restoration deliberately does not invent a Compare winner. | Design actual execution and proof authority, measurement/comparison and restore semantics for this direction. An ordinary imported entry has no paired Router API/token; a public-address proof cannot grant server-side authority. |
+
+CONNECT→SS is a bounded design option; it is not an implemented capability. Its final-selected Home/custom DNS must retain the
+original transport, address, port, TLS name and HTTP path. UDP or DoH3 selection
+cannot silently become TCP/DoH or a public resolver just to make the graph work.
+The existing `externalUDP`, `externalExitRequiresUDP` and selected-DNS validator
+already express those transport limits for ordinary external composition; the
+imported-entry compiler must carry them through its paired-final ownership and
+host capability presentation if this direction is implemented.
+
+Required executable evidence would include actual CONNECT→encrypted-SS traffic
+and final-owned TCP-capable DNS, exact auth/target/HTTPS trust rejection,
+independent layer provisioning, public-entry/private-final proof, no UDP escape,
+unsupported-final rejection, cancellation and joined restoration. The existing
+`node_external_ss_connect_test.go.tmpl` exercises **SS→CONNECT**, the reverse
+direction, and cannot certify that work. Actual Android/Swift capture and stale
+source controls, pinned native parsing, and physical acceptance remain separate
+stages. No follow-up graph implementation is included in `a08d7d6f`.
+
 ## Selection and saved state
 
 Android's multihop editor lists eligible imported entries alongside Router

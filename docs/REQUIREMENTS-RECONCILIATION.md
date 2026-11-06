@@ -18,6 +18,27 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
+## November 6 imported-layer increment through `a08d7d6f`
+
+Published [`a08d7d6f`](https://github.com/Eabusham2/router-vpn/commit/a08d7d6f387c3b55b3139de54ef567bd67e841f9)
+preserves all 215 previously published mobile imported-entry graph names and
+adds twenty both-enabled SOCKS entry/final layer combinations. The 235-case
+inventory now includes all 45 SOCKS combinations to paired SS/Hysteria2/WG/AWG
+Fast/Strong finals in Local execution. All 354 prior core and 155 entry-only
+native verdicts remain. Final evidence comprises 397 core and 651 native peer
+verdicts, Android 17,565 checks/five causal controls/472 native parser verdicts,
+and Apple 5,466 checks/236 native parser verdicts over its 235 actual exports.
+The [product evidence ledger](CONTINUATION-EVIDENCE-2026-11-06-PRODUCT.md#published-independent-socks-layers--reconciled-final-evidence)
+records exact source identities and execution boundaries.
+
+This closes the identified independent SOCKS layer source gap, not the complete
+external-node requirement. HTTP/HTTPS CONNECT imported entries, other paired
+final families, and Server/Compare for this direction remain implementation
+work, alongside separate native/device/release acceptance. Their exact current
+admission and TCP/UDP/DNS constraints are recorded under
+[open graph requirements](MOBILE-IMPORTED-ROUTER-PATH.md#open-graph-requirements).
+The dated 190-case checkpoint below remains historical evidence.
+
 ## November 6 reconciliation through `7f801312`
 
 Original user passages were recovered from `mm.md`, the audit/addendum, the later

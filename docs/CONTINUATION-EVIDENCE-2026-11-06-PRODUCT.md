@@ -6,16 +6,19 @@ This ledger supplements [the earlier November 6 ledger](CONTINUATION-EVIDENCE-20
 and [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md). It does not replace
 the original requirements or cancel an unfinished requirement. The recorded
 published product work below ends at
-[`9afd2a32b6086c9c96fd347a7742d63b374cdcea`](https://github.com/Eabusham2/router-vpn/commit/9afd2a32b6086c9c96fd347a7742d63b374cdcea).
+[`35725083aae6c921fd5be7eba3c4a5c1d8ac1a64`](https://github.com/Eabusham2/router-vpn/commit/35725083aae6c921fd5be7eba3c4a5c1d8ac1a64).
 This is a source/evidence cutoff, not a claim that the branch stops moving or
 that this revision has completed its release gates.
 Concurrent [`9ce0c64c`](https://github.com/Eabusham2/router-vpn/commit/9ce0c64c52619755aa87e9616c42bd17e059794e)
 subsequently updates three Linux resolver compatibility files and is preserved
-with separately attributed contributor evidence; it is not one of these 24 units.
+with separately attributed contributor evidence; it is not one of these 27 units.
 The publisher also preserved concurrent
 [`c6a33ff1`](https://github.com/Eabusham2/router-vpn/commit/c6a33ff145168ed1aadf2008b66191611fcedd7d),
 eleven Linux private-domain DNSSEC files, with separate contributor evidence.
 This ledger does not claim independent execution of that unit.
+Concurrent [`090c09ec`](https://github.com/Eabusham2/router-vpn/commit/090c09ec54f875ad0bf0031a3b6da5d3a254dc4f)
+subsequently adds joined resolver-owner handling before private-domain fallback.
+It was preserved before `35725083`; its contributor evidence is separate.
 
 The initial live reconciliation found
 [`8f05dbe658fb6589e606e9995b613a3136a3d70e`](https://github.com/Eabusham2/router-vpn/commit/8f05dbe658fb6589e606e9995b613a3136a3d70e),
@@ -104,35 +107,74 @@ Counts are executable checks, not counts of completed user requirements.
 | [`3341e6c2`](https://github.com/Eabusham2/router-vpn/commit/3341e6c28434aacef08ddcbb8dfb1ab8aacc7333) | The captured-directory Tor fixture waits for its exact Close request and completed publication before cancelling. A real publication-lock schedule retains the original claim when a 100 ms Close expires before request issue, rejects replacement and retries the same request identity/generation. The pinned-directory and replacement-sentinel checks remain. | Four focused lifecycle race tests pass in 4.019 and 4.026 seconds. A temporary replacement-path cleanup mutation makes the real test fail in 1.222 seconds with a directory-ownership/publication diagnostic. The mutation driver expected a different failure string and failed its extra diagnostic assertion; the underlying ownership negative did reject the mutation. Production was restored before the final passing run. | Production cleanup, deadline and cancellation code are unchanged. This is private IPC fixture evidence, not physical Tor traffic acceptance. |
 | [`06615f64`](https://github.com/Eabusham2/router-vpn/commit/06615f64672cc8165357b42ea7f275c071edeee0) | Native SIP003 fixture Home cases now use the captured node-owned IPv4/IPv6 addresses. Other DNS modes retain public/hostname inputs; four public/foreign Home cases must fail in the Home-policy error domain. The default valid Home input prevents unrelated DNS rejection from masking protocol negatives. | Actual Swift SIP003 selection/DNS/credential checks pass 191 in a serial run. Independent review verifies the exact private addresses against the original fixture and inclusion of the shipping Home helper. Prior unchanged 90-second compiler timeouts occurred under concurrent compilation and remain unsuccessful attempts. | Production DNS validation is unchanged. Native Apple SDK, PacketTunnel and physical path acceptance remain separate. |
 | [`1969d8c3`](https://github.com/Eabusham2/router-vpn/commit/1969d8c309ee67b69c0df50f6ce991e04e4dc556) | Windows Advanced Performance now retains one panel and its exact request owner through Cancel, title-bar close and Alt-F4. Closed or stale callbacks cannot adopt results; old panels cannot cancel another global operation. Hop tests capture connected active-graph identities before measurement instead of mutable selection drafts. | The actual complete UI transformation and existing async owner pass 32 callback checks with transport/WPF doubles and four causal mutations. Existing help composition passes 19 checks, routed candidates 197 and async ownership fourteen groups. Source/package readback confirms the new fixture ships in installed and Portable packages. | Local execution used PowerShell 7.6.9. Native Windows PowerShell 5.1 and WPF are required by the added CI/package gates. Backend graph validation remains separate; the status/read-to-request sequence is not claimed atomic. Physical throughput and UI acceptance remain unproved. |
-| [`f4d222cb`](https://github.com/Eabusham2/router-vpn/commit/f4d222cb7bf8c730b36986e67e8e834af63fbb4c) | Android Home DNS preserves the selected current-node private IPv4/IPv6 address, all five transports, exact port, TLS name and HTTP path through Save/quick actions, native preparation and captured-profile restoration. A DNS sheet cannot adopt settings after its node/profile identity changes. | The original IPv6 HTTPS/5443 to IPv4 UDP/53 substitution is reproduced and rejected by two causal controls. Home checks pass 517; real-store checks pass 374 across eleven cases plus a node-validation control; existing graph checks pass 3,598. Both actual Android producers pass 15,121 checks and five controls; all 205 current captured inputs, source hashes and compiled graphs remain byte-identical using the same generated certificate inputs, without normalization. | Portable Java/Go execution does not establish actual VpnService, device selected-DNS proof or physical routing. This unit's exact 205-graph comparison does not establish the separate pending 235-graph feature. |
-| [`775ac68e`](https://github.com/Eabusham2/router-vpn/commit/775ac68e333c3c74021b702733e1381233bcc3e7) | Checksum-owned pinned sing preparation initializes a UDP NAT connection before publishing it and retires a cache entry only when its pointer still matches the original owner. All three retirement sites use the cache's locked conditional deletion, preserving a replacement flow. | The full preparation suite passes 24 tests in 11.133 seconds. Exact constructor-publication and Ex/legacy post-cleanup witnesses reject three independent causal mutations without scheduling sleeps. The actual formerly racy wrapped-AWG relay-route case passes eight repetitions under race in 7.024 seconds. Independent source review verifies all six pinned initializer callbacks perform only context/writer construction. | This is the bounded fix for the race found by the mandatory SOCKS gate; the entire updated native gate still must pass. Whole-group source validation precedes sequential writes and interrupted partial states fail closed; the upgrade is not a filesystem-atomic multi-file transaction. Physical OS routing remains separate. |
+| [`f4d222cb`](https://github.com/Eabusham2/router-vpn/commit/f4d222cb7bf8c730b36986e67e8e834af63fbb4c) | Android Home DNS preserves the selected current-node private IPv4/IPv6 address, all five transports, exact port, TLS name and HTTP path through Save/quick actions, native preparation and captured-profile restoration. A DNS sheet cannot adopt settings after its node/profile identity changes. | The original IPv6 HTTPS/5443 to IPv4 UDP/53 substitution is reproduced and rejected by two causal controls. Home checks pass 517; real-store checks pass 374 across eleven cases plus a node-validation control; existing graph checks pass 3,598. Both actual Android producers pass 15,121 checks and five controls; all 205 current captured inputs, source hashes and compiled graphs remain byte-identical using the same generated certificate inputs, without normalization. | Portable Java/Go execution does not establish actual VpnService, device selected-DNS proof or physical routing. This unit's exact 205-graph comparison is separate from the later 235-graph gate recorded below. |
+| [`775ac68e`](https://github.com/Eabusham2/router-vpn/commit/775ac68e333c3c74021b702733e1381233bcc3e7) | Checksum-owned pinned sing preparation initializes a UDP NAT connection before publishing it and retires a cache entry only when its pointer still matches the original owner. All three retirement sites use the cache's locked conditional deletion, preserving a replacement flow. | The full preparation suite passes 24 tests in 11.133 seconds. Exact constructor-publication and Ex/legacy post-cleanup witnesses reject three independent causal mutations without scheduling sleeps. The actual formerly racy wrapped-AWG relay-route case passes eight repetitions under race in 7.024 seconds. Independent source review verifies all six pinned initializer callbacks perform only context/writer construction. | This is the bounded fix for the race found by the mandatory SOCKS gate; the subsequently reconciled full native gate passes as recorded under `a08d7d6f` below. Whole-group source validation precedes sequential writes and interrupted partial states fail closed; the upgrade is not a filesystem-atomic multi-file transaction. Physical OS routing remains separate. |
 | [`3ac3542d`](https://github.com/Eabusham2/router-vpn/commit/3ac3542d3f492deaec271b11d14e736ac90cdc32) | Android session audit now requires both captured node and profile identities, the shipping guard call and its updated warning. It replaces the stale profile-only warning expectation exposed by the Home DNS fix. | The original audit failure is reproduced; focused and full recovered native UI gates pass with the required Swift toolchain on PATH. The first full attempt lacked local `swiftc` and required no additional source correction. | This is a source-audit repair. It does not establish device UI behavior, VpnService DNS proof or a successful exact-SHA native release. |
 | [`880a865e`](https://github.com/Eabusham2/router-vpn/commit/880a865e9270cd91d26970cb0ff08285e90e5083) | Apple Router DNS editor Save now requires the exact profile captured when the editor loaded, extending the existing external-profile guard to Router profiles. Loading an unavailable selection clears the prior captured profile. | Actual Swift settings checks pass 694 with four causal controls; measurement checks pass 324 with four controls. A stale fixture's `@MainActor` spacing was corrected so the shipping declaration is extracted correctly. | This binds editor adoption to its captured profile; it does not establish physical device DNS proof, native UI accessibility or installed PacketTunnel behavior. |
 | [`fde9861a`](https://github.com/Eabusham2/router-vpn/commit/fde9861ac524b01e813fc328cb4216e4d8598578) | The Apple Xray fixture expects the Home transport and port it actually requests: TCP on 5353. It no longer expects the obsolete silent UDP/53 substitution. | The actual Swift/native graph fixture passes 87 graphs and 1,167 checks. Selected address, resolver detour and the other DNS transport assertions remain. | Two fixture expectations change; production DNS code is unchanged. Native Apple SDK, physical traffic and release acceptance remain separate. |
 | [`9afd2a32`](https://github.com/Eabusham2/router-vpn/commit/9afd2a32b6086c9c96fd347a7742d63b374cdcea) | Android daily Router DNS Retest owns its captured request/socket through cancel and dialog close. Result adoption binds the exact node/profile/source bytes, publication generation and latest operation identity across panels. Shared store locking prevents cross-instance selection between validation and publication; change-away/back, byte-identical replacement and rollback invalidate old captures. | Exact original shipping callbacks reproduce a first-node result being written into another node sharing the same profile ID. The repaired actual Java callback, real loopback HTTP and store harness passes 80 checks plus five causal controls: atomic publication, generation, latest operation, dismiss and cancel. A final small-token amendment passes the focused seven-check replacement fixture and its causal control. Session-mutation/numeric and node-store transaction contracts pass. | Android widgets, Libbox admission and private-file platform calls are explicit doubles. The existing VPN mutation guard still refuses unsafe persistence; completed queries then report results not saved. Global latest identity retains no completed private Job. Home-node query RTT remains separate from native selected-policy DNS proof; no device or current release pass is inferred. |
+| [`80fefcc6`](https://github.com/Eabusham2/router-vpn/commit/80fefcc687cf6f8382ec0333e3f853b481688a2f) | Windows socket duplication retains and cleans an original duplicate on partial failure and adds strict creation/transfer protocol diagnostics. The new native cases cover four socket families and preserve two causal controls. | Actual identity test binaries crosscompile for AMD64 and ARM64 within the unchanged 90-second bound each. Six shared broker/actual Unix ownership race tests pass in 1.163 seconds; fifteen Python runner tests pass. | The historical UDP4 source/TCP `WSAPROTOCOL_INFO` mismatch is **not yet proved repaired**. The four-family native cases and two controls still require actual Windows CI; crosscompilation and portable ownership tests do not establish that runtime outcome. |
+| [`35725083`](https://github.com/Eabusham2/router-vpn/commit/35725083aae6c921fd5be7eba3c4a5c1d8ac1a64) | Android comparison fixture compiles the complete shipping Home DNS validator and verbatim pure Start Layer selection dependency used by the actual saved-profile store. | The original harness reproduces both missing-validator javac errors. The repaired fixture passes 438 shipping lifecycle/store/usage checks and rejects all twenty existing causal controls within unchanged bounds. | This is a source-closure fixture repair, with no product or validation relaxation. Actual Android runtime, native SDK, device and current release acceptance remain separate. |
 
-## Unpublished integration — excluded from the source cutoff
+## Published independent SOCKS layers — reconciled final evidence
 
-The following row deliberately has no commit SHA. It is not part of the twenty-four
-published units above and must not be treated as a shipped capability extension.
+This twenty-fifth unit replaces the earlier unpublished integration row. The
+initial full native attempt found a real UDP NAT publication/replacement race;
+that failed attempt remains evidence of the cause repaired separately by
+`775ac68e`. The successful final gates below ran after that repair and after
+reconciling the subsequently published final-only and entry-only layer cases.
 
-| Commit SHA | Pending unit | Evidence available so far | Required before publication |
+| Published commit | Change and requirement connection | Observed verification | Remaining boundary |
 |---|---|---|---|
-| | Broader Local SOCKS entry/final independent Start Layers across SS, Hysteria2, WG and AWG Fast/Strong, with original authenticated TCP control owning its dynamic encrypted UDP relay. | Individual author runs pass all 45 native success combinations under race in 3.970 seconds and paired/packet negative inventories in 15.342/69.9 seconds. Independent lease scenarios pass under race in 1.124 seconds. The Apple 235-capture host run passes at its checked source digest. | The subsequent mandatory full native gate found a real pinned sing UDP NAT publication/replacement-owner race in the wrapped-AWG relay-route negative. Published `775ac68e` repairs that bounded cause, but the reconciled final 235-graph producers, exact source projection and complete updated native gate must pass before feature publication. No full-gate pass or physical OS acceptance is inferred from earlier individual runs. |
+| [`a08d7d6f`](https://github.com/Eabusham2/router-vpn/commit/a08d7d6f387c3b55b3139de54ef567bd67e841f9) | Local imported SOCKS5 entries retain independently provisioned Off/AES/AES+XOR layers to paired SS, Hysteria2, WG and AWG Fast/Strong finals. All 215 published graph names remain; twenty both-enabled combinations complete 235 graphs, including all 45 SOCKS combinations. The original authenticated control owns its encrypted UDP relay through cancellation and worker retirement. | The exact mandatory gate passes 397 core verdicts and 651 native encrypted-peer verdicts under race detection. Android produces 235 graphs with 17,565 checks and five causal controls; shared plus Android captures pass 472 native parser verdicts. Apple produces 235 actual Swift graphs with 5,466 checks and 236 pinned native parser verdicts. Exact source checks pass before/after the gates. | These source/host/loopback-native results do not establish physical VpnService/PacketTunnel routing, current-SHA packages, signing/distribution or the broader imported-protocol/final/Server/Compare requirements. |
 
-The Android Home DNS substitution previously listed here is now repaired in
-published `f4d222cb`, with its exact scope and device boundary in the table above.
-The broader SOCKS feature deliberately remains without a published commit SHA.
-The prior-source host/native gates and bounded NAT repair do not certify the
-latest merge. Concurrent
-[`ea460eae`](https://github.com/Eabusham2/router-vpn/commit/ea460eae005fb8ae7225c3dc17aa00dd991f2135)
-adds ten provisioned entry-only captures to the earlier 205 baseline, producing
-the current published 215-capture inventory. The merged 235-capture feature
-retains those cases and must finish its current host and native gates before
-publication. Concurrent
-[`ddbf7d3c`](https://github.com/Eabusham2/router-vpn/commit/ddbf7d3c80e7da97ec8900555b1f94fbbad882a1)
-Windows Router Server physical-policy work is preserved with separate contributor
-evidence; it is not one of the 24 units in this ledger.
+All **354** prior core verdict IDs remain within the 397-case inventory. The
+newly published entry-only native family retains all **155** verdicts (54 proxy
+children, 99 packet children and two parent tests), including authentication,
+private-target, full-MTU packet and original-association retirement checks. The
+prior final-only packet family retains all **94** verdicts and its actual padded
+DNS/packet-capacity assertions. The ten entry-only `--entry-{layer}` filenames
+and ten final-only filenames retain their upstream identities. Entry-only
+captures retain their original credentials; both-enabled fixtures use distinct
+entry/final layer keys.
+
+| Exact final native group | Named verdicts, including parents | Package elapsed |
+|---|---:|---:|
+| Shared imported-entry compiler (`TestImportedEntry*`) | 397 | 8.519 s |
+| SOCKS proxy paths, including retained final-only group | 152 | 18.358 s |
+| SOCKS packet paths | 162 | 71.241 s |
+| Retained imported paths and original relay/initial-packet retirement | 88 | 29.574 s |
+| Preserved packet-final-layer family | 94 | 47.347 s |
+| Preserved entry-layer proxy and packet families | 155 | 54.966 s |
+
+The runner retains the original 60-second core and 90-second native process
+limits and rejects missing, skipped, duplicate or foreign verdicts. Counts are
+executable checks, not completed requirements. Test commands and exact sets are
+in `deploy/test_mobile_imported_entry.py`; mutation coverage of that runner
+passes eleven tests. Apple exact-manifest contracts pass four tests.
+
+### Source and publication identities
+
+- Native/core and Android completed on isolated `46efb57d5d5cb7e22aa507d5ec1733bdad272b03`.
+- Final candidate `7778ec2af67b9cba8ff7c600f0019f6d81eb6700`, tree `fbcd8aa70efdcb34158c018dfe9b2aa3f2ea17a5`, differs only in one Apple fixture assertion: exact upstream entry-only credentials are accepted when the final layer is Off; independently enabled layers still require distinct fixture keys. Production, graph generation, native peers, compiler and Android inputs did not change. The final Apple gate passed on this candidate.
+- Final candidate mobile source digest: `f68c7cca676d5d1a865ee9cbc78eb47c36895de53927db8db1069113acf5c4bf`.
+- Apple gate source digest: `2135628f113ee5a13bf7cf2a41bbcfcb108eed45c393ac6a0525d4019e3fd4d5`, unchanged during the successful gate.
+- The projected native module is pinned at `1ac1a339cb1223e9c70eae14c44411c75033c02d`; the source checker compares exact compiler, bridge and peer templates. This is an isolated owned projection, not a newly packaged device release.
+- Publication `a08d7d6f387c3b55b3139de54ef567bd67e841f9`, tree `bb360c4d1bed8a09ed6ee4dd5aee6625c205c605`, parent `1066bfaf`, includes the feature and updated guide. The publisher verified its exact tree and remote readback. Candidate digests above identify the tested source closure, not a claim that every unrelated file in the published tree was retested.
+
+The final local evidence files are `socks-entry-reconciled-native.log`,
+`socks-entry-reconciled-records/native-manifest.json`,
+`socks-entry-reconciled-android.log`,
+`socks-entry-reconciled-records/android-manifest.json`, and
+`socks-entry-reconciled-apple-final.log`. These identify the retained local
+artifacts; they are not uploaded CI artifacts or evidence of release delivery.
+
+Concurrent `ad4da5e7` contributed four final-only proxy cases, `dbb0a4ca` six
+final-only packet cases, and `ea460eae` ten entry-only cases. Their source and
+negative inventories are retained; this continuation adds the remaining twenty
+both-enabled combinations rather than claiming those earlier cases as new.
+Concurrent `ddbf7d3c` Windows Router Server physical-policy work and subsequent
+disjoint source updates are preserved with their separately attributed evidence.
 
 ## Newer source supersedes specific earlier open descriptions
 
@@ -154,6 +196,22 @@ validation of that contributor unit.
 
 ## Current CI and publication evidence
 
+The later **attempt 2** of [macOS run 42167793365](https://github.com/Eabusham2/router-vpn/actions/runs/42167793365),
+Intel job 127740178604, completed with failure on original `a5000cc3`.
+The socket-retirement baseline passed in 257.25 seconds and the complete
+IPv4/IPv6 SOCKS association baseline passed in 40.92 seconds. Kernel-identity
+and permit-sequence mutations were rejected. The permit-expiry mutation then
+failed during selected-private UDP association setup before its intended
+assertion. A direct test cleanup Close blocked ahead of the existing bounded
+broker/policy cleanup; the run reached its unchanged 730-second outer timeout.
+At timeout the original test process was a zombie and exact-binary descendants
+were in another process group within its original session; killing the original
+group returned PermissionError. This observation does not prove those children
+remained after the root fixture's final cleanup. The initial setup error was
+lost from the bounded output tail, so its cause remains unproved. A narrow
+fixture cleanup/diagnostic repair is under review; no further retry, deadline
+increase or successful macOS release is claimed.
+
 At **2026-11-06 06:18:53 UTC**, an independent read found live `main` at
 `c6a33ff145168ed1aadf2008b66191611fcedd7d`. The exact published `9afd2a32`
 query returned 28 attempt-1 runs: seven successful, fourteen cancelled, six
@@ -169,8 +227,9 @@ The single targeted macOS Intel retry is still running at that read: run
 42167793365 attempt 2, new job 127740178604, at original `a5000cc3`. Its original
 failure and earlier unchanged-source pass remain below. No retry success or
 current-SHA release evidence is claimed. The Windows protocol-readback/partial
-keeper repair is independently reviewed but remains unpublished in this cutoff;
-its actual AMD64/ARM64 kernel tests remain required. The historical wrong-protocol
+keeper repair was unpublished at that observation and is now published as
+`80fefcc6` with the bounded evidence above; its actual AMD64/ARM64 kernel tests
+remain required. The historical wrong-protocol
 failure is not declared resolved by source diagnostics alone.
 
 After publication, the root publisher verified live `main` at `775ac68e` and
@@ -307,12 +366,12 @@ Linux root-DS decision work was preserved before `a5000cc3`. Concurrent
 [`ad4da5e7`](https://github.com/Eabusham2/router-vpn/commit/ad4da5e75ec73ce9bea2bf9fe3ead5f7cd771750)
 adds four provisioned SS/Hysteria final-layer captures behind an Off-layer SOCKS
 entry and was preserved before `3341e6c2`; its contributor evidence is separate
-from the broader unpublished 45-combination unit. Concurrent
+from the later complete 45-combination unit recorded above. Concurrent
 [`dbb0a4ca`](https://github.com/Eabusham2/router-vpn/commit/dbb0a4ca2bde5ad4a7951a01f5b849f558d32229)
 adds six provisioned WG/AWG packet-final layer cases. Together with `ad4da5e7`'s
 four SS/Hysteria proxy-final cases, these form the published 205-capture baseline
 used by the exact-input Android comparison; their contributor evidence remains
-separate from the unpublished 235-capture extension. The earlier CI snapshots cannot
+separate from the later published 235-capture extension. The earlier CI snapshots cannot
 certify `06615f64`. Earlier `e0b769ff`
 and `8fdc2ef7` authoritative release and iOS compile runs were cancelled as the
 branch advanced; they cannot establish current native acceptance.
@@ -379,16 +438,15 @@ The complete original scope remains open. Apple captured per-hop profile
 restoration, the persisted Start Layer fixture correction and macOS Performance
 cancellation are now published with the bounded evidence in their rows. Other
 original native UI, settings, Methods, recovery and graph requirements retain
-their individual closure obligations; these twenty-four units are not a replacement scope.
+their individual closure obligations; these twenty-seven units are not a replacement scope.
 
 The concrete Apple Home DNS substitution gap reported at `8fdc2ef7` is repaired
 in `5b32bcf5` with the bounded evidence above. Intentional UDP/53 for Fastest node
 measurement remains a different path. Android Home DNS now has its own published
-repair in `f4d222cb`. Narrower provisioned SS/Hysteria final-layer SOCKS captures
-are published in concurrent `ad4da5e7`; the broader 45-combination independent
-entry/final layer feature remains unpublished pending the updated complete gate.
-Its observed UDP NAT race has a published bounded repair in `775ac68e`, which
-does not by itself close that feature or its native acceptance. The newly failed persistence regression fixture above is now repaired in source;
+repair in `f4d222cb`. The full 45-combination SOCKS layer feature is published
+in `a08d7d6f`, preserving the final-only and entry-only contributor units. Its
+updated complete native and host gates pass as recorded above; the separate
+NAT repair `775ac68e` alone was not treated as feature acceptance. The newly failed persistence regression fixture above is now repaired in source;
 its new exact-SHA CI evidence remains pending.
 
 In particular, support for one entry/final graph does not prove every requested
@@ -397,6 +455,14 @@ platform. Supported source must still be connected to the actual daily app,
 owned lifecycle, complete restoration, native engine and relevant negative
 controls. Unavailable capability with an honest reason is safer behavior, not
 completion of the corresponding requested capability.
+
+Concrete source implementation gaps remain in this same mobile imported-entry
+direction: HTTP/HTTPS CONNECT entries are refused even for paired SS; other
+paired final families and Server/Compare are refused by current core and host
+admission. They are not merely live-access or device-evidence gaps. See the
+[precise open graph boundaries](MOBILE-IMPORTED-ROUTER-PATH.md#open-graph-requirements)
+for the capability and selected-DNS constraints that a further implementation
+must resolve without weakening original authority.
 
 Remaining evidence is tracked separately:
 
