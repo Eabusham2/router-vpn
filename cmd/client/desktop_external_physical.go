@@ -50,14 +50,15 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 		return nil
 	}
 	layeredSSPair := desktopExternalSSEntryOwner(owner) && desktopExternalSSLayeredFinalProfile(owner.profile)
-	// A paired Windows Router keeps its entry layer Off. Its independent final
-	// layer has already been validated against the complete original profile;
-	// the desktop compiler below must still retain the exact inner/outer rows.
+	// The independent selections belong to their original entry and final.
+	// The desktop compiler must still validate every inner/outer row and the
+	// actual lower root; a supported label alone never installs a native owner.
 	layeredRouterFinal := server && capture.Protocol == "shadowsocks" && capture.StartLayer != "" && capture.StartLayer == owner.profile.StartLayer
+	layeredRouterEntry := server && capture.EntryStartLayer != "" && capture.EntryStartLayer == owner.entry.StartLayer
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
 		capture.Protocol != "wireguard" && capture.Protocol != "amneziawg" && capture.Protocol != "openvpn" ||
 		!entry && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
-		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !layeredSSPair && !layeredRouterFinal || capture.EntryStartLayer != "" && !layeredSSPair || capture.KillSwitchPolicy == "off" {
+		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !layeredSSPair && !layeredRouterFinal || capture.EntryStartLayer != "" && !layeredSSPair && !layeredRouterEntry || capture.KillSwitchPolicy == "off" {
 		return nil
 	}
 	// Eligibility was established from the complete compiled capture. Any

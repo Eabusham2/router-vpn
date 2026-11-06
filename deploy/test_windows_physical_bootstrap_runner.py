@@ -300,6 +300,7 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             names.update(EXTERNAL.PACKET_COMMANDS)
             names.update(EXTERNAL.OPENVPN_COMMAND_CASES)
             names.update(EXTERNAL.OPENVPN_FACTORY_CASES)
+            names.update(EXTERNAL.ROUTER_ENTRY_LAYER_FACTORY_CASES)
             names.update("TestRouterVPNDesktopExternalPhysicalIntegration/latency50/" + leaf for leaf in EXTERNAL.LATENCY_BOUNDARIES)
             parent = "TestRouterVPNDesktopExternalPhysicalIntegration"
             names.update(parent + "/" + leaf for leaf in ("delayed-accept-retains-prior-grant", "network-reset-during-mtu", "network-reset-after-native-publication", "network-reset-during-real-proof"))
@@ -346,6 +347,7 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             self.assertIn(EXTERNAL.HYSTERIA2_COMMAND, observed["command"])
             self.assertTrue(set(EXTERNAL.HYSTERIA2_BOX_CASES).issubset(set().union(*(set(required) for name, required in observed.items() if name.startswith("box")))))
             self.assertTrue(set(EXTERNAL.HYSTERIA2_FACTORY_CASES).issubset(observed["factory"]))
+            self.assertTrue(set(EXTERNAL.ROUTER_ENTRY_LAYER_FACTORY_CASES).issubset(observed["factory"]))
             self.assertEqual(len(calls), 28)
 
 
@@ -585,6 +587,57 @@ class ExternalPacketInventory(unittest.TestCase):
             self.assertTrue(required)
             if name != "box":
                 self.assertTrue(selection.startswith("^TestRouterVPNDesktopExternalPhysicalIntegration$/"))
+
+
+class ExternalRouterEntryStartupInventory(unittest.TestCase):
+    def test_both_independent_entry_layers_are_mandatory_factory_verdicts(self):
+        expected = tuple("TestRouterVPNExternalPhysicalStartupSocketPhase/" + name
+                         for name in ("router-entry-aes", "router-entry-aes-xor"))
+        self.assertEqual(EXTERNAL.ROUTER_ENTRY_LAYER_FACTORY_CASES, expected)
+        output = "".join("--- PASS: " + case + " (0.01s)\n" for case in expected)
+        with contextlib.redirect_stdout(io.StringIO()):
+            EXTERNAL.report_baseline("router-entry-startup", expected, 0, output)
+        for case in expected:
+            for malformed in (output.replace("--- PASS: " + case + " (0.01s)\n", ""),
+                              output + "--- PASS: " + case + " (0.01s)\n",
+                              output.replace("--- PASS: " + case, "--- PASS: Foreign" + case),
+                              output + "--- SKIP: " + case + " (0.01s)\n"):
+                with self.subTest(case=case, output=malformed), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                    EXTERNAL.report_baseline("router-entry-startup", expected, 0, malformed)
+
+    def test_existing_phase_mutant_must_reach_both_new_entry_paths(self):
+        parent = "TestRouterVPNExternalPhysicalStartupSocketPhase"
+        required = (parent, *EXTERNAL.ROUTER_ENTRY_LAYER_FACTORY_CASES)
+        witness = "ordinary transport changed its separate startup socket/readiness phase"
+        output = "=== RUN   " + parent + "\n" + "".join(
+            "=== RUN   " + case + "\n    external_physical_test.go:1: " + witness + "\n"
+            for case in EXTERNAL.ROUTER_ENTRY_LAYER_FACTORY_CASES)
+        output += "".join("--- FAIL: " + case + " (0.01s)\n" for case in required)
+        with contextlib.redirect_stdout(io.StringIO()):
+            EXTERNAL.report_control("missing-eager-endpoint-phase", parent, witness, 1, output)
+        for case in required:
+            for malformed in (output.replace("--- FAIL: " + case + " (0.01s)\n", ""),
+                              output + "--- FAIL: " + case + " (0.01s)\n",
+                              output.replace("--- FAIL: " + case, "--- FAIL: Foreign" + case),
+                              output.replace("=== RUN   " + case + "\n", ""),
+                              output + "=== RUN   " + case + "\n"):
+                with self.subTest(case=case, output=malformed), self.assertRaises(ValueError):
+                    EXTERNAL.report_control("missing-eager-endpoint-phase", parent, witness, 1, malformed)
+        for case in EXTERNAL.ROUTER_ENTRY_LAYER_FACTORY_CASES:
+            block = "=== RUN   " + case + "\n    external_physical_test.go:1: " + witness + "\n"
+            malformed = output.replace(block, block.replace(witness, "unrelated new leaf failure"))
+            # An old direct WG witness cannot explain a new leaf's failure.
+            malformed = malformed.replace("=== RUN   " + parent + "\n", "=== RUN   " + parent +
+                "\n=== RUN   " + parent + "/wireguard\n    external_physical_test.go:1: " + witness + "\n")
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                EXTERNAL.report_control("missing-eager-endpoint-phase", parent, witness, 1, malformed)
+        for malformed in (output.replace(witness, "another failure"), output + "--- SKIP: Other (0.01s)\n",
+                          output + "WARNING: DATA RACE\n", output + "panic: original worker did not join\n",
+                          output + "fatal error: original owner lost\n", output + "[build failed]\n"):
+            with self.subTest(output=malformed), self.assertRaises(ValueError):
+                EXTERNAL.report_control("missing-eager-endpoint-phase", parent, witness, 1, malformed)
+        with self.assertRaises(ValueError):
+            EXTERNAL.report_control("missing-eager-endpoint-phase", parent, witness, 0, output)
 
 
 if __name__ == "__main__":

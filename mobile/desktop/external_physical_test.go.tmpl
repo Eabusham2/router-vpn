@@ -3,6 +3,7 @@ package routervpndesktoppt
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,12 @@ func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int
 
 func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, port int, lan bool, target, ipv6, kill string, remotes []nativeopenvpn.Remote) *mobilemultihop.DesktopExternalPolicy {
 	t.Helper()
+	routerLayer := ""
+	if protocol == "router-entry-aes" {
+		routerLayer, protocol = "aes-256-gcm", "shadowsocks"
+	} else if protocol == "router-entry-aes-xor" {
+		routerLayer, protocol = "aes-256-gcm+xor-whitening", "shadowsocks"
+	}
 	// The labels select independent imported test profiles. The saved native
 	// protocol remains amneziawg; no preset alias is added to its schema.
 	ssSelected := protocol
@@ -222,6 +229,31 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	if protocol == "wireguard" || protocol == "amneziawg" || protocol == "openvpn" {
 		graph["outbounds"], graph["endpoints"] = []any{}, []any{transport}
 	}
+	if routerLayer != "" {
+		// This is the real paired compiler with two separately captured files;
+		// no encrypted provider or OS constructor is used by this fixture.
+		key := func(value byte) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32)) }
+		encoded := func(value any) string {
+			body, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(body)
+		}
+		entry := map[string]any{"id": "captured-router-entry", "node_kind": "router-vpn", "node_proof_id": fmt.Sprintf("%x", sha256.Sum256([]byte("router-vpn-node-proof-v1\n"+key(18)))),
+			"endpoint": host, "router_api": "http://10.77.0.1:8787", "api_token": "original-entry-token", "start_layer": routerLayer,
+			"dns_mode": "home", "adguard_ipv4": "10.77.0.1", "ipv6_mode": "on", "home_lan_access": true, "mtu_policy": "auto"}
+		wg := "[Interface]\nPrivateKey = " + key(17) + "\nAddress = 10.77.0.2/32\nMTU = 1420\n\n[Peer]\nPublicKey = " + key(18) + "\nPresharedKey = " + key(19) + "\nEndpoint = " + net.JoinHostPort(host, "51820") + "\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n"
+		aes := encoded(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": host, "server_port": port, "method": mobilemultihop.NativeStartLayerMethod, "password": key(23)}}})
+		node, err := mobilemultihop.NewNodeProfile("wg", encoded(map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))}), encoded(entry), encoded(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(aes))}), "")
+		if err != nil {
+			t.Fatal("captured Router startup source did not compile", err)
+		}
+		transport["server"] = "198.51.100.240"
+		private["shadowsocks"].(map[string]any)["server"] = transport["server"]
+		profile["multihop_execution"], profile["multihop_entry_mode"] = "server", "wg"
+		selection["entry"], selection["entry_tag"], selection["predecessor_config"] = entry, "external-entry", node.Config()
+	}
 	if entrySelected || ssEntry {
 		transport["tag"] = "external-entry"
 		entry := map[string]any{"id": "captured-wg-entry", "node_kind": "external", "external": private, "home_lan_access": true, "ipv6_mode": "on", "mtu_policy": "auto"}
@@ -302,7 +334,15 @@ func externalPhysicalDeviceFixtureRemotes(t *testing.T, protocol, host string, p
 	}
 	config, _ := json.Marshal(graph)
 	capture, _ := json.Marshal(selection)
-	original, err := mobilemultihop.NewExternalPolicy(string(config), string(capture))
+	prepared := string(capture)
+	if routerLayer != "" {
+		var err error
+		prepared, err = mobilemultihop.PrepareExternalPairedExecutionCapture(string(config), prepared, "")
+		if err != nil {
+			t.Fatal("captured Router startup proposal did not compile", err)
+		}
+	}
+	original, err := mobilemultihop.NewExternalPolicy(string(config), prepared)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,6 +522,9 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		protocols = append(protocols, "wireguard", "amneziawg-fast", "amneziawg-strong")
 	}
+	if runtime.GOOS == "windows" {
+		protocols = append(protocols, "router-entry-aes", "router-entry-aes-xor")
+	}
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		protocols = append(protocols, "openvpn-tcp", "openvpn-udp", "openvpn-mixed")
 	}
@@ -492,6 +535,7 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 				host = "198.18.0.2"
 			}
 			policy := externalPhysicalPolicyFixture(t, protocol, host, 8443, false, runtime.GOOS)
+			routerEntry := strings.HasPrefix(protocol, "router-entry-")
 			f := newExternalPhysicalFixture(t, policy)
 			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
 			var calls atomic.Int32
@@ -508,10 +552,13 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 				t.Fatal(err)
 			}
 			network := "tcp"
-			if protocol == "hysteria2" || protocol == "wireguard" || strings.HasPrefix(protocol, "wg-entry-") || strings.HasPrefix(protocol, "awg-entry-") || strings.HasPrefix(protocol, "amneziawg-") || protocol == "openvpn-udp" {
+			if protocol == "hysteria2" || protocol == "wireguard" || strings.HasPrefix(protocol, "wg-entry-") || strings.HasPrefix(protocol, "awg-entry-") || strings.HasPrefix(protocol, "amneziawg-") || protocol == "openvpn-udp" || routerEntry {
 				network = "udp"
 			}
 			peer := M.ParseSocksaddr(net.JoinHostPort(host, "8443"))
+			if protocol == "router-entry-aes-xor" {
+				peer = M.ParseSocksaddr(net.JoinHostPort(host, "8389"))
+			}
 			if _, err := f.physical.current(context.Background(), network, peer); err == nil || f.network.SocketCurrent() {
 				t.Fatal("prepared source exposed a lower socket before its factory completed")
 			}
@@ -521,13 +568,23 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 			if err := f.network.Start(adapter.StartStateInitialize); err != nil || calls.Load() != 1 {
 				t.Fatal("exact Initialize failed", err)
 			}
-			eager := protocol == "wireguard" || strings.HasPrefix(protocol, "wg-entry-") || strings.HasPrefix(protocol, "awg-entry-") || strings.HasPrefix(protocol, "amneziawg-") || strings.HasPrefix(protocol, "openvpn-")
+			eager := protocol == "wireguard" || strings.HasPrefix(protocol, "wg-entry-") || strings.HasPrefix(protocol, "awg-entry-") || strings.HasPrefix(protocol, "amneziawg-") || strings.HasPrefix(protocol, "openvpn-") || routerEntry
 			if f.network.SocketCurrent() != eager || f.network.Current() {
 				t.Fatal("ordinary transport changed its separate startup socket/readiness phase")
 			}
 			broker, err := f.physical.current(context.Background(), network, peer)
 			if eager && (err != nil || broker != f.network.broker) || !eager && (err == nil || broker != nil) {
 				t.Fatal("only an exact captured eager endpoint may acquire its pre-ready lower broker", err)
+			}
+			if routerEntry {
+				for _, other := range []M.Socksaddr{M.ParseSocksaddr("10.77.0.1:51820"), M.ParseSocksaddr("198.51.100.240:8443"), M.ParseSocksaddr(net.JoinHostPort(host, "51820"))} {
+					if escaped, err := f.physical.current(context.Background(), "udp", other); err == nil || escaped != nil {
+						t.Fatal("entry startup borrowed a private WG, final or original plain-WG tuple")
+					}
+				}
+				if escaped, err := f.physical.current(context.Background(), "tcp", peer); err == nil || escaped != nil {
+					t.Fatal("entry startup broadened its actual UDP carrier")
+				}
 			}
 			if f.network.Start(adapter.StartStateInitialize) == nil || calls.Load() != 1 || f.network.Start(adapter.StartStateStarted) == nil {
 				t.Fatal("duplicate or skipped startup acquired native readiness")
@@ -546,7 +603,17 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 			if f.network.Current() || f.network.SocketCurrent() != eager {
 				t.Fatal("native Started implicitly activated a complete proof owner")
 			}
-			identical := externalPhysicalPolicyFixture(t, protocol, host, 8443, false, runtime.GOOS)
+			var identical *mobilemultihop.DesktopExternalPolicy
+			if routerEntry {
+				// Preserve the same random proposal for this independent policy
+				// object; a newly prepared proposal would not be equal-source.
+				identical, err = mobilemultihop.NewDesktopExternalPolicy(policy.OriginalPolicy(), policy.Metadata().SessionID, runtime.GOOS)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				identical = externalPhysicalPolicyFixture(t, protocol, host, 8443, false, runtime.GOOS)
+			}
 			if identical.Config() != policy.Config() || identical == policy {
 				t.Fatal("equal-source substitution fixture lost its independent identity")
 			}
@@ -563,6 +630,25 @@ func TestRouterVPNExternalPhysicalStartupSocketPhase(t *testing.T) {
 			}
 			if err := f.network.Close(); err != nil || !source.closed.Load() || !source.cancelled.Load() {
 				t.Fatal("retirement did not join the exact source", err)
+			}
+			if routerEntry {
+				failed := newExternalPhysicalFixture(t, policy)
+				partial := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+				failure := errors.New("captured Router lower factory failed")
+				if err := failed.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+					broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, partial, current, func(observeCtx context.Context) error {
+						return failed.network.MatchesContext(observeCtx, capture.SessionID, capture.SourceSHA256)
+					})
+					return broker, partial, errors.Join(err, failure)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if err := failed.network.Start(adapter.StartStateInitialize); !errors.Is(err, failure) || failed.network.Current() || failed.network.SocketCurrent() || !partial.cancelled.Load() {
+					t.Fatal("failed entry startup retained socket or proof admission", err)
+				}
+				if err := failed.network.Close(); err != nil || !partial.closed.Load() {
+					t.Fatal("failed entry startup did not join its original partial source", err)
+				}
 			}
 		})
 	}

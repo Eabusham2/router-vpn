@@ -170,8 +170,16 @@ func captureDesktopWindowsExternalHost(a *app, supplied *desktopNodeConnectionHo
 
 func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost, profile, entry common.RouterProfile,
 	exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {
+	return prepareDesktopWindowsExternalLaunchWith(a, host, profile, entry, exit, direct, restored, physicalNetworkIdentity)
+}
+
+func prepareDesktopWindowsExternalLaunchWith(a *app, host *desktopNodeConnectionHost, profile, entry common.RouterProfile,
+	exit standardExit, direct bool, restored string, networkIdentity func() string) (*desktopNodeLaunch, error) {
 	if !desktopWindowsExternalGraphEligible(profile, entry, direct, restored) {
 		return nil, errors.New("native external preparation requires its captured Local Windows graph")
+	}
+	if networkIdentity == nil {
+		return nil, errors.New("native external preparation has no captured physical network observer")
 	}
 	operation := a.connectionOperationContextOrBackground()
 	if err := a.checkCapturedConnectionOperation(operation); err != nil {
@@ -184,7 +192,7 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 	ctx, cancel := context.WithTimeout(operation, 30*time.Second)
 	stop := context.AfterFunc(captured.capture.lifetime, cancel)
 	defer func() { stop(); cancel() }()
-	network := physicalNetworkIdentity()
+	network := networkIdentity()
 	if network == "" {
 		return nil, errors.New("native external preparation has no captured physical network")
 	}
@@ -192,7 +200,7 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 	if err != nil || !sameDesktopNodeProcessPath(binary, filepath.Join(captured.capture.packageRoot, "runtime", "native", nativeBinaryName())) {
 		return nil, errors.Join(err, errors.New("native external verification selected another captured package"))
 	}
-	var files map[string][]byte
+	var files, start map[string][]byte
 	if !direct && desktopWindowsExternalRouterPairedGraph(profile, entry, restored) {
 		profile.MultihopEntryMode = "wg"
 		files, err = readDesktopNodeAssets(captured.capture.dataRoot, entry.ID, "wg")
@@ -204,8 +212,17 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 				clear(data)
 			}
 		}()
+		start, err = readDesktopNodeStartAssets(captured.capture.dataRoot, entry, "wg")
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, data := range start {
+				clear(data)
+			}
+		}()
 	}
-	launch, err := compileDesktopWindowsExternalCaptured(ctx, profile, entry, exit, direct, restored, files, nil, captured.host.lookup)
+	launch, err := compileDesktopWindowsExternalCaptured(ctx, profile, entry, exit, direct, restored, files, start, captured.host.lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +237,7 @@ func prepareDesktopWindowsExternalLaunch(a *app, host *desktopNodeConnectionHost
 	if err := preflightDesktopExternalLaunch(ctx, binary, launch, captured.host.externalPreflight); err != nil {
 		return nil, err
 	}
-	if err := a.checkCapturedConnectionOperation(operation); err != nil || ctx.Err() != nil || physicalNetworkIdentity() != network {
+	if err := a.checkCapturedConnectionOperation(operation); err != nil || ctx.Err() != nil || networkIdentity() != network {
 		return nil, errors.Join(err, ctx.Err(), errors.New("native external preparation changed its request or physical network"))
 	}
 	return launch, captured.current()

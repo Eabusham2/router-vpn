@@ -17,17 +17,17 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 	if (capture.Execution != "server" && capture.Execution != "local" && capture.Execution != "auto") || (p.Profile["multihop_execution"] != capture.Execution && p.Profile["multihop_execution"] != "auto") || p.Profile["multihop_entry_mode"] != "wg" ||
 		p.Entry["node_kind"] != "router-vpn" || capture.EntryNodeID == "" || capture.EntryTag != externalEntryTag ||
 		capture.PredecessorSHA256 == "" || capture.Protocol != "shadowsocks" || !desktopExternalSS2022Import(final) ||
-		capture.StartLayer != "" && !multihoprelay.ValidLayerMode(capture.StartLayer) || capture.EntryStartLayer != "" || len(capture.PhysicalRoots) != 1 ||
+		capture.StartLayer != "" && !multihoprelay.ValidLayerMode(capture.StartLayer) || capture.EntryStartLayer != "" && !multihoprelay.ValidLayerMode(capture.EntryStartLayer) || len(capture.PhysicalRoots) != 1 ||
 		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || p.Execution == nil || p.Execution.Selection != capture.Execution {
 		return nil, bad
 	}
-	entryLayer, err := externalOptionalString(p.Entry, "start_layer")
-	if err != nil || entryLayer != "" && entryLayer != "off" {
-		return nil, bad
-	}
 	root := capture.PhysicalRoots[0]
-	if root.Family != "endpoints" || root.Tag != externalEntryTag || root.Type != "wireguard" || root.DynamicSOCKSUDP {
+	family, tag, kind := "endpoints", externalEntryTag, "wireguard"
+	if capture.EntryStartLayer != "" {
+		family, tag, kind = "outbounds", predecessorNamespace("node", NativeStartLayerTag), desktopExternalLayerKind(capture.EntryStartLayer)
+	}
+	if root.Family != family || root.Tag != tag || root.Type != kind || root.DynamicSOCKSUDP {
 		return nil, bad
 	}
 	var graph map[string]any
@@ -44,15 +44,32 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 	if !ok || len(endpoints) != 1 {
 		return nil, bad
 	}
-	physical, ok := endpoints[0].(map[string]any)
-	if !ok || physical["tag"] != root.Tag || physical["type"] != root.Type || physical["detour"] != nil || desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
+	inner, err := desktopExternalRouterEntryEndpoint(endpoints, p, capture)
+	if err != nil {
 		return nil, bad
 	}
 	rows, ok := graph["outbounds"].([]any)
 	if !ok || desktopExternalRouterServerRows(rows, p, capture) != nil {
 		return nil, bad
 	}
+	physical := inner
+	if capture.EntryStartLayer != "" {
+		physical = nil
+		for _, raw := range rows {
+			row := raw.(map[string]any) // The exact row validator rejected every non-object.
+			if row["tag"] == root.Tag {
+				physical = row
+			}
+		}
+	}
+	if physical == nil || physical["tag"] != root.Tag || physical["type"] != root.Type || physical["detour"] != nil || desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
+		return nil, bad
+	}
 	meta := DesktopExternalMetadata{Schema: 1, SessionID: session, TargetOS: "windows", OriginalSourceSHA256: capture.SourceSHA256, OriginalConfigSHA256: capture.ConfigSHA256, OriginalMetadataSHA256: capture.MetadataSHA256, OriginalCaptureSHA256: capture.CaptureSHA256, Protocol: capture.Protocol, RootTag: root.Tag, RootType: root.Type, OriginalRootSHA256: root.ConfigSHA256, KillSwitchPolicy: capture.KillSwitchPolicy, IPv6Mode: capture.IPv6Mode, HomeLANAccess: capture.HomeLANAccess}
+	if capture.EntryStartLayer != "" {
+		meta.StartupEndpointTag, meta.StartupEndpointType = externalEntryTag, "wireguard"
+		meta.StartupEndpointSHA256 = desktopExternalObjectDigest(inner)
+	}
 	meta.SourceSHA256 = desktopExternalObjectDigest(struct {
 		Domain string                  `json:"domain"`
 		Policy DesktopExternalMetadata `json:"policy"`
@@ -167,6 +184,13 @@ func desktopExternalRouterServerRows(rows []any, original externalPolicyCapture,
 	}
 	if outer != nil {
 		wanted[multihoprelay.ExitStartLayerTag] = predecessorCopy(outer)
+	}
+	_, entryOuter, err := desktopExternalRouterEntryExpected(original, capture)
+	if err != nil {
+		return bad
+	}
+	if entryOuter != nil {
+		wanted[predecessorNamespace("node", NativeStartLayerTag)] = entryOuter
 	}
 	if len(rows) != len(wanted) {
 		return bad

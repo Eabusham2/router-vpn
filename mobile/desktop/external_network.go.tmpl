@@ -152,27 +152,34 @@ func (n *ExternalNetworkOwner) Start(stage adapter.StartStage) error {
 	}
 	n.mu.Lock()
 	valid := !n.retired && n.ctx != nil && n.ctx.Err() == nil && stage == n.nextStage && stage <= adapter.StartStateStarted
+	policy := n.policy
 	n.mu.Unlock()
 	if !valid {
 		return errors.New("ordinary desktop startup changed its captured stage order")
 	}
+	sockets := false
 	if stage == adapter.StartStateInitialize {
 		if err := n.startPhysical(); err != nil {
+			return err
+		}
+		var err error
+		sockets, err = policy.StartupSocketRequired(runtime.GOOS)
+		if err != nil {
+			n.retire()
 			return err
 		}
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.policy == nil || n.broker == nil || n.source == nil || stage != n.nextStage {
+	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.policy == nil || n.policy != policy || n.broker == nil || n.source == nil || stage != n.nextStage {
 		return errors.New("ordinary desktop network startup has no prepared native owner")
 	}
 	if stage == adapter.StartStateInitialize {
-		// Packet endpoints and OpenVPN may dial during endpoint Start. Their
-		// exact remote tuples, source and deny baseline have
-		// already been retained by the native factory. This separate phase
-		// admits only the compiled lower tuples, never proof or TUN readiness.
-		meta := n.policy.Metadata()
-		n.sockets = meta.TargetOS == runtime.GOOS && (runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin") && (meta.RootType == "wireguard" || meta.RootType == mobilemultihop.AmneziaType || meta.RootType == "openvpn-client")
+		// A sealed packet endpoint (including an inner Router WG endpoint
+		// behind its distinct AES/XOR root) may dial during endpoint Start.
+		// The original factory has retained its exact lower tuples, source
+		// and deny baseline. This grants no proof or TUN readiness.
+		n.sockets = sockets
 	}
 	if stage == adapter.StartStateStarted {
 		n.ready = true
@@ -293,8 +300,8 @@ func (n *ExternalNetworkOwner) Current() bool {
 }
 
 // SocketCurrent preserves normal activation for the ordinary lazy transports.
-// Only sealed Linux/Windows WG/AWG/OpenVPN and Darwin WG may acquire its captured lower
-// after Initialize. Current still governs every proof, TUN and measurement.
+// Only the sealed endpoint startup requirement admits its captured lower after
+// Initialize. Current still governs every proof, TUN and measurement.
 func (n *ExternalNetworkOwner) SocketCurrent() bool {
 	if n == nil {
 		return false

@@ -241,6 +241,15 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	if err != nil {
 		return nil, err
 	}
+	if predecessor != nil {
+		// The complete Router predecessor already validated and composed its
+		// own layer. Report that captured selection rather than interpreting
+		// the external-only wrapper's empty result as an Off entry.
+		entryStartLayer = predecessorText(selection.Entry, "start_layer")
+		if entryStartLayer == "off" {
+			entryStartLayer = ""
+		}
+	}
 	startLayer, err := externalApplyStartLayer(graph, exit, selection)
 	if err != nil {
 		return nil, err

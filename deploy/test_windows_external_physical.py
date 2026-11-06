@@ -82,6 +82,8 @@ OPENVPN_COMMAND_CASES = (OPENVPN_COMMAND, *(OPENVPN_COMMAND + "/" + network + "/
     for fault in ("valid", "source", "credential", "username", "endpoint", "tls-name", "fingerprint", "remote-order", "remote-network", "remote-removed", "session", "original-config")))
 OPENVPN_FACTORY_CASES = tuple("TestRouterVPNExternalPhysicalStartupSocketPhase/openvpn-" + network
     for network in ("tcp", "udp", "mixed"))
+ROUTER_ENTRY_LAYER_FACTORY_CASES = tuple("TestRouterVPNExternalPhysicalStartupSocketPhase/" + mode
+    for mode in ("router-entry-aes", "router-entry-aes-xor"))
 PACKET_PROTOCOLS = ("wireguard", "awg2-fast", "awg2-strong")
 PACKET_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + leaf
     for protocol in PACKET_PROTOCOLS
@@ -222,7 +224,7 @@ def mutants(source):
         ("missing-eager-endpoint-phase", "routervpn/desktoppt/external_network.go", "./routervpn/desktoppt",
          "TestRouterVPNExternalPhysicalStartupSocketPhase",
          "ordinary transport changed its separate startup socket/readiness phase",
-         IDENTITY.replace_once(network, "n.sockets = meta.TargetOS == runtime.GOOS", "n.sockets = false && meta.TargetOS == runtime.GOOS")),
+         IDENTITY.replace_once(network, "n.sockets = sockets", "n.sockets = false && sockets")),
         ("missing-inherited-parent", "cmd/sing-box/routervpn_external_command_journal.go", "./cmd/sing-box",
          "TestRouterVPNDesktopExternalPhysicalCommandJournalWindowsHasNoFileFallback",
          "public Windows external command read private files before inherited journal admission",
@@ -287,6 +289,34 @@ def report_baseline(name, required, status, output):
                          + " (native exit " + str(status) + ", 0x" + format(status & 0xffffffff, "08x") + ")")
 
 
+def report_control(label, test, witness, status, output):
+    required = (test,)
+    missing_leaf_witness = False
+    if label == "missing-eager-endpoint-phase":
+        # The existing control must reject both newly admitted inner-WG layer
+        # paths as well as its original parent. An old direct-WG failure alone
+        # cannot provide causal evidence for the new Windows startup leaves.
+        required += ROUTER_ENTRY_LAYER_FACTORY_CASES
+        runs = list(re.finditer(r"(?m)^=== RUN[ \t]+(\S+)[ \t]*$", output))
+        for case in required:
+            matches = [index for index, run in enumerate(runs) if run.group(1) == case]
+            if len(matches) != 1:
+                missing_leaf_witness = True
+                continue
+            if case == test:
+                continue
+            index = matches[0]
+            end = runs[index + 1].start() if index + 1 < len(runs) else len(output)
+            if witness not in output[runs[index].end():end]:
+                missing_leaf_witness = True
+    if status == 0 or witness not in output or missing_leaf_witness or any(
+            len(re.findall(r"(?m)^[ \t]*--- FAIL: " + re.escape(case) + r" \([^\r\n]*\)[ \t]*$", output)) != 1
+            for case in required) or any(marker in output for marker in
+            ("--- SKIP:", "DATA RACE", "panic:", "fatal error:", "[build failed]")):
+        raise ValueError("Ordinary Windows negative control missed its exact broken behavior: " + label + "\n" + output[-16384:])
+    print("Rejected actual ordinary native production mutant: " + label, flush=True)
+
+
 def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False):
     if prospective or platform.system() != "Windows":
         raise ValueError("Ordinary Windows composition requires its unmodified native host")
@@ -309,7 +339,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner",
           "TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures",
           "TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback",
-          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES + PACKET_FACTORY_CASES + OPENVPN_FACTORY_CASES),
+          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES + PACKET_FACTORY_CASES + OPENVPN_FACTORY_CASES + ROUTER_ENTRY_LAYER_FACTORY_CASES),
     )
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-external-") as directory:
         for name, package, selection, required in suites:
@@ -340,10 +370,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Ordinary Windows negative control did not compile: " + label + "\n" + output[-16384:])
             status, output = run_owned([binary, "-test.run=" + control_selection(test), "-test.count=1", "-test.timeout=60s", "-test.v"],
                                           cwd=source, env=captured, timeout=75)
-            if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or \
-                    "--- SKIP:" in output or "DATA RACE" in output or "panic: test timed out" in output:
-                raise ValueError("Ordinary Windows negative control missed its exact broken behavior: " + label + "\n" + output[-16384:])
-            print("Rejected actual ordinary native production mutant: " + label, flush=True)
+            report_control(label, test, witness, status, output)
     if checked_sources(source)[1] != before:
         raise ValueError("Ordinary Windows composition source changed during execution")
     print("Exact ordinary Windows command, generated factory, Box, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2, SOCKS5, WireGuard and AmneziaWG "

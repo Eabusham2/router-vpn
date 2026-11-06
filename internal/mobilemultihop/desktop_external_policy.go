@@ -37,6 +37,9 @@ type DesktopExternalMetadata struct {
 	RootType                    string `json:"root_type"`
 	OriginalRootSHA256          string `json:"original_root_sha256"`
 	DerivedRootSHA256           string `json:"derived_root_sha256"`
+	StartupEndpointTag          string `json:"startup_endpoint_tag,omitempty"`
+	StartupEndpointType         string `json:"startup_endpoint_type,omitempty"`
+	StartupEndpointSHA256       string `json:"startup_endpoint_sha256,omitempty"`
 	KillSwitchPolicy            string `json:"kill_switch_policy"`
 	IPv6Mode                    string `json:"ipv6_mode"`
 	HomeLANAccess               bool   `json:"home_lan_access"`
@@ -66,8 +69,8 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
 // Windows additionally retains the explicitly captured paired Router WG entry
-// with an SS2022 final and Local/Server selector. The entry layer remains Off;
-// the final keeps its independently provisioned Off/AES/AES+XOR selection.
+// with an SS2022 final and Local/Server selector. Entry and final retain their
+// independently captured Off/AES/AES+XOR selections and distinct physical roles.
 // This constructor alone cannot enable a mode or a privileged OS firewall owner.
 func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS string) (*DesktopExternalPolicy, error) {
 	if original == nil || !desktopExternalSessionID.MatchString(sessionID) ||

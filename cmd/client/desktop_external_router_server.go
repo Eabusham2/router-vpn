@@ -21,7 +21,7 @@ func desktopWindowsExternalRouterServerProfile(profile common.RouterProfile, res
 func desktopWindowsExternalRouterServerGraph(profile, entry common.RouterProfile, restored string) bool {
 	if !desktopWindowsExternalRouterServerProfile(profile, restored) || entry.ID == "" || entry.ID == profile.ID ||
 		entry.NodeKind != "router-vpn" && entry.NodeKind != "" || entry.External != nil ||
-		entry.StartLayer != "" && entry.StartLayer != common.StartLayerOff ||
+		entry.StartLayer != "" && entry.StartLayer != common.StartLayerOff && entry.StartLayer != common.StartLayerAES256GCM && entry.StartLayer != common.StartLayerAES256GCMXOR ||
 		!common.ValidNodeProofID(entry.NodeProofID) || entry.RouterAPI == "" || entry.APIToken == "" {
 		return false
 	}
