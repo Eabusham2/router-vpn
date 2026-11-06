@@ -196,10 +196,10 @@ public final class NodeUsageTest{
   if(e.protocol.equals("amneziawg"))e.awgParameters=new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");
  }
  static List<String> importedProtocols=List.of("shadowsocks","hysteria2");
- static void importedExclusions(Path root)throws Exception{for(String protocol:importedProtocols)for(String finalMode:List.of("shadowsocks","hysteria2")){
+ static void importedExclusions(Path root)throws Exception{for(String protocol:importedProtocols)for(String finalMode:(importedProtocols.contains("socks5")?List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2"))){
   try(Fixture f=new Fixture(root)){
    var imported=AndroidStandardExitStore.copy(f.x);imported.id=f.a.id;imported.protocol=protocol;packetFields(imported);f.exits.save(imported);
-   f.controller.connectImportedMultihop(imported,f.b,finalMode,"local",f.callback);f.finish();
+   f.controller.connectImportedMultihop(imported,f.b,finalMode,"local",f.callback);check(NativeUsageBoundary.pending!=null,"imported usage launch failed "+protocol+"/"+finalMode+": "+f.callback.message);f.finish();
    check(f.callback.ok&&f.count("external",f.a.id)==1&&f.count("router-vpn",f.a.id)==0&&f.count("router-vpn",f.b.id)==2,"imported usage conflated same text IDs across original node kinds: "+protocol);
    byte[] receipt=f.read(f.usage());NativeUsageBoundary.last.run();check(Arrays.equals(receipt,f.read(f.usage())),"duplicate imported completion counted both nodes again");
   }
@@ -273,7 +273,7 @@ public final class NodeUsageTest{
    e.latitude=null;e.longitude=null;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.isEmpty()&&f.activity.nodeButton.getText().toString().contains("Chicago"),"clearing coordinates retained the old pin or removed its independent label");
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){if(!args[1].equals("imported-packet"))throw new AssertionError("Unknown usage family");importedProtocols=List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android packet entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -362,7 +362,9 @@ def main():
         subprocess.run(compile, check=True, timeout=45)
         subprocess.run(run, check=True, timeout=60)
         subprocess.run([*run, "imported-packet"], check=True, timeout=60)
+        subprocess.run([*run, "imported-socks"], check=True, timeout=60)
         controls = (
+            ('AndroidNodeUsage.java', '!AndroidImportedRouterPath.supports(entry.protocol,exitMode)', '!Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entry.protocol)', 'imported usage conflated same text IDs across original node kinds: socks5'),
             ('AndroidNodeUsage.java', 'Arrays.asList(captureExternal(context,entry),captureRouter(exit))', 'Collections.singletonList(captureRouter(exit))', 'imported multihop did not count both original typed nodes'),
             ('AndroidNodeUsage.java', 'entry.id,exit.id,entry.protocol,"",false)', 'entry.id,exit.id,"shadowsocks","",false)', 'imported usage conflated same text IDs across original node kinds: hysteria2'),
             ('UsageActivity.java', '(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0))', '!(m.latitude==0&&m.longitude==0)', 'valid explicit zero coordinates disappeared from shipping map'),
@@ -381,7 +383,7 @@ def main():
             assert original.count(old) == 1, (name, old)
             target.write_text(original.replace(old, new))
             subprocess.run(compile, check=True, timeout=45, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            broken = subprocess.run(run, timeout=60, capture_output=True, text=True)
+            broken = subprocess.run([*run, "imported-socks"] if assertion.endswith(": socks5") else run, timeout=60, capture_output=True, text=True)
             target.write_text(original)
             assert broken.returncode and assertion in broken.stderr, 'usage negative control missed intended assertion: ' + name + '\n' + broken.stdout + broken.stderr
             print('Android usage negative control rejected:', name, assertion)

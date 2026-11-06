@@ -716,7 +716,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private AndroidNodeUsage.Attempt captureUsageIntent(Callback callback){
         if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;
         try{
-            if("multihop".equals(pendingMode))return pendingOrdinaryEntry==null?AndroidNodeUsage.multihop(pendingEntry,pendingExit,pendingEntryMode):AndroidNodeUsage.importedMultihop(activity,pendingOrdinaryEntry,pendingExit);
+            if("multihop".equals(pendingMode))return pendingOrdinaryEntry==null?AndroidNodeUsage.multihop(pendingEntry,pendingExit,pendingEntryMode):AndroidNodeUsage.importedMultihop(activity,pendingOrdinaryEntry,pendingExit,pendingExitMode);
             if("external".equals(pendingMode))return AndroidNodeUsage.external(activity,pendingEntry,pendingOrdinaryEntry,pendingStandardExit,pendingExternalDirect,pendingEntryMode);
             AndroidNodeStore.Node node=pendingNode!=null?pendingNode:findNode(nodeStore.activeId());
             return AndroidNodeUsage.router(node);

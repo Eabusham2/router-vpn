@@ -45,7 +45,7 @@ final class AndroidNativeMAXProfile{ // MAX_PREDICATE
 }
 final class AndroidNativeCompositeProfile{ // COMPOSITE_PREDICATE
 }
-final class AndroidStandardExitStore {static final class Entry{String id,name,protocol;}}
+final class AndroidStandardExitStore {static final class Entry{String id,name,protocol;String secret="original imported source";}}
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] data=Files.readAllBytes(f.toPath());if(data.length==0||data.length>max)throw new IllegalArgumentException("bounded source required");return data;}}
 final class AndroidNodeStore {
  static final int MAX_BUNDLE=32*1024*1024;
@@ -53,11 +53,14 @@ final class AndroidNodeStore {
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");if(b.getString("node_id").isEmpty())throw new IllegalArgumentException("missing paired node");}
 }
 final class AndroidImportedRouterPath {
- static boolean supports(String entry,String last){return false;} // This paired-only fixture owns no imported graph.
+ // SHIPPING_IMPORTED_SUPPORTS
+ static AndroidStandardExitStore.Entry current;
+ static String snapshot(AndroidStandardExitStore.Entry e){return e.id+"/"+e.protocol+"/"+e.secret;}
+
  static final class PreparationFailure extends Exception{final String sessionId="";}
- static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{throw new IllegalStateException("No imported Router source in paired Last fixture");}
- static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{throw new IllegalStateException("No imported Router owner in paired Last fixture");}
- static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{throw new IllegalStateException("No imported Router compiler in paired Last fixture");}
+ static AndroidMultihopController.Source captureSource(Context c,AndroidStandardExitStore.Entry e)throws Exception{if(current!=e)throw new IllegalStateException("foreign imported record");String original=snapshot(e);return new AndroidMultihopController.Source(e.id,e.name,original.getBytes(StandardCharsets.UTF_8),()->{if(current==null||!original.equals(snapshot(current)))throw new IllegalStateException("changed imported source");});}
+ static AndroidStandardExitStore.Entry entry(Context c,AndroidMultihopController.Source s)throws Exception{s.require(null);return current;}
+ static AndroidMultihopController.Prepared prepare(Context c,AndroidMultihopController.Source e,File x,String mode,String execution,AndroidMultihopController.Source last)throws Exception{if(AndroidMultihopController.onPrepare!=null)AndroidMultihopController.onPrepare.run();e.require(null);last.require(x);if(!execution.equals("local")||!supports(current.protocol,mode))throw new IllegalStateException("unowned imported preparation");AndroidMultihopController.preparations++;AndroidMultihopController.lastExecution=execution;AndroidMultihopController.lastEntryMode=current.protocol;AndroidMultihopController.lastExitMode=mode;return new AndroidMultihopController.Prepared(null,x,mode,e,last);}
 }
 final class AndroidMultihopController {
  private static final int MAX_BUNDLE=32*1024*1024;
@@ -151,6 +154,29 @@ public final class MultihopStartupLastTest{
   void idle()throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(runtime.isActiveOrTransitioning()&&System.nanoTime()<end)Thread.yield();check(!runtime.isActiveOrTransitioning(),"retired runtime kept a joined graph");}
   public void close()throws Exception{engine.failStop=false;if(engine.stopRelease!=null)engine.stopRelease.countDown();runtime.close();idle();Files.deleteIfExists(entry.file.toPath());Files.deleteIfExists(exit.file.toPath());Files.deleteIfExists(directory);}
  }
+ static AndroidStandardExitStore.Entry imported(){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="saved-import";e.name="Original import";e.protocol="socks5";AndroidImportedRouterPath.current=e;return e;}
+ static void importedRuntime()throws Exception{
+  for(String mode:new String[]{"shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"})try(Fixture f=new Fixture()){
+   AndroidStandardExitStore.Entry e=imported();Callback c=new Callback();f.runtime.connectImported(e,f.exit,mode,"local",c);c.await();
+   check(c.ok&&f.engine.starts==1&&AndroidMultihopController.preparations==1,"supported SOCKS imported runtime rejected before preparation: "+mode);
+   check(AndroidPathProbe.proofs==1&&LayeredVpnService.mtu==1&&AndroidStartupPolicy.writes==0,"imported runtime skipped owned proof/activation or borrowed paired history");
+   check(AndroidHomeStateStore.current.activeEntryId.equals(e.id)&&AndroidHomeStateStore.current.activeEntryMode.equals("socks5")&&AndroidHomeStateStore.current.runtimeMode.equals(mode),"imported runtime substituted source or final mode");cases++;
+  }
+  for(String fault:new String[]{"unsupported-entry","unsupported-final","server","auto","same-id","foreign-source","queued-entry","queued-exit","queued-cancel","prepared-entry","started-entry","private-proof"})try(Fixture f=new Fixture()){
+   AndroidStandardExitStore.Entry e=imported();String mode="wg",execution="local";
+   if(fault.equals("unsupported-entry"))e.protocol="openvpn";if(fault.equals("unsupported-final"))mode="naive-h3";
+   if(fault.equals("server")||fault.equals("auto"))execution=fault;if(fault.equals("same-id"))e.id=f.exit.id;if(fault.equals("foreign-source"))AndroidImportedRouterPath.current=null;
+   if(fault.equals("prepared-entry"))AndroidMultihopController.onPrepare=()->e.secret="replaced before staging";
+   if(fault.equals("started-entry"))f.engine.duringStart=()->e.secret="replaced after native start";
+   if(fault.equals("private-proof"))AndroidPathProbe.valid=false;
+   CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+   if(fault.startsWith("queued-")){Field field=AndroidMultihopRuntime.class.getDeclaredField("executor");field.setAccessible(true);((ExecutorService)field.get(f.runtime)).submit(()->{entered.countDown();try{release.await();}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}});check(entered.await(3,TimeUnit.SECONDS),"imported queue barrier not acquired");}
+   Callback c=new Callback();try{f.runtime.connectImported(e,f.exit,mode,execution,c);if(fault.equals("queued-entry"))e.secret="replacement";if(fault.equals("queued-exit"))f.change(false);if(fault.equals("queued-cancel"))f.runtime.disconnect();}finally{release.countDown();}c.await();
+   boolean launched=fault.equals("started-entry")||fault.equals("private-proof");
+   check(!c.ok&&f.engine.starts==(launched?1:0)&&!AndroidHomeStateStore.current.connected&&LayeredVpnService.mtu==0,"invalid imported source/execution escaped runtime: "+fault);
+   if(launched)check(f.engine.stops==1,"failed imported proof did not join original native owner");cases++;
+  }
+ }
  static void historicalMatrix()throws Exception{
   for(String entry:new String[]{"wg","wg-pq","max-quic-awg","reality-xhttp","naive-h3","max"})for(String exit:new String[]{"wg","awg2-strong","wg-pq","awg2-pq","max-tls-wg","max-quic-awg","shadowsocks","reality-xhttp","max","split"})for(String selected:new String[]{"local","server"}){
    try(Fixture f=new Fixture()){int generation=LayeredVpnService.nativeGeneration;AndroidMultihopRuntime.StartupCapture historical=f.capture(entry,exit,"auto",selected);Callback c=f.last(historical);c.await();
@@ -223,7 +249,7 @@ public final class MultihopStartupLastTest{
   }
   try(Fixture f=new Fixture()){LayeredVpnService.selected="local";AndroidStartupPolicy.writeFailure=true;Callback c=new Callback();f.runtime.connect(f.entry,f.exit,"wg","auto","wg",c);c.await();check(c.ok&&AndroidStartupPolicy.writes==0&&LayeredVpnService.mtu==1,"harmless historical write failure disconnected proved path");cases++;}
  }
- public static void main(String[] args)throws Exception{historicalMatrix();malformed();staleAndProof();historicalRecording();System.out.println("Android two-Router historical execution: "+checks+" checks / "+cases+" cases; actual runtime, source files and public-pin constraints");}
+ public static void main(String[] args)throws Exception{importedRuntime();historicalMatrix();malformed();staleAndProof();historicalRecording();System.out.println("Android two-Router historical execution: "+checks+" checks / "+cases+" cases; actual runtime, source files and public-pin constraints");}
 }
 '''
 
@@ -247,6 +273,7 @@ def main():
     composite_predicate = member((JAVA / 'AndroidNativeCompositeProfile.java').read_text(), '    static boolean isMode(')
     stubs = STUBS.replace('// REAL_SOURCE_MEMBERS', source_members).replace('// NATIVE_PREDICATES', predicates)
     stubs = stubs.replace('// MAX_PREDICATE', max_predicate).replace('// COMPOSITE_PREDICATE', composite_predicate)
+    stubs = stubs.replace('// SHIPPING_IMPORTED_SUPPORTS', member((JAVA/'AndroidImportedRouterPath.java').read_text(), '    static boolean supports('))
     with tempfile.TemporaryDirectory(prefix='routervpn-multihop-startup-last-') as directory:
         root = Path(directory)
         app = root / 'com/eabusham/routervpn'
@@ -270,6 +297,7 @@ def main():
         subprocess.run(run, check=True, timeout=45)
         original = target.read_text()
         controls = (
+            ('published SOCKS admission', target, 'imported ? !AndroidImportedRouterPath.supports(entryMode,exitMode)', 'imported ? !java.util.Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode)', 'supported SOCKS imported runtime rejected before preparation'),
             ('historical leaf', target, 'connectCaptured(entry,exit,capture.exitMode,capture.selected,capture.policy,capture.entryMode,', 'connectCaptured(entry,exit,capture.exitMode,capture.policy,capture.policy,capture.entryMode,', 'valid historical choice failed'),
             ('historical no-write', target, 'capture.entrySource,capture.exitSource,capture.serverIdentityPins,idle,false,callback);', 'capture.entrySource,capture.exitSource,capture.serverIdentityPins,idle,true,callback);', 'Startup Last overwrote history'),
             ('submission-time temporary ownership', target, 'boolean remember=!AndroidMTUMeasurementGate.held();', 'boolean remember=true;', 'temporary request entered Last history'),
@@ -293,8 +321,94 @@ def main():
             file.write_text(source)
             assert result.returncode and 'AssertionError' in result.stderr and expected in result.stdout + result.stderr, (label, 'did not fail at intended runtime assertion', result.stdout, result.stderr)
             print('Android two-Router Last mutation rejected:', label)
-        print('Android historical multihop runtime: thirteen source/owner/public-identity mutations rejected')
+        print('Android historical multihop runtime: fourteen source/owner/public-identity mutations rejected')
+
+
+
+COMPOSED = r'''package com.eabusham.routervpn;
+import android.content.Context;import java.nio.file.*;import java.util.*;import java.util.concurrent.*;import org.json.*;
+public final class ComposedTest {
+ static Context context;static int checks;
+ static void check(boolean ok,String message){checks++;if(!ok)throw new AssertionError(message);}
+ static final class Callback implements AndroidMultihopRuntime.Callback {final CountDownLatch done=new CountDownLatch(1);boolean ok;int completions;public void progress(String s){}public void finished(boolean value,String message){ok=value;completions++;done.countDown();}void await()throws Exception{check(done.await(4,TimeUnit.SECONDS)&&completions==1,"composed runtime did not finish one owned callback");}}
+ static byte[] source()throws Exception{return new JSONObject().put("node_id","final").put("profiles",new JSONObject()).put("modes",new JSONArray()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);}
+ public static void main(String[] args)throws Exception{
+  for(String mode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"))for(String fault:List.of("none","source-before-stage","source-after-start","proof","cancel")){
+   context=new Context();NativeSingBoxController engine=new NativeSingBoxController();AndroidMultihopController.preparations=0;AndroidMultihopController.onPrepare=null;AndroidPathProbe.proofs=0;AndroidPathProbe.valid=!fault.equals("proof");AndroidPathProbe.duringProof=null;
+   LayeredVpnService.captures=0;LayeredVpnService.mtu=0;LayeredVpnService.unhealthy=false;LayeredVpnService.selected="";LayeredVpnService.pins="{}";LayeredVpnService.duringCapture=null;LayeredVpnService.duringMTU=null;
+   Path directory=Files.createTempDirectory("composed-imported-home-"),file=directory.resolve("final.json");Files.write(file,source());AndroidNodeStore.Node last=new AndroidNodeStore.Node("final",file.toFile());
+   AndroidStandardExitStore.Entry first=new AndroidStandardExitStore.Entry();first.id="original-socks";first.name="Saved SOCKS";first.protocol="socks5";AndroidImportedRouterPath.current=first;
+   AndroidMultihopRuntime runtime=new AndroidMultihopRuntime(context,engine);AndroidStartupPolicy.runtime=runtime;
+   try{
+    if(fault.equals("source-before-stage"))AndroidMultihopController.onPrepare=()->first.secret="changed original source";
+    if(fault.equals("source-after-start"))engine.duringStart=()->first.secret="changed original source";
+    if(fault.equals("cancel"))AndroidMultihopController.onPrepare=runtime::disconnect;
+    Callback callback=new Callback();runtime.connectImported(first,last,mode,"local",callback);callback.await();
+    AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+    if(fault.equals("none")){
+     check(callback.ok&&engine.starts==1&&AndroidMultihopController.preparations==1,"composed SOCKS runtime/Home rejected published path: "+mode);
+     check(home.connected&&home.pathProof.equals("passed")&&home.activeEntryId.equals(first.id)&&home.activeExitId.equals(last.id)&&home.activeEntryMode.equals("socks5")&&home.runtimeMode.equals(mode)&&home.actualBase.equals("libbox"),"composed runtime adopted wrong real Home identity");
+     check(LayeredVpnService.captures>0&&LayeredVpnService.mtu==1,"composed runtime activated before owned proof");
+    }else check(!callback.ok&&!home.connected&&LayeredVpnService.mtu==0,"composed runtime published cancelled/stale/unproved Home: "+fault);
+   }finally{runtime.disconnect();runtime.close();long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(runtime.isActiveOrTransitioning()&&System.nanoTime()<end)Thread.yield();check(!AndroidHomeStateStore.snapshot(context).connected&&engine.state.equals("DOWN"),"composed cleanup retained live Home or native owner: "+fault+"/"+engine.state+"/"+AndroidHomeStateStore.snapshot(context).phase);Files.delete(file);Files.delete(directory);}
+  }
+  for(String mode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong"))for(boolean alive:List.of(false,true)){
+   context=new Context();AndroidHomeStateStore.beginMultihop(context,"saved-socks","saved-final",mode,"socks5");AndroidHomeStateStore.connectedMultihop(context,"saved-socks","saved-final",mode,"socks5");
+   NativeSingBoxController engine=new NativeSingBoxController();engine.state=alive?"UP":"DOWN";AndroidMultihopRuntime runtime=new AndroidMultihopRuntime(context,engine);
+   try{check(runtime.isConnected()==alive&&AndroidHomeStateStore.snapshot(context).connected==alive,"published SOCKS live-state reattachment changed exact native liveness");if(alive)check(runtime.activeEntryMode().equals("socks5"),"reattachment changed original entry label");}
+   finally{runtime.disconnect();runtime.close();}
+  }
+  System.out.println("Composed shipping imported runtime + Home: "+checks+" checks /35 cases PASS; native preparation/proof and Android OS boundaries doubled");
+ }
+}
+'''
+
+
+def composed_home():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('composed_home_boundary', ROOT/'android/test_android_multihop_home_state.py')
+    home_fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(home_fixture)
+    controller = (JAVA/'AndroidMultihopController.java').read_text()
+    source_members = '\n'.join(member(controller, marker) for marker in (
+        '    static final class Source {', '    private static final class LoadedBundle {',
+        '    static Source captureSource(', '    static String validatedServerIdentityPins(',
+        '    private static String sourceDigest(', '    private static byte[] readBundleBytes('))
+    native = (JAVA/'NativeSingBoxController.java').read_text()
+    predicates = '\n'.join(member(native, '    static boolean '+name+'(') for name in ('nativeWireGuardFamily','nativePQFamily','nativeNaiveFamily','nativeMultihopEntry'))
+    maximum = (JAVA/'AndroidNativeMAXProfile.java').read_text()
+    modes = re.search(r'(?s)    private static final (?:java\.util\.)?Set<String> MODES\s*=.*?;',maximum)[0]
+    stubs = STUBS.replace(member(STUBS,'final class AndroidHomeStateStore {'),'')
+    stubs = stubs.replace('// REAL_SOURCE_MEMBERS',source_members).replace('// NATIVE_PREDICATES',predicates)
+    stubs = stubs.replace('// MAX_PREDICATE',modes+'\n'+member(maximum,'    static boolean isMode(')).replace('// COMPOSITE_PREDICATE',member((JAVA/'AndroidNativeCompositeProfile.java').read_text(),'    static boolean isMode('))
+    stubs = stubs.replace('// SHIPPING_IMPORTED_SUPPORTS',member((JAVA/'AndroidImportedRouterPath.java').read_text(),'    static boolean supports('))
+    stubs = stubs.replace('AndroidHomeStateStore.current','AndroidHomeStateStore.snapshot(ComposedTest.context)')
+    with tempfile.TemporaryDirectory(prefix='routervpn-composed-imported-home-') as directory:
+        root=Path(directory);app=root/'com/eabusham/routervpn';app.mkdir(parents=True)
+        for name in ('AndroidMultihopRuntime','AndroidHomeStateStore','AndroidMTUMeasurementGate'):
+            shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
+        (app/'Boundaries.java').write_text(stubs)
+        (app/'ComposedTest.java').write_text(COMPOSED)
+        for name in ('android/content/SharedPreferences.java','android/content/Context.java','com/wireguard/android/backend/Tunnel.java','org/amnezia/awg/backend/Tunnel.java','com/eabusham/routervpn/HomeBoundaries.java'):
+            target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(home_fixture.SOURCES[name])
+        target=root/'android/content/Intent.java';target.write_text('package android.content;public class Intent{}')
+        target=root/'android/util/Base64.java';target.parent.mkdir(parents=True)
+        target.write_text('package android.util;public class Base64{public static final int DEFAULT=0,NO_WRAP=2;public static byte[] decode(String s,int f){return java.util.Base64.getMimeDecoder().decode(s);}public static String encodeToString(byte[] b,int f){return java.util.Base64.getEncoder().encodeToString(b);}}')
+        jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'));classes=root/'classes'
+        compile=['javac','--release','17','-encoding','UTF-8','-cp',str(jar),'-d',str(classes),*map(str,root.rglob('*.java'))]
+        run=['java','-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.ComposedTest']
+        subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=45)
+        for name,old,new in (
+            ('AndroidMultihopRuntime.java','imported ? !AndroidImportedRouterPath.supports(entryMode,exitMode)','imported ? !java.util.Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode)'),
+            ('AndroidMultihopRuntime.java','AndroidImportedRouterPath.supports(state.activeEntryMode,state.runtimeMode)','java.util.Arrays.asList("wireguard","amneziawg").contains(state.activeEntryMode)'),
+            ('AndroidHomeStateStore.java','!AndroidImportedRouterPath.supports(entryMode,runtimeMode)','!java.util.Arrays.asList("wireguard","amneziawg").contains(entryMode)')):
+            target=app/name;original=target.read_text();assert old in original;target.write_text(original.replace(old,new))
+            subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            result=subprocess.run(run,capture_output=True,text=True,timeout=45);target.write_text(original)
+            if not result.returncode or not any(w in result.stderr for w in ('composed SOCKS runtime/Home rejected published path','Invalid live entry transport','published SOCKS live-state reattachment changed exact native liveness')):
+                raise AssertionError('Composed old admission did not fail at exact boundary: '+name+'\n'+result.stdout+result.stderr)
+            print('Composed actual runtime/Home old admission rejected:',name)
 
 
 if __name__ == '__main__':
     main()
+    composed_home()

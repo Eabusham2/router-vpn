@@ -257,7 +257,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                                              AndroidMultihopController.Source expectedEntry, AndroidMultihopController.Source expectedExit, String expectedPins,
                                              AndroidHomeStateStore.Snapshot expectedIdle, boolean remember, Callback callback) {
         boolean imported=expectedEntry!=null&&expectedEntry.imported();
-        if (imported ? !java.util.Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode)
+        if (imported ? !AndroidImportedRouterPath.supports(entryMode,exitMode)
                 : !NativeSingBoxController.nativeMultihopEntry(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
         if(!java.util.Arrays.asList("local","server","auto").contains(execution)){callback.finished(false,"Invalid multihop execution.");return;}
         if (closed.get()) { callback.finished(false, "Android multihop runtime is closed."); return; }
@@ -547,7 +547,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     private synchronized void restoreFromPersistedState() {
         AndroidHomeStateStore.Snapshot state = AndroidHomeStateStore.snapshot(context);
-        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && (NativeSingBoxController.nativeMultihopEntry(state.activeEntryMode) || java.util.Arrays.asList("wireguard","amneziawg").contains(state.activeEntryMode)) && "UP".equals(singBox.getState())) {
+        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && (NativeSingBoxController.nativeMultihopEntry(state.activeEntryMode) || AndroidImportedRouterPath.supports(state.activeEntryMode,state.runtimeMode)) && "UP".equals(singBox.getState())) {
             connected = true;
             transitioning = false;
             activeEntryId = state.activeEntryId;

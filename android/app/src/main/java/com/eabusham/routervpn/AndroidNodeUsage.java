@@ -143,8 +143,9 @@ final class AndroidNodeUsage {
         return new Attempt(Arrays.asList(captureRouter(entry),captureRouter(exit)),"multihop","",entry.id,exit.id,entryMode,"",false);
     }
 
-    static Attempt importedMultihop(Context context,AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit)throws Exception{
-        if(entry==null||exit==null||entry.id.equals(exit.id)||!Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entry.protocol))throw new IllegalArgumentException("The captured mixed usage path changed.");
+    static Attempt importedMultihop(Context context,AndroidStandardExitStore.Entry entry,AndroidNodeStore.Node exit,String exitMode)throws Exception{
+        if(entry==null||exit==null||entry.id.equals(exit.id))throw new IllegalArgumentException("The captured mixed usage path changed.");
+        if(!AndroidImportedRouterPath.supports(entry.protocol,exitMode))throw new IllegalArgumentException("The captured mixed usage transport changed.");
         return new Attempt(Arrays.asList(captureExternal(context,entry),captureRouter(exit)),"multihop","",entry.id,exit.id,entry.protocol,"",false);
     }
 

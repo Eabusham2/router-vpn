@@ -318,7 +318,18 @@ public final class MultihopHomeHarness {
   AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; cancel pending restoration");
   check(AndroidHomeStateStore.snapshot(context).pathGeneration==before+1,"emergency stop did not revoke queued restoration");
  }
+ static void importedPairs(){
+  for(String mode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")){
+   try{pair("socks5",mode);}catch(Throwable failure){throw new AssertionError("published SOCKS Home admission failed: "+mode,failure);}
+  }
+  for(boolean adopted:List.of(false,true)){
+   Context context=externalOwner();Map<String,Object> before=new HashMap<>(context.store.values);boolean refused=false;
+   try{if(adopted)AndroidHomeStateStore.connectedMultihop(context,ENTRY,EXIT,"naive-h3","socks5");else AndroidHomeStateStore.beginMultihop(context,ENTRY,EXIT,"naive-h3","socks5");}catch(IllegalArgumentException expected){refused=true;}
+   check(refused&&before.equals(context.store.values),"unsupported SOCKS final changed original Home owner");
+  }
+ }
  public static void main(String[] args)throws Exception {
+  if(args.length==1&&args[0].equals("--imported-only")){importedPairs();return;}
   if(args.length==1&&args[0].equals("--atomic-only")){atomicAdoptions();return;}
   JSONArray catalog=new JSONArray(Files.readString(Path.of(args[0])));List<String> supported=new ArrayList<>(),unsupported=new ArrayList<>();
   for(int i=0;i<catalog.length();i++){String id=catalog.getJSONObject(i).getString("id");
@@ -332,6 +343,7 @@ public final class MultihopHomeHarness {
    check(!NativeSingBoxController.nativeMultihopEntry(packet)&&!supported.contains(packet),"ordinary packet label entered private profile catalogue");
    for(String exit:List.of("shadowsocks","hysteria2"))try{pair(packet,exit);}catch(Throwable error){failures.add(packet+" -> "+exit+": "+error);}
   }
+  importedPairs();
   tor("direct");for(String entry:supported)tor(entry);
   externalPolicy("direct");for(String entry:supported)externalPolicy(entry);
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","http"},{"expected_external_ip","9.9.9.9"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})externalStale(change[0],change[1]);
@@ -362,6 +374,10 @@ def main():
         sources.update(SOURCES)
         context = 'android/content/Context.java'
         sources[context] = sources[context].replace('public final class Context {', 'public final class Context {public static final String CONNECTIVITY_SERVICE="connectivity";public Object getSystemService(String name){return null;}', 1)
+        imported = (JAVA/'AndroidImportedRouterPath.java').read_text()
+        start = imported.index('    static boolean supports(')
+        end = imported.index('\n    }', start) + len('\n    }')
+        sources['com/eabusham/routervpn/AndroidImportedRouterPath.java'] = 'package com.eabusham.routervpn;import java.util.Arrays;final class AndroidImportedRouterPath{' + imported[start:end] + '}'
         for name, source in sources.items():
             target = root/name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +414,24 @@ def main():
             raise AssertionError('Unlocked Home negative control did not expose the adoption race:\n'
                                  + negative.stdout + negative.stderr)
         print('Unlocked Home transaction negative control: rejected the competing write PASS')
+        original = home.read_text()
+        for method in ('beginMultihop', 'connectedMultihop'):
+            marker = '    static synchronized ' + ('String' if method == 'beginMultihop' else 'void') + ' ' + method + '(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {'
+            start = original.index(marker)
+            end = original.index('\n    }', start)
+            body = original[start:end]
+            old = '!AndroidImportedRouterPath.supports(entryMode,runtimeMode)'
+            assert body.count(old) == 1
+            broken = body.replace(old, '!java.util.Arrays.asList("wireguard","amneziawg").contains(entryMode)')
+            mutant.write_text(original[:start] + broken + original[end:])
+            subprocess.run(['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none',
+                            '-cp', os.pathsep.join((str(root), str(jar))), '-d', str(mutant_classes), str(mutant)], check=True, timeout=60)
+            negative = subprocess.run(['java', '-cp', os.pathsep.join((str(mutant_classes), str(root), str(jar))),
+                                       'com.eabusham.routervpn.MultihopHomeHarness', '--imported-only'], capture_output=True, text=True, timeout=30)
+            if negative.returncode == 0 or 'published SOCKS Home admission failed' not in negative.stderr:
+                raise AssertionError('Old imported Home restriction escaped: ' + method + '\n' + negative.stdout + negative.stderr)
+            print('Old imported Home admission rejected:', method)
+
 
 
 if __name__ == '__main__':

@@ -170,7 +170,7 @@ final class AndroidStartupPolicy {
             if((entry==null?ordinaryEntry.id:entry.id).equals(exit.id))throw new IllegalStateException("Saved startup multihop requires two different nodes.");
             entryMode=prefs.getString("multihop_entry_mode","wg");exitMode=prefs.getString("multihop_exit_mode","");execution=prefs.getString("multihop_execution","local");
             if((ordinaryEntry==null?!NativeSingBoxController.nativeMultihopEntry(entryMode)
-                    :!Arrays.asList("shadowsocks","hysteria2","wireguard","amneziawg").contains(entryMode))||exitMode.isEmpty()
+                    :!AndroidImportedRouterPath.supports(entryMode,exitMode))||exitMode.isEmpty()
                     ||!Arrays.asList("local","server","auto").contains(execution))
                 throw new IllegalStateException("The saved multihop startup path is incomplete; it cannot become a single-node connection.");
             if(ordinaryEntry!=null){
