@@ -24,6 +24,16 @@ def module(name, path):
     return loaded
 
 
+def java_member(source, marker):
+    start = source.index(marker)
+    end = source.index('{', start) + 1
+    depth = 1
+    while depth:
+        depth += (source[end] == '{') - (source[end] == '}')
+        end += 1
+    return source[start:end]
+
+
 SOURCES = {
     'android/content/SharedPreferences.java': '''package android.content;
 public interface SharedPreferences {
@@ -70,8 +80,10 @@ public interface Tunnel {enum State {DOWN,UP}}''',
 public interface Tunnel {enum State {DOWN,UP}}''',
     'com/eabusham/routervpn/HomeBoundaries.java': r'''package com.eabusham.routervpn;
 import android.content.Context;
+import java.util.Arrays;
 final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
-final class AndroidExternalPolicy {static boolean supports(String protocol){return java.util.Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2").contains(protocol);}}
+final class AndroidExternalPolicy { // SHIPPING_EXTERNAL_POLICY_MEMBERS
+}
 final class AndroidRuntimeRegistry {
  static final AndroidRuntimeRegistry INSTANCE=new AndroidRuntimeRegistry();
  static AndroidRuntimeRegistry get(Context context){return INSTANCE;}
@@ -322,6 +334,17 @@ public final class MultihopHomeHarness {
   for(String mode:List.of("shadowsocks","hysteria2","wg","awg2-fast","awg2-strong")){
    try{pair("socks5",mode);}catch(Throwable failure){throw new AssertionError("published SOCKS Home admission failed: "+mode,failure);}
   }
+  for(String raw:List.of("http","https")){
+   String mode=AndroidExternalPolicy.protocol(raw);
+   check((raw+"-connect").equals(mode),"captured CONNECT protocol mapping changed");
+   check(AndroidImportedRouterPath.supports(raw,"shadowsocks"),"stored CONNECT alias lost captured capability");
+   pair(mode,"shadowsocks");
+   for(String exit:List.of("hysteria2","wg","awg2-fast","awg2-strong","naive-h3"))for(boolean adopted:List.of(false,true)){
+    Context context=externalOwner();Map<String,Object> before=new HashMap<>(context.store.values);int writes=context.store.writes;boolean refused=false;
+    try{if(adopted)AndroidHomeStateStore.connectedMultihop(context,ENTRY,EXIT,exit,mode);else AndroidHomeStateStore.beginMultihop(context,ENTRY,EXIT,exit,mode);}catch(IllegalArgumentException expected){refused=true;}
+    check(refused&&writes==context.store.writes&&before.equals(context.store.values),"unsupported CONNECT final changed original Home owner");
+   }
+  }
   for(boolean adopted:List.of(false,true)){
    Context context=externalOwner();Map<String,Object> before=new HashMap<>(context.store.values);boolean refused=false;
    try{if(adopted)AndroidHomeStateStore.connectedMultihop(context,ENTRY,EXIT,"naive-h3","socks5");else AndroidHomeStateStore.beginMultihop(context,ENTRY,EXIT,"naive-h3","socks5");}catch(IllegalArgumentException expected){refused=true;}
@@ -372,12 +395,15 @@ def main():
         jar = dependency.android_json_dependency(root, dict(os.environ))
         sources = dict(graph.STUBS)
         sources.update(SOURCES)
+        external = (JAVA/'AndroidExternalPolicy.java').read_text()
+        boundary = 'com/eabusham/routervpn/HomeBoundaries.java'
+        sources[boundary] = sources[boundary].replace('// SHIPPING_EXTERNAL_POLICY_MEMBERS',
+            java_member(external, '    static boolean supports(') + '\n' +
+            java_member(external, '    static String protocol('))
         context = 'android/content/Context.java'
         sources[context] = sources[context].replace('public final class Context {', 'public final class Context {public static final String CONNECTIVITY_SERVICE="connectivity";public Object getSystemService(String name){return null;}', 1)
         imported = (JAVA/'AndroidImportedRouterPath.java').read_text()
-        start = imported.index('    static boolean supports(')
-        end = imported.index('\n    }', start) + len('\n    }')
-        sources['com/eabusham/routervpn/AndroidImportedRouterPath.java'] = 'package com.eabusham.routervpn;import java.util.Arrays;final class AndroidImportedRouterPath{' + imported[start:end] + '}'
+        sources['com/eabusham/routervpn/AndroidImportedRouterPath.java'] = 'package com.eabusham.routervpn;import java.util.Arrays;final class AndroidImportedRouterPath{' + java_member(imported, '    static boolean supports(') + '}'
         for name, source in sources.items():
             target = root/name
             target.parent.mkdir(parents=True, exist_ok=True)
