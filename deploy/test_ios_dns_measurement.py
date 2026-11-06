@@ -156,7 +156,7 @@ func LibboxRouterValidateTorProfile(_ source:String,_ failure:inout NSError?)->B
   return Binding(connection:connection,identity:identity,session:mtuSession)
  }
  static func current(_ b:Binding,model:RouterVPNModel)->Bool{model.connected && model.activeSessionIdentity==b.identity}
- static func withHold<T>(model:RouterVPNModel,operation:@MainActor()async throws->T)async throws->T{
+ static func withHold<T>(model:RouterVPNModel,operation:@MainActor () async throws -> T) async throws -> T {
   let lease=IOSMTUMeasurementGate.acquire();defer{_ = IOSMTUMeasurementGate.release(lease)}
   return try await operation()
  }
@@ -165,7 +165,7 @@ func LibboxRouterValidateTorProfile(_ source:String,_ failure:inout NSError?)->B
  let model:RouterVPNModel,nativeMeasurement:IOSDNSMeasurementClient
  var mode="home",protocolName="udp",host="",port="53",serverName="",path="/dns-query",status=""
  var useHostnameBootstrap=true,measuredDraft=false
- var measuredSource:IOSDNSMeasurementCapture?,loadedExternalDNS:[String]?,loadedExternalProfile:RouterProfile?
+ var measuredSource:IOSDNSMeasurementCapture?,loadedExternalDNS:[String]?,loadedDNSProfile:RouterProfile?
  var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"",serverPort:53))
  init(_ model:RouterVPNModel,_ client:IOSDNSMeasurementClient){self.model=model;nativeMeasurement=client;load()}
  func choose(_ value:IOSDNSMeasurementResult){useMeasured(value)}

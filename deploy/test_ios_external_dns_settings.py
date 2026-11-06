@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run shipping external DNS settings and Codable with store/OS boundaries.
+"""Run shipping Router/external DNS settings and Codable with store/OS boundaries.
 
 The separate external-policy gate calls the real Go compiler. This gate proves
 the visible sheet saves the exact selected node and retains bootstrap options.
@@ -62,7 +62,7 @@ enum IOSDNSRuntimePolicy {
  var mode="home",protocolName="udp",host="",port="53",serverName="",path="/dns-query",status=""
  var useHostnameBootstrap=false,results:[DNSBenchmarkResult]=[]
  var loadedExternalDNS:[String]?
- var loadedExternalProfile:RouterProfile?
+ var loadedDNSProfile:RouterProfile?
  var initialMode:String?
  var measuredSource:IOSDNSMeasurementCapture?,measuredDraft=false
  var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"",serverPort:53))
@@ -142,6 +142,35 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
    editor.host=host;editor.protocolName="https";editor.serverName="";editor.savePolicy()
    try check("Router Home incomplete TLS fails without mutation",model.imports==1 && model.bundle!.routerProfiles==before)
   }}
+ }
+ static func routerEditorOwnership()throws {
+  var original=profile("wireguard");original.nodeKind="router-vpn";original.external=nil
+  original.nodeProofID=String(repeating:"a",count:64);original.routerAPI="http://10.8.0.1:8787"
+  original.adGuardIPv4="192.168.50.133";original.adGuardIPv6="fd12:3456::53";original.ipv6Mode="on"
+  for fault in ["same-id-other-node","credential","endpoint","policy","paired-entry","selection","not-loaded","invalid-reload","external-to-router"] {
+   let model=RouterVPNModel();model.bundle=bundle(original);let editor=Settings(model)
+   if fault != "not-loaded" {editor.load()}
+   if fault=="external-to-router" {model.bundle=bundle(profile("wireguard"));editor.load()}
+   var replacement=original
+   switch fault {
+   case "same-id-other-node":replacement.nodeProofID=String(repeating:"b",count:64)
+   case "credential":replacement.apiToken="replacement-private-token"
+   case "endpoint":replacement.endpoint="198.51.100.9"
+   case "policy":replacement.dnsHost="8.8.8.8"
+   case "paired-entry":replacement.multihopEntryID="replacement-entry"
+   case "selection":replacement.id="another-selection"
+   case "invalid-reload":model.bundle=nil;editor.load()
+   default:break
+   }
+   model.bundle=bundle(replacement)
+   let before=model.bundle!.routerProfiles,assets=model.bundle!.profiles
+   editor.mode="custom";editor.protocolName="tcp";editor.host="149.112.112.112";editor.port="5353"
+   editor.savePolicy()
+   try check("Router DNS editor rejects changed captured owner "+fault,model.imports==0 && model.bundle!.routerProfiles==before && model.bundle!.profiles==assets && editor.status.contains("Reopen DNS settings"))
+   editor.load();editor.mode="custom";editor.protocolName="tcp";editor.host="149.112.112.112";editor.port="5353"
+   editor.savePolicy()
+   try check("Router DNS editor explicitly reopens the current owner "+fault,model.imports==1 && model.bundle!.routerProfiles[0].nodeProofID==replacement.nodeProofID && model.bundle!.routerProfiles[0].apiToken==replacement.apiToken && model.bundle!.routerProfiles[0].dnsHost=="149.112.112.112" && model.bundle!.profiles==assets)
+  }
  }
  static func hostileCodable()throws {
   let original=try JSONSerialization.jsonObject(with:JSONEncoder().encode(boot())) as! [String:Any]
@@ -284,7 +313,7 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
  static func main() {
   defer { RouterVPNTorTestClose() }
   do {
-   try settings();try home();try routerHome();try hostileCodable();try ordinaryDrafts();try tor();try quick()
+   try settings();try home();try routerHome();try routerEditorOwnership();try hostileCodable();try ordinaryDrafts();try tor();try quick()
    print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; ordinary and Tor DNS use real Go validation; storage and Network boundary substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
@@ -336,6 +365,7 @@ def main():
         subprocess.run(compile_command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=60)
         for name, before, after, expected in (
+            ('router-editor-owner', 'guard loadedDNSProfile == p else', 'guard !nativeExternal || loadedDNSProfile == p else', 'Router DNS editor rejects changed captured owner same-id-other-node'),
             ('unresolved-home', 'if external {\n                guard let entry', 'if external && entry != nil {\n                guard let entry', 'quick DNS rejects unowned or unmeasured selection borrowed-home-fields'),
             ('active-write', 'guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing the selected DNS policy."; return }', 'guard true else { return }', 'quick DNS rejects unowned or unmeasured selection busy'),
             ('unmeasured-fastest', 'if initialMode == "fastest" {', 'if initialMode == "fastest" { mode = "fastest"', 'Fastest opens real Retest without adopting historical selection'),

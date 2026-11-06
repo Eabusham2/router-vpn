@@ -35,7 +35,7 @@ struct IOSDNSPolicyView: View {
     @State private var measuredDraft = false
     @State private var measuredSource: IOSDNSMeasurementCapture?
     @State private var loadedExternalDNS: [String]?
-    @State private var loadedExternalProfile: RouterProfile?
+    @State private var loadedDNSProfile: RouterProfile?
 
     private let modeValues = [
         ("Home AdGuard", "home"), ("Fastest measured", "fastest"), ("Custom UDP/TCP", "custom"),
@@ -279,6 +279,8 @@ struct IOSDNSPolicyView: View {
     }
 
     private func load() {
+        loadedDNSProfile = nil
+        loadedExternalDNS = nil
         guard let p = selectedProfile(), p.normalizedNodeKind == "router-vpn" || nativeExternal else { status = "Select a linked node with native DNS policy."; return }
         let savedMode = (p.dnsMode ?? "").lowercased()
         mode = savedMode.isEmpty ? "home" : savedMode
@@ -292,7 +294,7 @@ struct IOSDNSPolicyView: View {
         useHostnameBootstrap = p.dnsBootstrap != nil
         bootstrap = p.dnsBootstrap ?? ExternalDNSBootstrap(server: .init(type: "tcp", server: "", serverPort: 53))
         loadedExternalDNS = nativeExternal ? externalDNSFields : nil
-        loadedExternalProfile = nativeExternal ? p : nil
+        loadedDNSProfile = p
     }
 
     private func savePolicy() {
@@ -304,7 +306,7 @@ struct IOSDNSPolicyView: View {
         }
         var p = bundle.routerProfiles[index]
         guard p.normalizedNodeKind == "router-vpn" || nativeExternal else { status = "This node uses its protocol-specific DNS settings."; return }
-        guard !nativeExternal || loadedExternalProfile == p else { status = "The selected external node changed while DNS settings were open. Reopen DNS settings before saving."; return }
+        guard loadedDNSProfile == p else { status = "The selected node or its profile changed while DNS settings were open. Reopen DNS settings before saving."; return }
         do { try measuredSource?.requireSources(model: model) }
         catch { status = "The selected node or paired entry changed after this DNS choice was measured. Retest before saving it."; return }
         guard let selectedPort = Int(port), (0...65535).contains(selectedPort) else { status = "DNS port must be 1–65535, or 0 for the selected protocol default."; return }
