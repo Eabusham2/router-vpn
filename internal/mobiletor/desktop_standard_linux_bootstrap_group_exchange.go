@@ -21,13 +21,19 @@ import (
 // Exchange retains its original socket/grant until group Close. A failed reply
 // never cancels sibling scopes. The caller validates replies and cancels losing
 // query contexts only after choosing a usable answer, then must Close the group.
-func (g *DesktopLinuxBootstrapDNSGroup) Exchange(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte) (answer []byte, failure error) {
+func (g *DesktopLinuxBootstrapDNSGroup) Exchange(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte) ([]byte, error) {
+	return g.exchangeAttempt(query, upstream, question, nil)
+}
+func (g *DesktopLinuxBootstrapDNSGroup) exchangeAttempt(query context.Context, upstream DesktopLinuxBootstrapDNSUpstream, question []byte, attempt *desktopLinuxBootstrapTLSAttempt) (answer []byte, failure error) {
 	if g == nil || query == nil || g.ctx == nil || g.owner == nil || g.owner.baseline == nil {
 		return nil, errors.New("bootstrap group omitted original query")
 	}
 	deadline, ok := query.Deadline()
 	if !ok || deadline.After(g.deadline) || query.Err() != nil || g.ctx.Err() != nil || upstream.Validate() != nil || desktopLinuxBootstrapQuestion(question) != nil {
 		return nil, errors.New("bootstrap group query outside original bounds")
+	}
+	if attempt != nil && (upstream.Network != "tls" || attempt.config == nil || attempt.deadline.After(deadline) || !attempt.deadline.After(time.Now())) {
+		return nil, errors.New("opportunistic attempt escaped original bounded TLS stage")
 	}
 	ctx, cancel := context.WithDeadline(g.ctx, deadline)
 	defer cancel()
@@ -82,28 +88,49 @@ func (g *DesktopLinuxBootstrapDNSGroup) Exchange(query context.Context, upstream
 		return nil, e
 	}
 	t.mark = binary.BigEndian.Uint32(random[:]) | 0x80000000
-	dialer := net.Dialer{Deadline: deadline, KeepAlive: -1, ControlContext: func(control context.Context, actualNetwork, address string, raw syscall.RawConn) error {
+	dialDeadline := deadline
+	if attempt != nil {
+		dialDeadline = attempt.deadline
+	}
+	var controlFailure error
+	dialer := net.Dialer{Deadline: dialDeadline, KeepAlive: -1, ControlContext: func(control context.Context, actualNetwork, address string, raw syscall.RawConn) error {
+		defer func() {
+			if controlFailure == nil && control.Err() != nil {
+				controlFailure = control.Err()
+			}
+		}()
 		if address != t.remote.String() || actualNetwork != network+"4" && actualNetwork != network+"6" {
-			return errors.New("bootstrap dial changed original destination")
+			controlFailure = errors.New("bootstrap dial changed original destination")
+			return controlFailure
 		}
 		if e := desktopnetwork.LockContext(control, &g.mu); e != nil {
+			controlFailure = e
 			return e
 		}
 		defer g.mu.Unlock()
 		if g.closing || g.blocked != nil {
-			return errors.Join(g.blocked, errors.New("bootstrap group stopped socket admission"))
+			controlFailure = errors.Join(g.blocked, errors.New("bootstrap group stopped socket admission"))
+			return controlFailure
 		}
 		var setup error
-		if e := raw.Control(func(fd uintptr) { setup = t.prepareSocket(control, int(fd), b, lease) }); e != nil {
+		if e := raw.Control(func(fd uintptr) { setup = t.prepareSocket(ctx, int(fd), b, lease) }); e != nil {
+			controlFailure = e
 			return e
 		}
 		if setup != nil && t.grant != nil && (t.grant.sent && !t.grant.complete() || t.grant.poison != nil) {
 			g.blocked = errors.Join(g.blocked, setup)
 		}
+		if setup == nil && attempt != nil && !time.Now().Before(attempt.deadline) {
+			setup = errors.New("opportunistic TLS stage exhausted during local grant setup")
+		}
+		controlFailure = setup
 		return setup
 	}}
 	t.conn, e = dialer.DialContext(ctx, network, t.remote.String())
 	if e != nil {
+		if attempt != nil && controlFailure == nil {
+			return nil, g.unavailableTLS(ctx, t, e)
+		}
 		return nil, e
 	}
 	t.connected = true
@@ -120,10 +147,13 @@ func (g *DesktopLinuxBootstrapDNSGroup) Exchange(query context.Context, upstream
 		if e != nil {
 			return nil, e
 		}
+		if attempt != nil {
+			config = attempt.config.Clone()
+		}
 		secure = tls.Client(connection, config)
 		connection = secure
 	}
-	if e = connection.SetDeadline(deadline); e != nil {
+	if e = connection.SetDeadline(dialDeadline); e != nil {
 		return nil, e
 	}
 	done := make(chan struct{})
@@ -138,9 +168,17 @@ func (g *DesktopLinuxBootstrapDNSGroup) Exchange(query context.Context, upstream
 	}
 	if secure != nil {
 		if e = secure.HandshakeContext(ctx); e != nil {
+			if attempt != nil {
+				return nil, g.unavailableTLS(ctx, t, e)
+			}
 			return nil, e
 		}
 		if e = t.currentSocket(ctx); e != nil {
+			return nil, e
+		}
+	}
+	if attempt != nil {
+		if e = connection.SetDeadline(deadline); e != nil {
 			return nil, e
 		}
 	}

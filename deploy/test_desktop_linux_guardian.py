@@ -34,7 +34,7 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession', 'NodeRunning', 'SOCKSAssociation')
-STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer', 'StandardBootstrapSocket', 'StandardBootstrapConditionalRemoval', 'StandardBootstrapFiniteGrant', 'StandardBootstrapUpstream', 'StandardBootstrapGroup')
+STANDARD_KERNEL_CASES = ('StandardProtectionCreator', 'StandardReplacementCannotBeDeleted', 'StandardScopedAbsence', 'StandardNodeTransfer', 'NodeStandardTransfer', 'StandardImageTransfer', 'StandardBootstrapSocket', 'StandardBootstrapConditionalRemoval', 'StandardBootstrapFiniteGrant', 'StandardBootstrapUpstream', 'StandardBootstrapGroup', 'StandardBootstrapOpportunistic')
 STANDARD_PARSER_CASES = ('ImageTransferUnknownResultRetainsOriginalPin', 'ImageTransferPolicy', 'ImageTransferOriginalEndpointInventory', 'ImageTransferCancellationKeepsOriginalPins', 'CreationReceiptRetainsExactEndpointPolicy', 'CreationScopeAndPartialAuthority', 'ScopedAbsenceNeverClaimsNodeOrMalformedAbsence', 'NodeTransferRejectsChangedInventory', 'NodeTransferUnknownResultRetainsPins')
 STANDARD_TRANSFER_INVENTORY = ('original', 'session', 'handle', 'uid', 'baseline', 'home-lan', 'unknown-field', 'noncanonical', 'widened-baseline')
 STANDARD_TRANSFER_UNKNOWN = ('unknown-removal', 'cancelled-finish', 'closed-creator')
@@ -52,6 +52,8 @@ BOOTSTRAP_REMOVAL_NATIVE = ('stale-ruleset', 'same-handle-replacement', 'cancell
 BOOTSTRAP_FINITE_NATIVE = ('kernel-expiry', 'late-original-receipts', 'wrong-endpoint', 'generation-change', 'same-handle-replacement')
 BOOTSTRAP_UPSTREAM_NATIVE = ('udp-port', 'tcp-port', 'tls-name', 'tls-ip', 'tls-wrong-name', 'tls-untrusted', 'tls-timeout', 'wrong-link')
 BOOTSTRAP_GROUP_NATIVE = ('overlap','loser-cancel','close-active','invalid-first','unknown-receipt','stale-generation')
+BOOTSTRAP_OPPORTUNISTIC_NATIVE = ('tls-selfsigned','tls-empty-sni','strict-selfsigned','fallback-udp','fallback-tcp','fallback-default','fallback-truncated','after-tls','cancel','owner-loss','stale-grant')
+BOOTSTRAP_PARSER += ('OpportunisticCapturedPolicy', 'OpportunisticCapturedPolicy/udp', 'OpportunisticCapturedPolicy/tcp', 'OpportunisticRejectsForeignPolicy', *(f'OpportunisticRejectsForeignPolicy/{case}' for case in ('strict','plain','unset','missing-current','changed-current','wrong-route','bad-network','missing-authority')), 'OpportunisticTLSIdentityBoundary', *(f'OpportunisticTLSIdentityBoundary/{case}' for case in ('captured-sni','empty-sni','strict-rejects')), 'OpportunisticFailureBoundary')
 BOOTSTRAP_PARSER += ('GroupOriginalGeneration', *(f'GroupOriginalGeneration/{case}' for case in ('original','partial','wrong-owner','foreign-generation','rejected','unsent')), 'GroupCapacity','GroupInventory', *(f'GroupInventory/{case}' for case in ('extra-rule','missing-set','duplicate-rule','retired-reappears')), 'GroupRejectsDetachedCapability','GroupFailedJoinRetainsOwner','GroupNativeInventoryBudget')
 
 BOOTSTRAP_PARSER += ('UpstreamPreservesExactTransport', *(f'UpstreamPreservesExactTransport/{network}/192.0.2.53:{port}' for network in ('udp','tcp','tls') for port in (53,853,5353)), 'UpstreamRejectsDowngrades', *(f'UpstreamRejectsDowngrades/{case}' for case in ('plain-with-name','unknown-transport','zero-port','negative-link','huge-link','loopback','mapped','multicast','zone','name-port','name-path','name-wildcard','name-space','name-empty-label')), 'UpstreamTLSProvesIdentityAndFraming', *(f'UpstreamTLSProvesIdentityAndFraming/{case}' for case in ('captured-sni','captured-ip-no-sni','wrong-sni','wrong-ip','untrusted-root')), 'UpstreamTLSCancellationJoins')
@@ -60,6 +62,7 @@ STANDARD_SOURCE_FILES = frozenset({'desktop_standard_linux_bootstrap.go', 'deskt
                                   'desktop_standard_linux_protection_test.go',
                                   'desktop_standard_linux_protection_native_test.go', 'desktop_standard_linux_absence_test.go'})
 STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_group'+suffix+'.go' for suffix in ('','_exchange','_test','_native_test'))
+STANDARD_SOURCE_FILES |= frozenset('desktop_standard_linux_bootstrap_opportunistic'+suffix+'.go' for suffix in ('','_test','_native_test'))
 STANDARD_SOURCE_FILES |= frozenset({'desktop_standard_linux_bootstrap_netlink.go', 'desktop_standard_linux_bootstrap_netlink_test.go', 'desktop_standard_linux_bootstrap_netlink_native_test.go'})
 BOOTSTRAP_GRANT_FILES = tuple('desktop_standard_linux_bootstrap_grant_'+suffix+'.go' for suffix in ('wire','receipt','transport','observe','wire_test','native_test'))
 STANDARD_SOURCE_FILES |= frozenset(BOOTSTRAP_GRANT_FILES)
@@ -475,6 +478,7 @@ def execute(source: Path, go='go', *, env=None):
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapFiniteGrant/', BOOTSTRAP_FINITE_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapUpstream/', BOOTSTRAP_UPSTREAM_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapGroup/', BOOTSTRAP_GROUP_NATIVE)
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapOpportunistic/', BOOTSTRAP_OPPORTUNISTIC_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardImageTransfer/', IMAGE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeStandardTransfer/', REVERSE_TRANSFER_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardNodeTransfer/', STANDARD_TRANSFER_NATIVE)
@@ -520,6 +524,7 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'conditional baseline generation': 'stale ruleset generation did not reject the actual conditional transaction',
         'conditional bootstrap generation': 'stale bootstrap generation did not reject the actual conditional transaction',
         'finite bootstrap kernel membership': 'actual kernel packet verdict kernel-expiry false',
+        'opportunistic captured TLS policy': 'actual owned opportunistic client',
         'concurrent bootstrap scope overlap': 'group peer overlap failed',
         'bootstrap group original generation': 'group adopted a fresh generation without original ledger receipt',
         'captured bootstrap resolver port': 'captured protected upstream did not return exact framed DNS',
@@ -547,6 +552,9 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'SOCKS joined UDP retirement': 'native TCP permit retired before its original UDP descriptor',
     }
     mutations = (
+        ('opportunistic captured TLS policy', 'StandardBootstrapOpportunistic', 'desktop_standard_linux_bootstrap_opportunistic.go', (
+            ('InsecureSkipVerify: true', 'InsecureSkipVerify: false'),
+        )),
         ('concurrent bootstrap scope overlap', 'StandardBootstrapGroup', 'desktop_standard_linux_bootstrap_group_exchange.go', (
             ('runtime.LockOSThread()', 'g.closeMu.Lock(); defer g.closeMu.Unlock(); runtime.LockOSThread()'),
         )),
