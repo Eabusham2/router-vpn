@@ -1131,3 +1131,16 @@ The runner's six positive-branch budget expectations change together with the si
 
 Evidence: [AMD64 aggregate alarm](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408655), [ARM64 complete ALL pass](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408807).
 
+
+## 2026-11-06 — Complete macOS native-sockets job allowance
+
+The Intel native-sockets job 127932408888 on `0ab1606c` started at 13:59:35 UTC and logged cancellation at 14:34:48, near its configured 35-minute job limit. It passed the 41 runner tests, completed the positive native cases, and rejected 42 of the runner's 44 causal mutations. The last completed control was quick-deny-before-foreign-pass at 14:33:27. Per-socket retirement and descriptor-finish acknowledgement controls remained. No completed assertion failure or Go package alarm appears at that cancellation boundary; the generic cancellation message alone does not independently identify its actor.
+
+The native-sockets matrix job now has a bounded 45-minute allowance so the complete existing sequence can finish. No case, mutation, command or individual deadline changes: each native case keeps its 12-minute Go alarm and the wrapper keeps its 730-second bound. The separate anchor-lifetime job remains at ten minutes. A complete fresh Intel and ARM64 run must still verify this aggregate allowance.
+
+This change does not address the separate ARM64 retirement failure in job 127932409218. That run exhausted the existing 12-minute individual case bound while waiting for original socket/guardian retirement. The same capacity case previously passed on the same recorded OS/image/toolchain in standalone job 127900106780, and its relevant source inputs did not change. The authenticated revoke-rejection lifetime defect and native diagnostics are being repaired separately; no native ownership check is relaxed here.
+
+Validation before publication: root read the completed Intel log and exact runner/workflow; independent Astra review reconciled the full 44-control inventory and prior ARM64 result. Only the one job allowance and explanatory comment change. No local execution is claimed.
+
+Evidence: [Intel job cancellation](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932408888), [separate ARM64 retirement failure](https://github.com/Eabusham2/router-vpn/actions/runs/42229778982/job/127932409218).
+

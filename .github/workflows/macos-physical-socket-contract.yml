@@ -104,7 +104,8 @@ jobs:
       matrix:
         runner: [macos-15-intel, macos-15]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    # Keep every native case and causal control within one bounded complete job.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
