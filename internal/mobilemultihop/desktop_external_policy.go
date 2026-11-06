@@ -72,6 +72,9 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		return nil, desktopExternalPolicyError
 	}
 	capture, err := original.DesktopCapture()
+	if err == nil && targetOS == "windows" && capture.Execution == "server" {
+		return newDesktopExternalRouterServerPolicy(original, capture, sessionID)
+	}
 	entryKind := ""
 	if err == nil && (targetOS == "darwin" || targetOS == "linux" || targetOS == "windows") {
 		entryKind = desktopExternalEntryKind(original, capture, targetOS)
