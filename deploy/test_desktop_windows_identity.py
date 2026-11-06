@@ -223,16 +223,43 @@ def run(command, *, cwd, env, timeout=180):
                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
     try:
         raw, _ = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # Only this newly owned process tree is terminated. The real fixture
-        # creates no child helper/token process and accounts expire atomically.
-        if process.poll() is None:
-            subprocess.run(["taskkill.exe", "/F", "/T", "/PID", str(process.pid)],
-                           check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           timeout=10)
-        raw, _ = process.communicate(timeout=10)
+    except subprocess.TimeoutExpired as expired:
+        raw = expired.output or b""
+        cleanup = []
+
+        def remember_cleanup(error):
+            detail = type(error).__name__ + ": " + str(error)
+            for value in (getattr(error, "stdout", None), getattr(error, "stderr", None)):
+                if value:
+                    detail += "\n" + value[-4096:].decode("utf-8", errors="replace")
+            cleanup.append(detail)
+
+        # Target only the newly owned process tree. The original process may
+        # exit while taskkill is starting, or a child may retain its output
+        # pipe. Neither secondary failure may hide the original test output.
+        try:
+            if process.poll() is None:
+                subprocess.run(["taskkill.exe", "/F", "/T", "/PID", str(process.pid)],
+                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               timeout=10)
+        except (OSError, subprocess.SubprocessError) as error:
+            remember_cleanup(error)
+            if process.poll() is None:
+                try:
+                    process.kill()  # The exact Popen process handle, never another PID.
+                except OSError as kill_error:
+                    remember_cleanup(kill_error)
+        try:
+            drained, _ = process.communicate(timeout=10)
+            if drained:
+                raw = drained
+        except (OSError, subprocess.SubprocessError) as error:
+            if isinstance(error, subprocess.TimeoutExpired) and error.output:
+                raw = error.output
+            remember_cleanup(error)
         raise RuntimeError("Windows identity gate timed out; no proof accepted:\n" +
-                           raw[-32768:].decode("utf-8", errors="replace"))
+                           raw[-32768:].decode("utf-8", errors="replace") +
+                           ("\nOwned process cleanup diagnostics:\n" + "\n".join(cleanup) if cleanup else "")) from expired
     return process.returncode, raw.decode("utf-8", errors="replace")
 
 

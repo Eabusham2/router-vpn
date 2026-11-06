@@ -7,13 +7,92 @@ import importlib.util
 import io
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "windows_identity_runner_gate", ROOT / "deploy/test_desktop_windows_identity.py")
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
+
+
+class WindowsIdentityTimeoutEvidence(unittest.TestCase):
+    def setUp(self):
+        self.process = Mock(pid=4219, returncode=7)
+        self.process.poll.return_value = None
+        self.command = ["owned-test.exe", "-test.timeout=90s"]
+        self.first = GATE.subprocess.TimeoutExpired(self.command, 105,
+                                                    output=b"original test failure\n")
+        self.process.communicate.side_effect = [self.first, (b"original test failure\njoined\n", None)]
+        self.popen = patch.object(GATE.subprocess, "Popen", return_value=self.process).start()
+        self.taskkill = patch.object(GATE.subprocess, "run").start()
+        patch.object(GATE.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, create=True).start()
+        self.addCleanup(patch.stopall)
+
+    def run_timeout(self):
+        with self.assertRaisesRegex(RuntimeError, "timed out; no proof accepted") as caught:
+            GATE.run(self.command, cwd=ROOT, env={"FIXTURE": "owned"}, timeout=105)
+        self.assertIs(caught.exception.__cause__, self.first)
+        self.assertIn("original test failure", str(caught.exception))
+        self.assertEqual(self.process.communicate.call_args_list, [call(timeout=105), call(timeout=10)])
+        return str(caught.exception)
+
+    def test_success_preserves_the_actual_status_and_output(self):
+        self.process.communicate.side_effect = [(b"actual result\n", None)]
+        self.assertEqual(GATE.run(self.command, cwd=ROOT, env={}, timeout=105), (7, "actual result\n"))
+        self.taskkill.assert_not_called()
+        self.process.kill.assert_not_called()
+
+    def test_timeout_rejects_even_after_successful_owned_tree_cleanup(self):
+        self.run_timeout()
+        self.taskkill.assert_called_once_with(
+            ["taskkill.exe", "/F", "/T", "/PID", "4219"], check=True,
+            stdout=GATE.subprocess.PIPE, stderr=GATE.subprocess.PIPE, timeout=10)
+        self.process.kill.assert_not_called()
+
+    def test_taskkill_failure_keeps_original_output_and_uses_only_owned_handle(self):
+        self.taskkill.side_effect = GATE.subprocess.CalledProcessError(
+            255, ["taskkill.exe"], stderr=b"termination failed for original process\n")
+        message = self.run_timeout()
+        self.assertIn("termination failed for original process", message)
+        self.assertIn("joined", message)
+        self.process.kill.assert_called_once_with()
+
+    def test_exited_process_is_not_killed_and_empty_drain_keeps_partial_output(self):
+        self.process.poll.return_value = 2
+        self.process.communicate.side_effect = [self.first, (b"", None)]
+        self.run_timeout()
+        self.taskkill.assert_not_called()
+        self.process.kill.assert_not_called()
+
+    def test_taskkill_race_does_not_kill_an_already_exited_process(self):
+        self.process.poll.side_effect = [None, 2]
+        self.taskkill.side_effect = GATE.subprocess.CalledProcessError(255, ["taskkill.exe"])
+        self.run_timeout()
+        self.process.kill.assert_not_called()
+
+    def test_cleanup_failures_keep_first_timeout_and_bounded_partial_output(self):
+        self.taskkill.side_effect = GATE.subprocess.TimeoutExpired(
+            ["taskkill.exe"], 10, stderr=b"tree cleanup timed out\n")
+        self.process.kill.side_effect = PermissionError("owned handle termination refused")
+        self.process.communicate.side_effect = [self.first, GATE.subprocess.TimeoutExpired(
+            self.command, 10, output=b"original test failure\nlast child output\n")]
+        message = self.run_timeout()
+        for detail in ("tree cleanup timed out", "owned handle termination refused", "last child output"):
+            self.assertIn(detail, message)
+        self.process.kill.assert_called_once_with()
+
+    def test_output_read_failure_and_unavailable_taskkill_keep_original_evidence(self):
+        self.taskkill.side_effect = FileNotFoundError("taskkill unavailable")
+        self.process.communicate.side_effect = [self.first, OSError("owned pipe read failed")]
+        message = self.run_timeout()
+        self.assertIn("taskkill unavailable", message)
+        self.assertIn("owned pipe read failed", message)
+
+    def test_timeout_output_tail_remains_bounded(self):
+        self.process.communicate.side_effect = [self.first, (b"x" * 65536 + b"original test failure\n", None)]
+        message = self.run_timeout()
+        self.assertEqual(len(message.split("no proof accepted:\n", 1)[1]), 32768)
 
 
 class WindowsIdentitySourceCopies(unittest.TestCase):
