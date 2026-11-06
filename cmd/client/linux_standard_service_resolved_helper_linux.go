@@ -33,6 +33,10 @@ type linuxResolvedHelper struct {
 	waitErr                                                       error
 	name, captureSHA                                              string
 	original                                                      context.Context
+	retainedCancel                                                context.CancelFunc
+	request                                                       context.Context
+	stopCancellation                                              func() bool
+	cancellationJoined                                            chan struct{}
 	sequence                                                      uint32
 	policy                                                        []byte
 	closedFiles                                                   map[*os.File]bool
@@ -48,6 +52,15 @@ func startLinuxResolvedHelper(ctx context.Context, root, session, name string) (
 	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 2*time.Minute {
 		return h, errors.New("resolved helper requires its original bounded deadline")
 	}
+	// Bridge request cancellation before any image/process proof begins. Only
+	// an explicitly accepted completed lookup may detach this bridge.
+	h.request = ctx
+	h.original, h.retainedCancel = context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	h.cancellationJoined = make(chan struct{})
+	h.stopCancellation = context.AfterFunc(ctx, func() {
+		h.retainedCancel()
+		close(h.cancellationJoined)
+	})
 	raw, err := (standardengine.ResolvedCapture{Schema: 1, Session: session, DeadlineNS: deadline.UnixNano(), Name: name}).Canonical()
 	if err != nil {
 		return h, err
@@ -140,6 +153,35 @@ func startLinuxResolvedHelper(ctx context.Context, root, session, name string) (
 		}
 	}
 	return h, nil
+}
+
+// retainCompleted transfers only the read-only observation owner from a
+// successful RPC to its already captured transaction deadline. The cancellation
+// bridge was installed before source verification or child creation.
+func (h *linuxResolvedHelper) retainCompleted(ctx context.Context) error {
+	if err := h.current(ctx); err != nil {
+		return err
+	}
+	return h.retainObservationLifetime(ctx)
+}
+func (h *linuxResolvedHelper) retainObservationLifetime(ctx context.Context) error {
+	if h.request == nil || h.stopCancellation == nil || h.request.Err() != nil {
+		return errors.New("resolved observation handoff lost original request")
+	}
+	if !h.stopCancellation() {
+		select {
+		case <-h.cancellationJoined:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return errors.New("resolved observation cancelled before completed handoff")
+	}
+	h.stopCancellation = nil
+	if h.request.Err() != nil || h.original.Err() != nil {
+		h.retainedCancel()
+		return errors.New("resolved observation cancelled during completed handoff")
+	}
+	return nil
 }
 
 func (h *linuxResolvedHelper) current(ctx context.Context) error {
@@ -322,6 +364,16 @@ func (h *linuxResolvedHelper) Close(ctx context.Context) error {
 	// proves its process-local observers/descriptors are gone; waitErr remains
 	// diagnostic and never repairs a failed observation. Mutating engines do
 	// not use this retirement rule.
+	if h.stopCancellation != nil && !h.stopCancellation() {
+		select {
+		case <-h.cancellationJoined:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if h.retainedCancel != nil {
+		h.retainedCancel()
+	}
 	h.closed = true
 	return nil
 }

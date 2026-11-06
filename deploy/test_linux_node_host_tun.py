@@ -189,14 +189,23 @@ SS_ENTRY_AUTHORITY_CASES = (SS_ENTRY_AUTHORITY_ROOT, *(SS_ENTRY_AUTHORITY_ROOT +
 def check_ss_entry_authority_verdict(output):
     NODE.require_native_verdicts(output, SS_ENTRY_AUTHORITY_CASES, 'installed SS2022 entry authority')
 
+RESOLVED_CASES = ('service-boot-resolved-udp', 'service-boot-resolved-tcp', 'service-boot-resolved-local')
+CASES += RESOLVED_CASES
+HOSTNAME_CASES += RESOLVED_CASES
+PUBLIC_CASES += RESOLVED_CASES
+ACTIVE_CASES += RESOLVED_CASES
+OFF_CASES += RESOLVED_CASES
+
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
-                         'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
+                         'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256', 'ROUTERVPN_RESOLVED_OUTER_MNTNS_ID')
 
 
 def checked_sources(source):
     source, native = CHILD.checked_sources(source)
     app = TRANSACTION.checked_sources()
+    if 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go' not in native:
+        raise ValueError('Installed resolved composition lost its original authenticated broker image source')
     for name in ('ui.html', 'logical_ui.js'):
         path = ROOT / 'cmd/client' / name
         if path.is_symlink() or not path.is_file():
@@ -206,7 +215,7 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/linux_standard_service_boot_resolver_adapter_linux.go', 'cmd/client/linux_standard_service_boot_resolver_linux.go', 'cmd/client/linux_standard_service_boot_resolver_native_test.go', 'cmd/client/linux_standard_service_boot_hostname_namespace_native_test.go', 'internal/systembootstrap/config_linux.go', 'internal/systembootstrap/config_linux_test.go', 'internal/systembootstrap/resolve_linux.go', 'internal/mobiletor/desktop_standard_linux_bootstrap.go', 'internal/mobiletor/desktop_standard_linux_bootstrap_test.go', 'internal/mobiletor/desktop_standard_linux_bootstrap_native_test.go', 'cmd/client/linux_standard_service_boot_transfer_linux.go', 'cmd/client/linux_standard_service_boot_transfer_linux_test.go', 'cmd/client/linux_standard_service_boot_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_reverse_planning_linux.go', 'cmd/client/linux_standard_service_reverse_planning_linux_test.go', 'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
+    required = {'cmd/client/linux_standard_service_resolved_namespace_native_test.go', 'cmd/client/linux_standard_service_resolved_helper_linux.go', 'cmd/client/linux_standard_service_resolved_adapter_linux.go', 'cmd/client/linux_standard_service_boot_resolver_adapter_linux.go', 'cmd/client/linux_standard_service_boot_resolver_linux.go', 'cmd/client/linux_standard_service_boot_resolver_native_test.go', 'cmd/client/linux_standard_service_boot_hostname_namespace_native_test.go', 'internal/systembootstrap/config_linux.go', 'internal/systembootstrap/config_linux_test.go', 'internal/systembootstrap/resolve_linux.go', 'internal/mobiletor/desktop_standard_linux_bootstrap.go', 'internal/mobiletor/desktop_standard_linux_bootstrap_test.go', 'internal/mobiletor/desktop_standard_linux_bootstrap_native_test.go', 'cmd/client/linux_standard_service_boot_transfer_linux.go', 'cmd/client/linux_standard_service_boot_transfer_linux_test.go', 'cmd/client/linux_standard_service_boot_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_reverse_planning_linux.go', 'cmd/client/linux_standard_service_reverse_planning_linux_test.go', 'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_hysteria_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_external_wg_hysteria_layer_linux_tun_native_test.go',
@@ -399,11 +408,15 @@ def check_verdict(output, case=None):
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if hysteria_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed WG/Hysteria graph omitted or duplicated original native completion: ' + value)
+        if value in RESOLVED_CASES:
+            marker = 'verified installed resolved helper original broker and scoped upstream: ' + value
+            if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
+                raise ValueError('missing/duplicate installed resolved composition receipt: ' + value)
         if value in HOSTNAME_CASES:
             marker = 'verified installed host captured resolver policy: ' + value
             if sum(line.rstrip().endswith(marker) for line in output.splitlines()) != 1:
                 raise ValueError('missing/duplicate original resolver policy receipt: ' + value)
-        if value in BOOT_TRANSFER_CASES + BOOT_RESOLVER_CASES:
+        if value in BOOT_TRANSFER_CASES + BOOT_RESOLVER_CASES + RESOLVED_CASES:
             verdict = r'^\s*' + re.escape(prefix + '/' + value) + r' \([0-9.]+s\)$'
             if boot_transfer_receipts.count(value) != 1 or len(re.findall(verdict, output, re.M)) != 1:
                 raise ValueError('Installed boot transfer omitted or duplicated original creator completion: ' + value)
@@ -473,8 +486,9 @@ def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha25
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o6022 or not 0 < info.st_size <= 32768 or hashlib.sha256(receipt.read_bytes()).hexdigest() != bundle_sha256:
         raise ValueError('Installed Linux host lost its exact complete bundle receipt')
     current = os.stat('/proc/self/ns/net')
+    mount = os.stat('/proc/self/ns/mnt')
     values = dict(zip(NAMESPACE_ENVIRONMENT, (str(current.st_dev) + ':' + str(current.st_ino), str(bundle), bundle_sha256,
-                                             str(peer), peer_sha256, str(whitening) if whitening is not None else '', whitening_sha256 or '')))
+                                             str(peer), peer_sha256, str(whitening) if whitening is not None else '', whitening_sha256 or '', str(mount.st_dev)+':'+str(mount.st_ino))))
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:

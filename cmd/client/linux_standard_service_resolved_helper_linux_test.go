@@ -84,3 +84,65 @@ func TestResolvedHelperReadOnlyJoinedRetirement(t *testing.T) {
 		}
 	})
 }
+
+func TestResolvedObservationTransactionLifetime(t *testing.T) {
+	newOwner := func(request context.Context) *linuxResolvedHelper {
+		deadline, _ := request.Deadline()
+		h := &linuxResolvedHelper{request: request, cancellationJoined: make(chan struct{})}
+		h.original, h.retainedCancel = context.WithDeadline(context.WithoutCancel(request), deadline)
+		h.stopCancellation = context.AfterFunc(request, func() { h.retainedCancel(); close(h.cancellationJoined) })
+		t.Cleanup(h.retainedCancel)
+		return h
+	}
+	t.Run("successful-rpc-retirement-keeps-original-deadline", func(t *testing.T) {
+		request, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		h := newOwner(request)
+		if err := h.retainObservationLifetime(request); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := request.Deadline()
+		after, _ := h.original.Deadline()
+		cancel()
+		if h.original.Err() != nil || !before.Equal(after) {
+			t.Fatal("successful RPC lost or renewed transaction")
+		}
+		h.retainedCancel()
+		if !errors.Is(h.original.Err(), context.Canceled) {
+			t.Fatal("retired owner remained live")
+		}
+	})
+	t.Run("cancelled-original-cannot-transfer", func(t *testing.T) {
+		request, cancel := context.WithTimeout(context.Background(), time.Second)
+		h := newOwner(request)
+		cancel()
+		<-h.cancellationJoined
+		if h.retainObservationLifetime(request) == nil || h.original.Err() == nil {
+			t.Fatal("cancelled original acquired replacement lifetime")
+		}
+	})
+	t.Run("original-deadline-expires-after-rpc", func(t *testing.T) {
+		request, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		h := newOwner(request)
+		if err := h.retainObservationLifetime(request); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		<-h.original.Done()
+		if !errors.Is(h.original.Err(), context.DeadlineExceeded) {
+			t.Fatal("original deadline renewed")
+		}
+	})
+	t.Run("failed-helper-cannot-transfer", func(t *testing.T) {
+		request, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		h := newOwner(request)
+		h.failure = errors.New("original daemon changed")
+		if h.retainCompleted(request) == nil || h.stopCancellation == nil {
+			t.Fatal("changed daemon acquired retained authority")
+		}
+		cancel()
+		<-h.cancellationJoined
+	})
+}

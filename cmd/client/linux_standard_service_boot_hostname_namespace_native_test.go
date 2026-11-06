@@ -183,13 +183,15 @@ func bootHostnameFixtureDNS(answer, countFile, mode string) error {
 // target and encrypted Node credentials remain the ordinary public fixture.
 func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scenario string) {
 	mode := "udp"
-	if scenario == "service-boot-hostname-tcp" {
+	if scenario == "service-boot-hostname-tcp" || scenario == "service-boot-resolved-tcp" {
 		mode = "tcp"
 	}
 	if scenario == "service-boot-hostname-truncated" {
 		mode = "truncated"
 	}
 	hostsOnly := scenario == "service-boot-hosts"
+	resolved := linuxHostTUNResolvedCase(scenario)
+	localResolved := scenario == "service-boot-resolved-local"
 	t.Cleanup(func() { t.Logf("verified installed host captured resolver policy: %s", scenario) })
 	t.Helper()
 	directory, e := os.MkdirTemp("/opt", "boot-hostname-")
@@ -216,8 +218,11 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 	if mode == "tcp" {
 		resolverBody += "options use-vc\n"
 	}
-	if hostsOnly {
-		resolverBody = "nameserver 127.0.0.53\n"
+	if hostsOnly || resolved {
+		resolverBody = "nameserver 127.0.0.53\noptions timeout:2 attempts:1\n"
+		if mode == "tcp" {
+			resolverBody += "options use-vc\n"
+		}
 	}
 	for name, body := range map[string]string{"nsswitch.conf": "hosts: files dns\n", "hosts": ""} {
 		if hostsOnly && name == "hosts" {
@@ -274,7 +279,7 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 			t.Error(e)
 		}
 	})
-	if !hostsOnly {
+	if !hostsOnly && !localResolved {
 		executable, e := os.Executable()
 		if e != nil {
 			t.Fatal(e)
@@ -308,6 +313,9 @@ func linuxHostTUNBootHostnameFixture(t *testing.T, peer *linuxHostTUNPeer, scena
 		if ready, e := bufio.NewReader(output).ReadString('\n'); e != nil || ready != "ready\n" {
 			t.Fatal("captured bootstrap peer not ready", ready, e)
 		}
+	}
+	if resolved {
+		linuxHostTUNResolvedBroker(t, peer, scenario)
 	}
 	profilePath := filepath.Join(linuxOwnedControllerRoot, "routers.json")
 	body, e := os.ReadFile(profilePath)

@@ -289,6 +289,14 @@ func (s *linuxStandardService) bootBootstrapRequest(ctx context.Context, peer *l
 	if e = work.Err(); e != nil {
 		return nil, e
 	}
+	// The successful response hands the original read-only daemon observation
+	// to the following authenticated transfer. Its deadline cannot renew when
+	// this RPC's work context is deliberately cancelled on return.
+	if t.resolver.helper != nil {
+		if e = t.resolver.helper.retainCompleted(work); e != nil {
+			return nil, e
+		}
+	}
 	t.complete = true
 	t.addresses = addresses
 	return &linuxStandardBootBootstrapResponse{ID: q.ID, Clean: true, Addresses: append([]string(nil), addresses...)}, nil
@@ -329,6 +337,17 @@ func (s *linuxStandardService) validateBootBootstrapTransfer(ctx context.Context
 			return e
 		}
 		return t.slot.current(ctx, lease)
+	}
+	if e = s.bootstrapCurrentLocked(ctx, t, lease); e != nil {
+		return e
+	}
+	if t.resolver != nil && t.resolver.helper != nil {
+		// A live child alone is not proof that its original daemon or policy
+		// survived the interval between successful lookup and transfer.
+		h := t.resolver.helper
+		if _, _, e = h.observe(ctx, h.name); e != nil {
+			return e
+		}
 	}
 	return s.bootstrapCurrentLocked(ctx, t, lease)
 }

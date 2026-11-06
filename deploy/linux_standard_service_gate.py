@@ -573,3 +573,12 @@ AUXILIARY_TESTS.update({
 
 # Original concurrent protected resolver cohort and exact joined retirement.
 SOURCE.update('internal/mobiletor/desktop_standard_linux_bootstrap_group'+suffix+'.go' for suffix in ('','_exchange','_test','_native_test'))
+
+# Installed shipping helper, original isolated broker and physical DNS composition.
+SOURCE.update({'cmd/client/linux_standard_service_resolved_namespace_native_test.go',
+ 'mobile/desktop/node_resolved_broker_test.go.tmpl',
+ 'deploy/test_linux_node_host_tun.py', 'deploy/test_linux_node_host_tun_runner.py'})
+
+AUXILIARY['resolved-helper'][1]['TestResolvedObservationTransactionLifetime'] = (
+ 'successful-rpc-retirement-keeps-original-deadline', 'cancelled-original-cannot-transfer',
+ 'original-deadline-expires-after-rpc', 'failed-helper-cannot-transfer')

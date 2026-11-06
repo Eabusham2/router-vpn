@@ -1,0 +1,358 @@
+//go:build linux
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	dbus "github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+)
+
+// The installed-host acceptance uses real EXTERNAL authentication, SCM_RIGHTS
+// ProcessFD, named Unix socket and native process/namespace witnesses. Only
+// the daemon property/local-answer data is modeled; public DNS travels through
+// the shipping helper and original protected upstream to the separate peer.
+func TestRouterVPNResolvedInstalledBroker(t *testing.T) {
+	if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_BROKER") != "1" {
+		t.Fatal("resolved broker is an installed-host subprocess fixture only")
+	}
+	if os.Geteuid() != 0 {
+		t.Fatal("broker fixture requires original isolated namespace root")
+	}
+	address := net.ParseIP(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_ANSWER")).To4()
+	if address == nil {
+		t.Fatal("broker omitted original local endpoint")
+	}
+	if err := os.MkdirAll("/run/dbus", 0755); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: "/run/dbus/system_bus_socket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	pidfd, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(pidfd)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	listener.SetDeadline(deadline)
+	var mu sync.Mutex
+	count := 0
+	observers := 0
+	observationRetired := make(chan struct{})
+	var retireOnce sync.Once
+	mutations := 0
+	ownedIndex := int32(0)
+	type dns struct {
+		Index      int32
+		Family     int32
+		Address    []byte
+		Port       uint16
+		ServerName string
+	}
+	type domain struct {
+		Index       int32
+		Name        string
+		RoutingOnly bool
+	}
+	type answer struct {
+		Index   int32
+		Family  int32
+		Address []byte
+	}
+	selected := dns{0, unix.AF_INET, []byte{198, 19, 0, 53}, 53, ""}
+	model := func(request *dbus.Message) ([]any, string, error) {
+		member, _ := request.Headers[dbus.FieldMember].Value().(string)
+		destination, _ := request.Headers[dbus.FieldDestination].Value().(string)
+		switch member {
+		case "GetId":
+			if destination != "org.freedesktop.DBus" {
+				return nil, "", errors.New("foreign broker identity request")
+			}
+			return []any{"0123456789abcdef0123456789abcdef"}, "", nil
+		case "AddMatch", "RemoveMatch":
+			return nil, "", nil
+		case "GetLink":
+			return []any{"no configured link"}, "org.freedesktop.resolve1.NoSuchLink", nil
+		case "GetAll":
+			if destination != ":1.77" {
+				return nil, "", errors.New("policy read adopted named successor")
+			}
+			values := map[string]dbus.Variant{
+				"DNSEx": dbus.MakeVariant([]dns{selected}), "FallbackDNSEx": dbus.MakeVariant([]dns{}), "CurrentDNSServerEx": dbus.MakeVariant(selected),
+				"Domains": dbus.MakeVariant([]domain{}), "LLMNRHostname": dbus.MakeVariant("original-resolved"),
+				"LLMNR": dbus.MakeVariant("no"), "MulticastDNS": dbus.MakeVariant("no"), "DNSOverTLS": dbus.MakeVariant("no"), "DNSSEC": dbus.MakeVariant("no"), "DNSSECNegativeTrustAnchors": dbus.MakeVariant([]string{}),
+			}
+			return []any{values}, "", nil
+		case "SetLinkDomains", "SetLinkDefaultRoute", "SetLinkDNS":
+			select {
+			case <-observationRetired:
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if observers != 0 || count == 0 || destination != ":1.77" || len(request.Body) != 2 {
+				return nil, "", errors.New("TUN DNS mutation preceded original observation retirement")
+			}
+			index, ok := request.Body[0].(int32)
+			iface, err := net.InterfaceByIndex(int(index))
+			if !ok || err != nil || index <= 0 {
+				return nil, "", errors.New("DNS mutation omitted actual owned interface")
+			}
+			if _, err = os.ReadFile(filepath.Join("/sys/class/net", iface.Name, "tun_flags")); err != nil {
+				return nil, "", errors.New("DNS mutation targeted non-TUN interface")
+			}
+			step := mutations % 3
+			if step == 0 {
+				ownedIndex = index
+			}
+			if ownedIndex != index {
+				return nil, "", errors.New("DNS mutation changed original TUN")
+			}
+			switch step {
+			case 0:
+				var rows []struct {
+					Name        string
+					RoutingOnly bool
+				}
+				if member != "SetLinkDomains" || dbus.Store(request.Body[1:], &rows) != nil || len(rows) != 1 || rows[0].Name != "." || !rows[0].RoutingOnly {
+					return nil, "", errors.New("TUN omitted exact root route")
+				}
+			case 1:
+				if member != "SetLinkDefaultRoute" || request.Body[1] != true {
+					return nil, "", errors.New("TUN omitted original default route")
+				}
+			case 2:
+				var rows []struct {
+					Family  int32
+					Address []byte
+				}
+				if member != "SetLinkDNS" || dbus.Store(request.Body[1:], &rows) != nil || len(rows) == 0 {
+					return nil, "", errors.New("TUN omitted selected DNS")
+				}
+				for _, row := range rows {
+					if row.Family != unix.AF_INET && row.Family != unix.AF_INET6 || net.IP(row.Address).IsUnspecified() {
+						return nil, "", errors.New("invalid TUN DNS address")
+					}
+				}
+			}
+			mutations++
+			if err := os.WriteFile(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT")+".mutations", []byte(strconv.Itoa(mutations)), 0600); err != nil {
+				return nil, "", err
+			}
+			return nil, "", nil
+		case "ResolveHostname":
+			if destination != ":1.77" || len(request.Body) != 4 || request.Body[0] != int32(0) || request.Body[1] != "node.transport-bootstrap.invalid" || request.Body[2] != int32(0) || request.Body[3] != uint64(1<<15|1<<12|1<<8) {
+				return nil, "", errors.New("local preflight escaped exact original question or NO_NETWORK/NO_CACHE/NO_SEARCH")
+			}
+			mu.Lock()
+			count++
+			err := os.WriteFile(os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_COUNT"), []byte(strconv.Itoa(count)), 0600)
+			mu.Unlock()
+			if err != nil {
+				return nil, "", err
+			}
+			if os.Getenv("ROUTERVPN_RESOLVED_COMPOSITION_LOCAL") == "1" {
+				return []any{[]answer{{0, unix.AF_INET, []byte(address)}}, "node.transport-bootstrap.invalid", uint64(1 << 9)}, "", nil
+			}
+			return []any{"no local source"}, "org.freedesktop.resolve1.NoSource", nil
+		default:
+			return nil, "", fmt.Errorf("unexpected mutable or unsupported broker method %s", member)
+		}
+	}
+	fmt.Println("original resolved composition broker ready")
+	var joined sync.WaitGroup
+	defer joined.Wait()
+	for {
+		conn, err := listener.AcceptUnix()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			t.Fatal(err)
+		}
+		conn.SetDeadline(deadline)
+		joined.Add(1)
+		go func() {
+			defer joined.Done()
+			defer conn.Close()
+			observing := false
+			defer func() {
+				mu.Lock()
+				if observing {
+					observers--
+					retireOnce.Do(func() { close(observationRetired) })
+				}
+				mu.Unlock()
+			}()
+			connectionModel := func(request *dbus.Message) ([]any, string, error) {
+				member, _ := request.Headers[dbus.FieldMember].Value().(string)
+				if member == "ResolveHostname" && !observing {
+					mu.Lock()
+					observers++
+					observing = true
+					mu.Unlock()
+				}
+				return model(request)
+			}
+			err := resolvedCompositionWire(conn, pidfd, "", connectionModel)
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+				fmt.Fprintln(os.Stderr, "original resolved broker connection:", err)
+			}
+		}()
+	}
+}
+
+func resolvedCompositionWire(server *net.UnixConn, processFD int, shape string, model func(*dbus.Message) ([]any, string, error)) error {
+	input := bufio.NewReader(server)
+	first, err := input.ReadByte()
+	if err != nil {
+		return err
+	}
+	if first != 0 {
+		return errors.New("missing EXTERNAL NUL")
+	}
+	line, err := input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "AUTH\r\n" {
+		return fmt.Errorf("unexpected initial auth %q", line)
+	}
+	if _, err = io.WriteString(server, "REJECTED EXTERNAL\r\n"); err != nil {
+		return err
+	}
+	line, err = input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "AUTH EXTERNAL\r\n" {
+		return fmt.Errorf("unexpected EXTERNAL %q", line)
+	}
+	if _, err = io.WriteString(server, "OK 0123456789abcdef0123456789abcdef\r\n"); err != nil {
+		return err
+	}
+	line, err = input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "NEGOTIATE_UNIX_FD\r\n" {
+		return fmt.Errorf("no native FD negotiation %q", line)
+	}
+	if _, err = io.WriteString(server, "AGREE_UNIX_FD\r\n"); err != nil {
+		return err
+	}
+	line, err = input.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != "BEGIN\r\n" {
+		return fmt.Errorf("no BEGIN %q", line)
+	}
+	serial := uint32(1)
+	for {
+		request, err := dbus.DecodeMessage(input)
+		if err != nil {
+			return err
+		}
+		member, _ := request.Headers[dbus.FieldMember].Value().(string)
+		destination, _ := request.Headers[dbus.FieldDestination].Value().(string)
+		sender := "org.freedesktop.DBus"
+		var body []any
+		var remoteError string
+		switch member {
+		case "Hello":
+			body = []any{":1.42"}
+		case "NameHasOwner":
+			body = []any{true}
+		case "GetNameOwner":
+			body = []any{":1.77"}
+		case "GetConnectionCredentials":
+			if len(request.Body) != 1 || request.Body[0] != ":1.77" {
+				return errors.New("credentials request changed original owner")
+			}
+			body = []any{map[string]dbus.Variant{"ProcessFD": dbus.MakeVariant(dbus.UnixFD(processFD))}}
+			if shape != "" {
+				array := []dbus.UnixFD{dbus.UnixFD(processFD)}
+				var value any = array
+				switch shape {
+				case "variant-array":
+					value = dbus.MakeVariant(array)
+				case "dictionary-array":
+					value = map[string]dbus.Variant{"extra": dbus.MakeVariant(array)}
+				case "dictionary-key":
+					value = map[dbus.UnixFD]string{dbus.UnixFD(processFD): "original"}
+				case "dictionary-value":
+					value = map[string]dbus.UnixFD{"original": dbus.UnixFD(processFD)}
+				case "structure-array":
+					value = struct {
+						Label string
+						Files []dbus.UnixFD
+					}{"extra", array}
+				}
+				body = []any{value}
+			}
+		default:
+			if model == nil {
+				return errors.New("unexpected resolver method")
+			}
+			body, remoteError, err = model(request)
+			if err != nil {
+				return err
+			}
+			sender = destination
+		}
+		reply := &dbus.Message{Type: dbus.TypeMethodReply, Headers: map[dbus.HeaderField]dbus.Variant{dbus.FieldReplySerial: dbus.MakeVariant(request.Serial()), dbus.FieldSender: dbus.MakeVariant(sender), dbus.FieldDestination: dbus.MakeVariant(":1.42")}, Body: body}
+		if remoteError != "" {
+			reply.Type = dbus.TypeError
+			reply.Headers[dbus.FieldErrorName] = dbus.MakeVariant(remoteError)
+		}
+		if len(body) > 0 {
+			reply.Headers[dbus.FieldSignature] = dbus.MakeVariant(dbus.SignatureOf(body...))
+		}
+		fds, err := reply.CountFds()
+		if err != nil {
+			return err
+		}
+		if fds > 0 {
+			reply.Headers[dbus.FieldUnixFDs] = dbus.MakeVariant(uint32(fds))
+		}
+		var encoded bytes.Buffer
+		rights, err := reply.EncodeToWithFDs(&encoded, binary.LittleEndian)
+		if err != nil {
+			return err
+		}
+		data := encoded.Bytes()
+		binary.LittleEndian.PutUint32(data[8:12], serial)
+		serial++
+		var ancillary []byte
+		if len(rights) > 0 {
+			ancillary = unix.UnixRights(rights...)
+		}
+		written, _, err := server.WriteMsgUnix(data, ancillary, nil)
+		if err != nil {
+			return err
+		}
+		if written != len(data) {
+			return io.ErrShortWrite
+		}
+	}
+}

@@ -117,6 +117,9 @@ var linuxHostTUNBootTransferCases = []string{"service-boot-transfer", "service-b
 
 func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNBootTransferCases...) }
 func linuxHostTUNBootTransferCase(scenario string) bool {
+	if linuxHostTUNResolvedCase(scenario) {
+		return true
+	}
 	for _, name := range linuxHostTUNBootTransferCases {
 		if scenario == name {
 			return true
@@ -365,6 +368,9 @@ func TestLinuxStandardServiceBootTransferRetriesReleasedOriginal(t *testing.T) {
 }
 
 func linuxHostTUNBootHostnameCase(scenario string) bool {
+	if linuxHostTUNResolvedCase(scenario) {
+		return true
+	}
 	switch scenario {
 	case "service-boot-hostname", "service-boot-hosts", "service-boot-hostname-tcp", "service-boot-hostname-truncated":
 		return true
