@@ -57,7 +57,7 @@ func fixture(base: String = "auto", fallback: Bool = false, dns: String = "home"
         "router_api":"http://10.77.0.1:8787", "api_token":"fixture-only-not-a-secret",
         "adguard_ipv4":"10.77.0.1", "adguard_ipv6":"fd77:77::1", "socks_host":"10.77.0.1",
         "socks_port":1080, "socks_username":"", "socks_password":"", "base_tunnel":base,
-        "mtu_policy":"fixed", "manual_mtu":1380, "base_fallback":fallback, "dns_mode":dns, "dns_host":"1.1.1.1", "dns_server_name":"cloudflare-dns.com", "start_layer":start
+        "mtu_policy":"fixed", "manual_mtu":1380, "base_fallback":fallback, "dns_mode":dns, "dns_host":dns == "home" ? "" : "1.1.1.1", "dns_server_name":"cloudflare-dns.com", "start_layer":start
     ]
     var bundle = ClientBundle.empty
     bundle.selectedRouterID = "home"
@@ -286,7 +286,7 @@ def main():
         test.write_text(TEST.replace("    // SHIPPING_STRATEGY_METHOD", method))
         binary = tmp / "tests"
         subprocess.run([swift, "-swift-version", "6", str(APP / "Models.swift"),
-                        str(dns), str(APP / "IOSNativeXrayProfile.swift"), str(APP / "IOSNativePQProfile.swift"), str(APP / "IOSMultihopStartLayer.swift"), str(APP / "IOSRuntimeSelection.swift"), str(test), "-o", str(binary)],
+                        str(APP/'IOSHomeDNSPolicy.swift'),str(dns), str(APP / "IOSNativeXrayProfile.swift"), str(APP / "IOSNativePQProfile.swift"), str(APP / "IOSMultihopStartLayer.swift"), str(APP / "IOSRuntimeSelection.swift"), str(test), "-o", str(binary)],
                        check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=25)
     print("Apple CI uses real Network.framework; no VPN/server connections were made.")

@@ -38,7 +38,9 @@ import Libbox
 // SHIPPING_PRESET
 enum IOSDNSRuntimePolicy {
  // SELECTED_PROFILE
- static func resolve(_ p:RouterProfile)throws->Int{1}
+ // SHIPPING_RESOLVE
+ // SHIPPING_RESOLVE_HELPERS
+ static let modeIDs=["home","fastest","custom","dot","doh","doh3","rescue"]
 }
 // Measurement-source capture is executed against the actual model builders in
 // test_ios_dns_measurement.py; this gate isolates editor/native DNS validation.
@@ -124,6 +126,22 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
   model.entry=bundle(home);model.bundle!.routerProfiles[0].multihopEnabled=false;editor.load();editor.savePolicy();try check("direct Home remains an explicit unresolved draft without public DNS substitution",model.imports==2 && model.bundle!.routerProfiles[0].dnsMode=="home" && model.bundle!.routerProfiles[0].dnsHost==home.adGuardIPv6)
   model.bundle=bundle(exit);editor.load();editor.protocolName="udp";editor.savePolicy()
   try check("Home UDP uses entry even with TCP-only exit",model.imports==3 && model.bundle!.routerProfiles[0].dnsProtocol=="udp")
+ }
+ static func routerHome()throws {
+  for transport in ["udp","tcp","tls","https","h3"] {for host in ["192.168.50.133","fd12:3456::53"] {
+   var p=profile("wireguard");p.nodeKind="router-vpn";p.external=nil;p.adGuardIPv4="192.168.50.133";p.adGuardIPv6="fd12:3456::53";p.ipv6Mode="on"
+   p.dnsMode="home";p.dnsProtocol="udp";p.dnsHost="";p.dnsPort=53;p.dnsServerName="";p.dnsPath=""
+   let model=RouterVPNModel();model.bundle=bundle(p);let editor=Settings(model);editor.load()
+   editor.protocolName=transport;editor.host=host;editor.port="5443";editor.serverName="adguard.home.example";editor.path="/owned-query";editor.savePolicy()
+   try check("Router Home editor saves explicit transport fields",model.imports==1 && model.bundle!.routerProfiles[0].dnsProtocol==transport && model.bundle!.routerProfiles[0].dnsHost==host && model.bundle!.routerProfiles[0].dnsPort==5443)
+   let resolved=try IOSDNSRuntimePolicy.resolve(model.bundle!.routerProfiles[0])!
+   try check("Router Home editor reaches real runtime resolver",resolved.type==transport && resolved.host==host && resolved.port==5443)
+   let before=model.bundle!.routerProfiles
+   editor.host="192.168.99.1";editor.savePolicy()
+   try check("Router Home foreign address fails without mutation",model.imports==1 && model.bundle!.routerProfiles==before)
+   editor.host=host;editor.protocolName="https";editor.serverName="";editor.savePolicy()
+   try check("Router Home incomplete TLS fails without mutation",model.imports==1 && model.bundle!.routerProfiles==before)
+  }}
  }
  static func hostileCodable()throws {
   let original=try JSONSerialization.jsonObject(with:JSONEncoder().encode(boot())) as! [String:Any]
@@ -266,7 +284,7 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
  static func main() {
   defer { RouterVPNTorTestClose() }
   do {
-   try settings();try home();try hostileCodable();try ordinaryDrafts();try tor();try quick()
+   try settings();try home();try routerHome();try hostileCodable();try ordinaryDrafts();try tor();try quick()
    print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; ordinary and Tor DNS use real Go validation; storage and Network boundary substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
@@ -294,6 +312,9 @@ def main():
     assert 'IOSDNSPolicyView(initialMode: dnsEditorMode)' in unified
     source = SWIFT.replace(' // SELECTED_PROFILE', selected).replace(' // SHIPPING_SETTINGS', methods).replace('// SHIPPING_PRESET', preset)
     source = source.replace(' // QUICK_DNS_HANDLER', method(unified, 'func unifiedSetDNSMode(')).replace(' // DNS_OPEN_HANDLER', method(unified, 'private func openDNS('))
+    source = source.replace(' // SHIPPING_RESOLVE', method(dns, '    static func resolve('), 1)
+    source = source.replace(' // SHIPPING_RESOLVE_HELPERS', '\n'.join(method(dns, signature) for signature in ['    private static func fastestHost(', '    private static func clean(', '    private static func firstNonEmpty(', '    private static func error(', '    private static func isLiteralIP(']))
+    source += '\n' + dns[dns.index('struct IOSResolvedDNSPolicy:'):dns.index('enum IOSDNSRuntimePolicy')]
     source += '\n' + (APP / 'IOSDNSQuickSelection.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='ios-external-dns-settings-') as temporary, tempfile.TemporaryDirectory(prefix='.ios-tor-dns-go-', dir=ROOT) as go_dir:
         work = Path(temporary)
@@ -311,7 +332,7 @@ def main():
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         code = work / 'Tests.swift'; code.write_text(source)
         binary = work / 'tests'
-        compile_command = options + ['-Onone', '-whole-module-optimization', str(APP / 'Models.swift'), str(APP / 'IOSExternalDNSPolicy.swift'), str(code), '-o', str(binary)]
+        compile_command = options + ['-Onone', '-whole-module-optimization', str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'Models.swift'), str(APP / 'IOSExternalDNSPolicy.swift'), str(code), '-o', str(binary)]
         subprocess.run(compile_command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=60)
         for name, before, after, expected in (

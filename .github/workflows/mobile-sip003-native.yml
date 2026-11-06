@@ -23,6 +23,7 @@ on:
       - 'deploy/test_ios_native_sip003_profiles.py'
       - 'ios/RouterVPN/App/IOSNativeXrayProfile.swift'
       - 'ios/RouterVPN/App/IOSRuntimeSelection.swift'
+      - 'ios/RouterVPN/App/IOSHomeDNSPolicy.swift'
       - 'ios/RouterVPN/App/IOSDNSRuntimePolicy.swift'
       - 'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java'
       - '.github/workflows/mobile-sip003-native.yml'

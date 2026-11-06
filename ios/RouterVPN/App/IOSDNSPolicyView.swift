@@ -67,10 +67,10 @@ struct IOSDNSPolicyView: View {
     private var nativeExternal: Bool { ordinaryExternal || torExternal }
     private var externalDNSFields: [String] { [mode, protocolName, host, port, serverName, path] }
     private var encryptedDNS: Bool {
-        ["dot", "doh", "doh3"].contains(mode) || (nativeExternal && ["custom", "home"].contains(mode) && ["tls", "https", "h3"].contains(protocolName))
+        ["dot", "doh", "doh3"].contains(mode) || ((mode == "home" || nativeExternal && mode == "custom") && ["tls", "https", "h3"].contains(protocolName))
     }
     private var httpDNS: Bool {
-        ["doh", "doh3"].contains(mode) || (nativeExternal && ["custom", "home"].contains(mode) && ["https", "h3"].contains(protocolName))
+        ["doh", "doh3"].contains(mode) || ((mode == "home" || nativeExternal && mode == "custom") && ["https", "h3"].contains(protocolName))
     }
 
     var body: some View {
@@ -83,18 +83,18 @@ struct IOSDNSPolicyView: View {
                                 .disabled(torExternal && ["fastest", "doh3"].contains($0.1))
                         }
                     }
-                    if mode == "custom" || (nativeExternal && mode == "home") {
+                    if mode == "custom" || mode == "home" {
                         Picker("Transport", selection: $protocolName) {
                             Text("UDP").tag("udp").disabled(torExternal && mode != "home")
                             Text("TCP").tag("tcp")
-                            if nativeExternal {
+                            if nativeExternal || mode == "home" {
                                 Text("TLS").tag("tls"); Text("HTTPS").tag("https")
                                 Text("HTTP/3").tag("h3").disabled(torExternal && mode != "home")
                             }
                         }
                     }
-                    if ["custom", "dot", "doh", "doh3"].contains(mode) || (nativeExternal && mode == "home") {
-                        TextField(torExternal && mode == "home" ? "Home AdGuard IP (blank uses entry)" : torExternal ? "Resolver IP" : "Resolver IP or hostname", text: $host)
+                    if ["custom", "dot", "doh", "doh3"].contains(mode) || mode == "home" {
+                        TextField(mode == "home" ? (nativeExternal ? "Home AdGuard IP (blank uses entry)" : "Home AdGuard IP (blank uses this node)") : torExternal ? "Resolver IP" : "Resolver IP or hostname", text: $host)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Port", text: $port).keyboardType(.numberPad)
                     }
@@ -153,7 +153,7 @@ struct IOSDNSPolicyView: View {
                          ? "Home AdGuard uses the selected paired Router VPN entry and supports UDP, TCP, TLS, HTTPS and HTTP/3. Its address must belong to that entry. Without an entry, choose a public TCP, TLS, HTTPS or Rescue resolver; those queries travel through Tor. Connection completes after the entry, DNS and current Tor exit pass their live checks."
                          : ordinaryExternal
                          ? "The selected DNS transport runs inside the external VPN. Home AdGuard uses the paired Router VPN entry, whose identity is checked separately. Connection completes after the selected DNS and exit address pass their live checks."
-                         : "WireGuardKit can enforce Home/Fastest/Custom UDP when the selected resolver is an IP. Explicit TCP, DoT, DoH and DoH3 require a self-contained Libbox mode. Mode readiness changes with the selected DNS policy instead of pretending WireGuard can provide an encrypted DNS transport it does not own.")
+                         : "Home AdGuard retains the selected node’s address, transport and port. WireGuardKit can enforce Home/Fastest/Custom UDP when the selected resolver is an IP. Explicit TCP, DoT, DoH and DoH3 require a self-contained Libbox mode. Mode readiness changes with the selected DNS policy instead of pretending WireGuard can provide an encrypted DNS transport it does not own.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Libbox receives the selected resolver as a typed sing-box DNS server, detoured through the selected non-direct outbound with DNS hijacking. A saved choice is still not counted as physical runtime proof until the live PacketTunnel test passes.")
                         .font(.caption).foregroundStyle(.secondary)

@@ -576,7 +576,7 @@ def main():
             subprocess.run(["go", "run", "./deploy/testfixtures/pq-exit"], cwd=ROOT, stdout=output, check=True, timeout=90)
         env = dict(os.environ, ROUTERVPN_XRAY_ENTRY_FIXTURES=str(native_entries), ROUTERVPN_XRAY_EXIT_FIXTURES=str(native_exits), ROUTERVPN_PQ_EXIT_FIXTURES=str(pq_exits))
         source.write_text(TEST)
-        subprocess.run([swift, "-swift-version", "6", str(POLICY), str(POLICY.with_name("RouterVPNMTUPolicy.swift")), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
+        subprocess.run([swift, "-swift-version", "6", str(ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift'),str(POLICY), str(POLICY.with_name("RouterVPNMTUPolicy.swift")), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
         command = [str(exe)]
         if args.fixture_dir:
             command.append(str(args.fixture_dir.resolve()))

@@ -35,7 +35,11 @@ enum IOSDNSRuntimePolicy {
         guard modeIDs.contains(mode) else { throw error("Unsupported iOS DNS policy \(mode).") }
         var type = "udp", host = "", port = 53, serverName = clean(profile.dnsServerName), path = clean(profile.dnsPath)
         switch mode {
-        case "home": host = firstNonEmpty(profile.adGuardIPv4, profile.adGuardIPv6)
+        case "home":
+            let home = try IOSHomeDNSPolicy.resolve(adGuardIPv4: profile.adGuardIPv4, adGuardIPv6: profile.adGuardIPv6,
+                ipv6Mode: clean(profile.ipv6Mode), protocolName: clean(profile.dnsProtocol), host: clean(profile.dnsHost),
+                port: profile.dnsPort ?? 0, serverName: serverName, path: path)
+            type = home.type; host = home.host; port = home.port; serverName = home.serverName; path = home.path
         case "fastest":
             host = fastestHost(profile)
             guard !host.isEmpty else { throw error("Fastest DNS is selected but this node has no measured working resolver.") }

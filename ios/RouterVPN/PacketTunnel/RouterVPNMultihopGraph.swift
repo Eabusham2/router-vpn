@@ -305,8 +305,11 @@ enum RouterVPNMultihopGraph {
         switch mode {
         case "": host = importedDNS
         case "home":
-            let v4 = try setting(profile, "adguard_ipv4", "")
-            host = try v4.isEmpty ? setting(profile, "adguard_ipv6", "") : v4
+            let home = try IOSHomeDNSPolicy.resolve(adGuardIPv4: setting(profile, "adguard_ipv4", ""),
+                adGuardIPv6: setting(profile, "adguard_ipv6", ""), ipv6Mode: setting(profile, "ipv6_mode", "on"),
+                protocolName: setting(profile, "dns_protocol", "udp"), host: setting(profile, "dns_host", ""),
+                port: requestedPort ?? 0, serverName: name, path: path)
+            host = home.host; type = home.type; port = home.port; name = home.serverName; path = home.path
         case "custom":
             host = try setting(profile, "dns_host", "")
             type = try setting(profile, "dns_protocol", "udp").lowercased()

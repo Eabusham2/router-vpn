@@ -1557,7 +1557,7 @@ def main():
         # extension. Keep only that complete extension, with no recreated logic.
         creation = creation[:creation.rfind('}') + 1]
         source = work / 'Tests.swift'; source.write_text(SWIFT + '\n' + creation + '\n' + provider_source())
-        sources = [APP / name for name in ('Models.swift', 'IOSExternalExecution.swift', 'IOSMultihopExecution.swift', 'IOSDNSRuntimePolicy.swift', 'IOSNativeXrayProfile.swift', 'IOSNativePQProfile.swift', 'IOSMultihopStartLayer.swift', 'IOSRuntimeSelection.swift')]
+        sources = [APP / name for name in ('Models.swift', 'IOSExternalExecution.swift', 'IOSMultihopExecution.swift', 'IOSHomeDNSPolicy.swift', 'IOSDNSRuntimePolicy.swift', 'IOSNativeXrayProfile.swift', 'IOSNativePQProfile.swift', 'IOSMultihopStartLayer.swift', 'IOSRuntimeSelection.swift')]
         sources += [TUN / name for name in ('WireGuardQuickConfig.swift', 'RouterVPNMultihopGraph.swift', 'RouterVPNMTUPolicy.swift', 'IOSStartLayer.swift', 'IOSXrayDevicePolicy.swift', 'RouterVPNExternalExit.swift')]
         command = ['swiftc', '-swift-version', '6', '-module-cache-path', str(work / 'module-cache'), '-I', str(work), '-L', str(work), '-lWireGuardKit', '-lLibbox']
         if platform.system() != 'Darwin':

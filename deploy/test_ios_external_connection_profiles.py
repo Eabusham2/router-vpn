@@ -347,7 +347,7 @@ def main():
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         code = work / 'Tests.swift';code.write_text(source + '\n' + policy + boundaries)
         binary = work / 'tests'
-        subprocess.run(options + [str(APP / 'Models.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
+        subprocess.run(options + [str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'Models.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary)], env=dict(os.environ, ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json')), check=True, timeout=30)
 
 

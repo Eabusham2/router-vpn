@@ -48,7 +48,7 @@ OBSERVATION = importlib.util.module_from_spec(_observation_spec)
 _observation_spec.loader.exec_module(OBSERVATION)
 
 def inputs():
-    paths = [ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
+    paths = [ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_imported_entry.go.tmpl')

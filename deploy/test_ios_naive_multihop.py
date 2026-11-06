@@ -164,7 +164,7 @@ def main():
         for name in ('entry','exit'):
             subprocess.run(['openssl','req','-x509','-newkey','ed25519','-nodes','-keyout',str(root/(name+'.key')),'-out',str(root/(name+'.pem')),'-days','2','-subj','/CN='+name+'.example.test'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
         source=root/'Tests.swift';source.write_text(TEST);binary=root/'tests'
-        sources=[ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift',ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift',ROOT/'ios/RouterVPN/App/IOSMultihopStartLayer.swift']
+        sources=[ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift',ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift',ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift',ROOT/'ios/RouterVPN/App/IOSMultihopStartLayer.swift']
         subprocess.run([swift,'-swift-version','6','-parse-as-library',*map(str,sources),str(source),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary)],env=dict(os.environ,NAIVE_POLICY=str(native),ENTRY_CERT=str(root/'entry.pem'),EXIT_CERT=str(root/'exit.pem')),check=True,timeout=120)
     provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()

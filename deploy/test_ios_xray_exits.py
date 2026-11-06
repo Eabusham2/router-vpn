@@ -217,7 +217,7 @@ def main():
         entries, exits = prepare_fixture_inputs(temp, args.entry_fixtures, args.exit_fixtures)
         source=temp/'main.swift';source.write_text(prefix+TEST)
         exe=temp/'tests'
-        subprocess.run(['swiftc','-swift-version','6',str(POLICY),str(POLICY.with_name('RouterVPNMTUPolicy.swift')),str(ROOT/'ios/RouterVPN/App/Models.swift'),str(source),'-o',str(exe)],check=True,timeout=90)
+        subprocess.run(['swiftc','-swift-version','6',str(ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift'),str(POLICY),str(POLICY.with_name('RouterVPNMTUPolicy.swift')),str(ROOT/'ios/RouterVPN/App/Models.swift'),str(source),'-o',str(exe)],check=True,timeout=90)
         env=dict(os.environ,ROUTERVPN_XRAY_EXIT_POLICY=str(helper),ROUTERVPN_XRAY_ENTRY_FIXTURES=str(entries),ROUTERVPN_XRAY_EXIT_FIXTURES=str(exits))
         # An inherited graph-suite environment must not hide a missing input.
         env.pop('ROUTERVPN_PQ_EXIT_FIXTURES', None)

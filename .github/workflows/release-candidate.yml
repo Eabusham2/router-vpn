@@ -464,6 +464,7 @@ jobs:
           python3 test_runtime_selection_contract.py
           python3 ../../deploy/test_ios_speed_lab_http_boundary.py
           python3 ../../deploy/test_ios_physical_path.py
+          python3 ../../deploy/test_ios_home_dns.py
           python3 ../../deploy/test_ios_pq_selection.py
           python3 ../../deploy/test_ios_max_selection.py
           python3 ../../deploy/test_ios_max_multihop.py

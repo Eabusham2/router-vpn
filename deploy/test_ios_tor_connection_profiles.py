@@ -139,7 +139,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
  static func entry()throws->ClientBundle {
   var p=try profile();p.id=entryID;p.name="Paired home";p.nodeKind="router-vpn";p.external=nil
   p.nodeProofID=String(repeating:"a",count:64);p.endpoint="198.51.100.10";p.routerAPI="http://10.8.0.1:8787";p.apiToken="NEVER_COPY_ENTRY_TOKEN"
-  p.adGuardIPv4="192.168.50.133";p.adGuardIPv6="fd12:3456::53";p.dnsMode="home";p.dnsProtocol="udp";p.dnsPort=53
+  p.adGuardIPv4="192.168.50.133";p.adGuardIPv6="fd12:3456::53";p.dnsMode="home";p.dnsProtocol="udp";p.dnsPort=53;p.dnsHost="";p.dnsServerName="";p.dnsPath=""
   p.homeLANAccess=true;p.ipv6Mode="on";p.mtuPolicy="auto";p.manualMTU=0;p.homeLANCIDRs=[]
   var b=bundle(p)
   let raw="[Interface]\nPrivateKey = \(Data(repeating:11,count:32).base64EncodedString())\nAddress = 10.8.0.2/32, fd08::2/128\nDNS = 192.168.50.133\n[Peer]\nPublicKey = \(Data(repeating:12,count:32).base64EncodedString())\nEndpoint = 198.51.100.10:51820\nAllowedIPs = 0.0.0.0/0, ::/0\n"
@@ -215,14 +215,14 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
   }}}}}
  }
  static func legacyAndDefaults()throws {
-  for schema in 1...5 {
+  for schema in 1...6 {
    let p=try profile("obfs4"),model=try reset(p)
    let legacy=IOSConnectionProfileRecord(id:"legacy",name:"Legacy Tor",nodeID:p.id,nodeKind:"external",mode:"external",customLayers:[],preferences:nil,updatedAt:Date(timeIntervalSince1970:0))
    IOSPrivateJSONStore.bytes=try encoded(IOSConnectionProfileEnvelope(schemaVersion:schema,profiles:[legacy]))
    let before=try encoded(model.bundle!)
    _=try IOSConnectionProfileStore.load(model:model,id:"legacy")
    try check("legacy Tor remains selection-only",encoded(model.bundle!)==before && IOSConnectionProfileStore.all()[0].preferences==nil)
-   try check("legacy envelope migrates without invented preferences",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==6)
+   try check("legacy envelope migrates without invented preferences",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==7)
    let updated=try IOSConnectionProfileStore.update(model:model,id:"legacy",name:"Captured now")
    try check("explicit Update captures a complete legacy Tor profile",updated.id=="legacy" && updated.preferences != nil && updated.externalPublicIP=="")
   }
@@ -247,6 +247,28 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    try check("unset restores default while legacy retains unrecorded rate",model.selectedNodeProfile?.daitaRateKbps==(legacy ? 96:0))
   }
  }
+ static func routerHomeProfiles()throws {
+  for transport in ["udp","tcp","tls","https","h3"] {for host in ["192.168.50.133","fd12:3456::53"] {
+   let model=try reset(profile()),store=IOSNodeBundleStore.shared
+   var source=try entry();source.routerProfiles[0].dnsMode="home";source.routerProfiles[0].dnsProtocol=transport;source.routerProfiles[0].dnsHost=host;source.routerProfiles[0].dnsPort=5443;source.routerProfiles[0].dnsServerName="adguard.home.example";source.routerProfiles[0].dnsPath="/owned-query"
+   try model.importBundle(encoded(source));UserDefaults.standard.set("smart-auto",forKey:iosConnectionModeKey)
+   let saved=try IOSConnectionProfileStore.add(model:model,name:"Captured Router Home")
+   try check("new Home snapshot marks exact owned DNS",saved.preferences?.homeDNSCaptured==true && saved.preferences?.dnsProtocol==transport && saved.preferences?.dnsHost==host && saved.preferences?.dnsPort==5443)
+   var changed=model.bundle!;changed.routerProfiles[0].dnsMode="custom";changed.routerProfiles[0].dnsProtocol="udp";changed.routerProfiles[0].dnsHost="9.9.9.9";changed.routerProfiles[0].dnsPort=53;try model.importBundle(encoded(changed))
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   let restored=try IOSConnectionProfileStore.snapshot(model:model,name:"Readback")
+   try check("Home Load restores exact full captured DNS",restored.preferences==saved.preferences && model.selectedNodeProfile?.apiToken=="NEVER_COPY_ENTRY_TOKEN")
+   var foreign=model.bundle!;foreign.routerProfiles[0].adGuardIPv4="192.168.99.133";foreign.routerProfiles[0].adGuardIPv6="fd99::53";foreign.routerProfiles[0].dnsMode="custom";foreign.routerProfiles[0].dnsHost="9.9.9.9";foreign.routerProfiles[0].dnsProtocol="udp";foreign.routerProfiles[0].dnsPort=53;try model.importBundle(encoded(foreign))
+   let before=try encoded(model.bundle!),nodes=store.records
+   try reject("captured Home rejects relinked resolver"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+   try check("relinked Home failure preserves exact selected/store state",encoded(model.bundle!)==before && store.records==nodes)
+   var envelope=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:IOSPrivateJSONStore.bytes!)
+   envelope.schemaVersion=6;envelope.profiles[0].preferences?.homeDNSCaptured=false;IOSPrivateJSONStore.bytes=try encoded(envelope)
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   let legacy=try IOSDNSRuntimePolicy.resolve(model.selectedNodeProfile!)!
+   try check("legacy Home keeps original default migration",legacy.type=="udp" && legacy.host=="192.168.99.133" && legacy.port==53 && IOSConnectionProfileStore.all()[0].preferences?.homeDNSCaptured==false)
+  }}
+ }
  static func sharedRecordAndLegacyEntry()throws {
   var p=try profile("obfs4");graph(&p)
   let model=try reset(p),store=IOSNodeBundleStore.shared
@@ -269,7 +291,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
   let entryBytes=store.bundleData(containing:entryID,current:nil)!
   let actions=ProfileActions(legacyModel);actions.selectedID=legacy.id;actions.load()
   try check("legacy multihop retains current uncaptured entry",actions.status.hasPrefix("Loaded") && actions.status.contains("Older profile: entry settings use the current linked node") && store.bundleData(containing:entryID,current:nil)==entryBytes && IOSConnectionProfileStore.all()[0].entryPolicy==nil)
-  try check("legacy migration never fabricates entry capture",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==6)
+  try check("legacy migration never fabricates entry capture",try object(IOSPrivateJSONStore.bytes!)["schema_version"] as? Int==7)
  }
  static func nativeRejections()throws {
   for fault in ["fixed-ip","other-owner","bridge-port","bridge-malformed","custom-udp","doh3","resolver-hostname","dns-bootstrap","ipv6","jumbo-fixed","lan-range","start-layer","cover-small","cover-large"] {
@@ -450,7 +472,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
  }
  static func main(){
   defer{RouterVPNTorTestClose();UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)}
-  do{try matrix();try legacyAndDefaults();try sharedRecordAndLegacyEntry();try nativeRejections();try restoreRejections();try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles();print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")}
+  do{try matrix();try legacyAndDefaults();try routerHomeProfiles();try sharedRecordAndLegacyEntry();try nativeRejections();try restoreRejections();try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles();print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")}
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
 }
@@ -499,7 +521,7 @@ def main():
             subprocess.run(options+(['-lcrypto'] if name=='CryptoKit' else [])+['-emit-module','-emit-library','-module-name',name,str(path),'-emit-module-path',str(work/(name+'.swiftmodule')),'-o',str(work/('lib'+name+suffix))],check=True,timeout=90)
         options+=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         if platform.system()!='Darwin':options+=['-lNetwork','-lCryptoKit']
-        shipping=[APP/name for name in ['IOSMultihopExecution.swift','Models.swift','IOSExternalExecution.swift','IOSDNSRuntimePolicy.swift','IOSRuntimeSelection.swift','IOSNativeXrayProfile.swift','IOSNativePQProfile.swift','IOSMultihopStartLayer.swift','IOSNodeLatencyStatistics.swift','IOSSpeedLabOwnership.swift']]
+        shipping=[APP/name for name in ['IOSMultihopExecution.swift','Models.swift','IOSExternalExecution.swift','IOSHomeDNSPolicy.swift', 'IOSDNSRuntimePolicy.swift','IOSRuntimeSelection.swift','IOSNativeXrayProfile.swift','IOSNativePQProfile.swift','IOSMultihopStartLayer.swift','IOSNodeLatencyStatistics.swift','IOSSpeedLabOwnership.swift']]
         code=work/'Tests.swift';code.write_text(store+'\n'+source)
         binary=work/'tests'
         command=options+['-Onone','-whole-module-optimization',*map(str,shipping),str(code),'-o',str(binary)]

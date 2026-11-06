@@ -4,7 +4,7 @@ import SwiftUI
 
 private let iosConnectionProfilesKey = "routervpn.connection-profiles.v1"
 private let iosConnectionProfilesFile = "connection-profiles.json"
-private let iosConnectionProfilesSchemaVersion = 6
+private let iosConnectionProfilesSchemaVersion = 7
 private let iosConnectionProfilesMaximumBytes = 512 * 1024
 private let iosConnectionModeKey = "routervpn.unified.mode.v1"
 private let iosConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
@@ -46,6 +46,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var dnsPort: Int
     var dnsServerName: String
     var dnsPath: String
+    var homeDNSCaptured: Bool = false
     var dnsBootstrap: ExternalDNSBootstrap? = nil
     var multihopEnabled: Bool = false
     var multihopEntryID: String? = nil
@@ -57,7 +58,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case homeLANAccess, homeLANCIDRs, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
         case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect, daitaEnabled, daitaRateKbps, jumboTUN
-        case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath, dnsBootstrap
+        case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath, dnsBootstrap, homeDNSCaptured
         case multihopEnabled, multihopEntryMode, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
     }
 }
@@ -88,6 +89,7 @@ private extension IOSConnectionSafePreferences {
         dnsPort = try c.decodeIfPresent(Int.self, forKey: .dnsPort) ?? 0
         dnsServerName = try c.decodeIfPresent(String.self, forKey: .dnsServerName) ?? ""
         dnsPath = try c.decodeIfPresent(String.self, forKey: .dnsPath) ?? ""
+        homeDNSCaptured = try c.decodeIfPresent(Bool.self, forKey: .homeDNSCaptured) ?? false
         dnsBootstrap = try c.decodeIfPresent(ExternalDNSBootstrap.self, forKey: .dnsBootstrap)
         multihopEnabled = try c.decodeIfPresent(Bool.self, forKey: .multihopEnabled) ?? false
         multihopEntryID = try c.decodeIfPresent(String.self, forKey: .multihopEntryID)
@@ -180,7 +182,7 @@ private enum IOSConnectionProfileStore {
                 return sorted(values)
             }
             // The pre-v4 private store was a raw array. Treat that exact shape as
-            // known schema v1, validate it fully, then atomically rewrite v6.
+            // known schema v1, validate it fully, then atomically rewrite v7.
             let values = try validateStoredProfiles(decoder.decode([IOSConnectionProfileRecord].self, from: data))
             try persist(values)
             return sorted(values)
@@ -214,7 +216,7 @@ private enum IOSConnectionProfileStore {
         if completeExternal && selected.external?.matchesStartLayer(selected.startLayer) != true { throw issue("The selected external Start Layer no longer matches its private node settings.") }
         let prefs: IOSConnectionSafePreferences?
         if selected.normalizedNodeKind == "router-vpn" || completeExternal {
-            prefs = capturePreferences(selected)
+            prefs = try capturePreferences(selected)
         } else {
             prefs = nil
         }
@@ -232,7 +234,7 @@ private enum IOSConnectionProfileStore {
             }
             record.entryPolicy = IOSConnectionEntryCapture(nodeID: entry.id, nodeKind: entry.normalizedNodeKind,
                 nodeProofID: entry.nodeProofID, externalProtocol: entry.external?.protocolName,
-                externalPublicIP: entry.external?.expectedPublicIP, preferences: capturePreferences(entry))
+                externalPublicIP: entry.external?.expectedPublicIP, preferences: try capturePreferences(entry))
         }
         let validated = try validateStoredProfiles([record])[0]
         if torExternal, let captured = validated.preferences {
@@ -243,8 +245,8 @@ private enum IOSConnectionProfileStore {
         return validated
     }
 
-    private static func capturePreferences(_ selected: RouterProfile) -> IOSConnectionSafePreferences {
-        return IOSConnectionSafePreferences(
+    private static func capturePreferences(_ selected: RouterProfile) throws -> IOSConnectionSafePreferences {
+        var preferences = IOSConnectionSafePreferences(
                 homeLANAccess: selected.homeLANAccess ?? true,
                 homeLANCIDRs: selected.homeLANCIDRs ?? [],
                 killSwitch: selected.killSwitch ?? false,
@@ -276,6 +278,15 @@ private enum IOSConnectionProfileStore {
                 multihopExitMode: selected.multihopExitMode,
                 multihopExecution: selected.multihopExecution ?? "local"
             )
+        if selected.normalizedNodeKind == "router-vpn", preferences.dnsMode == "home" {
+            let home = try IOSHomeDNSPolicy.resolve(adGuardIPv4: selected.adGuardIPv4, adGuardIPv6: selected.adGuardIPv6,
+                ipv6Mode: preferences.ipv6Mode, protocolName: preferences.dnsProtocol, host: preferences.dnsHost,
+                port: preferences.dnsPort, serverName: preferences.dnsServerName, path: preferences.dnsPath)
+            preferences.homeDNSCaptured = true
+            preferences.dnsProtocol = home.type; preferences.dnsHost = home.host; preferences.dnsPort = home.port
+            preferences.dnsServerName = home.serverName; preferences.dnsPath = home.path
+        }
+        return preferences
     }
 
     static func add(model: RouterVPNModel, name: String) throws -> IOSConnectionProfileRecord {
@@ -596,6 +607,14 @@ private enum IOSConnectionProfileStore {
             if p.dnsMode == "custom", p.dnsProtocol.isEmpty { throw issue("External Custom DNS requires its explicit saved transport.") }
             // The shared compiler owns preset defaults and actual DNS proof.
             // Keep custom/Home transports, ports and TLS identities unchanged.
+            return p
+        }
+        if p.homeDNSCaptured {
+            guard p.dnsMode == "home" else { throw issue("A captured Home DNS policy must retain Home mode.") }
+            let home = try IOSHomeDNSPolicy.normalize(protocolName: p.dnsProtocol, host: p.dnsHost,
+                port: p.dnsPort, serverName: p.dnsServerName, path: p.dnsPath)
+            p.dnsProtocol = home.type; p.dnsHost = home.host; p.dnsPort = home.port
+            p.dnsServerName = home.serverName; p.dnsPath = home.path
             return p
         }
         switch p.dnsMode {

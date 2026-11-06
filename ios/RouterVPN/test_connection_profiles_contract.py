@@ -6,9 +6,9 @@ SOURCE = (ROOT / "App" / "IOSConnectionProfilesView.swift").read_text(encoding="
 assert SOURCE.strip(), "iOS connection profile source is empty"
 
 for marker in (
-    'iosConnectionProfilesSchemaVersion = 6',
+    'iosConnectionProfilesSchemaVersion = 7',
     'Unsupported connection profile store schema',
-    'known schema v1, validate it fully, then atomically rewrite v6',
+    'known schema v1, validate it fully, then atomically rewrite v7',
     'decodeIfPresent(Bool.self, forKey: .homeLANAccess) ?? true',
     'decodeIfPresent(String.self, forKey: .killSwitchPolicy) ?? (killSwitch ? "always" : "off")',
     'decodeIfPresent(String.self, forKey: .ipv6Mode) ?? "on"',
